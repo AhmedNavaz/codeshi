@@ -2671,3 +2671,18 @@ test('a changed image opens as pictures, before and after, instead of a binary n
   assert.match(figures[1].textContent, /Too large to preview.*After.*6\.0 MB/);
   assert.doesNotMatch(ui.$('diff-content').textContent, /Binary file changed/);
 });
+
+test('the message box grows a pixel past its text and only scrolls at its full height', async () => {
+  const ui = await browser(); await flush();
+  const input = ui.$('message-input'), type = (text, height) => { input.value = text; input.scrollHeight = height; ui.fire('message-input', 'input'); };
+  // Three lines measure 81.1px, which scrollHeight reports as 81.
+  type('one\ntwo\nthree', 81);
+  assert.equal(input.style.height, '82px');
+  assert.equal(input.style.overflowY, 'hidden');
+  type('a long message\n'.repeat(20), 320);
+  assert.equal(input.style.height, '200px');
+  assert.equal(input.style.overflowY, 'auto');
+  type('', 20);
+  assert.equal(input.style.height, '64px');
+  assert.equal(input.style.overflowY, 'hidden');
+});

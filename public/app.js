@@ -1046,9 +1046,14 @@
     document.title = currentProject() ? currentProject().name + " · Throughline" : "Throughline · Your project workspaces";
   }
   function render(forceScroll = false) { renderProjects(); renderStatus(); renderWorkspaceList(); renderMessages(forceScroll); renderControls(); window.dispatchEvent(new CustomEvent("relay-state")); }
+  // The message box grows with its text up to 200px. Lines can be a fraction of a pixel tall while scrollHeight is a
+  // whole number, so the box gets one pixel more, and it only scrolls once it has stopped growing; otherwise a message
+  // of three lines showed a scroll bar.
   function resizeInput() {
     ui.input.style.height = "auto";
-    ui.input.style.height = `${Math.min(Math.max(ui.input.scrollHeight, 64), 200)}px`;
+    const needed = ui.input.scrollHeight + 1;
+    ui.input.style.height = `${Math.min(Math.max(needed, 64), 200)}px`;
+    ui.input.style.overflowY = needed > 200 ? "auto" : "hidden";
   }
 
   function applyConversation(conversation, { adoptSettings = true } = {}) {

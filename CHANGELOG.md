@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Fixed
+
+- A message that wrapped to three lines showed a scroll bar in the message box, though all of it was visible. The box now grows a pixel more and only scrolls once it reaches its full height.
+
 ## [0.20.0] - 2026-11-03
 
 ### Added
