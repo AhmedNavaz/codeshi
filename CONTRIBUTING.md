@@ -35,6 +35,7 @@ Backend code lives in `src/`; Electron, browser UI and the separately deployable
 | `src/server.mjs` | Local HTTP server bound to 127.0.0.1, with host, origin and token checks |
 | `src/projects.mjs` | Workspace registry: folders and each workspace's single conversation |
 | `src/broker.mjs`, `src/context.mjs` | Conversation journal, runs, and the shared context handed to each agent |
+| `src/checkpoints.mjs` | Run checkpoints (#20): folders saved before and after each run, and undo and redo |
 | `src/gemini.mjs`, `src/providers.mjs`, `src/provider-worker.mjs` | Claude Agent SDK, Codex app-server and Gemini CLI ACP adapters, accounts and plan usage; runs happen in a worker process |
 | `src/local-models.mjs` | Ollama local-model discovery, validation and scoped Codex tool-harness launch routes |
 | `src/resolve-binary.mjs` | Finds the installed `claude`, `codex` and `gemini` executables |

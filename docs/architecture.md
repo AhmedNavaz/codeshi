@@ -31,6 +31,7 @@ flowchart TD
 | Temporary development profiles and data migration | `desktop/launch.mjs`, `desktop/storage.mjs` |
 | Workspace identity, folders and one permanent conversation | `src/projects.mjs` |
 | Conversation journal, accepted submissions, approvals and run lifecycle | `src/broker.mjs` |
+| Run checkpoints in a private Git object store per folder, and previewed undo and redo (#20) | `src/checkpoints.mjs`, `src/checkpoint-routes.mjs` |
 | Waiting for a usage limit to reset and continuing on the first agent with room (#32) | `src/resume.mjs` |
 | Loopback relay that reaches Google over IPv4 first for the Antigravity runtime | `src/google-relay.mjs` |
 | Shared prompt context | `src/context.mjs` |
@@ -75,6 +76,7 @@ Disposable generated assets belong in `output/`, which is excluded from Git and 
 | `files.js` | File explorer, previews and attachments |
 | `conversation-search.js` | Find in the conversation: match highlights, the match count and moving between matches |
 | `agent-review.js` | Cross-agent review selection, explicit preview/start, findings and fix drafts |
+| `rewind.js` | A run's checkpoint line, and the undo and redo preview |
 | `workbench.js` | Ask a Friend review flow |
 | `desktop-controls.js` | Native keep-awake controls |
 

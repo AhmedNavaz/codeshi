@@ -15,6 +15,7 @@ import { createWorkspaceRoutes } from './workspace-routes.mjs';
 import { randomBytes } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
 import { createReviewRoutes } from './agent-review-routes.mjs';
+import { createCheckpointRoutes } from './checkpoint-routes.mjs';
 import { createLocalRoutes } from './local-models.mjs';
 import { atomicJSON } from './patches.mjs';
 import { continuationRequest } from './context.mjs';
@@ -31,6 +32,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/updates.js': ['updates.js', 'text/javascript; charset=utf-8'], '/updater.js': ['updater.js', 'text/javascript; charset=utf-8'], '/updates.css': ['updates.css', 'text/css; charset=utf-8'],
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
+  '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'] };
 const json = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -79,6 +81,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const workspaceRoutes = createWorkspaceRoutes({ registry, body, json });
   const conversationRoutes = createConversationRoutes({ registry, body, json, importer });
   const reviewRoutes = createReviewRoutes({ registry, body, json });
+  const checkpointRoutes = createCheckpointRoutes({ registry, body, json });
   const localRoutes = createLocalRoutes({ registry, body, json });
   const commandRoutes = createCommandRoutes({ registry, body, json });
   const terminalRoutes = createTerminalRoutes({ registry, body, json });
@@ -198,6 +201,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (await workspaceRoutes({ req, res, url })) return;
       if (await conversationRoutes({ req, res, url })) return;
       if (await reviewRoutes({ req, res, url })) return;
+      if (await checkpointRoutes({ req, res, url })) return;
       if (await localRoutes({ req, res, url })) return;
       if (await collaborationRoute({req,res,url,registry,collaboration,sharing,configureSharing,body,json})) return;
       if (req.method === 'GET' && url.pathname === '/api/status') {

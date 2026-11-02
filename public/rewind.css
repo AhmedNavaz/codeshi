@@ -1,0 +1,48 @@
+/* Rewind (#20): a run's checkpoint line on its timeline, and the undo preview. */
+.activity-icon.icon-checkpoint { --activity-icon: var(--icon-history); }
+.run-checkpoint-header { gap: 8px; min-height: 26px; color: var(--muted); }
+.run-checkpoint .activity-entry-title { color: var(--muted); font-weight: 400; }
+.run-checkpoint-action { height: 22px; padding: 0 6px; border-radius: 5px; font-size: 12px; }
+.run-checkpoint-action:hover:enabled { background: var(--hover); text-decoration: none; }
+.run-checkpoint-action:disabled { color: var(--faint); cursor: default; }
+
+.rewind-dialog {
+  width: min(760px, calc(100vw - 48px)); max-height: min(720px, calc(100vh - 48px)); max-width: none; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); overflow: hidden;
+}
+.rewind-dialog[open] { display: flex; flex-direction: column; }
+.rewind-dialog::backdrop { background: var(--backdrop); }
+.rewind-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 12px 12px 20px; border-bottom: 1px solid var(--border); }
+.rewind-dialog h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 600; }
+#rewind-meta { margin: 3px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+#rewind-meta:empty { display: none; }
+.rewind-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 20px 16px; }
+.rewind-summary { margin: 0 0 12px; color: var(--text); font-size: 13px; line-height: 1.6; }
+.rewind-dialog[aria-busy="true"] .rewind-summary { color: var(--muted); }
+/* One column no wider than the dialog: a long line scrolls inside its diff instead of widening every row. */
+.rewind-list { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.rewind-file { min-width: 0; }
+.rewind-file + .rewind-file { border-top: 1px solid var(--border); }
+.rewind-file > summary { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 12px; list-style: none; cursor: pointer; }
+.rewind-file > summary::-webkit-details-marker { display: none; }
+.rewind-file > summary::before { content: ""; flex: none; width: 12px; height: 12px; background: var(--faint); -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform .12s ease; }
+.rewind-file[open] > summary::before { transform: rotate(90deg); }
+.rewind-file > summary:hover { background: var(--hover); }
+.rewind-file > summary:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: -2px; }
+.rewind-action { flex: none; padding: 1px 7px; border-radius: 10px; background: var(--chip-bg); color: var(--text); font-size: 11px; font-weight: 500; }
+.rewind-file[data-action="remove"] .rewind-action { color: var(--danger); }
+.rewind-file[data-action="recreate"] .rewind-action { color: var(--success); }
+.rewind-file[data-action="merge"] .rewind-action { color: var(--link); }
+.rewind-path { flex: 1; min-width: 0; overflow: hidden; color: var(--text-strong); font: 12px/1.4 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.rewind-file > summary .diff-added, .rewind-file > summary .diff-removed { flex: none; font-size: 11.5px; }
+.rewind-diff { max-height: 320px; overflow: auto; border-top: 1px solid var(--border); background: var(--code-bg); }
+.rewind-diff .diff-lines { padding: 4px 0 8px; }
+.rewind-diff-note { margin: 0; padding: 10px 14px; color: var(--muted); font-size: 12px; }
+.rewind-heading { margin: 18px 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.rewind-left-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.rewind-left { display: grid; gap: 2px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.rewind-left code { color: var(--text); font: 12px/1.4 var(--mono); overflow-wrap: anywhere; }
+.rewind-left span { color: var(--muted); }
+.rewind-error { margin: 0; padding: 0 20px 10px; color: var(--danger); font-size: 12.5px; }
+.rewind-footer { display: flex; align-items: center; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
+.rewind-note { margin-right: auto; color: var(--muted); font-size: 12px; }

@@ -87,7 +87,7 @@
   }
   async function api(path, options = {}, projectId = state.projectId) {
     const providerEndpoint = /^\/api\/providers(?:\/|$)/.test(path);
-    if (/^\/api\/(?:status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
+    if (/^\/api\/(?:status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
       if (!projectId) throw new Error("Choose a project first.");
       path += `${path.includes("?") ? "&" : "?"}projectId=${encodeURIComponent(projectId)}`;
     }
@@ -579,7 +579,7 @@
   function updateJump() { $("jump-latest").hidden = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 240; }
   function renderMessages(forceScroll = false) {
     const messages = state.conversation?.messages || [];
-    const signature = JSON.stringify([state.projectId, state.conversation?.id, messages, state.conversation?.reviews?.map(({ id, status, summary }) => [id, status, summary]), state.conversation?.status, state.conversation?.activeRun?.id, state.conversation?.lastRun?.id, state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path), state.conversation?.pendingApprovals?.map(({ id, runId }) => [id, runId])]);
+    const signature = JSON.stringify([state.projectId, state.conversation?.id, messages, state.conversation?.reviews?.map(({ id, status, summary }) => [id, status, summary]), state.conversation?.status, state.conversation?.activeRun?.id, state.conversation?.lastRun?.id, state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path), state.conversation?.pendingApprovals?.map(({ id, runId }) => [id, runId]), state.conversation?.checkpoints]);
     const noProvider=state.ready&&!messages.length&&!['codex','claude','gemini'].some(available);
     ui.empty.hidden = messages.length > 0 || !state.ready || noProvider;
     if($('provider-empty-state'))$('provider-empty-state').hidden=!noProvider;
@@ -662,6 +662,8 @@
       if (!host && liveRun) host = thread && thread.turn === turn && !shownRun.id ? thread : openThread(shownRun.id || "", shownRun.provider || c?.provider || "codex", shownRun.connection, null, shownRun);
       if (host) host.body.append($("run-progress")); else $("transcript-footer").prepend($("run-progress"));
     } else $("transcript-footer").prepend($("run-progress"));
+    // A run that changed files ends with its checkpoint line, after its status line (#20).
+    for (const item of new Map(threads.filter(entry => entry.key).map(entry => [entry.key, entry])).values()) { const line = window.relayRewind?.row(item.key); if (line) item.body.append(line); }
     place($("transcript-footer"));
     ui.messages.replaceChildren(fragment);
     if (forceScroll || nearBottom) requestAnimationFrame(() => { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); });

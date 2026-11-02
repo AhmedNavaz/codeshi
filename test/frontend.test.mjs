@@ -63,7 +63,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -201,6 +201,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(filesUI)vm.runInContext(fs.readFileSync(new URL('../public/files.js',import.meta.url),'utf8'),context,{filename:'public/files.js'});
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
+  if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
   // A stand-in for xterm.js: it records what the page writes and lets a test type into it.
   if(terminalUI){
@@ -2525,3 +2526,61 @@ test('coming back after two minutes or more shows what ran, changed and is waiti
   assert.equal(panel.hidden, true);
 });
 
+
+test('a run that changed files offers Undo, previews every file before anything changes, then offers Redo', async () => {
+  const ui = await browser({ rewindUI: true }), runId = '11111111-1111-4111-8111-111111111111', undoId = '22222222-2222-4222-8222-222222222222';
+  const reply = (data, status = 200) => ({ ok: status < 300, status, text: async () => JSON.stringify(data), json: async () => clone(data) });
+  const conversation = ui.canonical.get('project-one');
+  Object.assign(conversation, { status: 'complete', lastRun: { id: runId, provider: 'codex', status: 'complete' }, checkpoints: { [runId]: { files: 3 } },
+    messages: [{ id: 'u1', role: 'user', text: 'Add promo codes', runId, provider: 'codex' }, { id: 'a1', role: 'assistant', text: 'Done.', runId, provider: 'codex', status: 'complete' }] });
+  const preview = { target: { kind: 'run', id: runId }, runId, provider: 'codex', prompt: 'Add promo codes', startedAt: new Date().toISOString(), digest: 'digest-1', unchanged: 0, files: [
+    { folderId: 'f', folder: 'web', path: 'src/checkout.js', action: 'restore', diff: '@@ -1,2 +1,2 @@\n line one\n-PROMO\n+line two' },
+    { folderId: 'f', folder: 'web', path: 'src/promo.js', action: 'remove', diff: '@@ -1 +0,0 @@\n-export const promo = 1;' },
+    { folderId: 'f', folder: 'web', path: 'notes.md', action: 'conflict', reason: 'Changed since the run in the same places.' }] };
+  let applies = 0, stale = true;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/checkpoints/preview') return reply(request.body.target.kind === 'rewind' ? { ...preview, target: request.body.target, digest: 'digest-redo', files: preview.files.slice(0, 2).map(file => ({ ...file, action: 'restore' })) } : preview);
+    if (request.path === '/api/checkpoints/apply') {
+      applies++;
+      if (stale) { stale = false; return reply({ error: 'Files changed since you reviewed this. Review the changes again.' }, 409); }
+      conversation.checkpoints = { [runId]: { files: 3, undone: undoId } };
+      conversation.messages.push({ id: 'n1', role: 'system', text: 'Undid Codex’s changes from “Add promo codes”.' });
+      return reply({ id: undoId, counts: { restore: 1, remove: 1, merge: 0, recreate: 0 }, left: [{ path: 'notes.md' }] });
+    }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  const line = () => ui.document.querySelectorAll('.run-checkpoint')[0];
+  assert.equal(line().dataset.runId, runId);
+  assert.match(line().textContent, /3 files changed/);
+  line().querySelectorAll('button')[0].click(); await flush();
+  assert.equal(ui.$('rewind-dialog').open, true);
+  assert.equal(ui.$('rewind-title').textContent, 'Undo Codex’s changes?');
+  assert.equal(ui.$('rewind-summary').textContent, 'This restores 1 file and removes 1 file it added. 1 file stays as it is.');
+  assert.equal(ui.document.querySelectorAll('.rewind-file').length, 2);
+  assert.match(ui.$('rewind-files').textContent, /notes\.md.*Changed since the run in the same places/);
+  assert.equal(applies, 0, 'Opening the preview changes nothing.');
+  assert.equal(ui.$('confirm-rewind').disabled, false);
+
+  // Files changed after the preview: the newer preview replaces it, and nothing is applied until confirmed again.
+  ui.$('confirm-rewind').click(); await flush();
+  assert.equal(applies, 1); assert.equal(ui.$('rewind-dialog').open, true);
+  assert.match(ui.$('rewind-error').textContent, /updated preview/);
+  ui.$('confirm-rewind').click(); await flush();
+  const apply = ui.requests.filter(request => request.path === '/api/checkpoints/apply').at(-1);
+  assert.deepEqual(apply.body, { target: { kind: 'run', id: runId }, digest: 'digest-1' }); assert.equal(apply.projectId, 'project-one');
+  assert.equal(ui.$('rewind-dialog').open, false);
+  assert.match(line().textContent, /Changes undone/);
+  assert.equal(line().querySelectorAll('button')[0].textContent, 'Redo');
+
+  line().querySelectorAll('button')[0].click(); await flush();
+  assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').at(-1).body, { target: { kind: 'rewind', id: undoId } });
+  assert.equal(ui.$('rewind-title').textContent, 'Redo Codex’s changes?');
+  assert.equal(ui.$('rewind-summary').textContent, 'This puts back 2 files as the run left them.');
+  ui.$('cancel-rewind').click(); assert.equal(ui.$('rewind-dialog').open, false);
+
+  // While a run works, nothing can be undone.
+  Object.assign(conversation, { status: 'running', activeRun: { id: 'other-run', provider: 'codex' } });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(line().querySelectorAll('button')[0].disabled, true);
+});

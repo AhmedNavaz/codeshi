@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { prepareContext, emptyContext, validateContext } from './context.mjs';
 import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
+import { RunCheckpoints } from './checkpoints.mjs';
 import { AttachmentStore } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
 import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mjs';
@@ -152,6 +153,7 @@ export class Broker extends EventEmitter {
     this.queue.restore();
     this.handoff = new HandoffMonitor(this, { preferences: handoffPreferences });
     this.checks = new RunChecks(this, { tests });
+    this.checkpoints = new RunCheckpoints(this);
     this.checks.restore();
     // The first check of a wait saved before a restart runs once startup has finished.
     if (this.resume.waiting) setTimeout(() => this.resume.tick(), 0);
@@ -197,7 +199,7 @@ export class Broker extends EventEmitter {
 
   empty(id) {
     return { id, title: 'New conversation', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', status: 'idle', messages: [],
-      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
+      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
   }
 
   apply(c, record) {
@@ -248,6 +250,10 @@ export class Broker extends EventEmitter {
     if (record.type === 'review_process') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, { pid: record.pid, pidStart: record.pidStart }); }
     if (record.type === 'review_result') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, record.result, { endedAt: record.at }); }
     if (record.type === 'title') c.title = record.title;
+    // Checkpoints (#20): a run's folders saved before and after it, and the undos made from them.
+    if (record.type === 'run_snapshot') { c.snapshots ||= {}; const saved = c.snapshots[record.runId] ||= {}; saved[record.phase] = { folders: record.folders, at: record.at }; if (record.phase === 'after') saved.files = record.files || 0; }
+    if (record.type === 'rewind') c.rewinds = [...(c.rewinds || []), { id: record.id, target: record.target, runId: record.runId, folders: record.folders, counts: record.counts, left: record.left || [], at: record.at }];
+    if (record.type === 'snapshot_expired') { for (const id of record.runIds || []) delete c.snapshots?.[id]; const gone = new Set(record.rewindIds || []); c.rewinds = (c.rewinds || []).filter(item => !gone.has(item.id)); }
     if (record.type === 'message') c.messages.push({ ...record.message, seq: record.seq });
     if (record.type === 'message_update') {
       const message = c.messages.find(m => m.id === record.id);
@@ -307,8 +313,8 @@ export class Broker extends EventEmitter {
   }
 
   view(c) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, ...visible } = c;
-    return { ...visible, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: c.messages.map(({ seq, ...m }) => m) };
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, ...visible } = c;
+    return { ...visible, checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: c.messages.map(({ seq, ...m }) => m) };
   }
 
   list() {
@@ -498,6 +504,7 @@ export class Broker extends EventEmitter {
         this.record(c, { type: 'run_metadata', metadata: { elapsedMs: Date.now() - Date.parse(c.activeRun.startedAt), phase: success ? 'complete' : 'stopped', lastEventAt: c.activeRun.lastEventAt } });
         if (review) this.record(c, { type: 'review_result', id: runId, result: success ? parseReviewResult(c.messages.filter(message => message.runId === runId && message.role === 'assistant').at(-1)?.text, review.snapshot) : { status: run.stopped ? 'interrupted' : 'failed', summary: run.stopped ? 'Review stopped. Start a new review when ready.' : 'The review did not finish. Check the agent response and try again.', findings: [] } });
         this.record(c, { type: 'run_end', status: run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete', errorCategory: run.errorCategory });
+        if (!review) this.checkpoints.after(c, run);
         if (success && !review && !local && c.sessions[provider]) this.record(c, { type: 'checkpoint', provider });
       } catch (persistError) { success = false; run.persistenceError = persistError.message; }
       finally { try { lease.release(); } catch (releaseError) { success = false; run.persistenceError ||= releaseError.message; } finally {
@@ -530,6 +537,7 @@ export class Broker extends EventEmitter {
           if (account.authenticated === false) throw Object.assign(new Error('Sign in through the provider’s supported authentication flow before running.'), { category: 'authentication' });
           if (account.billingSource !== 'subscription' && !billingConfirmed) throw Object.assign(new Error(`Billing source is ${account.billingSource}. Explicitly confirm this provider run before it may consume usage.`), { category: 'permission' });
         }
+        if (!review) await this.checkpoints.before(c, run);
         if (run.stopped) return complete(null, null, new Error('Run stopped.'));
         const command = commandFor(provider, { mode, approvalPolicy, sessionId, bin, workspace: this.workspace, workspaces: this.workspaces, effort });
         if (provider === 'codex') {
@@ -727,5 +735,6 @@ export class Broker extends EventEmitter {
       this.stop(run.c.id);
       await run.done;
     }
+    await this.checkpoints.close();
   }
 }

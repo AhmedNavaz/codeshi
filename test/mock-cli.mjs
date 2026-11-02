@@ -33,6 +33,11 @@ if (provider === 'codex') {
   await emit({ type: 'item.updated', item: { id: 'answer', type: 'agent_message', text: scenario.text || `Codex: ${context.currentRequest}` } });
   await emit({ type: 'item.completed', item: { id: 'command', type: 'command_execution', command: 'inspect-project', aggregated_output: 'project inspection retained' } });
   if (scenario.changes) await emit({ type: 'item.completed', item: { id: 'patch', type: 'file_change', changes: scenario.changes } });
+  // Writes and removes files as the scenario says, as an agent's edits would.
+  for (const [file, content] of Object.entries(scenario.write || {})) {
+    if (content === null) fs.rmSync(file, { force: true });
+    else { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); }
+  }
   // Holds the run open until the test creates .release, then finishes normally.
   if (scenario.behavior === 'hold') await new Promise(resolve => { const timer = setInterval(() => { if (fs.existsSync('.release')) { clearInterval(timer); resolve(); } }, 20); });
   if (scenario.behavior === 'hang') {

@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Undo a run** (#20): Throughline saves the workspace folders before and after every run, whichever agent ran it, in its own data folder rather than your project's Git repository. A run that changed files ends with **3 files changed · Undo**. Undo previews every file and the exact lines that change before anything is written, takes the run's edits out of files you changed since when they don't overlap, leaves the rest as they are, and adds a note so the next agent knows. **Redo** puts the changes back.
+
 ## [0.19.0] - 2026-11-02
 
 ### Added
