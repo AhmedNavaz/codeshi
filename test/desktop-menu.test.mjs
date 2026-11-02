@@ -117,3 +117,11 @@ test('the Agent menu chooses when a handoff is offered near a usage limit, and w
   assert.deepEqual(changes,[{threshold:0},{threshold:80},{automatic:true}]);
   assert.equal(disabled(menu({handoff:{threshold:0,automatic:true}}).item('Hand Off Automatically to Subscription Agents')),true,'Automatic handoff needs offers to be on.');
 });
+
+test('the installed app offers Check for Updates… after About, which asks the page to check and show the answer',()=>{
+  const {item,sent,labels}=menu({updates:true});
+  assert.deepEqual(labels(item('Throughline').submenu).slice(0,3),['about','Check for Updates…','-']);
+  item('check-updates').click();
+  assert.deepEqual(sent,[['check-updates']]);
+  assert(!menu().all.some(entry=>entry.label==='Check for Updates…'),'A copy that cannot update itself, such as one run from source, leaves it out.');
+});

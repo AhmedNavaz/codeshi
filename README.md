@@ -38,6 +38,7 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 - Plan usage for Claude Code and Codex in the status bar, with reset times, plus per-run context usage when reported.
 - Keep awake: your Mac stays awake while agents are working or waiting for a usage limit to reset, and sleeps normally once they finish.
 - Native desktop menus for workspaces, agents, conversation search, appearance and Help, with keyboard shortcuts and current selections.
+- Updates from inside the app: one click downloads the new version, checks it against its published checksum, and Throughline restarts into it once no agent is working.
 
 **Context portability and human collaboration**
 

@@ -10,6 +10,17 @@ contextBridge.exposeInMainWorld('relayDesktop', Object.freeze({
   platform: process.platform,
   getLaunchState: () => ipcRenderer.invoke('relay:launch'),
   acknowledgeUpdate: () => ipcRenderer.invoke('relay:acknowledge-update'),
+  getUpdateState: () => ipcRenderer.invoke('relay:update:get'),
+  checkForUpdates: () => ipcRenderer.invoke('relay:update:check'),
+  installUpdate: () => ipcRenderer.invoke('relay:update:install'),
+  cancelUpdate: () => ipcRenderer.invoke('relay:update:cancel'),
+  skipUpdate: version => ipcRenderer.invoke('relay:update:skip', version),
+  setAutomaticUpdates: enabled => ipcRenderer.invoke('relay:update:automatic', enabled),
+  onUpdateState: callback => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('relay:update-state', listener);
+    return () => ipcRenderer.removeListener('relay:update-state', listener);
+  },
   getKeepAwake: () => ipcRenderer.invoke('relay:keep-awake:get'),
   setKeepAwake: enabled => ipcRenderer.invoke('relay:keep-awake:set', enabled),
   onKeepAwakeChanged: callback => {

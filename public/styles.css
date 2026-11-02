@@ -618,6 +618,20 @@ button.commit-hash:hover { text-decoration: underline; }
 .status-button { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px; border: 0; border-radius: 3px; background: none; color: var(--muted); font-size: 11px; }
 .status-button .icon { width: 13px; height: 13px; }
 .status-button:hover { color: var(--text); background: var(--hover); }
+/* Software update: a status bar button while an update is offered or installing, and its popover. */
+.update-status { color: var(--link); }
+.update-status:hover { color: var(--link); }
+.update-status[data-status="error"] { color: var(--danger); }
+.update-status[data-status="downloading"] .icon, .update-status[data-status="installing"] .icon { animation: pulse 1.4s ease-in-out infinite; }
+.update-popover #update-subtitle { margin: 2px 0 0; color: var(--faint); font-size: 11px; }
+.update-body { display: grid; gap: 10px; padding: 0 16px 16px; }
+.update-text { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.update-error { color: var(--danger); }
+.update-notes { justify-self: start; padding: 0; font-size: 12px; }
+.update-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 2px; }
+.update-actions > .text-link { margin-right: auto; padding: 0; font-size: 12px; }
+.update-progress { height: 4px; overflow: hidden; border-radius: 2px; background: var(--chip-bg); }
+.update-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
 .appearance-options { display: inline-flex; }
 .appearance-options button { display: inline-grid; place-items: center; width: 22px; height: 20px; padding: 0; border: 0; border-radius: 3px; background: none; color: var(--faint); }
 .appearance-options button .icon { width: 13px; height: 13px; }

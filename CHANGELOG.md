@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Update from inside the app** (#2): when a newer release is out, **Update available** and its version appear in the status bar, with a link to the release notes. **Update and restart** downloads the build for your Mac, checks it against the release's published checksum and checks the app inside (its version, bundle ID and signature), then quits, replaces the app and reopens it with your workspaces as they were. While an agent works, or a queued prompt is about to start, the update downloads and Throughline restarts once no agent is working, never in the middle of a run. A version can be skipped, **Throughline › Check for Updates…** checks at any time, and **Settings › Updates** turns automatic checks (at launch and every six hours) off. A copy that can't replace itself, such as one opened straight from Downloads, offers the download instead.
+
 ### Changed
 
 - Each run now reads as one thread under the agent's name, model and effort. Its replies and every step sit on one line in order, each step showing what it did in a single line, such as **Run** `npm test` or **Read** `src/app.js`, with a chevron for the full output, edit or result. Steps are no longer folded into a "Worked through" summary, and notes from full auto-approval are no longer listed. The run's status line is the last step of its thread and its only live indicator (**Thinking**, **Working**, **Writing** or **Waiting for your approval**, with the elapsed time); its details hold token and context counts instead of repeating the agent, model, permission setting and step count.

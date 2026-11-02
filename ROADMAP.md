@@ -52,6 +52,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Routing: the agent, model and effort picked for each message, shown with its reason before sending ([#12](https://github.com/AhmedNavaz/throughline/issues/12), stage 1) | [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) |
 | A new layout: a search bar for workspaces, files and actions, a side panel for Agents and Git, and resizable sections | [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) |
 | Reliable Gemini connection on networks where Google stalls over IPv6 | [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) |
+| Update from inside the app with one click: downloaded, checked against its checksum and installed once no agent is working ([#2](https://github.com/AhmedNavaz/throughline/issues/2)) | Next release |
 | Each run as a timeline of its steps, with one live status line | Next release |
 
 ## Now
@@ -60,7 +61,6 @@ The fastest way to make Throughline better is to use it on your real projects an
 | --- | --- | --- |
 | More agents and models, including Google's supported coding-agent integration, free cloud tiers and local models, on your own accounts | First milestones shipped in 0.10.0: Gemini CLI over ACP and explicit Ollama local-model handoffs through Codex tools; Google personal-account support now uses Antigravity ACP with native sign-in and model discovery in 0.11.0; further provider adapters are next | [#4](https://github.com/AhmedNavaz/throughline/issues/4) |
 | Notarized macOS builds, so downloads open without a security prompt | Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/throughline/issues/1) |
-| Update button: get new versions from inside the app with one click | Planned | [#2](https://github.com/AhmedNavaz/throughline/issues/2) |
 | Install with Homebrew: `brew install --cask throughline` | Depends on #1 | [#3](https://github.com/AhmedNavaz/throughline/issues/3) |
 
 ## Next

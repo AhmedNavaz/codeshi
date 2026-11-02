@@ -22,7 +22,7 @@ function system(platform, osVersion, arch) {
   return `${name} ${osVersion}, ${platform === 'darwin' ? arch === 'arm64' ? 'Apple Silicon' : 'Intel' : arch}`;
 }
 
-export function menuTemplate({ platform, packaged, version, osVersion, arch, state, appearance, keepAwake, notifications = { enabled: true, sound: false }, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open }) {
+export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = { enabled: true, sound: false }, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open }) {
   const page = state || initial, mac = platform === 'darwin', separator = () => ({ type: 'separator' });
   const command = (label, name, options = {}) => ({ label, ...options, click: () => send(...name) });
   const link = (label, url) => ({ label, click: () => open(url) });
@@ -104,6 +104,6 @@ export function menuTemplate({ platform, packaged, version, osVersion, arch, sta
     command('What’s New', ['whats-new'], { id: 'whats-new' }),
     ...mac ? [] : [separator(), { role: 'about' }],
   ] };
-  const application = { label: 'Throughline', submenu: [{ role: 'about' }, separator(), settings, setup, separator(), { role: 'services' }, separator(), { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator(), { role: 'quit' }] };
+  const application = { label: 'Throughline', submenu: [{ role: 'about' }, ...updates ? [command('Check for Updates…', ['check-updates'], { id: 'check-updates' })] : [], separator(), settings, setup, separator(), { role: 'services' }, separator(), { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator(), { role: 'quit' }] };
   return [...mac ? [application] : [], file, edit, view, agent, workspace, { role: 'windowMenu' }, help];
 }

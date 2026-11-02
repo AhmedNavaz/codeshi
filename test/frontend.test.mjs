@@ -63,7 +63,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,launch=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -161,6 +161,10 @@ async function browser({existing=true,available=true,providers={},authenticated=
   // The menu bar's side of the bridge: commands arrive through onMenuCommand, and reported states are cloned as IPC would.
   if(desktop)Object.assign(window.relayDesktop,{onMenuCommand:callback=>{menuListeners.push(callback);return ()=>{};},setMenuState:state=>{menuStates.push(clone(state));}});
   if(desktop){launch ||= {version:'0.9.1',previousVersion:null,updated:false,releases:[]};Object.assign(window.relayDesktop,{getLaunchState:async()=>clone(launch),acknowledgeUpdate:async()=>{updateAcknowledgements.push(launch.version);launch={...launch,updated:false};return clone(launch);},openExternal:async url=>{externalLinks.push(url);}});}
+  // The updater's side of the bridge: calls are recorded, and the main process's answers and pushed states are cloned as IPC would.
+  const updateCalls=[],updateListeners=[];let updateState=update&&clone(update);
+  const answer=(name,next)=>async(...args)=>{updateCalls.push([name,...args]);if(next)updateState={...updateState,...next(...args)};return clone(updateState);};
+  if(desktop&&update)Object.assign(window.relayDesktop,{getUpdateState:answer('get'),checkForUpdates:answer('check',()=>({status:updateState.latest?'available':'current'})),installUpdate:answer('install',()=>({status:'downloading',progress:{received:0,total:null}})),cancelUpdate:answer('cancel',()=>({status:'available',progress:null})),skipUpdate:answer('skip',version=>({skipped:version})),setAutomaticUpdates:answer('automatic',automatic=>({automatic})),onUpdateState:callback=>{updateListeners.push(callback);return ()=>{};}});
   // Custom Highlight API stand-ins: ranges record their boundaries, and the registry is a Map.
   class Range{setStart(node,offset){this.startContainer=node;this.startOffset=offset;}setEnd(node,offset){this.endContainer=node;this.endOffset=offset;}getBoundingClientRect(){return this.startContainer.parentNode.getBoundingClientRect();}}
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
@@ -182,6 +186,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(filesUI)vm.runInContext(fs.readFileSync(new URL('../public/files.js',import.meta.url),'utf8'),context,{filename:'public/files.js'});
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
+  if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
   if(theme)document.dispatchEvent(new UIEvent('DOMContentLoaded'));
   await flush();assert.equal(window.relayUI.getState().ready,!empty);assert.equal(window.relayUI.getState().loading,false);
   const $=id=>document.getElementById(id);const fire=(id,type)=>$(id).dispatchEvent(new UIEvent(type));const findButton=text=>document.querySelectorAll('button').find(button=>button.textContent===text);
@@ -189,7 +194,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -2067,3 +2072,73 @@ test('with the sidebar hidden, the top bar names the open workspace, and clickin
   ui.$('toggle-sidebar').click();assert(ui.$('app-shell').classList.contains('sidebar-collapsed'));
   ui.$('workspace-chip').click();assert(!ui.$('app-shell').classList.contains('sidebar-collapsed'),'Clicking the name shows the sidebar.');
 });
+
+test('a newer release shows in the status bar; its popover links the notes, installs with one click and can skip the version', async () => {
+  const latest = { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0', publishedAt: null };
+  const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'current', error: null, progress: null, blocked: null, latest: null } });
+  const button = ui.$('update-status');
+  assert.equal(button.hidden, true, 'Nothing shows while this is the latest version.');
+
+  ui.pushUpdate({ status: 'available', latest });
+  assert.equal(button.hidden, false);
+  assert.equal(ui.$('update-status-label').textContent, 'Update available · 0.15.0');
+  button.click();
+  assert.equal(ui.$('update-popover').matches(':popover-open'), true);
+  assert.equal(ui.$('update-title').textContent, 'Throughline 0.15.0');
+  assert.equal(ui.$('update-subtitle').textContent, 'You have 0.14.0');
+  ui.findButton('Release notes ↗').click(); await flush();
+  assert.deepEqual(ui.externalLinks, [latest.notesUrl]);
+
+  // An agent at work: the update downloads now and the restart waits for the run.
+  ui.projects[0].runningConversationId = 'busy'; await ui.window.relayUI.refreshProjects(); ui.window.dispatchEvent(new UIEvent('relay-state'));
+  assert(ui.findButton('Update after this run'));
+  ui.projects[0].runningConversationId = null; await ui.window.relayUI.refreshProjects(); ui.window.dispatchEvent(new UIEvent('relay-state'));
+  ui.findButton('Update and restart').click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['install']);
+  ui.pushUpdate({ status: 'downloading', progress: { received: 52428800, total: 136314880 } });
+  assert.equal(ui.$('update-status-label').textContent, 'Downloading update · 38%');
+  assert.match(ui.$('update-content').textContent, /Downloading 50\.0 MB of 130 MB/);
+  ui.findButton('Cancel').click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['cancel']);
+  ui.pushUpdate({ status: 'waiting', progress: null });
+  assert.equal(ui.$('update-status-label').textContent, 'Updates after this run');
+  ui.pushUpdate({ status: 'error', error: 'The download does not match its published checksum, so nothing was installed.' });
+  assert.equal(ui.$('update-status-label').textContent, 'Update failed');
+  assert.match(ui.$('update-content').textContent, /does not match its published checksum/);
+
+  // Skipping hides this version until the next one, and Check for Updates… shows it again.
+  ui.pushUpdate({ status: 'available', error: null });
+  ui.findButton('Skip this version').click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['skip', '0.15.0']);
+  assert.equal(button.hidden, true);
+  ui.$('update-popover').hidePopover();
+  ui.window.relayUI.commands['check-updates'](); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['check']);
+  assert.equal(ui.$('update-popover').matches(':popover-open'), true);
+  assert(ui.findButton('Update and restart'), 'A manual check offers the skipped version.');
+});
+
+test('an app that cannot replace itself offers the download instead, and a manual check says when Throughline is up to date', async () => {
+  const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'available', error: null, progress: null, blocked: 'translocated', latest: { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0' } } });
+  ui.$('update-status').click();
+  assert.match(ui.$('update-content').textContent, /Move it to your Applications folder/);
+  assert.equal(ui.findButton('Update and restart'), undefined);
+  ui.findButton('Download ↗').click(); await flush();
+  assert.deepEqual(ui.externalLinks, ['https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0']);
+  ui.pushUpdate({ status: 'current', latest: null, blocked: null });
+  ui.window.relayUI.commands['check-updates'](); await flush();
+  assert.match(ui.$('update-content').textContent, /Throughline 0\.14\.0 is the latest version/);
+});
+
+test('Settings turns automatic update checks off and checks now', async () => {
+  const ui = await browser({ desktop: true, workbench: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: '2026-11-02T09:30:00.000Z', status: 'current', error: null, progress: null, blocked: null, latest: null } });
+  ui.fire('relay-settings', 'click'); await flush();
+  assert(ui.document.querySelectorAll('h3').some(heading => heading.textContent === 'Updates'));
+  const automatic = ui.labelledInput('Check for updates automatically');
+  assert.equal(automatic.checked, true);
+  automatic.checked = false; automatic.dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['automatic', false]);
+  ui.findButton('Check now').click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['check']);
+});
+

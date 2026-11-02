@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import { atomicJSON } from '../src/patches.mjs';
 
-const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([\da-zA-Z.-]+))?(?:\+[\da-zA-Z.-]+)?$/;
-function compare(left, right) {
+export const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([\da-zA-Z.-]+))?(?:\+[\da-zA-Z.-]+)?$/;
+export function compareVersions(left, right) {
   const a = left.match(versionPattern), b = right.match(versionPattern);
   for (let i = 1; i <= 3; i++) if (Number(a[i]) !== Number(b[i])) return Number(a[i]) > Number(b[i]) ? 1 : -1;
   if (a[4] === b[4]) return 0;
@@ -69,11 +69,11 @@ export function releaseNotes(changelog, current, since = null) {
       section.items.push(summarizeItem(line.slice(2), true));
     }
   }
-  if (!releases.some(item => compare(item.version, current) === 0)) return [];
+  if (!releases.some(item => compareVersions(item.version, current) === 0)) return [];
   return releases
     .map(item => ({ ...item, sections: item.sections.filter(s => s.items.length > 0) }))
-    .filter(item => item.sections.length > 0 && compare(item.version, current) <= 0 && (since ? compare(item.version, since) > 0 : compare(item.version, current) === 0))
-    .sort((a, b) => compare(b.version, a.version))
+    .filter(item => item.sections.length > 0 && compareVersions(item.version, current) <= 0 && (since ? compareVersions(item.version, since) > 0 : compareVersions(item.version, current) === 0))
+    .sort((a, b) => compareVersions(b.version, a.version))
     .slice(0, 5);
 }
 
@@ -85,7 +85,7 @@ export function createReleaseState({ filename, version, changelog = '', existing
   try { saved = JSON.parse(fs.readFileSync(filename, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
   const previous = typeof saved?.lastSeenVersion === 'string' && versionPattern.test(saved.lastSeenVersion) ? saved.lastSeenVersion : null;
-  let updated = previous ? compare(version, previous) > 0 : existing || typeof saved?.install === 'string';
+  let updated = previous ? compareVersions(version, previous) > 0 : existing || typeof saved?.install === 'string';
   const record = () => atomicJSON(filename, { version: 2, lastSeenVersion: version });
   if (!updated && !previous) record(); // A fresh profile starts onboarding without an update announcement.
   const get = () => ({ version, previousVersion: previous, updated, releases: releaseNotes(changelog, version, updated ? previous : null) });

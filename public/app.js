@@ -1414,6 +1414,7 @@
     workspace: number => { const project = filteredProjects()[number - 1]; if (!project) return false; selectProject(project.id); return true; },
     settings: press("relay-settings"), "setup-guide": press("open-setup-guide"), "new-workspace": press("create-workspace"), review: press("open-review"),
     "whats-new": () => { if (covered() || !window.relayUpdates) return false; window.relayUpdates.open(); return true; },
+    "check-updates": () => { if (!window.relayUpdater) return false; window.relayUpdater.checkNow(); return true; },
     "local-models": () => window.relayLocal?.open(),
     "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), files: press("toggle-explorer"), "keep-awake": press("keep-awake"),
     "add-folder": () => { if (covered()) return false; toggleFolderForm(true); return true; },
