@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
 import { alertChannels, currentAction, overlayBounds, statusMenu, statusSnapshot, statusTitle } from '../desktop/status.mjs';
+import { createOverlay } from '../desktop/overlay.mjs';
 
 // A registry stand-in: workspaces with their main conversation and, when an agent works, its run.
 function registry(workspaces) {
@@ -94,4 +95,27 @@ test('the overlay sits centred under the menu bar of its display, and its page r
   const script = page.match(/<script>([\s\S]*?)<\/script>/)[1];
   assert(page.includes(`script-src 'sha256-${createHash('sha256').update(script).digest('base64')}'`), 'The policy allows exactly the page’s script; update its hash when the script changes.');
   assert.match(page, /default-src 'none'/);
+});
+
+test('an alert taken away while the panel’s page loads never shows, and of several waiting only the latest does', () => {
+  // The panel loads its page on the first alert. One that goes in the meantime must not leave an empty panel on top.
+  function overlay() {
+    const panel = { loaded: [], sent: [], shown: 0 };
+    class Panel {
+      constructor() { this.webContents = { isLoading: () => true, once: (_name, callback) => panel.loaded.push(callback), send: (_channel, alert) => panel.sent.push(alert.title), setWindowOpenHandler() {}, on() {} }; }
+      setAlwaysOnTop() {} setVisibleOnAllWorkspaces() {} loadFile() {} setBounds() {} hide() {} destroy() {} isDestroyed() { return false; } showInactive() { panel.shown++; }
+    }
+    const screen = { getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 25, width: 1440, height: 875 } }) };
+    return { panel, overlay: createOverlay({ BrowserWindow: Panel, screen, ipcMain: { on() {}, off() {} }, root: '/app', open() {}, mac: true }) };
+  }
+  const first = overlay();
+  first.overlay.show({ kind: 'approval', title: 'Approval needed', projectName: 'Shop' }); first.overlay.hide();
+  for (const callback of first.panel.loaded) callback();
+  assert.deepEqual([first.panel.sent, first.panel.shown], [[], 0]);
+  first.overlay.dispose();
+  const second = overlay();
+  second.overlay.show({ kind: 'finished', title: 'Task finished' }); second.overlay.show({ kind: 'failed', title: 'Task failed' });
+  for (const callback of second.panel.loaded) callback();
+  assert.deepEqual([second.panel.sent, second.panel.shown], [['Task failed'], 1]);
+  second.overlay.dispose();
 });

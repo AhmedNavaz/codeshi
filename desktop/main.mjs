@@ -167,8 +167,13 @@ else {
         result.statusItem=Boolean(tray&&!tray.isDestroyed()&&!statusIcons.idle.isEmpty()&&!statusIcons.attention.isEmpty()&&statusMenu(statusSnapshot(relay.registry)).length>0);
         overlay.show({kind:'finished',title:'Task finished',body:'Smoke test',projectName:'Smoke'});
         const panel=BrowserWindow.getAllWindows().find(item=>item!==win);
-        await new Promise(resolve=>setTimeout(resolve,800));
-        result.overlay=Boolean(panel&&panel.isVisible()&&!panel.isFocused()&&await panel.webContents.executeJavaScript(`!document.getElementById('alert').hidden&&document.getElementById('title').textContent==='Task finished · Smoke'`));
+        // The panel loads its page on the first alert, which a busy build machine can take over a second to do, so this
+        // waits for it to show, within the time an alert stays up.
+        result.overlay=false;
+        for(const until=Date.now()+6000;!result.overlay&&Date.now()<until;){
+          await new Promise(resolve=>setTimeout(resolve,200));
+          result.overlay=Boolean(panel&&panel.isVisible()&&!panel.isFocused()&&await panel.webContents.executeJavaScript(`!document.getElementById('alert').hidden&&document.getElementById('title').textContent==='Task finished · Smoke'`));
+        }
         overlay.hide();
       }
       // Point and tell (#19): a local page opens in the preview, and a click while picking reports the element, with its

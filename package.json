@@ -1,6 +1,6 @@
 {
   "name": "throughline",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "An open-source desktop control plane for agentic development. Multi-agent orchestration, persistent project context, and human-in-the-loop collaboration across Claude Code, Codex, Gemini and local models—powered by your own accounts.",
   "keywords": [
     "claude-code",

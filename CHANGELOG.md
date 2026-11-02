@@ -4,6 +4,8 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-02
+
 ### Added
 
 - **Point and tell** (#19, desktop app): **Preview** beside a running dev server in Run opens it in a preview window. **Pick element** outlines what is under the pointer, and a click puts it into the message box as a sentence (where it is, its text, a selector and, from the app's development build, its source file and line) with a screenshot attached, for you to say or type what should change. The preview shows local addresses only, keeps its own cookies and storage, opens no windows, downloads or permissions, and runs the picker apart from the page's scripts.
@@ -14,6 +16,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 - **Plan usage moves to the Agents panel**, at the top: each connected agent shows what its tightest limit has left as a bar, with the limit named in words and its reset time underneath ("5-hour limit · resets 3:40 pm", "Weekly limit for Opus") instead of abbreviations; selecting it shows all its limits, and selecting an agent that isn't connected opens its setup. The status bar keeps Terminal and Run on the left and your settings on the right. The composer still shows the selected agent's tightest limit.
 - **A clearer terminal.** Its header names the shell and folder (zsh · acme-shop) with icon actions; when the shell exits, one line under its output says so instead of a separate message; with several folders, each is a button that opens the shell there; and the text is a little larger with more room around it.
 - **Run is rebuilt around its output.** A workspace keeps up to 12 named commands, such as its dev server, tests, build or linter, instead of one Run and one Test command. With none yet, Run offers what the folder defines: `package.json` scripts, `Makefile` targets and the usual Cargo, Go and Python commands, found without running anything. The list shows each command's state; the selected one's output keeps its colours, with links to local addresses and Start, Stop, Restart, Edit and Clear. **Ask an agent to fix it** puts a failed command and the end of its output in the message box to read and send. The status bar shows how many commands run, or that one failed. One command can be marked for Check with tests (#12). Commands saved before appear as Run and Test.
+
+### Fixed
+
+- When the first alert after starting was taken away before its panel had loaded, such as an approval answered right away in the window, an empty, invisible panel no longer stays under the menu bar catching clicks (macOS).
 
 ## [0.18.0] - 2026-11-02
 
@@ -313,6 +319,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.19.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0
 [0.18.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0
 [0.17.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0
 [0.16.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.16.0

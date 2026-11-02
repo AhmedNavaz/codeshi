@@ -60,7 +60,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Voice input on macOS, recognized on the Mac, with spoken summaries of finished runs ([#11](https://github.com/AhmedNavaz/throughline/issues/11)) | [0.17.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0) |
 | "While you were away" recaps of what ran, changed and is waiting, written or read aloud ([#22](https://github.com/AhmedNavaz/throughline/issues/22)) | [0.17.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0) |
 | Live status in the Mac menu bar, and optional alerts near the top of the screen ([#13](https://github.com/AhmedNavaz/throughline/issues/13)) | [0.18.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0) |
-| Point and tell: click an element in your app's preview and say what should change ([#19](https://github.com/AhmedNavaz/throughline/issues/19)) | Next release |
+| Point and tell: click an element in your app's preview and say what should change ([#19](https://github.com/AhmedNavaz/throughline/issues/19)) | [0.19.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0) |
 
 ## Now
 
@@ -82,14 +82,14 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Status in the Windows notification area | Planned, help wanted; follows the macOS menu bar status | [#74](https://github.com/AhmedNavaz/throughline/issues/74) |
 | Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/throughline/issues/9) |
-| Everything in the thread: GitHub issues, pull requests and failing CI checks as context, then pull requests from the conversation | Planned in stages; failed command output from Run in the next release; [details below](#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/throughline/issues/18) |
+| Everything in the thread: GitHub issues, pull requests and failing CI checks as context, then pull requests from the conversation | Planned in stages; failed command output from Run shipped in [0.19.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0); [details below](#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/throughline/issues/18) |
 
 ### Everything in the thread
 
 Bring the work around the code into the project conversation, so an agent sees what you see on GitHub, and finish the loop with a pull request. Collaborators with access to the repository work this way rather than through Ask a Friend.
 
 1. **GitHub as context.** Paste or pick an issue, a pull request or the current branch, and Throughline reads it through your own `gh` login: the issue or pull request with its comments and review threads, and the failing checks with the end of each failing job's log. It never asks for a token of its own and only reads. What comes in is shown for review before it is sent, as part of your message, with secrets and local paths removed by the same step that cleans exports. Nothing is fetched in the background.
-2. **Logs from the app.** A failed command in **Run** puts its command and the end of its output in the message box in one click, in the next release; selected terminal output follows in [#71](https://github.com/AhmedNavaz/throughline/issues/71).
+2. **Logs from the app.** A failed command in **Run** puts its command and the end of its output in the message box in one click, since [0.19.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0); selected terminal output follows in [#71](https://github.com/AhmedNavaz/throughline/issues/71).
 3. **A pull request from the conversation.** After you review the diff and commit in the Git panel, **Open pull request** pushes the branch and opens the pull request with `gh`, with a title and description drafted from the conversation for you to edit. It is the one place Throughline pushes, only when you click it and after showing the remote and branch; agents never push.
 
 ### Adaptive agent and model routing

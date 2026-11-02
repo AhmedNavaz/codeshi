@@ -30,7 +30,8 @@ export function createOverlay({ BrowserWindow, screen, ipcMain, root, open, mac 
     current = { kind: alert.kind, title: String(alert.title || ''), body: String(alert.body || '').slice(0, 240), projectName: alert.projectName ? String(alert.projectName) : '', projectId: alert.projectId || null, approvalId: alert.approvalId || null };
     const panel = window(), display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     panel.setBounds(overlayBounds(display, size));
-    const send = () => { if (!panel.isDestroyed()) { panel.webContents.send('overlay:alert', current); panel.showInactive(); } };
+    // An alert taken away, or replaced, while the panel's page loads is not shown when it finishes.
+    const shown = current, send = () => { if (!panel.isDestroyed() && current === shown) { panel.webContents.send('overlay:alert', shown); panel.showInactive(); } };
     if (panel.webContents.isLoading()) panel.webContents.once('did-finish-load', send); else send();
     clearTimeout(timer);
     if (current.kind !== 'approval') timer = setTimeout(hide, OVERLAY_SECONDS * 1000);
