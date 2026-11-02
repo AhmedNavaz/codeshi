@@ -4,6 +4,8 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-03
+
 ### Added
 
 - **Undo a run** (#20): Throughline saves the workspace folders before and after every run, whichever agent ran it, in its own data folder rather than your project's Git repository. A run that changed files ends with **3 files changed · Undo**. Undo previews every file and the exact lines that change before anything is written, takes the run's edits out of files you changed since when they don't overlap, leaves the rest as they are, and adds a note so the next agent knows. **Redo** puts the changes back.
@@ -14,6 +16,7 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 - Notification banners are silent, and the Agent menu's **Play Notification Sound** is now **Play Sounds**, which turns on the new sounds. It no longer depends on banners being on.
 - A run's steps are coloured by kind, so changes stand out: reading and searching in blue, commands in purple, edits in amber, new files in green and deleted files in red, with the web and other agents in their own colours. Each changed file shows its added and removed lines, and an opened edit shows them as a diff with the unchanged lines around them.
+- The bottom panel, with Terminal and Run, has a background of its own, set apart from the conversation above it.
 
 ### Fixed
 
@@ -335,6 +338,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.20.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.20.0
 [0.19.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0
 [0.18.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0
 [0.17.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0

@@ -61,6 +61,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | "While you were away" recaps of what ran, changed and is waiting, written or read aloud ([#22](https://github.com/AhmedNavaz/throughline/issues/22)) | [0.17.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0) |
 | Live status in the Mac menu bar, and optional alerts near the top of the screen ([#13](https://github.com/AhmedNavaz/throughline/issues/13)) | [0.18.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0) |
 | Point and tell: click an element in your app's preview and say what should change ([#19](https://github.com/AhmedNavaz/throughline/issues/19)) | [0.19.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0) |
+| Undo and redo any run's changes, whichever agent made them, after a preview of every file and line ([#20](https://github.com/AhmedNavaz/throughline/issues/20), stage 1) | [0.20.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.20.0) |
 
 ## Now
 
@@ -81,7 +82,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/throughline/issues/73) |
 | Status in the Windows notification area | Planned, help wanted; follows the macOS menu bar status | [#74](https://github.com/AhmedNavaz/throughline/issues/74) |
 | Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
-| Rewind: undo any run's changes, whichever agent made them, then one timeline of checkpoints | Stage 1, undoing and redoing a run with a preview of every file, ships in the next release; a Timeline panel and restoring the workspace to any checkpoint follow | [#20](https://github.com/AhmedNavaz/throughline/issues/20) |
+| Rewind: undo any run's changes, whichever agent made them, then one timeline of checkpoints | Stage 1, undoing and redoing a run with a preview of every file, shipped in [0.20.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.20.0); a Timeline panel and restoring the workspace to any checkpoint follow | [#20](https://github.com/AhmedNavaz/throughline/issues/20) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/throughline/issues/9) |
 | Everything in the thread: GitHub issues, pull requests and failing CI checks as context, then pull requests from the conversation | Planned in stages; failed command output from Run shipped in [0.19.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0); [details below](#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/throughline/issues/18) |
 
