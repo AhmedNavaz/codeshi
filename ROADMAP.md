@@ -79,7 +79,6 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/throughline/issues/73) |
 | Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/throughline/issues/9) |
-| Run the project's own tests on a returned patch, with approval | Planned | [#10](https://github.com/AhmedNavaz/throughline/issues/10) |
 
 ### Adaptive agent and model routing
 
@@ -113,6 +112,7 @@ Evaluate routing with representative coding tasks, tracking completion quality, 
 | Feature | Status | Issue |
 | --- | --- | --- |
 | Binary files in Ask a Friend patches | Planned | [#25](https://github.com/AhmedNavaz/throughline/issues/25) |
+| Run the project's own tests on a returned patch, with approval | On hold until Ask a Friend sees more use; collaborators with access to the repository use Git and CI, which [#18](https://github.com/AhmedNavaz/throughline/issues/18) brings into the conversation | [#10](https://github.com/AhmedNavaz/throughline/issues/10) |
 | Accessibility pass for keyboard navigation and screen readers | Help wanted | [#26](https://github.com/AhmedNavaz/throughline/issues/26) |
 | Interface translations | Help wanted | [#27](https://github.com/AhmedNavaz/throughline/issues/27) |
 
