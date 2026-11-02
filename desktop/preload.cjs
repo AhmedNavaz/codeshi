@@ -34,4 +34,11 @@ contextBridge.exposeInMainWorld('relayDesktop', Object.freeze({
     return () => ipcRenderer.removeListener('relay:menu-command', listener);
   },
   setMenuState: state => ipcRenderer.send('relay:menu-state', state),
+  // Point and tell (#19): opens a local address in the preview window; what is picked there comes back here.
+  openPreview: input => ipcRenderer.invoke('relay:preview:open', input),
+  onPreviewPick: callback => {
+    const listener = (_event, pick) => callback(pick);
+    ipcRenderer.on('relay:preview-pick', listener);
+    return () => ipcRenderer.removeListener('relay:preview-pick', listener);
+  },
 }));

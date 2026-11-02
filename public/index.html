@@ -34,6 +34,7 @@
     <script src="/vendor/xterm.js" defer></script>
     <script src="/vendor/addon-fit.js" defer></script>
     <script src="/bottom-panel.js" defer></script>
+    <script src="/preview.js" defer></script>
     <script src="/terminal.js" defer></script>
     <link rel="stylesheet" href="/voice.css" />
     <script src="/voice.js" defer></script>
@@ -215,7 +216,7 @@
             <div class="run-pane">
               <p id="command-error" class="project-error command-error" role="alert" hidden></p>
               <div id="command-view" class="command-view" hidden>
-                <div class="run-pane-bar"><span id="command-state" class="command-state" role="status"></span><code id="command-line" class="command-line"></code><span id="command-links" class="command-links"></span><span class="command-buttons"><button id="command-fix" class="toolbar-button command-fix" type="button" hidden>Ask an agent to fix it</button><button id="command-start" class="pill-button command-start" type="button">Start</button><button id="command-stop" class="pill-button command-stop" type="button" hidden>Stop</button><button id="command-restart" class="icon-button command-icon" type="button" aria-label="Restart" title="Restart" data-icon="restart" hidden></button><button id="command-clear" class="icon-button command-icon" type="button" aria-label="Clear output" title="Clear output" data-icon="clear" hidden></button><button id="command-edit" class="icon-button command-icon" type="button" aria-label="Edit command" title="Edit command" data-icon="edit"></button></span></div>
+                <div class="run-pane-bar"><span id="command-state" class="command-state" role="status"></span><code id="command-line" class="command-line"></code><span id="command-links" class="command-links"></span><span class="command-buttons"><button id="command-fix" class="toolbar-button command-fix" type="button" hidden>Ask an agent to fix it</button><button id="command-preview" class="pill-button command-preview" type="button" title="Open it in the preview, where you can click an element to change" hidden>Preview</button><button id="command-start" class="pill-button command-start" type="button">Start</button><button id="command-stop" class="pill-button command-stop" type="button" hidden>Stop</button><button id="command-restart" class="icon-button command-icon" type="button" aria-label="Restart" title="Restart" data-icon="restart" hidden></button><button id="command-clear" class="icon-button command-icon" type="button" aria-label="Clear output" title="Clear output" data-icon="clear" hidden></button><button id="command-edit" class="icon-button command-icon" type="button" aria-label="Edit command" title="Edit command" data-icon="edit"></button></span></div>
                 <p id="command-truncated" class="command-note" hidden>Older output was discarded. Showing the latest 64K characters.</p>
                 <pre id="command-output" class="command-output" tabindex="0" aria-label="Command output"></pre>
               </div>

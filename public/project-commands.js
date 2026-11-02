@@ -92,6 +92,9 @@
     $('command-clear').hidden = !session || running; $('command-clear').disabled = pending;
     $('command-edit').disabled = pending;
     $('command-fix').hidden = session?.status !== 'failed';
+    // A running app with a local address can open in the preview, to point at what should change (#19).
+    const address = running ? (session?.urls || []).find(url => { try { const parsed = new URL(url); return ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname) && !parsed.username && !parsed.password; } catch { return false; } }) : null;
+    $('command-preview').hidden = !address || !window.relayPreview?.available; $('command-preview').dataset.url = address || '';
     $('command-truncated').hidden = !session?.truncated;
     $('command-links').replaceChildren();
     for (const url of session?.urls || []) {
@@ -233,6 +236,7 @@
   $('command-add').addEventListener('click', () => openForm());
   $('command-custom').addEventListener('click', () => openForm());
   $('command-edit').addEventListener('click', () => { const command = current(); if (command) openForm(command); });
+  $('command-preview').addEventListener('click', () => { if ($('command-preview').dataset.url) window.relayPreview?.open($('command-preview').dataset.url); });
   $('command-start').addEventListener('click', () => { const command = current(); if (command) start(command); });
   $('command-stop').addEventListener('click', () => { const command = current(); if (command) stop(command); });
   $('command-restart').addEventListener('click', () => { const command = current(); if (command) perform(scope => api.post('/api/commands/restart', { id: command.id }, scope)); });
@@ -264,5 +268,7 @@
     // Opens Run; for Check with tests, straight into choosing a test command when none is marked.
     open: ({ test = false } = {}) => { window.relayPanel?.show('run'); if (test && !state().commands.some(command => command.test)) openForm(null, { test: true }); },
     refresh,
+    // The local address of a running command, for opening the app in the preview.
+    localURL: () => Object.values(state().sessions).filter(active).flatMap(session => session.urls || []).find(url => { try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname); } catch { return false; } }) || null,
   };
 })();

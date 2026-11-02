@@ -1,4 +1,4 @@
-import {app,BrowserWindow,Menu,Notification,Tray,dialog,ipcMain,nativeImage,nativeTheme,screen,shell,powerSaveBlocker} from 'electron';
+import {app,BaseWindow,BrowserWindow,Menu,Notification,Tray,WebContentsView,dialog,ipcMain,nativeImage,nativeTheme,screen,session,shell,powerSaveBlocker} from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -13,10 +13,12 @@ import {helperPath} from '../src/voice.mjs';
 import {execFile} from 'node:child_process';
 import {createRequire} from 'node:module';
 import os from 'node:os';
+import http from 'node:http';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
 import {statusSnapshot,statusTitle,statusMenu,alertChannels} from './status.mjs';
 import {createOverlay} from './overlay.mjs';
+import {createPreview} from './preview.mjs';
 import {APP_ID,ensureStartMenuShortcut} from './windows.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const smoke=process.argv.includes('--smoke-test');
@@ -31,12 +33,12 @@ else app.setPath('userData',preferredUserData(app.getPath('appData'),app.getPath
 // Windows ties notifications and the taskbar entry to this ID (see windows.mjs).
 if(process.platform==='win32'&&!development)app.setAppUserModelId(APP_ID);
 const primary=app.requestSingleInstanceLock();
-let relay,win,origin,keepAwake,updater,tray=null,overlay=null,quitting=false;
+let relay,win,origin,keepAwake,updater,tray=null,overlay=null,preview=null,quitting=false;
 if(!primary) app.quit();
 else {
   app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
   app.on('before-quit',event=>{if(relay&&!quitting){event.preventDefault();quitting=true;keepAwake?.dispose();updater?.dispose();relay.close().finally(()=>app.quit());}});
-  app.on('will-quit',()=>{keepAwake?.dispose();overlay?.dispose();tray?.destroy();tray=null;});
+  app.on('will-quit',()=>{keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
     if(process.platform==='darwin'&&!app.isPackaged) app.dock?.setIcon(path.join(root,'assets','icon.png'));
@@ -132,6 +134,12 @@ else {
     ipcMain.handle('relay:update:skip',(event,version)=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.skip(version);});
     ipcMain.handle('relay:update:automatic',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.setAutomatic(enabled);});
     ipcMain.on('relay:menu-state',(event,input)=>{if(!trusted(event))return;const next=menuState(input);if(next){page=next;updateMenu();}});
+    // Point and tell (#19): the workspace's app in a preview window; an element picked there goes to the message box.
+    const previewPicks=[];
+    preview=createPreview({BaseWindow,WebContentsView,session,ipcMain,shell,root,background:()=>appearance.background(),
+      folders:id=>{try{return id?relay.registry.get(id).folders.map(folder=>({name:folder.displayName||folder.name,path:folder.path})):[];}catch{return [];}},
+      onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image});}});
+    ipcMain.handle('relay:preview:open',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const project=relay.registry.get(String(input?.projectId||''));return preview.open({projectId:project.id,url:input?.url,workspace:project.name});});
     ipcMain.handle('relay:pick-folder',async event=>{if(!trusted(event))throw Error('Untrusted renderer');const choice=await dialog.showOpenDialog(win,{properties:['openDirectory']});return choice.canceled?null:choice.filePaths[0];});
     ipcMain.handle('relay:open-external',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const url=new URL(input);if(url.username||url.password||(url.protocol!=='https:' && !(url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname))))throw Error('Only HTTPS or local test links without credentials may open');await shell.openExternal(url.href);return true;});
     win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
@@ -163,6 +171,31 @@ else {
         result.overlay=Boolean(panel&&panel.isVisible()&&!panel.isFocused()&&await panel.webContents.executeJavaScript(`!document.getElementById('alert').hidden&&document.getElementById('title').textContent==='Task finished · Smoke'`));
         overlay.hide();
       }
+      // Point and tell (#19): a local page opens in the preview, and a click while picking reports the element, with its
+      // screenshot, instead of reaching the page.
+      {
+        const server=http.createServer((_request,response)=>{response.setHeader('Content-Type','text/html; charset=utf-8');response.end('<!doctype html><title>Smoke app</title><main style="padding:40px"><button id="buy" onclick="document.title=\'clicked\'">Buy now</button></main>');});
+        await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+        try{
+          const picked=new Promise(resolve=>previewPicks.push(resolve));
+          await preview.open({projectId:null,url:`http://127.0.0.1:${server.address().port}/`,workspace:'Smoke'});
+          preview.setPicking(true);
+          const contents=preview.page.webContents,point=await contents.executeJavaScript(`(()=>{const r=document.getElementById('buy').getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`);
+          // As for a person, the click comes once the picker outlines the button under the pointer.
+          let outlined=false;
+          for(let step=0,until=Date.now()+5000;!outlined&&Date.now()<until;step++){
+            contents.sendInputEvent({type:'mouseMove',x:point.x+step%2,y:point.y});
+            await new Promise(resolve=>setTimeout(resolve,100));
+            outlined=await contents.executeJavaScript(`document.querySelector('throughline-picker')?.style.display==='block'`);
+          }
+          contents.sendInputEvent({type:'mouseDown',x:point.x,y:point.y,button:'left',clickCount:1});
+          contents.sendInputEvent({type:'mouseUp',x:point.x,y:point.y,button:'left',clickCount:1});
+          const pick=await Promise.race([picked,new Promise(resolve=>setTimeout(()=>resolve(null),8000))]),title=await contents.executeJavaScript('document.title');
+          result.preview=Boolean(outlined&&pick&&pick.element?.selector==='#buy'&&pick.element.text==='Buy now'&&pick.image?.data?.length>100&&pick.text.includes('the “Buy now” button (#buy)')&&title==='Smoke app');
+          // A failure says which step went wrong.
+          if(!result.preview)result.previewSteps={outlined,picked:Boolean(pick),selector:pick?.element?.selector??null,image:pick?.image?.data?.length??0,title};
+        }finally{preview.close();server.close();}
+      }
       if(process.platform==='darwin'&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));
       result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'`);
       // The menu bar is Throughline's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
@@ -178,7 +211,7 @@ else {
       for(let tries=0;tries<100;tries++){result.updates=await win.webContents.executeJavaScript(`({open:document.getElementById('updates-dialog').open,notes:!!document.querySelector('#updates-content .updates-release')})`);if(result.updates.open)break;await new Promise(resolve=>setTimeout(resolve,20));}
       await win.webContents.executeJavaScript(`document.getElementById('updates-dismiss').click()`);
       for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!document.getElementById('updates-dialog').open`)){result.updates.dismissed=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
-      if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.voiceUI||result.speech===false||result.statusItem===false||result.overlay===false||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
+      if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.voiceUI||result.speech===false||result.statusItem===false||result.overlay===false||!result.preview||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
       console.log('AI_RELAY_DESKTOP_SMOKE '+JSON.stringify(result));app.quit();
     }
   }).catch(error=>{console.error(error);if(!smoke)dialog.showErrorBox('Throughline could not start',error.message);app.exit(1);});

@@ -21,6 +21,13 @@ Throughline is an open-source desktop control plane for agentic development. It 
 </td>
 </tr>
 <tr>
+<td colspan="2" valign="top">
+<img src="docs/features/point-and-tell.jpg" alt="A preview of a shop app with its Apply button outlined while picking, and Throughline's message box with a sentence describing that button, where its code is, and its screenshot attached">
+<h3>Point at what should change</h3>
+<p>Open your running app in a preview, click the button, heading or section you mean, and say or type the change. Throughline puts that element into your message, with a screenshot and, from your app's development build, where its code is, so the agent changes the right thing. In the desktop app.</p>
+</td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 <img src="docs/features/conversation.png" alt="Claude adds a promo code field, then Codex finishes the API side in the same conversation">
 <h3>Switch agents without starting over</h3>
@@ -108,6 +115,7 @@ Throughline is an open-source desktop control plane for agentic development. It 
 - **While you were away**: come back to a short recap of what ran, what changed and what is waiting in each workspace, written or read aloud.
 - **Voice** on macOS: speak a message instead of typing it, recognized on your Mac so the audio never leaves it, and hear a short summary when the run finishes.
 - A terminal for each workspace in a bottom panel: your own shell in the folder you choose, kept running while the panel is hidden or you switch workspaces.
+- **Point and tell** in the desktop app: open your running app in a preview, click the element that should change, and say or type what to do. The element, with a screenshot and where its code is, goes into your message.
 - **Run**, beside the terminal: your dev server, tests and scripts as named commands, found in `package.json`, a `Makefile` or Cargo, Go and Python projects, with live coloured output, links to local addresses, and a failure you can hand to an agent. Terminal and Run are always in the status bar.
 - A file browser with syntax-highlighted previews. Attach files and images by clicking, dragging or pasting.
 - Plan usage for each agent in the Agents panel, with bars and reset times, plus per-run context usage when reported.

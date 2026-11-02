@@ -63,7 +63,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -183,6 +183,8 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,navigator:{clipboard:{writeText:async()=>{}}}});
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
+  const previewOpens=[],previewListeners=[];
+  if(previewUI)window.relayDesktop=Object.assign(window.relayDesktop||{},{openPreview:async input=>{previewOpens.push(clone(input));return true;},onPreviewPick:callback=>{previewListeners.push(callback);return ()=>{};}});
   vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(workbench)vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});
   if(insights)vm.runInContext(fs.readFileSync(new URL('../public/insights.js',import.meta.url),'utf8'),context,{filename:'public/insights.js'});
   if(modelPickerUI)vm.runInContext(fs.readFileSync(new URL('../public/model-picker.js',import.meta.url),'utf8'),context,{filename:'public/model-picker.js'});
@@ -194,6 +196,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(updatesUI)vm.runInContext(fs.readFileSync(new URL('../public/updates.js',import.meta.url),'utf8'),context,{filename:'public/updates.js'});
   if(localUI)vm.runInContext(fs.readFileSync(new URL('../public/local-models.js',import.meta.url),'utf8'),context,{filename:'public/local-models.js'});
   if(commandsUI||terminalUI)vm.runInContext(fs.readFileSync(new URL('../public/bottom-panel.js',import.meta.url),'utf8'),context,{filename:'public/bottom-panel.js'});
+  if(previewUI)vm.runInContext(fs.readFileSync(new URL('../public/preview.js',import.meta.url),'utf8'),context,{filename:'public/preview.js'});
   if(commandsUI)vm.runInContext(fs.readFileSync(new URL('../public/project-commands.js',import.meta.url),'utf8'),context,{filename:'public/project-commands.js'});
   if(filesUI)vm.runInContext(fs.readFileSync(new URL('../public/files.js',import.meta.url),'utf8'),context,{filename:'public/files.js'});
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
@@ -221,7 +224,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {previewOpens,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -1590,6 +1593,26 @@ test('Run is in the status bar; a command found in the folder is added in one cl
   ui.$('command-clear').click();await flush();await flush();assert.equal(ui.$('command-state').textContent,'Not started');
   assert.equal(ui.$('message-input').value,'Keep coding while the server runs');
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0);
+});
+
+test('a running app opens in the preview from Run, and a pick goes into the message box as a sentence with its screenshot attached',async()=>{
+  const ui=await browser({commandsUI:true,filesUI:true,previewUI:true,desktop:true});
+  const attachments=[];ui.setIntercept((request,next)=>{if(request.path==='/api/attachments'&&request.method==='POST'){attachments.push(request.body);return response({id:'att-1',name:request.body.name,kind:'image',mime:'image/png',bytes:120});}return next();});
+  ui.$('status-run').click();await flush();await flush();
+  ui.$('command-quick').querySelectorAll('.command-chip')[0].click();await flush();await flush();
+  assert.equal(ui.$('command-preview').hidden,true,'A command that isn’t running has nothing to preview.');
+  ui.$('command-start').click();await flush();await flush();
+  assert.equal(ui.$('command-preview').hidden,false,'A running app with a local address can be previewed.');
+  ui.$('command-preview').click();await flush();
+  assert.deepEqual(ui.previewOpens,[{projectId:'project-one',url:'http://localhost:3000/'}]);
+  assert.equal(ui.window.relayCommands.localURL(),'http://localhost:3000/');
+  ui.$('message-input').value='Make the promo field wider';ui.fire('message-input','input');
+  await ui.pickInPreview({projectId:'project-one',text:'In the preview of localhost:3000/checkout, the “Apply” button (form#promo > button.apply; src/PromoForm.tsx:42 in PromoForm): ',image:{name:'preview-button.png',data:'iVBORw0KGgo='}});await flush();
+  assert.equal(ui.$('message-input').value,'Make the promo field wider\nIn the preview of localhost:3000/checkout, the “Apply” button (form#promo > button.apply; src/PromoForm.tsx:42 in PromoForm): ','Each pick starts its own line after what is already written.');
+  assert.deepEqual(attachments,[{name:'preview-button.png',data:'iVBORw0KGgo='}],'The screenshot is attached to the message.');
+  assert.deepEqual([...ui.window.relayFiles.ids()],['att-1']);
+  assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
+  const web=await browser({commandsUI:true});assert.equal(web.window.relayPreview,undefined,'Without the desktop app there is no preview.');
 });
 
 test('commands are added and edited in a short form, stay with their workspace, and a failure can go to an agent without sending',async()=>{

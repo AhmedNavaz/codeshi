@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Point and tell** (#19, desktop app): **Preview** beside a running dev server in Run opens it in a preview window. **Pick element** outlines what is under the pointer, and a click puts it into the message box as a sentence (where it is, its text, a selector and, from the app's development build, its source file and line) with a screenshot attached, for you to say or type what should change. The preview shows local addresses only, keeps its own cookies and storage, opens no windows, downloads or permissions, and runs the picker apart from the page's scripts.
+
 ### Changed
 
 - **Terminal and Run share one bottom panel**, with a tab each, and both are always in the status bar, so a hidden tool is one click away. ⌘J shows or hides the panel as you left it, ⌃` the terminal. Hiding never stops what runs in it.

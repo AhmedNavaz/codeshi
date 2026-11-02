@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-BFKtYDs6kPwhjUtACTEBF9MKURJM1KGf8EhgR3jlarc='">
+<title>Preview toolbar</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f8f8f8; --text: #1f1f1f; --muted: #616161; --faint: #8a8a8a; --border: #e5e5e5; --hover: rgba(0, 0, 0, .06); --field: #ffffff; --field-border: #d4d4d4; --accent: #005fb8; --accent-strong: #004c94; --on-accent: #ffffff; --danger: #c4314b; --success: #2b8a3e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1f1f1f; --text: #cccccc; --muted: #9d9d9d; --faint: #777777; --border: #2b2b2b; --hover: rgba(255, 255, 255, .07); --field: #2a2a2a; --field-border: #3c3c3c; --accent: #0078d4; --accent-strong: #026ec1; --on-accent: #ffffff; --danger: #f1707b; --success: #73c991; } }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 12.5px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 44px; padding: 0 10px; border-bottom: 1px solid var(--border); }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+  button:hover:enabled { background: var(--hover); color: var(--text); }
+  button:disabled { opacity: .4; cursor: default; }
+  .icon { width: 28px; flex: none; }
+  svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  #address { flex: 1; min-width: 120px; height: 28px; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--field-border); border-radius: 7px; background: var(--field); color: var(--text); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; -webkit-user-select: text; user-select: text; }
+  #address:focus { border-color: var(--accent); }
+  #workspace { flex: none; max-width: 160px; overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; }
+  #workspace:empty { display: none; }
+  #pick { flex: none; padding: 0 12px; border-radius: 14px; background: var(--accent); color: var(--on-accent); font-weight: 500; }
+  #pick:hover:enabled { background: var(--accent-strong); color: var(--on-accent); }
+  #pick[aria-pressed="true"] { background: var(--hover); color: var(--text); box-shadow: inset 0 0 0 1.5px var(--accent); }
+  #status { display: flex; align-items: center; gap: 6px; flex: none; max-width: 340px; overflow: hidden; color: var(--muted); white-space: nowrap; }
+  #status:empty { display: none; }
+  #status[data-kind="error"] { color: var(--danger); white-space: normal; max-width: 420px; line-height: 1.25; font-size: 11.5px; }
+  #status[data-kind="picked"]::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+  #back-to-app { height: 24px; padding: 0 8px; color: var(--accent); }
+</style>
+</head>
+<body>
+  <button id="back" class="icon" type="button" aria-label="Back" title="Back" disabled><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+  <button id="forward" class="icon" type="button" aria-label="Forward" title="Forward" disabled><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+  <button id="reload" class="icon" type="button" aria-label="Reload" title="Reload"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
+  <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Local address" />
+  <span id="workspace" title="Picks go to this workspace's message"></span>
+  <span id="status" role="status" aria-live="polite"></span>
+  <button id="pick" type="button" aria-pressed="false" title="Pick an element to change (Esc stops)"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg><span id="pick-label">Pick element</span></button>
+  <button id="open-external" class="icon" type="button" aria-label="Open in browser" title="Open in your browser"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M18 14v4a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18V7.5A1.5 1.5 0 0 1 5.5 6H10"/></svg></button>
+<script>
+  const $ = id => document.getElementById(id), bridge = window.relayPreview;
+  let editing = false, statusTimer = null;
+  function status(kind, text, back = false) {
+    clearTimeout(statusTimer);
+    const host = $('status'); host.dataset.kind = kind || ''; host.replaceChildren();
+    if (!text) return;
+    host.append(document.createTextNode(text));
+    if (back) { const button = document.createElement('button'); button.id = 'back-to-app'; button.type = 'button'; button.textContent = 'Go to message'; button.addEventListener('click', () => bridge.act('focus-app')); host.append(button); }
+    if (kind !== 'error') statusTimer = setTimeout(() => status(''), back ? 8000 : 4000);
+  }
+  bridge.onState(state => {
+    if (!editing) $('address').value = state.url || '';
+    $('back').disabled = !state.back; $('forward').disabled = !state.forward;
+    $('workspace').textContent = state.workspace || '';
+    $('pick').setAttribute('aria-pressed', String(state.picking));
+    $('pick-label').textContent = state.picking ? 'Click an element · Esc stops' : 'Pick element';
+    if (state.picking) status('');
+  });
+  bridge.onPicked(() => status('picked', 'Added to your message', true));
+  bridge.onError(message => status('error', message));
+  for (const action of ['back', 'forward', 'reload', 'pick']) $(action).addEventListener('click', () => bridge.act(action));
+  $('open-external').addEventListener('click', () => bridge.act('open-external'));
+  $('address').addEventListener('focus', () => { editing = true; $('address').select(); });
+  $('address').addEventListener('blur', () => { editing = false; });
+  $('address').addEventListener('keydown', event => { if (event.key === 'Enter') { bridge.act('navigate', $('address').value); $('address').blur(); } if (event.key === 'Escape') $('address').blur(); });
+</script>
+</body>
+</html>
