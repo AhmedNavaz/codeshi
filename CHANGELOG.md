@@ -4,6 +4,8 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-02
+
 ### Added
 
 - **Status in the menu bar** (#13, macOS): Throughline's mark in the menu bar says what needs you, or what the working agent is doing, in general words and counts, never commands, chat text or file paths. Its menu lists busy workspaces, approvals first, opens the workspace or the request without answering it, and shows Keep Awake. Hide it from the menu itself or the Agent menu.
@@ -300,6 +302,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.18.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0
 [0.17.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0
 [0.16.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.16.0
 [0.15.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0

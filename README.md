@@ -8,9 +8,7 @@
 
 <p align="center"><img src="docs/screenshot.png" alt="Throughline: a project conversation shared by Claude and Codex, with the file browser, routing and handoff settings, and plan usage" width="900"></p>
 
-Throughline is an open-source desktop control plane for agentic development. It brings Claude Code, Codex, Gemini through Google Antigravity and downloaded Ollama coding models into a unified workspace for multi-agent orchestration, persistent project context, and human-in-the-loop collaboration.
-
-Each project becomes a continuous working thread: its folders, conversation, saved context, and agent activity stay together as the work evolves. Carry work between agents, consolidate fragmented chat histories, inspect execution and code changes, and exchange reviewable patches with collaborators. Throughline runs through your installed agent CLIs and existing accounts, with you directing the workflow.
+Throughline is an open-source desktop control plane for agentic development. It brings Claude Code, Codex, Gemini through Google Antigravity and downloaded Ollama coding models into a unified workspace for multi-agent orchestration, persistent project context, and human-in-the-loop collaboration. It runs the agents you already have installed, on your own accounts and subscriptions.
 
 ## What you can do
 
@@ -18,68 +16,68 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 <tr>
 <td colspan="2" valign="top">
 <img src="docs/features/menu-bar.jpg" alt="Throughline in the macOS menu bar while another app is in front: the status says Approval needed, its menu lists each busy workspace, and an alert under the menu bar names the workspace waiting for approval">
-<h3>Your agents, in the menu bar</h3>
-<p>Work in any other app and still know what your agents are doing. The menu bar says what needs you, or what the working agent is doing, and its menu lists every busy workspace, approvals first. Choose one to jump straight to it. Optional alerts slide in under the menu bar without taking the keyboard. It shows general words and counts, never your commands, code or file paths. macOS only for now.</p>
+<h3>See what your agents are doing from the menu bar</h3>
+<p>Keep working in your editor or browser while agents run. The Throughline icon in your Mac's menu bar tells you when something needs you, like an approval or failing tests, and otherwise what the agent is doing right now. Click it to see every busy project at a glance and jump straight to the one waiting on you. Alerts can also pop up at the top of the screen if you turn them on. Your commands, code and file names stay inside the app.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 <img src="docs/features/conversation.png" alt="Claude adds a promo code field, then Codex finishes the API side in the same conversation">
-<h3>One thread, every agent</h3>
-<p>Claude Code, Codex, Gemini and local models share one conversation per project. Switch mid-task and the next agent picks up the context.</p>
+<h3>Switch agents without starting over</h3>
+<p>Claude Code, Codex, Gemini and local models work in the same conversation for each project. If one gets stuck or runs out of usage, switch to another mid-task and it carries on from everything said so far.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/routing.png" alt="The Agents panel with Manual, Cost saving, Balanced and Maximum quality routing">
-<h3>Routing</h3>
-<p>Throughline can pick the agent, model and effort for each message, to save allowance or get the best result, and shows why before you send.</p>
+<h3>Let Throughline pick the model</h3>
+<p>For each message, it chooses the agent, the model and how hard it should think: a light model for a typo, the strongest one for a refactor. You see its choice and why before you send. Turn on test checks and it runs your tests after each change; if they fail, it tries once more with a stronger model or more thinking.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 <img src="docs/features/handoff.png" alt="An offer to hand a running task from Codex, at 92% of its limit, to Claude">
-<h3>Handoff before a limit</h3>
-<p>When an agent nears its usage limit, hand the task to one with room. You see its model, billing and the task before it switches.</p>
+<h3>Keep going when an agent hits its limit</h3>
+<p>When an agent gets close to its plan's usage limit, Throughline offers to hand the task to another agent that still has room. Before anything switches, you see which agent and model would take over and whether it's covered by your subscription.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/plan.png" alt="A note added to a running task, a queued prompt and the agent's plan with two of four steps done">
-<h3>Queue, steer and follow the plan</h3>
-<p>Queue the next prompts, add a note to the run that's working, and watch the agent's plan as a live to-do list.</p>
+<h3>Line up work and guide it as it goes</h3>
+<p>Queue your next prompts so they run one after another. Add a note to the task that's running without stopping it, and follow the agent's plan as a checklist that ticks off as it works.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 <img src="docs/features/approvals.png" alt="An approval for npm install, with options to allow it for this run or always in this workspace">
-<h3>Approvals on your terms</h3>
-<p>Reading your workspace runs freely; changes ask first. Allow an exact action for this run, or always in this workspace.</p>
+<h3>You decide what agents can change</h3>
+<p>Agents can look around your project freely, but anything that could change it asks you first. Allow it once, for the rest of the task, or always in this project.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/git.png" alt="The Git panel with a commit message, two staged files and one unstaged deletion">
-<h3>Review and commit</h3>
-<p>See every change with its diff, stage what you reviewed, and commit with your own identity and hooks. Throughline never pushes.</p>
+<h3>Review and commit in one place</h3>
+<p>See every changed file with its diff, stage what you've checked, and commit under your own Git name with your project's usual commit checks. Throughline never pushes for you.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 <img src="docs/features/terminal.png" alt="The terminal panel showing passing tests and git status">
-<h3>A terminal per workspace</h3>
-<p>Your own shell in a bottom panel, kept running while you switch workspaces, so a dev server stays up while agents work.</p>
+<h3>A terminal for each project</h3>
+<p>Your own shell in a panel below the conversation. It keeps running when you hide it or switch projects, so your dev server stays up while agents work.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/voice.png" alt="Voice input listening, with the spoken request appearing in the message box">
-<h3>Speak instead of typing</h3>
-<p>On macOS, say what you want and it appears in the message box, recognized on your Mac. When the run finishes, hear what it did.</p>
+<h3>Talk instead of typing</h3>
+<p>On a Mac, say what you want and your words appear in the message box, ready to check and send. Your voice is recognized on your Mac and never leaves it. When the task is done, Throughline reads you a short summary.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 <img src="docs/features/recap.png" alt="A recap listing finished, stopped and running work and an approval waiting in two workspaces">
-<h3>While you were away</h3>
-<p>Come back to a short recap of what ran, what changed and what's waiting in each workspace, written or read aloud.</p>
+<h3>Catch up when you come back</h3>
+<p>Step away, and when you return a short summary shows for each project: what finished, which files changed, and what's waiting for you, like an approval or a queued prompt. It can read it aloud too.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/search.png" alt="The search bar finding a workspace and files from two workspaces">
-<h3>Find anything</h3>
-<p>⌘K finds workspaces, files in every workspace and actions from one search bar.</p>
+<h3>Find anything with ⌘K</h3>
+<p>One search bar for your projects, the files in all of them, and the app's actions.</p>
 </td>
 </tr>
 </table>
