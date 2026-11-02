@@ -6,7 +6,7 @@
 
 <p align="center"><a href="https://github.com/AhmedNavaz/throughline/actions/workflows/ci.yml"><img src="https://github.com/AhmedNavaz/throughline/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="https://github.com/AhmedNavaz/throughline/releases/latest"><img src="https://img.shields.io/github/v/release/AhmedNavaz/throughline" alt="Latest release"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a> <a href="https://www.patreon.com/17048317/join"><img src="https://img.shields.io/badge/Support-Patreon-FF424D?logo=patreon&amp;logoColor=white" alt="Support Throughline on Patreon"></a></p>
 
-<p align="center"><img src="docs/screenshot.png" alt="Throughline: a project conversation shared by Claude and Codex, with the file browser, routing and handoff settings, and plan usage" width="900"></p>
+<p align="center"><img src="docs/screenshot.png" alt="Throughline: a project conversation shared by Claude and Codex, with the file browser, and the Agents panel showing each agent’s plan usage and the routing settings" width="900"></p>
 
 Throughline is an open-source desktop control plane for agentic development. It brings Claude Code, Codex, Gemini through Google Antigravity and downloaded Ollama coding models into a unified workspace for multi-agent orchestration, persistent project context, and human-in-the-loop collaboration. It runs the agents you already have installed, on your own accounts and subscriptions.
 
@@ -58,7 +58,7 @@ Throughline is an open-source desktop control plane for agentic development. It 
 </tr>
 <tr>
 <td width="50%" valign="top">
-<img src="docs/features/terminal.png" alt="The terminal panel showing passing tests and git status">
+<img src="docs/features/terminal.png" alt="The bottom panel’s Terminal tab, beside Run, showing passing tests and git status">
 <h3>A terminal for each project</h3>
 <p>Your own shell in a panel below the conversation. It keeps running when you hide it or switch projects, so your dev server stays up while agents work. Beside it, Run keeps your dev server, tests and scripts one click away, with their live output.</p>
 </td>
@@ -110,7 +110,7 @@ Throughline is an open-source desktop control plane for agentic development. It 
 - A terminal for each workspace in a bottom panel: your own shell in the folder you choose, kept running while the panel is hidden or you switch workspaces.
 - **Run**, beside the terminal: your dev server, tests and scripts as named commands, found in `package.json`, a `Makefile` or Cargo, Go and Python projects, with live coloured output, links to local addresses, and a failure you can hand to an agent. Terminal and Run are always in the status bar.
 - A file browser with syntax-highlighted previews. Attach files and images by clicking, dragging or pasting.
-- Plan usage for Claude Code and Codex in the status bar, with reset times, plus per-run context usage when reported.
+- Plan usage for each agent in the Agents panel, with bars and reset times, plus per-run context usage when reported.
 - Keep awake: your computer stays awake while agents are working or waiting for a usage limit to reset, and sleeps normally once they finish.
 - Native desktop menus for workspaces, agents, conversation search, appearance and Help, with keyboard shortcuts and current selections.
 - Updates from inside the app on macOS: one click downloads the new version, checks it against its published checksum, and Throughline restarts into it once no agent is working.

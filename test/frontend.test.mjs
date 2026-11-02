@@ -562,7 +562,7 @@ test('one side panel shows at a time: Agents opens first on docked layouts, the 
 test('Gemini quota uses the reported default model and shows absolute and disabled buckets without percentage bars',async()=>{
   const windows={gemini:{available:true,source:'antigravity-acp',defaultModel:'gemini-argon',windows:[{id:'flash',label:'5-hour · Flash',usedPercent:20,scopes:['flash']},{id:'argon',label:'Weekly · Argon',usedPercent:100,scopes:['argon']},{id:'units',label:'Daily · Gemini',remainingAmount:1200,scopes:['gemini']},{id:'disabled',label:'Weekly · Other',disabled:true,scopes:[]}]}};
   const ui=await browser({insights:true,workbench:true,providers:{gemini:{available:true}},authenticated:{codex:true,claude:true,gemini:true},billingSource:{codex:'subscription',claude:'subscription',gemini:'subscription'},usage:windows});await ui.window.relayUI.refreshAccounts({force:true});await flush();
-  ui.$('select-gemini').click();await flush();assert.match(ui.$('gemini-usage').textContent,/Argon.*0% left/);assert.doesNotMatch(ui.$('gemini-usage').textContent,/80%/);
+  ui.$('select-gemini').click();await flush();assert.match(ui.$('gemini-usage').textContent,/0% left.*Weekly limit for Argon/,'A limit for some models says which.');assert.doesNotMatch(ui.$('gemini-usage').textContent,/80%/);
   ui.state().model='gemini-flash';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.match(ui.$('usage-chip').textContent,/80% left/);
   ui.window.relayUsage.open('gemini');await flush();const content=ui.$('usage-details');assert.match(content.textContent,/1,200 units left/);assert.match(content.textContent,/Disabled/);assert.equal(content.querySelectorAll('.usage-track').length,2);
   ui.state().model=null;ui.state().usage.gemini.defaultModel=null;ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('gemini-usage').hidden,true,'An unknown provider default never assumes Flash.');
@@ -584,8 +584,9 @@ test('signing out hides cached Gemini quota and discards a late reading from tha
 test('plan usage shows remaining percent for both agents and the selected model',async()=>{
   const windows={codex:{provider:'codex',available:true,windows:[{id:'primary',label:'5-hour',usedPercent:80,resetsAt:null},{id:'secondary',label:'Weekly',usedPercent:18,resetsAt:null}]},claude:{provider:'claude',available:true,windows:[{id:'five_hour',label:'5-hour',usedPercent:20,resetsAt:null},{id:'seven_day_opus',label:'Weekly · Opus',usedPercent:95,resetsAt:null,scope:'opus'}]}};
   const ui=await browser({insights:true,usage:windows});await ui.window.relayUI.refreshAccounts({force:true});await flush();
-  assert.equal(ui.$('codex-usage').hidden,false);assert.match(ui.$('codex-usage').textContent,/5h.*20% left/);assert.doesNotMatch(ui.$('codex-usage').textContent,/82%/,'The footer shows only the tightest window; the card lists all of them.');assert.match(ui.$('claude-usage').textContent,/5h.*80% left/);assert.doesNotMatch(ui.$('claude-usage').textContent,/Opus/,'Model-specific limits appear only for that model.');
-  assert.equal(ui.$('usage-chip').textContent,'5h · 20% left');assert.match(ui.$('usage-chip').className,/\blow\b/);
+  assert.equal(ui.$('codex-usage').hidden,false);assert.match(ui.$('codex-usage').textContent,/^20% left5-hour limit$/,'Limits are named in words, not abbreviations.');assert.doesNotMatch(ui.$('codex-usage').textContent,/82%/,'Plan usage shows only the tightest window; the card lists all of them.');assert.match(ui.$('claude-usage').textContent,/80% left.*5-hour limit/);
+  assert.equal(ui.$('codex-usage').querySelector('.usage-bar').style['--left'],'20%','A bar shows what is left.');assert.doesNotMatch(ui.$('claude-usage').textContent,/Opus/,'Model-specific limits appear only for that model.');
+  assert.equal(ui.$('usage-chip').textContent,'5-hour · 20% left');assert.match(ui.$('usage-chip').className,/\blow\b/);
   ui.$('select-claude').click();await flush();ui.state().model='claude-opus';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('usage-chip').textContent,'Opus · 5% left');assert.match(ui.$('usage-chip').className,/critical/);
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue)$/.test(request.path)).length,0,'Reading usage never starts inference.');
 });
@@ -1114,7 +1115,7 @@ test('workspace options rename without changing chat or draft and never remove o
 test('usage details show exact resets and scoped limits, and retain readings after a refresh error',async()=>{
   const reset=new Date(Date.now()+125*60000).toISOString();
   const ui=await browser({insights:true,usage:{codex:{available:true,plan:'pro',windows:[{id:'primary',label:'5-hour',usedPercent:70,resetsAt:reset},{id:'weekly',label:'Weekly',usedPercent:10,resetsAt:null}]}}});
-  ui.$('codex-usage').click();await flush();assert.equal(ui.$('usage-dialog').matches(':popover-open'),true);assert.equal(ui.$('usage-title').textContent,'Plan usage');assert.deepEqual([...ui.$('usage-details').children].map(section=>section.dataset.provider),['codex'],'Only the clicked agent is shown.');assert.equal(ui.$('usage-plan').textContent,'From your own Codex account');
+  ui.$('codex-status').click();await flush();assert.equal(ui.$('usage-dialog').matches(':popover-open'),true);assert.equal(ui.$('usage-title').textContent,'Plan usage');assert.deepEqual([...ui.$('usage-details').children].map(section=>section.dataset.provider),['codex'],'Only the clicked agent is shown.');assert.equal(ui.$('usage-plan').textContent,'From your own Codex account');
   assert.match(ui.$('usage-details').textContent,/30% left/);assert.match(ui.$('usage-details').textContent,/Resets in 2h/);assert.match(ui.$('usage-details').textContent,/Reset time not reported/);
   const time=ui.document.querySelectorAll('time')[0];assert.equal(time.getAttribute('datetime'),reset);assert.match(ui.$('usage-details').children[0].textContent,/pro/);
   ui.setIntercept((request,next)=>request.path.endsWith('/usage')?response({error:'Provider unavailable'},503):next());ui.$('refresh-usage').click();await flush();
@@ -1131,19 +1132,21 @@ test('Ask a Friend explains the round trip and disables private links when no se
   const html=fs.readFileSync(new URL('../public/index.html',import.meta.url),'utf8');assert.doesNotMatch(html,/id="open-context"|data-tab="context"/);
 });
 
-test('usage opens beside its meter, switches providers in place and closes on Escape',async()=>{
+test('usage opens beside its agent, switches providers in place and closes on Escape, and an agent that isn’t connected opens its setup',async()=>{
   const usage={available:true,windows:[{id:'primary',label:'5-hour',usedPercent:20,resetsAt:null}]};
   const ui=await browser({insights:true,usage:{codex:usage,claude:usage}});
   ui.$('usage-dialog').bounds={left:0,top:0,width:340,height:390,right:340,bottom:390};
-  ui.$('codex-usage').bounds={left:80,top:772,bottom:794,right:290,width:210,height:22};
-  ui.$('codex-usage').click();await flush();
-  const card=ui.$('usage-dialog');assert.equal(card.tagName,'DIV');assert.equal(card.matches(':popover-open'),true);assert.equal(ui.$('codex-usage').getAttribute('aria-expanded'),'true');
+  ui.$('codex-status').bounds={left:80,top:772,bottom:794,right:290,width:210,height:22};
+  ui.$('codex-status').click();await flush();
+  const card=ui.$('usage-dialog');assert.equal(card.tagName,'DIV');assert.equal(card.matches(':popover-open'),true);assert.equal(ui.$('codex-status').getAttribute('aria-expanded'),'true');
   assert.equal(card.style.left,'80px');assert.ok(Number.parseFloat(card.style.top)+390<772,'The card stays above its footer meter.');
-  ui.$('claude-usage').click();await flush();assert.deepEqual([...ui.$('usage-details').children].map(section=>section.dataset.provider),['claude']);assert.equal(ui.$('codex-usage').getAttribute('aria-expanded'),'false');
-  ui.$('claude-usage').click();await flush();assert.equal(card.matches(':popover-open'),false);
+  ui.$('claude-status').click();await flush();assert.deepEqual([...ui.$('usage-details').children].map(section=>section.dataset.provider),['claude']);assert.equal(ui.$('codex-status').getAttribute('aria-expanded'),'false');
+  ui.$('claude-status').click();await flush();assert.equal(card.matches(':popover-open'),false);
   ui.$('usage-chip').bounds={left:1190,top:700,bottom:726,right:1270,width:80,height:26};ui.$('usage-chip').click();await flush();assert.ok(Number.parseFloat(card.style.left)+340<=1280-12,'Composer usage stays inside the window.');
   assert.deepEqual([...ui.$('usage-details').children].map(section=>section.dataset.provider),[ui.state().provider],'The composer chip shows only the selected agent.');
   ui.document.dispatchEvent(new UIEvent('keydown',{key:'Escape'}));assert.equal(card.matches(':popover-open'),false);assert.equal(ui.document.activeElement,ui.$('usage-chip'));
+  const opened=[];ui.window.relaySettings={open:tab=>opened.push(tab)};ui.$('gemini-status').click();await flush();
+  assert.deepEqual(opened,['accounts'],'An agent that isn’t connected opens its setup, never usage.');assert.equal(card.matches(':popover-open'),false);
 });
 
 test('footer keep awake shows armed and native active states, handles errors and stays hidden in web mode',async()=>{
@@ -2343,8 +2346,9 @@ test('the terminal opens a shell for the workspace, keeps each workspace’s ses
   assert.equal(ui.$('toggle-terminal').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('status-terminal').getAttribute('aria-pressed'), 'true');
   assert.equal(ui.$('bottom-tab-terminal').getAttribute('aria-selected'), 'true');
   assert.equal(ui.$('terminal-start').hidden, false);
-  assert.deepEqual(ui.$('terminal-folder').children.map(option => option.textContent), ['Frontend', 'Backend']);
-  ui.$('terminal-folder').value = 'backend'; ui.$('terminal-open').click(); await flush();
+  const folders = ui.$('terminal-folders').querySelectorAll('button');
+  assert.deepEqual(folders.map(button => button.textContent), ['Frontend', 'Backend'], 'Each folder is a button that opens the shell there.');
+  folders[1].click(); await flush();
   assert.deepEqual(posts[0], ['start', 'project-one', { folderId: 'backend', cols: 100, rows: 24 }]);
   const [first] = ui.terminals, [firstStream] = streams();
   assert.equal(firstStream.url, '/api/terminal/stream?projectId=project-one&id=project-one-session');
@@ -2352,7 +2356,7 @@ test('the terminal opens a shell for the workspace, keeps each workspace’s ses
   assert.equal(first.written, 'welcome\r\n$ ');
   first.type('ls\r'); await flush();
   assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-session', data: 'ls\r' }]);
-  assert.equal(ui.$('terminal-place').textContent, 'Backend');
+  assert.equal(ui.$('terminal-place').textContent, 'zsh · Backend', 'The header names the shell and its folder.');
   assert.equal(ui.$('terminal-start').hidden, true);
 
   // Another workspace gets its own session, and the first one's input still goes to the first workspace.
@@ -2385,7 +2389,9 @@ test('the terminal opens a shell for the workspace, keeps each workspace’s ses
   assert.equal(first.host.hidden, false, 'The first workspace’s view returns as it was.');
   send(firstStream, 'exit', { ...session('project-one', 'backend'), status: 'exited', exitCode: 1 });
   assert.equal(firstStream.closed, true);
-  assert.match(ui.$('terminal-message').textContent, /The shell exited with code 1/);
+  assert.match(first.written, /\[The shell exited with code 1\. Its output stays until you start a new session\.\]/, 'The exit is said once, in the terminal.');
+  assert.equal(ui.$('terminal-message').hidden, true);
+  assert.equal(ui.$('terminal-place').textContent, 'zsh · Backend · exited');
   assert.equal(ui.$('terminal-restart').hidden, false); assert.equal(ui.$('terminal-end').hidden, true);
   ui.$('terminal-restart').click(); await flush();
   assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'backend', cols: 100, rows: 24 }]);

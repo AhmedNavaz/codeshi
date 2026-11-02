@@ -1560,7 +1560,11 @@
   $('connect-assistant')?.addEventListener('click',()=>$('relay-settings').click());
   $('connection-install')?.addEventListener('click',()=>{if(state.installUrl)openExternal(state.installUrl);});
   $('connection-action')?.addEventListener('click',()=>state.connectionAction?.());
-  for(const provider of ['codex','claude','gemini'])$(`${provider}-status`)?.addEventListener('click',event=>{if(!event.target?.closest?.('.usage-meter'))$('relay-settings')?.click();});
+  // Each agent in Plan usage does one thing: a connected agent shows its limits, any other opens its setup in Settings.
+  for(const provider of ['codex','claude','gemini'])$(`${provider}-status`)?.addEventListener('click',event=>{
+    if(state.accounts?.[provider]?.authenticated===true&&window.relayUsage)window.relayUsage.open(provider,event.currentTarget||$(`${provider}-status`));
+    else if(window.relaySettings)window.relaySettings.open('accounts');else $('relay-settings')?.click();
+  });
   window.addEventListener('relay-account',()=>{renderStatus();renderControls();});
   window.addEventListener('relay-billing',()=>{renderStatus();renderControls();});
   window.addEventListener("beforeunload", saveDraft);

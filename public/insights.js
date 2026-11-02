@@ -323,7 +323,14 @@
   const usageIsOpen = () => usagePopover.matches(':popover-open');
   const remaining = row => Math.max(0, Math.min(100, Math.round(100 - row.usedPercent)));
   const usageLevel = percent => percent <= 10 ? 'critical' : percent <= 25 ? 'low' : 'ok';
-  const shortLabel = label => label === 'Weekly' ? 'wk' : label.replace(/^(\d+)-hour · /, '$1h ').replace(/^(\d+)-hour$/, '$1h').replace(/^Weekly · /, '');
+  // Limits in plain words. A provider names a limit by its period, and by what it is for when it covers only some
+  // models: "5-hour", "Weekly · Opus", "Weekly · Gemini Argon". The composer chip keeps what it is for, or the period.
+  const limitParts = label => { const [period, ...scope] = String(label || '').split(' · '); return { period, scope: scope.join(' · ') }; };
+  const shortLabel = label => { const { period, scope } = limitParts(label); return scope || period; };
+  function limitName(label) {
+    const { period, scope } = limitParts(label), name = /^(?:\d+-hour|Weekly|Daily|Current)$/.test(period) ? `${period} limit` : period;
+    return scope ? `${name} for ${scope}` : name;
+  }
   function resetLabel(value) {
     const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return '';
     return 'resets ' + at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
@@ -342,9 +349,14 @@
       meter.closest('.provider-status')?.classList.toggle('selected', state.provider === provider);
       const tightest = rows.reduce((low, row) => !low || remaining(row) < remaining(low) ? row : low, null);
       meter.hidden = !tightest; meter.replaceChildren();
-      if (tightest) { meter.dataset.level = usageLevel(remaining(tightest)); meter.append(el('span', shortLabel(tightest.label), 'usage-label'), el('span', `${remaining(tightest)}% left`, 'usage-value')); }
-      const summary = rows.length ? `${name(provider)} plan usage. ${rows.map(describeWindow).join('. ')}. Select for usage and reset details.` : '';
-      meter.title = summary; meter.setAttribute('aria-label', summary);
+      if (tightest) {
+        // The tightest limit: what is left, as a bar, and which limit it is and when it resets.
+        const bar = el('i', undefined, 'usage-bar'); bar.style.setProperty('--left', `${remaining(tightest)}%`);
+        const reset = resetLabel(tightest.resetsAt);
+        meter.dataset.level = usageLevel(remaining(tightest)); meter.append(el('span', `${remaining(tightest)}% left`, 'usage-value'), bar, el('span', `${limitName(tightest.label)}${reset ? ` · ${reset}` : ''}`, 'usage-caption'));
+      }
+      const row = $(`${provider}-status`), connected = api.getState().accounts?.[provider]?.authenticated === true;
+      row.title = rows.length ? `${name(provider)}: ${rows.map(describeWindow).join('. ')}. Select for all its limits.` : connected ? `${name(provider)}: select for its plan usage` : `Set up ${name(provider)} in Settings`;
     }
     const chip = $('usage-chip'), rows = usageWindows(state.provider), tightest = rows.reduce((low, row) => !low || remaining(row) < remaining(low) ? row : low, null);
     chip.hidden = !tightest;
@@ -358,7 +370,6 @@
     catch (error) { if (request === usageRequests[provider]) usageErrors[provider] = error.message; }
     finally { if (request === usageRequests[provider]) { usageLoading[provider] = false; renderUsage(); renderUsageDetails(); } }
   }
-  for (const provider of ['codex', 'claude', 'gemini']) $(`${provider}-usage`).addEventListener('click', event => openUsage(provider, event.currentTarget || $(`${provider}-usage`)));
   $('usage-chip').addEventListener('click', () => openUsage(api.getState().provider, $('usage-chip')));
   function resetCountdown(value) {
     const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return 'Reset time not reported';
@@ -413,7 +424,7 @@
     if (restoreFocus) usageAnchor?.focus();
   }
   function openUsage(provider, anchor) {
-    const nextAnchor = anchor || (!$(`${provider}-usage`).hidden ? $(`${provider}-usage`) : $('relay-settings'));
+    const row = $(`${provider}-status`), nextAnchor = anchor || (row && !row.closest?.('[hidden]') ? row : $('usage-chip') && !$('usage-chip').hidden ? $('usage-chip') : $('relay-settings'));
     if (usageIsOpen() && provider === usageProvider && nextAnchor === usageAnchor) { closeUsage(); return; }
     usageAnchor?.setAttribute('aria-expanded','false'); usageProvider = provider; usageAnchor = nextAnchor;
     usageAnchor.setAttribute('aria-expanded','true');
@@ -427,7 +438,7 @@
     return rows.length ? Math.max(...rows.map(row => row.usedPercent)) : null;
   };
   window.relayUsage = { open: openUsage, usedPercent };
-  for (const trigger of [$('codex-usage'), $('claude-usage'), $('gemini-usage'), $('usage-chip')]) { trigger.setAttribute('aria-controls','usage-dialog'); trigger.setAttribute('aria-haspopup','dialog'); trigger.setAttribute('aria-expanded','false'); }
+  for (const trigger of [$('codex-status'), $('claude-status'), $('gemini-status'), $('usage-chip')]) { trigger.setAttribute('aria-controls','usage-dialog'); trigger.setAttribute('aria-haspopup','dialog'); trigger.setAttribute('aria-expanded','false'); }
   usagePopover.addEventListener('toggle',() => { if (!usageIsOpen()) usageAnchor?.setAttribute('aria-expanded','false'); });
   $('close-usage').addEventListener('click',()=>closeUsage(true));
   document.addEventListener('keydown',event=>{if(event.key==='Escape' && usageIsOpen()){event.preventDefault();closeUsage(true);}});

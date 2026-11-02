@@ -43,7 +43,7 @@
     const host = document.createElement('div');
     host.className = 'terminal-view'; host.dataset.projectId = session.projectId; host.hidden = panel.hidden || session.projectId !== projectId();
     $('terminal-views').append(host);
-    const term = new Terminal({ cursorBlink: true, fontFamily: (typeof getComputedStyle === 'function' && getComputedStyle(document.documentElement).getPropertyValue('--mono').trim()) || 'Menlo, monospace', fontSize: 12.5, lineHeight: 1.2, scrollback: 5000, allowProposedApi: false, macOptionIsMeta: false, theme: theme() });
+    const term = new Terminal({ cursorBlink: true, fontFamily: (typeof getComputedStyle === 'function' && getComputedStyle(document.documentElement).getPropertyValue('--mono').trim()) || 'Menlo, monospace', fontSize: 13, lineHeight: 1.25, scrollback: 5000, allowProposedApi: false, macOptionIsMeta: false, theme: theme() });
     const fit = new FitAddon();
     term.loadAddon(fit); term.open(host);
     view = { id: session.id, projectId: session.projectId, session, term, fit, host, stream: null, queue: '', sending: false, resizeTimer: null };
@@ -66,7 +66,12 @@
     view.stream = new EventSource('/api/terminal/stream?' + query);
     view.stream.addEventListener('reset', event => { term.reset(); term.write(JSON.parse(event.data).data); });
     view.stream.addEventListener('data', event => term.write(JSON.parse(event.data).data));
-    view.stream.addEventListener('exit', event => { view.session = JSON.parse(event.data); view.stream.close(); if (views.get(view.projectId) === view) render(); });
+    view.stream.addEventListener('exit', event => {
+      view.session = JSON.parse(event.data); view.stream.close();
+      // The shell's end is said once, under its last output, as a terminal does.
+      if (view.session.status !== 'failed') term.write(`\r\n\x1b[2m[The shell exited${Number.isInteger(view.session.exitCode) ? ` with code ${view.session.exitCode}` : ''}. Its output stays until you start a new session.]\x1b[22m\r\n`);
+      if (views.get(view.projectId) === view) render();
+    });
     view.dispose = () => { view.stream?.close(); clearTimeout(view.resizeTimer); term.dispose(); host.remove(); };
     views.set(session.projectId, view);
     return view;
@@ -83,18 +88,25 @@
     for (const item of views.values()) item.host.hidden = item.projectId !== id || panel.hidden;
     current = id;
     const folders = project()?.folders || [];
-    $('terminal-place').textContent = session ? `${session.folderName}${session.status === 'running' ? '' : session.status === 'failed' ? ' · could not start' : ` · exited${Number.isInteger(session.exitCode) ? ` (${session.exitCode})` : ''}`}` : '';
+    // The header names the shell and the folder it runs in, and says when it has ended.
+    const shell = String(session?.shell || '').split(/[\\/]/).pop().replace(/\.exe$/i, '');
+    $('terminal-place').textContent = session ? [shell, session.folderName, session.status === 'running' ? '' : session.status === 'failed' ? 'could not start' : 'exited'].filter(Boolean).join(' · ') : '';
     $('terminal-place').title = session?.cwd || '';
+    $('terminal-place').dataset.status = session?.status || '';
     $('terminal-end').hidden = !session || session.status !== 'running';
     $('terminal-restart').hidden = !session || session.status === 'running';
     $('terminal-start').hidden = Boolean(session) || folders.length < 2;
     if (!Terminal || !FitAddon) message('The terminal could not load. Reinstall Throughline to restore it.');
     else if (session?.status === 'failed') message(session.error);
-    else if (session && session.status !== 'running') message(`The shell exited${Number.isInteger(session.exitCode) ? ` with code ${session.exitCode}` : ''}. Its output stays until you start a new session.`);
     else message('');
-    const select = $('terminal-folder'), chosen = select.value;
-    select.replaceChildren(...folders.map(folder => { const option = document.createElement('option'); option.value = folder.id; option.textContent = folder.displayName || folder.name; return option; }));
-    if (folders.some(folder => folder.id === chosen)) select.value = chosen;
+    // With several folders, each is a button that opens the shell there.
+    $('terminal-folders').replaceChildren(...folders.map(folder => {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'command-chip terminal-folder'; button.dataset.folderId = folder.id;
+      const name = document.createElement('span'); name.className = 'command-chip-name'; name.textContent = folder.displayName || folder.name; button.append(name);
+      button.title = folder.path || ''; button.disabled = busy;
+      button.addEventListener('click', () => start(folder.id));
+      return button;
+    }));
     requestAnimationFrame(fitCurrent);
   }
 
@@ -140,8 +152,7 @@
   window.addEventListener('relay-panel', () => { if (shown()) load().then(() => { if (shown()) views.get(projectId())?.term.focus(); }); else render(); });
 
   $('terminal-end').addEventListener('click', end);
-  $('terminal-open').addEventListener('click', () => start($('terminal-folder').value));
-  $('terminal-restart').addEventListener('click', () => { const view = views.get(projectId()); view?.dispose(); views.delete(projectId()); start(view?.session.folderId || $('terminal-folder').value); });
+  $('terminal-restart').addEventListener('click', () => { const view = views.get(projectId()); view?.dispose(); views.delete(projectId()); start(view?.session.folderId || project()?.folders?.[0]?.id); });
   // ⌃` shows or hides the terminal, as in VS Code.
   document.addEventListener('keydown', event => { if (event.ctrlKey && !event.metaKey && !event.altKey && (event.key === '`' || event.code === 'Backquote') && api.getState().projectId) { event.preventDefault(); toggle(); } });
   if (typeof ResizeObserver === 'function') new ResizeObserver(() => fitCurrent()).observe($('terminal-views'));

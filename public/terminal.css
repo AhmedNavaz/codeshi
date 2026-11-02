@@ -1,15 +1,22 @@
 /* The workspace terminal: a tab of the bottom panel (see project-commands.css). */
 .terminal-panel { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .terminal-panel[hidden] { display: none; }
-.terminal-place { min-width: 0; overflow: hidden; color: var(--muted); font: 11.5px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.terminal-place { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin-right: 4px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-place:empty { display: none; }
+.terminal-place::before { content: ""; width: 13px; height: 13px; flex: none; background: currentColor; -webkit-mask: var(--icon-terminal) center / contain no-repeat; mask: var(--icon-terminal) center / contain no-repeat; }
+.terminal-place[data-status="exited"], .terminal-place[data-status="stopped"] { color: var(--faint); }
+.terminal-place[data-status="failed"] { color: var(--danger); }
+.terminal-restart { height: 24px; margin-right: 4px; background: var(--accent); color: var(--on-accent); }
+.terminal-restart:hover:enabled { background: var(--accent-strong); }
 .terminal-end::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--terminal-icon) center / contain no-repeat; mask: var(--terminal-icon) center / contain no-repeat; }
 .terminal-end { --terminal-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3'/%3E%3C/svg%3E"); }
-.terminal-start { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; padding: 10px 14px; }
-.terminal-start label { display: grid; gap: 4px; color: var(--muted); font-size: 11.5px; }
-.terminal-start select { min-width: 200px; height: 28px; padding: 0 8px; border: 1px solid var(--input-border); border-radius: 5px; background: var(--surface-input); color: var(--text); font-size: 12px; }
-.terminal-message { margin: 0; padding: 4px 14px 6px; color: var(--muted); font-size: 12px; }
-.terminal-views { position: relative; flex: 1; min-height: 0; padding: 2px 0 4px 14px; }
-.terminal-view { position: absolute; inset: 2px 4px 4px 14px; }
+.terminal-start { display: grid; justify-items: start; gap: 8px; padding: 14px 18px; }
+.terminal-start[hidden] { display: none; }
+.terminal-start-title { margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.terminal-folders { margin: 0; }
+.terminal-message { margin: 0; padding: 6px 18px; color: var(--danger); font-size: 12px; }
+.terminal-views { position: relative; flex: 1; min-height: 0; }
+.terminal-view { position: absolute; inset: 6px 8px 6px 16px; }
 .terminal-view[hidden] { display: none; }
 .terminal-view .xterm { height: 100%; }
 .terminal-view .xterm-viewport { scrollbar-width: thin; }

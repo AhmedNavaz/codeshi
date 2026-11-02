@@ -982,6 +982,32 @@ button.commit-hash:hover { text-decoration: underline; }
 .agents-section { padding: 12px 0 14px; border-bottom: 1px solid var(--border); scroll-margin-top: 8px; transition: background .4s; }
 .agents-section:last-child { border-bottom: 0; }
 .agents-section.flash { background: var(--hover); border-radius: 8px; }
+/* Plan usage: one button per agent. A connected agent shows what its tightest limit has left, as a bar, with which
+   limit it is and when it resets underneath; any other agent shows its state on one line. */
+.agent-accounts { display: grid; gap: 2px; margin: 0 -8px; }
+.agents-usage .provider-status { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; grid-template-areas: "icon name value"; align-items: center; column-gap: 9px; row-gap: 5px; width: 100%; min-width: 0; height: auto; padding: 7px 8px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.agents-usage .provider-status:has(.usage-meter:not([hidden])) { grid-template-areas: "icon name value" ". bar bar" ". caption caption"; }
+.agents-usage .provider-status:hover { background: var(--hover); }
+.agents-usage .provider-status:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.agents-usage .agent-icon { grid-area: icon; width: 13px; height: 13px; color: var(--muted); }
+.agents-usage .provider-status[data-provider="codex"] .agent-icon { color: var(--codex); }
+.agents-usage .provider-status[data-provider="claude"] .agent-icon { color: var(--claude); }
+.agents-usage .provider-status[data-provider="gemini"] .agent-icon { color: var(--gemini); }
+.agents-usage .provider-name { grid-area: name; min-width: 0; overflow: hidden; color: var(--text); font-size: 12.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.agents-usage .provider-status.selected .provider-name { color: var(--text-strong); font-weight: 600; }
+.agents-usage .status-dot { display: none; }
+.agents-usage .provider-state { grid-area: value; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.agents-usage .status-dot.attention ~ .provider-state { color: var(--warning); }
+.agents-usage .usage-meter { display: contents; }
+.agents-usage .usage-meter[hidden] { display: none; }
+.agents-usage .usage-value { grid-area: value; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-bar { position: relative; display: none; height: 4px; border-radius: 2px; background: var(--chip-bg); overflow: hidden; }
+.agents-usage .usage-bar { grid-area: bar; display: block; width: 100%; }
+.usage-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--left, 0%); border-radius: 2px; background: var(--success); }
+.usage-meter[data-level="low"] .usage-bar::after { background: var(--warning); }
+.usage-meter[data-level="critical"] .usage-bar::after { background: var(--danger); }
+.agents-usage .usage-caption { grid-area: caption; min-width: 0; overflow: hidden; color: var(--faint); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.agents-body { overflow-x: hidden; }
 .agents-section h3 { margin: 0 0 4px; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
 .agents-hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .routing-options { display: grid; gap: 2px; }
