@@ -87,7 +87,7 @@
   }
   async function api(path, options = {}, projectId = state.projectId) {
     const providerEndpoint = /^\/api\/providers(?:\/|$)/.test(path);
-    if (/^\/api\/(?:status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
+    if (/^\/api\/(?:status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
       if (!projectId) throw new Error("Choose a project first.");
       path += `${path.includes("?") ? "&" : "?"}projectId=${encodeURIComponent(projectId)}`;
     }
@@ -1335,6 +1335,7 @@
     { label: "Previous chats…", id: "open-import" }, { label: "Export conversation…", id: "open-export" },
     { label: "Agents: routing and handoff", run: () => window.relayAgents?.open() },
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
+    { label: "Terminal", run: () => window.relayTerminal?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
   ];
   let commandActive = 0, commandItems = [], commandFiles = { query: "", files: [] }, fileSearch = 0, fileTimer = null;
@@ -1415,6 +1416,7 @@
     settings: press("relay-settings"), "setup-guide": press("open-setup-guide"), "new-workspace": press("create-workspace"), review: press("open-review"),
     "whats-new": () => { if (covered() || !window.relayUpdates) return false; window.relayUpdates.open(); return true; },
     "check-updates": () => { if (!window.relayUpdater) return false; window.relayUpdater.checkNow(); return true; },
+    terminal: () => { if (!state.projectId || !window.relayTerminal) return false; window.relayTerminal.toggle(); return true; },
     "local-models": () => window.relayLocal?.open(),
     "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), files: press("toggle-explorer"), "keep-awake": press("keep-awake"),
     "add-folder": () => { if (covered()) return false; toggleFolderForm(true); return true; },
@@ -1435,6 +1437,8 @@
   };
   document.addEventListener("keydown", (event) => {
     if (!(mac ? event.metaKey : event.ctrlKey) || event.altKey) return;
+    // Ctrl keys typed in the terminal belong to the shell.
+    if (!mac && event.target?.closest?.("#terminal-panel")) return;
     const key = event.key.toLowerCase(), run = (name, value) => { if (commands[name](value)) event.preventDefault(); };
     if (key === "k" && !event.shiftKey) run("filter-workspaces");
     else if (key === "l" && !event.shiftKey) run("focus-message");

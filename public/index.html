@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#181818" />
+    <meta name="relay-style-nonce" content="" />
     <meta name="description" content="An open-source desktop control plane for agentic development. Multi-agent orchestration, persistent project context, and human-in-the-loop collaboration across Claude Code, Codex, Gemini and local models—powered by your own accounts." />
     <title>Throughline</title>
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
@@ -28,6 +29,11 @@
     <script src="/local-models.js" defer></script>
     <script src="/desktop-controls.js" defer></script>
     <script src="/files.js" defer></script>
+    <link rel="stylesheet" href="/vendor/xterm.css" />
+    <link rel="stylesheet" href="/terminal.css" />
+    <script src="/vendor/xterm.js" defer></script>
+    <script src="/vendor/addon-fit.js" defer></script>
+    <script src="/terminal.js" defer></script>
     <script src="/conversation-search.js" defer></script>
     <script src="/agent-review.js" defer></script>
     <script src="/project-commands.js" defer></script>
@@ -190,6 +196,12 @@
           <details id="command-config" class="command-config" open><summary>Configure command</summary><div class="command-fields"><label>Attached folder<select id="command-folder" aria-label="Command folder"></select></label><label>Package subdirectory<input id="command-directory" placeholder=". (folder root)" autocomplete="off" spellcheck="false" maxlength="1024" /></label><label class="command-full">Shell command<input id="command-text" placeholder="e.g. npm run dev" autocomplete="off" spellcheck="false" maxlength="4096" /></label></div><div class="command-actions"><button id="command-detect" class="text-link" type="button">Find suggestions</button><button id="command-save" class="text-link" type="button">Save command</button></div><p id="command-detection" class="command-note"></p><div id="command-suggestions" class="command-suggestions"></div><p class="command-note">Runs with your local shell permissions, independently of the agent’s access mode. Commands can change files while the agent works. Check scripts before running; hide keeps them running, Stop or quitting ends them.</p></details>
           <p class="command-note">Working directory: <span id="command-location"></span></p><p id="command-error" class="project-error" role="alert" hidden></p><code id="command-executed" class="command-executed"></code><div id="command-links" class="command-links"></div><p id="command-truncated" class="command-note" hidden>Older output discarded. Showing the latest 64K characters.</p><pre id="command-output" class="command-output" tabindex="0" aria-label="Command output"></pre>
         </section>
+        <section id="terminal-panel" class="terminal-panel" aria-label="Terminal" hidden>
+          <header class="terminal-heading"><h2>Terminal</h2><span id="terminal-place" class="terminal-place"></span><span class="terminal-scope" title="Your own shell. Agent access settings such as Read only don’t apply to it.">Your shell</span><span class="terminal-tools"><button id="terminal-restart" class="toolbar-button" type="button" hidden>New session</button><button id="terminal-end" class="icon-button terminal-end" type="button" aria-label="End terminal session" title="End session: stops the shell and what it started" hidden></button><button id="terminal-hide" class="icon-button terminal-hide" type="button" aria-label="Hide terminal" title="Hide (the session keeps running)"></button></span></header>
+          <div id="terminal-start" class="terminal-start" hidden><label>Open a shell in<select id="terminal-folder" aria-label="Terminal folder"></select></label><button id="terminal-open" class="primary-button" type="button">Open terminal</button></div>
+          <p id="terminal-message" class="terminal-message" role="status" hidden></p>
+          <div id="terminal-views" class="terminal-views"></div>
+        </section>
       </main>
 
       <aside id="git-panel" class="git-panel" aria-label="Git activity" hidden>
@@ -212,6 +224,7 @@
 
       <div id="layout-toggles" class="layout-toggles" role="group" aria-label="Layout">
         <button id="toggle-sidebar" class="layout-toggle" type="button" aria-pressed="true" aria-label="Sidebar" title="Toggle sidebar"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><rect class="layout-fill" x="5" y="6" width="3" height="12" rx="1"/></svg></button>
+        <button id="toggle-terminal" class="layout-toggle" type="button" aria-pressed="false" aria-controls="terminal-panel" aria-label="Terminal" title="Toggle terminal (⌃`)"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 13.5h17"/><rect class="layout-fill" x="5" y="15" width="14" height="3" rx="1"/></svg></button>
         <button id="toggle-side-panel" class="layout-toggle" type="button" aria-pressed="false" aria-label="Side panel" title="Toggle side panel"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/><rect class="layout-fill" x="16" y="6" width="3" height="12" rx="1"/></svg></button>
       </div>
 

@@ -16,6 +16,7 @@
     inspector: { measure: () => sidePanels().find(panel => !panel.hidden)?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--inspector-width', value + 'px') : root.style.removeProperty('--inspector-width'), min: 260, max: 600, axis: 'x', sign: -1, label: 'Resize the side panel' },
     workspaces: { measure: () => $('workspace-list')?.getBoundingClientRect().height, apply: value => { const list = $('workspace-list'); if (list) list.style.flexBasis = value ? value + 'px' : ''; document.querySelector('.sidebar')?.classList.toggle('sized', Boolean(value)); }, min: 60, max: 640, axis: 'y', sign: 1, label: 'Resize workspaces and files' },
     commands: { measure: () => $('project-commands')?.getBoundingClientRect().height, apply: value => { const panel = $('project-commands'); if (panel) panel.style.height = value ? value + 'px' : ''; }, min: 140, max: 720, axis: 'y', sign: -1, label: 'Resize the Run panel' },
+    terminal: { measure: () => $('terminal-panel')?.getBoundingClientRect().height, apply: value => { const panel = $('terminal-panel'); if (panel) panel.style.height = value ? value + 'px' : ''; }, min: 140, max: 720, axis: 'y', sign: -1, label: 'Resize the terminal' },
   };
   function set(name, value) {
     const section = sections[name];
@@ -51,6 +52,7 @@
   for (const panel of sidePanels()) handle(panel, 'inspector', 'edge-start');
   handle($('explorer'), 'workspaces', 'before');
   handle($('project-commands'), 'commands', 'edge-top');
+  handle($('terminal-panel'), 'terminal', 'edge-top');
   // Layout buttons at the top right, as in an editor: the sidebar and the side panel on the right. Each is filled
   // while its area shows. The side panel reopens on the tab last used (Agents at first).
   const SIDEBAR_KEY = 'throughline:sidebar', LAST_PANEL_KEY = 'throughline:side-panel-last', shell = $('app-shell');

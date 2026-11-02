@@ -8,6 +8,9 @@ import {migrateLegacyData,preferredUserData} from './storage.mjs';
 import {createReleaseState} from './updates.mjs';
 import {createKeepAwake} from './keep-awake.mjs';
 import {createUpdater,updateBuild,bundleLocation} from './updater.mjs';
+import {prepareHelper} from '../src/terminal.mjs';
+import {createRequire} from 'node:module';
+import os from 'node:os';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -108,6 +111,9 @@ else {
       result.modelPicker=await win.webContents.executeJavaScript(`typeof window.relayModelPicker?.open==='function'&&!!document.getElementById('model-picker-popover')`);
       result.permissions=await win.webContents.executeJavaScript(`['ask','auto'].every(value=>!!document.querySelector('#approval-select option[value="'+value+'"]'))`);
       result.geminiImports=await win.webContents.executeJavaScript(`!!document.querySelector('#import-provider-select option[value="gemini"]')`);
+      // The terminal's native module loads in this build and runs a shell, and its renderer loaded under the page's policy.
+      result.terminal=await new Promise(resolve=>{try{prepareHelper();const shell=createRequire(import.meta.url)('node-pty').spawn('/bin/sh',['-c','echo terminal-ok'],{name:'xterm-256color',cols:80,rows:24,cwd:os.tmpdir(),env:{PATH:'/usr/bin:/bin'}});let output='';shell.onData(data=>{output+=data;});shell.onExit(()=>resolve(output.includes('terminal-ok')));setTimeout(()=>resolve(false),5000);}catch(error){console.error(error);resolve(false);}});
+      result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'`);
       // The menu bar is Throughline's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
       const settled=async done=>{for(let tries=0;!done()&&tries<250;tries++)await new Promise(resolve=>setTimeout(resolve,20));return done();};
       const reported=await settled(()=>page!==null);
@@ -121,7 +127,7 @@ else {
       for(let tries=0;tries<100;tries++){result.updates=await win.webContents.executeJavaScript(`({open:document.getElementById('updates-dialog').open,notes:!!document.querySelector('#updates-content .updates-release')})`);if(result.updates.open)break;await new Promise(resolve=>setTimeout(resolve,20));}
       await win.webContents.executeJavaScript(`document.getElementById('updates-dismiss').click()`);
       for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!document.getElementById('updates-dialog').open`)){result.updates.dismissed=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
-      if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
+      if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
       console.log('AI_RELAY_DESKTOP_SMOKE '+JSON.stringify(result));app.quit();
     }
   }).catch(error=>{console.error(error);if(!smoke)dialog.showErrorBox('Throughline could not start',error.message);app.exit(1);});

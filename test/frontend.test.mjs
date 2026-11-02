@@ -63,7 +63,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -162,6 +162,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(desktop)Object.assign(window.relayDesktop,{onMenuCommand:callback=>{menuListeners.push(callback);return ()=>{};},setMenuState:state=>{menuStates.push(clone(state));}});
   if(desktop){launch ||= {version:'0.9.1',previousVersion:null,updated:false,releases:[]};Object.assign(window.relayDesktop,{getLaunchState:async()=>clone(launch),acknowledgeUpdate:async()=>{updateAcknowledgements.push(launch.version);launch={...launch,updated:false};return clone(launch);},openExternal:async url=>{externalLinks.push(url);}});}
   // The updater's side of the bridge: calls are recorded, and the main process's answers and pushed states are cloned as IPC would.
+  const eventSources=[],terminals=[];
   const updateCalls=[],updateListeners=[];let updateState=update&&clone(update);
   const answer=(name,next)=>async(...args)=>{updateCalls.push([name,...args]);if(next)updateState={...updateState,...next(...args)};return clone(updateState);};
   if(desktop&&update)Object.assign(window.relayDesktop,{getUpdateState:answer('get'),checkForUpdates:answer('check',()=>({status:updateState.latest?'available':'current'})),installUpdate:answer('install',()=>({status:'downloading',progress:{received:0,total:null}})),cancelUpdate:answer('cancel',()=>({status:'available',progress:null})),skipUpdate:answer('skip',version=>({skipped:version})),setAutomaticUpdates:answer('automatic',automatic=>({automatic})),onUpdateState:callback=>{updateListeners.push(callback);return ()=>{};}});
@@ -169,7 +170,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   class Range{setStart(node,offset){this.startContainer=node;this.startOffset=offset;}setEnd(node,offset){this.endContainer=node;this.endOffset=offset;}getBoundingClientRect(){return this.startContainer.parentNode.getBoundingClientRect();}}
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
   const highlights=new Map();document.createRange=()=>new Range();
-  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,navigator:{clipboard:{writeText:async()=>{}}}});
+  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,navigator:{clipboard:{writeText:async()=>{}}}});
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
   vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(workbench)vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});
@@ -187,6 +188,12 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
+  // A stand-in for xterm.js: it records what the page writes and lets a test type into it.
+  if(terminalUI){
+    window.Terminal=class{constructor(options){this.options=options;this.written='';this.cols=80;this.rows=24;this.focused=0;terminals.push(this);}loadAddon(){}open(host){this.host=host;}onData(fn){this.type=fn;}onResize(fn){this.resized=fn;}write(data){this.written+=data;}reset(){this.written='';}focus(){this.focused++;}dispose(){this.disposed=true;}};
+    window.FitAddon={FitAddon:class{fit(){}}};
+    vm.runInContext(fs.readFileSync(new URL('../public/terminal.js',import.meta.url),'utf8'),context,{filename:'public/terminal.js'});
+  }
   if(theme)document.dispatchEvent(new UIEvent('DOMContentLoaded'));
   await flush();assert.equal(window.relayUI.getState().ready,!empty);assert.equal(window.relayUI.getState().loading,false);
   const $=id=>document.getElementById(id);const fire=(id,type)=>$(id).dispatchEvent(new UIEvent(type));const findButton=text=>document.querySelectorAll('button').find(button=>button.textContent===text);
@@ -194,7 +201,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -1184,10 +1191,10 @@ test('Find in Conversation, Find Next and Find Previous do what ⌘F, Enter and 
 
 test('the menu bar follows the page: the workspace, a run, the agent, Continue, Files, Git activity and the first nine workspaces',async()=>{
   const web=await browser({desktopControls:true,insights:true,historyUI:true,filesUI:true});assert.equal(web.menuStates.length,0,'The browser has no menu bar.');
-  const none=await browser({empty:true,existing:false,desktop:true,desktopControls:true,historyUI:true});assert.deepEqual(none.menuStates.at(-1),{workspace:false,running:false,agent:'codex',codex:false,claude:false,gemini:false,continue:null,files:true,git:false,imports:false,export:false,workspaces:[]});
+  const none=await browser({empty:true,existing:false,desktop:true,desktopControls:true,historyUI:true});assert.deepEqual(none.menuStates.at(-1),{workspace:false,running:false,agent:'codex',codex:false,claude:false,gemini:false,continue:null,files:true,git:false,terminal:false,imports:false,export:false,workspaces:[]});
   const ui=await browser({desktop:true,desktopControls:true,moreProjects:true,insights:true,historyUI:true,filesUI:true}),shown=()=>ui.menuStates.at(-1);
   const workspaces=[{name:'Example workspace',current:true},{name:'Other workspace',current:false}];
-  assert.deepEqual(shown(),{workspace:true,running:false,agent:'codex',codex:true,claude:true,gemini:false,continue:null,files:true,git:false,imports:true,export:false,workspaces});
+  assert.deepEqual(shown(),{workspace:true,running:false,agent:'codex',codex:true,claude:true,gemini:false,continue:null,files:true,git:false,terminal:false,imports:true,export:false,workspaces});
   const reported=ui.menuStates.length;ui.window.dispatchEvent(new UIEvent('relay-state'));await flush();assert.equal(ui.menuStates.length,reported,'An unchanged state is not sent again.');
   ui.$('select-claude').click();await flush();assert.equal(shown().agent,'claude');
   ui.$('toggle-explorer').click();await flush();assert.equal(shown().files,false);
@@ -1989,7 +1996,7 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
 test('the sidebar, side panel, workspaces and Run panel resize from handles that work with the keyboard, are remembered and reset on double-click',async()=>{
   const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300})}});
   const root=ui.document.documentElement,handles=ui.document.querySelectorAll('.resize-handle');
-  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the Run panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize workspaces and files']);
+  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the Run panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal','Resize workspaces and files']);
   assert.equal(root.style['--inspector-width'],'600px','Saved sizes come back, within their limits.');assert.equal(ui.$('project-commands').style.height,'300px');
   const sidebar=handles.find(handle=>handle.getAttribute('aria-label')==='Resize the sidebar');assert.equal(sidebar.getAttribute('role'),'separator');assert.equal(sidebar.tabIndex,0);
   sidebar.dispatchEvent(new UIEvent('keydown',{key:'ArrowRight',preventDefault(){}}));
@@ -2213,3 +2220,66 @@ test('with nothing staged, Commit commits every change listed: it stages exactly
   assert.equal(ui.$('git-commit-button').disabled, true);
 });
 
+
+test('the terminal opens a shell for the workspace, keeps each workspace’s session to itself, and hiding leaves it running', async () => {
+  const ui = await browser({ terminalUI: true, moreProjects: true });
+  const sessions = new Map(), posts = [];
+  const session = (projectId, folderId) => ({ id: `${projectId}-session`, projectId, folderId, folderName: { backend: 'Backend', api: 'API' }[folderId] || folderId, cwd: `/workspace/${folderId}`, shell: '/bin/zsh', status: 'running', exitCode: null, signal: null, error: null, startedAt: new Date().toISOString(), endedAt: null, cols: 80, rows: 24 });
+  ui.setIntercept((request, next) => {
+    if (!request.path.startsWith('/api/terminal')) return next();
+    if (request.path === '/api/terminal') return response({ session: sessions.get(request.projectId) || null, shell: 'zsh' });
+    posts.push([request.path.slice('/api/terminal/'.length), request.projectId, clone(request.body)]);
+    if (request.path === '/api/terminal/start') { const value = session(request.projectId, request.body.folderId); sessions.set(request.projectId, value); return response(value, 201); }
+    if (request.path === '/api/terminal/stop') { const value = { ...sessions.get(request.projectId), status: 'stopped' }; sessions.delete(request.projectId); return response(value); }
+    return response({ written: 1 });
+  });
+  const streams = () => ui.eventSources.filter(source => source.url.startsWith('/api/terminal/stream'));
+  const send = (stream, type, data) => stream.dispatchEvent(new UIEvent(type, { data: JSON.stringify(data) }));
+
+  // A workspace with several folders asks which one the shell starts in.
+  ui.$('toggle-terminal').click(); await flush();
+  assert.equal(ui.$('terminal-panel').hidden, false);
+  assert.equal(ui.$('toggle-terminal').getAttribute('aria-pressed'), 'true');
+  assert.equal(ui.$('terminal-start').hidden, false);
+  assert.deepEqual(ui.$('terminal-folder').children.map(option => option.textContent), ['Frontend', 'Backend']);
+  ui.$('terminal-folder').value = 'backend'; ui.$('terminal-open').click(); await flush();
+  assert.deepEqual(posts[0], ['start', 'project-one', { folderId: 'backend', cols: 100, rows: 24 }]);
+  const [first] = ui.terminals, [firstStream] = streams();
+  assert.equal(firstStream.url, '/api/terminal/stream?projectId=project-one&id=project-one-session');
+  send(firstStream, 'reset', { data: 'welcome\r\n' }); send(firstStream, 'data', { data: '$ ' });
+  assert.equal(first.written, 'welcome\r\n$ ');
+  first.type('ls\r'); await flush();
+  assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-session', data: 'ls\r' }]);
+  assert.equal(ui.$('terminal-place').textContent, 'Backend');
+  assert.equal(ui.$('terminal-start').hidden, true);
+
+  // Another workspace gets its own session, and the first one's input still goes to the first workspace.
+  await ui.switchProject('project-two'); await flush();
+  assert.deepEqual(posts.at(-1).slice(0, 2), ['start', 'project-two'], 'A single-folder workspace opens its shell at once.');
+  const second = ui.terminals[1];
+  assert.equal(first.host.hidden, true); assert.equal(second.host.hidden, false);
+  first.type('pwd\r'); await flush();
+  assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-session', data: 'pwd\r' }]);
+
+  // Hiding leaves the sessions running; the menu command shows the panel again.
+  ui.$('terminal-hide').click(); await flush();
+  assert.equal(ui.$('terminal-panel').hidden, true);
+  assert.equal(ui.storage.get('throughline:terminal'), 'closed');
+  assert(!posts.some(([name]) => name === 'stop'));
+  ui.window.relayUI.commands.terminal(); await flush();
+  assert.equal(ui.$('terminal-panel').hidden, false);
+  assert.equal(second.host.hidden, false);
+
+  // Ending a session stops it; an exited shell keeps its output and offers a new session.
+  ui.$('terminal-end').click(); await flush();
+  assert.deepEqual(posts.at(-1), ['stop', 'project-two', { id: 'project-two-session' }]);
+  assert.equal(second.disposed, true);
+  await ui.switchProject('project-one'); await flush();
+  assert.equal(first.host.hidden, false, 'The first workspace’s view returns as it was.');
+  send(firstStream, 'exit', { ...session('project-one', 'backend'), status: 'exited', exitCode: 1 });
+  assert.equal(firstStream.closed, true);
+  assert.match(ui.$('terminal-message').textContent, /The shell exited with code 1/);
+  assert.equal(ui.$('terminal-restart').hidden, false); assert.equal(ui.$('terminal-end').hidden, true);
+  ui.$('terminal-restart').click(); await flush();
+  assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'backend', cols: 100, rows: 24 }]);
+});

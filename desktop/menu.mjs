@@ -3,7 +3,7 @@
 // act on the page send it a command, so each runs the same code as the shortcut or button it stands for.
 const repository = 'https://github.com/AhmedNavaz/throughline';
 const agents = ['codex', 'claude', 'gemini'], names = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini' };
-const flags = ['workspace', 'running', 'codex', 'claude', 'gemini', 'files', 'git', 'imports', 'export'];
+const flags = ['workspace', 'running', 'codex', 'claude', 'gemini', 'files', 'git', 'terminal', 'imports', 'export'];
 // What the menu offers until the page reports: nothing that needs a workspace.
 const initial = { workspace: false, running: false, agent: 'codex', codex: false, claude: false, gemini: false, continue: null, files: false, git: false, imports: false, export: false, workspaces: [] };
 
@@ -57,6 +57,8 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
   const view = { label: 'View', submenu: [
     command('Show Git Activity', ['git'], { type: 'checkbox', checked: page.git, accelerator: 'CmdOrCtrl+Shift+G', enabled: page.workspace }),
     command('Show Files', ['files'], { type: 'checkbox', checked: page.files, enabled: page.workspace }),
+    // ⌃` as in VS Code, on every system: ⌘` switches windows on macOS.
+    command('Terminal', ['terminal'], { type: 'checkbox', checked: page.terminal, accelerator: 'Ctrl+`', enabled: page.workspace }),
     command('Focus Message Box', ['focus-message'], { accelerator: 'CmdOrCtrl+L', enabled: page.workspace }),
     separator(),
     { label: 'Appearance', submenu: [['system', 'System'], ['graphite', 'Dark'], ['light', 'Light']].map(([value, label]) => command(label, ['appearance', value], { id: `appearance-${value}`, type: 'radio', checked: appearance === value })) },

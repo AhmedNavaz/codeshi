@@ -8,7 +8,9 @@ import { SharingClient, validateSharingURL } from './sharing-client.mjs';
 import { collaborationRoute } from './collaboration-routes.mjs';
 import { closeAccountConnections } from './providers.mjs';
 import { createCommandRoutes } from './project-commands.mjs';
+import { createTerminalRoutes } from './terminal.mjs';
 import { createWorkspaceRoutes } from './workspace-routes.mjs';
+import { randomBytes } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
 import { createReviewRoutes } from './agent-review-routes.mjs';
 import { createLocalRoutes } from './local-models.mjs';
@@ -19,6 +21,9 @@ import { appearance, appearances, preferencePatch, publicPreferences } from './p
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
   '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
+  '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'],
+  // The terminal renderer, served from the installed package so packaged builds work offline.
+  '/vendor/xterm.js': ['../node_modules/@xterm/xterm/lib/xterm.js', 'text/javascript; charset=utf-8'], '/vendor/xterm.css': ['../node_modules/@xterm/xterm/css/xterm.css', 'text/css; charset=utf-8'], '/vendor/addon-fit.js': ['../node_modules/@xterm/addon-fit/lib/addon-fit.js', 'text/javascript; charset=utf-8'],
   '/updates.js': ['updates.js', 'text/javascript; charset=utf-8'], '/updater.js': ['updater.js', 'text/javascript; charset=utf-8'], '/updates.css': ['updates.css', 'text/css; charset=utf-8'],
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
@@ -72,6 +77,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const reviewRoutes = createReviewRoutes({ registry, body, json });
   const localRoutes = createLocalRoutes({ registry, body, json });
   const commandRoutes = createCommandRoutes({ registry, body, json });
+  const terminalRoutes = createTerminalRoutes({ registry, body, json });
   const listeners = new Set();
   let closing = false;
   registry.on('update', update => {
@@ -122,11 +128,18 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (req.method === 'GET' && assets[url.pathname]) {
         const [filename, type] = assets[url.pathname];
-        const contents = fs.readFileSync(path.join(root, 'public', filename));
+        let contents = fs.readFileSync(path.join(root, 'public', filename));
+        // The terminal's renderer adds its own <style> elements. Each page load gets a nonce that allows exactly those,
+        // instead of allowing inline styles in general.
+        if (url.pathname === '/') {
+          const nonce = randomBytes(16).toString('base64');
+          res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self' 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
+          contents = String(contents).replace('<meta name="relay-style-nonce" content="" />', `<meta name="relay-style-nonce" content="${nonce}" />`);
+        }
         res.writeHead(200, { 'Content-Type': type });
         return res.end(contents);
       }
-      if (accessToken && req.headers['x-ai-relay-token'] !== accessToken && !(url.pathname === '/api/events' && url.searchParams.get('token') === accessToken)) return json(res, 403, { error: 'Desktop session required.' });
+      if (accessToken && req.headers['x-ai-relay-token'] !== accessToken && !(['/api/events', '/api/terminal/stream'].includes(url.pathname) && url.searchParams.get('token') === accessToken)) return json(res, 403, { error: 'Desktop session required.' });
       if (req.method === 'GET' && url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
       if (req.method === 'GET' && url.pathname === '/api/projects') return json(res, 200, registry.list());
       if (req.method === 'GET' && url.pathname === '/api/events') {
@@ -172,6 +185,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if(req.method==='POST'&&projectRoute)return json(res,200,await registry.update(projectRoute[1],await body(req)));
       if(req.method==='GET'&&url.pathname==='/api/conversation')return json(res,200,registry.mainConversation(selectedProjectId(url)));
       if (await commandRoutes.route({ req, res, url })) return;
+      if (await terminalRoutes.route({ req, res, url })) return;
       if (await workspaceRoutes({ req, res, url })) return;
       if (await conversationRoutes({ req, res, url })) return;
       if (await reviewRoutes({ req, res, url })) return;
@@ -244,12 +258,13 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     closeAccountConnections();
     await reviewRoutes.close();
     await commandRoutes.close();
+    await terminalRoutes.close();
     await registry.close();
     clearInterval(heartbeat);
     for (const res of listeners) res.end();
     await new Promise(resolve => { server.close(resolve); if (force) server.closeAllConnections(); });
   })();
-  return { server, registry, collaboration, sharing, commands: commandRoutes.commands, close,
+  return { server, registry, collaboration, sharing, commands: commandRoutes.commands, terminals: terminalRoutes.sessions, close,
     getAppearancePreference: () => appearance(config),
     getKeepAwakePreference: () => config.keepAwake === true,
     // Handoff near a usage limit (#17): offered at 90% by default, automatic only when allowed, 0 turns offers off.
