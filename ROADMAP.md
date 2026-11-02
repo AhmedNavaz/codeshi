@@ -80,6 +80,15 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/throughline/issues/73) |
 | Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/throughline/issues/9) |
+| Everything in the thread: GitHub issues, pull requests and failing CI checks as context, then pull requests from the conversation | Planned in stages; [details below](#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/throughline/issues/18) |
+
+### Everything in the thread
+
+Bring the work around the code into the project conversation, so an agent sees what you see on GitHub, and finish the loop with a pull request. Collaborators with access to the repository work this way rather than through Ask a Friend.
+
+1. **GitHub as context.** Paste or pick an issue, a pull request or the current branch, and Throughline reads it through your own `gh` login: the issue or pull request with its comments and review threads, and the failing checks with the end of each failing job's log. It never asks for a token of its own and only reads. What comes in is shown for review before it is sent, as part of your message, with secrets and local paths removed by the same step that cleans exports. Nothing is fetched in the background.
+2. **Logs from the app.** Send the output of a failed Test or Run command from Project commands as context in one click; selected terminal output follows in [#71](https://github.com/AhmedNavaz/throughline/issues/71).
+3. **A pull request from the conversation.** After you review the diff and commit in the Git panel, **Open pull request** pushes the branch and opens the pull request with `gh`, with a title and description drafted from the conversation for you to edit. It is the one place Throughline pushes, only when you click it and after showing the remote and branch; agents never push.
 
 ### Adaptive agent and model routing
 
@@ -123,33 +132,13 @@ Larger ideas for bringing project context, execution and collaboration into one 
 
 | Idea | Issue |
 | --- | --- |
-| **Focus and downtime.** Optional timers, ambient audio, reading and short games during agent runs, with persistent status and a clear return to the project when attention is needed. [Scope and stages below](#focus-and-downtime). | [#14](https://github.com/AhmedNavaz/throughline/issues/14) |
 | **Automatic tag-team cycles.** Extend cross-agent review with an opt-in handoff from builder to reviewer and user-approved fix cycles. | [#15](https://github.com/AhmedNavaz/throughline/issues/15) |
 | **Race mode.** Two agents take the same task in separate worktrees; keep the better result. | [#16](https://github.com/AhmedNavaz/throughline/issues/16) |
-| **Everything in the thread.** Issues, pull requests, CI failures and logs as context, and pull requests from the conversation. | [#18](https://github.com/AhmedNavaz/throughline/issues/18) |
 | **Point and tell.** Click an element in your app's preview and say what should change. | [#19](https://github.com/AhmedNavaz/throughline/issues/19) |
 | **Rewind.** One timeline of messages, file changes and commits, with checkpoints to undo any step. | [#20](https://github.com/AhmedNavaz/throughline/issues/20) |
 | **Project memory.** A living brief of goals, decisions and conventions that every agent reads. | [#21](https://github.com/AhmedNavaz/throughline/issues/21) |
 | **Approve from your phone.** Extend desktop approval alerts to a paired phone, with run progress and iPhone Live Activities. | [#23](https://github.com/AhmedNavaz/throughline/issues/23) |
 | **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription. | [#24](https://github.com/AhmedNavaz/throughline/issues/24) |
-
-### Focus and downtime
-
-Explore an optional space for focus, breaks and enjoyable downtime while agents work. Users should be able to listen, read, play briefly or step away, then return with a clear account of what changed and what needs their attention. Keep the project conversation, execution and review central; the whole space should be easy to disable.
-
-Deliver in stages, starting with agent awareness:
-
-1. **Stay informed and return easily.** Build on compact activity in [#45](https://github.com/AhmedNavaz/throughline/issues/45) and actionable approval alerts in [#46](https://github.com/AhmedNavaz/throughline/issues/46). Keep status visible within the app and notifications useful outside it; extend those surfaces through [#13](https://github.com/AhmedNavaz/throughline/issues/13). Link a factual return recap in [#22](https://github.com/AhmedNavaz/throughline/issues/22) to the result, changed files and outstanding requests.
-2. **Try a small local experience.** Offer a configurable focus or break timer, a clock and optional ambient audio. Start without a network service, model calls or extra account requirements. Timers can be paused, snoozed or dismissed; no fixed routine is imposed.
-3. **Validate optional activities.** Experiment with a short pauseable game, saved reading links or user-selected feeds. Add music or video integrations only when users request them and the provider supports the intended desktop experience. General browsing, film and series playback, weather and quote widgets need separate justification before expanding the scope.
-
-Design boundaries:
-
-- Distinguish running, needs input, failed and ready to review. Show actual reported activity; do not invent progress percentages or completion times. An attention indicator opens the correct workspace and request.
-- Keep approvals in trusted application UI. Consuming media never grants permission or enables auto-approval. Pause a built-in game when attention is required; pausing or lowering media volume requires the user's preference, and unrelated external players remain under their control.
-- Keep remote articles and players isolated from coding capabilities, project files, credentials and the desktop bridge. Prefer official integrations or opening the user's external application. Free APIs and open-source tools still require checks of licenses, content access, account requirements and maintenance costs.
-- Load optional services only after the user chooses them. Avoid autoplay, infinite feeds, streaks and incentives to remain in the app. OS notifications remain available when users choose another application or a physical break.
-- Trial the small experience with interested users and people who prefer a plain workspace. Evaluate enjoyment, missed requests, time to return and review, unwanted distraction and task completion. Expand based on usefulness rather than time spent inside Throughline; do not claim productivity gains before measuring them.
 
 ## Good places to start
 
