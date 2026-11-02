@@ -23,14 +23,6 @@ It's a free, open-source desktop app for multi-agent coding on macOS and Windows
 
 Throughline keeps an eye on each agent's plan usage. Before one runs out mid-task, it offers to hand the task to an agent that still has room, and shows you who takes over and how it's billed before anything switches. If every agent is out, the task waits and carries on with whichever resets first, or you can continue it on a local model.
 
-**Routing** can choose the agent, model and effort for every message: a light model for a typo, the strongest one for a refactor. Pick Cost saving, Balanced or Maximum quality, and it sticks to your subscriptions unless you allow API billing.
-
-### Undo any run, whichever agent made it
-
-<img src="docs/features/rewind.jpg" alt="The undo preview for a Codex run: it restores checkout.js, brings back a deleted file and removes a file the run added, with the exact lines that change">
-
-Throughline saves your project before and after every run. If a run went the wrong way, undo it: you see every file and every line that will change before anything is written, edits you made since are kept, and a note tells the next agent what was taken back. **Redo** puts it all back. Your Git history, branches and staged files are never touched.
-
 ### Point at what should change
 
 <img src="docs/features/point-and-tell.jpg" alt="A preview of a shop app with its Apply button outlined while picking, and Throughline's message box with a sentence describing that button, where its code is, and its screenshot attached">
@@ -54,9 +46,9 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 <table>
 <tr>
 <td width="50%" valign="top">
-<img src="docs/features/routing.jpg" alt="Routing's choice above the message box: Claude with Opus 5.5 for a complex refactoring task, in Balanced mode">
+<img src="docs/features/routing.jpg" alt="Routing in the Agents panel, set to Balanced among Manual, Cost saving and Maximum quality, and its choice above the message box: Claude with Opus 5.5 for a complex refactoring task">
 <h3>Routing</h3>
-<p>Picks the agent, model and effort for each message, from a light model for a typo to the strongest for a refactor, and shows why before you send.</p>
+<p>Picks the agent, model and effort for each message, from a light model for a typo to the strongest for a refactor, and shows its choice before you send. It stays on your subscriptions unless you allow API billing.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/recap.jpg" alt="The While you were away recap: a finished task, a usage limit, a reset to wait for, uncommitted changes and an approval waiting">
@@ -83,18 +75,6 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 <p>Line up your next prompts, add a note to a running task without stopping it, and follow the agent's plan as a live checklist.</p>
 </td>
 <td width="50%" valign="top">
-<img src="docs/features/terminal.jpg" alt="The Terminal tab under the conversation, showing passing tests and Git status">
-<h3>Terminal and Run</h3>
-<p>A shell for each project that keeps running in the background, with your dev server, tests and scripts one click away.</p>
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-<img src="docs/features/git.jpg" alt="A changed logo shown before and after in the Git panel's diff view">
-<h3>Git, images included</h3>
-<p>Review every changed file, see changed images before and after, stage what you've checked and commit. Throughline never pushes.</p>
-</td>
-<td width="50%" valign="top">
 <img src="docs/features/search.jpg" alt="The search bar finding a workspace and files from two workspaces">
 <h3>Find anything</h3>
 <p>One search bar (⌘K) for your projects, the files in all of them and the app's actions, and ⌘F inside the conversation.</p>
@@ -114,7 +94,15 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 </tr>
 </table>
 
-Also included: importing your earlier Claude Code and Codex chats, **Ask a Friend** for help from another developer with a patch you review, updates from inside the app on macOS, keeping your computer awake while agents work, system, light and dark themes, and native menus with shortcuts. The [guide](docs/guide.md) describes every feature and its limits.
+Also included:
+
+- **Undo and redo** for any run, after a preview of every line that changes
+- **Terminal, Run and Git** panels for each workspace
+- **Chat import** from your earlier Claude Code and Codex sessions
+- **Ask a Friend**, for help from another developer with a patch you review
+- **Light, dark and system themes**, native menus and shortcuts, updates from inside the app on macOS, and keeping your computer awake while agents work
+
+The [guide](docs/guide.md) describes every feature and its limits.
 
 ## Coming next
 
