@@ -59,6 +59,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Windows (64-bit) builds with a one-line PowerShell install, checked against published checksums ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) | [0.16.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.16.0) |
 | Voice input on macOS, recognized on the Mac, with spoken summaries of finished runs ([#11](https://github.com/AhmedNavaz/throughline/issues/11)) | [0.17.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0) |
 | "While you were away" recaps of what ran, changed and is waiting, written or read aloud ([#22](https://github.com/AhmedNavaz/throughline/issues/22)) | [0.17.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0) |
+| Live status in the Mac menu bar, and optional alerts near the top of the screen ([#13](https://github.com/AhmedNavaz/throughline/issues/13)) | Next release |
 
 ## Now
 
@@ -122,7 +123,6 @@ Larger ideas for bringing project context, execution and collaboration into one 
 
 | Idea | Issue |
 | --- | --- |
-| **Live status at a glance.** Progress and input requests in the Mac menu bar and around the notch, extending the desktop approval alerts in [#46](https://github.com/AhmedNavaz/throughline/issues/46). | [#13](https://github.com/AhmedNavaz/throughline/issues/13) |
 | **Focus and downtime.** Optional timers, ambient audio, reading and short games during agent runs, with persistent status and a clear return to the project when attention is needed. [Scope and stages below](#focus-and-downtime). | [#14](https://github.com/AhmedNavaz/throughline/issues/14) |
 | **Automatic tag-team cycles.** Extend cross-agent review with an opt-in handoff from builder to reviewer and user-approved fix cycles. | [#15](https://github.com/AhmedNavaz/throughline/issues/15) |
 | **Race mode.** Two agents take the same task in separate worktrees; keep the better result. | [#16](https://github.com/AhmedNavaz/throughline/issues/16) |

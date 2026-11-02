@@ -4,7 +4,7 @@ import { workspaceGit } from './workspace-git.mjs';
 // time. It is put together from what Throughline recorded, with no agent call: each conversation keeps a short run
 // history (src/broker.mjs), and each run's steps say which files it changed and which commands it ran.
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
-const TESTS = /\b(?:test|tests|jest|vitest|pytest|mocha|rspec|go test|cargo test)\b/;
+export const TESTS = /\b(?:test|tests|jest|vitest|pytest|mocha|rspec|go test|cargo test)\b/;
 
 // The files a run changed and the commands it ran, read from its recorded steps.
 export function runSteps(messages) {

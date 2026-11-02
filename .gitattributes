@@ -1,0 +1,2 @@
+# The alert panel's security policy allows its inline script by hash, so the page keeps the same bytes on every system.
+desktop/overlay.html text eol=lf

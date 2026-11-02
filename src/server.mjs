@@ -91,6 +91,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   registry.on('projects', () => {
     for (const res of listeners) res.write('event: projects\ndata: {}\n\n');
   });
+  const notificationPreferences = () => ({ enabled: config.notifications?.enabled !== false, sound: config.notifications?.sound === true, statusItem: config.notifications?.statusItem !== false, overlay: config.notifications?.overlay === true });
   const handoffPreferences = () => ({ threshold: [0, 80, 90, 95].includes(config.handoff?.threshold) ? config.handoff.threshold : 90, automatic: config.handoff?.automatic === true });
   registry.handoffPreferences = handoffPreferences;
   // Changed from the Agents panel or the desktop Agent menu; each tells the other.
@@ -280,11 +281,12 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     // Handoff near a usage limit (#17): offered at 90% by default, automatic only when allowed, 0 turns offers off.
     getHandoffPreferences: () => handoffPreferences(),
     setHandoffPreferences,
-    // Alerts outside the window (#46): on unless turned off, with sound only when asked for.
-    getNotificationPreferences: () => ({ enabled: config.notifications?.enabled !== false, sound: config.notifications?.sound === true }),
+    // Alerts outside the window (#46): on unless turned off, with sound only when asked for. On macOS, the status in
+    // the menu bar shows unless hidden, and alerts near the top of the screen only when asked for (#13).
+    getNotificationPreferences: () => notificationPreferences(),
     setNotificationPreferences: patch => {
-      const next = { enabled: config.notifications?.enabled !== false, sound: config.notifications?.sound === true, ...patch };
-      if (typeof next.enabled !== 'boolean' || typeof next.sound !== 'boolean') throw new Error('Notifications must be turned on or off.');
+      const next = { ...notificationPreferences(), ...patch };
+      if (Object.keys(next).length !== 4 || !Object.values(next).every(value => typeof value === 'boolean')) throw new Error('Notifications must be turned on or off.');
       saveSettings({ notifications: next });
     },
     setKeepAwakePreference: enabled => { if (typeof enabled !== 'boolean') throw new Error('Keep awake must be enabled or disabled.'); saveSettings({ keepAwake: enabled }); },

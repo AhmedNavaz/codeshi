@@ -22,7 +22,7 @@ function system(platform, osVersion, arch) {
   return `${name} ${osVersion}, ${platform === 'darwin' ? arch === 'arm64' ? 'Apple Silicon' : 'Intel' : arch}`;
 }
 
-export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = { enabled: true, sound: false }, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open }) {
+export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = { enabled: true, sound: false, statusItem: true, overlay: false }, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open }) {
   const page = state || initial, mac = platform === 'darwin', separator = () => ({ type: 'separator' });
   const command = (label, name, options = {}) => ({ label, ...options, click: () => send(...name) });
   const link = (label, url) => ({ label, click: () => open(url) });
@@ -80,6 +80,11 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     // Alerts when Throughline is not in front: a notification and Dock bounce, and an optional sound.
     { label: 'Notify When Runs Finish or Need Approval', type: 'checkbox', checked: notifications.enabled, click: () => setNotifications({ enabled: !notifications.enabled }) },
     { label: 'Play Notification Sound', type: 'checkbox', checked: notifications.sound, enabled: notifications.enabled, click: () => setNotifications({ sound: !notifications.sound }) },
+    // Live status on the Mac (#13): the menu bar item, and alerts near the top of the screen instead of banners.
+    ...mac ? [
+      { label: 'Show Status in Menu Bar', type: 'checkbox', checked: notifications.statusItem !== false, click: () => setNotifications({ statusItem: notifications.statusItem === false }) },
+      { label: 'Show Alerts Near the Top of the Screen', type: 'checkbox', checked: notifications.overlay === true, enabled: notifications.enabled, click: () => setNotifications({ overlay: notifications.overlay !== true }) },
+    ] : [],
     separator(),
     // When to offer moving a run to another agent before its usage limit stops it, and whether to do it unasked.
     { label: 'Hand Off Near Usage Limits', submenu: [

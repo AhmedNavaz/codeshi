@@ -1,4 +1,4 @@
-import {app,BrowserWindow,Menu,Notification,dialog,ipcMain,nativeTheme,shell,powerSaveBlocker} from 'electron';
+import {app,BrowserWindow,Menu,Notification,Tray,dialog,ipcMain,nativeImage,nativeTheme,screen,shell,powerSaveBlocker} from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -15,6 +15,8 @@ import {createRequire} from 'node:module';
 import os from 'node:os';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
+import {statusSnapshot,statusTitle,statusMenu,alertChannels} from './status.mjs';
+import {createOverlay} from './overlay.mjs';
 import {APP_ID,ensureStartMenuShortcut} from './windows.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const smoke=process.argv.includes('--smoke-test');
@@ -29,12 +31,12 @@ else app.setPath('userData',preferredUserData(app.getPath('appData'),app.getPath
 // Windows ties notifications and the taskbar entry to this ID (see windows.mjs).
 if(process.platform==='win32'&&!development)app.setAppUserModelId(APP_ID);
 const primary=app.requestSingleInstanceLock();
-let relay,win,origin,keepAwake,updater,quitting=false;
+let relay,win,origin,keepAwake,updater,tray=null,overlay=null,quitting=false;
 if(!primary) app.quit();
 else {
   app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
   app.on('before-quit',event=>{if(relay&&!quitting){event.preventDefault();quitting=true;keepAwake?.dispose();updater?.dispose();relay.close().finally(()=>app.quit());}});
-  app.on('will-quit',()=>keepAwake?.dispose());
+  app.on('will-quit',()=>{keepAwake?.dispose();overlay?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
     if(process.platform==='darwin'&&!app.isPackaged) app.dock?.setIcon(path.join(root,'assets','icon.png'));
@@ -46,7 +48,7 @@ else {
     const appearance=createAppearance({nativeTheme,onBackground:color=>{if(win&&!win.isDestroyed())win.setBackgroundColor(color);}});
     // The menu bar shows what the page last reported, the saved appearance and Keep Awake.
     let page=null,awake=false;
-    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),
+    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
       send:(...command)=>{if(win&&!win.isDestroyed())win.webContents.send('relay:menu-command',...command);updateMenu();}})));
     app.setAboutPanelOptions({applicationName:'Throughline',applicationVersion:app.getVersion(),version:''});
@@ -56,25 +58,49 @@ else {
     // added where macOS allows one: an app without a Developer ID signature is refused, so the Dock always carries it.
     // On Windows and Linux the taskbar button flashes instead of the Dock bouncing.
     let attention=0,notificationsRefused=false;
-    // Turned off in the Agent menu, only the Dock badge and the sidebar's approval count remain.
+    // Brings the window forward, opening a workspace or an approval's request card. Nothing is answered on the way.
+    function openTarget(target){
+      if(!win||win.isDestroyed())return;
+      if(win.isMinimized())win.restore();win.show();win.focus();app.focus?.({steal:true});
+      if(target?.projectId)win.webContents.send('relay:menu-command',target.approvalId?'open-approval':'open-workspace',target.approvalId?{projectId:target.projectId,approvalId:target.approvalId}:target.projectId);
+    }
+    // Turned off in the Agent menu, only the Dock badge and the sidebar's approval count remain. With alerts near the
+    // top of the screen turned on (#13), they take the place of the system banner, so nothing is announced twice.
     function notify({kind,title,body,projectId,projectName,approvalId}){
-      if(win&&!win.isDestroyed()&&win.isFocused())return;
+      const preferences=relay.getNotificationPreferences(),channels=alertChannels({focused:Boolean(win&&!win.isDestroyed()&&win.isFocused()),preferences,overlayAvailable:Boolean(overlay)});
+      if(!channels.badge)return;
       attention++;app.dock?.setBadge(String(attention));
-      const preferences=relay.getNotificationPreferences();
-      if(!preferences.enabled)return;
+      if(!channels.bounce)return;
       app.dock?.bounce(kind==='approval'?'critical':'informational');
       if(process.platform!=='darwin'&&win&&!win.isDestroyed())win.flashFrame(true);
+      if(channels.overlay){overlay.show({kind,title,body,projectId,projectName,approvalId});return;}
       if(notificationsRefused||!Notification.isSupported())return;
       const notice=new Notification({title:projectName?`${title} · ${projectName}`:title,body:String(body||'').slice(0,240),silent:kind==='started'||!preferences.sound});
       // An approval opens its own request card; it is never answered from the notification.
-      notice.on('click',()=>{if(!win||win.isDestroyed())return;if(win.isMinimized())win.restore();win.show();win.focus();if(projectId)win.webContents.send('relay:menu-command',kind==='approval'?'open-approval':'open-workspace',kind==='approval'?{projectId,approvalId}:projectId);});
+      notice.on('click',()=>openTarget(projectId?{projectId,approvalId:kind==='approval'?approvalId:null}:null));
       notice.on('failed',(_event,error)=>{notificationsRefused=true;console.warn('macOS did not show a Throughline notification:',error);});
       notice.show();
+    }
+    const statusIcons=process.platform==='darwin'?{idle:nativeImage.createFromPath(path.join(root,'assets','status','StatusTemplate.png')),attention:nativeImage.createFromPath(path.join(root,'assets','status','StatusAttentionTemplate.png'))}:null;
+    let statusTimer=null;
+    function scheduleStatus(){if(!statusTimer)statusTimer=setTimeout(syncStatus,400);}
+    function setStatusPreferences(patch){relay.setNotificationPreferences(patch);updateMenu();syncStatus();}
+    function syncStatus(){
+      clearTimeout(statusTimer);statusTimer=null;
+      if(process.platform!=='darwin'||!relay||quitting)return;
+      const preferences=relay.getNotificationPreferences();
+      if(!preferences.statusItem){tray?.destroy();tray=null;return;}
+      const snapshot=statusSnapshot(relay.registry);
+      if(!tray){for(const icon of Object.values(statusIcons))icon.setTemplateImage(true);tray=new Tray(statusIcons.idle);tray.setToolTip('Throughline');}
+      tray.setImage(snapshot.attention?statusIcons.attention:statusIcons.idle);
+      tray.setTitle(statusTitle(snapshot),{fontType:'monospacedDigit'});
+      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{keepAwake:keepAwake?.getState()||{enabled:false,active:false},overlay:preferences.overlay,open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),setOverlay:value=>setStatusPreferences({overlay:value}),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
+      overlay?.reconcile(snapshot);
     }
     async function start(){
       relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify});
       appearance.set(relay.getAppearancePreference());
-      keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;if(win&&!win.isDestroyed())win.webContents.send('relay:keep-awake-changed',state);updateMenu();}});
+      keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;if(win&&!win.isDestroyed())win.webContents.send('relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
       await new Promise((resolve,reject)=>{relay.server.once('error',reject);relay.server.listen(0,'127.0.0.1',resolve);});
       origin=`http://127.0.0.1:${relay.server.address().port}`;
     }
@@ -83,7 +109,12 @@ else {
     const busy=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.running||broker.backgroundReview||[...broker.conversations.values()].some(c=>c.queue?.length&&!c.queuePaused));
     updater=createUpdater({version:app.getVersion(),build:updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation}),location:bundleLocation(process.execPath),directory:path.join(app.getPath('userData'),'updates'),supported:app.isPackaged&&!smoke,busy,quit:()=>app.quit(),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
     relay.registry.on('update',()=>setTimeout(()=>updater.idle(),0));
-    updateMenu();
+    // Live status on the Mac (#13): the menu bar item follows every workspace's runs, approvals and waits.
+    if(process.platform==='darwin'){
+      overlay=createOverlay({BrowserWindow,screen,ipcMain,root,open:openTarget});
+      relay.registry.on('update',scheduleStatus);relay.registry.on('projects',scheduleStatus);
+    }
+    updateMenu();syncStatus();
     win=new BrowserWindow({width:1440,height:1000,minWidth:900,minHeight:680,show:false,title:'Throughline',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences:{preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]}});
     win.on('focus',()=>{attention=0;app.dock?.setBadge('');if(process.platform!=='darwin')win.flashFrame(false);});
     // The window list and the app switcher tell the two copies apart.
@@ -123,6 +154,15 @@ else {
       result.terminal=await new Promise(resolve=>{try{prepareHelper();const shell=createRequire(import.meta.url)('node-pty').spawn(...process.platform==='win32'?[process.env.ComSpec||'cmd.exe',['/d','/c','echo terminal-ok']]:['/bin/sh',['-c','echo terminal-ok']],{name:'xterm-256color',cols:80,rows:24,cwd:os.tmpdir(),env:process.platform==='win32'?process.env:{PATH:'/usr/bin:/bin'}});let output='';shell.onData(data=>{output+=data;});shell.onExit(()=>resolve(output.includes('terminal-ok')));setTimeout(()=>resolve(false),5000);}catch(error){console.error(error);resolve(false);}});
       // Voice input loaded, and in a packaged Mac build its speech helper is inside and answers without asking for anything.
       result.voiceUI=await win.webContents.executeJavaScript(`typeof window.relayVoice?.toggle==='function'&&!!document.getElementById('voice-input')`);
+      // The status item shows in the menu bar, and an alert panel loads and shows without taking focus (#13).
+      if(process.platform==='darwin'){
+        result.statusItem=Boolean(tray&&!tray.isDestroyed()&&!statusIcons.idle.isEmpty()&&!statusIcons.attention.isEmpty()&&statusMenu(statusSnapshot(relay.registry)).length>0);
+        overlay.show({kind:'finished',title:'Task finished',body:'Smoke test',projectName:'Smoke'});
+        const panel=BrowserWindow.getAllWindows().find(item=>item!==win);
+        await new Promise(resolve=>setTimeout(resolve,800));
+        result.overlay=Boolean(panel&&panel.isVisible()&&!panel.isFocused()&&await panel.webContents.executeJavaScript(`!document.getElementById('alert').hidden&&document.getElementById('title').textContent==='Task finished · Smoke'`));
+        overlay.hide();
+      }
       if(process.platform==='darwin'&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));
       result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'`);
       // The menu bar is Throughline's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
@@ -138,7 +178,7 @@ else {
       for(let tries=0;tries<100;tries++){result.updates=await win.webContents.executeJavaScript(`({open:document.getElementById('updates-dialog').open,notes:!!document.querySelector('#updates-content .updates-release')})`);if(result.updates.open)break;await new Promise(resolve=>setTimeout(resolve,20));}
       await win.webContents.executeJavaScript(`document.getElementById('updates-dismiss').click()`);
       for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!document.getElementById('updates-dialog').open`)){result.updates.dismissed=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
-      if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.voiceUI||result.speech===false||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
+      if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.voiceUI||result.speech===false||result.statusItem===false||result.overlay===false||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
       console.log('AI_RELAY_DESKTOP_SMOKE '+JSON.stringify(result));app.quit();
     }
   }).catch(error=>{console.error(error);if(!smoke)dialog.showErrorBox('Throughline could not start',error.message);app.exit(1);});

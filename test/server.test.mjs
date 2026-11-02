@@ -461,8 +461,9 @@ test('a note for the working run is refused clearly when nothing is running',asy
 });
 
 test('desktop alert preferences default to on and silent, reject other values and persist',async t=>{
-  const f=await fixture(t);assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:false});
-  f.app.setNotificationPreferences({sound:true});assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:true});
-  f.app.setNotificationPreferences({enabled:false});assert.throws(()=>f.app.setNotificationPreferences({enabled:'no'}),/turned on or off/);
-  await f.app.close();const next=await f.launch();assert.deepEqual(next.app.getNotificationPreferences(),{enabled:false,sound:true});
+  const f=await fixture(t);assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:false,statusItem:true,overlay:false},'The menu bar status shows unless hidden; alerts near the top of the screen only when asked for.');
+  f.app.setNotificationPreferences({sound:true});assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:true,statusItem:true,overlay:false});
+  f.app.setNotificationPreferences({enabled:false,overlay:true});assert.throws(()=>f.app.setNotificationPreferences({enabled:'no'}),/turned on or off/);
+  assert.throws(()=>f.app.setNotificationPreferences({banner:true}),/turned on or off/,'Only known preferences are saved.');
+  await f.app.close();const next=await f.launch();assert.deepEqual(next.app.getNotificationPreferences(),{enabled:false,sound:true,statusItem:true,overlay:true});
 });

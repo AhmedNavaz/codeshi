@@ -16,6 +16,13 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 
 <table>
 <tr>
+<td colspan="2" valign="top">
+<img src="docs/features/menu-bar.jpg" alt="Throughline in the macOS menu bar while another app is in front: the status says Approval needed, its menu lists each busy workspace, and an alert under the menu bar names the workspace waiting for approval">
+<h3>Your agents, in the menu bar</h3>
+<p>Work in any other app and still know what your agents are doing. The menu bar says what needs you, or what the working agent is doing, and its menu lists every busy workspace, approvals first. Choose one to jump straight to it. Optional alerts slide in under the menu bar without taking the keyboard. It shows general words and counts, never your commands, code or file paths. macOS only for now.</p>
+</td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 <img src="docs/features/conversation.png" alt="Claude adds a promo code field, then Codex finishes the API side in the same conversation">
 <h3>One thread, every agent</h3>
@@ -91,7 +98,7 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 - **Handoff**: before a usage limit stops a run, Throughline offers to move the task to an agent with room left, showing its model, billing and the task first.
 - Queue prompts to run one after another, or add a note to the run that is working without stopping it. When an agent plans in steps, its plan shows as a live to-do list.
 - Approve agent actions in the app and follow each run live: current step, tool calls, elapsed time and token counts. **Ask before changes** lets reading the workspace run without approval and asks before edits, installs, scripts or network access. Allow an exact action for the run or remember it for the workspace, with rules you can review and revoke.
-- When you are in another app, the Dock and a notification show what finished or needs your approval, and the sidebar marks workspaces that are waiting for you.
+- When you are in another app, the Dock and a notification show what finished or needs your approval, and the sidebar marks workspaces that are waiting for you. On macOS, the menu bar shows what's working and what needs you, with optional alerts near the top of the screen.
 - Run agents in several workspaces at once; the sidebar shows which ones are busy.
 - Find earlier messages and code with Cmd/Ctrl+F, highlighted matches and next/previous navigation.
 - Get a second opinion with **Review**: a background agent checks a saved snapshot of selected changes in a side panel while you continue the next task. Findings become outdated when those files change.

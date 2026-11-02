@@ -21,7 +21,7 @@ test('the macOS menu bar has Throughline, File, Edit, View, Agent, Workspace, Wi
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','pasteAndMatchStyle','delete','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces','-','Speech']);
   assert.deepEqual(labels(item('View').submenu),['Show Git Activity','Show Files','Terminal','Focus Message Box','-','Appearance','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen']);
   assert.deepEqual(labels(item('Appearance').submenu),['System','Dark','Light']);
-  assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Notify When Runs Finish or Need Approval','Play Notification Sound','-','Hand Off Near Usage Limits']);
+  assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Notify When Runs Finish or Need Approval','Play Notification Sound','Show Status in Menu Bar','Show Alerts Near the Top of the Screen','-','Hand Off Near Usage Limits']);
   assert.deepEqual(labels(item('Workspace').submenu),['Frontend','R&D','-','Workspace Settings…','Remove Workspace…']);
   assert.deepEqual(labels(item('help').submenu),['Throughline Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New']);
   // These are the page's own shortcuts plus ⌘, ⌘N and ⌘G, which the page leaves to the menu.
@@ -72,8 +72,8 @@ test('page items and in-app release notes send commands, and external Help links
   const repository='https://github.com/AhmedNavaz/throughline';
   const pages={'Throughline Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`};
   for(const [label,url] of Object.entries(pages)){opened.length=0;item(label).click();assert.deepEqual(opened,[url],label);}
-  // The two alert toggles and the five handoff choices are handled by the desktop app itself and tested separately.
-  assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+7,'Every other item is a standard role.');
+  // The four alert and status toggles and the five handoff choices are handled by the desktop app itself and tested separately.
+  assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+9,'Every other item is a standard role.');
   for(const entry of all)assert(!(entry.role&&entry.click),`${entry.role} keeps its native behaviour.`);
   const intel=[];menu({arch:'x64',osVersion:'15.7.1',open:url=>intel.push(url)}).item('Report a Bug').click();assert.match(intel[0],/&system=macOS\+15\.7\.1%2C\+Intel$/);
 });
@@ -126,6 +126,16 @@ test('the installed app offers Check for Updates… after About, which asks the 
   item('check-updates').click();
   assert.deepEqual(sent,[['check-updates']]);
   assert(!menu().all.some(entry=>entry.label==='Check for Updates…'),'A copy that cannot update itself, such as one run from source, leaves it out.');
+});
+
+test('on macOS the Agent menu shows or hides the menu bar status and turns alerts near the top of the screen on or off',()=>{
+  const changes=[],options={setNotifications:patch=>changes.push(patch)};
+  const shown=menu({...options,notifications:{enabled:true,sound:false,statusItem:true,overlay:false}});
+  assert.equal(shown.item('Show Status in Menu Bar').checked,true);assert.equal(shown.item('Show Alerts Near the Top of the Screen').checked,false);
+  shown.item('Show Status in Menu Bar').click();shown.item('Show Alerts Near the Top of the Screen').click();
+  assert.deepEqual(changes,[{statusItem:false},{overlay:true}]);
+  assert.equal(disabled(menu({notifications:{enabled:false,sound:false,statusItem:true,overlay:true}}).item('Show Alerts Near the Top of the Screen')),true,'Alerts need notifications to be on.');
+  assert(!menu({platform:'win32'}).all.some(entry=>/Menu Bar|Top of the Screen/.test(entry.label||'')));
 });
 
 test('Voice Input is in the Agent menu on macOS, where speech is recognized on the Mac, and nowhere else yet',()=>{
