@@ -133,6 +133,7 @@ Larger ideas for bringing project context, execution and collaboration into one 
 
 | Idea | Issue |
 | --- | --- |
+| **Task board and schedules.** Capture tasks from meetings or anywhere on a board for each project, with priority and details, and let agents work through them while you review the results; run tasks on a schedule. [Plan below](#task-board-and-schedules). | Not opened yet |
 | **Live progress near the top of the screen.** A compact pill under the menu bar while a run works, alongside the alerts from [#13](https://github.com/AhmedNavaz/throughline/issues/13). | [#75](https://github.com/AhmedNavaz/throughline/issues/75) |
 | **Automatic tag-team cycles.** Extend cross-agent review with an opt-in handoff from builder to reviewer and user-approved fix cycles. | [#15](https://github.com/AhmedNavaz/throughline/issues/15) |
 | **Race mode.** Two agents take the same task in separate worktrees; keep the better result. | [#16](https://github.com/AhmedNavaz/throughline/issues/16) |
@@ -141,6 +142,21 @@ Larger ideas for bringing project context, execution and collaboration into one 
 | **Project memory.** A living brief of goals, decisions and conventions that every agent reads. | [#21](https://github.com/AhmedNavaz/throughline/issues/21) |
 | **Approve from your phone.** Extend desktop approval alerts to a paired phone, with run progress and iPhone Live Activities. | [#23](https://github.com/AhmedNavaz/throughline/issues/23) |
 | **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription. | [#24](https://github.com/AhmedNavaz/throughline/issues/24) |
+
+### Task board and schedules
+
+A board for each project to capture work as it comes up, in a meeting or anywhere else, and let agents work through it while you review the results. Tasks can also run on a schedule.
+
+1. **The board and running tasks.** Columns for Backlog, Ready, Doing, Review and Done. A card has a title, a description, a priority, labels, a checklist of what done means, and the agent to use, Auto by default so routing chooses. Running a card sends it to the agent and moves it to Doing; when the run ends, the card keeps the files it changed, the result of **Check with tests** and a short summary. **Run the Ready column** works through cards in priority order with the prompt queue, one at a time in each project and in parallel across projects. Cards can be dictated with voice input, and the saved context's unfinished tasks become the board's open cards, so agents know the backlog.
+2. **Schedules.** Run a card or a prompt once at a set time, or repeat it daily, on weekdays or weekly. Throughline can keep running in the menu bar after its window closes, and open at login. Schedules run while the Mac is awake; a missed run shows in the "While you were away" recap and waits for you, unless you let it run late.
+3. **Later.** Turn pasted meeting notes into cards with an agent, checked by you before any is added; sync cards with GitHub Issues through the access from [#18](https://github.com/AhmedNavaz/throughline/issues/18); and run cards in parallel in separate worktrees with [#16](https://github.com/AhmedNavaz/throughline/issues/16).
+
+Design boundaries:
+
+- An agent never marks its own work done. A finished card waits in Review with its diff and test result until you accept it; a failed one goes back to Ready with the reason.
+- A scheduled run uses the access chosen when it was scheduled. Anything that needs approval waits and shows in the menu bar; nothing is approved for it unless the project already allows it, and nothing is pushed.
+- Usage limits, routing and billing rules apply as they do to any run, and a schedule never wakes a sleeping Mac.
+- Cards are kept with the project in Throughline's own data, not in the repository, and work offline.
 
 ## Good places to start
 
