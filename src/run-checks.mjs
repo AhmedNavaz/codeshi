@@ -6,8 +6,8 @@ import { limitState } from './resume.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 
 // Checking routed runs with the workspace's own tests (#12, stage 2). With Check with tests on, a routed run that
-// changed files is followed by the workspace's saved Test command, the one set in Project commands, never a command
-// from the agent or the repository. It runs as the usual Test session, so it shows in that panel and Stop works.
+// changed files is followed by the workspace's test command, the one marked for checks in the Run panel, never a
+// command from the agent or the repository. It runs as the usual Test session, so it shows in that panel and Stop works.
 //
 // When the tests fail, routing tries once more one step up: the same agent, so it keeps its session, with a stronger
 // model or more effort, told what failed. Balanced and Maximum quality retry on their own unless that agent is close
@@ -47,7 +47,7 @@ export class RunChecks {
     }
   }
 
-  // The saved Test command when a finished run should be checked: a complete routed run, with Check with tests on,
+  // The command marked for checks when a finished run should be checked: a complete routed run, with Check with tests on,
   // that changed files. A retry is always checked, so its result is known even if it changed nothing.
   wanted(c, run, status) {
     if (this.closed || !this.tests || status !== 'complete' || run.review || run.local || !run.routing || c.routing?.check !== true) return null;
@@ -82,12 +82,12 @@ export class RunChecks {
     this.finish(c, run.id, check, result, Date.now() - started);
     if (result.status === 'failed') return this.failed(c, run, command, result);
     if (result.status === 'timed-out') return this.hold(c, 'The tests didn’t finish after the last run.', 'The tests didn’t finish', 'They ran for 10 minutes and were stopped.');
-    // Passed, stopped by the person, or skipped because the Test command was already running: carry on.
+    // Passed, stopped by the person, or skipped because the test command was already running: carry on.
     if (result.status === 'passed' && c.queuePaused?.reason === CHECK_PAUSE) this.broker.record(c, { type: 'queue_resume' });
     this.carryOn(c);
   }
 
-  // Runs the Test command and waits for it, stopping it at the time limit.
+  // Runs the test command and waits for it, stopping it at the time limit.
   async execute() {
     let session;
     try { session = this.tests.run(); }
@@ -106,8 +106,8 @@ export class RunChecks {
   finish(c, runId, check, result, durationMs) {
     const word = { passed: 'passed', failed: 'failed', 'timed-out': 'timed out', stopped: 'stopped', skipped: 'skipped', interrupted: 'interrupted' }[result.status];
     const line = { passed: `Passed in ${seconds(durationMs)}.`, failed: `Exit code ${result.exitCode ?? 'none'} after ${seconds(durationMs)}.`,
-      'timed-out': 'Still running after 10 minutes, so it was stopped. A Test command that watches for changes never finishes; set one that exits.',
-      stopped: 'Stopped before it finished.', skipped: 'The Test command was already running, so this run wasn’t checked.', interrupted: 'Throughline closed while the tests were running.' }[result.status];
+      'timed-out': 'Still running after 10 minutes, so it was stopped. A test command that watches for changes never finishes; mark one that exits.',
+      stopped: 'Stopped before it finished.', skipped: 'The test command was already running, so this run wasn’t checked.', interrupted: 'Throughline closed while the tests were running.' }[result.status];
     const output = result.status === 'skipped' || !result.output.trim() ? '' : `\n\n${result.output.trim()}`;
     this.broker.record(c, { type: 'message_update', id: check.messageId, update: { text: `Tests ${word}: ${check.command}\n${line}${output}`, status: 'complete' } });
     this.broker.record(c, { type: 'check', runId, check: { ...check, status: result.status, exitCode: result.exitCode, durationMs } });

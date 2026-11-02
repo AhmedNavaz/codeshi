@@ -1364,6 +1364,7 @@
     { label: "Agents: routing and handoff", run: () => window.relayAgents?.open() },
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", run: () => window.relayTerminal?.open() },
+    { label: "Run: your dev servers, tests and scripts", run: () => window.relayPanel?.show("run") },
     { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
     { label: "Preferences: appearance, updates, voice and recaps", run: () => window.relaySettings?.open("preferences") },

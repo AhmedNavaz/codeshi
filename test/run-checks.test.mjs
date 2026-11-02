@@ -137,7 +137,7 @@ test('a slow check is stopped at its limit, a busy Test command skips it, and a 
   await settled(broker, c, 1);
   assert(env.runs[0].stopped, 'The Test command was stopped.');
   assert.equal(c.runs[0].check.status, 'timed-out');
-  assert.match(c.messages.find(message => message.text?.startsWith('Tests timed out')).text, /set one that exits/);
+  assert.match(c.messages.find(message => message.text?.startsWith('Tests timed out')).text, /mark one that exits/);
   assert.equal(c.runs.length, 1, 'A check that didn’t finish is not a failure to retry.');
 
   broker.start(c, { text: 'Add promo codes', ...routed('balanced') });
@@ -172,14 +172,14 @@ test('through the app, the Test command saved in Project commands checks a route
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const project = app.registry.list()[0], id = app.registry.mainConversation(project.id).id;
   const post = async (route, body) => { const response = await fetch(`http://127.0.0.1:${app.server.address().port}${route}?projectId=${project.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
-  assert.equal((await post('/api/commands/test', { folderId: project.folders[0].id, directory: '', command: `"${process.execPath}" -e "process.stdout.write('31 passing')"` })).status, 200);
+  assert.equal((await post('/api/commands/save', { name: 'Tests', folderId: project.folders[0].id, directory: '', command: `"${process.execPath}" -e "process.stdout.write('31 passing')"`, test: true })).status, 200);
   assert.deepEqual((await post(`/api/conversations/${id}/routing`, { mode: 'quality', check: true })).body.routing, { mode: 'quality', allowApi: false, check: true });
   assert.equal((await post(`/api/conversations/${id}/messages`, { text: 'Add promo codes', ...routed('quality'), requestId: 'checked' })).status, 202);
   const c = app.registry.broker(project.id).get(id);
   await until(() => c.runs[0]?.check && c.runs[0].check.status !== 'running');
   assert.equal(c.runs[0].check.status, 'passed');
   assert.match(c.messages.find(message => message.text?.startsWith('Tests passed')).text, /Passed in \d+s\.\n\n31 passing/);
-  assert.equal(app.commands.state(project.id).sessions.test.status, 'exited', 'The check ran as the Test session the panel shows.');
+  assert.equal(app.commands.state(project.id).sessions.tests.status, 'exited', 'The check ran as the session the panel shows.');
   assert.equal((await post(`/api/conversations/${id}/retry`, { offerId: 'none', accept: true })).status, 409);
   assert.equal((await post(`/api/conversations/${id}/retry`, { offerId: 'none', accept: false })).status, 200);
 });

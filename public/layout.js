@@ -1,11 +1,17 @@
 (() => {
   'use strict';
   // Resizable sections: the sidebar, the right-hand panel (Git, Agents, reviews), the split between workspaces and
-  // files, and the Run panel. Drag a handle, use the arrow keys on it, or double-click to reset. Sizes are kept per
+  // files, and the bottom panel (Terminal and Run). Drag a handle, use the arrow keys on it, or double-click to reset. Sizes are kept per
   // viewer in this browser only; without storage the defaults apply.
   const KEY = 'throughline:layout', root = document.documentElement, $ = id => document.getElementById(id);
   let sizes = {};
   try { sizes = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch { sizes = {}; }
+  // The terminal and Run were separate panels, each with its own height; the shared panel keeps the terminal's.
+  if ('terminal' in sizes || 'commands' in sizes) {
+    if (!sizes.panel && (sizes.terminal || sizes.commands)) sizes.panel = sizes.terminal || sizes.commands;
+    delete sizes.terminal; delete sizes.commands;
+    try { localStorage.setItem(KEY, JSON.stringify(sizes)); } catch { /* Sizes are a convenience. */ }
+  }
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(sizes)); } catch { /* Sizes are a convenience. */ } };
   const clamp = (value, min, max) => Math.round(Math.max(min, Math.min(max, value)));
   const sidePanels = () => ['git-panel', 'agents-panel', 'review-panel'].map($).filter(Boolean);
@@ -15,8 +21,7 @@
     sidebar: { measure: () => document.querySelector('.sidebar')?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--sidebar-width', value + 'px') : root.style.removeProperty('--sidebar-width'), min: 200, max: 440, axis: 'x', sign: 1, label: 'Resize the sidebar' },
     inspector: { measure: () => sidePanels().find(panel => !panel.hidden)?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--inspector-width', value + 'px') : root.style.removeProperty('--inspector-width'), min: 260, max: 600, axis: 'x', sign: -1, label: 'Resize the side panel' },
     workspaces: { measure: () => $('workspace-list')?.getBoundingClientRect().height, apply: value => { const list = $('workspace-list'); if (list) list.style.flexBasis = value ? value + 'px' : ''; document.querySelector('.sidebar')?.classList.toggle('sized', Boolean(value)); }, min: 60, max: 640, axis: 'y', sign: 1, label: 'Resize workspaces and files' },
-    commands: { measure: () => $('project-commands')?.getBoundingClientRect().height, apply: value => { const panel = $('project-commands'); if (panel) panel.style.height = value ? value + 'px' : ''; }, min: 140, max: 720, axis: 'y', sign: -1, label: 'Resize the Run panel' },
-    terminal: { measure: () => $('terminal-panel')?.getBoundingClientRect().height, apply: value => { const panel = $('terminal-panel'); if (panel) panel.style.height = value ? value + 'px' : ''; }, min: 140, max: 720, axis: 'y', sign: -1, label: 'Resize the terminal' },
+    panel: { measure: () => $('bottom-panel')?.getBoundingClientRect().height, apply: value => { const panel = $('bottom-panel'); if (panel) panel.style.height = value ? value + 'px' : ''; }, min: 140, max: 720, axis: 'y', sign: -1, label: 'Resize the terminal and Run panel' },
   };
   function set(name, value) {
     const section = sections[name];
@@ -51,8 +56,7 @@
   handle(document.querySelector('.sidebar'), 'sidebar', 'edge-end');
   for (const panel of sidePanels()) handle(panel, 'inspector', 'edge-start');
   handle($('explorer'), 'workspaces', 'before');
-  handle($('project-commands'), 'commands', 'edge-top');
-  handle($('terminal-panel'), 'terminal', 'edge-top');
+  handle($('bottom-panel'), 'panel', 'edge-top');
   // Layout buttons at the top right, as in an editor: the sidebar and the side panel on the right. Each is filled
   // while its area shows. The side panel reopens on the tab last used (Agents at first).
   const SIDEBAR_KEY = 'throughline:sidebar', LAST_PANEL_KEY = 'throughline:side-panel-last', shell = $('app-shell');

@@ -88,13 +88,23 @@ async function browser({existing=true,available=true,providers={},authenticated=
     const next=()=>{
       if (request.path.startsWith('/api/commands')) {
         assert(projects.some(project=>project.id===request.projectId),'Project commands must name the current workspace.');
-        let saved=commandStates.get(request.projectId); if(!saved){saved={commands:{},sessions:{}};commandStates.set(request.projectId,saved);}
-        if(request.path==='/api/commands')return response(clone(saved));
-        if(request.path==='/api/commands/detect')return response({manager:'npm',scripts:['dev','test'],suggestions:{run:'npm run dev',test:'npm run test'},message:'Review before executing.'});
-        const [,action,operation]=request.path.match(/^\/api\/commands\/(run|test)(?:\/(start|stop))?$/);
-        if(operation==='start'){saved.commands[action]=clone(request.body);saved.sessions[action]={...request.body,id:randomUUID(),action,status:'running',output:'http://localhost:3000',cwd:'/workspace/example/frontend',exitCode:null,urls:['http://localhost:3000/']};return response(clone(saved.sessions[action]),202);}
-        if(operation==='stop'){assert.equal(request.body.sessionId,saved.sessions[action].id);saved.sessions[action].status='stopped';return response(clone(saved.sessions[action]));}
-        saved.commands[action]=clone(request.body);return response(clone(request.body));
+        let saved=commandStates.get(request.projectId); if(!saved){saved={commands:[],sessions:{}};commandStates.set(request.projectId,saved);}
+        // A stand-in for the commands API: named commands, each with its latest session.
+        if(request.path==='/api/commands')return response(clone({commands:saved.commands,sessions:Object.fromEntries(Object.entries(saved.sessions).map(([id,session])=>[id,request.params.output===id?session:(({output,ansi,...rest})=>rest)(session)]))}));
+        if(request.path==='/api/commands/detect')return response({manager:'npm',suggestions:[{name:'dev',command:'npm run dev'},{name:'test',command:'npm run test',test:true}],message:'Nothing found here.'});
+        const action=request.path.slice('/api/commands/'.length),body=request.body||{};
+        if(action==='save'){
+          const existing=saved.commands.find(command=>command.id===body.id),id=existing?.id||body.name.toLowerCase().replace(/[^a-z0-9]+/g,'-');
+          const command={id,name:body.name,folderId:body.folderId,directory:body.directory||'',command:body.command,...(body.test?{test:true}:{})};
+          saved.commands=existing?saved.commands.map(item=>item===existing?command:item):[...saved.commands,command];
+          if(body.test)saved.commands=saved.commands.map(item=>item.id===id?item:(({test,...rest})=>rest)(item));
+          return response(clone(command));
+        }
+        const command=saved.commands.find(item=>item.id===body.id);assert(command,'A command action names a saved command.');
+        if(action==='start'||action==='restart'){saved.sessions[command.id]={id:randomUUID(),commandId:command.id,name:command.name,command:command.command,folderId:command.folderId,status:'running',startedAt:new Date().toISOString(),output:'ready on http://localhost:3000',ansi:'\u001b[32mready\u001b[39m on http://localhost:3000',cwd:'/workspace/example/frontend',exitCode:null,urls:['http://localhost:3000/']};return response(clone(saved.sessions[command.id]),202);}
+        if(action==='stop'){assert.equal(body.sessionId,saved.sessions[command.id].id);saved.sessions[command.id].status='stopped';return response(clone(saved.sessions[command.id]));}
+        if(action==='clear'){delete saved.sessions[command.id];return response({});}
+        if(action==='remove'){saved.commands=saved.commands.filter(item=>item!==command);delete saved.sessions[command.id];return response({});}
       }
       if(request.path==='/api/files')return response({entries:[],nextOffset:null});
       if(request.path==='/api/attachments'&&request.method==='POST'){const id=(snapshots.size+1).toString(16).padStart(64,'0'), file={id,name:request.body.name,kind:'text',mime:'text/plain',bytes:10};snapshots.set(id,file);return response(file,201);}
@@ -183,6 +193,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(setup)vm.runInContext(fs.readFileSync(new URL('../public/setup.js',import.meta.url),'utf8'),context,{filename:'public/setup.js'});
   if(updatesUI)vm.runInContext(fs.readFileSync(new URL('../public/updates.js',import.meta.url),'utf8'),context,{filename:'public/updates.js'});
   if(localUI)vm.runInContext(fs.readFileSync(new URL('../public/local-models.js',import.meta.url),'utf8'),context,{filename:'public/local-models.js'});
+  if(commandsUI||terminalUI)vm.runInContext(fs.readFileSync(new URL('../public/bottom-panel.js',import.meta.url),'utf8'),context,{filename:'public/bottom-panel.js'});
   if(commandsUI)vm.runInContext(fs.readFileSync(new URL('../public/project-commands.js',import.meta.url),'utf8'),context,{filename:'public/project-commands.js'});
   if(filesUI)vm.runInContext(fs.readFileSync(new URL('../public/files.js',import.meta.url),'utf8'),context,{filename:'public/files.js'});
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
@@ -1538,46 +1549,76 @@ test('permission controls offer Ask for permission and Full auto-approval and en
 });
 
 
-test('project controls preview commands without executing, preserve the chat draft and keep output alive when hidden',async()=>{
+test('Run is in the status bar; a command found in the folder is added in one click, and starting, stopping and hiding never touch the conversation',async()=>{
   const ui=await browser({commandsUI:true,desktop:true});
   ui.$('message-input').value='Keep coding while the server runs';ui.fire('message-input','input');
-  ui.$('open-commands').click();await flush();assert.equal(ui.$('project-commands').hidden,false);
-  assert.equal(ui.$('command-folder').value,'frontend');assert.equal(ui.$('command-start').disabled,true);
-  ui.$('command-detect').click();await flush();assert.equal(ui.$('command-text').value,'npm run dev');
-  assert.match(ui.$('command-detection').textContent,/npm/);assert.match(ui.$('command-location').textContent,/frontend/);
-  assert.equal(ui.requests.filter(request=>request.path.endsWith('/start')).length,0,'Detection never starts scripts.');
-  ui.$('command-text').value='npm run dev -- --port 3000';ui.fire('command-text','input');
-  ui.$('command-start').click();ui.$('command-start').click();await flush();
-  assert.equal(ui.requests.filter(request=>request.path==='/api/commands/run/start').length,1);
-  assert.equal(ui.$('command-config').open,false);assert.equal(ui.$('command-stop').disabled,false);assert.equal(ui.$('command-start').disabled,true);
-  assert.match(ui.$('command-output').textContent,/localhost:3000/);assert.equal(ui.$('command-badge').textContent,'1');
-  ui.$('close-commands').click();assert.equal(ui.$('project-commands').hidden,true);
-  assert.equal(ui.requests.filter(request=>request.path.endsWith('/stop')).length,0);
-  ui.$('open-commands').click();await flush();ui.$('command-links').children[0].click();await flush();assert(ui.externalLinks.includes('http://localhost:3000/'));
-  ui.$('command-stop').click();await flush();assert.equal(ui.$('command-status').textContent,'Stopped');assert.equal(ui.$('command-start').disabled,false);
+  assert.equal(ui.$('bottom-panel').hidden,true);assert.equal(ui.$('status-run').hidden,false);
+  ui.$('status-run').click();await flush();await flush();
+  assert.equal(ui.$('project-commands').hidden,false);assert.equal(ui.$('status-run').getAttribute('aria-pressed'),'true');
+  assert.equal(ui.$('command-empty').hidden,false,'With no commands, Run offers what the folder defines.');
+  const quick=ui.$('command-quick').querySelectorAll('.command-chip');
+  assert.deepEqual(quick.map(chip=>chip.querySelector('.command-chip-name').textContent),['dev','test']);
+  assert.equal(ui.requests.filter(request=>/\/(start|restart)$/.test(request.path)).length,0,'Finding commands never runs them.');
+  quick[1].click();await flush();await flush();
+  assert.deepEqual(ui.requests.filter(request=>request.path==='/api/commands/save').at(-1).body,{name:'test',command:'npm run test',folderId:'frontend',directory:'',test:true},'A test script is marked for Check with tests when none is.');
+  assert.equal(ui.$('command-empty').hidden,true,'Once there is a command, Run shows it.');
+  ui.$('command-add').click();ui.runTimers();await flush();await flush();
+  assert.deepEqual(ui.$('command-suggestions').querySelectorAll('.command-chip-name').map(chip=>chip.textContent),['dev'],'Commands already added are not offered again.');
+  ui.$('command-suggestions').querySelectorAll('.command-chip')[0].click();ui.$('command-form').dispatchEvent(new UIEvent('submit'));await flush();await flush();
+  const rows=()=>ui.$('command-list').querySelectorAll('.command-row');
+  assert.deepEqual(rows().map(row=>row.dataset.commandId),['test','dev']);
+  assert.equal(ui.$('command-line').textContent,'npm run dev','The command just added is selected.');
+  assert(rows()[0].querySelector('.command-test-mark'),'The command used for checks is marked.');
+  rows()[0].querySelector('.command-pick').click();await flush();await flush();
+  assert.equal(ui.$('command-line').textContent,'npm run test');
+  rows()[1].querySelector('.command-pick').click();await flush();await flush();
+  assert.equal(ui.$('command-line').textContent,'npm run dev');assert.equal(ui.$('command-state').textContent,'Not started');
+  ui.$('command-start').click();ui.$('command-start').click();await flush();await flush();
+  assert.equal(ui.requests.filter(request=>request.path==='/api/commands/start').length,1,'A double click starts it once.');
+  assert.match(ui.$('command-state').textContent,/^Running · \d+s$/);assert.equal(ui.$('command-start').hidden,true);assert.equal(ui.$('command-stop').hidden,false);assert.equal(ui.$('command-restart').hidden,false);
+  assert.equal(ui.$('command-output').querySelector('.ansi-green').textContent,'ready','Output keeps its colours.');
+  assert.equal(ui.$('run-tab-count').textContent,'1');assert.equal(ui.$('status-run-state').textContent,'1');assert.equal(ui.$('status-run-state').dataset.state,'running');
+  ui.$('command-links').children[0].click();await flush();assert(ui.externalLinks.includes('http://localhost:3000/'));
+  ui.$('status-run').click();assert.equal(ui.$('bottom-panel').hidden,true,'Clicking Run again hides the panel.');
+  assert.equal(ui.requests.filter(request=>request.path.endsWith('/stop')).length,0,'Hiding leaves commands running.');
+  assert.equal(ui.$('status-run-state').textContent,'1','The status bar still says what runs.');
+  ui.$('status-run').click();await flush();await flush();
+  ui.$('command-stop').click();await flush();await flush();assert.equal(ui.$('command-state').textContent,'Stopped');assert.equal(ui.$('command-start').hidden,false);
+  ui.$('command-clear').click();await flush();await flush();assert.equal(ui.$('command-state').textContent,'Not started');
   assert.equal(ui.$('message-input').value,'Keep coding while the server runs');
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0);
 });
 
-test('project command configuration and sessions stay separate across actions and workspaces',async()=>{
-  const ui=await browser({commandsUI:true,moreProjects:true});ui.$('open-commands').click();await flush();
-  ui.$('command-text').value='npm run dev';ui.fire('command-text','input');ui.$('command-start').click();await flush();
-  ui.$('command-tab-test').click();await flush();assert.equal(ui.$('command-text').value,'');ui.$('command-text').value='npm test';ui.fire('command-text','input');ui.$('command-save').click();await flush();
-  ui.$('command-tab-run').click();await flush();assert.equal(ui.$('command-text').value,'npm run dev');assert.equal(ui.$('command-stop').disabled,false);
-  await ui.switchProject('project-two');assert.equal(ui.$('command-text').value,'');assert.equal(ui.$('command-stop').disabled,true);assert.equal(ui.$('command-output').textContent,'Output will appear here when you start a command.');
-  ui.$('command-text').value='python app.py';ui.fire('command-text','input');
-  await ui.switchProject('project-one');assert.equal(ui.$('command-text').value,'npm run dev');assert.equal(ui.$('command-stop').disabled,false);
-  ui.$('command-tab-test').click();await flush();assert.equal(ui.$('command-text').value,'npm test');
-  assert.equal(ui.requests.filter(request=>request.path.endsWith('/stop')).length,0);
-});
+test('commands are added and edited in a short form, stay with their workspace, and a failure can go to an agent without sending',async()=>{
+  const ui=await browser({commandsUI:true,moreProjects:true});
+  ui.$('status-run').click();await flush();await flush();
+  ui.$('command-add').click();ui.runTimers();await flush();await flush();
+  assert.equal(ui.$('command-form').hidden,false);assert.equal(ui.$('command-form-title').textContent,'Add a command');
+  ui.$('command-suggestions').querySelectorAll('.command-chip')[0].click();
+  assert.deepEqual([ui.$('command-name').value,ui.$('command-text').value],['dev','npm run dev'],'A suggestion fills the form.');
+  ui.$('command-name').value='web';ui.$('command-text').value='npm run dev -- --port 3000';ui.$('command-test').checked=false;
+  ui.$('command-form').dispatchEvent(new UIEvent('submit'));await flush();await flush();
+  assert.deepEqual(ui.requests.filter(request=>request.path==='/api/commands/save').at(-1).body,{name:'web',folderId:'frontend',directory:'',command:'npm run dev -- --port 3000',test:false});
+  assert.equal(ui.$('command-form').hidden,true);assert.equal(ui.$('command-line').textContent,'npm run dev -- --port 3000');
+  ui.$('command-edit').click();await flush();
+  assert.equal(ui.$('command-form-title').textContent,'Edit web');assert.equal(ui.$('command-remove').hidden,false);assert.equal(ui.$('command-text').value,'npm run dev -- --port 3000');
+  ui.$('command-cancel').click();await flush();assert.equal(ui.$('command-form').hidden,true);
 
-test('stale command detection cannot replace another workspace draft and output is literal text',async()=>{
-  const ui=await browser({commandsUI:true,moreProjects:true});ui.$('open-commands').click();await flush();const held=deferred();
-  ui.setIntercept((request,next)=>request.path==='/api/commands/detect'?held.promise.then(next):next());
-  ui.$('command-detect').click();await flush();await ui.switchProject('project-two');ui.$('command-text').value='other draft';ui.fire('command-text','input');
-  held.resolve();await flush();assert.equal(ui.$('command-text').value,'other draft');assert.equal(ui.$('command-start').disabled,false);
-  ui.setIntercept((request,next)=>request.path==='/api/commands'?response({commands:{},sessions:{run:{status:'failed',command:'echo fixture',cwd:'/workspace/other/api',output:'<script>untrusted</script>',exitCode:1,urls:['javascript:alert(1)','http://evil.example','http://user:pass@localhost:42','http://localhost:42']}}}):next());
-  await ui.window.relayCommands.refresh();assert.equal(ui.$('command-output').textContent,'<script>untrusted</script>');assert.equal(ui.$('command-links').children.length,1);
+  await ui.switchProject('project-two');await flush();await flush();
+  assert.equal(ui.$('command-empty').hidden,false,'Another workspace has its own commands.');
+  await ui.switchProject('project-one');await flush();await flush();
+  assert.equal(ui.$('command-line').textContent,'npm run dev -- --port 3000');
+
+  // A failed command offers to put its failure in the message box, where it waits to be read and sent.
+  ui.setIntercept((request,next)=>request.path==='/api/commands'?response({commands:[{id:'web',name:'web',folderId:'frontend',directory:'',command:'npm test'}],sessions:{web:{id:'s1',commandId:'web',status:'failed',command:'npm test',cwd:'/workspace/example/frontend',output:'<script>untrusted</script>\nAssertionError: expected 100 to equal 90',ansi:'<script>untrusted</script>\nAssertionError: expected 100 to equal 90',exitCode:1,urls:['javascript:alert(1)','http://evil.example','http://user:pass@localhost:42','http://localhost:42']}}}):next());
+  await ui.window.relayCommands.refresh();await flush();
+  assert.equal(ui.$('command-state').textContent,'Failed · exit 1');assert.equal(ui.$('command-fix').hidden,false);
+  assert.match(ui.$('command-output').textContent,/<script>untrusted<\/script>/,'Output is literal text.');assert.equal(ui.$('command-output').querySelector('script'),null);
+  assert.equal(ui.$('command-links').children.length,1,'Only local links without credentials can be opened.');
+  assert.equal(ui.$('status-run-state').dataset.state,'failed');
+  ui.$('message-input').value='';ui.$('command-fix').click();
+  assert.match(ui.$('message-input').value,/^The web command failed with exit code 1\. Find the cause and fix it\.\n\nCommand: npm test \(in Frontend\)\n\nEnd of its output:\n```\n<script>untrusted<\/script>\nAssertionError/);
+  assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
 });
 
 test('user prompts read as bubbles distinct from labelled agent replies and stay pinned above the turn they started', async () => {
@@ -2034,9 +2075,9 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
   ui.$('routing-allow-api').checked=true;ui.fire('routing-allow-api','change');await flush();await flush();
   assert.deepEqual(choices.at(-1),{mode:'balanced',allowApi:true,check:false});
   assert.equal(ui.$('routing-check-row').hidden,false);
-  assert.equal(ui.$('routing-check').disabled,true,'Checking needs a Test command.');assert.match(ui.$('routing-check-hint').textContent,/Needs a Test command for this workspace/);
+  assert.equal(ui.$('routing-check').disabled,true,'Checking needs a Test command.');assert.match(ui.$('routing-check-hint').textContent,/Needs a test command\. Choose one in Run\./);
   assert.equal(ui.$('routing-check-set').hidden,false);
-  ui.window.dispatchEvent(new UIEvent('relay-commands',{detail:{projectId:'project-one',commands:{test:{command:'npm test'}}}}));
+  ui.window.dispatchEvent(new UIEvent('relay-commands',{detail:{projectId:'project-one',commands:[{id:'dev',command:'npm run dev'},{id:'test',command:'npm test',test:true}]}}));
   assert.equal(ui.$('routing-check').disabled,false,'A Test command saved in Run shows at once.');assert.match(ui.$('routing-check-hint').textContent,/runs npm test\. If the tests fail, routing retries once/);
   assert.equal(ui.$('routing-check-set').hidden,true);
   ui.$('routing-check').checked=true;ui.fire('routing-check','change');await flush();await flush();
@@ -2052,11 +2093,12 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
   assert.equal(ui.$('agents-panel').hidden,true,'Git and Agents share the side panel.');
 });
 
-test('the sidebar, side panel, workspaces and Run panel resize from handles that work with the keyboard, are remembered and reset on double-click',async()=>{
+test('the sidebar, side panel, workspaces and the terminal and Run panel resize from handles that work with the keyboard, are remembered and reset on double-click',async()=>{
   const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300})}});
   const root=ui.document.documentElement,handles=ui.document.querySelectorAll('.resize-handle');
-  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the Run panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal','Resize workspaces and files']);
-  assert.equal(root.style['--inspector-width'],'600px','Saved sizes come back, within their limits.');assert.equal(ui.$('project-commands').style.height,'300px');
+  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel','Resize workspaces and files']);
+  assert.equal(root.style['--inspector-width'],'600px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel').style.height,'300px','The Run panel’s height carries over to the shared panel.');
+  assert.deepEqual(Object.keys(JSON.parse(ui.storage.get('throughline:layout')||'{}')).filter(key=>['terminal','commands'].includes(key)),[]);
   const sidebar=handles.find(handle=>handle.getAttribute('aria-label')==='Resize the sidebar');assert.equal(sidebar.getAttribute('role'),'separator');assert.equal(sidebar.tabIndex,0);
   sidebar.dispatchEvent(new UIEvent('keydown',{key:'ArrowRight',preventDefault(){}}));
   assert.equal(root.style['--sidebar-width'],'216px');
@@ -2295,10 +2337,11 @@ test('the terminal opens a shell for the workspace, keeps each workspace’s ses
   const streams = () => ui.eventSources.filter(source => source.url.startsWith('/api/terminal/stream'));
   const send = (stream, type, data) => stream.dispatchEvent(new UIEvent(type, { data: JSON.stringify(data) }));
 
-  // A workspace with several folders asks which one the shell starts in.
-  ui.$('toggle-terminal').click(); await flush();
-  assert.equal(ui.$('terminal-panel').hidden, false);
-  assert.equal(ui.$('toggle-terminal').getAttribute('aria-pressed'), 'true');
+  // A workspace with several folders asks which one the shell starts in. Terminal is in the status bar.
+  ui.$('status-terminal').click(); await flush();
+  assert.equal(ui.$('terminal-panel').hidden, false); assert.equal(ui.$('bottom-panel').hidden, false);
+  assert.equal(ui.$('toggle-terminal').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('status-terminal').getAttribute('aria-pressed'), 'true');
+  assert.equal(ui.$('bottom-tab-terminal').getAttribute('aria-selected'), 'true');
   assert.equal(ui.$('terminal-start').hidden, false);
   assert.deepEqual(ui.$('terminal-folder').children.map(option => option.textContent), ['Frontend', 'Backend']);
   ui.$('terminal-folder').value = 'backend'; ui.$('terminal-open').click(); await flush();
@@ -2320,14 +2363,19 @@ test('the terminal opens a shell for the workspace, keeps each workspace’s ses
   first.type('pwd\r'); await flush();
   assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-session', data: 'pwd\r' }]);
 
-  // Hiding leaves the sessions running; the menu command shows the panel again.
-  ui.$('terminal-hide').click(); await flush();
-  assert.equal(ui.$('terminal-panel').hidden, true);
-  assert.equal(ui.storage.get('throughline:terminal'), 'closed');
-  assert(!posts.some(([name]) => name === 'stop'));
+  // Hiding the panel, or switching to Run, leaves the sessions running; the menu command shows the terminal again.
+  ui.$('bottom-hide').click(); await flush();
+  assert.equal(ui.$('terminal-panel').hidden, true); assert.equal(ui.$('bottom-panel').hidden, true);
+  assert.deepEqual(JSON.parse(ui.storage.get('throughline:panel')), { open: false, tool: 'terminal' });
+  assert.equal(ui.$('status-terminal').hidden, false, 'Terminal stays in the status bar while the panel is hidden.');
   ui.window.relayUI.commands.terminal(); await flush();
   assert.equal(ui.$('terminal-panel').hidden, false);
   assert.equal(second.host.hidden, false);
+  ui.$('bottom-tab-run').click(); await flush();
+  assert.equal(ui.$('terminal-panel').hidden, true); assert.equal(second.host.hidden, true);
+  ui.$('bottom-tab-terminal').click(); await flush();
+  assert.equal(second.host.hidden, false);
+  assert(!posts.some(([name]) => name === 'stop'));
 
   // Ending a session stops it; an exited shell keeps its output and offers a new session.
   ui.$('terminal-end').click(); await flush();

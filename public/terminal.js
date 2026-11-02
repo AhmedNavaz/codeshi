@@ -1,12 +1,12 @@
 (() => {
   'use strict';
-  // The workspace terminal (#7): a bottom panel with an interactive shell for the open workspace. Each workspace has its
-  // own session and its own view; switching workspaces swaps the view, and hiding the panel leaves the shell running.
+  // The workspace terminal (#7): a tab of the bottom panel with an interactive shell for the open workspace. Each
+  // workspace has its own session and its own view; switching workspaces swaps the view, and hiding the panel or
+  // switching to another tab leaves the shell running.
   // Input goes to the session it was typed in, never to another workspace's. Keys typed here belong to the shell, not
   // to the message box.
   const $ = id => document.getElementById(id), api = window.relayUI, panel = $('terminal-panel');
   if (!api || !panel) return;
-  const OPEN_KEY = 'throughline:terminal';
   const Terminal = window.Terminal, FitAddon = window.FitAddon?.FitAddon;
   const views = new Map();
   let current = null, busy = false;
@@ -23,7 +23,6 @@
   const projectId = () => api.getState().projectId;
   const project = () => api.getState().projects?.find(item => item.id === projectId());
   const message = text => { $('terminal-message').textContent = text || ''; $('terminal-message').hidden = !text; };
-  const remember = open => { try { localStorage.setItem(OPEN_KEY, open ? 'open' : 'closed'); } catch { /* A convenience only. */ } };
 
   // Colours follow the app's theme; the sixteen terminal colours are VS Code's for each appearance.
   const palettes = {
@@ -135,31 +134,23 @@
     finally { busy = false; render(); }
   }
 
-  function setOpen(open, keep = true) {
-    panel.hidden = !open;
-    $('toggle-terminal')?.setAttribute('aria-pressed', String(open));
-    if (keep) remember(open);
-    if (open) { load().then(() => views.get(projectId())?.term.focus()); } else render();
-  }
-  const toggle = () => setOpen(panel.hidden);
+  // The bottom panel decides when the terminal shows; it says so with a relay-panel event.
+  const shown = () => !panel.hidden;
+  const toggle = () => window.relayPanel?.toggle('terminal');
+  window.addEventListener('relay-panel', () => { if (shown()) load().then(() => { if (shown()) views.get(projectId())?.term.focus(); }); else render(); });
 
-  $('toggle-terminal')?.addEventListener('click', toggle);
-  $('terminal-hide').addEventListener('click', () => setOpen(false));
   $('terminal-end').addEventListener('click', end);
   $('terminal-open').addEventListener('click', () => start($('terminal-folder').value));
   $('terminal-restart').addEventListener('click', () => { const view = views.get(projectId()); view?.dispose(); views.delete(projectId()); start(view?.session.folderId || $('terminal-folder').value); });
   // ⌃` shows or hides the terminal, as in VS Code.
-  document.addEventListener('keydown', event => { if (event.ctrlKey && !event.metaKey && !event.altKey && (event.key === '`' || event.code === 'Backquote')) { event.preventDefault(); toggle(); } });
+  document.addEventListener('keydown', event => { if (event.ctrlKey && !event.metaKey && !event.altKey && (event.key === '`' || event.code === 'Backquote') && api.getState().projectId) { event.preventDefault(); toggle(); } });
   if (typeof ResizeObserver === 'function') new ResizeObserver(() => fitCurrent()).observe($('terminal-views'));
   if (typeof MutationObserver === 'function') new MutationObserver(() => { const colours = theme(); for (const view of views.values()) view.term.options.theme = colours; }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-  // The panel reopens if it was open when Throughline last closed, once a workspace is open.
-  let lastProject = null, reopen = false;
-  try { reopen = localStorage.getItem(OPEN_KEY) === 'open'; } catch { /* Starts closed. */ }
+  let lastProject = null;
   window.addEventListener('relay-state', () => {
     if (projectId() === lastProject) return;
     lastProject = projectId();
-    if (reopen && lastProject) { reopen = false; setOpen(true, false); return; }
-    if (!panel.hidden) load(); else render();
+    if (shown()) load(); else render();
   });
-  window.relayTerminal = { toggle, open: () => setOpen(true), close: () => setOpen(false), isOpen: () => !panel.hidden };
+  window.relayTerminal = { toggle, open: () => window.relayPanel?.show('terminal'), close: () => { if (window.relayPanel?.isOpen('terminal')) window.relayPanel.hide(); }, isOpen: () => shown() };
 })();

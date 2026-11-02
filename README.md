@@ -60,7 +60,7 @@ Throughline is an open-source desktop control plane for agentic development. It 
 <td width="50%" valign="top">
 <img src="docs/features/terminal.png" alt="The terminal panel showing passing tests and git status">
 <h3>A terminal for each project</h3>
-<p>Your own shell in a panel below the conversation. It keeps running when you hide it or switch projects, so your dev server stays up while agents work.</p>
+<p>Your own shell in a panel below the conversation. It keeps running when you hide it or switch projects, so your dev server stays up while agents work. Beside it, Run keeps your dev server, tests and scripts one click away, with their live output.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/voice.png" alt="Voice input listening, with the spoken request appearing in the message box">
@@ -108,6 +108,7 @@ Throughline is an open-source desktop control plane for agentic development. It 
 - **While you were away**: come back to a short recap of what ran, what changed and what is waiting in each workspace, written or read aloud.
 - **Voice** on macOS: speak a message instead of typing it, recognized on your Mac so the audio never leaves it, and hear a short summary when the run finishes.
 - A terminal for each workspace in a bottom panel: your own shell in the folder you choose, kept running while the panel is hidden or you switch workspaces.
+- **Run**, beside the terminal: your dev server, tests and scripts as named commands, found in `package.json`, a `Makefile` or Cargo, Go and Python projects, with live coloured output, links to local addresses, and a failure you can hand to an agent. Terminal and Run are always in the status bar.
 - A file browser with syntax-highlighted previews. Attach files and images by clicking, dragging or pasting.
 - Plan usage for Claude Code and Codex in the status bar, with reset times, plus per-run context usage when reported.
 - Keep awake: your computer stays awake while agents are working or waiting for a usage limit to reset, and sleeps normally once they finish.

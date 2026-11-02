@@ -975,10 +975,6 @@ button.commit-hash:hover { text-decoration: underline; }
 :root.resizing-rows, :root.resizing-rows * { cursor: row-resize !important; }
 
 /* Run lives with the files, as project scripts do in an editor's explorer. */
-.explorer-run { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px 0 6px; border: 0; border-radius: 11px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 500; }
-.explorer-run .icon { width: 12px; height: 12px; fill: currentColor; stroke: none; }
-.explorer-run:hover:enabled, .explorer-run[aria-expanded="true"] { background: var(--hover); color: var(--text); }
-.explorer-run:disabled { opacity: .5; }
 
 /* The Agents panel: agents, who answers each message, and what happens near a limit. */
 .agents-panel { position: relative; grid-column: 3; grid-row: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--border); background: var(--sidebar); }

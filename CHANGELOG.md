@@ -4,6 +4,11 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Changed
+
+- **Terminal and Run share one bottom panel**, with a tab each, and both are always in the status bar, so a hidden tool is one click away. ⌘J shows or hides the panel as you left it, ⌃` the terminal. Hiding never stops what runs in it.
+- **Run is rebuilt around its output.** A workspace keeps up to 12 named commands, such as its dev server, tests, build or linter, instead of one Run and one Test command. With none yet, Run offers what the folder defines: `package.json` scripts, `Makefile` targets and the usual Cargo, Go and Python commands, found without running anything. The list shows each command's state; the selected one's output keeps its colours, with links to local addresses and Start, Stop, Restart, Edit and Clear. **Ask an agent to fix it** puts a failed command and the end of its output in the message box to read and send. The status bar shows how many commands run, or that one failed. One command can be marked for Check with tests (#12). Commands saved before appear as Run and Test.
+
 ## [0.18.0] - 2026-11-02
 
 ### Added
