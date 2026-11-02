@@ -990,6 +990,9 @@ test('an appearance chosen in the status bar survives reopening the setup checkl
 test('Settings, setup, the status bar and other windows agree on one appearance preference',async()=>{
   const ui=await browser({theme:true,setup:true,workbench:true,systemDark:true,savedPreferences:{onboarding:{step:1}}});
   ui.$('relay-settings').click();await flush();
+  assert.equal(ui.$('workbench-content').querySelectorAll('[data-appearance]').length,0,'Connections holds the agent accounts; appearance is under Preferences.');
+  await ui.window.relaySettings.open('preferences');await flush();
+  assert.equal(ui.$('workbench-title').textContent,'Preferences');
   const settings=ui.$('workbench-content').querySelectorAll('[data-appearance]');
   assert.deepEqual(settings.map(button=>button.textContent),['System','Dark','Light']);assert.deepEqual(pressedAppearance(ui,ui.$('workbench-content')),['system']);
   settings.find(button=>button.dataset.appearance==='light').click();await flush();
@@ -2053,10 +2056,10 @@ test('the search bar at the top finds workspaces, files in every workspace and a
   ui.runTimers();await flush();await flush();
   assert.deepEqual(searches,['sett']);
   assert.deepEqual(results.querySelectorAll('.command-group').map(node=>node.textContent),['Files','Actions']);
-  assert.deepEqual(labels(),['settings.js','Settings']);
+  assert.deepEqual(labels(),['settings.js','Settings','Voice settings']);
   assert.match(results.querySelectorAll('.command-result')[0].textContent,/Other workspace · src/);
   search.value='>sett';ui.fire('workspace-search','input');ui.runTimers();await flush();
-  assert.deepEqual(labels(),['Settings'],'A leading > shows actions only.');assert.deepEqual(searches,['sett'],'Actions-only searches look up no files.');
+  assert.deepEqual(labels(),['Settings','Voice settings'],'A leading > shows actions only.');assert.deepEqual(searches,['sett'],'Actions-only searches look up no files.');
   search.dispatchEvent(new UIEvent('keydown',{key:'Enter',preventDefault(){}}));
   assert.equal(settings,1);assert.equal(search.value,'','Running a result clears the search.');assert.equal(results.hidden,true);
   search.value='sett';ui.fire('workspace-search','input');ui.runTimers();await flush();await flush();
@@ -2148,7 +2151,7 @@ test('an app that cannot replace itself offers the download instead, and a manua
 
 test('Settings turns automatic update checks off and checks now', async () => {
   const ui = await browser({ desktop: true, workbench: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: '2026-11-02T09:30:00.000Z', status: 'current', error: null, progress: null, blocked: null, latest: null } });
-  ui.fire('relay-settings', 'click'); await flush();
+  await ui.window.relaySettings.open('preferences'); await flush();
   assert(ui.document.querySelectorAll('h3').some(heading => heading.textContent === 'Updates'));
   const automatic = ui.labelledInput('Check for updates automatically');
   assert.equal(automatic.checked, true);

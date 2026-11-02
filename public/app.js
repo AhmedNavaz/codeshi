@@ -1338,6 +1338,8 @@
     { label: "Terminal", run: () => window.relayTerminal?.open() },
     { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
+    { label: "Preferences: appearance, updates, voice and recaps", run: () => window.relaySettings?.open("preferences") },
+    { label: "Voice settings", run: () => window.relaySettings?.open("preferences", "Voice") },
   ];
   let commandActive = 0, commandItems = [], commandFiles = { query: "", files: [] }, fileSearch = 0, fileTimer = null;
   const commandQuery = () => { const raw = $("workspace-search").value.trim(); return raw.startsWith(">") ? { actionsOnly: true, text: raw.slice(1).trim().toLowerCase() } : { actionsOnly: false, text: raw.toLowerCase() }; };

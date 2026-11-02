@@ -6,8 +6,9 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ### Added
 
+- **Preferences** in Settings: appearance, updates, voice and recaps now have their own tab beside **Connections**, which keeps the agent accounts.
 - **While you were away** (#22): coming back after two minutes or more, a short recap shows, for each workspace, the runs that finished, stopped or are still working, the files they changed and whether they ran the tests, and what is waiting for you: approvals, handoff offers, usage-limit waits, queued prompts and uncommitted changes. It is put together from what Throughline recorded, with no agent call, can be read aloud, and opens at any time from the search bar.
-- **Voice** (#11, macOS): press ⌥⌘V or the microphone beside Send and speak; what you say appears in the message box as it is heard, for you to review and send, and Esc cancels. Speech is recognized on your Mac by Throughline Speech, a small helper that ships with the app, using Apple's on-device recognition, so the audio never leaves your Mac. **Send when I stop talking** in **Settings › Voice** sends after a three-second countdown that Esc cancels. When a run you started by voice finishes, a short summary of what it did is read aloud with your system's voice. It is put together from what the run recorded, so it costs no agent usage, and can be turned on for every run or off.
+- **Voice** (#11, macOS): press ⌥⌘V or the microphone beside Send and speak; what you say appears in the message box as it is heard, for you to review and send, and Esc cancels. Speech is recognized on your Mac by Throughline Speech, a small helper that ships with the app, using Apple's on-device recognition, so the audio never leaves your Mac. **Send when I stop talking** in **Settings › Preferences › Voice** sends after a three-second countdown that Esc cancels. When a run you started by voice finishes, a short summary of what it did is read aloud with your system's voice. It is put together from what the run recorded, so it costs no agent usage, and can be turned on for every run or off.
 
 ## [0.16.0] - 2026-11-02
 

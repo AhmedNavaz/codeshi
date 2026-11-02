@@ -9,6 +9,7 @@
     solutions: ['Returned solutions', 'Manage shared requests and review the changes your friend sends back.'],
     friend: ['Help someone', 'Open a request in your workspace and return your proposed changes.'],
     accounts: ['Connections', 'Manage your Codex, Claude and Gemini accounts and model preferences.'],
+    preferences: ['Preferences', 'Appearance, updates, voice and recaps.'],
   };
   const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const field = (label, type = 'input', value = '') => { const l = node('label', label), i = node(type); i.value = value; l.append(i); return { l, i }; };
@@ -49,6 +50,7 @@
     if ($('workbench-description')) $('workbench-description').textContent = description;
     document.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
     if (tab === 'accounts') return accounts(forceAccounts);
+    if (tab === 'preferences') return preferences();
     if (!projectScope) { empty(content, 'Choose a workspace first', 'Add a workspace from the sidebar to use this feature.'); return; }
     if (tab === 'request') return request(); if (tab === 'solutions') return solutions(); if (tab === 'friend') return friend();
   }
@@ -317,15 +319,18 @@
       if (state.projectId) card.append(node('p', 'Choose the model and reasoning effort in the message composer.', 'muted'));
       diagnostics(card, account);
     }
+    const billing = section('Usage and billing', 'Provider runs use your own connected account. Subscription allowances and API charges are managed by the provider.');
+    const acceptance = check('For explicit provider runs in this app session, I accept the displayed API or unknown billing source.'); acceptance.i.checked = window.relayBillingConfirmed === true; acceptance.i.addEventListener('change', () => { window.relayBillingConfirmed = acceptance.i.checked; window.dispatchEvent(new CustomEvent('relay-billing')); }); billing.append(acceptance.l);
+    const permissions = details(content, 'Permissions and account details'); permissions.append(node('p', 'Codex read-only uses its native sandbox. Claude and the advanced Gemini CLI connection restrict tools. Antigravity coding uses native approvals and workspace trust; choose Codex or Claude for read-only work. Managed runs disable project hooks where supported; administrator policy may still apply. Tool approval requests appear in the workspace chat.')); permissions.append(node('p', 'Sign-in uses the provider’s own flow. Account credentials stay with the provider. There is no automatic switch to API billing.'));
+  }
+  // How Throughline looks and behaves, apart from the agent accounts: appearance, updates, voice and recaps.
+  function preferences() {
     const look = section('Appearance', 'System follows your computer’s light or dark setting.'), choices = node('div', undefined, 'segmented'); choices.setAttribute('role', 'group'); choices.setAttribute('aria-label', 'Appearance'); look.append(choices);
     for (const [value, label] of [['system', 'System'], ['graphite', 'Dark'], ['light', 'Light']]) { const choice = node('button', label); choice.type = 'button'; choice.setAttribute('data-appearance', value); choice.setAttribute('aria-pressed', String(window.relayTheme?.preference() === value)); choice.addEventListener('click', () => window.relayTheme?.choose(value)); choices.append(choice); }
     if (window.relayUpdater) { const updates = node('section', undefined, 'workbench-section'); content.append(updates); window.relayUpdater.settings(updates); }
     if (window.relayVoice) { const voice = node('section', undefined, 'workbench-section'); content.append(voice); window.relayVoice.settings(voice); }
     if (window.relayRecap) { const recap = node('section', undefined, 'workbench-section'); content.append(recap); window.relayRecap.settings(recap); }
     const setup = section('App preferences', 'Choose your default assistant, model, theme and starting workspace.'); actions(setup, button('Open setup checklist', () => { modal.close(); window.relaySetup?.open(); }));
-    const billing = section('Usage and billing', 'Provider runs use your own connected account. Subscription allowances and API charges are managed by the provider.');
-    const acceptance = check('For explicit provider runs in this app session, I accept the displayed API or unknown billing source.'); acceptance.i.checked = window.relayBillingConfirmed === true; acceptance.i.addEventListener('change', () => { window.relayBillingConfirmed = acceptance.i.checked; window.dispatchEvent(new CustomEvent('relay-billing')); }); billing.append(acceptance.l);
-    const permissions = details(content, 'Permissions and account details'); permissions.append(node('p', 'Codex read-only uses its native sandbox. Claude and the advanced Gemini CLI connection restrict tools. Antigravity coding uses native approvals and workspace trust; choose Codex or Claude for read-only work. Managed runs disable project hooks where supported; administrator policy may still apply. Tool approval requests appear in the workspace chat.')); permissions.append(node('p', 'Sign-in uses the provider’s own flow. Account credentials stay with the provider. There is no automatic switch to API billing.'));
   }
   function approvals() {
     let host = $('pending-approvals'); if (!host) { host = node('section', undefined, 'pending-approvals'); host.id = 'pending-approvals'; $('transcript-footer').prepend(host); }
@@ -369,6 +374,8 @@
   }
   modal.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
   $('ask-friend').addEventListener('click', () => open('request')); $('relay-settings').addEventListener('click', () => open('accounts')); $('connection-action')?.addEventListener('click', () => open('accounts')); $('workbench-close').addEventListener('click', () => modal.close());
+  // Other parts of the app open Settings on a tab, and can bring one of its sections into view.
+  window.relaySettings = { open: async (next = 'accounts', heading = null) => { await open(next); if (heading) [...content.querySelectorAll('h3')].find(item => item.textContent === heading)?.scrollIntoView?.({ block: 'start' }); } };
   $('workbench-tabs').addEventListener('click', event => { const target = event.target.closest('[data-tab]'); if (target?.dataset.tab) perform(async () => { tab = target.dataset.tab; await render(); }); });
   window.addEventListener('relay-state', () => { if (modal.open && tab !== 'accounts' && projectScope !== api().getState().projectId) { ++renderRevision; modal.close(); } approvals(); $('ask-friend').disabled = !api().getState().projectId; for (const save of document.querySelectorAll('.model-save')) save.disabled = modelLocked(save.dataset.provider); if (modal.open && tab === 'accounts' && !busy && accountSignature !== accountState()) perform(render); }); approvals();
 })();
