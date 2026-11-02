@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Voice** (#11, macOS): press ⌥⌘V or the microphone beside Send and speak; what you say appears in the message box as it is heard, for you to review and send, and Esc cancels. Speech is recognized on your Mac by Throughline Speech, a small helper that ships with the app, using Apple's on-device recognition, so the audio never leaves your Mac. **Send when I stop talking** in **Settings › Voice** sends after a three-second countdown that Esc cancels. When a run you started by voice finishes, a short summary of what it did is read aloud with your system's voice. It is put together from what the run recorded, so it costs no agent usage, and can be turned on for every run or off.
+
 ## [0.16.0] - 2026-11-02
 
 ### Added

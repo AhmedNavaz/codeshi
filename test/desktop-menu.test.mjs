@@ -21,11 +21,11 @@ test('the macOS menu bar has Throughline, File, Edit, View, Agent, Workspace, Wi
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','pasteAndMatchStyle','delete','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces','-','Speech']);
   assert.deepEqual(labels(item('View').submenu),['Show Git Activity','Show Files','Terminal','Focus Message Box','-','Appearance','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen']);
   assert.deepEqual(labels(item('Appearance').submenu),['System','Dark','Light']);
-  assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Continue with…','-','Keep Awake','Notify When Runs Finish or Need Approval','Play Notification Sound','-','Hand Off Near Usage Limits']);
+  assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Notify When Runs Finish or Need Approval','Play Notification Sound','-','Hand Off Near Usage Limits']);
   assert.deepEqual(labels(item('Workspace').submenu),['Frontend','R&D','-','Workspace Settings…','Remove Workspace…']);
   assert.deepEqual(labels(item('help').submenu),['Throughline Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New']);
   // These are the page's own shortcuts plus ⌘, ⌘N and ⌘G, which the page leaves to the menu.
-  assert.deepEqual(Object.fromEntries(all.filter(entry=>entry.accelerator).map(entry=>[entry.label,entry.accelerator])),{'Settings…':'CmdOrCtrl+,','New Workspace':'CmdOrCtrl+N','Find in Conversation':'CmdOrCtrl+F','Find Next':'CmdOrCtrl+G','Filter Workspaces':'CmdOrCtrl+K','Show Git Activity':'CmdOrCtrl+Shift+G',Terminal:'Ctrl+`','Focus Message Box':'CmdOrCtrl+L','Stop Run':'CmdOrCtrl+.',Frontend:'CmdOrCtrl+1','R&D':'CmdOrCtrl+2'});
+  assert.deepEqual(Object.fromEntries(all.filter(entry=>entry.accelerator).map(entry=>[entry.label,entry.accelerator])),{'Settings…':'CmdOrCtrl+,','New Workspace':'CmdOrCtrl+N','Find in Conversation':'CmdOrCtrl+F','Find Next':'CmdOrCtrl+G','Filter Workspaces':'CmdOrCtrl+K','Show Git Activity':'CmdOrCtrl+Shift+G',Terminal:'Ctrl+`','Focus Message Box':'CmdOrCtrl+L','Stop Run':'CmdOrCtrl+.','Voice Input':'Alt+Cmd+V',Frontend:'CmdOrCtrl+1','R&D':'CmdOrCtrl+2'});
   for(const role of ['reload','forceReload','toggleDevTools'])assert(!roles.includes(role),`A packaged app leaves out ${role}.`);
   assert.deepEqual(labels(menu({packaged:false}).item('View').submenu),['Show Git Activity','Show Files','Terminal','Focus Message Box','-','Appearance','-','reload','forceReload','toggleDevTools','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen'],'Running from source adds Reload and Developer Tools.');
 });
@@ -64,6 +64,7 @@ test('page items and in-app release notes send commands, and external Help links
   const commands={'Review Changes with Other Agent…':['review'],'Ask a Friend…':['ask-friend'],'Settings…':['settings'],'Setup Guide':['setup-guide'],'New Workspace':['new-workspace'],'Add Folder to Workspace…':['add-folder'],'Previous Chats…':['previous-chats'],'Export Conversation…':['export'],'Find in Conversation':['find'],'Find Next':['find-next'],'Find Previous':['find-previous'],'Filter Workspaces':['filter-workspaces'],'Show Git Activity':['git'],'Show Files':['files'],'Focus Message Box':['focus-message'],System:['appearance','system'],Dark:['appearance','graphite'],Light:['appearance','light'],'Use Codex':['agent','codex'],'Use Claude Code':['agent','claude'],'Stop Run':['stop'],continue:['continue'],'Keep Awake':['keep-awake'],Frontend:['workspace',1],'R&D':['workspace',2],'Workspace Settings…':['workspace-settings'],'Remove Workspace…':['remove-workspace']};
   commands['What’s New']=['whats-new'];
   commands.Terminal=['terminal'];
+  commands['Voice Input']=['voice'];
   commands['Use Gemini']=['agent','gemini'];
   commands['Continue Locally…']=['local-models'];
   for(const [label,command] of Object.entries(commands)){sent.length=0;item(label).click();assert.deepEqual(sent,[command],label);}
@@ -125,4 +126,9 @@ test('the installed app offers Check for Updates… after About, which asks the 
   item('check-updates').click();
   assert.deepEqual(sent,[['check-updates']]);
   assert(!menu().all.some(entry=>entry.label==='Check for Updates…'),'A copy that cannot update itself, such as one run from source, leaves it out.');
+});
+
+test('Voice Input is in the Agent menu on macOS, where speech is recognized on the Mac, and nowhere else yet',()=>{
+  const mac=menu();assert.equal(mac.item('Voice Input').accelerator,'Alt+Cmd+V');mac.item('Voice Input').click();assert.deepEqual(mac.sent,[['voice']]);
+  assert(!menu({platform:'win32'}).all.some(entry=>entry.label==='Voice Input'));
 });

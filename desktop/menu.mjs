@@ -71,6 +71,8 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command('Continue Locally…', ['local-models'], { enabled: page.workspace && !page.running }),
     separator(),
     command('Stop Run', ['stop'], { accelerator: 'CmdOrCtrl+.', enabled: page.running }),
+    // Speech is recognized on the Mac itself; other systems get voice input later.
+    ...mac ? [command('Voice Input', ['voice'], { accelerator: 'Alt+Cmd+V', enabled: page.workspace })] : [],
     // The page's Continue button continues with the same agent unless a usage limit stopped the run.
     command(page.continue ? `Continue with ${names[page.continue]}` : 'Continue with…', ['continue'], { id: 'continue', enabled: page.continue !== null }),
     separator(),

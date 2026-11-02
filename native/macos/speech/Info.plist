@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>local.throughline.speech</string>
+  <key>CFBundleName</key>
+  <string>Throughline Speech</string>
+  <key>CFBundleDisplayName</key>
+  <string>Throughline Speech</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Throughline listens while voice input is on, to turn what you say into a message.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Throughline recognizes your speech on this Mac. The audio never leaves it.</string>
+</dict>
+</plist>

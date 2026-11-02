@@ -63,7 +63,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -162,7 +162,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(desktop)Object.assign(window.relayDesktop,{onMenuCommand:callback=>{menuListeners.push(callback);return ()=>{};},setMenuState:state=>{menuStates.push(clone(state));}});
   if(desktop){launch ||= {version:'0.9.1',previousVersion:null,updated:false,releases:[]};Object.assign(window.relayDesktop,{getLaunchState:async()=>clone(launch),acknowledgeUpdate:async()=>{updateAcknowledgements.push(launch.version);launch={...launch,updated:false};return clone(launch);},openExternal:async url=>{externalLinks.push(url);}});}
   // The updater's side of the bridge: calls are recorded, and the main process's answers and pushed states are cloned as IPC would.
-  const eventSources=[],terminals=[];
+  const eventSources=[],terminals=[],spoken=[];
   const updateCalls=[],updateListeners=[];let updateState=update&&clone(update);
   const answer=(name,next)=>async(...args)=>{updateCalls.push([name,...args]);if(next)updateState={...updateState,...next(...args)};return clone(updateState);};
   if(desktop&&update)Object.assign(window.relayDesktop,{getUpdateState:answer('get'),checkForUpdates:answer('check',()=>({status:updateState.latest?'available':'current'})),installUpdate:answer('install',()=>({status:'downloading',progress:{received:0,total:null}})),cancelUpdate:answer('cancel',()=>({status:'available',progress:null})),skipUpdate:answer('skip',version=>({skipped:version})),setAutomaticUpdates:answer('automatic',automatic=>({automatic})),onUpdateState:callback=>{updateListeners.push(callback);return ()=>{};}});
@@ -194,6 +194,12 @@ async function browser({existing=true,available=true,providers={},authenticated=
     window.FitAddon={FitAddon:class{fit(){}}};
     vm.runInContext(fs.readFileSync(new URL('../public/terminal.js',import.meta.url),'utf8'),context,{filename:'public/terminal.js'});
   }
+  // A stand-in for the system's speech synthesis: it records what would be spoken.
+  if(voiceUI){
+    window.SpeechSynthesisUtterance=class{constructor(text){this.text=text;}};
+    window.speechSynthesis={speak:utterance=>spoken.push(utterance.text),cancel(){},getVoices:()=>[]};
+    vm.runInContext(fs.readFileSync(new URL('../public/voice.js',import.meta.url),'utf8'),context,{filename:'public/voice.js'});
+  }
   if(theme)document.dispatchEvent(new UIEvent('DOMContentLoaded'));
   await flush();assert.equal(window.relayUI.getState().ready,!empty);assert.equal(window.relayUI.getState().loading,false);
   const $=id=>document.getElementById(id);const fire=(id,type)=>$(id).dispatchEvent(new UIEvent(type));const findButton=text=>document.querySelectorAll('button').find(button=>button.textContent===text);
@@ -201,7 +207,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -2282,4 +2288,66 @@ test('the terminal opens a shell for the workspace, keeps each workspace’s ses
   assert.equal(ui.$('terminal-restart').hidden, false); assert.equal(ui.$('terminal-end').hidden, true);
   ui.$('terminal-restart').click(); await flush();
   assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'backend', cols: 100, rows: 24 }]);
+});
+
+test('voice input fills the message box as you speak, Esc cancels it, and a run started by voice is summarized aloud', async () => {
+  const ui = await browser({ voiceUI: true, stored: { 'throughline:voice': JSON.stringify({ sendAfter: true }) } });
+  const posts = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/voice') return response({ supported: true, helper: 'ready', speech: 'authorized', microphone: 'authorized', onDevice: true, locale: 'en-US' });
+    if (request.path.startsWith('/api/voice/')) { posts.push([request.path.slice(11), clone(request.body)]); return response(request.path === '/api/voice/start' ? { id: `v${posts.length}`, status: 'starting' } : {}, request.path === '/api/voice/start' ? 201 : 200); }
+    return next();
+  });
+  ui.window.relayVoice.settings(ui.document.createElement('section')); await flush();
+  const mic = ui.$('voice-input'), input = ui.$('message-input');
+  assert.equal(mic.hidden, false);
+  const send = (stream, type, data) => stream.dispatchEvent(new UIEvent(type, { data: JSON.stringify({ type, ...data }) }));
+  const stream = () => ui.eventSources.filter(source => source.url.startsWith('/api/voice/stream')).at(-1);
+
+  // Esc while listening puts the message box back as it was.
+  input.value = 'Draft'; ui.fire('message-input', 'input');
+  mic.click(); await flush();
+  send(stream(), 'ready'); send(stream(), 'partial', { text: 'never mind' });
+  assert.equal(input.value, 'Draft never mind');
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
+  assert.equal(input.value, 'Draft');
+  assert.deepEqual(posts.at(-1), ['cancel', { id: 'v1' }]);
+  assert.equal(stream().closed, true);
+
+  // What is heard joins the draft as it comes; stopping keeps it.
+  input.value = 'Fix'; ui.fire('message-input', 'input');
+  mic.click(); await flush();
+  assert.equal(stream().url, '/api/voice/stream?id=v3');
+  send(stream(), 'ready');
+  assert.equal(mic.getAttribute('aria-pressed'), 'true');
+  assert.match(ui.$('voice-status-text').textContent, /Listening/);
+  send(stream(), 'partial', { text: 'the header' });
+  assert.equal(input.value, 'Fix the header');
+  mic.click(); await flush();
+  assert.deepEqual(posts.at(-1), ['stop', { id: 'v3' }]);
+  send(stream(), 'final', { text: 'the header colour.' });
+  assert.equal(input.value, 'Fix the header colour.');
+  assert.equal(mic.getAttribute('aria-pressed'), 'false');
+
+  // "Send when I stop talking" counts down, then sends.
+  assert.match(ui.$('voice-status-text').textContent, /Sending in 3/);
+  for (let tick = 0; tick < 4 && !ui.requests.some(request => request.path.endsWith('/messages')); tick++) { ui.runTimers(); await flush(); }
+  assert.equal(ui.requests.find(request => request.path.endsWith('/messages')).body.text, 'Fix the header colour.');
+
+  // The run it started is summarized aloud from what it recorded, without another agent call.
+  const c = ui.canonical.get('project-one'), startedAt = '2026-11-02T10:00:00.000Z';
+  c.status = 'running'; c.activeRun = { id: 'run-voice', provider: 'claude', phase: 'tool', startedAt }; await ui.window.relayUI.refresh();
+  c.messages.push(
+    { id: 'step-1', runId: 'run-voice', role: 'activity', text: 'File changes: [{"path":"src/header.css","kind":"modify"},{"path":"src/theme.js","kind":"modify"}]' },
+    { id: 'step-2', runId: 'run-voice', role: 'activity', text: '$ npm test\n12 passing' },
+    { id: 'reply', runId: 'run-voice', role: 'assistant', provider: 'claude', text: 'Done. The header now uses the **brand colour** from `theme.js`.\n\n```css\n.header { color: var(--brand); }\n```\n\nI also checked the dark theme.' });
+  c.status = 'complete'; c.activeRun = null; c.lastRun = { id: 'run-voice', provider: 'claude', status: 'complete', startedAt, endedAt: '2026-11-02T10:01:40.000Z' };
+  await ui.window.relayUI.refresh();
+  assert.deepEqual(ui.spoken, ['Claude finished in 1 minute 40 seconds. It changed header.css and theme.js, and ran the tests. Done. The header now uses the brand colour from theme.js. I also checked the dark theme.']);
+
+  // A run started by typing is not read aloud unless that is chosen.
+  c.status = 'running'; c.activeRun = { id: 'run-typed', provider: 'codex', startedAt }; await ui.window.relayUI.refresh();
+  c.status = 'complete'; c.activeRun = null; c.lastRun = { id: 'run-typed', provider: 'codex', status: 'complete', startedAt, endedAt: startedAt }; await ui.window.relayUI.refresh();
+  assert.equal(ui.spoken.length, 1);
+  assert.equal(ui.window.relayVoice.summarize({ provider: 'codex', status: 'failed', errorCategory: 'quota' }, []), 'Codex stopped at a usage limit.');
 });

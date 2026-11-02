@@ -1,0 +1,22 @@
+/* Voice input: a microphone beside Send, and one status line above the message box. */
+.voice-input { position: relative; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); }
+.voice-input:hover:enabled { color: var(--text); background: var(--hover); }
+.voice-input .icon { position: relative; width: 16px; height: 16px; }
+.voice-input[aria-pressed="true"] { color: var(--on-accent); background: var(--danger); }
+.voice-input[aria-pressed="true"]:hover:enabled { color: var(--on-accent); background: var(--danger); }
+/* The ring follows the microphone level while listening. */
+.voice-ring { position: absolute; inset: -3px; border: 2px solid var(--danger); border-radius: 50%; opacity: 0; transform: scale(1); transition: transform .08s linear, opacity .12s; pointer-events: none; }
+.voice-input[aria-pressed="true"] .voice-ring { opacity: calc(.25 + var(--level, 0) * .6); transform: scale(calc(1 + var(--level, 0) * .3)); }
+.voice-input[data-state="starting"] .voice-ring, .voice-input[data-state="stopping"] .voice-ring { opacity: .5; animation: pulse 1.2s ease-in-out infinite; }
+.voice-status { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 4px; color: var(--muted); font-size: 12px; line-height: 18px; }
+.voice-status[hidden] { display: none; }
+.voice-status #voice-status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.voice-status[data-state="listening"] .voice-dot { background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
+.voice-status[data-state="countdown"] .voice-dot, .voice-status[data-state="speaking"] .voice-dot { background: var(--link); }
+.voice-status[data-state="error"] { color: var(--danger); }
+.voice-status[data-state="error"] .voice-dot { background: var(--danger); }
+.voice-status-actions { display: inline-flex; flex: none; gap: 10px; margin-left: auto; }
+.voice-status-actions .text-link { font-size: 12px; }
+.voice-field { display: grid; grid-template-columns: 170px minmax(0, 260px); align-items: center; gap: 10px; margin: 8px 0; color: var(--muted); font-size: 12.5px; }
+.voice-field select { height: 28px; padding: 0 8px; border: 1px solid var(--input-border); border-radius: 5px; background: var(--surface-input); color: var(--text); font-size: 12px; }

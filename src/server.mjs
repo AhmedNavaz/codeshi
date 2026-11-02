@@ -9,6 +9,7 @@ import { collaborationRoute } from './collaboration-routes.mjs';
 import { closeAccountConnections } from './providers.mjs';
 import { createCommandRoutes } from './project-commands.mjs';
 import { createTerminalRoutes } from './terminal.mjs';
+import { createVoiceRoutes } from './voice.mjs';
 import { createWorkspaceRoutes } from './workspace-routes.mjs';
 import { randomBytes } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
@@ -22,6 +23,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
   '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
   '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'],
+  '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
   // The terminal renderer, served from the installed package so packaged builds work offline.
   '/vendor/xterm.js': ['../node_modules/@xterm/xterm/lib/xterm.js', 'text/javascript; charset=utf-8'], '/vendor/xterm.css': ['../node_modules/@xterm/xterm/css/xterm.css', 'text/css; charset=utf-8'], '/vendor/addon-fit.js': ['../node_modules/@xterm/addon-fit/lib/addon-fit.js', 'text/javascript; charset=utf-8'],
   '/updates.js': ['updates.js', 'text/javascript; charset=utf-8'], '/updater.js': ['updater.js', 'text/javascript; charset=utf-8'], '/updates.css': ['updates.css', 'text/css; charset=utf-8'],
@@ -53,7 +55,7 @@ async function body(req, limit = 3 * 1024 * 1024) {
   } catch { throw Object.assign(new Error('Invalid JSON request.'), { status: 400 }); }
 }
 
-export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {} } = {}) {
+export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, voice } = {}) {
   const registry = new ProjectRegistry({ dataRoot: dataRoot || dataDir || path.join(root, '.data'), bins, lock });
   for (const folder of [...(workspace ? [workspace] : []), ...workspaces]) registry.add({ path: folder });
   const collaboration = new CollaborationService({ registry, dataRoot: registry.dataRoot });
@@ -78,6 +80,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const localRoutes = createLocalRoutes({ registry, body, json });
   const commandRoutes = createCommandRoutes({ registry, body, json });
   const terminalRoutes = createTerminalRoutes({ registry, body, json });
+  const voiceRoutes = createVoiceRoutes({ body, json, ...(voice ? { sessions: voice } : {}) });
   const listeners = new Set();
   let closing = false;
   registry.on('update', update => {
@@ -139,7 +142,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         res.writeHead(200, { 'Content-Type': type });
         return res.end(contents);
       }
-      if (accessToken && req.headers['x-ai-relay-token'] !== accessToken && !(['/api/events', '/api/terminal/stream'].includes(url.pathname) && url.searchParams.get('token') === accessToken)) return json(res, 403, { error: 'Desktop session required.' });
+      if (accessToken && req.headers['x-ai-relay-token'] !== accessToken && !(['/api/events', '/api/terminal/stream', '/api/voice/stream'].includes(url.pathname) && url.searchParams.get('token') === accessToken)) return json(res, 403, { error: 'Desktop session required.' });
       if (req.method === 'GET' && url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
       if (req.method === 'GET' && url.pathname === '/api/projects') return json(res, 200, registry.list());
       if (req.method === 'GET' && url.pathname === '/api/events') {
@@ -186,6 +189,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if(req.method==='GET'&&url.pathname==='/api/conversation')return json(res,200,registry.mainConversation(selectedProjectId(url)));
       if (await commandRoutes.route({ req, res, url })) return;
       if (await terminalRoutes.route({ req, res, url })) return;
+      if (await voiceRoutes.route({ req, res, url })) return;
       if (await workspaceRoutes({ req, res, url })) return;
       if (await conversationRoutes({ req, res, url })) return;
       if (await reviewRoutes({ req, res, url })) return;
@@ -259,6 +263,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     await reviewRoutes.close();
     await commandRoutes.close();
     await terminalRoutes.close();
+    await voiceRoutes.close();
     await registry.close();
     clearInterval(heartbeat);
     for (const res of listeners) res.end();

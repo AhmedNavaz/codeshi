@@ -9,3 +9,4 @@ sharing/.data/
 .env
 .env.*
 skills/
+native/bin/

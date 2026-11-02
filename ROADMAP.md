@@ -57,6 +57,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Stage and commit from the Git panel, with your own identity and the project's commit hooks ([#6](https://github.com/AhmedNavaz/throughline/issues/6)) | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
 | A terminal for each workspace in a bottom panel, kept running while hidden ([#7](https://github.com/AhmedNavaz/throughline/issues/7)) | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
 | Windows (64-bit) builds with a one-line PowerShell install, checked against published checksums ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) | [0.16.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.16.0) |
+| Voice input on macOS, recognized on the Mac, with spoken summaries of finished runs ([#11](https://github.com/AhmedNavaz/throughline/issues/11)) | Next release |
 
 ## Now
 
@@ -73,6 +74,8 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) as **Routing**; escalation after failed checks and subtask coordination are next; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/throughline/issues/12) |
 | Terminal tabs and split panes | Planned, help wanted; follows the terminal in 0.15.0 | [#70](https://github.com/AhmedNavaz/throughline/issues/70) |
 | Send selected terminal output to the conversation | Needs design | [#71](https://github.com/AhmedNavaz/throughline/issues/71) |
+| Hands-free voice conversations: say "send", keep talking while the agent works, hear what it did | Needs design; follows voice mode | [#72](https://github.com/AhmedNavaz/throughline/issues/72) |
+| Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/throughline/issues/73) |
 | Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/throughline/issues/9) |
 | Run the project's own tests on a returned patch, with approval | Planned | [#10](https://github.com/AhmedNavaz/throughline/issues/10) |
@@ -118,7 +121,6 @@ Larger ideas for bringing project context, execution and collaboration into one 
 
 | Idea | Issue |
 | --- | --- |
-| **Voice mode.** Say what you want, the agent does it, then reads back a short spoken summary. Ask about the project out loud too. | [#11](https://github.com/AhmedNavaz/throughline/issues/11) |
 | **Live status at a glance.** Progress and input requests in the Mac menu bar and around the notch, extending the desktop approval alerts in [#46](https://github.com/AhmedNavaz/throughline/issues/46). | [#13](https://github.com/AhmedNavaz/throughline/issues/13) |
 | **Focus and downtime.** Optional timers, ambient audio, reading and short games during agent runs, with persistent status and a clear return to the project when attention is needed. [Scope and stages below](#focus-and-downtime). | [#14](https://github.com/AhmedNavaz/throughline/issues/14) |
 | **Automatic tag-team cycles.** Extend cross-agent review with an opt-in handoff from builder to reviewer and user-approved fix cycles. | [#15](https://github.com/AhmedNavaz/throughline/issues/15) |

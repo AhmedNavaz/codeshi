@@ -1417,6 +1417,7 @@
     "whats-new": () => { if (covered() || !window.relayUpdates) return false; window.relayUpdates.open(); return true; },
     "check-updates": () => { if (!window.relayUpdater) return false; window.relayUpdater.checkNow(); return true; },
     terminal: () => { if (!state.projectId || !window.relayTerminal) return false; window.relayTerminal.toggle(); return true; },
+    voice: () => Boolean(state.projectId && window.relayVoice?.toggle()),
     "local-models": () => window.relayLocal?.open(),
     "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), files: press("toggle-explorer"), "keep-awake": press("keep-awake"),
     "add-folder": () => { if (covered()) return false; toggleFolderForm(true); return true; },

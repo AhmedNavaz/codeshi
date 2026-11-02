@@ -34,6 +34,8 @@
     <script src="/vendor/xterm.js" defer></script>
     <script src="/vendor/addon-fit.js" defer></script>
     <script src="/terminal.js" defer></script>
+    <link rel="stylesheet" href="/voice.css" />
+    <script src="/voice.js" defer></script>
     <script src="/conversation-search.js" defer></script>
     <script src="/agent-review.js" defer></script>
     <script src="/project-commands.js" defer></script>
@@ -156,6 +158,7 @@
           <div id="connection-notice" class="connection-notice" role="status" hidden><span id="connection-notice-text"></span><div class="connection-notice-actions"><button id="connection-install" class="secondary-action" type="button" hidden>How to install ↗</button><button id="connection-action" type="button">Connect account</button></div></div>
           <section id="run-plan" class="run-plan" aria-label="The agent's plan for this run" hidden><button id="run-plan-toggle" class="run-plan-summary" type="button" aria-expanded="false" aria-controls="run-plan-list"><span id="run-plan-ring" class="run-plan-ring" aria-hidden="true"></span><span id="run-plan-count" class="run-plan-count"></span><span id="run-plan-current" class="run-plan-current"></span><svg class="icon run-plan-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><ol id="run-plan-list" class="run-plan-list" hidden></ol></section>
           <button id="route-preview" class="route-preview" type="button" hidden title="Auto picks for each message. Click to choose a model yourself."><span class="route-icon" aria-hidden="true"></span><span id="route-choice" class="route-choice"></span><span id="route-reason" class="route-reason"></span><span class="route-change" aria-hidden="true">Change</span></button>
+          <div id="voice-status" class="voice-status" role="status" hidden><span class="voice-dot" aria-hidden="true"></span><span id="voice-status-text"></span><span id="voice-status-actions" class="voice-status-actions"></span></div>
           <form id="composer" class="composer">
             <div id="custom-model-editor" class="custom-model-editor" hidden><label for="custom-model-input">Custom model ID</label><input id="custom-model-input" maxlength="200" placeholder="Enter a supported model identifier" /><button id="save-custom-model" type="button">Use model</button><button id="cancel-custom-model" type="button">Cancel</button></div>
             <div id="attachment-list" class="attachment-list" aria-label="Message attachments" hidden></div>
@@ -179,6 +182,7 @@
               <div class="composer-actions">
                 <button id="usage-chip" class="usage-chip" type="button" hidden></button>
                 <span id="composer-hint" class="sr-only">Enter to send, Shift and Enter for a new line.</span>
+                <button id="voice-input" class="voice-input" type="button" aria-pressed="false" aria-label="Voice input" title="Voice input (⌥⌘V)" hidden><span class="voice-ring" aria-hidden="true"></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg></button>
                 <button id="stop-button" class="stop-button" type="button" hidden><span aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></span> Stop</button>
                 <button id="steer-button" class="steer-button" type="button" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v6a3 3 0 0 0 3 3h11"/><path d="m15 10 4 4-4 4"/></svg><span class="steer-label">Add to run</span></button>
                 <button id="queue-button" class="queue-button" type="button" hidden title="Run this after the current work (Enter)">Queue</button>
