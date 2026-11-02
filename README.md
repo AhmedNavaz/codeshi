@@ -25,7 +25,7 @@ Throughline keeps an eye on each agent's plan usage. Before one runs out mid-tas
 
 ### Point at what should change
 
-<img src="docs/features/point-and-tell.jpg" alt="A preview of a shop app with its Apply button outlined while picking, and Throughline's message box with a sentence describing that button, where its code is, and its screenshot attached">
+<img src="docs/features/point-and-tell.jpg" alt="A store's product page open in Throughline's preview while picking, with its Add to bag button outlined under the pointer, and Throughline's message box holding the button's screenshot and a sentence naming the button and where its code is, followed by the change asked for">
 
 Open your running app in a preview, click the button or section you mean, and say or type the change. The agent gets that element, a screenshot of it and, from your app's development build, where its code is, so it changes the right thing.
 
