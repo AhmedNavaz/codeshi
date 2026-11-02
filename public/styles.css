@@ -824,6 +824,14 @@ button.commit-hash:hover { text-decoration: underline; }
 .diff-line.hunk { margin-top: 4px; background: var(--chip-bg); color: var(--link); }
 .diff-line.hunk:first-child { margin-top: 0; }
 .diff-line.note .diff-text { color: var(--faint); font-style: italic; }
+/* A changed image: before and after side by side on a checkerboard, so transparent areas show. */
+.diff-images { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; padding: 20px; }
+.diff-image { display: grid; gap: 8px; min-width: 0; margin: 0; }
+.diff-image-frame { display: grid; place-items: center; min-height: 160px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: repeating-conic-gradient(var(--chip-bg) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
+.diff-image-frame img { display: block; max-width: 100%; max-height: calc(100vh - 260px); object-fit: contain; }
+.diff-image figcaption { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.diff-image-label { color: var(--text-strong); font-weight: 600; }
+.diff-image-facts { color: var(--muted); font-variant-numeric: tabular-nums; }
 .diff-truncated { margin: 0; padding: 10px 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 
 @keyframes pulse { 50% { opacity: .35; } }

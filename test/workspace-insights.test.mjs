@@ -7,7 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
-import { workspaceGit, workspaceGitDiff, githubRepository } from '../src/workspace-git.mjs';
+import { workspaceGit, workspaceGitDiff, githubRepository, IMAGE_PREVIEW_BYTES } from '../src/workspace-git.mjs';
 import { gitExecutable } from '../src/resolve-binary.mjs';
 
 // Antigravity keeps its conversation index in SQLite, which is read with the sqlite3 program. Windows does not include
@@ -264,6 +264,25 @@ test('several large conversation files import together, though they exceed the g
   assert.equal(app.registry.mainConversation(result.projectId).messages.length, 18);
   const preview = await fetch(`http://127.0.0.1:${app.server.address().port}/api/import-sources/file-preview`, { method: 'POST', headers: { 'X-AI-Relay': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ package: { padding: 'x'.repeat(3 * 1024 * 1024) } }) });
   assert.equal(preview.status, 413, 'Other requests keep the general limit.');
+});
+
+test('a changed image shows as pictures before and after, from its own bytes only', t => {
+  const f = fixture(t), [folder] = f.folders, file = name => path.join(f.workspace, name);
+  const png = color => Buffer.from(color === 'red' ? 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' : 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  git(f.workspace, 'init', '-q'); git(f.workspace, 'config', 'user.name', 'Fixture'); git(f.workspace, 'config', 'user.email', 'fixture@example.invalid');
+  fs.writeFileSync(file('logo.png'), png('red')); fs.writeFileSync(file('old.png'), png('red')); fs.writeFileSync(file('fake.png'), Buffer.from([0, 1, 2, 3, 0, 5]));
+  git(f.workspace, 'add', '.'); git(f.workspace, 'commit', '-qm', 'Images');
+  fs.writeFileSync(file('logo.png'), png('blue')); fs.rmSync(file('old.png')); fs.writeFileSync(file('new.png'), png('blue')); fs.writeFileSync(file('fake.png'), Buffer.from([0, 9, 9, 9, 0]));
+  fs.writeFileSync(file('data.bin'), Buffer.from([0, 1, 0, 1])); fs.writeFileSync(file('huge.png'), Buffer.concat([png('red'), Buffer.alloc(IMAGE_PREVIEW_BYTES)]));
+  const changed = workspaceGitDiff(folder, 'logo.png');
+  assert.equal(changed.images.before.src, `data:image/png;base64,${png('red').toString('base64')}`, 'Before is the committed image.');
+  assert.equal(changed.images.after.src, `data:image/png;base64,${png('blue').toString('base64')}`, 'After is the image on disk.');
+  assert.equal(changed.images.after.bytes, png('blue').length);
+  assert.deepEqual([workspaceGitDiff(folder, 'new.png').images.before, Boolean(workspaceGitDiff(folder, 'new.png').images.after.src)], [null, true], 'A new image has only its after side.');
+  assert.deepEqual([Boolean(workspaceGitDiff(folder, 'old.png').images.before.src), workspaceGitDiff(folder, 'old.png').images.after], [true, null], 'A deleted image has only its before side.');
+  assert.deepEqual(workspaceGitDiff(folder, 'fake.png').images, { before: { bytes: 6, unreadable: true }, after: { bytes: 5, unreadable: true } }, 'Bytes that are not the image the name says are never shown.');
+  assert.equal(workspaceGitDiff(folder, 'data.bin').images, undefined, 'Other binary files keep the binary note.');
+  assert.deepEqual(workspaceGitDiff(folder, 'huge.png').images.after, { bytes: IMAGE_PREVIEW_BYTES + png('red').length, tooLarge: true });
 });
 
 test('Git diff shows tracked, staged and untracked changes but only for paths Git reports as changed', t => {

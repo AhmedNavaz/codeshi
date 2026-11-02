@@ -296,7 +296,24 @@
     try { const result = await api.api(`/api/git/diff?folderId=${encodeURIComponent(repo.folderId)}&path=${encodeURIComponent(file.path)}`, {}, projectId); if (request === diffRequest) renderDiff(result); }
     catch (error) { if (request === diffRequest) $('diff-content').replaceChildren(el('p', error.message, 'inspector-empty')); }
   }
+  // A changed image shows as pictures: before and after side by side, or the one side an added or deleted image has.
+  function renderImages(images) {
+    const view = el('div', undefined, 'diff-images'), size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    for (const [key, label] of [['before', images.after ? 'Before' : 'Deleted'], ['after', images.before ? 'After' : 'Added']]) {
+      const side = images[key];
+      if (!side) continue;
+      const figure = el('figure', undefined, 'diff-image'), frame = el('div', undefined, 'diff-image-frame'), caption = el('figcaption'), facts = el('span', size(side.bytes), 'diff-image-facts');
+      if (side.src) {
+        const image = el('img'); image.alt = `${label} version`; image.src = side.src;
+        image.addEventListener('load', () => { facts.textContent = `${image.naturalWidth} × ${image.naturalHeight} · ${size(side.bytes)}`; });
+        frame.append(image);
+      } else frame.append(el('p', side.tooLarge ? 'Too large to preview.' : 'This file is not a readable image.', 'inspector-empty'));
+      caption.append(el('span', label, 'diff-image-label'), facts); figure.append(frame, caption); view.append(figure);
+    }
+    $('diff-content').replaceChildren(view);
+  }
   function renderDiff(result) {
+    if (result.images) { renderImages(result.images); return; }
     const lines = el('div', undefined, 'diff-lines'), maxRows = 5000;
     let oldLine = 0, newLine = 0, added = 0, removed = 0, rows = 0, inHunk = false;
     const row = (kind, before, after, text) => { const line = el('div', undefined, 'diff-line ' + kind); line.append(el('span', String(before), 'diff-number'), el('span', String(after), 'diff-number'), el('span', kind === 'add' ? '+' : kind === 'del' ? '-' : '', 'diff-sign'), el('span', text, 'diff-text')); lines.append(line); rows++; };

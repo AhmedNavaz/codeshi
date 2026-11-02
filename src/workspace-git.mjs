@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { gitExecutable } from './resolve-binary.mjs';
 
 const prefix = ['--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
@@ -6,8 +8,8 @@ export function githubRepository(remote = '') {
   const match = remote.trim().match(/^(?:git@github\.com:|https:\/\/github\.com\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
   return match ? `https://github.com/${match[1]}/${match[2]}` : null;
 }
-function runner(folder, spawnImpl, { timeout = 5000, maxBuffer = 1024 * 1024 } = {}) {
-  return (args, extra = []) => spawnImpl(gitExecutable(), [...prefix, ...extra, ...args], { cwd: folder.path, shell: false, encoding: 'utf8', timeout, maxBuffer, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_PAGER: 'cat' } });
+function runner(folder, spawnImpl, { timeout = 5000, maxBuffer = 1024 * 1024, encoding = 'utf8' } = {}) {
+  return (args, extra = []) => spawnImpl(gitExecutable(), [...prefix, ...extra, ...args], { cwd: folder.path, shell: false, encoding, timeout, maxBuffer, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_PAGER: 'cat' } });
 }
 function isRepository(run) { const inside = run(['rev-parse', '--is-inside-work-tree']); return inside.status === 0 && String(inside.stdout || '').trim() === 'true'; }
 // Status and diff can invoke attributes filters. Returns -c overrides that disable configured external drivers.
@@ -55,6 +57,43 @@ export function workspaceGit(folders, { spawnImpl = spawnSync, untracked = 'norm
   }) };
 }
 // Unified diff of one currently changed file against HEAD. Only paths Git reports as changed are accepted.
+// Changed images are shown as pictures: the committed one and the one on disk, from their own bytes, and only when
+// those bytes are the image their name says.
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' };
+export const IMAGE_PREVIEW_BYTES = 4 * 1024 * 1024;
+function isImage(type, bytes) {
+  const text = (start, end) => bytes.subarray(start, end).toString('latin1');
+  if (type === 'image/png') return bytes.length > 8 && bytes.readUInt32BE(0) === 0x89504e47;
+  if (type === 'image/jpeg') return bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (type === 'image/gif') return text(0, 4) === 'GIF8';
+  if (type === 'image/webp') return text(0, 4) === 'RIFF' && text(8, 12) === 'WEBP';
+  if (type === 'image/bmp') return text(0, 2) === 'BM';
+  if (type === 'image/x-icon') return bytes.length > 4 && bytes.readUInt32LE(0) === 0x00010000;
+  if (type === 'image/avif') return text(4, 12).startsWith('ftypavi');
+  return false;
+}
+function imageSide(type, bytes) {
+  if (!bytes) return null;
+  if (bytes.length > IMAGE_PREVIEW_BYTES) return { bytes: bytes.length, tooLarge: true };
+  return isImage(type, bytes) ? { src: `data:${type};base64,${bytes.toString('base64')}`, bytes: bytes.length } : { bytes: bytes.length, unreadable: true };
+}
+function imagePreview(folder, file, head, spawnImpl) {
+  const type = IMAGE_TYPES[path.extname(file.path).slice(1).toLowerCase()];
+  if (!type) return null;
+  // Before: the committed file, unless the change added it.
+  let before = null;
+  if (head && file.code !== '??' && !file.code.includes('A')) {
+    const read = runner(folder, spawnImpl, { timeout: 10000, maxBuffer: IMAGE_PREVIEW_BYTES + 1, encoding: 'buffer' })(['cat-file', 'blob', `HEAD:${file.originalPath || file.path}`]);
+    before = read.error?.code === 'ENOBUFS' ? { bytes: IMAGE_PREVIEW_BYTES + 1, tooLarge: true } : read.status === 0 ? imageSide(type, read.stdout) : null;
+  }
+  // After: the file on disk, unless the change deleted it. Only a regular file inside the folder is read.
+  let after = null;
+  const target = path.resolve(folder.path, file.path), inside = path.relative(path.resolve(folder.path), target);
+  if (!file.code.includes('D') && inside && !inside.startsWith('..') && !path.isAbsolute(inside)) {
+    try { const stat = fs.lstatSync(target); if (stat.isFile()) after = stat.size > IMAGE_PREVIEW_BYTES ? { bytes: stat.size, tooLarge: true } : imageSide(type, fs.readFileSync(target)); } catch { after = null; }
+  }
+  return before || after ? { before, after } : null;
+}
 export function workspaceGitDiff(folder, filePath, { spawnImpl = spawnSync, limit = 400 * 1024 } = {}) {
   const fail = (message, status) => Object.assign(new Error(message), { status });
   const run = runner(folder, spawnImpl, { timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
@@ -67,10 +106,10 @@ export function workspaceGitDiff(folder, filePath, { spawnImpl = spawnSync, limi
   if (file.path.endsWith('/')) return { ...base, diff: '', directory: true, truncated: false };
   const options = ['--no-color', '--no-ext-diff', '--no-textconv', '-M'];
   let result;
+  const head = run(['rev-parse', '--verify', '--quiet', 'HEAD']);
   if (file.code === '??') result = run(['diff', '--no-index', ...options, '--', '/dev/null', file.path], filters.overrides);
   else {
     const paths = ['--', ...(file.originalPath ? [file.originalPath] : []), file.path];
-    const head = run(['rev-parse', '--verify', '--quiet', 'HEAD']);
     // Before the first commit, the base is empty. Include current bytes even if a new staged file was edited again.
     if (head.status !== 0 && file.code.includes('D')) return { ...base, diff: '', truncated: false };
     result = run(head.status === 0 ? ['diff', 'HEAD', ...options, ...paths] : ['diff', '--no-index', ...options, '--', '/dev/null', file.path], filters.overrides);
@@ -79,7 +118,8 @@ export function workspaceGitDiff(folder, filePath, { spawnImpl = spawnSync, limi
   const overflow = result.error?.code === 'ENOBUFS';
   if ((result.error && !overflow) || (!overflow && ![0, 1].includes(result.status))) throw fail('Could not read this file’s changes.', 500);
   const diff = String(result.stdout || '');
-  return { ...base, diff: diff.slice(0, limit), truncated: overflow || diff.length > limit };
+  const images = /^Binary files /m.test(diff) ? imagePreview(folder, file, head.status === 0, spawnImpl) : null;
+  return { ...base, diff: diff.slice(0, limit), truncated: overflow || diff.length > limit, ...(images ? { images } : {}) };
 }
 
 export function workspaceGitIdentity(folder) {

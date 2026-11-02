@@ -2656,3 +2656,18 @@ test('steps are coloured by kind, changed files show their line counts, and a cu
   edit.querySelectorAll('button')[0].click(); await flush();
   assert.deepEqual(edit.querySelectorAll('.activity-diff').map(line => [line.className, line.textContent.trim()]), [['activity-diff', 'a'], ['activity-diff removed', '- b'], ['activity-diff added', '+ X'], ['activity-diff', 'c'], ['activity-diff added', '+ d']]);
 });
+
+test('a changed image opens as pictures, before and after, instead of a binary note', async () => {
+  const ui = await browser({ insights: true, wide: true }); await flush();
+  const reply = data => ({ ok: true, status: 200, text: async () => JSON.stringify(data), json: async () => clone(data) });
+  ui.setIntercept((request, next) => request.path === '/api/git/diff' ? reply({ folderId: 'frontend', path: 'app.js', code: ' M', diff: 'diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n', truncated: false,
+    images: { before: { src: 'data:image/png;base64,AAAA', bytes: 2048 }, after: { bytes: 6 * 1024 * 1024, tooLarge: true } } }) : next());
+  ui.$('open-git').click(); await flush();
+  ui.document.querySelectorAll('.git-file')[0].click(); await flush();
+  const figures = ui.document.querySelectorAll('.diff-image');
+  assert.equal(figures.length, 2);
+  assert.equal(figures[0].querySelectorAll('img')[0].src, 'data:image/png;base64,AAAA');
+  assert.match(figures[0].textContent, /Before.*2 KB/);
+  assert.match(figures[1].textContent, /Too large to preview.*After.*6\.0 MB/);
+  assert.doesNotMatch(ui.$('diff-content').textContent, /Binary file changed/);
+});
