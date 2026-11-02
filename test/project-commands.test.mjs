@@ -69,7 +69,8 @@ test('Start deduplicates running commands, Stop and shutdown clean up child proc
   const config = f.config(`${quote(process.execPath)} server.cjs`);
   const run = f.commands.start(f.project.id, 'run', config);
   const key = f.commands.key(f.project.id, 'run');
-  await waitFor(() => f.commands.state(f.project.id).sessions.run.output.includes('child='));
+  // The two lines can arrive in separate chunks on a slow machine, so wait for both.
+  await waitFor(() => { const output = f.commands.state(f.project.id).sessions.run.output; return output.includes('child=') && output.includes('http://localhost:4321'); });
   assert.throws(() => f.commands.start(f.project.id, 'run', config), /already/);
   assert.deepEqual(f.commands.state(f.project.id).sessions.run.urls, ['http://localhost:4321/']);
   await assert.rejects(f.commands.stop(f.project.id, 'run', 'outdated-session'), /changed/);
