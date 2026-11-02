@@ -1342,6 +1342,8 @@
       else scheduleProjectsRefresh();
     });
     state.events.addEventListener("projects", scheduleProjectsRefresh);
+    // An alert with a sound to play (sounds.js), for any workspace.
+    state.events.addEventListener("alert", (event) => { try { window.dispatchEvent(new CustomEvent("relay-alert", { detail: JSON.parse(event.data) })); } catch { /* A malformed alert plays nothing. */ } });
     state.events.addEventListener("error", () => { state.streamConnected = false; window.dispatchEvent(new CustomEvent("relay-state")); });
     state.events.addEventListener("ready", () => { state.streamConnected = true; scheduleProjectsRefresh(); scheduleRefresh(); });
     state.events.addEventListener("open", () => { state.streamConnected = true; scheduleProjectsRefresh(); scheduleRefresh(); });

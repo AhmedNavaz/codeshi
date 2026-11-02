@@ -21,7 +21,7 @@ test('the macOS menu bar has Throughline, File, Edit, View, Agent, Workspace, Wi
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','pasteAndMatchStyle','delete','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces','-','Speech']);
   assert.deepEqual(labels(item('View').submenu),['Show Git Activity','Show Files','Terminal','Focus Message Box','-','Appearance','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen']);
   assert.deepEqual(labels(item('Appearance').submenu),['System','Dark','Light']);
-  assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Notify When Runs Finish or Need Approval','Play Notification Sound','Show Status in Menu Bar','Show Alerts Near the Top of the Screen','-','Hand Off Near Usage Limits']);
+  assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Notify When Runs Finish or Need Approval','Play Sounds','Show Status in Menu Bar','Show Alerts Near the Top of the Screen','-','Hand Off Near Usage Limits']);
   assert.deepEqual(labels(item('Workspace').submenu),['Frontend','R&D','-','Workspace Settings…','Remove Workspace…']);
   assert.deepEqual(labels(item('help').submenu),['Throughline Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New']);
   // These are the page's own shortcuts plus ⌘, ⌘N and ⌘G, which the page leaves to the menu.
@@ -101,12 +101,12 @@ test('menu state from the page is used only in the expected shape',()=>{
   const copy=menuState(page);assert.notEqual(copy.workspaces,page.workspaces,'The state is copied, not kept by reference.');
 });
 
-test('the Agent menu turns alerts outside the window on or off, with sound only while they are on',()=>{
+test('the Agent menu turns alerts outside the window on or off, and sounds on or off separately',()=>{
   const changes=[],open=menu({notifications:{enabled:true,sound:false},setNotifications:patch=>changes.push(patch)});
-  const alerts=open.item('Notify When Runs Finish or Need Approval'),sound=open.item('Play Notification Sound');
+  const alerts=open.item('Notify When Runs Finish or Need Approval'),sound=open.item('Play Sounds');
   assert.deepEqual([alerts.type,alerts.checked,sound.checked,disabled(sound)],['checkbox',true,false,false]);
   alerts.click();sound.click();assert.deepEqual(changes,[{enabled:false},{sound:true}]);
-  assert.equal(disabled(menu({notifications:{enabled:false,sound:true}}).item('Play Notification Sound')),true,'Sound applies only when alerts are on.');
+  assert.equal(disabled(menu({notifications:{enabled:false,sound:true}}).item('Play Sounds')),false,'Sounds play from the page, so they do not depend on banners.');
 });
 
 test('the Agent menu chooses when a handoff is offered near a usage limit, and whether it may switch to subscription agents on its own',()=>{

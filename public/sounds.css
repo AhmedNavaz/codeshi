@@ -1,0 +1,14 @@
+/* Sounds in Settings: one compact row per kind of alert, each with Play to hear it first. Settings styles labels,
+   buttons and inputs for forms, so this section sets its own spacing. */
+#workbench .sound-section .review-check { margin: 4px 0; padding: 4px 0; }
+#workbench .sound-section .review-check:hover { background: none; }
+#workbench .sound-options { display: grid; margin: 0 0 0 24px; }
+#workbench .sound-options[aria-disabled="true"] .sound-row, #workbench .sound-options[aria-disabled="true"] .sound-volume { opacity: .6; }
+#workbench .sound-row { display: flex; align-items: center; gap: 12px; min-height: 30px; }
+#workbench .sound-row .review-check { flex: 1; min-width: 0; margin: 0; }
+#workbench .sound-play { flex: none; height: 24px; padding: 0 8px; border-color: transparent; color: var(--link); }
+#workbench .sound-play:hover:enabled { background: var(--hover); }
+#workbench .sound-volume { display: flex; align-items: center; gap: 12px; min-height: 30px; margin: 2px 0; font-weight: 400; }
+#workbench .sound-volume span { min-width: 52px; }
+#workbench .sound-volume input[type="range"] { display: inline-block; width: 220px; margin: 0; padding: 0; border: 0; background: none; accent-color: var(--accent); }
+#workbench .sound-volume output { min-width: 36px; color: var(--muted); font-variant-numeric: tabular-nums; }

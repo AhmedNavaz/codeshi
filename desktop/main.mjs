@@ -77,7 +77,8 @@ else {
       if(process.platform!=='darwin'&&win&&!win.isDestroyed())win.flashFrame(true);
       if(channels.overlay){overlay.show({kind,title,body,projectId,projectName,approvalId});return;}
       if(notificationsRefused||!Notification.isSupported())return;
-      const notice=new Notification({title:projectName?`${title} · ${projectName}`:title,body:String(body||'').slice(0,240),silent:kind==='started'||!preferences.sound});
+      // Banners are silent: the page plays alert sounds itself, as chosen in Settings, so a sound is never heard twice.
+      const notice=new Notification({title:projectName?`${title} · ${projectName}`:title,body:String(body||'').slice(0,240),silent:true});
       // An approval opens its own request card; it is never answered from the notification.
       notice.on('click',()=>openTarget(projectId?{projectId,approvalId:kind==='approval'?approvalId:null}:null));
       notice.on('failed',(_event,error)=>{notificationsRefused=true;console.warn('macOS did not show a Throughline notification:',error);});
@@ -100,7 +101,7 @@ else {
       overlay?.reconcile(snapshot);
     }
     async function start(){
-      relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify});
+      relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify,onNotifications:()=>{updateMenu();scheduleStatus();}});
       appearance.set(relay.getAppearancePreference());
       keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;if(win&&!win.isDestroyed())win.webContents.send('relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
       await new Promise((resolve,reject)=>{relay.server.once('error',reject);relay.server.listen(0,'127.0.0.1',resolve);});

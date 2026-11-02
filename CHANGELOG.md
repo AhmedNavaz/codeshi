@@ -7,6 +7,11 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 ### Added
 
 - **Undo a run** (#20): Throughline saves the workspace folders before and after every run, whichever agent ran it, in its own data folder rather than your project's Git repository. A run that changed files ends with **3 files changed · Undo**. Undo previews every file and the exact lines that change before anything is written, takes the run's edits out of files you changed since when they don't overlap, leaves the rest as they are, and adds a note so the next agent knows. **Redo** puts the changes back.
+- **Sounds** for alerts: a short sound when an agent needs your approval or a decision, when a task finishes, and when a task stops because of an error, a usage limit or failing tests. Turn each on or off and hear it first in **Settings › Preferences › Sounds**, set the volume, and choose to hear them only when Throughline isn't in front. Throughline plays them itself, so they work without notification permission, in the desktop app and in a browser.
+
+### Changed
+
+- Notification banners are silent, and the Agent menu's **Play Notification Sound** is now **Play Sounds**, which turns on the new sounds. It no longer depends on banners being on.
 
 ## [0.19.0] - 2026-11-02
 

@@ -16,6 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
 import { createReviewRoutes } from './agent-review-routes.mjs';
 import { createCheckpointRoutes } from './checkpoint-routes.mjs';
+import { alertSound, soundPatch, soundSettings } from './alert-sounds.mjs';
 import { createLocalRoutes } from './local-models.mjs';
 import { atomicJSON } from './patches.mjs';
 import { continuationRequest } from './context.mjs';
@@ -33,6 +34,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
+  '/sounds.js': ['sounds.js', 'text/javascript; charset=utf-8'], '/sounds.css': ['sounds.css', 'text/css; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'] };
 const json = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -59,7 +61,7 @@ async function body(req, limit = 3 * 1024 * 1024) {
   } catch { throw Object.assign(new Error('Invalid JSON request.'), { status: 400 }); }
 }
 
-export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, voice } = {}) {
+export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, voice } = {}) {
   const registry = new ProjectRegistry({ dataRoot: dataRoot || dataDir || path.join(root, '.data'), bins, lock });
   for (const folder of [...(workspace ? [workspace] : []), ...workspaces]) registry.add({ path: folder });
   const collaboration = new CollaborationService({ registry, dataRoot: registry.dataRoot });
@@ -94,7 +96,16 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   registry.on('projects', () => {
     for (const res of listeners) res.write('event: projects\ndata: {}\n\n');
   });
-  const notificationPreferences = () => ({ enabled: config.notifications?.enabled !== false, sound: config.notifications?.sound === true, statusItem: config.notifications?.statusItem !== false, overlay: config.notifications?.overlay === true });
+  const notificationPreferences = () => ({ enabled: config.notifications?.enabled !== false, sound: config.notifications?.sound === true, statusItem: config.notifications?.statusItem !== false, overlay: config.notifications?.overlay === true, sounds: soundSettings(config.notifications?.sounds) });
+  // Alert settings change from the desktop menu or from Settings; each change is saved whole and tells the other.
+  const setNotificationPreferences = patch => {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw Object.assign(new Error('Notifications must be turned on or off.'), { status: 400 });
+    const { sounds, ...switches } = patch, current = notificationPreferences();
+    if (Object.entries(switches).some(([key, value]) => !['enabled', 'sound', 'statusItem', 'overlay'].includes(key) || typeof value !== 'boolean')) throw Object.assign(new Error('Notifications must be turned on or off.'), { status: 400 });
+    const next = { ...current, ...switches, sounds: { ...current.sounds, ...(sounds === undefined ? {} : soundPatch(sounds)) } };
+    saveSettings({ notifications: next }); onNotifications(next);
+    return next;
+  };
   const handoffPreferences = () => ({ threshold: [0, 80, 90, 95].includes(config.handoff?.threshold) ? config.handoff.threshold : 90, automatic: config.handoff?.automatic === true });
   registry.handoffPreferences = handoffPreferences;
   // Changed from the Agents panel or the desktop Agent menu; each tells the other.
@@ -104,7 +115,12 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     saveSettings({ handoff: next }); onHandoff(next);
     return next;
   };
-  registry.on('notify', notice => { try { onNotify(notice); } catch (error) { console.error('Throughline could not show a notification:', error.message); } });
+  registry.on('notify', notice => {
+    try { onNotify(notice); } catch (error) { console.error('Throughline could not show a notification:', error.message); }
+    // The page plays the alert's sound, when sounds are on for its kind.
+    const sound = alertSound(notice, notificationPreferences());
+    if (sound) for (const res of listeners) res.write(`event: alert\ndata: ${JSON.stringify(sound)}\n\n`);
+  });
   // Workspaces waiting for a usage limit to reset reopen at startup, so the wait continues after a restart.
   for (const project of registry.list()) {
     if (!fs.existsSync(path.join(registry.dataRoot, project.id, 'resume-pending'))) continue;
@@ -172,6 +188,11 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         if (req.method === 'POST') saveSettings(preferencePatch(await body(req), config));
         else if (req.method !== 'GET') return json(res, 405, { error: 'Use GET or POST for preferences.' });
         return json(res, 200, publicPreferences(config, registry.list().length > 0));
+      }
+      if (url.pathname === '/api/notifications') {
+        if (req.method === 'POST') return json(res, 200, setNotificationPreferences(await body(req, 4096)));
+        if (req.method !== 'GET') return json(res, 405, { error: 'Use GET or POST for notifications.' });
+        return json(res, 200, notificationPreferences());
       }
       if (url.pathname === '/api/appearance') {
         if (req.method === 'GET') return json(res, 200, { theme: appearance(config) });
@@ -288,11 +309,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     // Alerts outside the window (#46): on unless turned off, with sound only when asked for. On macOS, the status in
     // the menu bar shows unless hidden, and alerts near the top of the screen only when asked for (#13).
     getNotificationPreferences: () => notificationPreferences(),
-    setNotificationPreferences: patch => {
-      const next = { ...notificationPreferences(), ...patch };
-      if (Object.keys(next).length !== 4 || !Object.values(next).every(value => typeof value === 'boolean')) throw new Error('Notifications must be turned on or off.');
-      saveSettings({ notifications: next });
-    },
+    setNotificationPreferences,
     setKeepAwakePreference: enabled => { if (typeof enabled !== 'boolean') throw new Error('Keep awake must be enabled or disabled.'); saveSettings({ keepAwake: enabled }); },
     get broker() { const projects = registry.list(); return projects.length === 1 ? registry.broker(projects[0].id) : null; } };
 }

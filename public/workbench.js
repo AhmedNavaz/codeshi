@@ -9,7 +9,7 @@
     solutions: ['Returned solutions', 'Manage shared requests and review the changes your friend sends back.'],
     friend: ['Help someone', 'Open a request in your workspace and return your proposed changes.'],
     accounts: ['Connections', 'Manage your Codex, Claude and Gemini accounts and model preferences.'],
-    preferences: ['Preferences', 'Appearance, updates, voice and recaps.'],
+    preferences: ['Preferences', 'Appearance, sounds, updates, voice and recaps.'],
   };
   const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const field = (label, type = 'input', value = '') => { const l = node('label', label), i = node(type); i.value = value; l.append(i); return { l, i }; };
@@ -327,6 +327,7 @@
   function preferences() {
     const look = section('Appearance', 'System follows your computer’s light or dark setting.'), choices = node('div', undefined, 'segmented'); choices.setAttribute('role', 'group'); choices.setAttribute('aria-label', 'Appearance'); look.append(choices);
     for (const [value, label] of [['system', 'System'], ['graphite', 'Dark'], ['light', 'Light']]) { const choice = node('button', label); choice.type = 'button'; choice.setAttribute('data-appearance', value); choice.setAttribute('aria-pressed', String(window.relayTheme?.preference() === value)); choice.addEventListener('click', () => window.relayTheme?.choose(value)); choices.append(choice); }
+    if (window.relaySounds) { const sounds = node('section', undefined, 'workbench-section'); content.append(sounds); window.relaySounds.settings(sounds); }
     if (window.relayUpdater) { const updates = node('section', undefined, 'workbench-section'); content.append(updates); window.relayUpdater.settings(updates); }
     if (window.relayVoice) { const voice = node('section', undefined, 'workbench-section'); content.append(voice); window.relayVoice.settings(voice); }
     if (window.relayRecap) { const recap = node('section', undefined, 'workbench-section'); content.append(recap); window.relayRecap.settings(recap); }

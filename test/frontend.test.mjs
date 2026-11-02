@@ -63,7 +63,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,soundsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -202,6 +202,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
   if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
+  if(soundsUI)vm.runInContext(fs.readFileSync(new URL('../public/sounds.js',import.meta.url),'utf8'),context,{filename:'public/sounds.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
   // A stand-in for xterm.js: it records what the page writes and lets a test type into it.
   if(terminalUI){
@@ -2583,4 +2584,47 @@ test('a run that changed files offers Undo, previews every file before anything 
   Object.assign(conversation, { status: 'running', activeRun: { id: 'other-run', provider: 'codex' } });
   await ui.window.relayUI.refresh(); await flush();
   assert.equal(line().querySelectorAll('button')[0].disabled, true);
+});
+
+test('alerts play their sound once, only when allowed, and Settings chooses which sounds play', async () => {
+  const ui = await browser({ workbench: true, soundsUI: true });
+  // A stand-in for Web Audio that records each tone's pitch.
+  const tones = [];
+  ui.window.AudioContext = class { constructor() { this.state = 'running'; this.currentTime = 0; this.destination = {}; }
+    createGain() { return { gain: { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
+    createOscillator() { return { type: '', frequency: { setValueAtTime: value => tones.push(value) }, connect() {}, start() {}, stop() {} }; } };
+  const alert = detail => ui.window.dispatchEvent(new UIEvent('relay-alert', { detail }));
+  alert({ id: 'one', sound: 'finished', volume: 70, background: false, kind: 'finished' });
+  assert.deepEqual(tones, [659.25, 1318.5, 987.77, 1975.54], 'Two notes, each with a soft octave above.');
+  alert({ id: 'one', sound: 'finished', volume: 70, background: false, kind: 'finished' });
+  assert.equal(tones.length, 4, 'The same alert plays once, even with several tabs open.');
+  ui.document.hasFocus = () => true; ui.document.visibilityState = 'visible';
+  alert({ id: 'two', sound: 'attention', volume: 70, background: true, kind: 'approval' });
+  assert.equal(tones.length, 4, 'Only when Throughline isn’t in front: nothing plays while it is.');
+  ui.document.hasFocus = () => false;
+  alert({ id: 'three', sound: 'attention', volume: 70, background: true, kind: 'approval' });
+  assert.deepEqual(tones.slice(4, 6), [880, 1760]);
+  alert({ id: 'four', sound: 'chime', volume: 70 }); alert({ id: 'five', sound: 'stopped', volume: 0 });
+  assert.equal(tones.length, 10, 'An unknown sound or no volume plays nothing.');
+
+  let saved = { enabled: true, sound: false, statusItem: true, overlay: false, sounds: { attention: true, finished: true, stopped: true, background: false, volume: 70 } };
+  const posts = [];
+  const reply = data => ({ ok: true, status: 200, text: async () => JSON.stringify(data), json: async () => clone(data) });
+  ui.setIntercept((request, next) => {
+    if (request.path !== '/api/notifications') return next();
+    if (request.method === 'POST') { posts.push(clone(request.body)); const { sounds, ...rest } = request.body; saved = { ...saved, ...rest, sounds: { ...saved.sounds, ...sounds } }; }
+    return reply(saved);
+  });
+  await ui.window.relaySettings.open('preferences'); await flush();
+  assert(ui.document.querySelectorAll('h3').some(heading => heading.textContent === 'Sounds'));
+  const master = ui.labelledInput('Play sounds');
+  assert.equal(master.checked, false); assert.equal(ui.labelledInput('A task finishes').disabled, true, 'Each kind waits for sounds to be turned on.');
+  master.checked = true; master.dispatchEvent(new UIEvent('change')); await flush();
+  const finished = ui.labelledInput('A task finishes');
+  assert.equal(finished.disabled, false);
+  finished.checked = false; finished.dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(posts, [{ sound: true }, { sounds: { finished: false } }]);
+  const before = tones.length;
+  ui.document.querySelectorAll('button').find(button => button.getAttribute('aria-label') === 'Play the sound for: A task stops: an error, a usage limit or failing tests').click();
+  assert.deepEqual(tones.slice(before), [493.88, 987.76, 369.99, 739.98], 'Play lets you hear each sound first.');
 });

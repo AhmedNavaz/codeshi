@@ -461,9 +461,33 @@ test('a note for the working run is refused clearly when nothing is running',asy
 });
 
 test('desktop alert preferences default to on and silent, reject other values and persist',async t=>{
-  const f=await fixture(t);assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:false,statusItem:true,overlay:false},'The menu bar status shows unless hidden; alerts near the top of the screen only when asked for.');
-  f.app.setNotificationPreferences({sound:true});assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:true,statusItem:true,overlay:false});
+  const f=await fixture(t),sounds={attention:true,finished:true,stopped:true,background:false,volume:70};assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:false,statusItem:true,overlay:false,sounds},'The menu bar status shows unless hidden; alerts near the top of the screen only when asked for.');
+  f.app.setNotificationPreferences({sound:true});assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:true,statusItem:true,overlay:false,sounds});
   f.app.setNotificationPreferences({enabled:false,overlay:true});assert.throws(()=>f.app.setNotificationPreferences({enabled:'no'}),/turned on or off/);
   assert.throws(()=>f.app.setNotificationPreferences({banner:true}),/turned on or off/,'Only known preferences are saved.');
-  await f.app.close();const next=await f.launch();assert.deepEqual(next.app.getNotificationPreferences(),{enabled:false,sound:true,statusItem:true,overlay:true});
+  await f.app.close();const next=await f.launch();assert.deepEqual(next.app.getNotificationPreferences(),{enabled:false,sound:true,statusItem:true,overlay:true,sounds});
+});
+
+test('alerts tell the page which sound to play, as chosen per kind, and sound settings are checked and kept', { timeout: 10000 }, async t => {
+  const f = await fixture(t), defaults = { attention: true, finished: true, stopped: true, background: false, volume: 70 };
+  assert.deepEqual(await (await fetch(`${f.url}/api/notifications`)).json(), { enabled: true, sound: false, statusItem: true, overlay: false, sounds: defaults });
+  const controller = new AbortController(); f.controllers.push(controller);
+  const reader = (await fetch(`${f.url}/api/events`, { signal: controller.signal })).body.getReader(), nextEvent = eventReader(reader);
+  assert.deepEqual(await nextEvent(), { type: 'ready', data: {} });
+  f.app.registry.emit('notify', { kind: 'finished', title: 'Task finished', projectId: 'p1' });
+  const saved = await (await post(`${f.url}/api/notifications`, { sound: true, sounds: { finished: false, volume: 40 } })).json();
+  assert.deepEqual(saved.sounds, { ...defaults, finished: false, volume: 40 });
+  f.app.registry.emit('notify', { kind: 'finished', title: 'Task finished', projectId: 'p1' });
+  f.app.registry.emit('notify', { kind: 'started', title: 'Continuing with Claude', projectId: 'p1' });
+  f.app.registry.emit('notify', { kind: 'approval', title: 'Approval needed', projectId: 'p1', approvalId: 'a1' });
+  // Sounds off, a kind turned off, and a kind with no sound all stay quiet: the first alert on the stream is the approval.
+  const alert = await nextEvent();
+  assert.equal(alert.type, 'alert'); assert.match(alert.data.id, /^[\da-f-]{36}$/);
+  assert.deepEqual({ ...alert.data, id: null }, { id: null, sound: 'attention', volume: 40, background: false, kind: 'approval', projectId: 'p1' });
+  f.app.registry.emit('notify', { kind: 'stopped', title: 'Task stopped', projectId: 'p1' });
+  assert.equal((await nextEvent()).data.sound, 'stopped');
+  for (const wrong of [{ sounds: { volume: 101 } }, { sounds: { volume: 2.5 } }, { sounds: { finished: 'yes' } }, { sounds: { chime: true } }, { sound: 'on' }, { banner: true }, { sounds: [] }]) assert.equal((await post(`${f.url}/api/notifications`, wrong)).status, 400, JSON.stringify(wrong));
+  controller.abort(); await reader.cancel().catch(() => {});
+  await f.app.close(); const next = await f.launch();
+  assert.deepEqual(next.app.getNotificationPreferences().sounds, { ...defaults, finished: false, volume: 40 }, 'Sound settings are kept across restarts.');
 });
