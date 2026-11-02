@@ -4,6 +4,8 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-02
+
 ### Added
 
 - **Update from inside the app** (#2): when a newer release is out, **Update available** and its version appear in the status bar, with a link to the release notes. **Update and restart** downloads the build for your Mac, checks it against the release's published checksum and checks the app inside (its version, bundle ID and signature), then quits, replaces the app and reopens it with your workspaces as they were. While an agent works, or a queued prompt is about to start, the update downloads and Throughline restarts once no agent is working, never in the middle of a run. A version can be skipped, **Throughline › Check for Updates…** checks at any time, and **Settings › Updates** turns automatic checks (at launch and every six hours) off. A copy that can't replace itself, such as one opened straight from Downloads, offers the download instead.
@@ -278,6 +280,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.15.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0
 [0.14.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0
 [0.13.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.13.0
 [0.12.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.12.0
