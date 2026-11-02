@@ -12,7 +12,73 @@ Throughline is an open-source desktop control plane for agentic development. It 
 
 Each project becomes a continuous working thread: its folders, conversation, saved context, and agent activity stay together as the work evolves. Carry work between agents, consolidate fragmented chat histories, inspect execution and code changes, and exchange reviewable patches with collaborators. Throughline runs through your installed agent CLIs and existing accounts, with you directing the workflow.
 
-## Features
+## What you can do
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<img src="docs/features/conversation.png" alt="Claude adds a promo code field, then Codex finishes the API side in the same conversation">
+<h3>One thread, every agent</h3>
+<p>Claude Code, Codex, Gemini and local models share one conversation per project. Switch mid-task and the next agent picks up the context.</p>
+</td>
+<td width="50%" valign="top">
+<img src="docs/features/routing.png" alt="The Agents panel with Manual, Cost saving, Balanced and Maximum quality routing">
+<h3>Routing</h3>
+<p>Throughline can pick the agent, model and effort for each message, to save allowance or get the best result, and shows why before you send.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<img src="docs/features/handoff.png" alt="An offer to hand a running task from Codex, at 92% of its limit, to Claude">
+<h3>Handoff before a limit</h3>
+<p>When an agent nears its usage limit, hand the task to one with room. You see its model, billing and the task before it switches.</p>
+</td>
+<td width="50%" valign="top">
+<img src="docs/features/plan.png" alt="A note added to a running task, a queued prompt and the agent's plan with two of four steps done">
+<h3>Queue, steer and follow the plan</h3>
+<p>Queue the next prompts, add a note to the run that's working, and watch the agent's plan as a live to-do list.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<img src="docs/features/approvals.png" alt="An approval for npm install, with options to allow it for this run or always in this workspace">
+<h3>Approvals on your terms</h3>
+<p>Reading your workspace runs freely; changes ask first. Allow an exact action for this run, or always in this workspace.</p>
+</td>
+<td width="50%" valign="top">
+<img src="docs/features/git.png" alt="The Git panel with a commit message, two staged files and one unstaged deletion">
+<h3>Review and commit</h3>
+<p>See every change with its diff, stage what you reviewed, and commit with your own identity and hooks. Throughline never pushes.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<img src="docs/features/terminal.png" alt="The terminal panel showing passing tests and git status">
+<h3>A terminal per workspace</h3>
+<p>Your own shell in a bottom panel, kept running while you switch workspaces, so a dev server stays up while agents work.</p>
+</td>
+<td width="50%" valign="top">
+<img src="docs/features/voice.png" alt="Voice input listening, with the spoken request appearing in the message box">
+<h3>Speak instead of typing</h3>
+<p>On macOS, say what you want and it appears in the message box, recognized on your Mac. When the run finishes, hear what it did.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<img src="docs/features/recap.png" alt="A recap listing finished, stopped and running work and an approval waiting in two workspaces">
+<h3>While you were away</h3>
+<p>Come back to a short recap of what ran, what changed and what's waiting in each workspace, written or read aloud.</p>
+</td>
+<td width="50%" valign="top">
+<img src="docs/features/search.png" alt="The search bar finding a workspace and files from two workspaces">
+<h3>Find anything</h3>
+<p>⌘K finds workspaces, files in every workspace and actions from one search bar.</p>
+</td>
+</tr>
+</table>
+
+<details>
+<summary><b>Everything else Throughline does</b></summary>
 
 **Multi-agent orchestration and continuity**
 
@@ -53,6 +119,8 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 
 - System appearance alongside explicit Dark and Light themes, keyboard shortcuts, Markdown replies with highlighted code and copy buttons, and a short setup guide.
 - Runs official Claude Code, Codex and Google Antigravity integrations on your own accounts. Gemini connects through Antigravity ACP with Google sign-in; Gemini CLI remains an advanced API-key/enterprise option. It ships no API keys and adds no model service of its own.
+
+</details>
 
 ## Install
 
