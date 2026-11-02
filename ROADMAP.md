@@ -56,7 +56,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Each run as a timeline of its steps, with one live status line | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
 | Stage and commit from the Git panel, with your own identity and the project's commit hooks ([#6](https://github.com/AhmedNavaz/throughline/issues/6)) | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
 | A terminal for each workspace in a bottom panel, kept running while hidden ([#7](https://github.com/AhmedNavaz/throughline/issues/7)) | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
-| Windows (64-bit) builds with a one-line PowerShell install, checked against published checksums ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) | Next release |
+| Windows (64-bit) builds with a one-line PowerShell install, checked against published checksums ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) | [0.16.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.16.0) |
 
 ## Now
 
