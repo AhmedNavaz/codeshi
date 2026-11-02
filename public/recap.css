@@ -1,0 +1,20 @@
+/* "While you were away": a panel under the search bar when you come back. */
+.recap { position: fixed; z-index: 60; top: 52px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow: auto; padding: 0 0 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
+.recap[hidden] { display: none; }
+.recap-heading { position: sticky; top: 0; display: flex; align-items: center; gap: 10px; padding: 12px 8px 8px 16px; background: var(--overlay-bg); }
+.recap-heading h2 { margin: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.recap-span { color: var(--faint); font-size: 11.5px; }
+.recap-heading .text-link { margin-left: auto; font-size: 12px; }
+.recap-close::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-close) center / contain no-repeat; mask: var(--icon-close) center / contain no-repeat; }
+.recap-body { display: grid; gap: 10px; padding: 0 16px 6px; }
+.recap-empty { margin: 0; color: var(--muted); font-size: 12.5px; }
+.recap-name { padding: 0; border: 0; background: none; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.recap-name:hover { color: var(--link); }
+.recap-workspace ul { display: grid; gap: 5px; margin: 6px 0 0; padding: 0; list-style: none; }
+.recap-workspace li { position: relative; display: grid; gap: 1px; padding-left: 18px; font-size: 12.5px; line-height: 1.45; }
+.recap-workspace li::before { content: ""; position: absolute; left: 2px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.recap-workspace li[data-kind="done"]::before { background: var(--success); }
+.recap-workspace li[data-kind="stopped"]::before, .recap-workspace li[data-kind="approval"]::before { background: var(--warning); }
+.recap-workspace li[data-kind="working"]::before { background: var(--link); }
+.recap-text { color: var(--text); overflow-wrap: anywhere; }
+.recap-detail { color: var(--faint); font-size: 11.5px; }

@@ -187,7 +187,7 @@ export class Broker extends EventEmitter {
 
   empty(id) {
     return { id, title: 'New conversation', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', status: 'idle', messages: [],
-      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, transports: {}, requests: {}, reviewRequests: {}, reviews: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, routing: null, createdAt: null, updatedAt: null };
+      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, routing: null, createdAt: null, updatedAt: null };
   }
 
   apply(c, record) {
@@ -252,6 +252,14 @@ export class Broker extends EventEmitter {
     }
     if (record.type === 'run_process' && c.activeRun) Object.assign(c.activeRun, { pid: record.pid, pidStart: record.pidStart });
     if (record.type === 'run_end') { if (c.activeRun && !c.activeRun.reviewId) c.lastBuilder = c.activeRun.provider; c.lastRun = { ...c.activeRun, status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at }; c.activeRun = null; c.status = record.status; }
+    // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
+    if ((record.type === 'submission' && !record.review) || record.type === 'run_start') {
+      c.runs = [...(c.runs || []), { id: record.id, provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null }].slice(-50);
+    }
+    if (record.type === 'run_end') {
+      const run = c.runs?.findLast(item => item.id === c.lastRun?.id && !item.endedAt);
+      if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at });
+    }
   }
 
   record(c, value) {

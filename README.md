@@ -34,6 +34,7 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 
 - A search bar (⌘K) for workspaces, files in every workspace and actions, a side panel for Agents and Git, and resizable sections you can show or hide.
 - Git activity for each folder: changed files with diffs, and recent commits. Stage files and commit from the panel with your own identity and the project's commit hooks; Throughline never pushes.
+- **While you were away**: come back to a short recap of what ran, what changed and what is waiting in each workspace, written or read aloud.
 - **Voice** on macOS: speak a message instead of typing it, recognized on your Mac so the audio never leaves it, and hear a short summary when the run finishes.
 - A terminal for each workspace in a bottom panel: your own shell in the folder you choose, kept running while the panel is hidden or you switch workspaces.
 - A file browser with syntax-highlighted previews. Attach files and images by clicking, dragging or pasting.

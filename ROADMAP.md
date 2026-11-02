@@ -58,6 +58,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | A terminal for each workspace in a bottom panel, kept running while hidden ([#7](https://github.com/AhmedNavaz/throughline/issues/7)) | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
 | Windows (64-bit) builds with a one-line PowerShell install, checked against published checksums ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) | [0.16.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.16.0) |
 | Voice input on macOS, recognized on the Mac, with spoken summaries of finished runs ([#11](https://github.com/AhmedNavaz/throughline/issues/11)) | Next release |
+| "While you were away" recaps of what ran, changed and is waiting, written or read aloud ([#22](https://github.com/AhmedNavaz/throughline/issues/22)) | Next release |
 
 ## Now
 
@@ -129,7 +130,6 @@ Larger ideas for bringing project context, execution and collaboration into one 
 | **Point and tell.** Click an element in your app's preview and say what should change. | [#19](https://github.com/AhmedNavaz/throughline/issues/19) |
 | **Rewind.** One timeline of messages, file changes and commits, with checkpoints to undo any step. | [#20](https://github.com/AhmedNavaz/throughline/issues/20) |
 | **Project memory.** A living brief of goals, decisions and conventions that every agent reads. | [#21](https://github.com/AhmedNavaz/throughline/issues/21) |
-| **"While you were away" recaps.** A short written or spoken briefing of what ran and what is waiting. | [#22](https://github.com/AhmedNavaz/throughline/issues/22) |
 | **Approve from your phone.** Extend desktop approval alerts to a paired phone, with run progress and iPhone Live Activities. | [#23](https://github.com/AhmedNavaz/throughline/issues/23) |
 | **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription. | [#24](https://github.com/AhmedNavaz/throughline/issues/24) |
 

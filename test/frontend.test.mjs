@@ -63,7 +63,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -200,6 +200,9 @@ async function browser({existing=true,available=true,providers={},authenticated=
     window.speechSynthesis={speak:utterance=>spoken.push(utterance.text),cancel(){},getVoices:()=>[]};
     vm.runInContext(fs.readFileSync(new URL('../public/voice.js',import.meta.url),'utf8'),context,{filename:'public/voice.js'});
   }
+  // A test can move the page's clock, for behaviour that depends on how long you were away.
+  if(clock){context.clock=clock;vm.runInContext('Date.now=()=>clock()',context);}
+  if(recapUI)vm.runInContext(fs.readFileSync(new URL('../public/recap.js',import.meta.url),'utf8'),context,{filename:'public/recap.js'});
   if(theme)document.dispatchEvent(new UIEvent('DOMContentLoaded'));
   await flush();assert.equal(window.relayUI.getState().ready,!empty);assert.equal(window.relayUI.getState().loading,false);
   const $=id=>document.getElementById(id);const fire=(id,type)=>$(id).dispatchEvent(new UIEvent(type));const findButton=text=>document.querySelectorAll('button').find(button=>button.textContent===text);
@@ -2351,3 +2354,47 @@ test('voice input fills the message box as you speak, Esc cancels it, and a run 
   assert.equal(ui.spoken.length, 1);
   assert.equal(ui.window.relayVoice.summarize({ provider: 'codex', status: 'failed', errorCategory: 'quota' }, []), 'Codex stopped at a usage limit.');
 });
+
+test('coming back after two minutes or more shows what ran, changed and is waiting, and can read it aloud', async () => {
+  let now = Date.parse('2026-11-02T10:00:00.000Z');
+  const ui = await browser({ voiceUI: true, recapUI: true, moreProjects: true, clock: () => now });
+  const asked = [];
+  let recap = { since: '2026-11-02T10:00:00.000Z', until: '2026-11-02T10:24:00.000Z', workspaces: [
+    { projectId: 'project-two', name: 'Other workspace', runs: [
+      { id: 'r1', provider: 'claude', prompt: 'Add promo codes to checkout', status: 'complete', startedAt: '2026-11-02T10:02:00.000Z', endedAt: '2026-11-02T10:05:00.000Z', files: ['src/checkout.js', 'src/promo.js'], fileCount: 2, commands: 1, tests: true },
+      { id: 'r2', provider: 'codex', prompt: 'Refactor the payment module', status: 'incomplete', errorCategory: 'quota', startedAt: '2026-11-02T10:06:00.000Z', endedAt: '2026-11-02T10:20:00.000Z', files: [], fileCount: 0, commands: 0, tests: false }],
+      approvals: 1, waiting: { providers: ['claude', 'codex'], resetsAt: null }, queue: null, handoff: null, uncommitted: 3 }] };
+  ui.setIntercept((request, next) => { if (request.path === '/api/recap') { asked.push(request.params.since); return response(recap); } return next(); });
+  const leave = () => ui.window.dispatchEvent(new UIEvent('blur')), come = async () => { ui.window.dispatchEvent(new UIEvent('focus')); await flush(); };
+
+  leave(); now += 90 * 1000; await come();
+  assert.deepEqual(asked, [], 'A short break shows nothing.');
+  leave(); const left = now; now += 24 * 60 * 1000; await come();
+  assert.deepEqual(asked, [new Date(left).toISOString()]);
+  const panel = ui.$('recap');
+  assert.equal(panel.hidden, false);
+  assert.equal(panel.querySelector('.recap-name').textContent, 'Other workspace');
+  assert.deepEqual(panel.querySelectorAll('li').map(item => [item.dataset.kind, item.textContent]), [
+    ['done', 'Claude finished “Add promo codes to checkout”3 min · changed checkout.js and promo.js · ran the tests'],
+    ['stopped', 'Codex stopped at a usage limit on “Refactor the payment module”14 min'],
+    ['approval', '1 approval waiting for you'],
+    ['waiting', 'Waiting for a usage limit to reset; it continues with Claude and Codex'],
+    ['git', '3 uncommitted changes in Git'],
+  ]);
+  ui.findButton('Read aloud').click();
+  assert.equal(ui.spoken.at(-1), 'While you were away. In Other workspace: Claude finished “Add promo codes to checkout”, 3 min, changed checkout.js and promo.js, ran the tests. Codex stopped at a usage limit on “Refactor the payment module”, 14 min. 1 approval waiting for you. Waiting for a usage limit to reset; it continues with Claude and Codex.');
+  panel.querySelector('.recap-name').click(); await flush();
+  assert.equal(panel.hidden, true);
+  assert.equal(ui.state().projectId, 'project-two', 'A workspace in the recap opens with one click.');
+
+  // Nothing happened: nothing shows; asked for, it says so.
+  recap = { ...recap, workspaces: [] };
+  leave(); now += 10 * 60 * 1000; await come();
+  assert.equal(panel.hidden, true);
+  await ui.window.relayRecap.open(); await flush();
+  assert.equal(panel.hidden, false);
+  assert.match(panel.textContent, /Nothing ran while you were away/);
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' }));
+  assert.equal(panel.hidden, true);
+});
+

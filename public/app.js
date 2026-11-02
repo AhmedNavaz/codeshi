@@ -1336,6 +1336,7 @@
     { label: "Agents: routing and handoff", run: () => window.relayAgents?.open() },
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", run: () => window.relayTerminal?.open() },
+    { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
   ];
   let commandActive = 0, commandItems = [], commandFiles = { query: "", files: [] }, fileSearch = 0, fileTimer = null;
