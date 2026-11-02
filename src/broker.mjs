@@ -12,6 +12,7 @@ import { prepareContext, emptyContext, validateContext } from './context.mjs';
 import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
+import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
 import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mjs';
@@ -639,7 +640,7 @@ export class Broker extends EventEmitter {
         this.message(c, 'assistant', item.text, provider, id, event.type === 'item.completed' ? 'complete' : 'streaming');
       }
       if (item.type === 'command_execution') this.message(c, 'activity', clip(`$ ${item.command}\n${item.aggregated_output || ''}`), provider, id);
-      if (item.type === 'file_change') this.message(c, 'activity', `File changes: ${JSON.stringify(item.changes || [])}`, provider, id);
+      if (item.type === 'file_change') this.message(c, 'activity', `File changes: ${JSON.stringify(fileChanges(item.changes))}`, provider, id);
       if (['mcp_tool_call', 'web_search'].includes(item.type)) this.message(c, 'activity', clip(`${item.type}: ${item.tool || item.query || ''}\n${JSON.stringify(item.result || item.arguments || '')}`), provider, id);
       return;
     }
@@ -671,7 +672,7 @@ export class Broker extends EventEmitter {
       if (text) this.message(c, 'assistant', text, provider, id, 'complete');
       for (const tool of content.filter(block => block.type === 'tool_use')) {
         run.tools.set(tool.id, tool.name);
-        this.message(c, 'activity', clip(`${tool.name}\n${JSON.stringify(tool.input || {})}`), provider, `${run.id}:tool:${tool.id}`);
+        this.message(c, 'activity', clip(`${tool.name}\n${toolInput(tool.name, tool.input)}`), provider, `${run.id}:tool:${tool.id}`);
       }
     }
     if (event.type === 'user' && Array.isArray(event.message?.content)) {

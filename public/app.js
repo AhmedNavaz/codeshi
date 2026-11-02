@@ -384,6 +384,55 @@
     }
     return text;
   }
+  // Lines in a text, and lines removed and added between two texts after the lines they share at either end.
+  function lineTotal(text) { const value = String(text ?? ""); return value ? value.split("\n").length - (value.endsWith("\n") ? 1 : 0) : 0; }
+  function lineCounts(before = "", after = "") {
+    const split = text => (text = String(text ?? "")) ? text.split("\n") : [], a = split(before), b = split(after);
+    let start = 0, end = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) start++;
+    while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+    const x = a.slice(start, a.length - end), y = b.slice(start, b.length - end);
+    // The lines both keep in the middle, in order, when comparing them line by line stays quick.
+    let common = 0;
+    if (x.length && y.length && x.length * y.length <= 1000000) {
+      let previous = new Uint32Array(y.length + 1);
+      for (let i = 1; i <= x.length; i++) { const row = new Uint32Array(y.length + 1); for (let j = 1; j <= y.length; j++) row[j] = x[i - 1] === y[j - 1] ? previous[j - 1] + 1 : Math.max(previous[j], row[j - 1]); previous = row; }
+      common = previous[y.length];
+    }
+    return { added: y.length - common, removed: x.length - common };
+  }
+  // An edit as kept, removed and added lines. Long stretches of kept lines fold to a count; a very large edit is
+  // shown as its old lines then its new ones.
+  function lineDiff(before = "", after = "") {
+    const split = text => (text = String(text ?? "")) ? text.split("\n") : [], a = split(before), b = split(after);
+    if (a.length * b.length > 1000000) return [...a.map(text => "- " + text), ...b.map(text => "+ " + text)];
+    const table = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1)), rows = [];
+    for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+    let i = 0, j = 0;
+    while (i < a.length && j < b.length) { if (a[i] === b[j]) { rows.push("  " + a[i]); i++; j++; } else if (table[i + 1][j] >= table[i][j + 1]) rows.push("- " + a[i++]); else rows.push("+ " + b[j++]); }
+    while (i < a.length) rows.push("- " + a[i++]);
+    while (j < b.length) rows.push("+ " + b[j++]);
+    const shown = [];
+    for (let start = 0; start < rows.length;) {
+      let end = start; while (end < rows.length && rows[end].startsWith("  ")) end++;
+      if (end - start > 5) shown.push(...rows.slice(start, start + 2), `⋯ ${end - start - 4} unchanged lines`, ...rows.slice(end - 2, end));
+      else shown.push(...rows.slice(start, end));
+      if (end === start) shown.push(rows[end++]);
+      start = end;
+    }
+    return shown;
+  }
+  // Added and removed lines in a diff; a new or deleted file may come as its plain contents.
+  function diffCounts(diff, change) {
+    const rows = String(diff ?? "").split("\n");
+    if (!diff) return null;
+    if (!rows.some(row => row.startsWith("@@"))) return change === "add" ? { added: lineTotal(diff), removed: 0 } : change === "delete" ? { added: 0, removed: lineTotal(diff) } : null;
+    return { added: rows.filter(row => row.startsWith("+") && !row.startsWith("+++")).length, removed: rows.filter(row => row.startsWith("-") && !row.startsWith("---")).length };
+  }
+  function changeOf(file) {
+    const kind = String(typeof file?.kind === "string" ? file.kind : file?.kind?.type || "").toLowerCase();
+    return ["add", "added", "create", "created"].includes(kind) ? "add" : ["delete", "deleted", "remove", "removed"].includes(kind) ? "delete" : "update";
+  }
   // One step of a run, shown as a timeline row: a short verb, what it acted on, and the full text behind a chevron.
   function parseActivity(raw) {
     const text = String(raw || "").trim(), first = text.split("\n")[0];
@@ -399,27 +448,42 @@
       return { kind: "check", icon: outcome === "running" ? "tests-running" : outcome === "passed" ? "tests-passed" : failed ? "tests-failed" : "general", verb, detail: command, mono: true, output: rest.trim(), error: failed, raw: text };
     }
     if (text.startsWith("File changes:")) {
-      let files = [];
-      try { files = JSON.parse(text.slice("File changes:".length)); } catch {}
-      const paths = files.map(file => file.path || file.file || "").filter(Boolean);
-      const created = files.length > 0 && files.every(file => file.kind === "add");
-      return { kind: "file", icon: "edit", verb: created ? "Create" : "Edit", detail: paths.map(displayPath).join(", ") || "files", files, paths, output: paths.length > 1 ? paths.map(displayPath).join("\n") : "", raw: text };
+      let changes = [];
+      try { changes = JSON.parse(text.slice("File changes:".length)); } catch {}
+      // Codex says a file was added, deleted or updated, as a word or as { type }; older records may carry its diff.
+      const files = (Array.isArray(changes) ? changes : []).map(file => {
+        const change = changeOf(file), counts = Number.isInteger(file?.added) || Number.isInteger(file?.removed) ? { added: file.added || 0, removed: file.removed || 0 } : typeof file?.diff === "string" ? diffCounts(file.diff, change) : null;
+        return { path: String(file?.path || file?.file || ""), change, ...(counts || {}) };
+      }).filter(file => file.path);
+      const paths = files.map(file => file.path), kinds = new Set(files.map(file => file.change)), tone = kinds.size === 1 ? [...kinds][0] : "update";
+      const [verb, icon] = { add: ["Create", "create"], delete: ["Delete", "delete"], update: ["Edit", "edit"] }[tone];
+      return { kind: "file", icon, verb, detail: paths.map(displayPath).join(", ") || "files", files, paths, output: paths.length > 1 ? paths.map(displayPath).join("\n") : "", raw: text };
     }
-    // A Claude tool: its name, its input as one line of JSON, then its result once it arrives.
-    const tool = text.match(/^([A-Za-z_][\w-]*)\n(\{.*\})(?:\n([\s\S]*))?$/);
-    if (tool) {
-      const name = tool[1], result = (tool[3] || "").trim();
+    // A Claude tool: its name, its input as one line of JSON, then its result once it arrives. A line an earlier
+    // version cut short still says which tool it was and what it acted on.
+    const tool = text.match(/^([A-Za-z_][\w-]*)\n(\{.*\})(?:\n([\s\S]*))?$/), partial = !tool && text.match(/^([A-Za-z_][\w-]*)\n(\{"[^\n]*)/);
+    if (tool || partial) {
+      const name = (tool || partial)[1], result = tool ? (tool[3] || "").trim() : "";
       let input = {};
-      try { input = JSON.parse(tool[2]); } catch {}
-      const file = displayPath(input.file_path || input.notebook_path || input.path || "");
+      if (tool) { try { input = JSON.parse(tool[2]); } catch {} }
+      else for (const key of ["file_path", "notebook_path", "path", "command", "description", "pattern", "url", "query"]) {
+        const found = partial[2].match(new RegExp(`"${key}":"((?:[^"\\\\]|\\\\.)*)"`));
+        if (found) try { input[key] = JSON.parse(`"${found[1]}"`); } catch { /* Left out. */ }
+      }
+      const path = input.file_path || input.notebook_path || input.path || "", file = displayPath(path);
       const step = (icon, verb, detail, output = result, mono = false) => ({ kind: "tool", icon, verb, detail, mono, output, toolName: name, input, raw: text });
       if (["Read", "read_file"].includes(name)) return step("read", "Read", file);
       if (["Edit", "MultiEdit", "edit_file", "NotebookEdit"].includes(name)) {
-        const edits = Array.isArray(input.edits) ? input.edits : [input];
-        const diff = edits.filter(edit => typeof edit.old_string === "string" || typeof edit.new_string === "string").map(edit => [...String(edit.old_string || "").split("\n").filter(Boolean).map(line => "- " + line), ...String(edit.new_string || "").split("\n").filter(Boolean).map(line => "+ " + line)].join("\n")).join("\n\n");
-        return step("edit", "Edit", file, diff || result);
+        const edits = (Array.isArray(input.edits) ? input.edits : [input]).filter(edit => typeof edit.old_string === "string" || typeof edit.new_string === "string");
+        const diff = edits.map(edit => lineDiff(edit.old_string, edit.new_string).join("\n")).join("\n\n");
+        const counts = input.lineCounts || (edits.length ? edits.reduce((sum, edit) => { const count = lineCounts(edit.old_string, edit.new_string); return { added: sum.added + count.added, removed: sum.removed + count.removed }; }, { added: 0, removed: 0 }) : null);
+        return { ...step("edit", "Edit", file, diff || result), diff: Boolean(diff), files: path ? [{ path, change: "update", ...(counts || {}) }] : [] };
       }
-      if (["Write", "write_file"].includes(name)) return step("edit", "Write", file, typeof input.content === "string" ? input.content : result);
+      if (["Write", "write_file"].includes(name)) {
+        // The tool's result says whether the file was new or written over.
+        const created = /\bcreated\b/i.test(result), counts = input.lineCounts || (typeof input.content === "string" && !partial ? { added: lineTotal(input.content) } : null);
+        return { ...step(created ? "create" : "edit", created ? "Create" : "Write", file, typeof input.content === "string" ? input.content : result), files: path ? [{ path, change: created ? "add" : "update", ...(counts || {}) }] : [] };
+      }
       if (name === "Glob") return step("search", "Find", input.pattern || "", result, true);
       if (["Grep", "search_files"].includes(name)) return step("search", "Search", [input.pattern, input.path && displayPath(input.path) ? "in " + displayPath(input.path) : ""].filter(Boolean).join(" "), result, true);
       if (name === "Bash") return { ...step("command", "Run", input.description || input.command || "", [input.command ? "$ " + input.command : "", result].filter(Boolean).join("\n"), !input.description), cmd: input.command || "" };
@@ -443,12 +507,31 @@
     return { kind: "general", icon: "general", verb: first.slice(0, 200), detail: "", output: text.includes("\n") ? text : "", raw: text };
   }
 
+  // Each kind of step has its colour: reading and searching, running, changing, adding and removing files, the web,
+  // and other agents. Approvals, errors and tests keep their own.
+  const STEP_TONES = { read: "read", search: "read", command: "run", edit: "edit", create: "add", delete: "delete", web: "web", agent: "agent" };
+  const CHANGES = { add: "Added", delete: "Deleted", update: "Changed" };
+  // The files a step changed, each with its added and removed lines when known.
+  function fileList(files) {
+    const list = element("span", "activity-entry-detail activity-files");
+    files.slice(0, 6).forEach((file, index) => {
+      if (index) list.append(document.createTextNode(", "));
+      const name = element("span", "activity-file", displayPath(file.path) || file.path);
+      name.dataset.change = file.change; name.title = `${CHANGES[file.change] || "Changed"}: ${file.path}`;
+      list.append(name);
+      if (file.added > 0) list.append(element("span", "line-count added", `+${file.added}`));
+      if (file.removed > 0) list.append(element("span", "line-count removed", `−${file.removed}`));
+    });
+    if (files.length > 6) list.append(document.createTextNode(` and ${files.length - 6} more`));
+    return list;
+  }
   // A timeline row: its node on the run's line, the step's first line, and its full text behind the chevron.
   function renderStep(step, entryId, openOutputs) {
     const open = openOutputs.has(entryId), more = Boolean(step.output);
     const entry = element("div", `activity-entry activity-entry-${step.kind}${step.error ? " activity-entry-error" : ""}${open ? " open" : ""}`);
     entry.setAttribute("data-entry-id", entryId);
     entry.dataset.entryId = entryId;
+    if (STEP_TONES[step.icon]) entry.dataset.tone = STEP_TONES[step.icon];
     const node = element("span", "timeline-node");
     node.setAttribute("aria-hidden", "true");
     node.append(element("span", `activity-icon icon-${step.icon || step.kind}`));
@@ -456,12 +539,15 @@
     // A step with more to show is a button; one that is only its line stays text, which keeps it searchable.
     const toggle = element(more ? "button" : "div", "activity-output-toggle");
     toggle.append(element("span", "activity-entry-title", step.verb));
-    if (step.detail) toggle.append(element(step.mono ? "code" : "span", "activity-entry-detail", step.detail));
+    if (step.files?.length) toggle.append(fileList(step.files));
+    else if (step.detail) toggle.append(element(step.mono ? "code" : "span", "activity-entry-detail", step.detail));
     if (more) toggle.append(element("span", "disclosure-chevron"));
     head.append(toggle, copyButton("activity-copy", "Copy", step.output || step.raw));
     entry.append(node, head);
     if (!more) return entry;
-    const output = element("pre", "activity-output", step.output), outputId = "activity-output-" + entryId;
+    const output = element("pre", "activity-output", step.diff ? undefined : step.output), outputId = "activity-output-" + entryId;
+    // An edit shows the lines it removed and added in their colours.
+    if (step.diff) step.output.split("\n").forEach((line, index, lines) => output.append(element("span", line.startsWith("+ ") ? "activity-diff added" : line.startsWith("- ") ? "activity-diff removed" : line.startsWith("⋯ ") ? "activity-diff folded" : "activity-diff", index < lines.length - 1 ? line + "\n" : line)));
     output.id = outputId;
     output.setAttribute("data-entry-id", entryId);
     output.dataset.entryId = entryId;

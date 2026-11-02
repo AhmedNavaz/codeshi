@@ -1713,7 +1713,7 @@ test('each step of a run shows its first line on the run’s timeline, with its 
   // Every step shows without opening anything; notes from full auto-approval add nothing and are left out.
   const entries = ui.document.querySelectorAll('.activity-entry');
   assert.deepEqual(entries.map(entry => [entry.querySelector('.activity-entry-title').textContent, entry.querySelector('.activity-entry-detail')?.textContent || '']), [
-    ['Edit', 'src/index.js, src/utils.js'], ['Run', 'npm run build'], ['Run', 'Run the unit tests'], ['Edit', 'src/a.js'], ['You denied the request', '']
+    ['Edit', 'src/index.js, src/utils.js'], ['Run', 'npm run build'], ['Run', 'Run the unit tests'], ['Edit', 'src/a.js+1−1'], ['You denied the request', '']
   ]);
   assert.equal(ui.document.querySelector('.activity-group'), null, 'Steps are not folded into a summary.');
   assert(entries.every(entry => entry.querySelector('.timeline-node')), 'Each step has a node on the run’s line.');
@@ -2627,4 +2627,32 @@ test('alerts play their sound once, only when allowed, and Settings chooses whic
   const before = tones.length;
   ui.document.querySelectorAll('button').find(button => button.getAttribute('aria-label') === 'Play the sound for: A task stops: an error, a usage limit or failing tests').click();
   assert.deepEqual(tones.slice(before), [493.88, 987.76, 369.99, 739.98], 'Play lets you hear each sound first.');
+});
+
+test('steps are coloured by kind, changed files show their line counts, and a cut-off Write still names its file', async () => {
+  const ui = await browser();
+  const conversation = ui.canonical.get('project-one'), runId = 'run-colours', step = (id, text) => ({ id, runId, role: 'activity', provider: 'claude', text });
+  Object.assign(conversation, { status: 'complete', lastRun: { id: runId, provider: 'claude', status: 'complete' }, messages: [
+    { id: 'u1', runId, role: 'user', text: 'Add promo codes', provider: 'claude' },
+    step('s1', 'Read\n{"file_path":"src/checkout.js"}'),
+    step('s2', 'Bash\n{"command":"npm test","description":"Run the tests"}\n24 passing'),
+    step('s3', 'Edit\n{"file_path":"src/checkout.js","old_string":"a\\nb\\nc","new_string":"a\\nX\\nc\\nd"}\nThe file has been updated.'),
+    step('s4', 'Write\n{"file_path":"src/promo.js","content":"one\\ntwo\\n"}\nFile created successfully at: src/promo.js'),
+    step('s5', 'Write\n{"file_path":"src/generated.js","content":"line 1\\nline 2\\nline\n[Output shortened; inspect project files for the full state.]'),
+    step('s6', 'File changes: [{"path":"api/new.js","kind":{"type":"add"},"diff":"x\\ny\\n"},{"path":"api/old.js","kind":"delete"}]'),
+    step('s7', 'File changes: [{"path":"api/a.js","kind":{"type":"add"}},{"path":"api/b.js","kind":"add","added":4,"removed":0}]'),
+    { id: 'a1', runId, role: 'assistant', provider: 'claude', text: 'Done.', status: 'complete' },
+  ] });
+  await ui.window.relayUI.refresh(); await flush();
+  const rows = ui.document.querySelectorAll('.activity-entry').map(row => [row.dataset.tone || '', row.querySelectorAll('.activity-entry-title')[0]?.textContent, row.querySelectorAll('.activity-entry-detail')[0]?.textContent]);
+  assert.deepEqual(rows, [
+    ['read', 'Read', 'src/checkout.js'], ['run', 'Run', 'Run the tests'], ['edit', 'Edit', 'src/checkout.js+2−1'], ['add', 'Create', 'src/promo.js+2'],
+    ['edit', 'Write', 'src/generated.js'], ['edit', 'Edit', 'api/new.js+2, api/old.js'], ['add', 'Create', 'api/a.js, api/b.js+4'],
+  ]);
+  const deleted = ui.document.querySelectorAll('.activity-file').find(file => file.textContent === 'api/old.js');
+  assert.equal(deleted.dataset.change, 'delete'); assert.equal(deleted.title, 'Deleted: api/old.js');
+  // An opened edit shows its removed and added lines in their colours.
+  const edit = ui.document.querySelectorAll('.activity-entry').find(row => row.querySelectorAll('.activity-entry-title')[0]?.textContent === 'Edit');
+  edit.querySelectorAll('button')[0].click(); await flush();
+  assert.deepEqual(edit.querySelectorAll('.activity-diff').map(line => [line.className, line.textContent.trim()]), [['activity-diff', 'a'], ['activity-diff removed', '- b'], ['activity-diff added', '+ X'], ['activity-diff', 'c'], ['activity-diff added', '+ d']]);
 });

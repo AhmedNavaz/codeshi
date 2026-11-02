@@ -12,6 +12,12 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 ### Changed
 
 - Notification banners are silent, and the Agent menu's **Play Notification Sound** is now **Play Sounds**, which turns on the new sounds. It no longer depends on banners being on.
+- A run's steps are coloured by kind, so changes stand out: reading and searching in blue, commands in purple, edits in amber, new files in green and deleted files in red, with the web and other agents in their own colours. Each changed file shows its added and removed lines, and an opened edit shows them as a diff with the unchanged lines around them.
+
+### Fixed
+
+- A step that wrote a very long file showed only **Write**, without the file, because its saved record was cut off mid-line. Long tool input is now shortened inside the record, which stays readable, and steps saved before still show their file.
+- New files from Codex's app-server connection showed as **Edit**; they now show as **Create**, and Codex file changes are saved without their full diffs, which kept conversations larger than needed.
 
 ## [0.19.0] - 2026-11-02
 

@@ -362,6 +362,29 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .activity-icon.icon-search { --activity-icon: var(--icon-search); }
 .activity-icon.icon-web { --activity-icon: var(--icon-globe); }
 .activity-icon.icon-agent { --activity-icon: var(--icon-agent); }
+.activity-icon.icon-create { --activity-icon: var(--icon-file-plus); }
+.activity-icon.icon-delete { --activity-icon: var(--icon-trash); }
+/* Each kind of step has its colour on its icon and verb, so edits, new files and commands stand apart at a glance. */
+.activity-entry[data-tone="read"] { --tone: var(--step-read); }
+.activity-entry[data-tone="run"] { --tone: var(--step-run); }
+.activity-entry[data-tone="edit"] { --tone: var(--step-edit); }
+.activity-entry[data-tone="add"] { --tone: var(--step-add); }
+.activity-entry[data-tone="delete"] { --tone: var(--step-delete); }
+.activity-entry[data-tone="web"] { --tone: var(--step-web); }
+.activity-entry[data-tone="agent"] { --tone: var(--step-agent); }
+.activity-entry[data-tone] .activity-icon { background: var(--tone); }
+.activity-entry[data-tone] .activity-entry-title { color: var(--tone); }
+/* Changed files read clearly: the name in full text colour, new files green and deleted ones red, with line counts. */
+.activity-files { color: var(--muted); }
+.activity-file { color: var(--text); }
+.activity-file[data-change="add"] { color: var(--step-add); }
+.activity-file[data-change="delete"] { color: var(--step-delete); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--step-delete) 55%, transparent); }
+.line-count { margin-left: 5px; font: 11.5px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.line-count.added { color: var(--success); }
+.line-count.removed { margin-left: 4px; color: var(--danger); }
+.activity-diff.added { color: var(--success); }
+.activity-diff.removed { color: var(--danger); }
+.activity-diff.folded { color: var(--faint); font-style: italic; }
 .activity-icon.icon-approval { --activity-icon: var(--icon-check); background: var(--success); }
 .activity-icon.icon-denied { --activity-icon: var(--icon-minus-circle); background: var(--danger); }
 .activity-icon.icon-error { --activity-icon: var(--icon-alert); background: var(--danger); }
