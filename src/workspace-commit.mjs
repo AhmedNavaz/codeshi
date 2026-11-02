@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { gitExecutable } from './resolve-binary.mjs';
 
 // Staging and committing from the Git panel (#6). The panel's reads turn off hooks, fsmonitor and filter programs, since
 // looking should never run code. A commit is a deliberate action, so these use the person's own Git setup instead, as a
@@ -13,7 +14,7 @@ const MESSAGE_LIMIT = 20000, OUTPUT_LIMIT = 6000;
 const fail = (message, status = 400, details = null) => { throw Object.assign(new Error(message), { status, ...details ? { details } : {} }); };
 
 function git(cwd, args, { timeout = 30000 } = {}) {
-  return new Promise(resolve => execFile('/usr/bin/git', ['--no-pager', '--literal-pathspecs', ...args], {
+  return new Promise(resolve => execFile(gitExecutable(), ['--no-pager', '--literal-pathspecs', ...args], {
     cwd, timeout, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8',
     // Nothing waits for a terminal: no credential prompt, pager or editor.
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', GIT_EDITOR: 'true' },

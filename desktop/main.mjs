@@ -13,6 +13,7 @@ import {createRequire} from 'node:module';
 import os from 'node:os';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
+import {APP_ID,ensureStartMenuShortcut} from './windows.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const smoke=process.argv.includes('--smoke-test');
 // A copy run from source is a separate app from the installed one: its own name, data folder and single-instance
@@ -23,6 +24,8 @@ if(development)app.setName('Throughline Dev');
 if(process.env.AI_RELAY_DESKTOP_DATA) app.setPath('userData',path.resolve(process.env.AI_RELAY_DESKTOP_DATA));
 else if(development) app.setPath('userData',path.join(app.getPath('appData'),'Throughline Dev'));
 else app.setPath('userData',preferredUserData(app.getPath('appData'),app.getPath('userData')));
+// Windows ties notifications and the taskbar entry to this ID (see windows.mjs).
+if(process.platform==='win32'&&!development)app.setAppUserModelId(APP_ID);
 const primary=app.requestSingleInstanceLock();
 let relay,win,origin,keepAwake,updater,quitting=false;
 if(!primary) app.quit();
@@ -33,6 +36,7 @@ else {
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
     if(process.platform==='darwin'&&!app.isPackaged) app.dock?.setIcon(path.join(root,'assets','icon.png'));
+    if(process.platform==='win32'&&!development&&!smoke){try{ensureStartMenuShortcut({shell,programs:path.join(app.getPath('appData'),'Microsoft','Windows','Start Menu','Programs'),target:process.execPath});}catch(error){console.warn('Windows notifications need a Start menu shortcut:',error.message);}}
     const data=path.join(app.getPath('userData'),'relay-data');
     migrateLegacyData(process.env.AI_RELAY_LEGACY_DATA_DIR || path.join(root,'.data'),data);
     const releases=createReleaseState({filename:path.join(app.getPath('userData'),'install.json'),version:app.getVersion(),changelog:fs.readFileSync(path.join(root,'CHANGELOG.md'),'utf8'),existing:['projects.json','settings.json'].some(name=>fs.existsSync(path.join(data,name)))});
@@ -48,6 +52,7 @@ else {
     // window is in front the page already shows it. The Dock badge counts what happened since the window was last in
     // front and needs no permission; an approval bounces the Dock until the app is opened. A system notification is
     // added where macOS allows one: an app without a Developer ID signature is refused, so the Dock always carries it.
+    // On Windows and Linux the taskbar button flashes instead of the Dock bouncing.
     let attention=0,notificationsRefused=false;
     // Turned off in the Agent menu, only the Dock badge and the sidebar's approval count remain.
     function notify({kind,title,body,projectId,projectName,approvalId}){
@@ -56,6 +61,7 @@ else {
       const preferences=relay.getNotificationPreferences();
       if(!preferences.enabled)return;
       app.dock?.bounce(kind==='approval'?'critical':'informational');
+      if(process.platform!=='darwin'&&win&&!win.isDestroyed())win.flashFrame(true);
       if(notificationsRefused||!Notification.isSupported())return;
       const notice=new Notification({title:projectName?`${title} · ${projectName}`:title,body:String(body||'').slice(0,240),silent:kind==='started'||!preferences.sound});
       // An approval opens its own request card; it is never answered from the notification.
@@ -77,7 +83,7 @@ else {
     relay.registry.on('update',()=>setTimeout(()=>updater.idle(),0));
     updateMenu();
     win=new BrowserWindow({width:1440,height:1000,minWidth:900,minHeight:680,show:false,title:'Throughline',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences:{preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]}});
-    win.on('focus',()=>{attention=0;app.dock?.setBadge('');});
+    win.on('focus',()=>{attention=0;app.dock?.setBadge('');if(process.platform!=='darwin')win.flashFrame(false);});
     // The window list and the app switcher tell the two copies apart.
     if(development)win.on('page-title-updated',(event,title)=>{event.preventDefault();win.setTitle(`${title} (Development)`);});
     if(!smoke) win.once('ready-to-show',()=>win.show());
@@ -112,7 +118,7 @@ else {
       result.permissions=await win.webContents.executeJavaScript(`['ask','auto'].every(value=>!!document.querySelector('#approval-select option[value="'+value+'"]'))`);
       result.geminiImports=await win.webContents.executeJavaScript(`!!document.querySelector('#import-provider-select option[value="gemini"]')`);
       // The terminal's native module loads in this build and runs a shell, and its renderer loaded under the page's policy.
-      result.terminal=await new Promise(resolve=>{try{prepareHelper();const shell=createRequire(import.meta.url)('node-pty').spawn('/bin/sh',['-c','echo terminal-ok'],{name:'xterm-256color',cols:80,rows:24,cwd:os.tmpdir(),env:{PATH:'/usr/bin:/bin'}});let output='';shell.onData(data=>{output+=data;});shell.onExit(()=>resolve(output.includes('terminal-ok')));setTimeout(()=>resolve(false),5000);}catch(error){console.error(error);resolve(false);}});
+      result.terminal=await new Promise(resolve=>{try{prepareHelper();const shell=createRequire(import.meta.url)('node-pty').spawn(...process.platform==='win32'?[process.env.ComSpec||'cmd.exe',['/d','/c','echo terminal-ok']]:['/bin/sh',['-c','echo terminal-ok']],{name:'xterm-256color',cols:80,rows:24,cwd:os.tmpdir(),env:process.platform==='win32'?process.env:{PATH:'/usr/bin:/bin'}});let output='';shell.onData(data=>{output+=data;});shell.onExit(()=>resolve(output.includes('terminal-ok')));setTimeout(()=>resolve(false),5000);}catch(error){console.error(error);resolve(false);}});
       result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'`);
       // The menu bar is Throughline's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
       const settled=async done=>{for(let tries=0;!done()&&tries<250;tries++)await new Promise(resolve=>setTimeout(resolve,20));return done();};

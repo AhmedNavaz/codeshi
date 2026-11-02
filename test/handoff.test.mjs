@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest } from '../src/context.mjs';
 
@@ -43,7 +44,7 @@ function setup(t, { preferences = { threshold: 90, automatic: false } } = {}) {
   };
 }
 
-test('near its limit, a run is offered a handoff to the agent with room, naming the destination, billing and task', async t => {
+test('near its limit, a run is offered a handoff to the agent with room, naming the destination, billing and task', { skip: scriptCLIs }, async t => {
   const env = setup(t), run = await env.start();
   await env.broker.handoff.check(run);
   const offer = env.c.handoffOffer;
@@ -57,7 +58,7 @@ test('near its limit, a run is offered a handoff to the agent with room, naming 
   assert.equal(env.c.handoffOffer, null, 'The offer ends with its run.');
 });
 
-test('no offer below the threshold, when offers are off, or when every other agent is near or at its limit', async t => {
+test('no offer below the threshold, when offers are off, or when every other agent is near or at its limit', { skip: scriptCLIs }, async t => {
   const env = setup(t), run = await env.start();
   env.usage.codex = 70; await env.broker.handoff.check(run); assert.equal(env.c.handoffOffer, null);
   env.usage.codex = 95; env.settings.threshold = 0; await env.broker.handoff.check(run); assert.equal(env.c.handoffOffer, null, 'Offers can be turned off.');
@@ -66,7 +67,7 @@ test('no offer below the threshold, when offers are off, or when every other age
   env.release(); await run.done;
 });
 
-test('accepting stops the run and the destination continues the task from the shared conversation; the queue carries on afterwards', async t => {
+test('accepting stops the run and the destination continues the task from the shared conversation; the queue carries on afterwards', { skip: scriptCLIs }, async t => {
   const env = setup(t), run = await env.start();
   env.broker.queueAction(env.c, { action: 'add', text: 'Then write the release notes', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
   await env.broker.handoff.check(run);
@@ -81,7 +82,7 @@ test('accepting stops the run and the destination continues the task from the sh
   assert.deepEqual(env.requests().at(-1), ['codex', 'Then write the release notes']);
 });
 
-test('a stale offer is refused before anything starts on the destination, and a fresh offer replaces it', async t => {
+test('a stale offer is refused before anything starts on the destination, and a fresh offer replaces it', { skip: scriptCLIs }, async t => {
   const env = setup(t), run = await env.start();
   await env.broker.handoff.check(run);
   const old = env.c.handoffOffer;
@@ -98,7 +99,7 @@ test('a stale offer is refused before anything starts on the destination, and a 
   assert.equal(env.broker.running.provider, 'claude'); await env.broker.running.done;
 });
 
-test('a destination billed outside a subscription needs its own confirmation, and is never chosen automatically', async t => {
+test('a destination billed outside a subscription needs its own confirmation, and is never chosen automatically', { skip: scriptCLIs }, async t => {
   const env = setup(t, { preferences: { threshold: 90, automatic: true } });
   env.billing.claude = 'api';
   const run = await env.start();
@@ -110,7 +111,7 @@ test('a destination billed outside a subscription needs its own confirmation, an
   assert.equal(env.broker.running.provider, 'claude'); await env.broker.running.done;
 });
 
-test('automatic handoff to a subscription agent switches and says so; Not now holds for the rest of the run', async t => {
+test('automatic handoff to a subscription agent switches and says so; Not now holds for the rest of the run', { skip: scriptCLIs }, async t => {
   const automatic = setup(t, { preferences: { threshold: 90, automatic: true } }), first = await automatic.start();
   await automatic.broker.handoff.check(first);
   await first.done; assert.equal(automatic.broker.running?.provider, 'claude');

@@ -3,16 +3,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { approvalScope } from '../src/approval-rules.mjs';
 import { PermissionRules } from '../src/permission-rules.mjs';
 import { Broker } from '../src/broker.mjs';
 
-const workspaces = ['/work/app', '/work/shared'];
+const workspaces = ['/work/app', '/work/shared'].map(folder => path.resolve(folder));
 const scope = (request, provider = 'claude') => approvalScope(request, { provider, workspaces });
 
 test('a remembered approval covers only the exact command, folder and agent, or the exact file', () => {
   const test1 = scope({ kind: 'Bash', input: { command: 'npm test' } });
-  assert.deepEqual([test1.kind, test1.label, test1.cwd], ['command', 'npm test', '/work/app']);
+  assert.deepEqual([test1.kind, test1.label, test1.cwd], ['command', 'npm test', workspaces[0]]);
   assert.equal(scope({ kind: 'Bash', input: { command: 'npm  test' } }).key, test1.key, 'Spacing does not change the command.');
   assert.notEqual(scope({ kind: 'Bash', input: { command: 'npm test -- --watch' } }).key, test1.key, 'Changed arguments are a different action.');
   assert.notEqual(scope({ kind: 'item/commandExecution/requestApproval', command: 'npm test', cwd: '/work/app' }, 'codex').key, test1.key, 'Rules stay with the agent that was approved.');
@@ -27,7 +28,7 @@ test('a remembered approval covers only the exact command, folder and agent, or 
   assert.equal(scope({ kind: 'item/commandExecution/requestApproval', command: 'ls', cwd: '/tmp' }, 'codex'), null, 'Not from outside the workspace.');
 
   const edit = scope({ kind: 'Edit', input: { file_path: '/work/app/src/app.js' } });
-  assert.deepEqual([edit.kind, edit.label], ['edit', 'Edit src/app.js']);
+  assert.deepEqual([edit.kind, edit.label], ['edit', `Edit ${path.join('src', 'app.js')}`]);
   assert.notEqual(scope({ kind: 'Write', input: { file_path: '/work/app/src/other.js' } }).key, edit.key);
   assert.equal(scope({ kind: 'edit', toolCall: { locations: [{ path: '/work/shared/notes.md' }] } }, 'gemini').label, 'Edit notes.md');
   assert.equal(scope({ kind: 'Edit', input: { file_path: '/etc/hosts' } }), null);
@@ -50,7 +51,7 @@ test('remembered rules are saved per workspace, record their use and can be revo
   reopened.reset(); assert.deepEqual(new PermissionRules(root).list(), []);
 });
 
-test('through real runs, allowing for the run covers repeats in that run only, and remembering for the workspace lasts until revoked', async t => {
+test('through real runs, allowing for the run covers repeats in that run only, and remembering for the workspace lasts until revoked', { skip: scriptCLIs }, async t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-remember-'))), workspace = path.join(root, 'workspace'), outcomes = path.join(root, 'outcomes.jsonl');
   fs.mkdirSync(workspace);
   const cli = path.join(root, 'gemini.mjs');

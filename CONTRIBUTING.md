@@ -62,10 +62,10 @@ npm run test:desktop
 
 ## Reporting bugs
 
-Use the [bug report](https://github.com/AhmedNavaz/throughline/issues/new?template=bug_report.yml) form, or [design feedback](https://github.com/AhmedNavaz/throughline/issues/new?template=ux_feedback.yml) for anything confusing or rough in the interface. Include your Throughline and macOS versions, the agent you used and the steps to reproduce. Please remove anything private from logs and screenshots. For security problems, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+Use the [bug report](https://github.com/AhmedNavaz/throughline/issues/new?template=bug_report.yml) form, or [design feedback](https://github.com/AhmedNavaz/throughline/issues/new?template=ux_feedback.yml) for anything confusing or rough in the interface. Include your Throughline version, your system (macOS or Windows) and its version, the agent you used and the steps to reproduce. Please remove anything private from logs and screenshots. For security problems, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ## Releasing
 
-Maintainers: bump `version` in `package.json`, add a section to [CHANGELOG.md](CHANGELOG.md) and push a matching tag such as `v0.4.1`. GitHub Actions tests and builds both macOS apps, publishes the private-link service image and creates the release.
+Maintainers: bump `version` in `package.json`, add a section to [CHANGELOG.md](CHANGELOG.md) and push a matching tag such as `v0.4.1`. GitHub Actions tests and builds both macOS apps and the Windows app, publishes the private-link service image and creates the release.
 
 The in-app **What’s New** panel reads versioned entries from the bundled changelog. Move completed **Unreleased** entries into the matching release section before packaging; unreleased and newer-version entries are excluded from the panel.

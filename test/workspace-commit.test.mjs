@@ -6,9 +6,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { commitChanges, committer, stageChanges, unstageChanges } from '../src/workspace-commit.mjs';
 import { workspaceGit } from '../src/workspace-git.mjs';
+import { gitExecutable } from '../src/resolve-binary.mjs';
 import { createRelayServer } from '../src/server.mjs';
 
-function git(cwd, ...args) { const result = spawnSync('/usr/bin/git', args, { cwd, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout; }
+function git(cwd, ...args) { const result = spawnSync(gitExecutable(), args, { cwd, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout; }
 // A repository with one commit, its own identity (so a machine without a global one still commits), and a change.
 function repository(t, { commit = true } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-commit-')));

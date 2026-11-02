@@ -48,7 +48,7 @@ function setup(t, { json = release(), sums = `${sha(zipBytes)}  Throughline-0.15
   return { root, calls, options, updater: createUpdater(options) };
 }
 
-test('updates come only from this repository’s releases, for this Mac', () => {
+test('updates come only from this repository’s releases, for this Mac', { skip: process.platform === 'win32' && 'The in-app updater replaces macOS app bundles' }, () => {
   assert.equal(updateBuild({ arch: 'arm64' }), 'apple-silicon');
   assert.equal(updateBuild({ arch: 'x64', translated: true }), 'apple-silicon', 'The Intel build running under Rosetta moves to the Apple Silicon build.');
   assert.equal(updateBuild({ arch: 'x64' }), 'intel');

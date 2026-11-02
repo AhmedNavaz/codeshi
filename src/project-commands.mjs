@@ -114,7 +114,9 @@ export class ProjectCommands {
     };
     try {
       const win = process.platform === 'win32';
-      session.child = this.spawn(win ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh', win ? ['/d', '/s', '/c', config.command] : ['-c', config.command], { cwd, env: commandEnvironment(), detached: !win, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      // Command Prompt reads the command line as written, as Node's own shell option passes it; quoted paths in a command
+      // would otherwise reach it escaped for programs that are not Command Prompt.
+      session.child = this.spawn(win ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh', win ? ['/d', '/s', '/c', `"${config.command}"`] : ['-c', config.command], { cwd, env: commandEnvironment(), detached: !win, windowsHide: true, windowsVerbatimArguments: win, stdio: ['ignore', 'pipe', 'pipe'] });
       for (const stream of ['stdout', 'stderr']) session.child[stream].on('data', chunk => append(session.decoders[stream].write(chunk)));
       session.child.once('spawn', () => { if (session.status === 'starting') session.status = 'running'; });
       session.child.once('error', error => { session.error = error.message; });

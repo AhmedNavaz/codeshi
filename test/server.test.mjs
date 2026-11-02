@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { noSymlinks } from './platform.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { ProjectRegistry } from '../src/projects.mjs';
 
@@ -322,7 +323,7 @@ test('adds multiple projects and keeps their conversations isolated across switc
   }
 });
 
-test('validates project folders and deduplicates canonical paths', async t => {
+test('validates project folders and deduplicates canonical paths', { skip: noSymlinks }, async t => {
   const f = await fixture(t);
   const [first] = await (await fetch(`${f.url}/api/projects`)).json();
   for (const input of [{}, { path: 123 }, { path: 'relative/folder' }, { path: path.join(f.directory, 'missing') }]) {

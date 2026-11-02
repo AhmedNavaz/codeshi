@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -70,7 +71,7 @@ test('unverified runtimes, sign-out, tool requests and incomplete usage never re
     if (config.version || config.signedOut) assert(!client.requests.some(row => row.method === 'session/prompt'));
   }
 });
-test('provider usage caches are isolated by Google profile and explicit refresh reads the native report again', async t => {
+test('provider usage caches are isolated by Google profile and explicit refresh reads the native report again', { skip: scriptCLIs }, async t => {
   const root = folder(t), bin = path.join(root, 'agy_acp_server.par'), script = path.join(root, 'native-fixture.mjs'), capture = path.join(root, 'requests.jsonl');
   fs.writeFileSync(script, `#!${process.execPath}
 import fs from 'node:fs';import readline from 'node:readline';

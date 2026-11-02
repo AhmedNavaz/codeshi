@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { resolveBinary } from '../src/resolve-binary.mjs';
+import { gitExecutable, resolveBinary } from '../src/resolve-binary.mjs';
 import { Broker } from '../src/broker.mjs';
 
 function setup(t) {
@@ -39,7 +39,7 @@ test('explicit overrides win, expand home paths, and do not silently fall back w
   assert.equal(resolveBinary('codex', { ...options, override: 'custom-codex' }), custom);
 });
 
-test('PATH order wins over install fallbacks and skips non-executable files and directories', t => {
+test('PATH order wins over install fallbacks and skips non-executable files and directories', { skip: process.platform === 'win32' && 'Windows files have no execute permission to remove' }, t => {
   const f = setup(t);
   const notExecutable = path.join(f.root, 'non-executable', 'codex');
   f.executable(notExecutable);
@@ -73,20 +73,73 @@ test('Antigravity CLI takes priority over deprecated Gemini CLI and explicit ove
   assert.equal(resolveBinary('gemini', f.options), legacyGemini);
 });
 
-test('Windows CLI discovery splits PATH entries and ignores non-runnable .cmd shims', t => {
+test('Windows CLI discovery splits PATH entries and ignores scripts that start no native program', t => {
   const f = setup(t);
   const codex = f.executable(path.join(f.root, 'windows path', 'codex.exe'));
   const claudeShim = f.executable(path.join(f.root, 'npm bin', 'claude.cmd'));
+  f.executable(path.join(f.root, 'npm bin', 'claude'));
   const options = {
     ...f.options,
     platform: 'win32',
     arch: 'x64',
-    env: { Path: [path.dirname(codex), path.dirname(claudeShim)].join(';') },
+    env: { Path: [path.dirname(codex), `"${path.dirname(claudeShim)}"`].join(';') },
   };
 
   assert.equal(resolveBinary('codex', options), codex);
   assert.equal(resolveBinary('claude', options), null,
-    'npm .cmd shims are not selected because spawning them needs a shell');
+    'a .cmd script is never started through a shell, and npm’s extensionless script is for POSIX shells');
+});
+
+// What npm writes for a CLI on Windows: a native program is started directly, a JavaScript one through node.
+const npmShim = target => /\.js$/.test(target)
+  ? `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${target}" %*\r\n`
+  : `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\${target}"   %*\r\n`;
+
+test('Windows npm installs are followed from their .cmd script to the native program', t => {
+  const f = setup(t);
+  const npm = path.join(f.root, 'AppData', 'Roaming', 'npm');
+  const options = { ...f.options, platform: 'win32', arch: 'x64', env: { PATH: '', APPDATA: path.dirname(npm) } };
+  f.executable(path.join(npm, 'claude.cmd'), npmShim('node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe'));
+  assert.equal(resolveBinary('claude', options), null, 'a script whose program is missing is skipped');
+  const claude = f.executable(path.join(npm, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'));
+  assert.equal(resolveBinary('claude', options), claude);
+
+  // Codex's npm script starts a Node launcher; Throughline starts the native build that launcher would.
+  f.executable(path.join(npm, 'codex.cmd'), npmShim('node_modules\\@openai\\codex\\bin\\codex.js'));
+  f.executable(path.join(npm, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
+  assert.equal(resolveBinary('codex', options), null, 'a JavaScript program is never started through a shell');
+  const hoisted = f.executable(path.join(npm, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'));
+  assert.equal(resolveBinary('codex', options), hoisted);
+  const nested = f.executable(path.join(npm, 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'));
+  assert.equal(resolveBinary('codex', options), nested, 'the build inside Codex’s own folder is the one its launcher uses');
+  assert.equal(resolveBinary('codex', { ...options, arch: 'arm64' }), null, 'a build for another architecture is never used');
+
+  // Another package's JavaScript CLI has no native program to start.
+  f.executable(path.join(npm, 'gemini.cmd'), npmShim('node_modules\\@google\\gemini-cli\\dist\\index.js'));
+  f.executable(path.join(npm, 'node_modules', '@google', 'gemini-cli', 'dist', 'index.js'));
+  assert.equal(resolveBinary('gemini', options), null);
+});
+
+test('an explicitly named command on Windows is found as an .exe or through its .cmd script', t => {
+  const f = setup(t);
+  const npm = path.join(f.root, 'npm');
+  f.executable(path.join(npm, 'my-claude.cmd'), npmShim('node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe'));
+  const claude = f.executable(path.join(npm, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'));
+  const options = { ...f.options, platform: 'win32', arch: 'x64', env: { Path: npm, AI_RELAY_CLAUDE_BIN: 'my-claude' } };
+  assert.equal(resolveBinary('claude', options), claude);
+});
+
+test('Git is started by its full path, never looked up in the working folder', t => {
+  const f = setup(t);
+  const tools = path.join(f.root, 'tools');
+  const git = f.executable(path.join(tools, 'git.exe'));
+  f.executable(path.join(tools, 'git'));
+  assert.equal(gitExecutable({ Path: ['.', tools].join(';') }, 'win32'), git);
+  const programFiles = path.join(f.root, 'Program Files');
+  assert.equal(gitExecutable({ PATH: '', ProgramFiles: programFiles }, 'win32'), path.join(programFiles, 'Git', 'cmd', 'git.exe'), 'a missing Git is reported at its standard location');
+  const installed = f.executable(path.join(programFiles, 'Git', 'cmd', 'git.exe'));
+  assert.equal(gitExecutable({ PATH: '', ProgramFiles: programFiles }, 'win32'), installed, 'Git installed after a failed lookup is found without a restart');
+  if (process.platform !== 'win32') assert.equal(gitExecutable({ PATH: tools }, process.platform), fs.existsSync('/usr/bin/git') ? '/usr/bin/git' : path.join(tools, 'git'));
 });
 
 test('Windows Codex install under LOCALAPPDATA is discovered', t => {
@@ -150,7 +203,7 @@ test('relative and empty PATH entries never discover executables inside the targ
   } finally { process.chdir(previous); }
 });
 
-test('Broker status probes and actual runs use the same selected executable', async t => {
+test('Broker status probes and actual runs use the same selected executable', { skip: process.platform === 'win32' && 'Windows cannot start a script as a stand-in agent CLI' }, async t => {
   const f = setup(t);
   const workspace = path.join(f.root, 'project');
   fs.mkdirSync(workspace);

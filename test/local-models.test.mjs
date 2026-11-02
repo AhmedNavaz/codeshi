@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { localCatalog, localEndpoint, verifyLocalModel } from '../src/local-models.mjs';
 import { runCodex, localCodexConfig, CodexClient } from '../src/providers.mjs';
 import { Broker } from '../src/broker.mjs';
@@ -126,7 +127,7 @@ emit({method:'turn/completed',params:{threadId:'fresh-local',turn:{status:'compl
 }
 const selection = (metadata, requestId = 'local-request') => ({ model, digest, task: 'Continue the project locally.', context: metadata.context, requestId });
 
-test('composer local runs include text snapshots and reject images before accepting a message', async t => {
+test('composer local runs include text snapshots and reject images before accepting a message', { skip: scriptCLIs }, async t => {
   const f = await fixture(t), metadata = (await f.request()).body;
   const text = f.broker.attachments.put({name:'notes.md',data:Buffer.from('Keep this attached context.').toString('base64')});
   assert.equal((await f.request('/start',{...selection(metadata,'with-text'),attachments:[text.id]})).status,202); await f.broker.running.done;
@@ -135,7 +136,7 @@ test('composer local runs include text snapshots and reject images before accept
   assert.equal((await f.request('/start',{...selection(metadata,'with-image'),attachments:[image.id]})).status,400); assert.equal(f.c.messages.length,before);
 });
 
-test('a local handoff uses the journal and leaves cloud settings, effort and native sessions intact across restart/export', async t => {
+test('a local handoff uses the journal and leaves cloud settings, effort and native sessions intact across restart/export', { skip: scriptCLIs }, async t => {
   const f = await fixture(t), metadata = (await f.request()).body, before = { provider: f.c.provider, model: f.c.model, effort: f.c.effort, sessions: structuredClone(f.c.sessions), models: structuredClone(f.c.models) };
   const response = await f.request('/start', selection(metadata)); assert.equal(response.status, 202); await f.broker.running.done;
   assert.equal(f.c.status, 'complete'); assert.equal(f.c.provider, before.provider); assert.equal(f.c.model, before.model); assert.equal(f.c.effort, before.effort);
@@ -168,7 +169,7 @@ test('changed or cloud-routed model metadata fails the local run without launchi
   }
 });
 
-test('Stop cancels a local run and releases its workspace for another run', async t => {
+test('Stop cancels a local run and releases its workspace for another run', { skip: scriptCLIs }, async t => {
   const f = await fixture(t), metadata = (await f.request()).body; f.scenario({ hang: true });
   await f.request('/start', selection(metadata)); const running = f.broker.running;
   // The agent starts in its own process; under a busy full test run that can take more than a few seconds.

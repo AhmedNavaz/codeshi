@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { createGoogleRelay, relayEnvironment } from '../src/google-relay.mjs';
 
 // Opens a CONNECT tunnel through the relay and returns its status line plus a socket for the tunnelled bytes.
@@ -59,7 +60,7 @@ test('the runtime uses the relay unless the user already configured a proxy', ()
   assert.equal(relayEnvironment({ PATH: '/bin' }, null).HTTPS_PROXY, undefined, 'Without a relay the runtime connects directly.');
 });
 
-test('opening the app checks the Google account and its models with one runtime launch, and reuses a signed-in result briefly', async t => {
+test('opening the app checks the Google account and its models with one runtime launch, and reuses a signed-in result briefly', { skip: scriptCLIs }, async t => {
   const { default: fs } = await import('node:fs'), { default: os } = await import('node:os'), { default: path } = await import('node:path');
   const { accountStatus, listModels, closeAccountConnections } = await import('../src/providers.mjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-google-check-')); t.after(() => { closeAccountConnections(); fs.rmSync(root, { recursive: true, force: true }); });

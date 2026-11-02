@@ -5,7 +5,9 @@ import path from 'node:path';
 import { createHash,randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
+import { noSymlinks } from './platform.mjs';
 import { ProjectRegistry } from '../src/projects.mjs';
+import { gitExecutable } from '../src/resolve-binary.mjs';
 import { CollaborationService } from '../src/collaboration.mjs';
 import { atomicJSON } from '../src/patches.mjs';
 import { readWorkspaceFile } from '../src/workspace-files.mjs';
@@ -14,7 +16,7 @@ import { sha256,canonicalStringify,sealPackage,sealSolution,validatePublicPackag
 function setup(t,{git=false}={}) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'ai-relay-collaboration-'));
   const dataRoot=path.join(root,'private');const owner=path.join(root,'owner');const friend=path.join(root,'friend');fs.mkdirSync(owner);fs.mkdirSync(friend);
-  if(git)execFileSync('/usr/bin/git',['init','--quiet'],{cwd:owner});
+  if(git)execFileSync(gitExecutable(),['init','--quiet'],{cwd:owner});
   const registry=new ProjectRegistry({dataRoot,bins:{codex:path.join(root,'missing-codex'),claude:path.join(root,'missing-claude')}});
   const first=registry.add({path:owner});const second=registry.add({path:friend});
   let modelCalls=0;
@@ -59,9 +61,9 @@ test('prepare uses only explicit messages/files and redacts common transcript se
 });
 
 test('full offline dirty/untracked source round trip preserves index, unrelated work, and exact recovery bytes',async t=>{
-  const env=setup(t,{git:true});fs.writeFileSync(path.join(env.owner,'app.js'),'export const value = "staged";\n');execFileSync('/usr/bin/git',['add','app.js'],{cwd:env.owner});
+  const env=setup(t,{git:true});fs.writeFileSync(path.join(env.owner,'app.js'),'export const value = "staged";\n');execFileSync(gitExecutable(),['add','app.js'],{cwd:env.owner});
   const dirty='\ufeffexport const value = "my dirty work";\n';fs.writeFileSync(path.join(env.owner,'app.js'),dirty);fs.chmodSync(path.join(env.owner,'app.js'),0o755);fs.writeFileSync(path.join(env.owner,'untracked.txt'),'untracked original\n');fs.writeFileSync(path.join(env.owner,'unrelated.txt'),'do not touch\n');
-  const indexBefore=execFileSync('/usr/bin/git',['show',':app.js'],{cwd:env.owner,encoding:'utf8'});
+  const indexBefore=execFileSync(gitExecutable(),['show',':app.js'],{cwd:env.owner,encoding:'utf8'});
   const handoff=await request(env,{files:['app.js','untracked.txt'],newPaths:['new/created.txt']});assert.equal(handoff.package.files[0].content,dirty);assert.equal(handoff.package.baseline[2].sha256,null);
   fs.writeFileSync(path.join(env.friend,'app.js'),'export const value = "friend fix";\n');fs.writeFileSync(path.join(env.friend,'untracked.txt'),'untracked fix\n');fs.mkdirSync(path.join(env.friend,'new'));fs.writeFileSync(path.join(env.friend,'new/created.txt'),'new approved file\n');fs.writeFileSync(path.join(env.friend,'keep.txt'),'friend work');
   const imported=await env.service.importRequest(env.second.id,handoff.package);assert.equal(existsContent(env.friend,'keep.txt'),'friend work');assert.equal(existsContent(env.friend,'app.js'),'export const value = "friend fix";\n');
@@ -71,7 +73,7 @@ test('full offline dirty/untracked source round trip preserves index, unrelated 
   const preview=env.service.previewSolution(env.first.id,received.id);assert.equal(preview.status,'applicable');assert(preview.files[0].diff.includes('my dirty work'));assert(preview.files[0].diff.includes('friend fix'));
   await assert.rejects(env.service.applySolution(env.first.id,received.id,{}),/Explicit approval/);
   const applied=await env.service.applySolution(env.first.id,received.id,{approvedIntegrity:solution.integrity});assert.equal(applied.status,'applied');assert.equal(existsContent(env.owner,'new/created.txt'),'new approved file\n');
-  assert.equal(fs.statSync(path.join(env.owner,'app.js')).mode&0o777,0o755);assert.equal(execFileSync('/usr/bin/git',['show',':app.js'],{cwd:env.owner,encoding:'utf8'}),indexBefore);assert.equal(existsContent(env.owner,'unrelated.txt'),'do not touch\n');
+  if(process.platform!=='win32')assert.equal(fs.statSync(path.join(env.owner,'app.js')).mode&0o777,0o755);assert.equal(execFileSync(gitExecutable(),['show',':app.js'],{cwd:env.owner,encoding:'utf8'}),indexBefore);assert.equal(existsContent(env.owner,'unrelated.txt'),'do not touch\n');
   const secondApply=await env.service.applySolution(env.first.id,received.id,{approvedIntegrity:solution.integrity});assert.deepEqual(secondApply,applied);
   const checked=await env.service.verify(env.first.id,received.id,{argv:['node','--check','app.js'],reviewed:true});assert.equal(checked.passed,true);assert.equal(checked.source,'local');
   const recovered=await env.service.recoverApplication(env.first.id,received.id);assert.equal(recovered.status,'recovered');assert.equal(existsContent(env.owner,'app.js'),dirty);assert.equal(existsContent(env.owner,'untracked.txt'),'untracked original\n');assert.equal(existsContent(env.owner,'new/created.txt'),null);assert.equal(existsContent(env.owner,'unrelated.txt'),'do not touch\n');
@@ -84,7 +86,7 @@ test('stale preview approval and stale patch application never overwrite changed
   assert.equal(env.service.previewSolution(env.first.id,solution.id).status,'stale');await assert.rejects(env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity}),{status:409});assert.equal(existsContent(env.owner,'app.js'),'still newer work\n');
 });
 
-test('rejects traversal, private paths, symlinks, binary, oversized files and malformed public schemas',async t=>{
+test('rejects traversal, private paths, symlinks, binary, oversized files and malformed public schemas',{skip:noSymlinks},async t=>{
   const env=setup(t);fs.writeFileSync(path.join(env.owner,'app.js'),'original');
   for(const relative of ['../x','/absolute','a/../../x','a\\x','a//x','.git/config','.env','.env.production','.data/a','.codex/auth.json','.claude/projects/a','key.pem','a/%2e%2e/x','C:/x'])assert.throws(()=>validateRelativePath(relative),{status:400});
   fs.symlinkSync(path.join(env.owner,'app.js'),path.join(env.owner,'link.js'));fs.symlinkSync(env.friend,path.join(env.owner,'outside'));fs.writeFileSync(path.join(env.owner,'binary.bin'),Buffer.from([0,1,2,3]));fs.writeFileSync(path.join(env.owner,'bad-utf8.txt'),Buffer.from([255]));fs.writeFileSync(path.join(env.owner,'big.txt'),'x'.repeat(MAX_FILE_BYTES+1));
@@ -135,15 +137,15 @@ test('verification requires explicit reviewed safe argv and never executes impor
   await assert.rejects(env.service.verify(env.first.id,solution.id,{argv:['node','--check','app.js'],reviewed:false}),/Explicitly review/);const result=await env.service.verify(env.first.id,solution.id,{argv:['node','--check','app.js'],reviewed:true});assert.equal(result.passed,true);assert.equal(env.service.getSolution(env.first.id,solution.id).verification.length,1);
 });
 
-test('symlink introduced after approval is stale, and tampered recovery paths are rejected',async t=>{
+test('symlink introduced after approval is stale, and tampered recovery paths are rejected',{skip:noSymlinks},async t=>{
   const env=setup(t);fs.writeFileSync(path.join(env.owner,'app.js'),'original');const handoff=await request(env);const solution=returned(handoff,[{path:'app.js',baseHash:handoff.package.baseline[0].sha256,content:'friend fix'}]);env.service.receiveSolution(env.first.id,solution);fs.writeFileSync(path.join(env.friend,'outside.js'),'outside original');fs.unlinkSync(path.join(env.owner,'app.js'));fs.symlinkSync(path.join(env.friend,'outside.js'),path.join(env.owner,'app.js'));
   assert.equal(env.service.previewSolution(env.first.id,solution.id).status,'stale');await assert.rejects(env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity}),{status:409});assert.equal(existsContent(env.friend,'outside.js'),'outside original');
   const filename=env.service.patches.filename(env.first.id,solution.id);atomicJSON(filename,{schema:'ai-relay.recovery',version:1,projectId:env.first.id,solutionId:solution.id,operations:[{path:'../outside.js',before:{content:null,sha256:null},after:{content:'bad',sha256:sha256('bad')}}]});await assert.rejects(env.service.recoverApplication(env.first.id,solution.id),{status:400});
 });
 
 test('git whitespace verification disables configured clean and process filters',async t=>{
-  const env=setup(t,{git:true});fs.writeFileSync(path.join(env.owner,'app.js'),'export const n = 1;\n');execFileSync('/usr/bin/git',['add','app.js'],{cwd:env.owner});const handoff=await request(env);const solution=returned(handoff,[]);env.service.receiveSolution(env.first.id,solution);
+  const env=setup(t,{git:true});fs.writeFileSync(path.join(env.owner,'app.js'),'export const n = 1;\n');execFileSync(gitExecutable(),['add','app.js'],{cwd:env.owner});const handoff=await request(env);const solution=returned(handoff,[]);env.service.receiveSolution(env.first.id,solution);
   const sentinel=path.join(env.root,'filter-executed');const script=path.join(env.root,'bad-filter.cjs');fs.writeFileSync(script,'require("node:fs").writeFileSync('+JSON.stringify(sentinel)+',"should never run")');
-  execFileSync('/usr/bin/git',['config','filter.evil.clean',process.execPath+' '+script],{cwd:env.owner});execFileSync('/usr/bin/git',['config','filter.evil.process',process.execPath+' '+script],{cwd:env.owner});fs.writeFileSync(path.join(env.owner,'.gitattributes'),'app.js filter=evil\n');fs.writeFileSync(path.join(env.owner,'app.js'),'export const n = 2;  \n');
+  execFileSync(gitExecutable(),['config','filter.evil.clean',process.execPath+' '+script],{cwd:env.owner});execFileSync(gitExecutable(),['config','filter.evil.process',process.execPath+' '+script],{cwd:env.owner});fs.writeFileSync(path.join(env.owner,'.gitattributes'),'app.js filter=evil\n');fs.writeFileSync(path.join(env.owner,'app.js'),'export const n = 2;  \n');
   const result=await env.service.verify(env.first.id,solution.id,{argv:['git','diff','--check'],reviewed:true});assert.equal(result.passed,false);assert.equal(fs.existsSync(sentinel),false);assert.match(result.stdout+result.stderr,/trailing whitespace/);
 });

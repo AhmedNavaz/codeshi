@@ -33,8 +33,8 @@ body:
   - type: input
     id: system
     attributes:
-      label: macOS version and Mac
-      placeholder: "macOS 26.1, Apple Silicon"
+      label: System and computer
+      placeholder: "macOS 26.1, Apple Silicon or Windows 11, x64"
   - type: dropdown
     id: agent
     attributes:

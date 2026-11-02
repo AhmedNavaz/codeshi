@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { ProjectRegistry } from '../src/projects.mjs';
 import { MutationCoordinator, acquireProjectLock, withFileGuard } from '../src/mutation-lock.mjs';
@@ -62,7 +63,7 @@ function setup(t) {
   t.after(async () => { for (const item of instances) await item.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, workspace, bins, broker, registry };
 }
-test('validation is atomic, long history is bounded, and request IDs deduplicate accepted runs across restart', async t => {
+test('validation is atomic, long history is bounded, and request IDs deduplicate accepted runs across restart', { skip: scriptCLIs }, async t => {
   const f = setup(t); let broker = f.broker(); let c = broker.get(broker.create().id);
   const before = fs.readFileSync(path.join(f.root, 'history', `${c.id}.jsonl`), 'utf8');
   assert.throws(() => broker.start(c, { text: '🧠'.repeat(50000), requestId: 'oversize' }), { status: 400 });
@@ -204,7 +205,7 @@ test('a lease that a full disk keeps from being saved leaves nothing behind to b
   assert.throws(() => fullDisk(coordinator.root, () => coordinator.acquire(one, 'patch')), { code: 'ENOSPC' });
   coordinator.acquire(two, 'patch').release();
   const lease = coordinator.acquire(one, 'provider:codex');
-  assert.equal(fs.statSync(path.join(coordinator.root, `${lease.id}.json`)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(coordinator.root, `${lease.id}.json`)).mode & 0o777, 0o600);
   assert.throws(() => fullDisk(coordinator.root, () => lease.setProcess(process.pid)), { code: 'ENOSPC' });
   // The lease as saved before the update still holds its folder.
   assert.throws(() => coordinator.acquire(one, 'patch'), /Project files are busy/);
@@ -278,7 +279,7 @@ test('error categories distinguish unavailable account causes', () => {
   assert.equal(classifyError('invalid JSON protocol'), 'protocol');
 });
 
-test('Broker GUI approval traverses its worker and actual Codex JSON-RPC adapter before execution', async t => {
+test('Broker GUI approval traverses its worker and actual Codex JSON-RPC adapter before execution', { skip: scriptCLIs }, async t => {
   const f = setup(t); const log = path.join(f.root, 'rpc.jsonl');
   fs.writeFileSync(f.bins.codex, `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';
 if(process.argv.includes('--version')){console.log('approval-fixture 1');process.exit(0);}
@@ -309,7 +310,7 @@ if(message.id===77&&message.result){send({method:'item/completed',params:{thread
   assert.deepEqual(messages.find(message => message.id === 77).result, { decision: 'accept' });
 });
 
-test('a long final Codex answer reaches the broker before its worker exits', async t => {
+test('a long final Codex answer reaches the broker before its worker exits', { skip: scriptCLIs }, async t => {
   const f = setup(t);
   // The final item is far larger than a pipe buffer, so its IPC write is still pending when the turn ends.
   fs.writeFileSync(f.bins.codex, `#!${process.execPath}\nimport readline from 'node:readline';
@@ -328,7 +329,7 @@ if(message.method==='turn/start'){send({id:message.id,result:{turn:{id:'long-tur
   assert.equal(c.messages.find(m => m.runId === runId && m.role === 'assistant')?.text.length, 262144);
 });
 
-test('the CLI worker forwards all provider output to a slow reader before it exits', async t => {
+test('the CLI worker forwards all provider output to a slow reader before it exits', { skip: scriptCLIs }, async t => {
   const f = setup(t), bin = path.join(f.root, 'large-output.mjs');
   fs.writeFileSync(bin, `#!${process.execPath}\nprocess.stdout.write('x'.repeat(1048576));\n`, { mode: 0o700 });
   const worker = fork(fileURLToPath(new URL('../src/provider-worker.mjs', import.meta.url)), [], { silent: true });
@@ -351,7 +352,7 @@ test('Claude native rate-limit metadata distinguishes warnings from quota reject
   assert.match(error.text, /5-hour window\. It resets /); assert.doesNotMatch(error.text, /[{}"]/, 'The notice is readable text, not raw provider JSON.');
 });
 
-test('fresh Codex CLI reconstruction retains non-Git opt-in and installed process guards', async t => {
+test('fresh Codex CLI reconstruction retains non-Git opt-in and installed process guards', { skip: scriptCLIs }, async t => {
   const f = setup(t); const broker = f.broker(); const c = broker.get(broker.create().id);
   broker.start(c, { text: 'Initial', provider: 'codex' }); await broker.running.done;
   broker.start(c, { text: 'Reconstruct', provider: 'codex', fresh: true }); await broker.running.done;
@@ -359,14 +360,14 @@ test('fresh Codex CLI reconstruction retains non-Git opt-in and installed proces
   assert.equal(captures.at(-1).args.includes('resume'), false);
   assert.equal(captures.at(-1).args.includes('--skip-git-repo-check'), true);
 });
-test('invalid Codex JSON-RPC fails before later valid responses can hide dropped events', async t => {
+test('invalid Codex JSON-RPC fails before later valid responses can hide dropped events', { skip: scriptCLIs }, async t => {
   const f = setup(t); const executable = path.join(f.root, 'malformed.mjs');
   fs.writeFileSync(executable, `#!${process.execPath}\nimport readline from 'node:readline';readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);console.log('invalid-json-protocol');console.log(JSON.stringify({id:m.id,result:{}}));});\n`, { mode: 0o700 });
   const client = new CodexClient({ bin: executable, cwd: f.workspace });
   try { await assert.rejects(client.initialize(), /protocol/); } finally { client.close(); }
 });
 
-test('Broker full auto-approval handles Codex tool requests without manual clicks and logs activity', async t => {
+test('Broker full auto-approval handles Codex tool requests without manual clicks and logs activity', { skip: scriptCLIs }, async t => {
   const f = setup(t); const log = path.join(f.root, 'rpc-auto.jsonl');
   fs.writeFileSync(f.bins.codex, `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';
 if(process.argv.includes('--version')){console.log('auto-approval-fixture 1');process.exit(0);}
@@ -409,7 +410,7 @@ test('Claude official SDK routes tool approvals to approval handler', async () =
   assert.equal(approvals, 1);
 });
 
-test('changing preference during a run preserves in-flight policy and existing pending requests', async t => {
+test('changing preference during a run preserves in-flight policy and existing pending requests', { skip: scriptCLIs }, async t => {
   const f = setup(t); const log = path.join(f.root, 'rpc-pending.jsonl');
   fs.writeFileSync(f.bins.codex, `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';
 if(process.argv.includes('--version')){console.log('pending-retention-fixture 1');process.exit(0);}
@@ -448,7 +449,7 @@ if(message.id===55&&message.result){send({method:'item/completed',params:{thread
   assert.equal(c.approvalPolicy, 'auto');
 });
 
-test('auto-approved run cancellation cleanly interrupts child and releases mutation lease', async t => {
+test('auto-approved run cancellation cleanly interrupts child and releases mutation lease', { skip: scriptCLIs }, async t => {
   const f = setup(t);
   fs.writeFileSync(f.bins.codex, `#!${process.execPath}\nimport readline from 'node:readline';
 if(process.argv.includes('--version')){console.log('cancel-fixture 1');process.exit(0);}

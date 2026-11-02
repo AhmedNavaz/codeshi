@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { Broker, commandFor } from '../src/broker.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
@@ -61,7 +62,7 @@ async function untilUpdate(broker, predicate) {
   });
 }
 
-test('cross-agent switches rebuild from shared history; same-agent turns resume only the current native session', async t => {
+test('cross-agent switches rebuild from shared history; same-agent turns resume only the current native session', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   let broker = env.open();
   let c = conversation(broker);
@@ -112,7 +113,7 @@ test('cross-agent switches rebuild from shared history; same-agent turns resume 
   assert.equal('sessions' in broker.view(c), false);
 });
 
-test('quota failure retains partial text and tool activity without committing its cursor', async t => {
+test('quota failure retains partial text and tool activity without committing its cursor', { skip: scriptCLIs }, async t => {
   const env = setup(t, { 'Hit the limit': { behavior: 'quota', text: 'I changed the first file, then stopped' } });
   const broker = env.open();
   const c = conversation(broker);
@@ -132,7 +133,7 @@ test('quota failure retains partial text and tool activity without committing it
   assert.ok(shared.some(m => m.role === 'activity' && m.text.includes('project inspection retained')));
 });
 
-test('restart recovers an unfinished run and repairs a torn final journal line', async t => {
+test('restart recovers an unfinished run and repairs a torn final journal line', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   const broker = env.open();
   const c = conversation(broker);
@@ -229,7 +230,7 @@ test('restart recovers a run whose process group ID belongs to a process that st
   assert.throws(() => restart(record => ({ ...record, at: new Date(Date.now() - 60 * 60 * 1000).toISOString() })), { status: 409, message: /previous run may still be active/ });
 });
 
-test('rejects concurrent turns and preserves partial output when cancelled', async t => {
+test('rejects concurrent turns and preserves partial output when cancelled', { skip: scriptCLIs }, async t => {
   const env = setup(t, { 'Keep working': { behavior: 'hang', text: 'Partial work before cancellation' } });
   const broker = env.open();
   const c = conversation(broker);
@@ -259,7 +260,7 @@ test('rejects concurrent turns and preserves partial output when cancelled', asy
   assert.equal(other.status, 'complete');
 });
 
-test('a run ended for an oversized provider event reports that, not a Stop', async t => {
+test('a run ended for an oversized provider event reports that, not a Stop', { skip: scriptCLIs }, async t => {
   const env = setup(t, { 'Send a huge event': { text: 'x'.repeat(9 * 1024 * 1024) } });
   const broker = env.open();
   const c = conversation(broker);
@@ -271,7 +272,7 @@ test('a run ended for an oversized provider event reports that, not a Stop', asy
   assert.doesNotMatch(errors[0], /JSON/, 'The cut-off rest of the event is not parsed.');
 });
 
-test('a run ended after a provider message could not be handled reports that failure, even if Stop follows', async t => {
+test('a run ended after a provider message could not be handled reports that failure, even if Stop follows', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   fs.writeFileSync(env.bins.codex, `#!${process.execPath}\nimport readline from 'node:readline';
 if(process.argv.includes('--version')){console.log('handler-fixture 1');process.exit(0);}
@@ -302,7 +303,7 @@ if(message.method==='turn/start'){send({id:message.id,result:{turn:{id:'handler-
   assert.deepEqual(c.messages.filter(m => m.role === 'error').map(m => m.text.split('\n')[0]), ['Could not save the answer.']);
 });
 
-test('requires both a successful terminal event and a successful process exit', async t => {
+test('requires both a successful terminal event and a successful process exit', { skip: scriptCLIs }, async t => {
   const env = setup(t, {
     'Missing terminal event': { behavior: 'no-terminal' },
     'Terminal but bad exit': { behavior: 'bad-exit' },
@@ -321,7 +322,7 @@ test('requires both a successful terminal event and a successful process exit', 
   assert.ok(c.messages.some(m => m.role === 'error' && /needs approval/.test(m.text)));
 });
 
-test('a recovered Codex connection diagnostic does not fail a completed turn', async t => {
+test('a recovered Codex connection diagnostic does not fail a completed turn', { skip: scriptCLIs }, async t => {
   const env = setup(t, { 'Recover the connection': { behavior: 'reconnect' } });
   const broker = env.open();
   const c = conversation(broker);
@@ -333,7 +334,7 @@ test('a recovered Codex connection diagnostic does not fail a completed turn', a
   assert.ok(c.messages.some(m => m.role === 'assistant' && m.status === 'complete'));
 });
 
-test('fresh sessions replay shared history and omit native resume flags', async t => {
+test('fresh sessions replay shared history and omit native resume flags', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   const broker = env.open();
   const c = conversation(broker);
@@ -397,7 +398,7 @@ test('approval policy enforces permission scope, rejects incompatible read-only 
   assert.equal(restored.approvalPolicy, 'auto');
 });
 
-test('quota handoff to Gemini and back to either cloud agent rebuilds intent from the canonical journal', async t => {
+test('quota handoff to Gemini and back to either cloud agent rebuilds intent from the canonical journal', { skip: scriptCLIs }, async t => {
   const env = setup(t, { 'Quota stop': { behavior: 'quota' } });
   const gemini = path.join(path.dirname(env.workspace), 'gemini-acp.mjs');
   fs.writeFileSync(gemini, `#!${process.execPath}

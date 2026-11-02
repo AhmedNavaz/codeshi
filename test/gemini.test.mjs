@@ -5,6 +5,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
+import { scriptCLIs, noSymlinks } from './platform.mjs';
 import { GeminiClient, geminiInvocation, runGemini } from '../src/gemini.mjs';
 import { Broker } from '../src/broker.mjs';
 import { accountStatus, listModels, providerUsage } from '../src/providers.mjs';
@@ -81,7 +82,7 @@ test('Gemini rejects read-only writes, denied approvals and persistent-only perm
   }
 });
 
-test('Gemini filesystem proxy rejects outside paths and symlinks and rechecks file contents after approval', async t => {
+test('Gemini filesystem proxy rejects outside paths and symlinks and rechecks file contents after approval', { skip: noSymlinks }, async t => {
   const root = folder(t), workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
   fs.writeFileSync(path.join(workspace, 'file.txt'), 'original'); fs.writeFileSync(path.join(root, 'outside.txt'), 'private');
   fs.symlinkSync(path.join(root, 'outside.txt'), path.join(workspace, 'link.txt'));
@@ -113,7 +114,7 @@ test('Gemini JSON-RPC client rejects malformed output and clears pending request
   await assert.rejects(pending, /Invalid Gemini protocol/); assert(client.closed); assert.equal(client.pending.size, 0);
 });
 
-test('Gemini worker completes canonical handoffs, preserves other sessions and model choices, and releases the workspace after Stop', async t => {
+test('Gemini worker completes canonical handoffs, preserves other sessions and model choices, and releases the workspace after Stop', { skip: scriptCLIs }, async t => {
   const root = folder(t), workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
   const cli = path.join(root, 'gemini.mjs'), capture = path.join(root, 'capture.jsonl');
   fs.writeFileSync(cli, `#!${process.execPath}
@@ -145,7 +146,7 @@ if(m.method==='session/prompt'){if(m.params.prompt[0].text.includes('HANG-FIXTUR
   const account = await accountStatus('gemini', { bin: cli, workspace }); assert.equal(account.installed, true); assert.equal(account.authenticated, 'unknown');
 });
 
-test('Antigravity cannot infer authentication or billing and cannot start a run without an approval protocol', async t => {
+test('Antigravity cannot infer authentication or billing and cannot start a run without an approval protocol', { skip: scriptCLIs }, async t => {
   const root = folder(t), bin = path.join(root, 'agy'), captures = path.join(root, 'commands.jsonl');
   fs.writeFileSync(bin, `#!${process.execPath}
 import fs from 'node:fs';

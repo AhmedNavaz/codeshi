@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,7 +31,7 @@ async function waitFor(filename) {
   assert.fail('Fake CLI did not start');
 }
 for (const [route, stage] of [['/api/providers/claude/account', 'version'], ['/api/providers/claude/account', 'auth'], ['/api/status', 'version']]) {
-  test(`${route} keeps HTTP responsive during ${stage}`, async t => {
+  test(`${route} keeps HTTP responsive during ${stage}`, { skip: scriptCLIs }, async t => {
     const f = fixture(t, { stage, keep: true });
     const child = fork(new URL('./fixtures/status-server.mjs', import.meta.url), [], { env: { ...process.env, TEST_ROOT: f.root, AI_RELAY_CLAUDE_BIN: f.bin, AI_RELAY_CODEX_BIN: f.bin }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     t.after(async () => {
@@ -58,7 +59,7 @@ for (const [route, stage] of [['/api/providers/claude/account', 'version'], ['/a
     }
   });
 }
-test('account probe preserves version, authentication and malformed/error results', async t => {
+test('account probe preserves version, authentication and malformed/error results', { skip: scriptCLIs }, async t => {
   const good = fixture(t);
   const result = await accountStatus('claude', { bin: good.bin });
   assert.equal(result.version, 'fake 1.0'); assert.equal(result.authenticated, true); assert.equal(result.billingSource, 'subscription');
@@ -70,7 +71,7 @@ test('account probe preserves version, authentication and malformed/error result
 });
 
 for (const stage of ['version', 'auth']) {
-  test(`account ${stage} timeout kills the child and reports a timeout, not a missing CLI`, async t => {
+  test(`account ${stage} timeout kills the child and reports a timeout, not a missing CLI`, { skip: scriptCLIs }, async t => {
     const f = fixture(t, { stage, wait: 15000 });
     const pending = accountStatus('claude', { bin: f.bin });
     await waitFor(f.root + '/started');
@@ -80,7 +81,7 @@ for (const stage of ['version', 'auth']) {
     assert.equal(result.installed, true); assert.equal(result.authenticated, 'unknown'); assert.equal(result.errorCategory, 'timeout');
   });
 }
-test('status checks never report a slow CLI as missing or make the conversation wait for it', async t => {
+test('status checks never report a slow CLI as missing or make the conversation wait for it', { skip: scriptCLIs }, async t => {
   const broker = bin => { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-status-')), value = new Broker({ workspace: root, dataDir: path.join(root, 'data'), bins: { claude: bin, codex: bin } }); t.after(async () => { await value.close(); fs.rmSync(root, { recursive: true, force: true }); }); return value; };
   const slow = fixture(t, { stage: 'version', wait: 15000 }), steady = fixture(t, { stage: 'version', wait: 15000 });
   fs.writeFileSync(steady.root + '/release', '');
@@ -96,7 +97,7 @@ test('status checks never report a slow CLI as missing or make the conversation 
   const kept = (await known.status()).providers.claude;
   assert.equal(kept.available, true); assert.equal(kept.version, 'fake 1.0', 'A timed-out recheck keeps the last known result.'); assert.equal(kept.errorCategory, undefined);
 });
-test('Claude auth nonzero output keeps the existing parse behavior', async t => {
+test('Claude auth nonzero output keeps the existing parse behavior', { skip: scriptCLIs }, async t => {
   const f = fixture(t, { authCode: 1, output: '{"loggedIn":false,"authMethod":"api_key"}' });
   const result = await accountStatus('claude', { bin: f.bin });
   assert.equal(result.installed, true); assert.equal(result.authenticated, false); assert.equal(result.billingSource, 'api');

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { runCodex, runClaude } from '../src/providers.mjs';
 import { runGemini } from '../src/gemini.mjs';
 import { Broker } from '../src/broker.mjs';
@@ -115,7 +116,7 @@ test('Gemini takes a note by stopping its prompt and continuing the same session
 });
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
-test('the broker records a note added to the run inside that run, queues it first when the run cannot take it, and keeps the plan', async t => {
+test('the broker records a note added to the run inside that run, queues it first when the run cannot take it, and keeps the plan', { skip: scriptCLIs }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-steer-')), workspace = path.join(root, 'workspace');
   fs.mkdirSync(workspace);
   fs.writeFileSync(path.join(workspace, '.mock-scenarios.json'), JSON.stringify({ 'Hold the workspace': { behavior: 'hold' } }));

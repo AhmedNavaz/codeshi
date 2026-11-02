@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { scriptCLIs, noSymlinks } from './platform.mjs';
 import { ProjectRegistry } from '../src/projects.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
@@ -48,7 +49,7 @@ async function untilUpdate(registry, predicate) {
   });
 }
 
-test('projects persist with stable realpath IDs and deduplicate symlinks without losing names', async t => {
+test('projects persist with stable realpath IDs and deduplicate symlinks without losing names', { skip: noSymlinks }, async t => {
   const env = setup(t);
   const registry = env.open();
   const workspace = fs.realpathSync(env.workspaces[0]);
@@ -272,7 +273,7 @@ test('a lock left by a crash is replaced once its process ID belongs to a proces
   assert.equal(env.open().broker(project.id).list().length, 1);
 });
 
-test('projects can run independently and registry close stops every run before releasing locks', async t => {
+test('projects can run independently and registry close stops every run before releasing locks', { skip: scriptCLIs }, async t => {
   const env = setup(t, { 'Keep working': { behavior: 'hang', text: 'Partial work before closing' } });
   const registry = env.open();
   const projects = env.workspaces.map(workspace => registry.add({ path: workspace }));

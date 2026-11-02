@@ -56,6 +56,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Each run as a timeline of its steps, with one live status line | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
 | Stage and commit from the Git panel, with your own identity and the project's commit hooks ([#6](https://github.com/AhmedNavaz/throughline/issues/6)) | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
 | A terminal for each workspace in a bottom panel, kept running while hidden ([#7](https://github.com/AhmedNavaz/throughline/issues/7)) | [0.15.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0) |
+| Windows (64-bit) builds with a one-line PowerShell install, checked against published checksums ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) | Next release |
 
 ## Now
 
@@ -70,7 +71,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Feature | Status | Issue |
 | --- | --- | --- |
 | Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) as **Routing**; escalation after failed checks and subtask coordination are next; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/throughline/issues/12) |
-| Windows and Linux builds | Planned, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
+| Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/throughline/issues/9) |
 | Run the project's own tests on a returned patch, with approval | Planned | [#10](https://github.com/AhmedNavaz/throughline/issues/10) |
 

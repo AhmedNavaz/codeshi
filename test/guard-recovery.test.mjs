@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import test from 'node:test';
+import { noSymlinks } from './platform.mjs';
 import { withFileGuard, processStart, ABANDONED_EMPTY_GUARD_MS } from '../src/mutation-lock.mjs';
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-guard-test-'));
@@ -49,7 +50,7 @@ test('a lost recovery claim retries macOS rename races without hiding other rena
   for(const disappeared of [true,false]) {
     const {filename}=fixture(t),child=await holder(t,filename),exited=once(child,'exit');child.kill('SIGKILL');await exited;
     const rename=fs.renameSync;let injected=false;
-    fs.renameSync=(source,destination)=>{if(!injected&&String(source).includes(filename+'.guard/owner-')){injected=true;if(disappeared){fs.unlinkSync(source);fs.rmdirSync(filename+'.guard');}throw Object.assign(new Error('Directory changed during rename'),{code:'EINVAL'});}return rename.call(fs,source,destination);};
+    fs.renameSync=(source,destination)=>{if(!injected&&String(source).includes(path.join(filename+'.guard','owner-'))){injected=true;if(disappeared){fs.unlinkSync(source);fs.rmdirSync(filename+'.guard');}throw Object.assign(new Error('Directory changed during rename'),{code:'EINVAL'});}return rename.call(fs,source,destination);};
     try {if(disappeared)withFileGuard(filename,()=>{});else assert.throws(()=>withFileGuard(filename,()=>assert.fail()),{code:'EINVAL'});}finally{fs.renameSync=rename;}
     assert(injected);if(!disappeared){assert(fs.existsSync(filename+'.guard'));withFileGuard(filename,()=>{});}assert(!fs.existsSync(filename+'.guard'));
   }
@@ -69,7 +70,7 @@ test('a guard never exists without its owner, and an empty one left by an earlie
   const old = new Date(Date.now() - 120000); fs.utimesSync(stale, old, old);
   withFileGuard(filename, () => {}); assert(!fs.existsSync(stale));
 });
-test('guard symlinks never redirect automatic recovery into another folder', t => {
+test('guard symlinks never redirect automatic recovery into another folder', { skip: noSymlinks }, t => {
   const { root, filename } = fixture(t), target = path.join(root, 'target'); fs.mkdirSync(target); fs.writeFileSync(path.join(target, 'keep'), 'preserve'); fs.symlinkSync(target, filename + '.guard');
   assert.throws(() => withFileGuard(filename, () => assert.fail()), { status: 409 }); assert.equal(fs.readFileSync(path.join(target, 'keep'), 'utf8'), 'preserve'); assert(fs.lstatSync(filename + '.guard').isSymbolicLink());
 });
@@ -82,7 +83,7 @@ test('a reused process ID is distinguished from the guard’s recorded process s
 });
 test('failed ownership writes and callback errors release the guard', t => {
   const { filename } = fixture(t), original = fs.writeFileSync;
-  fs.writeFileSync = function (file, ...args) { if (String(file).includes(filename + '.guard.new-') && String(file).includes('/owner-')) throw Object.assign(new Error('Full disk'), { code: 'ENOSPC' }); return original.call(fs, file, ...args); };
+  fs.writeFileSync = function (file, ...args) { if (String(file).includes(filename + '.guard.new-') && String(file).includes(path.sep + 'owner-')) throw Object.assign(new Error('Full disk'), { code: 'ENOSPC' }); return original.call(fs, file, ...args); };
   try { assert.throws(() => withFileGuard(filename, () => assert.fail()), { code: 'ENOSPC' }); } finally { fs.writeFileSync = original; }
   assert(!fs.existsSync(filename + '.guard')); assert.deepEqual(fs.readdirSync(path.dirname(filename)).filter(name => name.includes('.guard')), [], 'No staging folder is left behind.');
   assert.throws(() => withFileGuard(filename, () => { throw new Error('Transaction failed'); }), /Transaction failed/);

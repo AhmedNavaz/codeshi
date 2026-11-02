@@ -47,6 +47,40 @@ jobs:
           path: Throughline-*.zip
           if-no-files-found: error
 
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check the tag matches package.json
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - run: npm ci
+      - run: npm test
+      - run: npm run package
+      - name: Smoke test the packaged app
+        run: |
+          AI_RELAY_DESKTOP_DATA="$RUNNER_TEMP/profile" AI_RELAY_LEGACY_DATA_DIR="$RUNNER_TEMP/none" dist/Throughline-win32-x64/Throughline.exe --smoke-test | tee "$RUNNER_TEMP/smoke.log"
+          grep -q AI_RELAY_DESKTOP_SMOKE "$RUNNER_TEMP/smoke.log"
+      # The zip holds one Throughline folder, which the installer copies into place.
+      - name: Zip the app
+        shell: pwsh
+        run: |
+          Rename-Item dist/Throughline-win32-x64 Throughline
+          Compress-Archive -Path dist/Throughline -DestinationPath "Throughline-$($env:GITHUB_REF_NAME.Substring(1))-windows-x64.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          path: Throughline-*.zip
+          if-no-files-found: error
+
   sharing-image:
     name: Private-link service image
     runs-on: ubuntu-latest
@@ -93,7 +127,7 @@ jobs:
 
   release:
     name: Publish the release
-    needs: [desktop, sharing-image]
+    needs: [desktop, windows, sharing-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -103,6 +137,11 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: mac-*
+          path: release-files
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: windows-*
           path: release-files
           merge-multiple: true
       - name: Create the release
@@ -115,6 +154,8 @@ jobs:
           test -s changes.md
           {
             echo "## Install"
+            echo
+            echo "### macOS"
             echo
             echo "Run this in Terminal. It picks the right build for your Mac, verifies its checksum and installs it in Applications:"
             echo
@@ -132,6 +173,16 @@ jobs:
             echo "Unzip, move **Throughline** to Applications and open it. Use your own configured Claude Code or Codex CLI connection, or connect Gemini through Google Antigravity in Settings (Install Google connection, then Connect account). Local continuation needs Codex CLI, Ollama and a downloaded tool-capable model. See the setup guide in the repository for authentication and billing details."
             echo
             echo "The app is not notarized by Apple yet, so the first time you open a browser download macOS says it cannot verify the developer. Open **System Settings › Privacy & Security** and click **Open Anyway**. You only need to do this once. If macOS instead says the app is damaged, run \`xattr -cr /Applications/Throughline.app\` and open it again."
+            echo
+            echo "### Windows"
+            echo
+            echo "Run this in PowerShell. It downloads the Windows build, verifies its checksum, installs it for your user account and adds it to the Start menu:"
+            echo
+            echo '```powershell'
+            echo "irm https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.ps1 | iex"
+            echo '```'
+            echo
+            echo "Or download \`Throughline-$version-windows-x64.zip\`, unzip it and open **Throughline.exe** in the **Throughline** folder. The app is not signed yet, so the first time you open a browser download Windows may say it protected your PC: click **More info**, then **Run anyway**. On Windows, connect Claude Code or the Codex CLI; installing the Google connection from Settings is not available on Windows yet. Updates install from inside the app on macOS; on Windows, run the installer again."
             echo
             echo "The private-link service for Ask a Friend is published as a container image: \`docker pull ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/throughline-sharing:$version\`"
             echo

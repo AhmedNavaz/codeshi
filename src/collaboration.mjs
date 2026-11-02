@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { gitExecutable } from './resolve-binary.mjs';
 import { canonicalStringify, sealPackage, sealSolution, validatePublicPackage, validateSolution, scanSecrets, redactPublicText, validateRelativePath, invalid, PATCH_FORMAT } from './collaboration-format.mjs';
 import { captureSelectedFiles, compareBaseline, readWorkspaceFile, safeWorkspacePath } from './workspace-files.mjs';
 import { currentWorkspace, workspaceSnapshot, restrictWorkspace, importedWorkspace } from './workspace-layout.mjs';
@@ -153,10 +154,10 @@ export class CollaborationService {
     const syntax=argv.length===3&&argv[0]==='node'&&argv[1]==='--check'&&/\.(?:mjs|cjs|js)$/i.test(argv[2]);
     const whitespace=argv.length===3&&argv[0]==='git'&&argv[1]==='diff'&&argv[2]==='--check';
     if(!syntax&&!whitespace)throw invalid('Supported zero-AI verification: node --check relative-file.js or git diff --check. Arbitrary imported commands and scripts are not executed.');
-    const executable=syntax?process.execPath:process.platform==='win32'?null:'/usr/bin/git';
+    const executable=syntax?process.execPath:gitExecutable();
     if(!executable||!fs.existsSync(executable))throw invalid('This verification executable is unavailable.',503);
     return this.registry.withMutation(projectId,'local-verification',async()=>{
-      const startedAt=new Date().toISOString(),env={PATH:'/usr/bin:/bin:/usr/sbin:/sbin',LANG:'C.UTF-8',NODE_OPTIONS:'',ELECTRON_RUN_AS_NODE:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'};
+      const startedAt=new Date().toISOString(),env={PATH:process.platform==='win32'?path.dirname(executable):'/usr/bin:/bin:/usr/sbin:/sbin',...process.platform==='win32'?{SystemRoot:process.env.SystemRoot}:{},LANG:'C.UTF-8',NODE_OPTIONS:'',ELECTRON_RUN_AS_NODE:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'};
       const targets=syntax?[{file:safeWorkspacePath(workspace,argv[2])}]:workspace.folders.map(folder=>({folder}));
       const results=[];
       for(const target of targets){

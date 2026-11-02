@@ -14,9 +14,44 @@ function executable(filename) {
   } catch { return false; }
 }
 
-function firstExecutable(candidates) {
-  return candidates.find(filename => path.isAbsolute(filename) && executable(filename)) || null;
+// npm and pnpm install a CLI on Windows as a .cmd script, which Node cannot start without a shell, and a shell would
+// reinterpret the arguments. The script names the program it starts: a native executable, such as Claude Code's, is
+// used directly, and Codex's Node launcher is followed to the native executable it would start.
+const codexTargets = { x64: 'x86_64-pc-windows-msvc', arm64: 'aarch64-pc-windows-msvc' };
+export function windowsShimTarget(filename, arch = process.arch) {
+  let text;
+  try { if (fs.statSync(filename).size > 64 * 1024) return null; text = fs.readFileSync(filename, 'utf8'); } catch { return null; }
+  // The last quoted %dp0% path is the program; an earlier one can be a node.exe kept beside the script.
+  const target = [...text.matchAll(/"%(?:~dp0|dp0%)\\([^"%]+)"/g)].at(-1)?.[1];
+  if (!target) return null;
+  const program = path.join(path.dirname(filename), ...target.split('\\'));
+  if (/\.exe$/i.test(program)) return executable(program) ? program : null;
+  const triple = codexTargets[arch];
+  if (!/[\\/]@openai[\\/]codex[\\/]bin[\\/]codex\.js$/i.test(program) || !triple) return null;
+  // The native build is a package of its own: inside Codex's folder (npm), beside it (npm, or pnpm's linked store), or
+  // in Codex's own vendor folder (earlier versions).
+  let codex = path.dirname(path.dirname(program));
+  try { codex = fs.realpathSync(codex); } catch { /* Checked as written. */ }
+  const vendors = [path.join(codex, 'node_modules', '@openai', `codex-win32-${arch}`), path.join(path.dirname(codex), `codex-win32-${arch}`), codex].map(folder => path.join(folder, 'vendor', triple));
+  return vendors.flatMap(vendor => ['bin', 'codex'].map(folder => path.join(vendor, folder, 'codex.exe'))).find(executable) || null;
 }
+
+// Windows starts programs from .exe files; a .cmd script is followed to the program it starts.
+function runnable(filename, platform, arch) {
+  if (!path.isAbsolute(filename) || !executable(filename)) return null;
+  return platform === 'win32' && /\.cmd$/i.test(filename) ? windowsShimTarget(filename, arch) : filename;
+}
+
+function firstExecutable(candidates, platform = process.platform, arch = process.arch) {
+  for (const filename of candidates) { const found = runnable(filename, platform, arch); if (found) return found; }
+  return null;
+}
+
+// A name without an extension is a POSIX script on Windows, such as the one npm writes for Git Bash, and cannot be started.
+const commandNames = (name, platform) => platform === 'win32' && !path.extname(name) ? [`${name}.exe`, `${name}.cmd`] : [name];
+const searchPath = (env, platform) => (env.PATH || env.Path || '').split(platform === 'win32' ? ';' : path.delimiter)
+  .map(directory => platform === 'win32' ? directory.replace(/^"(.*)"$/, '$1') : directory)
+  .filter(directory => path.isAbsolute(directory));
 
 function compareVersions(a, b) {
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
@@ -91,19 +126,16 @@ export function resolveBinary(provider, {
     const expanded = expandHome(explicit, home);
     if (path.isAbsolute(expanded) || expanded.includes('/') || expanded.includes('\\')) return expanded;
     // An explicitly selected command is never silently replaced by another tool.
-    const pathEntries = (env.PATH || env.Path || '').split(platform === 'win32' ? ';' : path.delimiter)
-      .filter(directory => path.isAbsolute(directory));
-    return firstExecutable(pathEntries.map(directory => path.join(directory, expanded))) || expanded;
+    return firstExecutable(searchPath(env, platform).flatMap(directory => commandNames(expanded, platform).map(name => path.join(directory, name))), platform, arch) || expanded;
   }
 
-  const pathEntries = (env.PATH || env.Path || '').split(platform === 'win32' ? ';' : path.delimiter)
-    .filter(directory => path.isAbsolute(directory));
+  const pathEntries = searchPath(env, platform);
 
   if (provider === 'gemini') {
-    const native = firstExecutable([...(googleRoot ? [googleRuntimePath(googleRoot)] : []), ...pathEntries.flatMap(directory => ['agy_acp_server.par', 'agy_acp_server.exe', 'antigravity-acp'].map(name => path.join(directory, name)))]);
+    const native = firstExecutable([...(googleRoot ? [googleRuntimePath(googleRoot)] : []), ...pathEntries.flatMap(directory => ['agy_acp_server.par', 'agy_acp_server.exe', 'antigravity-acp'].map(name => path.join(directory, name)))], platform, arch);
     if (native) return native;
 
-    const agyNames = platform === 'win32' ? ['agy.exe', 'agy', 'antigravity.exe', 'antigravity'] : ['agy', 'antigravity'];
+    const agyNames = ['agy', 'antigravity'].flatMap(name => commandNames(name, platform));
     const agyDirs = [
       path.join(home, '.gemini/bin'),
       ...pathEntries,
@@ -111,12 +143,12 @@ export function resolveBinary(provider, {
       path.join(home, 'bin'),
       ...(platform === 'win32' && env.LOCALAPPDATA ? [path.join(env.LOCALAPPDATA, 'agy/bin')] : []),
     ];
-    const agy = firstExecutable(agyDirs.flatMap(directory => agyNames.map(name => path.join(directory, name))));
+    const agy = firstExecutable(agyDirs.flatMap(directory => agyNames.map(name => path.join(directory, name))), platform, arch);
     if (agy) return agy;
   }
 
-  const names = platform === 'win32' ? [`${provider}.exe`, provider] : [provider];
-  const onPath = firstExecutable(pathEntries.flatMap(directory => names.map(name => path.join(directory, name))));
+  const names = commandNames(provider, platform);
+  const onPath = firstExecutable(pathEntries.flatMap(directory => names.map(name => path.join(directory, name))), platform, arch);
   if (onPath) return onPath;
 
   const directories = [
@@ -136,9 +168,11 @@ export function resolveBinary(provider, {
     if (env.LOCALAPPDATA) {
       winDirs.push(path.join(env.LOCALAPPDATA, 'Programs/OpenAI/Codex/bin'), path.join(env.LOCALAPPDATA, 'Volta/bin'), path.join(env.LOCALAPPDATA, 'pnpm'), path.join(env.LOCALAPPDATA, 'agy/bin'));
     }
+    // npm's global folder on Windows.
+    if (env.APPDATA) winDirs.push(path.join(env.APPDATA, 'npm'));
     directories.unshift(...winDirs);
   }
-  const standard = firstExecutable(directories.flatMap(directory => names.map(name => path.join(directory, name))));
+  const standard = firstExecutable(directories.flatMap(directory => names.map(name => path.join(directory, name))), platform, arch);
   if (standard) return standard;
   if (provider === 'codex' && platform === 'darwin') {
     const bundled = firstExecutable(applicationRoots.flatMap(directory => ['ChatGPT.app', 'Codex.app'].flatMap(app => [
@@ -153,10 +187,29 @@ export function resolveBinary(provider, {
 
 // Finder launches have a minimal PATH. Project commands need the user's Node/package
 // manager installations, but never resolve executables from an empty/relative entry.
-export function commandEnvironment(env = process.env, home = os.homedir()) {
+// Windows apps start with the person's full PATH, so only its relative entries are dropped there.
+export function commandEnvironment(env = process.env, home = os.homedir(), platform = process.platform) {
   const result = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith('AI_RELAY_') && !['ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS'].includes(key)));
-  const key = process.platform === 'win32' && !('PATH' in result) && 'Path' in result ? 'Path' : 'PATH';
-  const directories = (result[key] || '').split(path.delimiter).filter(value => path.isAbsolute(value));
-  result[key] = [...new Set([...directories, ...nvmBinDirs(home, env), path.join(home, '.volta/bin'), path.join(home, '.bun/bin'), path.join(home, 'Library/pnpm'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'])].join(path.delimiter);
+  const key = platform === 'win32' && !('PATH' in result) && 'Path' in result ? 'Path' : 'PATH';
+  const delimiter = platform === 'win32' ? ';' : path.delimiter;
+  const directories = (result[key] || '').split(delimiter).filter(value => path.isAbsolute(value));
+  const added = platform === 'win32' ? [] : [...nvmBinDirs(home, env), path.join(home, '.volta/bin'), path.join(home, '.bun/bin'), path.join(home, 'Library/pnpm'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+  result[key] = [...new Set([...directories, ...added])].join(delimiter);
   return result;
+}
+
+// Git is started by its full path. Windows looks for a bare program name in the working folder before PATH, so an
+// attached folder could otherwise supply its own git.exe. A Git found once is kept; one that is missing is looked for
+// again, so installing Git needs no restart.
+const gits = new Map();
+export function gitExecutable(env = process.env, platform = process.platform) {
+  const key = `${platform}\0${env.PATH || env.Path || ''}`;
+  if (gits.has(key)) return gits.get(key);
+  const windows = platform === 'win32';
+  const installs = windows
+    ? [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs')].filter(Boolean).map(directory => path.join(directory, 'Git', 'cmd'))
+    : ['/usr/bin', ...searchPath(env, platform), '/usr/local/bin', '/opt/homebrew/bin'];
+  const found = firstExecutable([...windows ? searchPath(env, platform) : [], ...installs].map(directory => path.join(directory, windows ? 'git.exe' : 'git')), platform);
+  if (found) gits.set(key, found);
+  return found || (windows ? path.join(env.ProgramFiles || 'C:\\Program Files', 'Git', 'cmd', 'git.exe') : '/usr/bin/git');
 }

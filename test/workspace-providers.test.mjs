@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { Broker, commandFor } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { runCodex, runClaude } from '../src/providers.mjs';
@@ -86,7 +87,7 @@ test('snapshot reviews cannot resume coding sessions or enable edit access, MCP 
   assert.equal(options.reviewSnapshot,true); assert.equal(started.ephemeral,true); assert.equal(started.sandbox,'read-only'); assert.deepEqual(started.config.mcp_servers,{}); assert.equal(started.config.web_search,'disabled');
 });
 
-test('folder membership changes reconstruct both native sessions and preserve the canonical chat', async t => {
+test('folder membership changes reconstruct both native sessions and preserve the canonical chat', { skip: scriptCLIs }, async t => {
   const f = fixture(t); let broker = f.open(); const id = broker.create().id;
   const run = async (provider, text) => { const c = broker.get(id); broker.start(c, { provider, text }); await broker.running.done; assert.equal(c.status, 'complete'); };
   await run('codex', 'First Codex'); await run('claude', 'First Claude'); await run('codex', 'Codex after switch');

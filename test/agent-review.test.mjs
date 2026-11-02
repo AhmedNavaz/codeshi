@@ -5,13 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { scriptCLIs, noSymlinks } from './platform.mjs';
 import { captureReview, parseReviewResult, reviewFreshness, reviewPrompt } from '../src/agent-review.mjs';
+import { gitExecutable } from '../src/resolve-binary.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { ConversationImporter } from '../src/conversation-import.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-review-')), workspace = path.join(root, 'project'); fs.mkdirSync(workspace);
-  const git = (...args) => { const result = spawnSync('/usr/bin/git', args, { cwd: workspace, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
+  const git = (...args) => { const result = spawnSync(gitExecutable(), args, { cwd: workspace, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
   git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
   fs.writeFileSync(path.join(workspace, 'app.js'), 'export const value = 1;\n'); git('add', '.'); git('commit', '-qm', 'Initial');
   fs.writeFileSync(path.join(workspace, 'app.js'), 'export const value = 2;\n');
@@ -50,7 +52,7 @@ function client(app, token) {
   return { request, project, broker, c, files, preview };
 }
 
-test('background reviews read approved copies while the builder continues, retry idempotently and stop independently', async t => {
+test('background reviews read approved copies while the builder continues, retry idempotently and stop independently', { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app);
   f.scenario({ hang: true });
   const snapshot = await api.preview(), input = { files: api.files, goal: 'Review the approved version', approvedDigest: snapshot.digest, requestId: 'background-review', background: true };
@@ -72,7 +74,7 @@ test('background reviews read approved copies while the builder continues, retry
   assert.equal(api.c.reviews[0].status, 'interrupted'); assert.equal(api.c.lastRun.id, lastRun); assert.equal(api.c.status, 'complete'); assert(!fs.existsSync(job.directory));
 });
 
-for (const builder of ['codex', 'claude']) test(`${builder} changes are reviewed by the other agent with fresh read-only state, saved findings and an explicit fix draft`, async t => {
+for (const builder of ['codex', 'claude']) test(`${builder} changes are reviewed by the other agent with fresh read-only state, saved findings and an explicit fix draft`, { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app);
   api.broker.settings(api.c, { provider: builder, mode: 'edit', model: 'builder-model', effort: 'high' });
   api.broker.record(api.c, { type: 'session', provider: builder === 'codex' ? 'claude' : 'codex', id: 'previous-coding-session', workspaceSignature: api.broker.workspaceSignature });
@@ -107,7 +109,7 @@ test('previews bind exact selected bytes and Git base, including untracked conte
   assert.equal(reviewFreshness(review, folders).stale, true, 'A changed Git base invalidates old findings even when a path becomes unavailable.');
 });
 
-test('review scope rejects private, foreign, binary, symlink, duplicate and oversized inputs, with literal Git paths', t => {
+test('review scope rejects private, foreign, binary, symlink, duplicate and oversized inputs, with literal Git paths', { skip: noSymlinks }, t => {
   const f = fixture(t), folders = [{ id: 'root', name: 'Project', path: f.workspace }], choose = name => [{ folderId: 'root', path: name }];
   for (const name of ['.env', 'binary.bin', 'literal[1].js']) fs.writeFileSync(path.join(f.workspace, name), name === 'binary.bin' ? Buffer.from([0, 1, 2]) : 'safe text\n');
   fs.writeFileSync(path.join(f.workspace, 'literal1.js'), 'must not appear\n');
@@ -130,7 +132,7 @@ test('stale approval, busy workspaces and local-server access checks cannot star
   api.broker.stop(api.c.id); await run.done; assert.equal(api.c.reviews[0].status, 'interrupted');
 });
 
-test('malformed or invalid findings and failed providers never become a clean review', async t => {
+test('malformed or invalid findings and failed providers never become a clean review', { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app), snapshot = await api.preview();
   for (const wrong of ['plain prose', '{"summary":"Fine"}', JSON.stringify({ summary: 'Fine', findings: [{ severity: 'high', title: 'Bad', detail: 'Bad', fileId: 'foreign', line: 1 }] }), JSON.stringify({ summary: 'Fine', findings: [{ severity: 'high', title: 'Bad', detail: 'Bad', fileId: snapshot.files[0].id, line: 999999 }] })]) assert.equal(parseReviewResult(wrong, snapshot).status, 'unstructured');
   for (const scenario of [{ output: 'I think it is fine.' }, { fail: true }]) {
@@ -139,7 +141,7 @@ test('malformed or invalid findings and failed providers never become a clean re
   }
 });
 
-test('review preparation never runs repository filters, diff drivers or hooks', async t => {
+test('review preparation never runs repository filters, diff drivers or hooks', { skip: scriptCLIs }, async t => {
   const f = fixture(t), marker = path.join(f.root, 'filter-ran');
   f.git('config', 'filter.fixture.clean', `touch '${marker}'; cat`);
   f.git('config', 'diff.fixture.command', `touch '${marker}'`);
@@ -159,7 +161,7 @@ test('a mutation between preview validation and lease acquisition is rejected be
   assert.equal(response.status, 409); assert.equal(released, true); assert.equal(api.c.reviews.length, 0); assert.equal(f.captures().length, 0);
 });
 
-test('a new review with a valid empty report is distinct from an unstructured response and cannot target another workspace', async t => {
+test('a new review with a valid empty report is distinct from an unstructured response and cannot target another workspace', { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app), snapshot = await api.preview();
   f.scenario({ output: '```json\n{"summary":"No actionable bugs found in the selected scope.","findings":[]}\n```' });
   const started = await api.request('/start', { files: api.files, approvedDigest: snapshot.digest, goal: 'Review this' }); await api.broker.running.done;
@@ -171,7 +173,7 @@ test('a new review with a valid empty report is distinct from an unstructured re
 
 test('reviews before a first commit include current text beyond the staged version', t => {
   const f = fixture(t), workspace = path.join(f.root, 'new-repository'); fs.mkdirSync(workspace);
-  const git = args => { const result = spawnSync('/usr/bin/git', args, { cwd: workspace }); assert.equal(result.status, 0); };
+  const git = args => { const result = spawnSync(gitExecutable(), args, { cwd: workspace }); assert.equal(result.status, 0); };
   git(['init', '-q']); fs.writeFileSync(path.join(workspace, 'new.js'), 'staged version\n'); git(['add', '.']); fs.writeFileSync(path.join(workspace, 'new.js'), 'current version\n');
   const snapshot = captureReview([{ id: 'new', name: 'New', path: workspace }], [{ folderId: 'new', path: 'new.js' }]);
   assert.equal(snapshot.files[0].head, null); assert.match(snapshot.files[0].diff, /\+current version/); assert(!snapshot.files[0].diff.includes('+staged version'));
@@ -190,7 +192,7 @@ test('an editor changing a selected file during diff capture invalidates the pre
   finally { fs.readSync = original; }
 });
 
-test('native Codex reviews start a fresh read-only thread, reject command approval, and retain the coding session', async t => {
+test('native Codex reviews start a fresh read-only thread, reject command approval, and retain the coding session', { skip: scriptCLIs }, async t => {
   const f = fixture(t), protocol = path.join(f.root, 'native-protocol.jsonl');
   fs.writeFileSync(f.bins.codex, `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';
 const emit=value=>console.log(JSON.stringify(value));let payload;
@@ -214,7 +216,7 @@ else if(message.id===900){emit({method:'item/completed',params:{threadId:'fresh-
   assert(!messages.some(message => message.method === 'thread/resume')); assert.deepEqual(api.c.sessions, sessions); assert.equal(api.c.reviews[0].status, 'complete');
 });
 
-test('file mode and staging changes invalidate the captured Git scope even when file contents stay the same', t => {
+test('file mode and staging changes invalidate the captured Git scope even when file contents stay the same', { skip: process.platform === 'win32' && 'Windows files have no execute permission' }, t => {
   const f = fixture(t), folders = [{ id: 'root', name: 'Project', path: f.workspace }], files = [{ folderId: 'root', path: 'app.js' }];
   f.git('config', 'core.filemode', 'true'); const review = { snapshot: captureReview(folders, files) };
   fs.chmodSync(path.join(f.workspace, 'app.js'), 0o755); assert.equal(reviewFreshness(review, folders).stale, true);
@@ -222,7 +224,7 @@ test('file mode and staging changes invalidate the captured Git scope even when 
   f.git('add', 'app.js'); assert.equal(reviewFreshness(review, folders).stale, true);
 });
 
-test('a broker-ended review retains the protocol failure instead of claiming the user stopped it', async t => {
+test('a broker-ended review retains the protocol failure instead of claiming the user stopped it', { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app), snapshot = await api.preview();
   f.scenario({ output: 'x'.repeat(9 * 1024 * 1024) });
   const started = await api.request('/start', { files: api.files, approvedDigest: snapshot.digest, goal: 'Review current changes' });

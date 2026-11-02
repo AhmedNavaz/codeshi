@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Throughline for Windows** (#5): a 64-bit Windows build, published with each release beside the macOS builds. Install it from PowerShell with `irm https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install.ps1 | iex`, which checks the download against the release's published checksum, installs it in your user folder and adds it to the Start menu; run it again to update. Or unzip the release's Windows zip anywhere. The build is not signed yet, so Windows may ask you to confirm a browser download once. On Windows, the terminal opens PowerShell 7 when it is installed, otherwise Windows PowerShell, and ending a session stops everything it started; the taskbar button flashes when a run finishes or needs approval while you are elsewhere; Keep awake, Git activity and commits, project commands and the folder picker work as on macOS. Claude Code and Codex installed with npm or pnpm are found and started directly, never through a shell, and Git is always started from where it is installed, never from a program of the same name in a workspace folder. Updates install from inside the app on macOS only, and installing the Google connection from Settings is not available on Windows yet.
+
 ## [0.15.0] - 2026-11-02
 
 ### Added

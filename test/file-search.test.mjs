@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { noSymlinks } from './platform.mjs';
 import { searchFiles } from '../src/file-explorer.mjs';
 
-test('file search covers every workspace folder, ranks by name and never shows private, build or linked paths', t => {
+test('file search covers every workspace folder, ranks by name and never shows private, build or linked paths', { skip: noSymlinks }, t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-file-search-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const write = (file, text = '') => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
   const web = path.join(root, 'web'), api = path.join(root, 'api');

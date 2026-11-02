@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { SCROLLBACK, TerminalSessions, prepareHelper, processTree } from '../src/terminal.mjs';
+import { SCROLLBACK, TerminalSessions, loginShell, prepareHelper, processTree, shellArguments } from '../src/terminal.mjs';
 import { createRelayServer } from '../src/server.mjs';
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -110,7 +110,7 @@ test('ending a session hangs up the shell and stops every process it started; re
   t.after(() => { for (const child of children) try { child.kill('SIGKILL'); } catch {} });
   const started = () => { const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']); children.push(child); return child.pid; };
   const trees = new Map();
-  const sessions = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1, stopGrace: 200, tree: async pid => trees.get(pid) || [] });
+  const sessions = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1, stopGrace: 200, tree: async pid => trees.get(pid) || [], platform: 'darwin' });
   const one = sessions.start('project-0', { folderId: 'web' }), two = sessions.start('project-1', { folderId: 'web' });
   const first = [started(), started()], second = [started()];
   trees.set(pty.spawned[0].pid, first); trees.set(pty.spawned[1].pid, second);
@@ -128,6 +128,32 @@ test('ending a session hangs up the shell and stops every process it started; re
   assert.throws(() => sessions.start('project-0', { folderId: 'web' }), /stopping/);
 });
 
+test('on Windows, ending a session ends the shell’s whole process tree at once', async t => {
+  const { registry } = workspaces(t), pty = fakePty(), ended = [];
+  const sessions = new TerminalSessions({ registry, pty, shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', flushMs: 1, stopGrace: 200, platform: 'win32', endTree: async pid => { ended.push(pid); }, tree: async () => { throw new Error('Windows has no process list to walk.'); } });
+  t.after(() => sessions.close());
+  const session = sessions.start('project-0', { folderId: 'web' });
+  assert.deepEqual(pty.spawned[0].args, ['-NoLogo'], 'PowerShell is not given a login flag.');
+  assert.equal(sessions.state('project-0').shell, 'powershell');
+  assert.equal((await sessions.stop('project-0', session.id)).status, 'stopped');
+  assert.deepEqual(ended, [pty.spawned[0].pid]);
+  assert.deepEqual(pty.spawned[0].killed, [undefined], 'Windows has no hangup signal to send.');
+});
+
+test('Windows opens PowerShell 7 when it is installed, then Windows PowerShell, then Command Prompt', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-windows-shell-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const system = path.join(root, 'Windows'), tools = path.join(root, 'PowerShell 7');
+  const env = { SystemRoot: system, Path: `.;${tools}`, ComSpec: path.join(system, 'System32', 'cmd.exe') };
+  assert.equal(loginShell(env, 'win32'), env.ComSpec);
+  const windowsPowerShell = path.join(system, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  fs.mkdirSync(path.dirname(windowsPowerShell), { recursive: true }); fs.writeFileSync(windowsPowerShell, '');
+  assert.equal(loginShell(env, 'win32'), windowsPowerShell);
+  fs.mkdirSync(tools); fs.writeFileSync(path.join(tools, 'pwsh.exe'), '');
+  assert.equal(loginShell(env, 'win32'), path.join(tools, 'pwsh.exe'));
+  assert.deepEqual([shellArguments('C:\\Windows\\System32\\cmd.exe'), shellArguments('/bin/zsh'), shellArguments(path.join(tools, 'pwsh.exe'))], [[], ['-l'], ['-NoLogo']]);
+});
+
 test('the process tree includes every descendant of a shell', { skip: process.platform === 'win32' }, async t => {
   const parent = spawn('/bin/sh', ['-c', 'sleep 30 & sleep 30 & wait']);
   t.after(() => { try { process.kill(parent.pid, 'SIGKILL'); } catch {} });
@@ -137,7 +163,7 @@ test('the process tree includes every descendant of a shell', { skip: process.pl
   for (const pid of tree) process.kill(pid, 'SIGKILL');
 });
 
-test('node-pty’s helper is made executable for a copy run from source', t => {
+test('node-pty’s helper is made executable for a copy run from source', { skip: process.platform === 'win32' && 'Windows files have no execute permission' }, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-pty-helper-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const helper = path.join(root, 'prebuilds', 'darwin-arm64', 'spawn-helper');
@@ -175,4 +201,39 @@ test('a real shell runs commands and resizes through the HTTP routes, streams it
   await until(() => !alive(background) && closed);
   assert.match(received, /^id: \d+\nevent: reset\n/);
   assert.equal((await post('input', { id, data: 'ls\r' })).status, 409);
+});
+
+test('on Windows, a real shell runs commands through the HTTP routes, and ending it stops what it started', { skip: process.platform !== 'win32' }, async t => {
+  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-terminal-live-')));
+  const relay = createRelayServer({ workspace, dataDir: path.join(workspace, '.relay-data'), lock: false });
+  t.after(async () => { await relay.close({ force: true }); fs.rmSync(workspace, { recursive: true, force: true }); });
+  await new Promise(resolve => relay.server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${relay.server.address().port}`, [project] = relay.registry.list();
+  const post = async (name, body) => { const response = await fetch(`${base}/api/terminal/${name}?projectId=${project.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: JSON.stringify(body) }); return { status: response.status, data: await response.json() }; };
+  const started = await post('start', { folderId: project.folders[0].id, cols: 80, rows: 24 });
+  assert.equal(started.status, 201); assert.equal(started.data.status, 'running');
+  const id = started.data.id;
+  const stream = await fetch(`${base}/api/terminal/stream?projectId=${project.id}&id=${id}`);
+  let received = '', closed = false;
+  (async () => { const decoder = new TextDecoder(); for await (const chunk of stream.body) received += decoder.decode(chunk); closed = true; })().catch(() => { closed = true; });
+  // Joined text is printed so the shell's echo of the command never matches. The background process has no console of
+  // its own to close with the terminal, so only ending the process tree stops it.
+  const marker = path.join(workspace, 'background.pid');
+  const command = /cmd\.exe$/i.test(started.data.shell)
+    ? `if /i "%CD%"=="${workspace}" (echo cwd-%OS%)\r`
+    : `if ((Get-Location).Path -eq '${workspace}') { 'cwd-' + 'ok' }; $p = Start-Process -PassThru -WindowStyle Hidden -FilePath ping.exe -ArgumentList '-n','300','127.0.0.1'; Set-Content -Encoding ascii -Path '${marker}' -Value $p.Id\r`;
+  await post('input', { id, data: command });
+  await until(() => /cwd-(?:ok|Windows_NT)/.test(received), 20000);
+  if (!/cmd\.exe$/i.test(started.data.shell)) {
+    await until(() => fs.existsSync(marker) && fs.readFileSync(marker, 'utf8').trim(), 20000);
+    const background = Number(fs.readFileSync(marker, 'utf8').trim());
+    assert(alive(background));
+    t.after(() => { try { process.kill(background); } catch {} });
+    assert.equal((await post('stop', { id })).data.status, 'stopped');
+    await until(() => !alive(background) && closed);
+  } else {
+    assert.equal((await post('stop', { id })).data.status, 'stopped');
+    await until(() => closed);
+  }
+  assert.equal((await post('input', { id, data: 'dir\r' })).status, 409);
 });

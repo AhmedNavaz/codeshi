@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import '../public/routing.js';
 import { Broker } from '../src/broker.mjs';
 
@@ -56,7 +57,7 @@ test('Auto keeps the agent that did the last run, moves away from one near its l
   assert.match(route({ text, mode: 'balanced', candidates: agents({ claude: { billingSource: 'unknown' } }), current: 'claude' }).reason, /Claude isn’t available under your rules/, 'Unknown billing is not treated as free.');
 });
 
-test('the broker saves the Auto mode with the workspace and records what Auto chose with the run and its prompt', async t => {
+test('the broker saves the Auto mode with the workspace and records what Auto chose with the run and its prompt', { skip: scriptCLIs }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-routing-')), workspace = path.join(root, 'workspace');
   fs.mkdirSync(workspace);
   const bin = path.join(root, 'codex.mjs'); fs.writeFileSync(bin, `#!${process.execPath}\nimport ${JSON.stringify(new URL('./mock-cli.mjs', import.meta.url).href)};\n`, { mode: 0o700 });

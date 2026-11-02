@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { readOnlyCommand, readOnlyRequest } from '../src/approval-rules.mjs';
 
 const workspaces = ['/work/app', '/work/shared'], cwd = '/work/app';
@@ -71,7 +72,7 @@ test('approval requests from each agent are recognized: reads inside the workspa
   assert.equal(readOnlyRequest({ kind: 'Read', input: { file_path: 'a.js' } }, { workspaces: [] }), false, 'With no workspace folder nothing is judged inside.');
 });
 
-test('through a real run, a read-only command goes ahead while a change waits for approval', async t => {
+test('through a real run, a read-only command goes ahead while a change waits for approval', { skip: scriptCLIs }, async t => {
   const fs = (await import('node:fs')).default, os = (await import('node:os')).default, path = (await import('node:path')).default;
   const { Broker } = await import('../src/broker.mjs');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-approval-'))), workspace = path.join(root, 'workspace'), outcomes = path.join(root, 'outcomes.jsonl');

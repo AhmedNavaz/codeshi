@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,7 +34,7 @@ test('Google setup isolates native configuration, rejects unsupported scopes and
   const previous = process.env.AGY_ACP_DISABLE_WORKSPACE_TRUST; process.env.AGY_ACP_DISABLE_WORKSPACE_TRUST = '1';
   try {
     const options = antigravityInvocation({ bin, googleRoot: root, workspace: root, mode: 'edit' });
-    assert.equal(options.env.GEMINI_HOME, path.join(root, 'profile')); assert.equal(options.env.ANTIGRAVITY_HARNESS_PATH, path.join(root, 'localharness_external')); assert.equal(options.env.AGY_ACP_DISABLE_WORKSPACE_TRUST, undefined);
+    assert.equal(options.env.GEMINI_HOME, path.join(root, 'profile')); assert.equal(options.env.ANTIGRAVITY_HARNESS_PATH, path.join(root, process.platform === 'win32' ? 'localharness_external.exe' : 'localharness_external')); assert.equal(options.env.AGY_ACP_DISABLE_WORKSPACE_TRUST, undefined);
     assert.equal(options.env.GOOGLE_API_KEY, undefined); assert.equal(options.env.GEMINI_API_KEY, undefined);
     assert.throws(() => antigravityInvocation({ bin, googleRoot: root, mode: 'read' }), /verified read-only/);
     assert.throws(() => antigravityInvocation({ bin, googleRoot: root, workspace: root, workspaces: [path.join(root, 'other')], mode: 'edit' }), /one project folder/);
@@ -90,7 +91,7 @@ test('the installed Google ACP runtime takes priority while explicit Gemini API/
   assert.equal(resolveBinary('gemini', { googleRoot: root }), bin);
   assert.equal(resolveBinary('gemini', { googleRoot: root, override: '/explicit/gemini' }), '/explicit/gemini');
 });
-test('the Antigravity worker preserves project history and model metadata across a real IPC approval round trip', async t => {
+test('the Antigravity worker preserves project history and model metadata across a real IPC approval round trip', { skip: scriptCLIs }, async t => {
   const root = folder(t), bin = googleRuntimePath(root), protocol = path.join(root, 'protocol.mjs'), state = session(); fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(protocol, `#!${process.execPath}
 import readline from 'node:readline';

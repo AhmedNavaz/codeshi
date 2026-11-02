@@ -95,7 +95,7 @@
     settingsHost = host;
     host.replaceChildren();
     host.append(node('h3', 'Updates'));
-    if (!state?.supported) { host.append(node('p', 'Updates install in the Throughline app for macOS. This copy is updated from its source instead.', 'section-description')); return; }
+    if (!state?.supported) { host.append(node('p', window.relayDesktop?.platform === 'win32' ? 'Updates install in the Throughline app for macOS. On Windows, run the installer again or download the latest release to update.' : 'Updates install in the Throughline app for macOS. This copy is updated from its source instead.', 'section-description')); return; }
     const checked = state.checkedAt ? new Date(state.checkedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : null;
     const summary = state.status === 'checking' ? 'Checking for updates…' : offered() || ['downloading', 'waiting', 'installing'].includes(state.status) ? `Throughline ${state.latest.version} is available. You have ${state.version}.` : state.status === 'error' ? state.error : `You have ${state.version}${state.status === 'current' ? ', the latest version' : ''}.${checked ? ` Last checked ${checked}.` : ''}`;
     host.append(node('p', summary, 'section-description'));

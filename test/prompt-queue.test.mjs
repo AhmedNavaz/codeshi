@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { QUEUE_LIMIT } from '../src/prompt-queue.mjs';
 
@@ -33,7 +34,7 @@ async function idle(broker, c) {
   for (let i = 0; i < 1500; i++) { if (!broker.running && !c.queue.length) return; if (broker.running) await broker.running.done; else await new Promise(resolve => setTimeout(resolve, 10)); if (c.queuePaused) return; }
 }
 
-test('queued prompts run in order after the current work, each with the settings it was queued with, and can be reordered and edited first', async t => {
+test('queued prompts run in order after the current work, each with the settings it was queued with, and can be reordered and edited first', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
   broker.start(c, { text: 'Hold the workspace', provider: 'codex', mode: 'edit' });
   const first = add(broker, c, 'First queued').queue[0].id;
@@ -49,7 +50,7 @@ test('queued prompts run in order after the current work, each with the settings
   assert(c.messages.some(message => message.role === 'user' && message.text === 'Second queued' && message.provider === 'claude'));
 });
 
-test('a stop pauses the queue with the reason until it is resumed, and the queue survives a restart paused', async t => {
+test('a stop pauses the queue with the reason until it is resumed, and the queue survives a restart paused', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
   broker.start(c, { text: 'Hold the workspace', provider: 'codex', mode: 'edit' });
   add(broker, c, 'After the stop');
@@ -65,7 +66,7 @@ test('a stop pauses the queue with the reason until it is resumed, and the queue
   assert.deepEqual(env.requests().at(-1), ['codex', 'After the stop']);
 });
 
-test('a queued prompt that reaches a usage limit waits for a reset instead of pausing', async t => {
+test('a queued prompt that reaches a usage limit waits for a reset instead of pausing', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
   broker.start(c, { text: 'Hold the workspace', provider: 'codex', mode: 'edit' });
   add(broker, c, 'Quota stop'); add(broker, c, 'Later work');
@@ -77,7 +78,7 @@ test('a queued prompt that reaches a usage limit waits for a reset instead of pa
   assert.equal(c.queuePaused, null); assert.deepEqual(c.queue.map(item => item.text), ['Later work']);
 });
 
-test('the queue has a limit, refuses settings a run would refuse, and stale edits fail clearly', async t => {
+test('the queue has a limit, refuses settings a run would refuse, and stale edits fail clearly', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
   broker.start(c, { text: 'Hold the workspace', provider: 'codex', mode: 'edit' });
   assert.throws(() => add(broker, c, 'Read and approve everything', { mode: 'read', approvalPolicy: 'auto' }), /read/i);

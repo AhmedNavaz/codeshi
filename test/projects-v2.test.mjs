@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { noSymlinks } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { ProjectRegistry } from '../src/projects.mjs';
 
@@ -50,7 +51,7 @@ test('v1 migration preserves project ID and journals, deterministically selects 
   assert.equal(registry.get(id).archivedConversationCount, 1);
   await registry.close(); const reopened = f.open(); assert.equal(reopened.mainConversation(id).id, latest.id);
 });
-test('multi-folder aliases are stable and safe, primary changes preserve project and permanent chat', async t => {
+test('multi-folder aliases are stable and safe, primary changes preserve project and permanent chat', { skip: noSymlinks }, async t => {
   const f = setup(t); const registry = f.open();
   const project = registry.add({ name: 'Full product', folders: [f.folders[0], f.folders[1], f.folders[0]] });
   assert.equal(project.folders.length, 2); assert.notEqual(project.folders[0].name, project.folders[1].name);

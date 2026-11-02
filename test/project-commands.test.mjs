@@ -6,6 +6,7 @@ import http from 'node:http';
 import { once, EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
+import { noSymlinks } from './platform.mjs';
 import { ProjectRegistry } from '../src/projects.mjs';
 import { ProjectCommands, commandLogLimit, localCommandURLs } from '../src/project-commands.mjs';
 import { commandEnvironment } from '../src/resolve-binary.mjs';
@@ -26,9 +27,11 @@ function fixture(t, options = {}) {
   const config = (command = 'printf done', folder = project.folders[0], directory = '') => ({ folderId: folder.id, directory, command });
   return { root, frontend, backend, registry, project, commands, config };
 }
-const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+const quote = value => process.platform === 'win32' ? `"${value}"` : "'" + value.replaceAll("'", "'\\''") + "'";
+// Prints text without a newline, in sh and in Command Prompt alike.
+const print = text => `${quote(process.execPath)} -e "process.stdout.write('${text}')"`;
 
-test('command detection is inert, editable and scoped to a selected package and workspace', async t => {
+test('command detection is inert, editable and scoped to a selected package and workspace', { skip: noSymlinks }, async t => {
   const f = fixture(t); const nested = path.join(f.backend, 'packages/app'); fs.mkdirSync(nested, { recursive: true });
   fs.writeFileSync(path.join(nested, 'package.json'), JSON.stringify({ packageManager: 'pnpm@10.0.0', scripts: { dev: 'touch NEVER_EXECUTE', test: 'echo test', 'danger;touch BAD': 'true' } }));
   const detected = f.commands.detect(f.project.id, f.config('', f.project.folders[1], 'packages/app'));
@@ -58,7 +61,7 @@ test('managed commands use the selected cwd, retain bounded UTF-8 output and use
   assert(session.output.length <= commandLogLimit); assert(session.output.includes('🌍')); assert(session.output.includes('EADDRINUSE')); assert(session.output.includes(f.backend));
   assert.equal(session.output.includes('�'), false);
   assert.equal('child' in session, false); assert.equal('done' in session, false);
-  const next = f.commands.start(f.project.id, 'test', f.config('printf recovered'));
+  const next = f.commands.start(f.project.id, 'test', f.config(print('recovered')));
   await f.commands.sessions.get(f.commands.key(f.project.id, 'test')).done;
   assert.notEqual(next.id, value.id); assert.equal(f.commands.state(f.project.id).sessions.test.status, 'exited');
 });
@@ -89,7 +92,7 @@ test('Start deduplicates running commands, Stop and shutdown clean up child proc
   assert.throws(() => f.commands.start(f.project.id, 'run', config), /stopping/);
 });
 
-test('a shell exiting early still terminates its inherited server and releases the session', async t => {
+test('a shell exiting early still terminates its inherited server and releases the session', { skip: process.platform === 'win32' && 'Leaves a server running in the background with POSIX shell syntax' }, async t => {
   const f = fixture(t);
   const run = f.commands.start(f.project.id, 'run', f.config(`${quote(process.execPath)} -e 'setInterval(()=>{},1000)' & echo background`));
   const owned = f.commands.sessions.get(f.commands.key(f.project.id, 'run'));
@@ -103,7 +106,7 @@ test('spawn failures remain visible and local URL actions reject credentials and
   const result = f.commands.state(f.project.id).sessions.run;
   assert.equal(result.status, 'failed'); assert.equal(result.error, 'Shell unavailable');
   assert.deepEqual(localCommandURLs('\u001b[32mhttp://localhost:3000/path\u001b[0m http://127.0.0.1:8000 https://[::1]:443 http://evil.example http://localhost.evil http://user:secret@localhost:4000 javascript:alert(1)'), ['http://localhost:3000/path', 'http://127.0.0.1:8000/', 'https://[::1]/']);
-  const env = commandEnvironment({ PATH: '.:/usr/bin::relative', AI_RELAY_TOKEN: 'private', ELECTRON_RUN_AS_NODE: '1' }, f.root);
+  const env = commandEnvironment({ PATH: ['.', path.resolve('/usr/bin'), '', 'relative'].join(path.delimiter), AI_RELAY_TOKEN: 'private', ELECTRON_RUN_AS_NODE: '1' }, f.root);
   assert.equal(env.AI_RELAY_TOKEN, undefined); assert.equal(env.ELECTRON_RUN_AS_NODE, undefined); assert.equal(env.PATH.split(path.delimiter).some(entry => !path.isAbsolute(entry)), false);
 });
 
@@ -115,7 +118,7 @@ test('command routes retain token, origin and local application header checks an
   const project = app.registry.list()[0], base = `http://127.0.0.1:${app.server.address().port}`;
   const url = action => `${base}/api/commands${action}?projectId=${project.id}`;
   const headers = { 'Content-Type': 'application/json', 'X-AI-Relay': '1', 'X-AI-Relay-Token': 'fixture-token' };
-  const input = { folderId: project.folders[0].id, directory: '', command: 'printf from-http' };
+  const input = { folderId: project.folders[0].id, directory: '', command: print('from-http') };
   const post = (action, body = input, changes = {}) => fetch(url(action), { method: 'POST', headers: { ...headers, ...changes }, body: JSON.stringify(body) });
   assert.equal((await fetch(url(''))).status, 403);
   assert.equal((await post('/run/start', input, { 'X-AI-Relay': '0', Origin: 'https://evil.example' })).status, 403);
@@ -134,7 +137,7 @@ test('command routes retain token, origin and local application header checks an
 test('separate workspace and action sessions survive stopping another command and persist their configuration', async t => {
   const f = fixture(t);
   const second = f.registry.add({ path: f.backend });
-  const command = `${quote(process.execPath)} -e 'console.log(process.cwd());setInterval(()=>{},1000)'`;
+  const command = `${quote(process.execPath)} -e "console.log(process.cwd());setInterval(()=>{},1000)"`;
   const first = f.commands.start(f.project.id, 'run', f.config(command));
   const testRun = f.commands.start(f.project.id, 'test', f.config(command, f.project.folders[1]));
   const other = f.commands.start(second.id, 'run', { folderId: second.folders[0].id, directory: '', command });

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { gitExecutable } from './resolve-binary.mjs';
 
 const prefix = ['--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
 export function githubRepository(remote = '') {
@@ -6,7 +7,7 @@ export function githubRepository(remote = '') {
   return match ? `https://github.com/${match[1]}/${match[2]}` : null;
 }
 function runner(folder, spawnImpl, { timeout = 5000, maxBuffer = 1024 * 1024 } = {}) {
-  return (args, extra = []) => spawnImpl('/usr/bin/git', [...prefix, ...extra, ...args], { cwd: folder.path, shell: false, encoding: 'utf8', timeout, maxBuffer, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_PAGER: 'cat' } });
+  return (args, extra = []) => spawnImpl(gitExecutable(), [...prefix, ...extra, ...args], { cwd: folder.path, shell: false, encoding: 'utf8', timeout, maxBuffer, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_PAGER: 'cat' } });
 }
 function isRepository(run) { const inside = run(['rev-parse', '--is-inside-work-tree']); return inside.status === 0 && String(inside.stdout || '').trim() === 'true'; }
 // Status and diff can invoke attributes filters. Returns -c overrides that disable configured external drivers.

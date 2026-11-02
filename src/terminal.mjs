@@ -23,10 +23,26 @@ export function prepareHelper(root = path.dirname(require.resolve('node-pty/pack
   try { fs.accessSync(helper, fs.constants.X_OK); } catch { try { fs.chmodSync(helper, 0o755); } catch { /* A missing helper fails at start with node-pty's own error. */ } }
 }
 
-// The person's login shell, read from the environment Throughline was opened with.
-export function loginShell(env = process.env) {
+// The person's login shell, read from the environment Throughline was opened with. Windows has none, so PowerShell 7 is
+// used when it is installed, then the Windows PowerShell every system has, then Command Prompt.
+export function loginShell(env = process.env, platform = process.platform) {
+  if (platform === 'win32') {
+    const system = env.SystemRoot || 'C:\\Windows';
+    const pwsh = (env.PATH || env.Path || '').split(';').filter(directory => path.isAbsolute(directory)).map(directory => path.join(directory, 'pwsh.exe')).find(file => fs.existsSync(file));
+    return [pwsh, path.join(system, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')].find(file => file && fs.existsSync(file)) || env.ComSpec || path.join(system, 'System32', 'cmd.exe');
+  }
   const shell = env.SHELL;
   return shell && path.isAbsolute(shell) && fs.existsSync(shell) ? shell : fs.existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/sh';
+}
+// A POSIX shell starts as a login shell, so it reads the person's profile. PowerShell reads its profile anyway.
+export function shellArguments(shell) {
+  const name = path.win32.basename(shell).toLowerCase();
+  return ['pwsh.exe', 'powershell.exe', 'pwsh', 'powershell'].includes(name) ? ['-NoLogo'] : ['cmd.exe', 'cmd'].includes(name) ? [] : ['-l'];
+}
+// Windows has no signal that asks a process to stop, so a shell and every process it started end together.
+export function endProcessTree(pid) {
+  const taskkill = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
+  return new Promise(resolve => execFile(taskkill, ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve()));
 }
 
 // Every process the shell started, found before the shell ends, since its children are then adopted by launchd.
@@ -43,8 +59,8 @@ export function processTree(root) {
 const signal = (pid, kind) => { try { process.kill(pid, kind); return true; } catch { return false; } };
 
 export class TerminalSessions {
-  constructor({ registry, pty = null, shell = loginShell(), stopGrace = 1500, tree = processTree, flushMs = 8 } = {}) {
-    this.registry = registry; this.ptyImpl = pty; this.shell = shell; this.stopGrace = stopGrace; this.tree = tree; this.flushMs = flushMs;
+  constructor({ registry, pty = null, shell = loginShell(), stopGrace = 1500, tree = processTree, flushMs = 8, platform = process.platform, endTree = endProcessTree } = {}) {
+    this.registry = registry; this.ptyImpl = pty; this.shell = shell; this.stopGrace = stopGrace; this.tree = tree; this.flushMs = flushMs; this.platform = platform; this.endTree = endTree;
     this.sessions = new Map(); this.closing = false;
     // A removed workspace takes its terminal with it.
     this.onProjects = () => { for (const projectId of this.sessions.keys()) { try { registry.get(projectId); } catch { this.stop(projectId).catch(() => {}); } } };
@@ -55,7 +71,7 @@ export class TerminalSessions {
     if (!session) return null;
     return Object.fromEntries(['id', 'projectId', 'folderId', 'folderName', 'cwd', 'shell', 'status', 'exitCode', 'signal', 'error', 'startedAt', 'endedAt', 'cols', 'rows'].map(key => [key, session[key]]));
   }
-  state(projectId) { this.registry.get(projectId); return { session: this.view(this.sessions.get(projectId)), shell: path.basename(this.shell) }; }
+  state(projectId) { this.registry.get(projectId); return { session: this.view(this.sessions.get(projectId)), shell: path.win32.basename(this.shell).replace(/\.exe$/i, '') }; }
   session(projectId, id) {
     this.registry.get(projectId);
     const session = this.sessions.get(projectId);
@@ -81,7 +97,7 @@ export class TerminalSessions {
     session.done = new Promise(resolve => { session.resolve = resolve; });
     this.sessions.set(projectId, session);
     try {
-      session.process = this.pty().spawn(this.shell, ['-l'], { name: 'xterm-256color', ...size, cwd, env: { ...commandEnvironment(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'Throughline' } });
+      session.process = this.pty().spawn(this.shell, shellArguments(this.shell), { name: 'xterm-256color', ...size, cwd, env: { ...commandEnvironment(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'Throughline' } });
       session.pid = session.process.pid;
     } catch (error) {
       Object.assign(session, { status: 'failed', error: `The shell could not start: ${error.message}`, endedAt: new Date().toISOString() });
@@ -147,12 +163,17 @@ export class TerminalSessions {
     if (!session || (id && session.id !== id)) return null;
     if (terminalActive(session) && session.status !== 'stopping') {
       session.status = 'stopping';
-      const processes = session.pid ? await this.tree(session.pid) : [];
-      try { session.process.kill('SIGHUP'); } catch { /* Already gone. */ }
-      for (const pid of processes) signal(pid, 'SIGTERM');
-      const ended = await Promise.race([session.done.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), this.stopGrace))]);
-      for (const pid of processes) signal(pid, 'SIGKILL');
-      if (!ended && session.pid) signal(session.pid, 'SIGKILL');
+      if (this.platform === 'win32') {
+        if (session.pid) await this.endTree(session.pid);
+        try { session.process.kill(); } catch { /* Already gone. */ }
+      } else {
+        const processes = session.pid ? await this.tree(session.pid) : [];
+        try { session.process.kill('SIGHUP'); } catch { /* Already gone. */ }
+        for (const pid of processes) signal(pid, 'SIGTERM');
+        const ended = await Promise.race([session.done.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), this.stopGrace))]);
+        for (const pid of processes) signal(pid, 'SIGKILL');
+        if (!ended && session.pid) signal(session.pid, 'SIGKILL');
+      }
       await Promise.race([session.done, new Promise(resolve => setTimeout(resolve, this.stopGrace))]);
       if (!session.endedAt) this.exited(session, null, 'SIGKILL');
     }

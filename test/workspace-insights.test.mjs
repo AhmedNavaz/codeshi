@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { noSymlinks } from './platform.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,6 +8,10 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { workspaceGit, workspaceGitDiff, githubRepository } from '../src/workspace-git.mjs';
+import { gitExecutable } from '../src/resolve-binary.mjs';
+
+// Antigravity keeps its conversation index in SQLite, which is read with the sqlite3 program.
+const noSqlite = spawnSync('sqlite3', ['-version']).status !== 0 && 'Needs the sqlite3 program';
 import { ConversationImporter } from '../src/conversation-import.mjs';
 import { exportConversation, readConversationPackage } from '../src/conversation-export.mjs';
 import { Broker, commandFor } from '../src/broker.mjs';
@@ -14,7 +19,7 @@ import { runCodex, runClaude, codexUsageWindows, claudeUsageWindows } from '../s
 import { createRelayServer } from '../src/server.mjs';
 
 function fixture(t) { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-insights-')); const workspace = path.join(root, 'project'); fs.mkdirSync(workspace); const closers = []; t.after(async () => { for (const close of closers) await close(); fs.rmSync(root, { recursive: true, force: true }); }); return { root, workspace, closers, folders: [{ id: 'root', name: 'app', path: workspace }] }; }
-function git(cwd, ...args) { const result = spawnSync('/usr/bin/git', args, { cwd, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout; }
+function git(cwd, ...args) { const result = spawnSync(gitExecutable(), args, { cwd, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); return result.stdout; }
 
 test('Git activity reads real commits, branch, staged/untracked changes and safe GitHub URLs', t => {
   const f = fixture(t); git(f.workspace, 'init', '-q'); git(f.workspace, 'config', 'user.name', 'Fixture'); git(f.workspace, 'config', 'user.email', 'fixture@example.invalid');
@@ -65,7 +70,7 @@ test('workspace discovery matches attached folder paths and excludes Throughline
   assert.deepEqual((await importer.list('codex',f.folders)).sessions.map(session=>session.id),['codex-match']);
 });
 
-test('gemini discovery reads Antigravity summaries and parses transcripts into review previews', async t => {
+test('gemini discovery reads Antigravity summaries and parses transcripts into review previews', { skip: noSqlite }, async t => {
   const f = fixture(t);
   const geminiDir = path.join(f.root, '.gemini', 'antigravity');
   const brainDir = path.join(geminiDir, 'brain', 'gemini-chat-1');
@@ -121,12 +126,12 @@ test('Gemini previews bound large transcripts and require known workspace member
   const preview=await importer.preview('gemini','unlinked');assert.equal(preview.clipped,true);assert.equal(preview.messages.length,1);assert.equal(preview.messages[0].text,'Keep this visible request');
 });
 
-test('Gemini transcript symlinks cannot read outside the native conversation store',async t=>{
+test('Gemini transcript symlinks cannot read outside the native conversation store',{skip:noSymlinks},async t=>{
   const f=fixture(t),logs=path.join(f.root,'.gemini/antigravity/brain/linked/.system_generated/logs');fs.mkdirSync(logs,{recursive:true});const outside=path.join(f.root,'outside.jsonl');fs.writeFileSync(outside,JSON.stringify({type:'USER_INPUT',source:'USER_EXPLICIT',content:'private'}));fs.symlinkSync(outside,path.join(logs,'transcript.jsonl'));
   const importer=new ConversationImporter({geminiHome:()=>f.root});await assert.rejects(importer.preview('gemini','linked'),error=>error.status===403);assert.equal(fs.readFileSync(outside,'utf8').includes('private'),true);
 });
 
-test('Gemini conversations linked through a secondary folder remain previewable',async t=>{
+test('Gemini conversations linked through a secondary folder remain previewable',{skip:noSqlite},async t=>{
   const f=fixture(t),native=path.join(f.root,'.gemini/antigravity'),logs=path.join(native,'brain/multiple/.system_generated/logs');fs.mkdirSync(logs,{recursive:true});fs.writeFileSync(path.join(logs,'transcript.jsonl'),JSON.stringify({type:'USER_INPUT',source:'USER_EXPLICIT',content:'<USER_REQUEST>Secondary workspace</USER_REQUEST>'})+'\n');
   const uris=JSON.stringify(['file://'+path.join(f.root,'another-project'),'file://'+f.workspace]);const db=path.join(native,'conversation_summaries.db');const result=spawnSync('sqlite3',[db,`CREATE TABLE conversation_summaries(conversation_id TEXT,title TEXT,preview TEXT,last_modified_time TEXT,workspace_uris TEXT); INSERT INTO conversation_summaries VALUES('multiple','Multiple folders','','2026-11-01T00:00:00Z','${uris}');`]);assert.equal(result.status,0);
   const before=fs.statSync(db).mtimeMs,importer=new ConversationImporter({geminiHome:()=>f.root}),listed=await importer.list('gemini',f.folders);assert.equal(listed.sessions[0].cwd,f.workspace);assert.equal((await importer.preview('gemini','multiple',f.folders)).messages[0].text,'Secondary workspace');assert.equal(fs.statSync(db).mtimeMs,before);

@@ -6,12 +6,13 @@ import path from 'node:path';
 import {once} from 'node:events';
 import {spawnSync} from 'node:child_process';
 import {createRelayServer} from '../src/server.mjs';
+import {gitExecutable} from '../src/resolve-binary.mjs';
 import {createSharingServer} from '../sharing/server.mjs';
 import {sealSolution} from '../src/collaboration-format.mjs';
 
 async function listen(server){server.listen(0,'127.0.0.1');await once(server,'listening');return `http://127.0.0.1:${server.address().port}`;}
 async function json(url,method='GET',value){const response=await fetch(url,{method,headers:{'X-AI-Relay':'1',...(value?{'Content-Type':'application/json'}:{})},...(value?{body:JSON.stringify(value)}:{})});const data=await response.json();if(!response.ok)throw Object.assign(Error(data.error),{status:response.status});return data;}
-function git(cwd,...args){const r=spawnSync('/usr/bin/git',args,{cwd,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout;}
+function git(cwd,...args){const r=spawnSync(gitExecutable(),args,{cwd,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout;}
 
 test('HTTP acceptance: both providers unavailable, private friend patch reviewed/applied/verified with zero inference and dirty work preserved',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'relay-acceptance-')),workspace=path.join(root,'owner'),friendspace=path.join(root,'friend');fs.mkdirSync(workspace);fs.mkdirSync(friendspace);

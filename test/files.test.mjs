@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { scriptCLIs, noSymlinks } from './platform.mjs';
 import { EventEmitter, once } from 'node:events';
 import { AttachmentStore, describeAttachment } from '../src/attachments.mjs';
 import { listFiles, readExplorerFile } from '../src/file-explorer.mjs';
@@ -17,7 +18,7 @@ function fixture(t) {
   return { root, workspace, folder:{id:'root',name:'project',path:workspace}, store:new AttachmentStore(path.join(root,'data')) };
 }
 
-test('explorer is lazy, sorted, bounded, multi-root scoped and excludes private paths and links',t => {
+test('explorer is lazy, sorted, bounded, multi-root scoped and excludes private paths and links',{skip:noSymlinks},t => {
   const f=fixture(t);fs.mkdirSync(path.join(f.workspace,'src'));fs.mkdirSync(path.join(f.workspace,'.data'));fs.mkdirSync(path.join(f.workspace,'node_modules'));
   fs.writeFileSync(path.join(f.workspace,'main.js'),'export const answer = 42;');fs.writeFileSync(path.join(f.workspace,'.env'),'private');fs.symlinkSync(f.root,path.join(f.workspace,'outside'));
   assert.deepEqual(listFiles(f.folder).entries.map(e=>e.name),['src','main.js']);
@@ -70,7 +71,7 @@ test('native adapters deliver actual image inputs and preserve read-only permiss
   assert.deepEqual(content.at(-1),{type:'image',source:{type:'base64',media_type:'image/png',data:png}});assert.deepEqual(options.tools,['Read','Glob','Grep','TodoWrite']);
 });
 
-test('broker journals metadata only and attachment changes cannot reuse an accepted request ID',async t=>{
+test('broker journals metadata only and attachment changes cannot reuse an accepted request ID',{skip:scriptCLIs},async t=>{
   const f=fixture(t), bin=path.join(f.root,'mock');fs.writeFileSync(bin,`#!${process.execPath}\nimport ${JSON.stringify(new URL('./mock-cli.mjs',import.meta.url).href)};\n`,{mode:0o700});fs.writeFileSync(path.join(f.workspace,'.mock-scenarios.json'),'{}');
   const broker=new Broker({workspace:f.workspace,dataDir:path.join(f.root,'broker'),bins:{codex:bin,claude:bin}});t.after(()=>broker.close());
   const note=broker.attachments.put({name:'note.txt',data:Buffer.from('Attachment-only requirement').toString('base64')}), chat=broker.get(broker.create().id), input={text:'Review',attachments:[note.id],requestId:'file-request'};

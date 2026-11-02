@@ -37,9 +37,9 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 - A terminal for each workspace in a bottom panel: your own shell in the folder you choose, kept running while the panel is hidden or you switch workspaces.
 - A file browser with syntax-highlighted previews. Attach files and images by clicking, dragging or pasting.
 - Plan usage for Claude Code and Codex in the status bar, with reset times, plus per-run context usage when reported.
-- Keep awake: your Mac stays awake while agents are working or waiting for a usage limit to reset, and sleeps normally once they finish.
+- Keep awake: your computer stays awake while agents are working or waiting for a usage limit to reset, and sleeps normally once they finish.
 - Native desktop menus for workspaces, agents, conversation search, appearance and Help, with keyboard shortcuts and current selections.
-- Updates from inside the app: one click downloads the new version, checks it against its published checksum, and Throughline restarts into it once no agent is working.
+- Updates from inside the app on macOS: one click downloads the new version, checks it against its published checksum, and Throughline restarts into it once no agent is working.
 
 **Context portability and human collaboration**
 
@@ -54,16 +54,26 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 
 ## Install
 
+**macOS**, in Terminal:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install.sh | sh
 ```
 
-This installs the latest release for your Mac (Apple Silicon or Intel) after checking its published checksum. You also need at least one supported agent installed and signed in: [Claude Code](https://code.claude.com/docs/en/overview), [Codex CLI](https://github.com/openai/codex) or connect **Gemini with Google Antigravity** from Settings: **Install Google connection**, then **Connect account**. The download comes from Google and its checksum is verified before installation.
+**Windows**, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install.ps1 | iex
+```
+
+This installs the latest release for your Mac (Apple Silicon or Intel) or your Windows PC (64-bit) after checking its published checksum. On Windows it goes in your user folder (`%LOCALAPPDATA%\Programs\Throughline`) with a Start menu shortcut, and running the command again updates it. You also need at least one supported agent installed and signed in: [Claude Code](https://code.claude.com/docs/en/overview), [Codex CLI](https://github.com/openai/codex) or connect **Gemini with Google Antigravity** from Settings: **Install Google connection**, then **Connect account**. The download comes from Google and its checksum is verified before installation.
 
 <details>
 <summary>Other ways to install</summary>
 
 **Download the app.** Get the zip for your Mac from [Releases](https://github.com/AhmedNavaz/throughline/releases/latest) and move **Throughline** to Applications. The app is not notarized by Apple yet, so the first time you open a browser download macOS says it cannot verify the developer: open **System Settings › Privacy & Security** and click **Open Anyway**. If macOS says the app is damaged, run `xattr -cr /Applications/Throughline.app`.
+
+**Download for Windows.** Get the Windows zip from [Releases](https://github.com/AhmedNavaz/throughline/releases/latest), unzip it anywhere and open **Throughline.exe** in the **Throughline** folder. The app is not signed yet, so Windows may say it protected your PC: click **More info**, then **Run anyway**. Installing the Google connection from Settings is not available on Windows yet; use Claude Code or the Codex CLI.
 
 **Run from source** with Node.js 22.12 or later:
 
@@ -86,7 +96,7 @@ Inference starts only when you explicitly send a task, continue one or start a r
 
 ## Roadmap
 
-Next up: notarized macOS builds, automatic updates, a queue of prompts that run as usage limits allow, Windows and Linux builds, and more agents and models such as Grok and DeepSeek. Further out: voice mode (say what you want, hear a short summary of what changed), automatic model and effort choice for each request, live progress in your Mac's menu bar or notch, and agents that review each other's work. See [ROADMAP.md](ROADMAP.md) for what has shipped and the full plan.
+Next up: notarized macOS builds, automatic updates, a queue of prompts that run as usage limits allow, Linux builds, and more agents and models such as Grok and DeepSeek. Further out: voice mode (say what you want, hear a short summary of what changed), automatic model and effort choice for each request, live progress in your Mac's menu bar or notch, and agents that review each other's work. See [ROADMAP.md](ROADMAP.md) for what has shipped and the full plan.
 
 ## Support Throughline
 

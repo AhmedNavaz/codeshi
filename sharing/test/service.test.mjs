@@ -78,7 +78,7 @@ test('private link round trip returns exact patches without importing or calling
   assert.deepEqual(restarted.status(pkg.id).solutions, [returned]);
   const disk = fs.readFileSync(path.join(f.dataDir, `${record.remoteId}.json`), 'utf8');
   for (const capability of [record.viewToken, record.submitToken, record.ownerToken]) assert.equal(disk.includes(capability), false);
-  assert.equal(fs.statSync(storePath).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(storePath).mode & 0o777, 0o600);
   for (const filename of ['server.mjs', 'store.mjs']) {
     const code = fs.readFileSync(new URL(`../${filename}`, import.meta.url), 'utf8');
     assert.doesNotMatch(code, /(?:from|import\s*)\s*['"][^'"]*(?:broker|provider|child_process)/);

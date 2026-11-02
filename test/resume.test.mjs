@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest } from '../src/context.mjs';
 import { limitState, RESUME_EXPIRES_MS } from '../src/resume.mjs';
@@ -47,7 +48,7 @@ test('plan usage tells whether an agent is limited and when every full window re
   assert.equal(limitState({ available: true, windows: [{ usedPercent: 100, scope: 'opus', resetsAt: '2026-11-03T10:00:00Z' }] }, 'sonnet').limited, null, 'A limit on another model does not apply.');
 });
 
-test('a run stopped on a limit waits, then continues on whichever agent resets first with the access chosen when it was scheduled', async t => {
+test('a run stopped on a limit waits, then continues on whichever agent resets first with the access chosen when it was scheduled', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id), notices = [];
   broker.on('notify', notice => notices.push(notice));
   await run(broker, c, 'Quota stop', 'codex');
@@ -77,7 +78,7 @@ test('a run stopped on a limit waits, then continues on whichever agent resets f
   assert.equal(fs.existsSync(env.marker), false);
 });
 
-test('a wait survives a restart, ends when cancelled, and gives way to a message sent by hand', async t => {
+test('a wait survives a restart, ends when cancelled, and gives way to a message sent by hand', { skip: scriptCLIs }, async t => {
   const env = setup(t), first = env.open(), c = first.get(first.create().id);
   await run(first, c, 'Quota stop', 'codex');
   controlled(first, { codex: full(new Date(Date.now() + 3600000).toISOString()) });
@@ -96,7 +97,7 @@ test('a wait survives a restart, ends when cancelled, and gives way to a message
   assert.equal(again.resumeEnded.outcome, 'superseded'); assert.equal(reopened.waitingResumes, 0);
 });
 
-test('a wait ends after a day, and a resumed run that reaches another limit waits again', async t => {
+test('a wait ends after a day, and a resumed run that reaches another limit waits again', { skip: scriptCLIs }, async t => {
   const env = setup(t, { [continuationRequest]: { behavior: 'quota' } }), broker = env.open(), c = broker.get(broker.create().id), notices = [];
   broker.on('notify', notice => notices.push(notice));
   await run(broker, c, 'Quota stop', 'codex');
@@ -115,7 +116,7 @@ test('a wait ends after a day, and a resumed run that reaches another limit wait
   assert(notices.some(notice => notice.kind === 'expired'));
 });
 
-test('a wait is offered only after a usage limit, for connected agents, and never with settings a run would refuse', async t => {
+test('a wait is offered only after a usage limit, for connected agents, and never with settings a run would refuse', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
   assert.throws(() => broker.scheduleResume(c, { providers: ['codex'] }), /after a run stops on a usage limit/);
   await run(broker, c, 'Quota stop', 'codex');
@@ -124,7 +125,7 @@ test('a wait is offered only after a usage limit, for connected agents, and neve
   assert.equal(c.resume, null);
 });
 
-test('agents and the commands they run do not inherit the worker’s run-as-Node setting', async t => {
+test('agents and the commands they run do not inherit the worker’s run-as-Node setting', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
   await run(broker, c, 'Start the app from source', 'codex');
   await run(broker, c, 'Start it again', 'claude');
