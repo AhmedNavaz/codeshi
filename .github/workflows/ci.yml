@@ -26,4 +26,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The runner's own temporary folder has a short 8.3 name (RUNNER~1), which Throughline reports in its long form.
       - run: npm test
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}

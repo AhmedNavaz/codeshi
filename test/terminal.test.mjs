@@ -204,7 +204,8 @@ test('a real shell runs commands and resizes through the HTTP routes, streams it
 });
 
 test('on Windows, a real shell runs commands through the HTTP routes, and ending it stops what it started', { skip: process.platform !== 'win32' }, async t => {
-  const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-terminal-live-')));
+  // The long form of the folder's path, as the shell reports it, also when the temporary folder has a short 8.3 name.
+  const workspace = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-terminal-live-')));
   const relay = createRelayServer({ workspace, dataDir: path.join(workspace, '.relay-data'), lock: false });
   t.after(async () => { await relay.close({ force: true }); fs.rmSync(workspace, { recursive: true, force: true }); });
   await new Promise(resolve => relay.server.listen(0, '127.0.0.1', resolve));

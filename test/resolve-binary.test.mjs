@@ -109,9 +109,10 @@ test('Windows npm installs are followed from their .cmd script to the native pro
   f.executable(path.join(npm, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
   assert.equal(resolveBinary('codex', options), null, 'a JavaScript program is never started through a shell');
   const hoisted = f.executable(path.join(npm, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'));
-  assert.equal(resolveBinary('codex', options), hoisted);
+  // Codex's folder is followed through links, as pnpm's is, so the result is its real path (macOS's /var is /private/var).
+  assert.equal(resolveBinary('codex', options), fs.realpathSync(hoisted));
   const nested = f.executable(path.join(npm, 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'));
-  assert.equal(resolveBinary('codex', options), nested, 'the build inside Codex’s own folder is the one its launcher uses');
+  assert.equal(resolveBinary('codex', options), fs.realpathSync(nested), 'the build inside Codex’s own folder is the one its launcher uses');
   assert.equal(resolveBinary('codex', { ...options, arch: 'arm64' }), null, 'a build for another architecture is never used');
 
   // Another package's JavaScript CLI has no native program to start.

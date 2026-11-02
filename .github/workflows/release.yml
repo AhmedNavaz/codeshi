@@ -63,7 +63,11 @@ jobs:
       - name: Check the tag matches package.json
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: npm ci
+      # The runner's own temporary folder has a short 8.3 name (RUNNER~1), which Throughline reports in its long form.
       - run: npm test
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
       - run: npm run package
       - name: Smoke test the packaged app
         run: |

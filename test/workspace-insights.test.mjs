@@ -10,8 +10,9 @@ import { EventEmitter, once } from 'node:events';
 import { workspaceGit, workspaceGitDiff, githubRepository } from '../src/workspace-git.mjs';
 import { gitExecutable } from '../src/resolve-binary.mjs';
 
-// Antigravity keeps its conversation index in SQLite, which is read with the sqlite3 program.
-const noSqlite = spawnSync('sqlite3', ['-version']).status !== 0 && 'Needs the sqlite3 program';
+// Antigravity keeps its conversation index in SQLite, which is read with the sqlite3 program. Windows does not include
+// it, and reading the index there has not been checked yet.
+const noSqlite = process.platform === 'win32' ? 'Reading Antigravity’s conversation index has not been checked on Windows yet' : spawnSync('sqlite3', ['-version']).status !== 0 && 'Needs the sqlite3 program';
 import { ConversationImporter } from '../src/conversation-import.mjs';
 import { exportConversation, readConversationPackage } from '../src/conversation-export.mjs';
 import { Broker, commandFor } from '../src/broker.mjs';
