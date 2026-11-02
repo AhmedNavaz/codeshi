@@ -78,6 +78,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Send selected terminal output to the conversation | Needs design | [#71](https://github.com/AhmedNavaz/throughline/issues/71) |
 | Hands-free voice conversations: say "send", keep talking while the agent works, hear what it did | Needs design; follows voice mode | [#72](https://github.com/AhmedNavaz/throughline/issues/72) |
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/throughline/issues/73) |
+| Status in the Windows notification area | Planned, help wanted; follows the macOS menu bar status | [#74](https://github.com/AhmedNavaz/throughline/issues/74) |
 | Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/throughline/issues/9) |
 | Everything in the thread: GitHub issues, pull requests and failing CI checks as context, then pull requests from the conversation | Planned in stages; [details below](#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/throughline/issues/18) |
@@ -132,6 +133,7 @@ Larger ideas for bringing project context, execution and collaboration into one 
 
 | Idea | Issue |
 | --- | --- |
+| **Live progress near the top of the screen.** A compact pill under the menu bar while a run works, alongside the alerts from [#13](https://github.com/AhmedNavaz/throughline/issues/13). | [#75](https://github.com/AhmedNavaz/throughline/issues/75) |
 | **Automatic tag-team cycles.** Extend cross-agent review with an opt-in handoff from builder to reviewer and user-approved fix cycles. | [#15](https://github.com/AhmedNavaz/throughline/issues/15) |
 | **Race mode.** Two agents take the same task in separate worktrees; keep the better result. | [#16](https://github.com/AhmedNavaz/throughline/issues/16) |
 | **Point and tell.** Click an element in your app's preview and say what should change. | [#19](https://github.com/AhmedNavaz/throughline/issues/19) |
