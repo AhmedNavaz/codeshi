@@ -266,8 +266,8 @@ summary::-webkit-details-marker { display: none; }
 .message-steer .message-text { padding: 7px 12px; font-size: 13px; border-radius: 12px 12px 4px 12px; }
 .message-user .message-attachments { justify-content: flex-end; }
 @keyframes highlight-pulse { 0%, 40% { box-shadow: 0 0 0 2px var(--focus); } 100% { box-shadow: 0 0 0 2px transparent; } }
-.message-highlight .message-text, .activity-highlight > summary { border-radius: 10px; animation: highlight-pulse 1.8s ease-out; }
-.message-highlight:not(.message-user), .activity-highlight { border-radius: 8px; }
+.message-highlight .message-text { border-radius: 10px; animation: highlight-pulse 1.8s ease-out; }
+.message-highlight:not(.message-user) { border-radius: 8px; }
 .message-text { color: var(--text); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; tab-size: 2; }
 .message-assistant .message-text { padding-left: 24px; }
 .code-block { margin: 10px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--code-bg); overflow: hidden; white-space: normal; }
@@ -316,51 +316,67 @@ summary::-webkit-details-marker { display: none; }
 .message-system { margin: 6px 0 6px 24px; color: var(--faint); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .disclosure-chevron { flex: none; width: 12px; height: 12px; background: currentColor; opacity: .7; transition: transform .15s ease; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; }
 details[open] > summary > .disclosure-chevron, .activity-entry.open .activity-output-toggle > .disclosure-chevron { transform: rotate(90deg); }
-.activity-group { margin: 2px 0 6px 24px; }
-.activity-group > summary { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; width: fit-content; height: 26px; margin-left: -6px; padding: 0 6px; border-radius: 5px; color: var(--muted); font-size: 12.5px; cursor: pointer; user-select: none; }
-.activity-group > summary:hover { color: var(--text); background: var(--hover); }
-.activity-summary-action { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-summary-info { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
-.activity-counts { overflow: hidden; color: var(--faint); text-overflow: ellipsis; }
-.activity-counts::before { content: "·"; margin-right: 6px; }
-.activity-badge { flex: none; font-size: 11.5px; font-weight: 500; }
-.activity-badge::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
-.activity-badge.badge-warning { color: var(--warning); }
-.activity-badge.badge-danger { color: var(--danger); }
-/* The step currently running: a spinner and a moving highlight over its description. */
-.activity-spinner { flex: none; width: 11px; height: 11px; border: 1.5px solid var(--border-strong); border-top-color: var(--link); border-radius: 50%; animation: spin .8s linear infinite; }
-.activity-running .activity-summary-action, .run-progress[data-state="active"] .run-action {
+/* A run is one thread under the agent's name. A line runs down from the agent's icon, and each reply and step sits on it
+   in order: a step shows its first line, and its chevron opens the full text. The run's status line ends the thread. */
+.run-thread { padding: 10px 0 0; }
+.run-thread-heading { margin-bottom: 2px; }
+.run-thread-body { position: relative; padding-left: 24px; }
+.run-thread-body::before { content: ""; position: absolute; left: 8.5px; top: -1px; bottom: 0; width: 1px; background: var(--border-strong); }
+.run-thread-body > * { position: relative; --node-y: 13px; }
+/* The line stops at the last step. */
+.run-thread-body > :last-child::after { content: ""; position: absolute; left: -17px; top: var(--node-y); bottom: 0; width: 4px; background: var(--bg); }
+.run-thread .message { padding: 2px 0 0; --node-y: 13.5px; }
+.run-thread .message > .message-heading { display: none; }
+.run-thread .message-assistant .message-text { padding-left: 0; }
+.run-thread .message-assistant .message-actions { height: 18px; margin: 0 0 2px -4px; }
+/* Nodes sit above the line's end. */
+.run-thread .message-assistant::before, .run-thread-body > .message-steer::before, .run-thread-body > .message-system::before { content: ""; position: absolute; z-index: 1; left: -18px; top: 10.5px; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); box-shadow: 0 0 0 3px var(--bg); }
+.run-thread .message-steer { padding-top: 6px; }
+.run-thread .message-steer > .message-heading { display: flex; }
+.run-thread-body > .message-steer::before { top: 13px; background: var(--link); }
+.run-thread-body > .message-error, .run-thread-body > .message-system { margin-left: 0; }
+.run-thread-body > .message-error { --node-y: 10px; }
+.run-thread-body > .message-error::before { position: absolute; z-index: 1; left: -22.5px; top: 2px; margin: 0; box-shadow: 0 0 0 3px var(--bg); background: var(--danger); }
+.activity-highlight { border-radius: 8px; animation: highlight-pulse 1.8s ease-out; }
+/* The live status line: a moving highlight over what the agent is doing. */
+.run-progress[data-state="active"] .run-action {
   background: linear-gradient(90deg, var(--muted) 35%, var(--text-strong) 50%, var(--muted) 65%) 0 0 / 250% 100%;
   -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.2s linear infinite;
 }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
-.activity-list { margin: 2px 0 4px 5px; padding-left: 12px; border-left: 1px solid var(--border-strong); }
+.timeline-node { position: absolute; z-index: 1; left: -24px; top: 4px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--bg); }
 .activity-entry { color: var(--text); font-size: 12.5px; }
-.activity-entry-header { position: relative; display: flex; align-items: center; min-width: 0; }
+.activity-entry-header { display: flex; align-items: center; min-width: 0; }
 .activity-output-toggle { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; }
 .activity-output-toggle:hover:enabled { color: var(--text); background: var(--hover); }
 div.activity-output-toggle { cursor: default; }
-.activity-entry-title { flex: none; color: var(--text); font-weight: 500; }
-.activity-entry-detail, .activity-cmd-inline { min-width: 0; overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; }
-.activity-cmd-inline { font: 11.5px/1.4 var(--mono); }
-.activity-entry-detail { font: 12px/1.4 var(--mono); }
-.activity-icon { flex: none; width: 13px; height: 13px; background: var(--faint); -webkit-mask: var(--activity-icon, var(--icon-more)) center / contain no-repeat; mask: var(--activity-icon, var(--icon-more)) center / contain no-repeat; }
+.activity-entry-title { flex: none; max-width: 100%; overflow: hidden; color: var(--text); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.activity-entry-detail { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); }
+.activity-entry-error .activity-entry-title { color: var(--danger); }
+.activity-icon { flex: none; width: 12px; height: 12px; background: var(--faint); -webkit-mask: var(--activity-icon, var(--icon-more)) center / contain no-repeat; mask: var(--activity-icon, var(--icon-more)) center / contain no-repeat; }
 .activity-icon.icon-command { --activity-icon: var(--icon-terminal); }
 .activity-icon.icon-read { --activity-icon: var(--icon-file); }
 .activity-icon.icon-edit { --activity-icon: var(--icon-pencil); }
 .activity-icon.icon-search { --activity-icon: var(--icon-search); }
+.activity-icon.icon-web { --activity-icon: var(--icon-globe); }
+.activity-icon.icon-agent { --activity-icon: var(--icon-agent); }
 .activity-icon.icon-approval { --activity-icon: var(--icon-check); background: var(--success); }
 .activity-icon.icon-denied { --activity-icon: var(--icon-minus-circle); background: var(--danger); }
 .activity-icon.icon-error { --activity-icon: var(--icon-alert); background: var(--danger); }
+.activity-icon.icon-general, .activity-icon.icon-tool { --activity-icon: none; width: 6px; height: 6px; border-radius: 50%; -webkit-mask: none; mask: none; }
 .activity-output-toggle > .disclosure-chevron { margin-left: 2px; opacity: 0; }
 .activity-output-toggle:hover > .disclosure-chevron, .activity-entry.open .activity-output-toggle > .disclosure-chevron, .activity-output-toggle:focus-visible > .disclosure-chevron { opacity: .7; }
 .activity-copy { flex: none; opacity: 0; }
 .activity-entry-header:hover .activity-copy, .activity-copy:focus-visible, .activity-copy.copied { opacity: 1; }
-.activity-output { margin: 2px 0 6px 14px; padding: 8px 10px; border-radius: 6px; background: var(--code-bg); color: var(--muted); font: 11.5px/1.55 var(--mono); max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.activity-earlier > summary { display: flex; align-items: center; width: fit-content; height: 24px; margin-left: -6px; padding: 0 6px; border-radius: 5px; color: var(--faint); font-size: 12px; cursor: pointer; user-select: none; }
+.activity-output { margin: 2px 0 6px; padding: 8px 10px; border-radius: 6px; background: var(--code-bg); color: var(--muted); font: 11.5px/1.55 var(--mono); max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.activity-earlier > summary { display: flex; align-items: center; width: fit-content; height: 26px; margin-left: -6px; padding: 0 6px; border-radius: 5px; color: var(--faint); font-size: 12.5px; cursor: pointer; list-style: none; user-select: none; }
+.activity-earlier > summary::-webkit-details-marker { display: none; }
+.activity-earlier > summary .timeline-node { left: -18px; }
 .activity-earlier > summary::after { content: ""; width: 11px; height: 11px; margin-left: 4px; background: currentColor; -webkit-mask: var(--icon-chevron-down) center / contain no-repeat; mask: var(--icon-chevron-down) center / contain no-repeat; }
 .activity-earlier[open] > summary::after { transform: rotate(180deg); }
 .activity-earlier > summary:hover { color: var(--text); background: var(--hover); }
+.activity-earlier[open] > summary { display: none; }
 
 /* Empty states */
 .empty-state { display: flex; flex-direction: column; align-items: center; width: min(520px, calc(100% - 48px)); margin: clamp(48px, 16vh, 160px) auto 32px; text-align: center; }
@@ -402,14 +418,20 @@ div.activity-output-toggle { cursor: default; }
 .run-elapsed { flex: none; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .run-elapsed:empty { display: none; }
 .run-expanded-details { display: grid; gap: 3px; margin: 2px 0 6px 20px; color: var(--faint); font-size: 11.5px; }
-.run-meta-summary, .run-metrics { display: flex; flex-wrap: wrap; gap: 0 8px; }
-.run-meta-summary:empty, .run-metrics:empty, #run-detail:empty { display: none; }
-.run-meta-chip, .run-metric-item { display: inline-flex; align-items: center; }
-.run-meta-chip { color: var(--muted); }
-.run-meta-chip.run-meta-live { color: var(--success); }
-.run-meta-chip + .run-meta-chip::before, .run-metric-item + .run-metric-item::before { content: "·"; margin-right: 8px; color: var(--faint); }
+.run-metrics { display: flex; flex-wrap: wrap; gap: 0 8px; }
+.run-metrics:empty, #run-detail:empty { display: none; }
+.run-metric-item { display: inline-flex; align-items: center; }
+.run-metric-item + .run-metric-item::before { content: "·"; margin-right: 8px; color: var(--faint); }
 #run-detail { margin: 0; min-width: 0; color: var(--muted); }
-.run-jump-prompt { justify-self: start; font-size: 11.5px; }
+/* With nothing behind it, the line is only a status. */
+.run-details-disclosure.empty > summary { cursor: default; pointer-events: none; }
+.run-details-disclosure.empty .disclosure-chevron { display: none; }
+/* In a thread, the status line's indicator is the run's last step on its line. */
+.run-thread-body > .run-progress { --node-y: 6px; }
+.run-thread-body > .run-progress .run-details-disclosure > summary::before { position: absolute; z-index: 1; left: -18.5px; top: 8.5px; margin: 0; box-shadow: 0 0 0 3px var(--bg); }
+.run-thread-body > .run-progress[data-state="active"] .run-details-disclosure > summary::before { left: -20.5px; top: 6.5px; background: var(--bg); }
+.run-thread-body > .run-progress[data-state="complete"] .run-details-disclosure > summary::before { left: -21px; top: 6px; }
+.run-thread-body > .run-progress .run-expanded-details { margin-left: 0; }
 /* Under the latest turn: permission requests, the run's status line, Continue and follow-up actions. */
 .transcript-footer { display: grid; gap: 4px; margin: 0 0 4px 24px; }
 .transcript-footer:not(:has(> :not([hidden], :empty))) { display: none; }
@@ -771,7 +793,7 @@ button.commit-hash:hover { text-decoration: underline; }
   .messages, .composer-region { width: calc(100% - 24px); }
   .composer-region { padding-bottom: 10px; }
   .message-assistant .message-text { padding-left: 0; }
-  .activity-group, .message-error, .message-system { margin-left: 0; }
+  .message-error, .message-system { margin-left: 0; }
   .starter-prompts { grid-template-columns: 1fr; }
   .provider-button { padding: 0 7px; }
   .composer-toolbar { align-items: flex-end; }

@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Changed
+
+- Each run now reads as one thread under the agent's name, model and effort. Its replies and every step sit on one line in order, each step showing what it did in a single line, such as **Run** `npm test` or **Read** `src/app.js`, with a chevron for the full output, edit or result. Steps are no longer folded into a "Worked through" summary, and notes from full auto-approval are no longer listed. The run's status line is the last step of its thread and its only live indicator (**Thinking**, **Working**, **Writing** or **Waiting for your approval**, with the elapsed time); its details hold token and context counts instead of repeating the agent, model, permission setting and step count.
+
 ## [0.14.0] - 2026-11-02
 
 ### Added

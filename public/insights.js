@@ -101,65 +101,23 @@
     // A finished run states its duration in the action text.
     $('run-elapsed').textContent = running && Number.isFinite(elapsed) ? duration(elapsed) : '';
     $('run-progress').dataset.state = running ? state.streamConnected === false ? 'quiet' : phase === 'approval' ? 'approval' : quiet ? 'quiet' : 'active' : run.status === 'complete' ? 'complete' : 'quiet';
-    const model = run.effectiveModel && run.effectiveModel !== 'unknown' ? run.effectiveModel : run.model || 'Provider default';
     const agent = run.connection === 'local' ? 'Local · Ollama' : name(run.provider);
-    const effort = run.effectiveEffort || run.effort;
 
-    const actionEl = $('run-action');
-    if (actionEl) {
-      let actionText = '';
-      if (running) {
-        if (state.streamConnected === false) actionText = 'Reconnecting to app';
-        else if (c.pendingApprovals?.length) actionText = 'Waiting for tool approval';
-        else if (quiet) actionText = `No provider activity for ${duration(silence)}`;
-        else if (phase === 'reasoning') actionText = 'Reasoning about task';
-        else if (phase === 'tool') {
-          const latest = c.messages?.filter(message => message.role === 'activity' && message.runId === run.id).at(-1);
-          actionText = latest && api.describeActivity ? api.describeActivity(latest.text).action : 'Running workspace tools';
-        }
-        else if (phase === 'responding') actionText = 'Writing response';
-        else if (phase === 'compacting') actionText = 'Organizing context';
-        else actionText = phase === 'starting' ? 'Starting agent' : 'Working on your request';
-      } else {
-        if (run.status === 'complete') actionText = `Completed in ${Number.isFinite(elapsed) ? duration(elapsed) : 'recorded duration'}`;
-        else if (run.errorCategory === 'quota') actionText = 'Usage limit reached';
-        else actionText = 'Run stopped';
-      }
-      actionEl.textContent = actionText;
-    }
-
-    const jumpPrompt = $('run-jump-prompt');
-    if (jumpPrompt) {
-      const userMsg = run.id ? c.messages?.find(m => m.runId === run.id && m.role === 'user') : c.messages?.filter(m => m.role === 'user').slice(-1)[0];
-      if (userMsg) {
-        jumpPrompt.hidden = false;
-        jumpPrompt.onclick = () => {
-          const target = document.getElementById('message-' + userMsg.id);
-          if (target) {
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            target.classList.add('message-highlight');
-            setTimeout(() => target.classList.remove('message-highlight'), 2000);
-          }
-        };
-      } else {
-        jumpPrompt.hidden = true;
-      }
-    }
-
-    const metaSummary = $('run-meta-summary');
-    if (metaSummary) {
-      metaSummary.replaceChildren();
-      metaSummary.append(el('span', `${agent} · ${model}${effort ? ' · ' + title(effort) + ' effort' : ''}`, 'run-meta-chip run-meta-agent'));
-      if (run.approvalPolicy === 'auto') metaSummary.append(el('span', 'Full auto-approval', 'run-meta-chip run-meta-policy'));
-      if (run.toolCount) metaSummary.append(el('span', `${run.toolCount} tool step${run.toolCount === 1 ? '' : 's'}`, 'run-meta-chip run-meta-steps'));
-      if (running && !quiet && silence < 30000) metaSummary.append(el('span', 'Active', 'run-meta-chip run-meta-live'));
-    }
-
-    $('run-detail').textContent = running ? state.streamConnected === false ? 'The app connection was interrupted. The agent may still be running; reconnecting to restore its live status.' : phase === 'approval' ? 'Review the permission request below to let the agent continue.' : quiet ? `No provider activity for ${duration(silence)}. This can happen during a long request; you can wait or stop the run.` : phase === 'reasoning' ? `${name(run.provider)} reported reasoning activity. Its private reasoning stays private.` : phase === 'tool' ? `${name(run.provider)} is using workspace tools${run.approvalPolicy === 'auto' ? ' with full auto-approval' : ''}. Open workspace activity to see commands and file changes.` : phase === 'responding' ? 'The response is arriving live.' : 'The agent is running. New activity appears here as it arrives.' : '';
+    // One live line, the last step of the run's thread: what the agent is doing in a word, and for how long. The steps
+    // above it say what it did, and the agent, model and effort head the thread, so this line repeats none of them.
+    let actionText;
+    if (running) {
+      if (state.streamConnected === false) actionText = 'Reconnecting to the app';
+      else if (c.pendingApprovals?.length) actionText = 'Waiting for your approval';
+      else if (quiet) actionText = `Waiting for ${agent}`;
+      else actionText = { starting: `Starting ${agent}`, reasoning: 'Thinking', responding: 'Writing', compacting: 'Organizing context' }[phase] || 'Working';
+    } else if (run.status === 'complete') actionText = `Completed in ${Number.isFinite(elapsed) ? duration(elapsed) : 'recorded duration'}`;
+    else actionText = run.errorCategory === 'quota' ? 'Usage limit reached' : 'Run stopped';
+    $('run-action').textContent = actionText;
+    // Opening the line explains a pause; otherwise it holds the token and context counts.
+    $('run-detail').textContent = !running ? '' : state.streamConnected === false ? 'The app connection was interrupted. The agent may still be running; reconnecting to restore its live status.' : phase === 'approval' ? 'Review the permission request below to let the agent continue.' : quiet ? `No activity from ${agent} for ${duration(silence)}. This can happen during a long request; you can wait or stop the run.` : '';
     const metrics = [];
-    // The agent, model, policy and step count are on the line above; these add what it does not say.
-    if (run.connection === 'local') $('run-detail').textContent = running ? 'No cloud model charges' : '';
-    if (running) metrics.push(state.streamConnected === false ? 'Reconnecting to app' : `Last activity ${duration(silence)} ago`);
+    if (run.connection === 'local') metrics.push('No cloud model charges');
     // Codex's inputTokens include its cached input; Claude reports the input it read from and wrote to its cache apart from input_tokens.
     const usage = run.usage?.total || run.usage, output = usage?.outputTokens ?? usage?.output_tokens;
     const input = usage?.inputTokens ?? (typeof usage?.input_tokens === 'number' ? usage.input_tokens + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0) : undefined);
@@ -181,6 +139,10 @@
       if (!running && report?.status !== 'complete') $('run-phase').className = 'run-phase sr-only quiet';
       $('run-detail').textContent = `${name(run.provider)} · Read-only review${report?.summary ? ' · ' + report.summary : ''}`;
     }
+    // With nothing to open, the line is only a status.
+    const empty = !$('run-detail').textContent && !metrics.length;
+    $('run-details-disclosure').classList.toggle('empty', empty);
+    if (empty) $('run-details-disclosure').open = false;
   }
 
   let gitData = null, gitScope = null, gitBusy = false, gitView = 'changes', gitRequest = 0;

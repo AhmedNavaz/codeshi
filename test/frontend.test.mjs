@@ -716,15 +716,15 @@ test('Find in the conversation matches text across formatting, skips interface l
   await search('codex');assert.equal(count(),'No results','Author names, times and buttons are not conversation text.');assert.equal(texts('conversation-search').length,0);
 });
 
-test('Find in the conversation reveals a collapsed activity match, follows re-renders and Escape returns to the composer',async()=>{
-  const ui=await browser({searchUI:true}),chat=ui.canonical.get('project-one');chat.messages.push({id:'u1',role:'user',text:'Run the tests'},{id:'t1',role:'activity',text:'Ran npm test: 12 passed'},{id:'a1',role:'assistant',provider:'codex',text:'All tests pass.'});await ui.window.relayUI.refresh();
+test('Find in the conversation matches run steps, opens a step holding a match, follows re-renders and Escape returns to the composer',async()=>{
+  const ui=await browser({searchUI:true}),chat=ui.canonical.get('project-one');chat.messages.push({id:'u1',role:'user',text:'Run the tests'},{id:'t1',role:'activity',text:'Ran npm test: 12 passed'},{id:'t2',role:'activity',text:'$ npm run lint\nfound 0 problems'},{id:'a1',role:'assistant',provider:'codex',text:'All tests pass.'});await ui.window.relayUI.refresh();
   ui.document.dispatchEvent(new UIEvent('keydown',{key:'f',ctrlKey:true}));const search=async text=>{ui.$('conversation-search-input').value=text;ui.fire('conversation-search-input','input');await flush();};
-  await search('workspace activity');assert.equal(ui.$('conversation-search-count').textContent,'No results','The group summary is not conversation text.');assert.equal(ui.document.querySelector('.activity-group').open,false);
+  await search('problems');assert.equal(ui.$('conversation-search-count').textContent,'1 of 1');assert.equal(ui.document.querySelector('pre[data-entry-id="t2"]').hidden,false,'The step holding the match opens.');
   await search('npm test');
-  assert.equal(ui.$('conversation-search-count').textContent,'1 of 1');assert.equal(ui.document.querySelector('.activity-group').open,true,'The collapsed group holding the match opens.');
+  assert.equal(ui.$('conversation-search-count').textContent,'1 of 1');
   chat.messages.push({id:'a2',role:'assistant',provider:'codex',text:'Run npm test again after the change.'});await ui.window.relayUI.refresh();
   const attached=node=>{for(let current=node;current;current=current.parentNode)if(current===ui.$('messages'))return true;return false;};
-  assert.equal(ui.$('conversation-search-count').textContent,'1 of 2');assert.equal(ui.document.querySelector('.activity-group').open,true);assert([...ui.highlights.get('conversation-search')].every(range=>attached(range.startContainer)),'Highlights move to the re-rendered messages.');
+  assert.equal(ui.$('conversation-search-count').textContent,'1 of 2');assert([...ui.highlights.get('conversation-search')].every(range=>attached(range.startContainer)),'Highlights move to the re-rendered messages.');
   const escape=new UIEvent('keydown',{key:'Escape'});ui.$('conversation-search-input').dispatchEvent(escape);
   assert.equal(escape.defaultPrevented,true);assert.equal(ui.$('conversation-search').hidden,true);assert.equal(ui.highlights.size,0);assert.equal(ui.document.activeElement,ui.$('message-input'));
 });
@@ -838,9 +838,9 @@ test('import dialog filters conversations by agent using dropdown selector',asyn
 
 test('run indicators distinguish reasoning, quiet providers, approvals, and real token counts',async()=>{
   const ui=await browser({insights:true}),c=ui.canonical.get('project-one');c.status='running';c.activeRun={provider:'codex',phase:'reasoning',startedAt:new Date(Date.now()-50000).toISOString(),lastEventAt:new Date().toISOString(),effectiveModel:'model-one',effort:'high',usage:{total:{inputTokens:100,outputTokens:20}}};await ui.window.relayUI.refresh();
-  assert.equal(ui.$('run-phase').textContent,'Reasoning');assert.match(ui.$('run-detail').textContent,/reported reasoning activity/);assert.match(ui.$('run-metrics').textContent,/100 input tokens/);assert.equal(ui.$('model-select').disabled,true);
-  c.activeRun.lastEventAt=new Date(Date.now()-40000).toISOString();await ui.window.relayUI.refresh();assert.equal(ui.$('run-phase').textContent,'Waiting for provider');assert.match(ui.$('run-detail').textContent,/No provider activity/);assert.doesNotMatch(ui.$('run-detail').textContent,/stuck/i);
-  c.pendingApprovals=[{id:'approval'}];await ui.window.relayUI.refresh();assert.equal(ui.$('run-phase').textContent,'Waiting for approval');
+  assert.equal(ui.$('run-phase').textContent,'Reasoning');assert.equal(ui.$('run-action').textContent,'Thinking');assert.equal(ui.$('run-detail').textContent,'');assert.match(ui.$('run-metrics').textContent,/100 input tokens/);assert.equal(ui.$('model-select').disabled,true);
+  c.activeRun.lastEventAt=new Date(Date.now()-40000).toISOString();await ui.window.relayUI.refresh();assert.equal(ui.$('run-phase').textContent,'Waiting for provider');assert.equal(ui.$('run-action').textContent,'Waiting for Codex');assert.match(ui.$('run-detail').textContent,/No activity from Codex for 40s/);assert.doesNotMatch(ui.$('run-detail').textContent,/stuck/i);
+  c.pendingApprovals=[{id:'approval'}];await ui.window.relayUI.refresh();assert.equal(ui.$('run-phase').textContent,'Waiting for approval');assert.equal(ui.$('run-action').textContent,'Waiting for your approval');
 });
 
 test('input token counts include cached input for Claude as they do for Codex',async()=>{
@@ -1589,94 +1589,72 @@ test('user prompts read as bubbles distinct from labelled agent replies and stay
   // The prompt and everything that answers it form one turn, so the prompt stays pinned above its results.
   const turn = userMsg.parentNode;
   assert(turn.classList.contains('turn'));
-  assert.equal(assistantMsg.parentNode, turn);
-  const activityGroup = ui.document.querySelector('.activity-group');
-  assert.equal(activityGroup.parentNode, turn);
-  assert.equal(ui.$('transcript-footer').parentNode, turn, 'Run status and follow-up actions belong to the latest turn.');
-  // With the prompt pinned, replies and activity no longer carry their own links back to it.
+  // The run is one thread in the turn, headed once by the agent, with its steps and replies in order on its line.
+  const thread = assistantMsg.parentNode.parentNode;
+  assert(thread.classList.contains('run-thread'));
+  assert.equal(thread.parentNode, turn);
+  assert.equal(thread.dataset.runId, 'run-1');
+  assert.equal(thread.querySelector('.run-thread-heading').querySelector('.message-author').textContent, 'Codex');
+  assert.match(thread.querySelector('.run-thread-heading').querySelector('.message-model').textContent, /gpt-4o/, 'The heading names the model even when a step comes before the first reply.');
+  const step = ui.document.querySelector('.activity-entry');
+  assert.deepEqual(assistantMsg.parentNode.children.map(child => child.className.split(' ')[0]), ['activity-entry', 'message']);
+  assert.equal(step.querySelector('.activity-entry-title').textContent, 'Run');
+  assert.equal(ui.$('transcript-footer').parentNode === turn, true, 'Follow-up actions belong to the latest turn.');
   assert.equal(assistantMsg.querySelector('.message-jump-prompt'), null);
-  assert.equal(activityGroup.querySelector('.activity-prompt-link'), null);
 });
 
-test('activity group summarizes useful counts, parses commands and file changes, and preserves full copyable output', async () => {
+test('each step of a run shows its first line on the run’s timeline, with its full text behind a chevron', async () => {
   const ui = await browser();
   const chat = ui.canonical.get('project-one');
   chat.messages.push(
     { id: 'u1', runId: 'run-42', role: 'user', text: 'Build project' },
     { id: 't1', runId: 'run-42', role: 'activity', text: 'File changes: [{"path":"src/index.js","kind":"modify"},{"path":"src/utils.js","kind":"add"}]' },
-    { id: 't2', runId: 'run-42', role: 'activity', text: '$ npm run build\nBundled 2 modules in 42ms' }
+    { id: 't2', runId: 'run-42', role: 'activity', text: '$ npm run build\nBundled 2 modules in 42ms' },
+    { id: 't3', runId: 'run-42', role: 'activity', text: 'Tool Bash auto-approved by policy.' },
+    { id: 't4', runId: 'run-42', role: 'activity', text: 'Bash\n{"command":"npm test","description":"Run the unit tests"}\n12 passed' },
+    { id: 't5', runId: 'run-42', role: 'activity', text: 'Edit\n{"file_path":"src/a.js","old_string":"let a = 1;","new_string":"const a = 1;"}\nThe file was updated.' },
+    { id: 't6', runId: 'run-42', role: 'activity', text: 'Approval denied by the user.' }
   );
   await ui.window.relayUI.refresh();
 
-  const activityGroup = ui.document.querySelector('.activity-group');
-  assert(activityGroup);
-  const countsSpan = activityGroup.querySelector('.activity-counts');
-  assert(countsSpan);
-  // Summarizes files changed and commands run
-  assert.match(countsSpan.textContent, /2 files changed/);
-  assert.match(countsSpan.textContent, /1 command run/);
+  // Every step shows without opening anything; notes from full auto-approval add nothing and are left out.
+  const entries = ui.document.querySelectorAll('.activity-entry');
+  assert.deepEqual(entries.map(entry => [entry.querySelector('.activity-entry-title').textContent, entry.querySelector('.activity-entry-detail')?.textContent || '']), [
+    ['Edit', 'src/index.js, src/utils.js'], ['Run', 'npm run build'], ['Run', 'Run the unit tests'], ['Edit', 'src/a.js'], ['You denied the request', '']
+  ]);
+  assert.equal(ui.document.querySelector('.activity-group'), null, 'Steps are not folded into a summary.');
+  assert(entries.every(entry => entry.querySelector('.timeline-node')), 'Each step has a node on the run’s line.');
+  assert(entries[4].classList.contains('activity-entry-error'));
 
-  // Check action row rendering
-  const entries = activityGroup.querySelectorAll('.activity-entry');
-  assert.equal(entries.length, 2);
-
-  // File change entry
-  const fileEntry = entries[0];
-  assert(fileEntry.classList.contains('activity-entry-file'));
-  assert.match(fileEntry.querySelector('.activity-entry-title').textContent, /Changed 2 files/);
-
-  // Command entry
-  const cmdEntry = entries[1];
-  assert(cmdEntry.classList.contains('activity-entry-command'));
-  assert.match(cmdEntry.querySelector('.activity-entry-title').textContent, /Building project/);
-  assert.equal(cmdEntry.querySelector('.activity-cmd-inline').textContent, '$ npm run build');
-
-  // Command output disclosure and copy button
-  const toggle = cmdEntry.querySelector('.activity-output-toggle');
-  assert(toggle);
+  // The full text opens under its step, and copying takes all of it.
+  const command = entries[1], toggle = command.querySelector('.activity-output-toggle'), output = command.querySelector('.activity-output');
   assert.equal(toggle.getAttribute('aria-expanded'), 'false');
-  const pre = cmdEntry.querySelector('.activity-output');
-  assert(pre);
-  assert.equal(pre.hidden, true);
-  assert.match(pre.textContent, /Bundled 2 modules in 42ms/);
-
-  // Toggle reveals output without altering stored content
+  assert.equal(output.hidden, true);
   toggle.click();
-  assert.equal(pre.hidden, false);
+  assert.equal(output.hidden, false);
   assert.equal(toggle.getAttribute('aria-expanded'), 'true');
-  assert.match(pre.textContent, /Bundled 2 modules in 42ms/);
-
-  // Copy button copies full raw output
-  const copyBtn = cmdEntry.querySelector('.activity-copy');
-  assert(copyBtn);
-  copyBtn.click();
+  assert.equal(output.textContent, '$ npm run build\nBundled 2 modules in 42ms');
+  assert.equal(entries[2].querySelector('.activity-output').textContent, '$ npm test\n12 passed', 'Claude’s command shows its description first, and the command with its result inside.');
+  assert.equal(entries[3].querySelector('.activity-output').textContent, '- let a = 1;\n+ const a = 1;', 'An edit opens to what it changed.');
+  const copy = command.querySelector('.activity-copy');
+  copy.click();
   await flush();
-  assert(copyBtn.classList.contains('copied'));
+  assert(copy.classList.contains('copied'));
+  assert.equal(entries[4].querySelector('.activity-output'), null, 'A step with nothing more to show has no chevron.');
 });
 
-test('collapsed activity group surfaces pending approvals and failures without expanding', async () => {
+test('a very long stretch of steps keeps its earlier steps behind one row', async () => {
   const ui = await browser();
   const chat = ui.canonical.get('project-one');
-  chat.status = 'running';
-  chat.pendingApprovals = [{ id: 'ap1', runId: 'run-appr' }];
-  chat.messages.push(
-    { id: 'u1', runId: 'run-appr', role: 'user', text: 'Update system files' },
-    { id: 't1', runId: 'run-appr', role: 'activity', text: 'Approval denied by the user.' }
-  );
+  chat.messages.push({ id: 'u1', runId: 'run-long', role: 'user', text: 'Read everything' });
+  for (let index = 0; index < 15; index++) chat.messages.push({ id: 'r' + index, runId: 'run-long', role: 'activity', text: `Read\n{"file_path":"src/file-${index}.js"}` });
   await ui.window.relayUI.refresh();
-
-  const activityGroup = ui.document.querySelector('.activity-group');
-  assert(activityGroup);
-  assert.equal(activityGroup.open, false);
-
-  // Both warning (waiting for approval) and failure (denied/issue) badges are discoverable on the collapsed summary
-  const warningBadge = activityGroup.querySelector('.badge-warning');
-  assert(warningBadge);
-  assert.equal(warningBadge.textContent, 'Waiting for approval');
-
-  const errorBadge = activityGroup.querySelector('.badge-danger');
-  assert(errorBadge);
-  assert.match(errorBadge.textContent, /1 issue/);
+  const earlier = ui.document.querySelector('.activity-earlier');
+  assert(earlier);
+  assert.equal(earlier.open, false);
+  assert.equal(earlier.querySelectorAll('.activity-entry').length, 9);
+  assert.equal(ui.document.querySelectorAll('.activity-entry').length, 15);
+  assert.match(earlier.querySelector('summary').textContent, /9 earlier steps/);
 });
 
 test('activity expansion and reading scroll position are preserved across rerenders', async () => {
@@ -1688,27 +1666,21 @@ test('activity expansion and reading scroll position are preserved across rerend
   );
   await ui.window.relayUI.refresh();
 
-  const activityGroup = ui.document.querySelector('.activity-group');
-  assert.equal(activityGroup.open, false);
-  // User expands group and output
-  activityGroup.open = true;
-  const toggle = activityGroup.querySelector('.activity-output-toggle');
+  const toggle = ui.document.querySelector('.activity-output-toggle');
   toggle.click();
-  assert.equal(activityGroup.querySelector('.activity-output').hidden, false);
+  assert.equal(ui.document.querySelector('.activity-output').hidden, false);
 
   // New message arrives and refresh triggers
   chat.messages.push({ id: 't2', runId: 'run-exp', role: 'activity', text: '$ npm test\nPass 2' });
   await ui.window.relayUI.refresh();
 
-  // Group and output remain expanded across rerender
-  const refreshedGroup = ui.document.querySelector('.activity-group');
-  assert.equal(refreshedGroup.open, true);
-  const refreshedPre = refreshedGroup.querySelector('pre[data-entry-id="t1"]');
+  // The opened output stays open across the rerender
+  const refreshedPre = ui.document.querySelector('pre[data-entry-id="t1"]');
   assert(refreshedPre);
   assert.equal(refreshedPre.hidden, false);
 });
 
-test('run progress organizes primary action, secondary metadata and detailed context window metrics', async () => {
+test('the run’s status line is the last step of its thread, says what the agent is doing in a word, and opens to token counts', async () => {
   const ui = await browser({ insights: true });
   const c = ui.canonical.get('project-one');
   c.status = 'running';
@@ -1726,27 +1698,29 @@ test('run progress organizes primary action, secondary metadata and detailed con
   c.messages.push({ id: 'u1', runId: 'run-meta', role: 'user', text: 'Refactor core modules' });
   await ui.window.relayUI.refresh();
 
-  // Primary state & action
+  // Before any reply, the live run already has its thread, headed by the agent, model and effort.
+  const thread = ui.$('run-progress').parentNode.parentNode;
+  assert(thread.classList.contains('run-thread'));
+  assert.match(thread.querySelector('.run-thread-heading').textContent, /Codex.*gpt-4o · high effort/);
   assert.equal(ui.$('run-phase').textContent, 'Running tools');
-  assert.equal(ui.$('run-action').textContent, 'Running workspace tools');
-
-  // Secondary metadata summary
-  const meta = ui.$('run-meta-summary');
-  assert(meta);
-  assert.match(meta.textContent, /Codex · gpt-4o · High effort/);
-  assert.match(meta.textContent, /Full auto-approval/);
-  assert.match(meta.textContent, /3 tool steps/);
-
-  // Jump to request button in run status
-  const jump = ui.$('run-jump-prompt');
-  assert(jump);
-  assert.equal(jump.hidden, false);
+  assert.equal(ui.$('run-action').textContent, 'Working', 'The steps say what was run; the live line says what is happening.');
+  assert.equal(ui.$('run-detail').textContent, '');
+  assert.equal(ui.$('run-meta-summary'), null, 'The agent, model, permission setting and step count are not repeated under the line.');
 
   // Context window tokens distinct from allowance
   const metrics = ui.$('run-metrics');
   assert.match(metrics.textContent, /5,200 input tokens/);
   assert.match(metrics.textContent, /850 output tokens/);
   assert.match(metrics.textContent, /12,400 \/ 128,000 context tokens/);
+  assert.equal(ui.$('run-details-disclosure').classList.contains('empty'), false);
+
+  // A finished run ends its thread with how long it took.
+  c.status = 'complete'; c.lastRun = { ...c.activeRun, id: 'run-meta', status: 'complete', endedAt: new Date().toISOString(), usage: null }; c.activeRun = null;
+  c.messages.push({ id: 'a1', runId: 'run-meta', role: 'assistant', provider: 'codex', text: 'Done.' });
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-progress').parentNode, ui.$('message-a1').parentNode);
+  assert.match(ui.$('run-action').textContent, /^Completed in 1m/);
+  assert.equal(ui.$('run-details-disclosure').classList.contains('empty'), true, 'With nothing to show, the line does not open.');
 });
 
 

@@ -375,54 +375,103 @@
       renderInline(block, quote ? quote[1] : line);
     }
   }
+  // A path as the person knows it: relative to its workspace folder, with the folder named when there are several.
+  function displayPath(value) {
+    const text = String(value || ""), folders = currentProject()?.folders || [];
+    for (const folder of folders) {
+      if (folder.path && text === folder.path) return folders.length > 1 ? folder.name : "";
+      if (folder.path && text.startsWith(folder.path + "/")) return (folders.length > 1 ? folder.name + "/" : "") + text.slice(folder.path.length + 1);
+    }
+    return text;
+  }
+  // One step of a run, shown as a timeline row: a short verb, what it acted on, and the full text behind a chevron.
   function parseActivity(raw) {
-    const text = String(raw || '').trim();
-    if (text.startsWith('$ ')) {
-      const firstNewline = text.indexOf('\n');
-      const cmd = firstNewline === -1 ? text.slice(2).trim() : text.slice(2, firstNewline).trim();
-      const output = firstNewline === -1 ? '' : text.slice(firstNewline + 1).trim();
-      let action = 'Run command';
-      if (/^(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+test)/.test(cmd)) action = 'Running tests';
-      else if (/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build/.test(cmd)) action = 'Building project';
-      else if (/^git\s+status/.test(cmd)) action = 'Checking Git status';
-      else if (/^git\s+diff/.test(cmd)) action = 'Checking Git diff';
-      else if (/^git\s+/.test(cmd)) action = `Running git ${cmd.split(/\s+/)[1] || ''}`.trim();
-      else if (cmd) action = `Run ${cmd.split(/\s+/)[0]}`;
-      return { kind: 'command', icon: 'command', action, detail: cmd, cmd, output, raw: text };
+    const text = String(raw || "").trim(), first = text.split("\n")[0];
+    if (text.startsWith("$ ")) {
+      const newline = text.indexOf("\n"), cmd = (newline === -1 ? text.slice(2) : text.slice(2, newline)).trim();
+      return { kind: "command", icon: "command", verb: "Run", detail: cmd, mono: true, cmd, output: text, raw: text };
     }
-    if (text.startsWith('File changes:')) {
+    if (text.startsWith("File changes:")) {
       let files = [];
-      try { files = JSON.parse(text.slice('File changes:'.length)); } catch {}
-      const count = files.length;
-      const paths = files.map(f => f.path || f.file || '').filter(Boolean);
-      const action = count === 1 ? `Updating ${paths[0] || 'file'}` : `Changed ${count} file${count === 1 ? '' : 's'}`;
-      return { kind: 'file', icon: 'edit', action, detail: count > 1 ? paths.map(file => file.split('/').pop()).join(', ') : '', files, paths, raw: text };
+      try { files = JSON.parse(text.slice("File changes:".length)); } catch {}
+      const paths = files.map(file => file.path || file.file || "").filter(Boolean);
+      const created = files.length > 0 && files.every(file => file.kind === "add");
+      return { kind: "file", icon: "edit", verb: created ? "Create" : "Edit", detail: paths.map(displayPath).join(", ") || "files", files, paths, output: paths.length > 1 ? paths.map(displayPath).join("\n") : "", raw: text };
     }
-    const toolMatch = text.match(/^([A-Za-z_]+)\n(\{[\s\S]*\})$/);
-    if (toolMatch) {
-      const name = toolMatch[1];
+    // A Claude tool: its name, its input as one line of JSON, then its result once it arrives.
+    const tool = text.match(/^([A-Za-z_][\w-]*)\n(\{.*\})(?:\n([\s\S]*))?$/);
+    if (tool) {
+      const name = tool[1], result = (tool[3] || "").trim();
       let input = {};
-      try { input = JSON.parse(toolMatch[2]); } catch {}
-      const filePath = input.file_path || input.path || input.pattern || '';
-      let action = name, verb = name, icon = 'tool';
-      if (['Edit', 'Write', 'write_file', 'edit_file'].includes(name)) { action = filePath ? `Updating ${filePath}` : 'Updating file'; verb = name === 'Write' || name === 'write_file' ? 'Write' : 'Edit'; icon = 'edit'; }
-      else if (['Read', 'read_file'].includes(name)) { action = filePath ? `Reading ${filePath}` : 'Reading file'; verb = 'Read'; icon = 'read'; }
-      else if (['Glob', 'Grep', 'search_web'].includes(name)) { action = filePath ? `Searching ${filePath}` : 'Searching files'; verb = 'Search'; icon = 'search'; }
-      // The row shows a short verb with the path beside it; the full action describes the live run.
-      return { kind: 'tool', icon, action, verb, detail: filePath || input.command || input.url || '', toolName: name, input, filePath, raw: text };
+      try { input = JSON.parse(tool[2]); } catch {}
+      const file = displayPath(input.file_path || input.notebook_path || input.path || "");
+      const step = (icon, verb, detail, output = result, mono = false) => ({ kind: "tool", icon, verb, detail, mono, output, toolName: name, input, raw: text });
+      if (["Read", "read_file"].includes(name)) return step("read", "Read", file);
+      if (["Edit", "MultiEdit", "edit_file", "NotebookEdit"].includes(name)) {
+        const edits = Array.isArray(input.edits) ? input.edits : [input];
+        const diff = edits.filter(edit => typeof edit.old_string === "string" || typeof edit.new_string === "string").map(edit => [...String(edit.old_string || "").split("\n").filter(Boolean).map(line => "- " + line), ...String(edit.new_string || "").split("\n").filter(Boolean).map(line => "+ " + line)].join("\n")).join("\n\n");
+        return step("edit", "Edit", file, diff || result);
+      }
+      if (["Write", "write_file"].includes(name)) return step("edit", "Write", file, typeof input.content === "string" ? input.content : result);
+      if (name === "Glob") return step("search", "Find", input.pattern || "", result, true);
+      if (["Grep", "search_files"].includes(name)) return step("search", "Search", [input.pattern, input.path && displayPath(input.path) ? "in " + displayPath(input.path) : ""].filter(Boolean).join(" "), result, true);
+      if (name === "Bash") return { ...step("command", "Run", input.description || input.command || "", [input.command ? "$ " + input.command : "", result].filter(Boolean).join("\n"), !input.description), cmd: input.command || "" };
+      if (name === "WebFetch") return step("web", "Fetch", input.url || "");
+      if (name === "WebSearch" || name === "search_web") return step("web", "Search the web", input.query || "");
+      if (["Task", "Agent"].includes(name)) return step("agent", "Agent", input.description || "");
+      if (name === "TodoWrite") return { kind: "tool", skip: true, raw: text };
+      const summary = Object.values(input).find(value => typeof value === "string" && value.trim()) || "";
+      return step("tool", name, summary.split("\n")[0].slice(0, 200), result || (Object.keys(input).length ? JSON.stringify(input, null, 2) : ""));
     }
+    const remote = text.match(/^(mcp_tool_call|web_search): ?(.*)(?:\n([\s\S]*))?$/);
+    if (remote) return { kind: "tool", icon: remote[1] === "web_search" ? "web" : "tool", verb: remote[1] === "web_search" ? "Search the web" : "Tool", detail: remote[2], output: (remote[3] || "").replace(/^""$/, "").trim(), raw: text };
+    // Full auto-approval allows every request, so its notes add nothing to the timeline.
+    if (/^Tool .* auto-approved by policy\.?$/.test(text)) return { kind: "approval", skip: true, raw: text };
     // Remembered approvals say which rule allowed the action.
-    if (/^Allowed (?:by your rule|for this run|and remembered)/.test(text)) return { kind: 'approval', icon: 'approval', action: text.split('\n')[0].slice(0, 160), raw: text };
-    if (text.includes('Approval allowed') || text.includes('auto-approved')) {
-      return { kind: 'approval', icon: 'approval', action: 'Tool approved', raw: text };
-    }
-    if (text.includes('Approval denied')) {
-      return { kind: 'approval', icon: 'denied', action: 'Tool approval denied', error: true, raw: text };
-    }
-    if (text.includes('diagnostic') || text.includes('failed') || text.includes('error')) {
-      return { kind: 'error', icon: 'error', action: 'Diagnostic reported', error: true, raw: text };
-    }
-    return { kind: 'general', icon: 'general', action: text.split('\n')[0].slice(0, 60), raw: text };
+    const rule = text.match(/^Allowed (by your rule for this workspace|by your rule for this run|for this run|and remembered for this workspace): ([\s\S]*)$/);
+    if (rule) return { kind: "approval", icon: "approval", verb: rule[1].startsWith("by your rule") ? "Allowed by your rule" : rule[1] === "for this run" ? "Allowed for this run" : "Allowed and remembered", detail: rule[2].split("\n")[0], mono: true, output: "", raw: text };
+    if (/^Approval allowed/.test(text)) return { kind: "approval", icon: "approval", verb: "You allowed the request", detail: "", output: "", raw: text };
+    if (/^Approval denied/.test(text)) return { kind: "approval", icon: "denied", verb: "You denied the request", detail: "", output: "", error: true, raw: text };
+    if (/diagnostic/i.test(first)) return { kind: "error", icon: "error", verb: "Error", detail: first.replace(/^\w+ diagnostic:\s*/i, "").slice(0, 200), output: text, error: true, raw: text };
+    return { kind: "general", icon: "general", verb: first.slice(0, 200), detail: "", output: text.includes("\n") ? text : "", raw: text };
+  }
+
+  // A timeline row: its node on the run's line, the step's first line, and its full text behind the chevron.
+  function renderStep(step, entryId, openOutputs) {
+    const open = openOutputs.has(entryId), more = Boolean(step.output);
+    const entry = element("div", `activity-entry activity-entry-${step.kind}${step.error ? " activity-entry-error" : ""}${open ? " open" : ""}`);
+    entry.setAttribute("data-entry-id", entryId);
+    entry.dataset.entryId = entryId;
+    const node = element("span", "timeline-node");
+    node.setAttribute("aria-hidden", "true");
+    node.append(element("span", `activity-icon icon-${step.icon || step.kind}`));
+    const head = element("div", "activity-entry-header");
+    // A step with more to show is a button; one that is only its line stays text, which keeps it searchable.
+    const toggle = element(more ? "button" : "div", "activity-output-toggle");
+    toggle.append(element("span", "activity-entry-title", step.verb));
+    if (step.detail) toggle.append(element(step.mono ? "code" : "span", "activity-entry-detail", step.detail));
+    if (more) toggle.append(element("span", "disclosure-chevron"));
+    head.append(toggle, copyButton("activity-copy", "Copy", step.output || step.raw));
+    entry.append(node, head);
+    if (!more) return entry;
+    const output = element("pre", "activity-output", step.output), outputId = "activity-output-" + entryId;
+    output.id = outputId;
+    output.setAttribute("data-entry-id", entryId);
+    output.dataset.entryId = entryId;
+    output.hidden = !open;
+    toggle.type = "button";
+    toggle.title = open ? "Hide details" : "Show details";
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-controls", outputId);
+    toggle.addEventListener("click", () => {
+      const opening = output.hidden;
+      output.hidden = !opening;
+      entry.classList.toggle("open", opening);
+      toggle.title = opening ? "Hide details" : "Show details";
+      toggle.setAttribute("aria-expanded", String(opening));
+    });
+    entry.append(output);
+    return entry;
   }
 
   function renderMessage(message) {
@@ -468,7 +517,7 @@
       jumpRun.type = "button";
       jumpRun.title = "Jump to this run's activity";
       jumpRun.addEventListener("click", () => {
-        const node = ui.messages.querySelector(`details[data-run-id="${message.runId}"]`) || ui.messages.querySelector(`article[data-run-id="${message.runId}"]:not(.message-user)`);
+        const node = ui.messages.querySelector(`div[data-run-id="${message.runId}"]`);
         if (!node) return;
         node.scrollIntoView({ behavior: "smooth", block: "center" });
         node.classList.add("activity-highlight");
@@ -522,7 +571,7 @@
   function updateJump() { $("jump-latest").hidden = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 240; }
   function renderMessages(forceScroll = false) {
     const messages = state.conversation?.messages || [];
-    const signature = JSON.stringify([state.projectId, state.conversation?.id, messages, state.conversation?.reviews?.map(({ id, status, summary }) => [id, status, summary]), state.conversation?.status, state.conversation?.activeRun?.id, state.conversation?.pendingApprovals?.map(({ id, runId }) => [id, runId])]);
+    const signature = JSON.stringify([state.projectId, state.conversation?.id, messages, state.conversation?.reviews?.map(({ id, status, summary }) => [id, status, summary]), state.conversation?.status, state.conversation?.activeRun?.id, state.conversation?.lastRun?.id, state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path), state.conversation?.pendingApprovals?.map(({ id, runId }) => [id, runId])]);
     const noProvider=state.ready&&!messages.length&&!['codex','claude','gemini'].some(available);
     ui.empty.hidden = messages.length > 0 || !state.ready || noProvider;
     if($('provider-empty-state'))$('provider-empty-state').hidden=!noProvider;
@@ -530,142 +579,81 @@
     state.messagesSignature = signature;
     const nearBottom = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 110;
     const oldTop = ui.scroll.scrollTop;
-    const openActivity = new Set([...ui.messages.querySelectorAll("details")].filter(d => d.open).map((node) => node.getAttribute("data-group") || node.dataset?.group));
     const openOutputs = new Set([...ui.messages.querySelectorAll(".activity-output")].filter(node => !node.hidden).map(node => node.getAttribute("data-entry-id") || node.dataset?.entryId));
     const openEarlier = new Set([...ui.messages.querySelectorAll("details")].filter(node => node.open && node.classList.contains("activity-earlier")).map(node => node.getAttribute("data-group") || node.dataset?.group));
     const fragment = document.createDocumentFragment();
+    const c = state.conversation, liveRun = c?.status === "running" ? c.activeRun : null, shownRun = liveRun || c?.lastRun;
     // Each prompt starts a turn holding everything that answers it, so the prompt can stay at the top while its results scroll.
-    // Later replies from the same agent in the same run continue the first one, without repeating its name.
-    let speaker = null, turn = null;
+    // Inside a turn, each run is one thread under the agent's name: its replies and steps sit on one line, in order.
+    let turn = null, thread = null;
+    const threads = [];
     const place = node => (turn || fragment).append(node);
+    const openThread = (key, provider, connection, source, forRun = null) => {
+      const node = element("div", "run-thread"), body = element("div", "run-thread-body");
+      if (key) { node.setAttribute("data-run-id", key); node.dataset.runId = key; }
+      const run = forRun || (key && shownRun?.id === key ? shownRun : null);
+      const heading = element("div", "message-heading run-thread-heading");
+      const avatar = element("span", `message-avatar ${connection === "local" ? "local" : provider}`);
+      avatar.setAttribute("aria-hidden", "true");
+      heading.append(avatar, element("span", "message-author", connection === "local" ? "Local · Ollama" : label(provider)));
+      const model = source?.model && source.model !== "unknown" ? source.model : run?.effectiveModel && run.effectiveModel !== "unknown" ? run.effectiveModel : run?.model || "";
+      const effort = source?.effort || run?.effectiveEffort || run?.effort || "";
+      const details = [model, effort ? effort + " effort" : ""].filter(Boolean).join(" · ");
+      if (details) heading.append(element("span", "message-model", details));
+      if (source?.imported) heading.append(element("span", "message-label", "Imported"));
+      node.append(heading, body);
+      thread = { key, provider, connection, node, body, turn };
+      threads.push(thread);
+      place(node);
+      return thread;
+    };
+    // The thread for a message of this run, continuing the open one when it is the same run and agent.
+    const threadFor = (message, index) => {
+      const key = message.runId || "", provider = message.provider || c?.provider || "codex";
+      if (thread && thread.turn === turn && thread.key === key && (key || thread.provider === provider)) return thread;
+      const source = messages.slice(index).find(item => item.role === "assistant" && (item.runId || "") === key && (key || item === message));
+      return openThread(key, source?.provider || provider, source?.connection || message.connection, source);
+    };
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index];
+      if (message.role === "user" && !message.steer) {
+        turn = element("section", "turn"); fragment.append(turn); thread = null;
+        turn.append(renderMessage(message));
+        continue;
+      }
       if (message.role !== "activity") {
         const row = renderMessage(message);
-        // A note added while the agent worked belongs to the run it joined, not a new turn.
-        const prompt = message.role === "user" && !message.steer;
-        if (prompt) { turn = element("section", "turn"); fragment.append(turn); }
-        const key = message.role === "assistant" && message.runId ? [message.runId, message.provider, message.connection].join("|") : null;
-        if (key && key === speaker) row.classList.add("message-continued");
-        if (!message.steer) speaker = key;
-        place(row);
+        // Replies, errors and notes added while the agent worked belong to their run's thread.
+        const inRun = message.role === "assistant" || (message.runId && (message.role === "error" || message.steer || thread?.key === message.runId));
+        if (inRun) threadFor(message, index).body.append(row); else { thread = null; place(row); }
         continue;
       }
       const activities = [message];
       while (messages[index + 1]?.role === "activity" && (messages[index + 1].runId || "") === (message.runId || "")) activities.push(messages[++index]);
-      const runId = message.runId || activities.find(a => a.runId)?.runId || "";
-      const groupKey = String(message.id || `${runId || "run"}-${index}`);
-      const details = element("details", "activity-group");
-      details.setAttribute("data-group", groupKey);
-      details.dataset.group = groupKey;
-      if (runId) {
-        details.setAttribute("data-run-id", runId);
-        details.dataset.runId = runId;
-      }
-      details.open = openActivity.has(groupKey);
-
-      let fileChanges = 0, commands = 0, errors = 0;
-      const parsedItems = activities.map(act => {
-        const parsed = parseActivity(act.text);
-        if (parsed.kind === "command") commands++;
-        if (parsed.kind === "file" || (parsed.kind === "tool" && ["Edit", "Write", "write_file", "edit_file"].includes(parsed.toolName))) {
-          fileChanges += parsed.files?.length || 1;
-        }
-        if (parsed.error || parsed.kind === "error") errors++;
-        return { ...parsed, message: act };
-      });
-
-      const current = state.conversation?.status === "running" && state.conversation?.activeRun?.id === runId;
-      const latest = parsedItems.at(-1);
-      details.classList.toggle("activity-running", Boolean(current));
-      // One line: what is happening now while the run is live, otherwise what the run did. The chevron opens each step.
-      const summary = element("summary", "activity-summary");
-      summary.setAttribute("aria-label", "Workspace activity: " + (current ? latest?.action || "Working" : `${activities.length} action${activities.length === 1 ? "" : "s"}`));
-      if (current) summary.append(element("span", "activity-spinner"));
-      summary.append(element("span", "activity-summary-action", current ? latest?.action || "Working" : `Worked through ${activities.length} action${activities.length === 1 ? "" : "s"}`));
-      const summaryInfo = element("span", "activity-summary-info");
-      const counts = [];
-      if (fileChanges > 0) counts.push(`${fileChanges} file${fileChanges === 1 ? "" : "s"} changed`);
-      if (commands > 0) counts.push(`${commands} command${commands === 1 ? "" : "s"} run`);
-      if (!counts.length) counts.push(`${activities.length} ${activities.length === 1 ? "event" : "events"}`);
-      summaryInfo.append(element("span", "activity-counts", counts.join(" · ")));
-
-      const hasPending = (state.conversation?.pendingApprovals || []).some(ap => !runId || ap.runId === runId);
-      if (hasPending && state.conversation?.status === "running") {
-        summaryInfo.append(element("span", "activity-badge badge-warning", "Waiting for approval"));
-      }
-      if (errors > 0) {
-        summaryInfo.append(element("span", "activity-badge badge-danger", `${errors} ${errors === 1 ? "issue" : "issues"}`));
-      }
-      summary.append(summaryInfo, element("span", "disclosure-chevron"));
-
-      details.append(summary);
-
-      const renderEntry = ({ kind, icon, action, verb, detail, raw, message: act }, idx) => {
-        const entryId = act.id || `${groupKey}-${idx}`;
-        const open = openOutputs.has(entryId);
-        const entry = element("div", `activity-entry activity-entry-${kind}`);
-        entry.setAttribute("data-entry-id", entryId);
-        entry.dataset.entryId = entryId;
-        const head = element("div", "activity-entry-header");
-        const hasExtra = Boolean(raw && raw !== action);
-        // A step with more to show is a button; one that is only its line stays text, which keeps it searchable.
-        const toggle = element(hasExtra ? "button" : "div", "activity-output-toggle");
-        if (hasExtra) {
-          toggle.type = "button";
-          toggle.title = open ? "Hide details" : "Show details";
-          toggle.setAttribute("aria-expanded", String(open));
-        }
-        const glyph = element("span", `activity-icon icon-${icon || kind}`);
-        glyph.setAttribute("aria-hidden", "true");
-        toggle.append(glyph, element("span", "activity-entry-title", verb && detail ? verb : action));
-        if (kind === "command" && detail) toggle.append(element("code", "activity-cmd-inline", `$ ${detail}`));
-        else if (detail && (verb || kind === "file")) toggle.append(element("span", "activity-entry-detail", detail));
-        if (hasExtra) toggle.append(element("span", "disclosure-chevron"));
-        head.append(toggle, copyButton("activity-copy", "Copy output", raw));
-        entry.append(head);
-        if (hasExtra) {
-          const pre = element("pre", "activity-output", raw);
-          const outputId = "activity-output-" + entryId;
-          pre.id = outputId;
-          pre.setAttribute("data-entry-id", entryId);
-          pre.dataset.entryId = entryId;
-          pre.hidden = !open;
-          toggle.setAttribute("aria-controls", outputId);
-          toggle.addEventListener("click", () => {
-            const willOpen = pre.hidden;
-            pre.hidden = !willOpen;
-            entry.classList.toggle("open", willOpen);
-            toggle.title = willOpen ? "Hide details" : "Show details";
-            toggle.setAttribute("aria-expanded", String(willOpen));
-            if (willOpen) openOutputs.add(entryId); else openOutputs.delete(entryId);
-          });
-          entry.classList.toggle("open", open);
-          entry.append(pre);
-        }
-        return entry;
-      };
-
-      const list = element("div", "activity-list");
-      if (parsedItems.length > 5) {
-        const earlierItems = parsedItems.slice(0, parsedItems.length - 3);
-        const recentItems = parsedItems.slice(parsedItems.length - 3);
-        const earlierDisclosure = element("details", "activity-earlier");
-        earlierDisclosure.setAttribute("data-group", `${groupKey}-earlier`);
-        earlierDisclosure.dataset.group = `${groupKey}-earlier`;
-        earlierDisclosure.open = openEarlier.has(`${groupKey}-earlier`);
-        const earlierSummary = element("summary", "activity-earlier-toggle", `${earlierItems.length} earlier actions`);
-        earlierDisclosure.append(earlierSummary);
-        earlierItems.forEach((item, idx) => earlierDisclosure.append(renderEntry(item, idx)));
-        list.append(earlierDisclosure);
-        recentItems.forEach((item, idx) => list.append(renderEntry(item, idx + earlierItems.length)));
-      } else {
-        parsedItems.forEach((item, idx) => list.append(renderEntry(item, idx)));
-      }
-      details.append(list);
-
-      place(details);
+      const steps = activities.map(act => ({ ...parseActivity(act.text), message: act })).filter(step => !step.skip);
+      if (!steps.length) continue;
+      const host = threadFor(message, index).body;
+      const groupKey = String(message.id || `${message.runId || "run"}-${index}`);
+      // Every step shows; only a very long stretch keeps its earlier steps behind one row.
+      if (steps.length > 12) {
+        const earlier = steps.slice(0, -6), disclosure = element("details", "activity-earlier");
+        disclosure.setAttribute("data-group", `${groupKey}-earlier`);
+        disclosure.dataset.group = `${groupKey}-earlier`;
+        disclosure.open = openEarlier.has(`${groupKey}-earlier`);
+        const summary = element("summary", "activity-earlier-toggle");
+        const node = element("span", "timeline-node"); node.setAttribute("aria-hidden", "true"); node.append(element("span", "activity-icon icon-more"));
+        summary.append(node, element("span", "", `${earlier.length} earlier steps`));
+        disclosure.append(summary, ...earlier.map((step, idx) => renderStep(step, step.message.id || `${groupKey}-${idx}`, openOutputs)));
+        host.append(disclosure);
+        steps.slice(-6).forEach((step, idx) => host.append(renderStep(step, step.message.id || `${groupKey}-${idx + earlier.length}`, openOutputs)));
+      } else steps.forEach((step, idx) => host.append(renderStep(step, step.message.id || `${groupKey}-${idx}`, openOutputs)));
     }
+    // The run's status line is the last step of its thread, so the live run has one indicator, where its work is.
+    if (shownRun) {
+      let host = threads.findLast(item => item.turn === turn && shownRun.id && item.key === shownRun.id);
+      if (!host && liveRun) host = thread && thread.turn === turn && !shownRun.id ? thread : openThread(shownRun.id || "", shownRun.provider || c?.provider || "codex", shownRun.connection, null, shownRun);
+      if (host) host.body.append($("run-progress")); else $("transcript-footer").prepend($("run-progress"));
+    } else $("transcript-footer").prepend($("run-progress"));
     place($("transcript-footer"));
     ui.messages.replaceChildren(fragment);
     if (forceScroll || nearBottom) requestAnimationFrame(() => { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); });

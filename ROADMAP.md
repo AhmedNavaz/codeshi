@@ -52,6 +52,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Routing: the agent, model and effort picked for each message, shown with its reason before sending ([#12](https://github.com/AhmedNavaz/throughline/issues/12), stage 1) | [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) |
 | A new layout: a search bar for workspaces, files and actions, a side panel for Agents and Git, and resizable sections | [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) |
 | Reliable Gemini connection on networks where Google stalls over IPv6 | [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) |
+| Each run as a timeline of its steps, with one live status line | Next release |
 
 ## Now
 
