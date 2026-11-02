@@ -391,6 +391,13 @@
       const newline = text.indexOf("\n"), cmd = (newline === -1 ? text.slice(2) : text.slice(2, newline)).trim();
       return { kind: "command", icon: "command", verb: "Run", detail: cmd, mono: true, cmd, output: text, raw: text };
     }
+    // A check with the workspace's tests after a routed run (#12): running, then how it ended, with its output.
+    const check = text.match(/^Tests (running|passed|failed|timed out|stopped|skipped|interrupted): ([^\n]*)(?:\n([\s\S]*))?$/);
+    if (check) {
+      const [, outcome, command, rest = ""] = check, failed = ["failed", "timed out"].includes(outcome);
+      const verb = { running: "Running the tests", passed: "Tests passed", failed: "Tests failed", "timed out": "Tests didn’t finish", stopped: "Tests stopped", skipped: "Tests skipped", interrupted: "Tests interrupted" }[outcome];
+      return { kind: "check", icon: outcome === "running" ? "tests-running" : outcome === "passed" ? "tests-passed" : failed ? "tests-failed" : "general", verb, detail: command, mono: true, output: rest.trim(), error: failed, raw: text };
+    }
     if (text.startsWith("File changes:")) {
       let files = [];
       try { files = JSON.parse(text.slice("File changes:".length)); } catch {}
@@ -541,10 +548,11 @@
     row.append(body);
     // A prompt stays at the top of its turn while the results scroll past (see .message-prompt). A long one shows its
     // first lines until opened, so it never fills the view; an opened one scrolls normally.
+    if (user && message.retry) { row.classList.add("message-retry"); row.insertBefore(element("div", "message-retry-label", "Sent by Throughline after the tests failed"), body); }
     if (user && !message.steer) {
       row.classList.add("message-prompt");
       const text = message.text || "";
-      if (text.split("\n").length > 6 || text.length > 520) {
+      if (message.retry || text.split("\n").length > 6 || text.length > 520) {
         const expanded = state.expandedPrompts?.has(message.id);
         row.classList.add("long"); row.classList.toggle("expanded", Boolean(expanded));
         const more = element("button", "prompt-more", expanded ? "Show less" : "Show more"); more.type = "button";
@@ -689,7 +697,7 @@
     const routed = routeFor(text, attachments.length);
     if (routed?.error) { showNotice(routed.error); return; }
     state.pending = "queue"; renderControls();
-    const added = await queueAction({ action: "add", text, provider: routed?.provider || state.provider, model: (routed ? routed.model : state.model) || null, effort: (routed ? routed.effort : state.effort) || null, mode: state.mode, approvalPolicy: state.approvalPolicy || "ask", attachments, billingConfirmed: window.relayBillingConfirmed === true, ...(routed ? { routing: { mode: routed.mode, reason: routed.reason, tier: routed.tier } } : {}) });
+    const added = await queueAction({ action: "add", text, provider: routed?.provider || state.provider, model: (routed ? routed.model : state.model) || null, effort: (routed ? routed.effort : state.effort) || null, mode: state.mode, approvalPolicy: state.approvalPolicy || "ask", attachments, billingConfirmed: window.relayBillingConfirmed === true, ...(routed ? { routing: { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } } : {}) });
     if (added) {
       window.relayFiles?.accepted(projectId, attachments);
       if (ui.input.value === draft) { ui.input.value = ""; storedWrite(draftKey(), ""); storedWrite(draftKey(null), ""); resizeInput(); }
@@ -810,6 +818,26 @@
     $("handoff-accept").disabled = Boolean(state.pending) || charges && !$("handoff-billing-confirm").checked;
     $("handoff-dismiss").disabled = Boolean(state.pending);
   }
+  // A retry one step up after failed tests, when routing asks first (#12): Cost saving, or an agent near its limit.
+  function renderRetry() {
+    const offer = state.conversation?.retryOffer, section = $("retry-offer");
+    if (!section) return;
+    section.hidden = !offer || isRunning();
+    if (section.hidden) return;
+    const model = offer.model ? window.relayModelPicker?.modelName?.(offer.provider, offer.model) || offer.modelName || offer.model : "";
+    const choice = [label(offer.provider), model, offer.effort ? `${offer.effort[0].toUpperCase()}${offer.effort.slice(1)} effort` : ""].filter(Boolean).join(" · ");
+    $("retry-title").textContent = `The tests failed. Retry with ${choice}?`;
+    $("retry-detail").textContent = `${offer.blocked ? `${offer.blocked}, so routing asked first. ` : ""}${label(offer.provider)} gets the end of the test output and tries once more, one step up. ${offer.command} runs again afterwards.`;
+    $("retry-accept").disabled = $("retry-dismiss").disabled = Boolean(state.pending);
+  }
+  async function answerRetry(accept) {
+    const offer = state.conversation?.retryOffer, id = state.conversation?.id, projectId = state.projectId;
+    if (!offer || !id || state.pending) return;
+    state.pending = accept ? "retry" : "dismiss"; renderControls();
+    try { await post(endpoint(id, "retry"), { offerId: offer.id, accept }, projectId); }
+    catch (error) { showNotice(error.message); }
+    finally { state.pending = null; await refresh(); }
+  }
   async function answerHandoff(accept) {
     const offer = state.conversation?.handoffOffer, id = state.conversation?.id, projectId = state.projectId;
     if (!offer || !id || state.pending) return;
@@ -906,7 +934,7 @@
     for (const id of ["resume-button", "resume-ask", "resume-auto"]) $(id).disabled = busy || otherRunning || !resumeProviders().length;
     $("resume-waiting").hidden = !resume;
     if (resume) $("resume-waiting-text").textContent = resumeText(resume);
-    renderQueue(); renderHandoff(); renderPlan(); renderRoute();
+    renderQueue(); renderHandoff(); renderRetry(); renderPlan(); renderRoute();
     const hasMessages = Boolean(state.conversation?.messages?.length);
     ui.title.textContent=state.loading&&state.projectId?'Opening workspace…':currentProject()?.name||'Throughline';
     // With the sidebar hidden, the top bar names the open workspace; clicking it shows the sidebar again.
@@ -1023,7 +1051,7 @@
     const routed = continuing ? null : routeFor(text, attachments.length);
     if (routed?.error) { showNotice(routed.error); return; }
     const provider = routed?.provider || state.provider, model = routed ? routed.model : state.model, effort = routed ? routed.effort : state.effort;
-    const routing = routed ? { mode: routed.mode, reason: routed.reason, tier: routed.tier } : undefined;
+    const routing = routed ? { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } : undefined;
     const mode = state.mode;
     const approvalPolicy = state.approvalPolicy || 'ask';
     const originalDraft = ui.input.value;
@@ -1476,6 +1504,8 @@
   $("queue-button").addEventListener("click", queuePrompt);
   $("handoff-accept").addEventListener("click", () => answerHandoff(true));
   $("handoff-dismiss").addEventListener("click", () => answerHandoff(false));
+  $("retry-accept").addEventListener("click", () => answerRetry(true));
+  $("retry-dismiss").addEventListener("click", () => answerRetry(false));
   $("handoff-billing-confirm").addEventListener("change", renderHandoff);
   $("prompt-queue-toggle").addEventListener("click", () => queueAction({ action: state.conversation?.queuePaused ? "resume" : "pause" }));
   ui.input.addEventListener("input", () => { resizeInput(); saveDraft(); renderControls(); });

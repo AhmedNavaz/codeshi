@@ -7,7 +7,7 @@ import { scriptCLIs } from './platform.mjs';
 import '../public/routing.js';
 import { Broker } from '../src/broker.mjs';
 
-const { classify, modelTier, route } = globalThis.relayRouting;
+const { classify, modelTier, route, escalate } = globalThis.relayRouting;
 const levels = (...values) => values.map(reasoningEffort => ({ reasoningEffort }));
 const models = {
   codex: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high', 'xhigh') }, { id: 'gpt-codex-mini', displayName: 'GPT Codex Mini', supportedReasoningEfforts: levels('low', 'medium') }],
@@ -57,6 +57,18 @@ test('Auto keeps the agent that did the last run, moves away from one near its l
   assert.match(route({ text, mode: 'balanced', candidates: agents({ claude: { billingSource: 'unknown' } }), current: 'claude' }).reason, /Claude isn’t available under your rules/, 'Unknown billing is not treated as free.');
 });
 
+test('a retry after failed tests goes one step up with the same agent: a stronger model, or more effort on the strongest', () => {
+  const step = (provider, model, effort) => { const next = escalate(provider, models[provider], { model, effort }); return next && [next.provider, next.model, next.effort, next.tier]; };
+  assert.deepEqual(step('claude', 'sonnet', 'medium'), ['claude', 'opus', 'high', 'deep']);
+  assert.deepEqual(step('claude', 'haiku', null), ['claude', 'sonnet', 'medium', 'standard'], 'A light model steps up to the standard one.');
+  assert.deepEqual(step('claude', 'opus', 'high'), ['claude', 'opus', 'max', 'deep'], 'The strongest model gets more effort.');
+  assert.equal(step('claude', 'opus', 'max'), null, 'Nothing is stronger than the strongest model at its highest effort.');
+  assert.deepEqual(step('codex', 'gpt-codex-mini', 'low'), ['codex', 'gpt-codex', 'medium', 'standard']);
+  assert.deepEqual(step('codex', 'gpt-codex', 'high'), ['codex', 'gpt-codex', 'xhigh', 'standard'], 'Without a deeper Codex model, more effort.');
+  assert.equal(escalate('claude', [], { model: null, effort: null }), null, 'Without a model list there is nothing to step up to.');
+  assert.deepEqual(route({ text: 'Add a loading spinner to the checkout button', mode: 'balanced', candidates: agents(), current: 'claude' }).escalation, { provider: 'claude', model: 'opus', modelName: 'Opus', effort: 'high', tier: 'deep' }, 'Each choice carries its step up.');
+});
+
 test('the broker saves the Auto mode with the workspace and records what Auto chose with the run and its prompt', { skip: scriptCLIs }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-routing-')), workspace = path.join(root, 'workspace');
   fs.mkdirSync(workspace);
@@ -77,7 +89,7 @@ test('the broker saves the Auto mode with the workspace and records what Auto ch
   assert.equal(c.queue[0].routing.mode, 'saving', 'A queued prompt keeps the choice shown when it was queued.');
   await broker.close();
   broker = new Broker({ workspace, dataDir: path.join(root, 'data'), bins: { codex: bin } });
-  assert.deepEqual(broker.get(c.id).routing, { mode: 'saving', allowApi: true }, 'The mode survives a restart.');
+  assert.deepEqual(broker.get(c.id).routing, { mode: 'saving', allowApi: true, check: false }, 'The mode survives a restart.');
   broker.setRouting(broker.get(c.id), { mode: null });
   assert.equal(broker.get(c.id).routing, null);
 });

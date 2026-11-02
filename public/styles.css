@@ -262,6 +262,7 @@ summary::-webkit-details-marker { display: none; }
 .message-steer { padding-top: 4px; }
 .message-steer > .message-heading { margin-bottom: 2px; font-size: 11.5px; }
 .message-steer-label { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); }
+.message-retry-label { margin-bottom: 4px; color: var(--faint); font-size: 12px; }
 .message-steer-label::before { content: ""; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-steer) center / contain no-repeat; mask: var(--icon-steer) center / contain no-repeat; }
 .message-steer .message-text { padding: 7px 12px; font-size: 13px; border-radius: 12px 12px 4px 12px; }
 .message-user .message-attachments { justify-content: flex-end; }
@@ -364,6 +365,9 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .activity-icon.icon-approval { --activity-icon: var(--icon-check); background: var(--success); }
 .activity-icon.icon-denied { --activity-icon: var(--icon-minus-circle); background: var(--danger); }
 .activity-icon.icon-error { --activity-icon: var(--icon-alert); background: var(--danger); }
+.activity-icon.icon-tests-passed { --activity-icon: var(--icon-check); background: var(--success); }
+.activity-icon.icon-tests-failed { --activity-icon: var(--icon-alert); background: var(--danger); }
+.activity-icon.icon-tests-running { width: 10px; height: 10px; border: 1.5px solid var(--border-strong, var(--faint)); border-top-color: var(--link); border-radius: 50%; background: transparent; -webkit-mask: none; mask: none; animation: spin .9s linear infinite; }
 .activity-icon.icon-general, .activity-icon.icon-tool { --activity-icon: none; width: 6px; height: 6px; border-radius: 50%; -webkit-mask: none; mask: none; }
 .activity-output-toggle > .disclosure-chevron { margin-left: 2px; opacity: 0; }
 .activity-output-toggle:hover > .disclosure-chevron, .activity-entry.open .activity-output-toggle > .disclosure-chevron, .activity-output-toggle:focus-visible > .disclosure-chevron { opacity: .7; }
@@ -915,10 +919,12 @@ button.commit-hash:hover { text-decoration: underline; }
 .handoff-billing { display: flex; align-items: center; gap: 6px; margin-top: 2px; color: var(--text); cursor: pointer; }
 .handoff-actions { display: flex; flex: none; gap: 6px; }
 .handoff-actions button { height: 26px; padding: 0 12px; border: 0; border-radius: 13px; background: var(--chip-bg); color: var(--text-strong); font-size: 12px; font-weight: 500; white-space: nowrap; transition: background .12s; }
-.handoff-actions #handoff-accept { background: var(--accent); color: var(--on-accent); }
+.handoff-actions #handoff-accept, .handoff-actions #retry-accept { background: var(--accent); color: var(--on-accent); }
 .handoff-actions button:hover:enabled { background: var(--hover-strong, var(--surface-strong)); }
-.handoff-actions #handoff-accept:hover:enabled { background: var(--accent-strong); }
-.handoff-actions #handoff-accept:disabled { background: var(--chip-bg); color: var(--faint); opacity: 1; }
+.handoff-actions #handoff-accept:hover:enabled, .handoff-actions #retry-accept:hover:enabled { background: var(--accent-strong); }
+.handoff-actions #handoff-accept:disabled, .handoff-actions #retry-accept:disabled { background: var(--chip-bg); color: var(--faint); opacity: 1; }
+/* A retry after failed tests (#12). */
+.retry-icon { background: var(--danger); -webkit-mask-image: var(--icon-alert); mask-image: var(--icon-alert); }
 
 /* The agent's plan for the run (#32): one line docked above the message box that opens into the to-do list. */
 .run-plan { display: grid; margin: 0 0 6px; }
@@ -995,6 +1001,8 @@ button.commit-hash:hover { text-decoration: underline; }
 .agents-switch { display: flex; align-items: flex-start; gap: 8px; margin: 10px 8px 0; color: var(--text); font-size: 12px; line-height: 1.45; cursor: pointer; }
 .agents-switch input { margin-top: 2px; }
 .agents-switch small { display: block; color: var(--faint); font-size: 11.5px; }
+.routing-check-set { margin: 4px 0 0 36px; font-size: 12px; }
+.routing-check-stats { margin: 6px 8px 0 36px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 .agents-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 4px; color: var(--text); font-size: 12px; }
 .agents-field select { height: 26px; padding: 0 8px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--surface-input); color: var(--text); font-size: 12px; }
 .agents-more { margin: 10px 8px 0; color: var(--muted); font-size: 12px; }

@@ -1920,6 +1920,43 @@ test('a handoff offer names the destination, its billing and the task, needs cha
   assert.equal(ui.$('handoff-offer').hidden,true,'An offer shows only while its run works.');
 });
 
+test('a check with the tests shows on its run’s timeline, a retry reads as Throughline’s, and an offered retry can be accepted or declined',async()=>{
+  const ui=await browser(),conversation=ui.canonical.get('project-one'),answers=[];
+  ui.setIntercept((request,next)=>{if(!request.path.endsWith('/retry'))return next();answers.push(request.body);conversation.retryOffer=null;return response(request.body.accept?{runId:'retry-run'}:conversation,request.body.accept?202:200);});
+  const at=new Date().toISOString();
+  conversation.messages=[
+    {id:'p1',role:'user',text:'Add promo codes',provider:'codex',runId:'r1',createdAt:at},
+    {id:'a1',role:'assistant',text:'Done.',provider:'codex',runId:'r1',status:'complete',createdAt:at},
+    {id:'t1',role:'activity',text:'Tests running: npm test',provider:'codex',runId:'r1',status:'running',createdAt:at},
+  ];
+  conversation.status='complete';conversation.lastRun={id:'r1',provider:'codex',status:'complete'};await ui.window.relayUI.refresh();
+  let row=ui.$('messages').querySelector('.activity-entry-check');
+  assert.equal(row.querySelector('.activity-entry-title').textContent,'Running the tests');assert.equal(row.querySelector('.activity-entry-detail').textContent,'npm test');
+  assert(row.querySelector('.icon-tests-running'),'A running check shows as working.');
+  conversation.messages[2]={...conversation.messages[2],text:'Tests failed: npm test\nExit code 1 after 4s.\n\nExpected 90, received 100',status:'complete'};
+  conversation.messages.push({id:'p2',role:'user',text:'The project\'s tests failed after your changes.\n\nEnd of the output:\n```\nExpected 90, received 100\n```',provider:'codex',runId:'r2',retry:{of:'r1'},routing:{mode:'balanced',reason:'The tests failed, so one step up',model:'model-two',effort:'high'},createdAt:at});
+  await ui.window.relayUI.refresh();
+  row=ui.$('messages').querySelector('.activity-entry-check');
+  assert.equal(row.querySelector('.activity-entry-title').textContent,'Tests failed');assert(row.classList.contains('activity-entry-error'));
+  row.querySelector('.activity-output-toggle').click();assert.match(row.querySelector('.activity-output').textContent,/Exit code 1 after 4s\.[\s\S]*Expected 90/);
+  const retry=ui.$('messages').querySelector('.message-retry');
+  assert.equal(retry.querySelector('.message-retry-label').textContent,'Sent by Throughline after the tests failed');
+  assert(retry.classList.contains('long')&&!retry.classList.contains('expanded'),'The retry prompt stays short until opened.');
+
+  conversation.retryOffer={id:'offer-one',runId:'r1',provider:'codex',model:'model-two',modelName:'Model Two',effort:'high',command:'npm test',blocked:'Codex is at 85% of its limit'};await ui.window.relayUI.refresh();
+  assert.equal(ui.$('retry-offer').hidden,false);
+  assert.match(ui.$('retry-title').textContent,/^The tests failed\. Retry with Codex · .* · High effort\?$/);
+  assert.match(ui.$('retry-detail').textContent,/^Codex is at 85% of its limit, so routing asked first\. Codex gets the end of the test output and tries once more, one step up\. npm test runs again afterwards\.$/);
+  ui.$('retry-accept').click();await flush();await flush();
+  assert.deepEqual(answers[0],{offerId:'offer-one',accept:true});assert.equal(ui.$('retry-offer').hidden,true);
+  conversation.retryOffer={id:'offer-two',runId:'r1',provider:'codex',model:null,effort:null,command:'npm test'};await ui.window.relayUI.refresh();
+  assert.match(ui.$('retry-title').textContent,/Retry with Codex\?$/);
+  ui.$('retry-dismiss').click();await flush();await flush();
+  assert.deepEqual(answers[1],{offerId:'offer-two',accept:false});
+  conversation.retryOffer={id:'offer-three',runId:'r1',provider:'codex',command:'npm test'};conversation.status='running';conversation.activeRun={id:'r3',provider:'codex'};await ui.window.relayUI.refresh();
+  assert.equal(ui.$('retry-offer').hidden,true,'An offer waits while another run works.');
+});
+
 test('while a run works, a note can be added to it, shown inside that run, and the agent’s plan shows as a to-do list',async()=>{
   const ui=await browser(),conversation=ui.canonical.get('project-one'),notes=[];let answer={added:true};
   ui.setIntercept((request,next)=>{
@@ -1963,7 +2000,7 @@ test('while a run works, a note can be added to it, shown inside that run, and t
 test('routing is chosen in the Agents panel; the model button then shows the mode and opens it, and what will run is shown before sending',async()=>{
   const ui=await browser({modelPickerUI:true,agentsUI:true,insights:true}),conversation=ui.canonical.get('project-one'),choices=[],handoff=[];let preferences={threshold:90,automatic:false};
   ui.setIntercept((request,next)=>{
-    if(request.path.endsWith('/routing')){choices.push(request.body);conversation.routing=request.body.mode?{mode:request.body.mode,allowApi:request.body.allowApi===true}:null;return response(conversation);}
+    if(request.path.endsWith('/routing')){choices.push(request.body);conversation.routing=request.body.mode?{mode:request.body.mode,allowApi:request.body.allowApi===true,check:request.body.check===true}:null;return response(conversation);}
     if(request.path==='/api/handoff-preferences'){if(request.method==='POST'){handoff.push(request.body);preferences={...preferences,...request.body};}return response(preferences);}
     return next();
   });
@@ -1976,7 +2013,7 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
   assert.match(options[2].textContent,/Matches the model and effort to each message/,'Each mode says what it does.');
   assert.equal(options[0].getAttribute('aria-checked'),'true');
   options[2].click();await flush();await flush();
-  assert.deepEqual(choices[0],{mode:'balanced',allowApi:false});
+  assert.deepEqual(choices[0],{mode:'balanced',allowApi:false,check:false});
   assert.equal(ui.$('picked-agent').textContent,'Routing');assert.equal(ui.$('picked-model').textContent,'Balanced');
   assert(ui.$('model-picker-button').classList.contains('routing'));assert.equal(ui.$('effort-button').hidden,true,'Routing chooses the effort with the model.');
   ui.$('open-agents').click();ui.$('model-picker-button').click();await flush();
@@ -1987,7 +2024,7 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
   assert.equal(ui.$('route-choice').textContent,'Codex · Model One · High effort');assert.equal(ui.$('route-reason').textContent,'A complex task (refactoring)');
   ui.$('message-input').dispatchEvent(new UIEvent('keydown',{key:'Enter'}));await flush();await flush();
   const sent=ui.requests.filter(request=>request.path.endsWith('/messages')).at(-1).body;
-  assert.deepEqual([sent.provider,sent.model,sent.effort,sent.routing],['codex','model-one','high',{mode:'balanced',reason:'A complex task (refactoring)',tier:'deep'}]);
+  assert.deepEqual([sent.provider,sent.model,sent.effort,sent.routing],['codex','model-one','high',{mode:'balanced',reason:'A complex task (refactoring)',tier:'deep',escalation:null}],'Model One at high effort is already its strongest, so there is no step up.');
   conversation.status='complete';conversation.messages.push({id:'routed',role:'user',text:'Refactor the payment module into services',provider:'codex',runId:'routed-run',routing:{mode:'balanced',reason:'A complex task (refactoring)',tier:'deep',model:'model-one',effort:'high'},createdAt:new Date().toISOString()});
   await ui.window.relayUI.refresh();
   const note=ui.$('messages').querySelector('.message-routing');
@@ -1995,12 +2032,22 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
 
   assert.equal(ui.$('handoff-threshold').value,'90');assert.equal(ui.$('handoff-automatic').checked,false);
   ui.$('routing-allow-api').checked=true;ui.fire('routing-allow-api','change');await flush();await flush();
-  assert.deepEqual(choices.at(-1),{mode:'balanced',allowApi:true});
+  assert.deepEqual(choices.at(-1),{mode:'balanced',allowApi:true,check:false});
+  assert.equal(ui.$('routing-check-row').hidden,false);
+  assert.equal(ui.$('routing-check').disabled,true,'Checking needs a Test command.');assert.match(ui.$('routing-check-hint').textContent,/Needs a Test command for this workspace/);
+  assert.equal(ui.$('routing-check-set').hidden,false);
+  ui.window.dispatchEvent(new UIEvent('relay-commands',{detail:{projectId:'project-one',commands:{test:{command:'npm test'}}}}));
+  assert.equal(ui.$('routing-check').disabled,false,'A Test command saved in Run shows at once.');assert.match(ui.$('routing-check-hint').textContent,/runs npm test\. If the tests fail, routing retries once/);
+  assert.equal(ui.$('routing-check-set').hidden,true);
+  ui.$('routing-check').checked=true;ui.fire('routing-check','change');await flush();await flush();
+  assert.deepEqual(choices.at(-1),{mode:'balanced',allowApi:true,check:true});
+  conversation.runs=[{id:'a',check:{status:'passed'}},{id:'b',check:{status:'failed'}},{id:'b2',retryOf:'b',check:{status:'passed'}},{id:'c',check:{status:'failed'}},{id:'c2',retryOf:'c',check:{status:'failed'}},{id:'d',check:{status:'skipped'}}];await ui.window.relayUI.refresh();
+  assert.equal(ui.$('routing-check-stats').textContent,'Last 3 checked runs: 1 passed first time, 1 after a retry, 1 still failing.');
   ui.$('handoff-threshold').value='80';ui.fire('handoff-threshold','change');await flush();
   ui.$('handoff-automatic').checked=true;ui.fire('handoff-automatic','change');await flush();
   assert.deepEqual(handoff,[{threshold:80},{automatic:true}]);
   ui.$('routing-options').querySelectorAll('.routing-option')[0].click();await flush();await flush();
-  assert.deepEqual(choices.at(-1),{mode:null,allowApi:true});assert.equal(ui.$('picked-agent').textContent,'Codex','Manual shows the chosen agent again.');
+  assert.deepEqual(choices.at(-1),{mode:null,allowApi:true,check:true});assert.equal(ui.$('picked-agent').textContent,'Codex','Manual shows the chosen agent again.');
   ui.$('open-git').click();await flush();
   assert.equal(ui.$('agents-panel').hidden,true,'Git and Agents share the side panel.');
 });

@@ -19,6 +19,7 @@ import { readOnlyRequest, approvalScope } from './approval-rules.mjs';
 import { PermissionRules } from './permission-rules.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
 import { HandoffMonitor } from './handoff.mjs';
+import { RunChecks } from './run-checks.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
 const transportFor = (provider, transport, configured) => transport === 'auto' ? provider === 'gemini' ? 'acp' : configured ? 'cli' : provider === 'codex' ? 'app-server' : 'sdk' : transport;
@@ -74,16 +75,20 @@ export function commandFor(provider, { mode, approvalPolicy = 'ask', sessionId, 
   return { bin: bin || 'claude', args };
 }
 
-const ROUTING_MODES = ['saving', 'balanced', 'quality'];
+const ROUTING_MODES = ['saving', 'balanced', 'quality'], TIERS = ['light', 'standard', 'deep'];
+const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 // What Auto chose and why, as shown before sending; kept with the run and its prompt.
 export function routingNote(routing) {
   if (routing === null || routing === undefined) return null;
   if (typeof routing !== 'object' || !ROUTING_MODES.includes(routing.mode)) throw Object.assign(new Error('Invalid automatic agent choice.'), { status: 400 });
-  return { mode: routing.mode, reason: typeof routing.reason === 'string' ? routing.reason.slice(0, 300) : '', ...(['light', 'standard', 'deep'].includes(routing.tier) ? { tier: routing.tier } : {}) };
+  const step = routing.escalation, text = value => typeof value === 'string' && value.trim() && value.length <= 200 ? value : null;
+  // The step up a failed check retries with (#12): the same kind of choice, checked again when the retry starts.
+  const escalation = step && typeof step === 'object' && PROVIDERS.includes(step.provider) ? { provider: step.provider, model: text(step.model), modelName: text(step.modelName), effort: EFFORTS.includes(step.effort) ? step.effort : null, ...(TIERS.includes(step.tier) ? { tier: step.tier } : {}) } : null;
+  return { mode: routing.mode, reason: typeof routing.reason === 'string' ? routing.reason.slice(0, 300) : '', ...(TIERS.includes(routing.tier) ? { tier: routing.tier } : {}), ...(escalation ? { escalation } : {}) };
 }
 
 export class Broker extends EventEmitter {
-  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), handoffPreferences = () => ({ threshold: 90, automatic: false }) }) {
+  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), handoffPreferences = () => ({ threshold: 90, automatic: false }), tests = null }) {
     super();
     this.workspace = savedWorkspace(workspace);
     this.workspaces = [...new Set([this.workspace, ...workspaces.map(savedWorkspace), ...workspaceFolders.map(folder => savedWorkspace(folder.path))])];
@@ -146,6 +151,8 @@ export class Broker extends EventEmitter {
     this.queue = new PromptQueue(this);
     this.queue.restore();
     this.handoff = new HandoffMonitor(this, { preferences: handoffPreferences });
+    this.checks = new RunChecks(this, { tests });
+    this.checks.restore();
     // The first check of a wait saved before a restart runs once startup has finished.
     if (this.resume.waiting) setTimeout(() => this.resume.tick(), 0);
   }
@@ -184,10 +191,13 @@ export class Broker extends EventEmitter {
   // Handing off before a usage limit stops the run (#17).
   acceptHandoff(c, input = {}) { return this.handoff.accept(c, { offerId: input.offerId, billingConfirmed: input.billingConfirmed === true }); }
   dismissHandoff(c, offerId) { this.handoff.dismiss(c, offerId); return this.view(c); }
+  // A retry one step up after failed tests, offered instead of started (#12).
+  acceptRetry(c, input = {}) { return this.checks.accept(c, input.offerId); }
+  dismissRetry(c, offerId) { this.checks.dismiss(c, offerId); return this.view(c); }
 
   empty(id) {
     return { id, title: 'New conversation', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', status: 'idle', messages: [],
-      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, routing: null, createdAt: null, updatedAt: null };
+      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
   }
 
   apply(c, record) {
@@ -197,6 +207,9 @@ export class Broker extends EventEmitter {
     if (record.type === 'settings') { Object.assign(c, { provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model ?? null, transport: record.transport || c.transport, settingsRevision: record.seq }); c.models[record.provider] = record.model ?? null; c.transports[record.provider] = record.transport || c.transport; }
     if (record.type === 'context') c.context = record.context;
     if (record.type === 'routing') c.routing = record.routing;
+    if (record.type === 'retry_offer') c.retryOffer = record.offer;
+    if (record.type === 'retry_offer_end' && c.retryOffer?.id === record.id) c.retryOffer = null;
+    if (record.type === 'check') { const run = c.runs?.findLast(item => item.id === record.runId); if (run) run.check = record.check; if (c.lastRun?.id === record.runId) c.lastRun.check = record.check; }
     if (record.type === 'resume') c.resume = record.resume;
     if (record.type === 'queue_add') c.queue = [...c.queue, record.item];
     if (record.type === 'queue_update') c.queue = c.queue.map(item => item.id === record.id ? { ...item, text: record.text } : item);
@@ -254,7 +267,8 @@ export class Broker extends EventEmitter {
     if (record.type === 'run_end') { if (c.activeRun && !c.activeRun.reviewId) c.lastBuilder = c.activeRun.provider; c.lastRun = { ...c.activeRun, status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at }; c.activeRun = null; c.status = record.status; }
     // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
     if ((record.type === 'submission' && !record.review) || record.type === 'run_start') {
-      c.runs = [...(c.runs || []), { id: record.id, provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null }].slice(-50);
+      c.runs = [...(c.runs || []), { id: record.id, provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
+        ...(record.routing ? { routing: { mode: record.routing.mode, tier: record.routing.tier || null } } : {}), ...(record.retryOf ? { retryOf: record.retryOf } : {}) }].slice(-50);
     }
     if (record.type === 'run_end') {
       const run = c.runs?.findLast(item => item.id === c.lastRun?.id && !item.endedAt);
@@ -320,7 +334,7 @@ export class Broker extends EventEmitter {
   // Auto (#12): Throughline picks the agent, model and effort for each message, in one of three modes. Agents billed
   // outside a subscription are only chosen when allowed. Choosing a model by hand turns it off.
   setRouting(c, input = {}) {
-    const routing = input.mode === null || input.mode === undefined ? null : { mode: input.mode, allowApi: input.allowApi === true };
+    const routing = input.mode === null || input.mode === undefined ? null : { mode: input.mode, allowApi: input.allowApi === true, check: input.check === true };
     if (routing && !ROUTING_MODES.includes(routing.mode)) throw Object.assign(new Error('Choose Cost saving, Balanced or Maximum quality.'), { status: 400 });
     if (c.activeRun) throw Object.assign(new Error('Stop the current run before changing how agents are chosen.'), { status: 409 });
     this.record(c, { type: 'routing', routing });
@@ -406,7 +420,7 @@ export class Broker extends EventEmitter {
 
   prompt(c, text, fresh = false) { return prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
 
-  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null }, { review, verifyReview, local, verifyLocal, resume, queued } = {}) {
+  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
     if (local) { if (review || typeof verifyLocal !== 'function') throw Object.assign(new Error('Invalid local run.'), { status: 400 }); provider = 'codex'; model = local.model; transport = 'app-server'; effort = null; fresh = true; }
     checkSettings(provider, mode, approvalPolicy);
@@ -451,17 +465,19 @@ export class Broker extends EventEmitter {
     const runId = randomUUID();
     const run = { id: runId, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
       stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
-      model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map() };
+      model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf };
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
       this.record(c, { type: 'submission', id: runId, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
         ...(local ? { local } : {}), ...(review ? { review } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
-        ...(routing ? { routing } : {}),
-        message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { ...routing, model, effort } } : {}), provider, createdAt: new Date().toISOString(), runId } });
+        ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
+        message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
     // A message sent by hand takes the place of a wait for a reset.
     if (c.resume && !resume && !review) this.resume.end(c, 'superseded');
+    // So does any new run for an offered retry.
+    if (c.retryOffer && !review) this.record(c, { type: 'retry_offer_end', id: c.retryOffer.id, outcome: 'superseded' });
     this.running = run; this.bins[provider] = bin;
     let finished = false;
     const complete = (code, signal, error) => {
@@ -494,8 +510,13 @@ export class Broker extends EventEmitter {
         if (!review && !waiting && !run.stopped) this.emit('notify', success
           ? { conversationId: c.id, kind: 'finished', title: 'Task finished', body: `${agent} finished${run.resume ? ' the work it continued while you were away' : ''}.` }
           : { conversationId: c.id, kind: 'stopped', title: 'Task stopped', body: run.errorCategory === 'quota' ? `${agent} reached a usage limit.` : `${agent} stopped before finishing. Open the workspace to see why.` });
-        // Queued prompts carry on after a finished run, wait after a limit, and pause after anything else.
-        try { this.queue.runEnded(c, run, run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete'); } catch (error) { console.error('Throughline could not continue the prompt queue:', error.message); }
+        // A routed run that changed files is checked with the workspace's tests first (#12); the check then decides
+        // when queued prompts continue. Otherwise they carry on after a finished run, wait after a limit, and pause
+        // after anything else.
+        const ending = run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete';
+        let checking = false;
+        try { checking = this.checks.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not check the run:', error.message); }
+        if (!checking) try { this.queue.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not continue the prompt queue:', error.message); }
       } }
     };
     const launch = async () => {
@@ -700,7 +721,7 @@ export class Broker extends EventEmitter {
   }
 
   async close() {
-    this.resume.close(); this.queue.close(); this.handoff.close();
+    this.resume.close(); this.queue.close(); this.handoff.close(); this.checks.close();
     if (this.running) {
       const run = this.running;
       this.stop(run.c.id);

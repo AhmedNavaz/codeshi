@@ -66,6 +66,9 @@ export class ProjectCommands {
   constructor({ registry, spawnImpl = spawn, stopGrace = 1500 } = {}) {
     this.registry = registry; this.spawn = spawnImpl; this.stopGrace = stopGrace; this.sessions = new Map(); this.closing = false;
     registry.hasRunningCommands = id => this.active(id);
+    // Checks after routed runs (#12) use the saved Test command as configured.
+    registry.testCommand = id => this.saved(id).test || null;
+    registry.runTest = id => this.runSaved(id, 'test');
   }
   active(id) { return [...this.sessions.values()].some(session => session.projectId === id && commandActive(session)); }
   key(id, action) { if (!actions.includes(action)) fail('Choose Run or Test.'); return `${id}:${action}`; }
@@ -125,6 +128,15 @@ export class ProjectCommands {
       session.child.once('close', (code, signal) => finish(code, signal));
     } catch (error) { finish(null, null, error); }
     return this.view(session);
+  }
+  // Runs a saved command as configured. The session shows in the panel as usual and Stop works.
+  runSaved(id, action) {
+    const config = this.saved(id)[action];
+    if (!config) fail('Set a Test command in Project commands first.', 404);
+    if (commandActive(this.sessions.get(this.key(id, action)))) fail(`The ${action === 'test' ? 'Test' : 'Run'} command was already running.`, 409);
+    this.start(id, action, config);
+    const session = this.sessions.get(this.key(id, action));
+    return { done: session.done, view: () => this.view(session), stop: () => this.stop(id, action, session.id) };
   }
   async terminate(session) {
     const pid = session.child?.pid;

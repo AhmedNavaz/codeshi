@@ -15,7 +15,7 @@
   ];
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const routing = () => api.getState().conversation?.routing || null;
-  let busy = false, preferences = null;
+  let busy = false, preferences = null, testCommand, testScope = null;
 
   function error(message) { $('agents-error').textContent = message || ''; $('agents-error').hidden = !message; }
   async function choose(choice) {
@@ -37,9 +37,28 @@
       const text = node('span', 'routing-option-text');
       text.append(node('strong', '', option.name), node('small', '', option.hint));
       row.append(node('span', 'routing-option-mark'), text);
-      row.addEventListener('click', () => { if (!selected) choose({ mode: option.mode, allowApi: current?.allowApi === true }); });
+      row.addEventListener('click', () => { if (!selected) choose({ mode: option.mode, allowApi: current?.allowApi === true, check: current?.check === true }); });
       return row;
     }));
+  }
+
+  // Check with tests (#12) uses the Test command saved in Project commands, so the panel says which one, or that none is set.
+  async function loadTestCommand() {
+    const projectId = api.getState().projectId;
+    if (!projectId) { testCommand = undefined; testScope = null; return; }
+    testScope = projectId;
+    try { const value = await api.api('/api/commands', {}, projectId); if (testScope === projectId) testCommand = value.commands?.test?.command || null; }
+    catch { if (testScope === projectId) testCommand = undefined; }
+    render();
+  }
+  // How checked runs went: passed first time, passed after a retry, or still failing, from the conversation's history.
+  function checkStats() {
+    const runs = api.getState().conversation?.runs || [], checked = runs.filter(run => run.check && !run.retryOf && ['passed', 'failed'].includes(run.check.status));
+    if (!checked.length) return '';
+    const retries = new Map(runs.filter(run => run.retryOf).map(run => [run.retryOf, run]));
+    let first = 0, after = 0, failing = 0;
+    for (const run of checked) { if (run.check.status === 'passed') first++; else if (retries.get(run.id)?.check?.status === 'passed') after++; else failing++; }
+    return [`Last ${checked.length} checked run${checked.length === 1 ? '' : 's'}: ${first} passed first time`, after ? `${after} after a retry` : '', failing ? `${failing} still failing` : ''].filter(Boolean).join(', ') + '.';
   }
 
   async function loadPreferences() {
@@ -59,6 +78,14 @@
     $('routing-api-row').hidden = !current;
     $('routing-allow-api').checked = current?.allowApi === true;
     $('routing-allow-api').disabled = busy || api.isRunning();
+    $('routing-check-row').hidden = !current;
+    $('routing-check').checked = current?.check === true;
+    $('routing-check').disabled = busy || api.isRunning() || !testCommand && current?.check !== true;
+    $('routing-check-hint').textContent = testCommand === undefined ? 'After a run that changes files, runs this workspace’s Test command. If the tests fail, routing retries once, one step up.'
+      : testCommand ? `After a run that changes files, runs ${testCommand}. If the tests fail, routing retries once, one step up.` : 'Needs a Test command for this workspace, set in ▶ Run.';
+    $('routing-check-set').hidden = testCommand !== null;
+    const stats = current?.check ? checkStats() : '';
+    $('routing-check-stats').hidden = !stats; $('routing-check-stats').textContent = stats;
     $('handoff-threshold').value = String(preferences?.threshold ?? 90);
     $('handoff-threshold').disabled = !preferences;
     $('handoff-automatic').checked = preferences?.automatic === true;
@@ -75,12 +102,17 @@
       window.relayGit?.close();
       window.relayReviews?.closePanel?.();
       loadPreferences();
+      loadTestCommand();
       render();
       if (section) { const target = $(`agents-${section}`); target?.scrollIntoView?.({ block: 'start' }); target?.classList.add('flash'); setTimeout(() => target?.classList.remove('flash'), 1200); }
     }
   }
   button.addEventListener('click', () => setOpen(panel.hidden));
-  $('routing-allow-api').addEventListener('change', () => { const current = routing(); if (current) choose({ mode: current.mode, allowApi: $('routing-allow-api').checked }); });
+  $('routing-allow-api').addEventListener('change', () => { const current = routing(); if (current) choose({ mode: current.mode, allowApi: $('routing-allow-api').checked, check: current.check === true }); });
+  $('routing-check').addEventListener('change', () => { const current = routing(); if (current) choose({ mode: current.mode, allowApi: current.allowApi === true, check: $('routing-check').checked }); });
+  $('routing-check-set').addEventListener('click', () => window.relayCommands?.open());
+  // A Test command saved in ▶ Run shows here at once.
+  window.addEventListener('relay-commands', event => { if (event.detail?.projectId === api.getState().projectId) { testCommand = event.detail.commands?.test?.command || null; render(); } });
   $('handoff-threshold').addEventListener('change', () => savePreferences({ threshold: Number($('handoff-threshold').value) }));
   $('handoff-automatic').addEventListener('change', () => savePreferences({ automatic: $('handoff-automatic').checked }));
   // The overview in a new conversation links to the matching part of the panel.
@@ -91,6 +123,7 @@
     const projectId = api.getState().projectId;
     if (projectId !== lastProject) {
       lastProject = projectId;
+      if (!panel.hidden) loadTestCommand();
       if (!projectId) setOpen(false, null, false);
       else if (panel.hidden && preferred() === 'agents' && window.matchMedia?.('(min-width: 1101px)').matches) setOpen(true, null, false);
     }

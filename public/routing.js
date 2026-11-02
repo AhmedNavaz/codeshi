@@ -76,6 +76,22 @@
     return levels.reduce((best, level) => Math.abs(EFFORTS.indexOf(level) - target) < Math.abs(EFFORTS.indexOf(best) - target) ? level : best, levels[0]);
   }
 
+  // One step stronger than a choice, for a retry after failed tests (#12, stage 2): the same agent, so it keeps its
+  // session, with a stronger model or more effort. Null when the choice is already the agent's strongest.
+  const LADDER = [['light', 'low'], ['standard', 'medium'], ['deep', 'high'], ['deep', 'highest']];
+  function escalate(provider, rows, choice) {
+    const current = (rows || []).find(row => modelId(row) === choice.model);
+    if (!current) return null;
+    const tier = TIERS.indexOf(modelTier(current)), effort = choice.effort ? EFFORTS.indexOf(choice.effort) : -1;
+    for (const [wantedTier, wantedEffort] of LADDER) {
+      const model = pickModel(rows, wantedTier);
+      if (!model) continue;
+      const level = pickEffort(effortsOf(model), wantedEffort), stepTier = TIERS.indexOf(modelTier(model)), stepEffort = level ? EFFORTS.indexOf(level) : -1;
+      if (stepTier > tier || stepTier === tier && stepEffort > effort) return { provider, model: modelId(model), modelName: model.displayName || model.name || modelId(model), effort: level, tier: TIERS[stepTier] };
+    }
+    return null;
+  }
+
   // Chooses for one message. candidates: [{ provider, models, billingSource, usedPercent, eligible }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
   // limit is skipped, and the agent that did the last run is preferred, so the conversation keeps its native session.
@@ -106,8 +122,9 @@
       const before = candidates.find(candidate => candidate.provider === current);
       why.push(!before?.eligible || !pool.includes(before) ? `${agentNames[current]} isn’t available under your rules` : Number.isFinite(before.usedPercent) && before.usedPercent >= 80 ? `${agentNames[current]} is at ${Math.round(before.usedPercent)}% of its limit` : `${agentNames[chosen.provider]} has more allowance left`);
     }
-    return { provider: chosen.provider, model: model ? modelId(model) : null, modelName: model ? (model.displayName || model.name || modelId(model)) : null, effort, tier: task.tier, mode, reason: why.join(' · ') };
+    const choice = { provider: chosen.provider, model: model ? modelId(model) : null, modelName: model ? (model.displayName || model.name || modelId(model)) : null, effort, tier: task.tier, mode, reason: why.join(' · ') };
+    return { ...choice, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
 
-  root.relayRouting = { MODES, modeNames, classify, modelTier, route };
+  root.relayRouting = { MODES, modeNames, classify, modelTier, route, escalate };
 })(typeof window === 'undefined' ? globalThis : window);

@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Check with tests** (#12): under **Routing** in the Agents panel, a routed run that changes files is followed by the workspace's own **Test** command from **▶ Run**, shown on the run's timeline and in the Test panel, where it can be stopped. If the tests fail, routing tries once more with the same agent, one step up in model or effort, and tells it what failed: on its own in Balanced and Maximum quality, after asking in Cost saving or when the agent is near its limit. A retry is never retried, queued prompts wait until the tests pass, and the panel shows how checked runs went.
+
 ## [0.17.0] - 2026-11-02
 
 ### Added

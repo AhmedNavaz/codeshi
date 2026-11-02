@@ -150,3 +150,16 @@ test('separate workspace and action sessions survive stopping another command an
   assert.equal(f.commands.state(f.project.id).commands.test.folderId, f.project.folders[1].id);
   assert.equal(f.commands.state(second.id).commands.run.folderId, second.folders[0].id);
 });
+
+test('checks after routed runs start the saved Test command as configured, once at a time', async t => {
+  const f = fixture(t);
+  assert.equal(f.registry.testCommand(f.project.id), null);
+  assert.throws(() => f.registry.runTest(f.project.id), error => error.status === 404 && /Set a Test command/.test(error.message));
+  f.commands.save(f.project.id, 'test', f.config(print('24 passing')));
+  assert.equal(f.registry.testCommand(f.project.id).command, print('24 passing'));
+  const session = f.registry.runTest(f.project.id);
+  assert.throws(() => f.registry.runTest(f.project.id), error => error.status === 409 && /already running/.test(error.message));
+  assert.equal(f.commands.state(f.project.id).sessions.test.id, session.view().id, 'The check is the Test session the panel shows.');
+  await session.done;
+  assert.deepEqual([session.view().status, session.view().exitCode, session.view().output], ['exited', 0, '24 passing']);
+});

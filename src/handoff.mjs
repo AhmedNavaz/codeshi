@@ -15,7 +15,7 @@ import { limitState } from './resume.mjs';
 export const HANDOFF_FIRST_CHECK_MS = 30000;
 export const HANDOFF_CHECK_MS = 120000;
 const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
-const highest = (usage, model) => {
+export const highest = (usage, model) => {
   const windows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => typeof row.usedPercent === 'number' && (!row.scope || String(model || '').toLowerCase().includes(String(row.scope).toLowerCase())));
   return windows.reduce((top, row) => !top || row.usedPercent > top.usedPercent ? row : top, null);
 };

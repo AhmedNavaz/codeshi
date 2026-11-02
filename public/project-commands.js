@@ -64,7 +64,7 @@
     if (!scope || pending) return;
     let request = requests.get(scope);
     if (!request) {
-      request = api.api('/api/commands', {}, scope).then(value => { states.set(scope, value); return value; }).finally(() => requests.delete(scope));
+      request = api.api('/api/commands', {}, scope).then(value => { states.set(scope, value); window.dispatchEvent(new CustomEvent('relay-commands', { detail: { projectId: scope, commands: value.commands } })); return value; }).finally(() => requests.delete(scope));
       requests.set(scope, request);
     }
     try {
