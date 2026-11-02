@@ -6,6 +6,7 @@ Thanks for helping. Bug reports, fixes and focused improvements are all welcome.
 
 - Check the [roadmap](ROADMAP.md) for planned work, and issues labelled [good first issue](https://github.com/AhmedNavaz/throughline/labels/good%20first%20issue) or [help wanted](https://github.com/AhmedNavaz/throughline/labels/help%20wanted).
 - For anything bigger than a bug fix, open an issue first so we can agree on the approach before you write code.
+- When a feature ships in stages, the remaining work stays in open issues, linked from the issue that shipped and listed on the roadmap. Closed issues don't hold planned work.
 - The [guide](docs/guide.md) describes how each feature behaves, which is useful context before changing it.
 
 ## Set up

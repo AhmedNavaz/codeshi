@@ -71,6 +71,8 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Feature | Status | Issue |
 | --- | --- | --- |
 | Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) as **Routing**; escalation after failed checks and subtask coordination are next; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/throughline/issues/12) |
+| Terminal tabs and split panes | Planned, help wanted; follows the terminal in 0.15.0 | [#70](https://github.com/AhmedNavaz/throughline/issues/70) |
+| Send selected terminal output to the conversation | Needs design | [#71](https://github.com/AhmedNavaz/throughline/issues/71) |
 | Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/throughline/issues/5) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/throughline/issues/9) |
 | Run the project's own tests on a returned patch, with approval | Planned | [#10](https://github.com/AhmedNavaz/throughline/issues/10) |
