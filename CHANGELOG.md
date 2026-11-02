@@ -4,6 +4,8 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-02
+
 ### Added
 
 - **Preferences** in Settings: appearance, updates, voice and recaps now have their own tab beside **Connections**, which keeps the agent accounts.
@@ -292,6 +294,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.17.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.17.0
 [0.16.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.16.0
 [0.15.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0
 [0.14.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0
