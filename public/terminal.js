@@ -32,7 +32,7 @@
   function theme() {
     const style = typeof getComputedStyle === 'function' ? getComputedStyle(document.documentElement) : null, read = name => style?.getPropertyValue(name).trim() || '';
     const light = document.documentElement.getAttribute('data-theme') === 'light';
-    return { ...palettes[light ? 'light' : 'dark'], background: read('--bg') || (light ? '#ffffff' : '#181818'), foreground: read('--text') || (light ? '#1f1f1f' : '#cccccc'), cursor: read('--text-strong') || read('--text'), cursorAccent: read('--bg'), selectionBackground: light ? '#add6ff' : '#264f78' };
+    return { ...palettes[light ? 'light' : 'dark'], background: read('--panel-bg') || (light ? '#f8f8f8' : '#181818'), foreground: read('--text') || (light ? '#1f1f1f' : '#cccccc'), cursor: read('--text-strong') || read('--text'), cursorAccent: read('--panel-bg') || (light ? '#f8f8f8' : '#181818'), selectionBackground: light ? '#add6ff' : '#264f78' };
   }
 
   // One view per session: its xterm, its stream and an ordered queue of input.

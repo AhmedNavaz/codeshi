@@ -49,6 +49,8 @@
   --bg: #1f1f1f;
   --sidebar: #181818;
   --statusbar-bg: #181818;
+  /* The bottom panel (Terminal, Run) sits apart from the conversation. */
+  --panel-bg: #181818;
   --overlay-bg: #252526;
   --surface-raised: #252526;
   --surface-input: #2a2a2a;
@@ -112,6 +114,7 @@
   --bg: #ffffff;
   --sidebar: #f8f8f8;
   --statusbar-bg: #f8f8f8;
+  --panel-bg: #f8f8f8;
   --overlay-bg: #ffffff;
   --surface-raised: #f8f8f8;
   --surface-input: #ffffff;

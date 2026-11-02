@@ -1,5 +1,5 @@
 /* The bottom panel: the workspace's tools as tabs (Terminal, Run), resizable from its top edge. */
-.bottom-panel { position: relative; display: flex; flex-direction: column; flex: none; height: min(320px, 42vh); min-height: 140px; border-top: 1px solid var(--border-strong); background: var(--bg); }
+.bottom-panel { position: relative; display: flex; flex-direction: column; flex: none; height: min(320px, 42vh); min-height: 140px; border-top: 1px solid var(--border-strong); background: var(--panel-bg); }
 .bottom-panel[hidden] { display: none; }
 .bottom-heading { display: flex; align-items: center; gap: 8px; flex: none; height: 34px; padding: 0 6px 0 8px; }
 .bottom-tabs { display: flex; align-self: stretch; gap: 2px; margin-right: auto; }

@@ -20,4 +20,4 @@
 .terminal-view[hidden] { display: none; }
 .terminal-view .xterm { height: 100%; }
 .terminal-view .xterm-viewport { scrollbar-width: thin; }
-.terminal-view .xterm-viewport, .terminal-view .xterm-screen { background: var(--bg) !important; }
+.terminal-view .xterm-viewport, .terminal-view .xterm-screen { background: var(--panel-bg) !important; }
