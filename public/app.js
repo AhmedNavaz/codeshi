@@ -103,7 +103,7 @@
     const raw = await response.text();
     let data;
     try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
-    if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : data.error?.message || data.message || `The request could not be completed (${response.status}).`);
+    if (!response.ok) throw Object.assign(new Error(typeof data.error === "string" ? data.error : data.error?.message || data.message || `The request could not be completed (${response.status}).`), { status: response.status, ...(data.details ? { details: data.details } : {}) });
     return data;
   }
   function post(path, data = {}, projectId = state.projectId) { return api(path, { method: "POST", body: JSON.stringify(data) }, projectId); }

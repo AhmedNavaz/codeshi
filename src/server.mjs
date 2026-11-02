@@ -233,7 +233,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     } catch (error) {
       if (!error.status) console.error('Throughline request failed:', error.message);
       // A stale or unconfirmed handoff answers with the current offer, so the person can review it.
-      return json(res, error.status || 500, { error: error.status ? error.message : 'Local server error. Check the terminal for details.', ...(error.status && 'offer' in error ? { offer: error.offer, billingRequired: error.billingRequired === true } : {}) });
+      return json(res, error.status || 500, { error: error.status ? error.message : 'Local server error. Check the terminal for details.', ...(error.status && 'offer' in error ? { offer: error.offer, billingRequired: error.billingRequired === true } : {}), ...(error.status && error.details ? { details: error.details } : {}) });
     }
   });
 

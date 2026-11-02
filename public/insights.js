@@ -155,15 +155,21 @@
     const repo = repositories.find(row => row.folderId === select.value) || repositories[0];
     $('git-summary').replaceChildren(); $('git-content').replaceChildren();
     $('git-changes-tab').setAttribute('aria-pressed', String(gitView === 'changes')); $('git-commits-tab').setAttribute('aria-pressed', String(gitView === 'commits'));
+    $('git-commit').hidden = true;
     if (!repo) { $('git-content').append(el('p', 'Add a workspace folder to view Git activity.', 'inspector-empty')); return; }
     if (!repo.available) { $('git-content').append(el('p', repo.error || 'Git is not available for this folder.', 'inspector-empty')); return; }
     $('git-summary').dataset.clean = String(repo.totalChanges === 0);
     $('git-summary').append(el('span', repo.branch, 'git-branch'), el('span', `${repo.totalChanges} changed`, 'git-change-count'));
     if (repo.githubURL) $('git-summary').append(action('Open on GitHub ↗', () => external(repo.githubURL), 'text-link'));
     if (repo.error) $('git-content').append(el('p', repo.error, 'import-error'));
+    $('git-commit').hidden = gitView !== 'changes';
     if (gitView === 'changes') {
+      renderCommit(repo);
       if (!repo.totalChanges) $('git-content').append(el('div', '✓ Working tree is clean', 'inspector-empty'));
-      for (const file of repo.changes) { const status = file.code.includes('D') ? 'deleted' : file.code === '??' ? 'untracked' : file.code.includes('A') ? 'added' : file.code.includes('R') ? 'renamed' : 'modified', row = action('', () => openDiff(repo, file, status), 'git-file'); row.dataset.status = status; row.title = 'Show changes'; row.append(el('span', file.code.trim() || 'M', 'git-file-code'), el('span', file.path, 'git-file-name'), el('span', (file.staged ? 'Staged · ' : '') + ({ added: 'Added', untracked: 'New', deleted: 'Deleted', renamed: 'Renamed', modified: 'Modified' }[row.dataset.status]), 'git-file-status')); $('git-content').append(row); }
+      // Staged changes are exactly what the next commit holds; a file changed again after staging shows in both lists.
+      const staged = repo.changes.filter(file => !' ?'.includes(file.code[0])), unstaged = repo.changes.filter(file => file.code[1] !== ' ');
+      if (staged.length) gitSection(repo, 'Staged changes', staged, 'unstage');
+      if (unstaged.length) gitSection(repo, 'Changes', unstaged, 'stage');
       if (repo.changesClipped) $('git-content').append(el('p', 'Showing the first 100 changed files.', 'muted'));
     } else {
       if (!repo.commits.length) $('git-content').append(el('p', 'No commits yet. Your commits will appear here.', 'inspector-empty'));
@@ -174,6 +180,93 @@
     }
     $('git-updated').textContent = (gitView === 'commits' ? 'Latest 15 local commits · refreshed ' : 'Local Git · refreshed ') + date(gitData.checkedAt);
   }
+  const codeNames = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', T: 'Type changed', U: 'Conflict', '?': 'New' };
+  const statusOf = code => code === 'D' ? 'deleted' : code === '?' || code === 'A' ? 'added' : code === 'R' ? 'renamed' : 'modified';
+  // One list of changes with a stage or unstage button on each file and for the whole list.
+  function gitSection(repo, title, files, act) {
+    const section = el('section', undefined, 'git-section'), head = el('div', undefined, 'git-section-head');
+    head.append(el('h3', title), el('span', String(files.length), 'git-section-count'));
+    const all = action('', () => gitWrite(act, repo, { all: true }), `icon-button git-stage-button ${act}`); all.title = act === 'stage' ? 'Stage all changes' : 'Unstage all changes'; all.setAttribute('aria-label', all.title); all.disabled = gitWriting;
+    head.append(all); section.append(head);
+    for (const file of files) {
+      const code = act === 'stage' ? file.code[1] : file.code[0], status = statusOf(code), row = el('div', undefined, 'git-file-row');
+      const open = action('', () => openDiff(repo, file, file.code === '??' ? 'untracked' : statusOf(file.code.trim()[0] || 'M')), 'git-file'); open.dataset.status = status; open.title = 'Show changes';
+      open.append(el('span', code === '?' ? 'U' : code, 'git-file-code'), el('span', file.path, 'git-file-name'), el('span', codeNames[code] || 'Changed', 'git-file-status'));
+      const toggle = action('', () => gitWrite(act, repo, { paths: [file.path] }), `icon-button git-stage-button ${act}`); toggle.title = act === 'stage' ? 'Stage' : 'Unstage'; toggle.setAttribute('aria-label', `${toggle.title} ${file.path}`); toggle.disabled = gitWriting;
+      row.append(open, toggle); section.append(row);
+    }
+    $('git-content').append(section);
+  }
+  // The commit box: a message, and a button naming what the commit holds. With files staged it commits those; with
+  // nothing staged it commits every change listed, as the button says. Drafts are kept per folder.
+  const commitDrafts = new Map();
+  let gitWriting = false, commitOutcome = null;
+  const stagedFiles = repo => repo.changes.filter(file => !' ?'.includes(file.code[0])), changedFiles = repo => repo.changes.filter(file => file.code[1] !== ' ');
+  function renderCommit(repo) {
+    const box = $('git-commit'), message = $('git-commit-message'), staged = stagedFiles(repo).length, all = !staged, count = staged || changedFiles(repo).length, more = repo.changesClipped ? '+' : '';
+    if (box.dataset.folder !== repo.folderId) { box.dataset.folder = repo.folderId; message.value = commitDrafts.get(repo.folderId) || ''; if (commitOutcome?.folderId !== repo.folderId) commitOutcome = null; }
+    message.placeholder = `Message (${window.relayDesktop?.platform === 'darwin' || /Mac/.test(globalThis.navigator?.platform || '') ? '⌘' : 'Ctrl+'}↵ to commit${repo.branch && repo.branch !== 'Detached HEAD' ? ` on ${repo.branch}` : ''})`;
+    message.disabled = Boolean(gitWriting);
+    const button = $('git-commit-button');
+    button.textContent = gitWriting === 'commit' || gitWriting === 'commit-all' ? 'Committing…' : count ? `Commit ${all ? 'all ' : ''}${count}${more} file${count === 1 && !more ? '' : 's'}` : 'Commit';
+    button.disabled = Boolean(gitWriting) || !count || !message.value.trim();
+    button.title = !count ? 'There are no changes to commit' : !message.value.trim() ? 'Write a commit message' : all ? 'Stages every change listed below, then commits them' : 'Commits the staged files';
+    const who = repo.committer;
+    $('git-committer').textContent = who?.name && who?.email ? `as ${who.name}` : 'Set your Git name and email to commit';
+    $('git-committer').title = who?.email ? `${who.name} <${who.email}>` : 'git config --global user.name and user.email';
+    $('git-committer').classList.toggle('warning', !(who?.name && who?.email));
+    const result = $('git-commit-result');
+    result.hidden = !commitOutcome; result.replaceChildren();
+    if (!commitOutcome) return;
+    result.dataset.kind = commitOutcome.kind;
+    if (commitOutcome.kind === 'done') { const { commit } = commitOutcome; result.append(el('span', `Committed ${commit.shortHash}${commit.branch ? ` on ${commit.branch}` : ''} · not pushed`)); return; }
+    result.append(el('span', commitOutcome.message));
+    if (commitOutcome.output) result.append(el('pre', commitOutcome.output, 'git-commit-output'));
+    if (commitOutcome.hooks) { const skip = action('Commit without hooks', () => commit(true), 'secondary-button'); skip.title = 'Runs git commit --no-verify'; skip.disabled = gitWriting; result.append(skip); }
+  }
+  // One Git action at a time. A commit of everything listed stages first and stays busy until its commit finishes.
+  async function gitWrite(act, repo, input, { continuing = false, keepBusy = false } = {}) {
+    const projectId = api.getState().projectId;
+    if (!projectId || (gitWriting && !continuing)) return false;
+    gitWriting ||= act; renderGit();
+    let done = false;
+    try {
+      const result = await api.post(`/api/git/${act}`, { folderId: repo.folderId, ...input }, projectId);
+      if (api.getState().projectId === projectId) gitData = result.git;
+      if (act === 'commit') { commitDrafts.delete(repo.folderId); $('git-commit-message').value = ''; commitOutcome = { kind: 'done', folderId: repo.folderId, commit: result.commit }; }
+      else if (commitOutcome?.kind === 'done') commitOutcome = null;
+      done = true;
+    } catch (error) {
+      if (act === 'commit') commitOutcome = { kind: 'error', folderId: repo.folderId, message: error.message, output: error.details?.output || '', hooks: Boolean(error.details?.hooks) };
+      else api.showNotice(error.message);
+      if (error.status === 409) loadGit();
+    } finally {
+      if (!(keepBusy && done)) { gitWriting = false; if (api.getState().projectId === projectId) renderGit(); }
+    }
+    return done;
+  }
+  const currentRepo = () => (gitData?.repositories || []).find(row => row.folderId === $('git-repository').value);
+  async function commit(skipHooks = false) {
+    let repo = currentRepo();
+    const message = $('git-commit-message').value;
+    if (!repo || !message.trim() || gitWriting) return;
+    // Nothing staged: stage exactly the changes listed, then commit them, as the button says.
+    if (!stagedFiles(repo).length) {
+      const paths = changedFiles(repo).map(file => file.path);
+      if (!paths.length) return;
+      gitWriting = 'commit-all';
+      if (!await gitWrite('stage', repo, repo.changesClipped ? { all: true } : { paths }, { continuing: true, keepBusy: true })) return;
+      repo = currentRepo();
+      if (!repo) { gitWriting = false; renderGit(); return; }
+    }
+    await gitWrite('commit', repo, { message, expected: repo.stagedPaths || [], skipHooks }, { continuing: true });
+  }
+  $('git-commit').addEventListener('submit', event => { event.preventDefault(); commit(); });
+  $('git-commit-message').addEventListener('input', () => {
+    const folderId = $('git-commit').dataset.folder; if (folderId) commitDrafts.set(folderId, $('git-commit-message').value);
+    const repo = (gitData?.repositories || []).find(row => row.folderId === folderId); if (repo) renderCommit(repo);
+  });
+  $('git-commit-message').addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); if (!$('git-commit-button').disabled) commit(); } });
   async function loadGit() {
     const projectId = api.getState().projectId; if (!projectId || gitBusy) return;
     const request = ++gitRequest; gitBusy = true; gitScope = projectId; $('refresh-git').disabled = true; $('refresh-git').setAttribute('aria-busy', 'true');
@@ -375,7 +468,7 @@
   window.addEventListener('relay-state', render);
   window.addEventListener('relay-account', event => { const provider = event.detail?.provider || api.getState().provider; delete catalog[provider]; delete attemptedModels[provider]; modelSignature = ''; modelControls(); });
   setInterval(() => { if (!document.hidden) progress(); }, 1000);
-  setInterval(() => { if (!document.hidden && !$('git-panel').hidden && !gitBusy && gitScope === api.getState().projectId) loadGit(); }, 15000);
+  setInterval(() => { if (!document.hidden && !$('git-panel').hidden && !gitBusy && !gitWriting && gitScope === api.getState().projectId) loadGit(); }, 15000);
   setInterval(() => { if (!document.hidden) for (const provider of ['codex', 'claude', 'gemini']) if (Date.now() - (usage[provider]?.fetchedAt || 0) > 300000) loadUsage(provider); }, 60000);
   render();
 })();

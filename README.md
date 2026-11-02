@@ -33,7 +33,7 @@ Each project becomes a continuous working thread: its folders, conversation, sav
 **Execution visibility and developer controls**
 
 - A search bar (⌘K) for workspaces, files in every workspace and actions, a side panel for Agents and Git, and resizable sections you can show or hide.
-- Git activity for each folder: changed files with diffs, and recent commits.
+- Git activity for each folder: changed files with diffs, and recent commits. Stage files and commit from the panel with your own identity and the project's commit hooks; Throughline never pushes.
 - A file browser with syntax-highlighted previews. Attach files and images by clicking, dragging or pasting.
 - Plan usage for Claude Code and Codex in the status bar, with reset times, plus per-run context usage when reported.
 - Keep awake: your Mac stays awake while agents are working or waiting for a usage limit to reset, and sleeps normally once they finish.

@@ -2142,3 +2142,74 @@ test('Settings turns automatic update checks off and checks now', async () => {
   assert.deepEqual(ui.updateCalls.at(-1), ['check']);
 });
 
+
+test('the Git panel stages changes and commits exactly what is staged, and offers committing without hooks only after a hook stops it', async () => {
+  const ui = await browser({ insights: true });
+  let repo = { folderId: 'frontend', name: 'Frontend', available: true, branch: 'main', totalChanges: 2, changes: [{ path: 'app.js', code: ' M', staged: false }, { path: 'notes.md', code: '??', staged: false }], stagedPaths: [], commits: [], committer: { name: 'Pat Example', email: 'pat@example.com' } };
+  const posts = [], activity = () => ({ checkedAt: new Date().toISOString(), repositories: [clone(repo)] });
+  let hookFails = true;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/git' && request.method === 'GET') return response(activity());
+    if (request.path === '/api/git/stage' && request.method === 'POST') {
+      posts.push(['stage', clone(request.body)]);
+      repo = { ...repo, changes: [{ path: 'app.js', code: 'M ', staged: true }, repo.changes[1]], stagedPaths: ['app.js'] };
+      return response({ staged: true, git: activity() });
+    }
+    if (request.path === '/api/git/commit' && request.method === 'POST') {
+      posts.push(['commit', clone(request.body)]);
+      if (hookFails) { hookFails = false; return response({ error: 'A commit hook stopped the commit. Its output is below.', details: { code: 'hook', hooks: true, output: 'lint: 2 problems in app.js' } }, 409); }
+      repo = { ...repo, totalChanges: 1, changes: [repo.changes[1]], stagedPaths: [] };
+      return response({ commit: { hash: 'a'.repeat(40), shortHash: 'aaaaaaa', subject: 'Fix the header', branch: 'main', files: 1, hooks: false }, git: activity() });
+    }
+    return next();
+  });
+  ui.$('open-git').click(); await flush();
+  const heads = () => ui.document.querySelectorAll('.git-section-head').map(head => head.children[0].textContent);
+  assert.deepEqual(heads(), ['Changes']);
+  assert.equal(ui.$('git-commit').hidden, false);
+  assert.equal(ui.$('git-commit-button').disabled, true);
+  assert.equal(ui.$('git-committer').textContent, 'as Pat Example');
+  const labelled = label => ui.document.querySelectorAll('button').find(button => button.getAttribute('aria-label') === label);
+  labelled('Stage app.js').click(); await flush();
+  assert.deepEqual(posts[0], ['stage', { folderId: 'frontend', paths: ['app.js'] }]);
+  assert.deepEqual(heads(), ['Staged changes', 'Changes']);
+  assert(labelled('Unstage app.js'));
+  assert.equal(ui.$('git-commit-button').textContent, 'Commit 1 file');
+  assert.equal(ui.$('git-commit-button').disabled, true, 'A commit needs a message.');
+  ui.$('git-commit-message').value = 'Fix the header'; ui.fire('git-commit-message', 'input');
+  assert.equal(ui.$('git-commit-button').disabled, false);
+
+  ui.$('git-commit').dispatchEvent(new UIEvent('submit')); await flush();
+  assert.deepEqual(posts[1], ['commit', { folderId: 'frontend', message: 'Fix the header', expected: ['app.js'], skipHooks: false }]);
+  assert.match(ui.$('git-commit-result').textContent, /A commit hook stopped the commit/);
+  assert.equal(ui.document.querySelector('.git-commit-output').textContent, 'lint: 2 problems in app.js');
+  assert.equal(ui.$('git-commit-message').value, 'Fix the header', 'The message is kept to try again.');
+  ui.findButton('Commit without hooks').click(); await flush();
+  assert.equal(posts[2][1].skipHooks, true);
+  assert.equal(ui.$('git-commit-result').textContent, 'Committed aaaaaaa on main · not pushed');
+  assert.equal(ui.$('git-commit-message').value, '');
+  assert.deepEqual(heads(), ['Changes']);
+  assert.equal(ui.findButton('Commit without hooks'), undefined);
+});
+
+test('with nothing staged, Commit commits every change listed: it stages exactly those files, then commits them', async () => {
+  const ui = await browser({ insights: true });
+  let repo = { folderId: 'frontend', name: 'Frontend', available: true, branch: 'main', totalChanges: 2, changes: [{ path: 'app.js', code: ' M', staged: false }, { path: 'docs/', code: '??', staged: false }], stagedPaths: [], commits: [], committer: { name: 'Pat Example', email: 'pat@example.com' } };
+  const posts = [], activity = () => ({ checkedAt: new Date().toISOString(), repositories: [clone(repo)] });
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/git' && request.method === 'GET') return response(activity());
+    if (request.path === '/api/git/stage') { posts.push(['stage', clone(request.body)]); repo = { ...repo, changes: [{ path: 'app.js', code: 'M ', staged: true }, { path: 'docs/guide.md', code: 'A ', staged: true }], stagedPaths: ['app.js', 'docs/guide.md'] }; return response({ staged: true, git: activity() }); }
+    if (request.path === '/api/git/commit') { posts.push(['commit', clone(request.body)]); repo = { ...repo, totalChanges: 0, changes: [], stagedPaths: [] }; return response({ commit: { hash: 'b'.repeat(40), shortHash: 'bbbbbbb', subject: 'Ship it', branch: 'main', files: 2, hooks: true }, git: activity() }); }
+    return next();
+  });
+  ui.$('open-git').click(); await flush();
+  assert.equal(ui.$('git-commit-button').textContent, 'Commit all 2 files');
+  assert.equal(ui.$('git-commit-button').disabled, true, 'A commit needs a message.');
+  ui.$('git-commit-message').value = 'Ship it'; ui.fire('git-commit-message', 'input');
+  assert.equal(ui.$('git-commit-button').disabled, false, 'A message is enough when there are changes.');
+  ui.$('git-commit').dispatchEvent(new UIEvent('submit')); await flush();
+  assert.deepEqual(posts, [['stage', { folderId: 'frontend', paths: ['app.js', 'docs/'] }], ['commit', { folderId: 'frontend', message: 'Ship it', expected: ['app.js', 'docs/guide.md'], skipHooks: false }]]);
+  assert.equal(ui.$('git-commit-result').textContent, 'Committed bbbbbbb on main · not pushed');
+  assert.equal(ui.$('git-commit-button').disabled, true);
+});
+

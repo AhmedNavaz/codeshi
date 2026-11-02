@@ -48,7 +48,9 @@ export function workspaceGit(folders, { spawnImpl = spawnSync, untracked = 'norm
       const [hash, shortHash, author, date, ...subject] = row.split('\x1f');
       return { hash, shortHash, author, date, subject: subject.join('\x1f'), url: githubURL && /^[a-f0-9]{40,64}$/.test(hash) ? `${githubURL}/commit/${hash}` : null };
     }) : [];
-    return { ...base, available: true, branch: branch.status === 0 ? branch.stdout.trim() : 'Detached HEAD', githubURL, changes: changes.slice(0, 100), totalChanges: changes.length, changesClipped: changes.length > 100, commits, error: status.ok ? null : 'Could not read working changes.' };
+    // Everything staged, past the 100 changes listed: a commit from the panel must match it exactly.
+    const stagedPaths = changes.filter(change => change.staged).flatMap(change => [change.path, change.originalPath].filter(Boolean));
+    return { ...base, available: true, branch: branch.status === 0 ? branch.stdout.trim() : 'Detached HEAD', githubURL, changes: changes.slice(0, 100), totalChanges: changes.length, changesClipped: changes.length > 100, stagedPaths, commits, error: status.ok ? null : 'Could not read working changes.' };
   }) };
 }
 // Unified diff of one currently changed file against HEAD. Only paths Git reports as changed are accepted.

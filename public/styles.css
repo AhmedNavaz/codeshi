@@ -585,6 +585,31 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .git-file[data-status="renamed"] .git-file-code { color: var(--link); }
 .git-content .muted { padding: 4px 10px; color: var(--faint); font-size: 11px; }
 .git-content .import-error { margin: 4px 4px 8px; border-radius: 5px; }
+/* Committing (#6): a message box above the changes, then staged changes and the rest, each file with a stage or
+   unstage button that shows on hover. */
+.git-commit { display: grid; gap: 8px; padding: 10px 12px 10px; border-bottom: 1px solid var(--border); }
+.git-commit textarea { width: 100%; min-height: 52px; max-height: 160px; padding: 7px 9px; border: 1px solid var(--input-border); border-radius: 6px; background: var(--surface-input); color: var(--text); font: 12.5px/1.45 var(--font); resize: vertical; }
+.git-commit textarea:focus { outline: none; border-color: var(--focus); }
+.git-commit-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.git-commit-row .primary-button { flex: none; }
+.git-committer { min-width: 0; overflow: hidden; color: var(--faint); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.git-committer.warning { color: var(--warning); }
+.git-commit-result { display: grid; gap: 6px; color: var(--success); font-size: 12px; line-height: 1.45; }
+.git-commit-result[data-kind="error"] { color: var(--danger); }
+.git-commit-result .secondary-button { justify-self: start; }
+.git-commit-output { max-height: 180px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 6px; background: var(--code-bg); color: var(--muted); font: 11px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.git-section + .git-section { margin-top: 8px; }
+.git-section-head { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 10px; }
+.git-section-head h3 { margin: 0; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.git-section-count { padding: 0 6px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: 10.5px; line-height: 16px; }
+.git-section-head .git-stage-button { margin-left: auto; }
+.git-file-row { display: flex; align-items: center; min-width: 0; border-radius: 4px; }
+.git-file-row:hover { background: var(--hover); }
+.git-file-row .git-file { flex: 1; min-width: 0; background: transparent; }
+.git-stage-button { flex: none; width: 22px; height: 22px; margin-right: 2px; opacity: 0; }
+.git-stage-button::before { content: ""; width: 13px; height: 13px; background: currentColor; -webkit-mask: var(--icon-plus) center / contain no-repeat; mask: var(--icon-plus) center / contain no-repeat; }
+.git-stage-button.unstage::before { -webkit-mask-image: var(--icon-minus); mask-image: var(--icon-minus); }
+.git-file-row:hover .git-stage-button, .git-section-head:hover .git-stage-button, .git-stage-button:focus-visible { opacity: 1; }
 .commit-card { padding: 7px 10px; border-radius: 5px; }
 .commit-card:hover { background: var(--hover); }
 .commit-card h3 { margin: 0; color: var(--text); font-size: 12px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
