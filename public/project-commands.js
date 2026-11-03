@@ -4,6 +4,7 @@
   // The list on the left shows each one's state; the selected one's output fills the rest, with its colours, links to
   // local addresses and Start, Stop and Restart. Commands are added or edited in a short form that offers what the
   // folder already defines. Commands run in the person's own shell until stopped, whether or not the panel shows.
+  // A workspace with several folders lists its commands under the folder each runs in, and the output says where.
   const $ = id => document.getElementById(id), api = window.relayUI, panel = $('project-commands');
   if (!api || !panel) return;
   const states = new Map(), selected = new Map(), found = new Map(), requests = new Map();
@@ -17,6 +18,9 @@
   const node = (tag, className, text) => { const value = document.createElement(tag); if (className) value.className = className; if (text !== undefined) value.textContent = text; return value; };
   const folderName = folderId => { const folder = project()?.folders.find(item => item.id === folderId); return folder ? folder.displayName || folder.name : ''; };
   const place = command => [folderName(command.folderId), command.directory].filter(Boolean).join('/');
+  const several = () => (project()?.folders || []).length > 1;
+  // Where a command runs, in full: its folder's path and the subdirectory inside it.
+  const fullPath = command => { const folder = project()?.folders.find(item => item.id === command.folderId); return folder ? [folder.path, command.directory].filter(Boolean).join('/') : ''; };
   const elapsed = since => { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(since)) / 1000)); return seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s` : `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`; };
   function describe(session) {
     if (!session) return 'Not started';
@@ -61,17 +65,37 @@
     $('status-run')?.setAttribute('aria-label', `Run${running ? `, ${running} running` : failed ? ', a command failed' : ''}`);
   }
 
+  // With several folders, each folder heads the commands that run in it, with + to add one there.
+  function folderHeading(folder) {
+    const name = folder ? folder.displayName || folder.name : 'Folder no longer in this workspace', heading = node('div', 'run-folder');
+    heading.dataset.folderId = folder?.id || '';
+    heading.append(node('span', 'run-folder-name', name));
+    heading.title = folder?.path || 'Add the folder to the workspace again, or edit these commands to run elsewhere.';
+    if (folder) {
+      const add = node('button', 'icon-button run-folder-add'); add.type = 'button';
+      add.setAttribute('aria-label', `Add a command in ${name}`); add.title = `Add a command in ${name}`; add.disabled = pending || state().commands.length >= 12;
+      add.addEventListener('click', () => openForm(null, { folderId: folder.id }));
+      heading.append(add);
+    }
+    return heading;
+  }
   function renderList() {
-    const list = $('command-list'), chosen = current();
-    list.hidden = !state().commands.length;
-    list.replaceChildren(...state().commands.map(command => {
+    const list = $('command-list'), chosen = current(), commands = state().commands, folders = project()?.folders || [];
+    list.hidden = !commands.length;
+    if (!several()) { list.replaceChildren(...commands.map(command => commandRow(command, chosen))); return; }
+    const groups = [...folders.map(folder => ({ folder, commands: commands.filter(command => command.folderId === folder.id) })), { folder: null, commands: commands.filter(command => !folders.some(folder => folder.id === command.folderId)) }];
+    list.replaceChildren(...groups.filter(group => group.commands.length).flatMap(group => [folderHeading(group.folder), ...group.commands.map(command => commandRow(command, chosen))]));
+  }
+  function commandRow(command, chosen) {
       const session = sessionOf(command), row = node('div', 'command-row');
       row.dataset.commandId = command.id; row.dataset.status = session?.status || 'idle';
       const pick = node('button', 'command-pick'); pick.type = 'button';
       if (command === chosen) pick.setAttribute('aria-current', 'true');
       pick.append(node('span', 'command-dot'), node('span', 'command-name', command.name));
+      // A command in a subdirectory of its folder says which.
+      if (command.directory) pick.append(node('span', 'command-where', command.directory));
       if (command.test) { const mark = node('span', 'command-test-mark'); mark.title = 'Used by Check with tests'; mark.setAttribute('aria-label', 'Used by Check with tests'); pick.append(mark); }
-      pick.title = `${command.command}${place(command) ? ` · ${place(command)}` : ''}`;
+      pick.title = `${command.command}${place(command) ? ` · runs in ${place(command)}` : ''}`;
       pick.addEventListener('click', () => { selected.set(projectId, command.id); form = null; error(''); refresh(); render(); });
       const running = active(session), quick = node('button', `icon-button command-quick ${running ? 'stop' : 'start'}`);
       quick.type = 'button'; quick.setAttribute('aria-label', `${running ? 'Stop' : 'Start'} ${command.name}`); quick.title = running ? 'Stop' : 'Start';
@@ -79,13 +103,15 @@
       quick.addEventListener('click', () => { selected.set(projectId, command.id); running ? stop(command) : start(command); });
       row.append(pick, quick);
       return row;
-    }));
   }
 
   function renderView() {
     const command = current(), session = sessionOf(command), running = active(session);
     $('command-state').textContent = describe(session); $('command-state').dataset.status = session?.status || 'idle';
     $('command-line').textContent = command.command; $('command-line').title = place(command) ? `Runs in ${place(command)}` : '';
+    // Where it runs, before what it runs: the folder, and the subdirectory inside it.
+    const where = several() || command.directory ? place(command) : '';
+    $('command-place').textContent = where; $('command-place').hidden = !where; $('command-place').title = fullPath(command) ? `Runs in ${fullPath(command)}` : '';
     $('command-start').hidden = running; $('command-start').disabled = pending;
     $('command-stop').hidden = !running; $('command-stop').disabled = pending || session?.status === 'stopping';
     $('command-restart').hidden = !running; $('command-restart').disabled = pending || session?.status === 'stopping';
@@ -135,11 +161,32 @@
   const unused = suggestions => suggestions.filter(suggestion => !state().commands.some(command => command.command === suggestion.command));
 
   function renderEmpty() {
-    const folderId = api.selectedFolderId?.() || project()?.folders?.[0]?.id, scope = projectId, version = generation;
-    const show = value => { if (scope !== projectId || version !== generation) return; chips($('command-quick'), unused(value.suggestions).slice(0, 8), suggestion => add(suggestion, folderId)); };
-    if (!folderId) return;
-    const cached = found.get(`${scope}:${folderId}:`);
-    if (cached) show(cached); else detect(folderId).then(show).catch(() => {});
+    const folders = project()?.folders || [], scope = projectId, version = generation, host = $('command-quick');
+    const fresh = () => scope === projectId && version === generation;
+    host.classList.toggle('grouped', folders.length > 1);
+    if (folders.length < 2) {
+      const folderId = folders[0]?.id;
+      if (!folderId) return;
+      const show = value => { if (fresh()) chips(host, unused(value.suggestions).slice(0, 8), suggestion => add(suggestion, folderId)); };
+      const cached = found.get(`${scope}:${folderId}:`);
+      if (cached) show(cached); else detect(folderId).then(show).catch(() => {});
+      return;
+    }
+    // With several folders, each offers what it defines under its own name, so it's clear where each one runs.
+    const groups = new Map();
+    const draw = () => { if (!fresh()) return; const shown = folders.map(folder => groups.get(folder.id)).filter(group => group?.suggestions.length); host.replaceChildren(...shown.map(group => group.element)); host.hidden = !shown.length; };
+    for (const folder of folders) {
+      const apply = value => {
+        if (!fresh()) return;
+        const suggestions = unused(value.suggestions).slice(0, 6), element = node('div', 'command-quick-group'), row = node('div', 'command-chips');
+        element.dataset.folderId = folder.id;
+        element.append(node('p', 'command-quick-folder', folder.displayName || folder.name), row);
+        chips(row, suggestions, suggestion => add(suggestion, folder.id));
+        groups.set(folder.id, { element, suggestions }); draw();
+      };
+      const cached = found.get(`${scope}:${folder.id}:`);
+      if (cached) apply(cached); else detect(folder.id).then(apply).catch(() => {});
+    }
   }
 
   function render() {
@@ -190,12 +237,12 @@
   });
 
   // The form adds a command or edits one. It offers what the chosen folder defines, and saves only what is entered.
-  function openForm(command = null, { test = false } = {}) {
+  function openForm(command = null, { test = false, folderId = null } = {}) {
     form = { id: command?.id || null };
     const folders = project()?.folders || [];
     $('command-form-title').textContent = command ? `Edit ${command.name}` : test ? 'Choose a test command' : 'Add a command';
     $('command-folder').replaceChildren(...folders.map(folder => { const option = node('option', '', (folder.displayName || folder.name) + (folder.available === false ? ' (unavailable)' : '')); option.value = folder.id; return option; }));
-    $('command-folder').value = command?.folderId || api.selectedFolderId?.() || folders[0]?.id || '';
+    $('command-folder').value = command?.folderId || folderId || api.selectedFolderId?.() || folders[0]?.id || '';
     $('command-folder-field').hidden = folders.length < 2;
     $('command-name').value = command?.name || ''; $('command-directory').value = command?.directory || ''; $('command-text').value = command?.command || '';
     $('command-test').checked = command ? command.test === true : test;

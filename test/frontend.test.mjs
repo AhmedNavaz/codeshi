@@ -144,7 +144,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
       const workspaceAction=request.path.match(/^\/api\/projects\/([^/]+)\/(remove|restore)$/);
       if(workspaceAction){assert.equal(request.method,'POST');const id=workspaceAction[1];if(workspaceAction[2]==='remove'){const index=projects.findIndex(project=>project.id===id);if(index>=0)removedProjects.set(id,projects.splice(index,1)[0]);return response({id,removed:true});}const restored=removedProjects.get(id)||projects.find(project=>project.id===id);assert(restored);if(!projects.some(project=>project.id===id))projects.push(restored);removedProjects.delete(id);return response(clone(restored));}
       const membership=request.path.match(/^\/api\/projects\/([^/]+)\/folders(?:\/([^/]+)\/remove)?$/);
-      if(membership){const selected=projects.find(project=>project.id===membership[1]);assert(selected);if(membership[2]){if(selected.folders.length<=1)return response({error:'A workspace needs a folder.'},400);selected.folders=selected.folders.filter(folder=>folder.id!==membership[2]);}else{const folderPath=request.body.path;selected.folders.push(folder(randomUUID(),folderPath.split('/').pop(),folderPath));}selected.path=selected.folders[0].path;return response(clone(selected));}
+      if(membership){const selected=projects.find(project=>project.id===membership[1]);assert(selected);if(membership[2]){if(selected.folders.length<=1)return response({error:'A workspace needs a folder.'},400);selected.folders=selected.folders.filter(folder=>folder.id!==membership[2]);}else{for(const folderPath of request.body.folders||[request.body.path])selected.folders.push(folder(randomUUID(),folderPath.split('/').pop(),folderPath));}selected.path=selected.folders[0].path;return response(clone(selected));}
       if (request.path==='/api/providers/gemini/models') return response({models:[],source:'native-cli',manualSelection:true});
       if (/^\/api\/providers\/(codex|claude)\/models$/.test(request.path)) return response({models:[{id:'model-one',value:'model-one',displayName:'Model One',isDefault:true,defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}]},{id:'model-two',value:'model-two',displayName:'Model Two',supportedEffortLevels:['low','medium']}]});
       const selected=projects.find(project=>project.id===request.projectId);assert(selected,'Project-owned requests need an explicit valid project ID.');
@@ -1619,7 +1619,9 @@ test('Run is in the status bar; a command found in the folder is added in one cl
   ui.$('status-run').click();await flush();await flush();
   assert.equal(ui.$('project-commands').hidden,false);assert.equal(ui.$('status-run').getAttribute('aria-pressed'),'true');
   assert.equal(ui.$('command-empty').hidden,false,'With no commands, Run offers what the folder defines.');
-  const quick=ui.$('command-quick').querySelectorAll('.command-chip');
+  const groups=ui.$('command-quick').querySelectorAll('.command-quick-group');
+  assert.deepEqual(groups.map(group=>group.querySelector('.command-quick-folder').textContent),['Frontend','Backend'],'With several folders, each offers what it defines under its own name.');
+  const quick=groups[0].querySelectorAll('.command-chip');
   assert.deepEqual(quick.map(chip=>chip.querySelector('.command-chip-name').textContent),['dev','test']);
   assert.equal(ui.requests.filter(request=>/\/(start|restart)$/.test(request.path)).length,0,'Finding commands never runs them.');
   quick[1].click();await flush();await flush();
@@ -1631,6 +1633,8 @@ test('Run is in the status bar; a command found in the folder is added in one cl
   const rows=()=>ui.$('command-list').querySelectorAll('.command-row');
   assert.deepEqual(rows().map(row=>row.dataset.commandId),['test','dev']);
   assert.equal(ui.$('command-line').textContent,'npm run dev','The command just added is selected.');
+  assert.deepEqual(ui.$('command-list').querySelectorAll('.run-folder-name').map(node=>node.textContent),['Frontend'],'Commands are listed under the folder they run in.');
+  assert.deepEqual([ui.$('command-place').textContent,ui.$('command-place').hidden],['Frontend',false],'The output says where the command runs.');
   assert(rows()[0].querySelector('.command-test-mark'),'The command used for checks is marked.');
   rows()[0].querySelector('.command-pick').click();await flush();await flush();
   assert.equal(ui.$('command-line').textContent,'npm run test');
@@ -2854,4 +2858,43 @@ test('a run shows what an agent asked and what you answered or skipped', async (
     ['Asked 2 questions', 'Library · Storage', 'activity-icon icon-question'],
     ['You skipped 2 questions', 'The agent decides', 'activity-icon icon-question'],
   ]);
+});
+
+test('several folders can be chosen at once and added to a workspace in one go', async () => {
+  const ui = await browser({ moreProjects: true, desktop: true }), chatId = ui.state().conversation.id;
+  const adds = () => ui.requests.filter(request => request.path === '/api/projects/project-one/folders' && request.method === 'POST');
+  ui.findButton('Add folder').click();
+  assert.equal(ui.$('save-folder-label').textContent, 'Add folder');
+  ui.$('folder-path').value = '/workspace/shared'; ui.fire('folder-path', 'input');
+  ui.pickedFolders.push(['/workspace/docs', '/workspace/shared', '/workspace/infra']); ui.$('pick-add-folder').click(); await flush();
+  assert.equal(ui.$('folder-path').value, '/workspace/shared\n/workspace/docs\n/workspace/infra', 'Each chosen folder joins the list once.');
+  assert.equal(ui.$('save-folder-label').textContent, 'Add 3 folders');
+  ui.fire('folder-form', 'submit'); await flush();
+  assert.deepEqual(adds().map(request => request.body), [{ folders: ['/workspace/shared', '/workspace/docs', '/workspace/infra'] }], 'All of them go in one request.');
+  assert.equal(ui.projects[0].folders.length, 5);
+  assert.equal(ui.state().conversation.id, chatId, 'The same conversation stays open.');
+  assert.deepEqual([ui.$('folder-panel').hidden, ui.$('folder-path').value, ui.$('save-folder-label').textContent], [true, '', 'Add folder']);
+  // One line that isn't a folder path stops the whole list.
+  ui.findButton('Add folder').click(); ui.$('folder-path').value = '/workspace/api\nrelative/path'; ui.fire('folder-form', 'submit'); await flush();
+  assert.match(ui.$('folder-error').textContent, /one per line/);
+  assert.equal(adds().length, 1);
+});
+
+test('with several folders, Run lists each command under the folder it runs in, says where the selected one runs, and adds one in a folder', async () => {
+  const ui = await browser({ commandsUI: true, desktop: true }), save = body => ui.window.relayUI.post('/api/commands/save', body, 'project-one');
+  await save({ name: 'api', command: 'npm run dev', folderId: 'backend', directory: '' });
+  await save({ name: 'site', command: 'npm run dev', folderId: 'frontend', directory: '' });
+  await save({ name: 'ui', command: 'npm run storybook', folderId: 'frontend', directory: 'packages/ui' });
+  ui.$('status-run').click(); await flush(); await flush();
+  const list = ui.$('command-list'), entries = () => list.children.map(child => child.className === 'run-folder' ? `# ${child.querySelector('.run-folder-name').textContent}` : child.dataset.commandId);
+  assert.deepEqual(entries(), ['# Frontend', 'site', 'ui', '# Backend', 'api'], 'Folders in the workspace’s order, each heading the commands that run in it.');
+  assert.deepEqual(list.querySelectorAll('.command-where').map(node => node.textContent), ['packages/ui'], 'A command in a subdirectory says which.');
+  // The output bar says where the selected command runs, with its full path on hover.
+  list.querySelectorAll('.command-row').find(row => row.dataset.commandId === 'ui').querySelector('.command-pick').click(); await flush(); await flush();
+  assert.deepEqual([ui.$('command-place').textContent, ui.$('command-place').title], ['Frontend/packages/ui', 'Runs in /workspace/example/frontend/packages/ui']);
+  list.querySelectorAll('.command-row').find(row => row.dataset.commandId === 'api').querySelector('.command-pick').click(); await flush(); await flush();
+  assert.equal(ui.$('command-place').textContent, 'Backend');
+  // + on a folder's heading opens the form for a command in that folder.
+  list.querySelectorAll('.run-folder')[1].querySelector('.run-folder-add').click(); await flush();
+  assert.deepEqual([ui.$('command-form').hidden, ui.$('command-folder').value, ui.$('command-form-title').textContent], [false, 'backend', 'Add a command']);
 });

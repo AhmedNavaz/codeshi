@@ -1289,7 +1289,7 @@
   function toggleFolderForm(open) {
     if (projectBusy() || open && (!state.projectId || isRunning())) return;
     ui.folderPanel.hidden = !open;
-    if (open) { closeWorkspaceMenu(); ui.projectPanel.hidden = true; ui.addProject.setAttribute('aria-expanded','false'); ui.folderError.hidden = true; $('folder-panel-description').textContent = 'Add a folder to ' + currentProject().name + '. It joins the same existing chat; files stay where they are.'; ui.folderPath.focus(); }
+    if (open) { closeWorkspaceMenu(); ui.projectPanel.hidden = true; ui.addProject.setAttribute('aria-expanded','false'); ui.folderError.hidden = true; $('folder-panel-description').textContent = 'Add one or more folders to ' + currentProject().name + '. They join the same existing chat; files stay where they are.'; folderCount(); ui.folderPath.focus(); }
   }
   async function addProject(event) {
     event.preventDefault(); if (projectBusy()) return;
@@ -1303,14 +1303,17 @@
     } catch (error) { ui.projectError.textContent = error.message; ui.projectError.hidden = false; }
     finally { state.projectSaving = false; render(); }
   }
+  // The Add button says how many folders it adds.
+  function folderCount() { const count = folderPaths(ui.folderPath.value).length; $('save-folder-label').textContent = count > 1 ? `Add ${count} folders` : 'Add folder'; }
+  // One folder or several, one path per line: all of them are added in one change, or none if one can't be.
   async function addFolder(event) {
     event.preventDefault(); if (projectBusy() || isRunning() || !state.projectId) return;
-    const folder = ui.folderPath.value.trim(), projectId = state.projectId;
-    if (!validFolderPath(folder)) { ui.folderError.textContent = 'Enter an absolute folder path or a path beginning with ~/.'; ui.folderError.hidden = false; ui.folderPath.focus(); return; }
+    const folders = folderPaths(ui.folderPath.value), projectId = state.projectId;
+    if (!folders.length || folders.some(value=>!validFolderPath(value))) { ui.folderError.textContent = folders.length > 1 ? 'Enter absolute folder paths or paths beginning with ~/, one per line.' : 'Enter an absolute folder path or a path beginning with ~/.'; ui.folderError.hidden = false; ui.folderPath.focus(); return; }
     saveDraft(); state.projectSaving = true; ui.folderError.hidden = true; render();
     try {
-      const project = await post('/api/projects/' + encodeURIComponent(projectId) + '/folders',{path:folder});
-      state.projects = state.projects.map(item=>item.id === project.id ? project : item); ui.folderPath.value = ''; ui.folderPanel.hidden = true; await refresh(); announce('Folder added to this workspace. The same conversation is open.');
+      const project = await post('/api/projects/' + encodeURIComponent(projectId) + '/folders',folders.length === 1 ? {path:folders[0]} : {folders});
+      state.projects = state.projects.map(item=>item.id === project.id ? project : item); ui.folderPath.value = ''; folderCount(); ui.folderPanel.hidden = true; await refresh(); announce(folders.length === 1 ? 'Folder added to this workspace. The same conversation is open.' : `${folders.length} folders added to this workspace. The same conversation is open.`);
     } catch (error) { ui.folderError.textContent = error.message; ui.folderError.hidden = false; }
     finally { state.projectSaving = false; render(); }
   }
@@ -1601,6 +1604,7 @@
   ui.projectForm.addEventListener("submit", addProject);
   ui.createWorkspace.addEventListener("click",()=>toggleProjectForm(true));
   ui.folderForm.addEventListener("submit",addFolder);
+  ui.folderPath.addEventListener("input",folderCount);
   ui.folderClose.addEventListener("click",()=>toggleFolderForm(false));
   ui.workspaceToggle.addEventListener("click", () => {
     const open = ui.workspaceToggle.getAttribute("aria-expanded") !== "true";
@@ -1715,7 +1719,7 @@
   if (window.relayDesktop) {
     $('pick-folder').hidden = false; $('pick-add-folder').hidden = false;
     $('pick-folder').addEventListener('click',async()=>{try { const picked = await window.relayDesktop.pickFolder(); const folders = Array.isArray(picked) ? picked : picked ? [picked] : []; if (folders.length) ui.projectPaths.value = [...new Set([...folderPaths(ui.projectPaths.value),...folders])].join('\n'); } catch (error) { showNotice(error.message); }});
-    $('pick-add-folder').addEventListener('click',async()=>{try { const picked = await window.relayDesktop.pickFolder(); if (picked) ui.folderPath.value = Array.isArray(picked) ? picked[0] || '' : picked; } catch (error) { showNotice(error.message); }});
+    $('pick-add-folder').addEventListener('click',async()=>{try { const picked = await window.relayDesktop.pickFolder(); const folders = Array.isArray(picked) ? picked : picked ? [picked] : []; if (folders.length) { ui.folderPath.value = [...new Set([...folderPaths(ui.folderPath.value),...folders])].join('\n'); folderCount(); } } catch (error) { showNotice(error.message); }});
   }
   render();
   initialize();

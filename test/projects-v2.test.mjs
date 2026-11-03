@@ -101,3 +101,20 @@ test('folder limits validate the combined legacy path and folder list before per
   assert.throws(() => registry.add({ path: f.folders[0], folders }), { status: 400 });
   assert.deepEqual(registry.list(), []);
 });
+
+test('several folders are added in one change, those already there are skipped, and one that cannot be added stops all', async t => {
+  const f = setup(t); const registry = f.open();
+  const project = registry.add({ name: 'Product', folders: [f.folders[0]] });
+  const changes = []; registry.on('beforeFoldersChange', event => changes.push(event));
+  const added = registry.addFolder(project.id, { folders: [f.folders[1], f.folders[0], f.folders[2], f.folders[1]] });
+  assert.deepEqual(added.folders.map(folder => folder.path), f.folders);
+  assert.equal(changes.length, 1, 'All of them join in one change.');
+  assert.equal(new Set(added.folders.map(folder => folder.name)).size, 3, 'Two folders both called api still get names of their own.');
+  assert.equal(registry.addFolder(project.id, { folders: [f.folders[2]] }).folders.length, 3, 'A folder already there is left as it is.');
+  assert.equal(changes.length, 1);
+  const extra = path.join(f.root, 'extra'); fs.mkdirSync(extra);
+  assert.throws(() => registry.addFolder(project.id, { folders: [extra, path.join(f.root, 'missing')] }), { status: 400 });
+  assert.equal(registry.get(project.id).folders.length, 3, 'Nothing is added when one folder cannot be.');
+  assert.throws(() => registry.addFolder(project.id, { folders: [] }), /Choose between 1 and 32 folders/);
+  assert.throws(() => registry.addFolder(project.id, { folders: 'not a list' }), /Choose between 1 and 32 folders/);
+});

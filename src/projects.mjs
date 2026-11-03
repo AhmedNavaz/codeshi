@@ -191,11 +191,16 @@ export class ProjectRegistry extends EventEmitter {
     return this.public(entry);
   }
 
+  // Adds one folder ({ path }) or several at once ({ folders }): all of them in one change, or none if any is not a
+  // usable folder. Folders already in the workspace are left as they are.
   addFolder(id, input) {
-    this.reload(); const entry = this.entry(id); const aliases = { ...entry.folderAliases }; const added = folderRecord(input, entry.folders, aliases);
-    if (entry.folders.some(folder => folder.id === added.id)) return this.public(entry);
-    if (entry.folders.length >= 32) throw fail('A workspace supports at most 32 folders.');
-    return this.changeFolders(id, [...entry.folders, added], aliases);
+    this.reload(); const entry = this.entry(id); const aliases = { ...entry.folderAliases }; const folders = [...entry.folders];
+    const supplied = input?.folders === undefined ? [input] : input.folders;
+    if (!Array.isArray(supplied) || !supplied.length || supplied.length > 32) throw fail('Choose between 1 and 32 folders to add.');
+    for (const item of supplied) { const added = folderRecord(item, folders, aliases); if (!folders.some(folder => folder.id === added.id)) folders.push(added); }
+    if (folders.length === entry.folders.length) return this.public(entry);
+    if (folders.length > 32) throw fail('A workspace supports at most 32 folders.');
+    return this.changeFolders(id, folders, aliases);
   }
   removeFolder(id, folderId) {
     this.reload(); const entry = this.entry(id);

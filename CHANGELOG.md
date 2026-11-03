@@ -10,6 +10,8 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
+- **Run says where each command runs** in a workspace with several folders: commands are listed under their folder, with **+** to add one there, a command in a subdirectory names it, the selected command's output starts with its folder, and the commands found in each folder are offered under its name.
+- **Add folder** takes several folders at once: type one path per line, or use **Choose folders…** and select several in the folder picker. They are added together, and none is added if one of them can't be opened. **New workspace** and the first-run setup can choose several folders in the picker too.
 - Updating takes two clicks on the status bar and no reading: **Update to 0.x.y** is a blue button that downloads the update and checks it, with a ring that fills instead of megabytes, and then **Restart to update** restarts into it. Restarting still waits for any agent at work, and quitting instead puts the update in place as Throughline closes. The release notes and **Skip this version** are in the chevron beside the button. `npm run start:update-demo` shows the whole flow from a source checkout without downloading or replacing anything.
 
 ### Fixed

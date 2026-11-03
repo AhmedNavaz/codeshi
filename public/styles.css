@@ -187,14 +187,14 @@ summary::-webkit-details-marker { display: none; }
 .close-project { margin: -4px -4px 0 0; }
 .project-form, .folder-form { display: grid; gap: 12px; }
 .project-form label, .folder-form label { display: block; min-width: 0; color: var(--text); font-size: 12px; font-weight: 500; }
-.project-form label > span { margin-left: 4px; color: var(--faint); font-weight: 400; }
-.project-form input, .project-form textarea, .folder-form input {
+.project-form label > span, .folder-form label > span { margin-left: 4px; color: var(--faint); font-weight: 400; }
+.project-form input, .project-form textarea, .folder-form input, .folder-form textarea {
   display: block; width: 100%; margin-top: 6px; padding: 6px 8px; border: 1px solid var(--input-border); border-radius: 5px;
   background: var(--surface-input); color: var(--text); font-size: 13px; line-height: 1.5;
 }
-.project-form textarea, .folder-form input { font: 12px/1.6 var(--mono); }
-.project-form textarea { min-height: 72px; max-height: 190px; resize: vertical; }
-.project-form input:focus, .project-form textarea:focus, .folder-form input:focus { outline: none; border-color: var(--focus); }
+.project-form textarea, .folder-form input, .folder-form textarea { font: 12px/1.6 var(--mono); }
+.project-form textarea, .folder-form textarea { min-height: 72px; max-height: 190px; resize: vertical; }
+.project-form input:focus, .project-form textarea:focus, .folder-form input:focus, .folder-form textarea:focus { outline: none; border-color: var(--focus); }
 .project-form ::placeholder, .folder-form ::placeholder { color: var(--faint); }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 #pick-folder, #pick-add-folder { margin-right: auto; }
