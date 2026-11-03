@@ -63,6 +63,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Point and tell: click an element in your app's preview and say what should change ([#19](https://github.com/AhmedNavaz/throughline/issues/19)) | [0.19.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0) |
 | Undo and redo any run's changes, whichever agent made them, after a preview of every file and line ([#20](https://github.com/AhmedNavaz/throughline/issues/20), stage 1) | [0.20.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.20.0) |
 | Terminal tabs and split panes: several shells per workspace, each in a folder you choose, side by side or stacked ([#70](https://github.com/AhmedNavaz/throughline/issues/70)) | [0.21.2](https://github.com/AhmedNavaz/throughline/releases/tag/v0.21.2) |
+| Build, then review: one prompt's finished changes go to another agent for a read-only review once the build and its tests pass, and you choose which findings go back ([#15](https://github.com/AhmedNavaz/throughline/issues/15)) | [0.22.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.22.0) |
 
 ## Now
 
@@ -138,7 +139,7 @@ Larger ideas for bringing project context, execution and collaboration into one 
 | --- | --- |
 | **Task board and schedules.** Capture tasks from meetings or anywhere on a board for each project, with priority and details, and let agents work through them while you review the results; run tasks on a schedule. [Plan below](#task-board-and-schedules). | Not opened yet |
 | **Live progress near the top of the screen.** A compact pill under the menu bar while a run works, alongside the alerts from [#13](https://github.com/AhmedNavaz/throughline/issues/13). | [#75](https://github.com/AhmedNavaz/throughline/issues/75) |
-| **Automatic tag-team cycles.** Extend cross-agent review with an opt-in handoff from builder to reviewer and user-approved fix cycles. | [#15](https://github.com/AhmedNavaz/throughline/issues/15) |
+| **Repeated tag-team cycles.** Build, then review shipped in [0.22.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.22.0) with one review per prompt. Sending the fixes back for another review automatically would need a clear stop condition and a usage limit. | [#15](https://github.com/AhmedNavaz/throughline/issues/15) |
 | **Race mode.** Two agents take the same task in separate worktrees; keep the better result. | [#16](https://github.com/AhmedNavaz/throughline/issues/16) |
 | **Project memory.** A living brief of goals, decisions and conventions that every agent reads. | [#21](https://github.com/AhmedNavaz/throughline/issues/21) |
 | **Approve from your phone.** Extend desktop approval alerts to a paired phone, with run progress and iPhone Live Activities. | [#23](https://github.com/AhmedNavaz/throughline/issues/23) |
