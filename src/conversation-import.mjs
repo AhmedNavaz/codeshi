@@ -278,7 +278,12 @@ export class ConversationImporter {
         messages.unshift({ sourceId: row.uuid || digest([row.type, text]), role: row.type, text, ...(row.message?.model ? { model: row.message.model } : {}), ...(timestamp ? { timestamp } : {}) });
       }
     }
-    while (messages.length > 1000 || Buffer.byteLength(JSON.stringify(messages)) > MAX_BYTES) { messages.shift(); clipped = true; }
+    // Drop the oldest messages until the list fits. Each message is measured once: the list's size is its messages' sizes,
+    // the commas between them and the brackets, so it isn't serialized again after every drop.
+    const sizes = messages.map(message => Buffer.byteLength(JSON.stringify(message)));
+    let size = 2 + sizes.reduce((sum, bytes) => sum + bytes, 0) + Math.max(0, messages.length - 1), drop = 0;
+    while (messages.length - drop > 1000 || size > MAX_BYTES) size -= sizes[drop++] + (messages.length - drop > 0 ? 1 : 0);
+    if (drop) { messages.splice(0, drop); clipped = true; }
     if (!messages.length) fail('This conversation has no importable text messages.', 422);
     const value = { provider, sessionId, title, cwd, messages, clipped };
     return { ...value, digest: digest(value), messageCount: messages.length };

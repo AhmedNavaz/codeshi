@@ -41,7 +41,15 @@ export function exportConversation(conversation, project, { range = 'all', activ
   const context = redact ? JSON.parse(transform(JSON.stringify(rawContext))) : rawContext;
   const value = clean({ schema: CONVERSATION_SCHEMA, version: 1, id: randomUUID(), exportedAt: new Date().toISOString(), workspace: { name: project.name, folders: project.folders.map(folder => folder.displayName || folder.name) }, context: Object.keys(context).length ? context : undefined, messages, clipped: false });
   // Keep the most recent messages when the file would be too large to share and import.
-  while (value.messages.length > 1 && byteLength(canonicalStringify(value)) > MAX_CONVERSATION_BYTES - 1024) { value.messages.shift(); value.clipped = true; }
+  // Each message is measured once: the file's size is the size without messages plus theirs and the commas between them,
+  // so it isn't serialized again after every drop.
+  const maxBytes = MAX_CONVERSATION_BYTES - 1024, count = value.messages.length;
+  if (count > 1 && byteLength(canonicalStringify(value)) > maxBytes) {
+    const sizes = value.messages.map(message => byteLength(canonicalStringify(message)));
+    let size = byteLength(canonicalStringify({ ...value, messages: [], clipped: true })) + sizes.reduce((sum, bytes) => sum + bytes, 0) + count - 1, drop = 0;
+    do size -= sizes[drop++] + 1; while (count - drop > 1 && size > maxBytes);
+    value.messages = value.messages.slice(drop); value.clipped = true;
+  }
   const file = { ...value, digest: sha256(canonicalStringify(value)) };
   const times = messages.map(message => message.createdAt).filter(Boolean);
   return { package: file, stats: { messages: file.messages.length, omitted: source.length - file.messages.length, bytes: byteLength(JSON.stringify(file)), from: times[0] || null, to: times.at(-1) || null, providers: [...new Set(file.messages.map(message => message.provider).filter(Boolean))] }, findings: found, redacted: Boolean(redact) };

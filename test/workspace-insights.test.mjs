@@ -15,6 +15,7 @@ import { gitExecutable } from '../src/resolve-binary.mjs';
 const noSqlite = process.platform === 'win32' ? 'Reading Antigravity’s conversation index has not been checked on Windows yet' : spawnSync('sqlite3', ['-version']).status !== 0 && 'Needs the sqlite3 program';
 import { ConversationImporter } from '../src/conversation-import.mjs';
 import { exportConversation, readConversationPackage } from '../src/conversation-export.mjs';
+import { canonicalStringify } from '../src/collaboration-format.mjs';
 import { Broker, commandFor } from '../src/broker.mjs';
 import { prepareContext } from '../src/context.mjs';
 import { runCodex, runClaude, codexUsageWindows, claudeUsageWindows } from '../src/providers.mjs';
@@ -404,6 +405,57 @@ test('Claude import preview is scoped, excludes private reasoning/tools, and imp
   const options = { workspace: f.workspace, dataDir: path.join(f.root, 'journal') }; const broker = new Broker(options), c = broker.get(broker.create().id); broker.message(c, 'user', 'Existing Relay message'); broker.start = () => assert.fail('Import must not invoke a model');
   assert.equal(broker.importTranscript(c, preview).imported, 2); assert.equal(c.messages[0].text, 'Existing Relay message'); assert.equal(broker.importTranscript(c, preview).duplicate, true); assert.equal(c.messages.length, 3); await broker.close();
   const restored = new Broker(options); assert.equal(restored.importTranscript(restored.get(c.id), preview).duplicate, true); await restored.close();
+});
+
+// Counts how often a whole conversation file (over 1 MB) is measured, which is the costly step when a long history is clipped.
+function countLarge(target, key, t) { const original = target[key]; let calls = 0; target[key] = function (value, ...rest) { if (String(value).length > 1024 * 1024) calls++; return original.call(this, value, ...rest); }; t.after(() => { target[key] = original; }); return () => calls; }
+const prose = (label, n) => `${label} ` + Array.from({ length: n }, (_, i) => `word${i % 97}`).join(' ');
+
+// Grows one message a byte at a time across the limit: what is kept must always fit, and one more older message must not.
+const across = slack => [-2, -1, 0, 1, 2].map(step => slack + step).filter(extra => extra >= 0);
+const filler = n => Array.from({ length: n }, (_, i) => 'abcdefghij'[i % 10]).join('');
+
+test('clipping a long import measures each message once and keeps exactly the newest messages that fit', async t => {
+  const f = fixture(t), text = i => prose(`message #${i}`, 400 + (i * 37) % 300), limit = 2 * 1024 * 1024, bytes = list => Buffer.byteLength(JSON.stringify(list));
+  const preview = async (extra = {}) => { const rows = Array.from({ length: 1000 }, (_, i) => ({ uuid: `m${i}`, type: i % 2 ? 'assistant' : 'user', message: { content: [{ type: 'text', text: text(i) + (extra[i] || '') }] } }));
+    const importer = new ConversationImporter({ sdkLoader: async () => ({ getSessionInfo: async () => ({ cwd: f.workspace, summary: 'Long task' }), getSessionMessages: async () => rows }) });
+    return { rows, result: await importer.preview('claude', 'long-session', f.folders) }; };
+  const measured = countLarge(Buffer, 'byteLength', t), first = await preview();
+  assert(measured() <= 1, `The whole list was measured ${measured()} times while clipping.`);
+  assert.equal(first.result.clipped, true); assert.equal(first.result.messages.at(-1).text, text(999));
+  const oldest = 1000 - first.result.messages.length, slack = limit - bytes(first.result.messages);
+  for (const extra of across(slack)) {
+    const { rows, result } = await preview({ [oldest]: filler(extra) }), kept = result.messages, before = rows[999 - kept.length];
+    assert(bytes(kept) <= limit, `With ${extra} more bytes, what is kept fits.`);
+    assert(bytes([{ sourceId: before.uuid, role: before.type, text: before.message.content[0].text }, ...kept]) > limit, `With ${extra} more bytes, one more older message would not fit.`);
+    assert.equal(kept.length, first.result.messages.length - (extra > slack ? 1 : 0));
+  }
+});
+
+test('clipping a long export measures the file a bounded number of times and keeps exactly the newest messages that fit', async t => {
+  const f = fixture(t), project = { name: 'app', folders: f.folders }, start = Date.UTC(2026, 9, 1), maxBytes = 2 * 1024 * 1024 - 1024;
+  const conversation = (extra = {}) => ({ context: {}, messages: Array.from({ length: 1500 }, (_, i) => ({ id: `e${i}`, role: i % 2 ? 'assistant' : 'user', provider: 'codex', text: prose(`export #${i}`, 200 + (i * 37) % 150) + (extra[i] || ''), createdAt: new Date(start + i * 60000).toISOString() })) });
+  const size = file => new TextEncoder().encode(canonicalStringify(file)).length;
+  const measured = countLarge(TextEncoder.prototype, 'encode', t), first = exportConversation(conversation(), project);
+  assert(measured() <= 3, `The whole file was measured ${measured()} times while clipping.`);
+  const { digest, ...value } = first.package, oldest = 1500 - value.messages.length, slack = maxBytes - size(value);
+  assert.equal(value.clipped, true); assert.equal(value.messages.at(-1).id, 'e1499'); assert.equal(first.stats.omitted, oldest);
+  assert.equal(readConversationPackage(first.package).messages.length, value.messages.length, 'The clipped file still imports.');
+  for (const extra of across(slack)) {
+    const source = conversation({ [oldest]: filler(extra) }), { digest: _, ...kept } = exportConversation(source, project).package, before = source.messages[1499 - kept.messages.length];
+    const older = { id: before.id, role: before.role, text: before.text, ...(before.role === 'user' ? {} : { provider: 'codex' }), createdAt: before.createdAt };
+    assert(size(kept) <= maxBytes, `With ${extra} more bytes, what is kept fits.`);
+    assert(size({ ...kept, messages: [older, ...kept.messages] }) > maxBytes, `With ${extra} more bytes, one more older message would not fit.`);
+    assert.equal(kept.messages.length, value.messages.length - (extra > slack ? 1 : 0));
+  }
+});
+
+test('a Codex chat read in one piece keeps its newest 1000 messages', async t => {
+  const f = fixture(t), turns = Array.from({ length: 600 }, (_, i) => ({ id: `t${i}`, items: [{ type: 'userMessage', id: `u${i}`, content: [{ type: 'text', text: `Question ${i}` }] }, { type: 'agentMessage', id: `a${i}`, text: `Answer ${i}` }] }));
+  // Without paged turns, thread/read returns the whole chat at once.
+  const importer = new ConversationImporter({ codexBin: () => '/fixture/codex', clientFactory: () => ({ initialize: async () => {}, close() {}, request: async method => { if (method === 'thread/turns/list') throw new Error('method not found'); return { thread: { cwd: f.workspace, name: 'Long task', turns } }; } }) });
+  const preview = await importer.preview('codex', 'long-thread', f.folders);
+  assert.equal(preview.messageCount, 1000); assert.equal(preview.clipped, true); assert.equal(preview.messages[0].text, 'Question 100'); assert.equal(preview.messages.at(-1).text, 'Answer 599');
 });
 
 test('Claude import of a long conversation keeps its newest messages', async t => {
