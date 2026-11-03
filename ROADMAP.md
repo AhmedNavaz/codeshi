@@ -69,6 +69,7 @@ The fastest way to make Codeshi better is to use it on your real projects and te
 
 | Feature | Status | Issue |
 | --- | --- | --- |
+| Full auto-approval for Codex that approves actions outside its sandbox, such as `git push`, instead of leaving them to fail | Bug, fixing next; until then, use **Ask before changes** for runs that need the network | [#81](https://github.com/AhmedNavaz/codeshi/issues/81) |
 | More agents and models, including Google's supported coding-agent integration, free cloud tiers and local models, on your own accounts | First milestones shipped in 0.10.0: Gemini CLI over ACP and explicit Ollama local-model handoffs through Codex tools; Google personal-account support now uses Antigravity ACP with native sign-in and model discovery in 0.11.0; further provider adapters are next | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | Notarized macOS builds, so downloads open without a security prompt | Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
 | Install with Homebrew: `brew install --cask throughline` | Depends on #1 | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
