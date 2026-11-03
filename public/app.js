@@ -791,6 +791,8 @@
   async function queuePrompt() {
     const text = ui.input.value.trim(), attachments = window.relayFiles?.ids() || [], projectId = state.projectId, draft = ui.input.value;
     if (!text || state.pending || !state.conversation || $("queue-button").hidden) return;
+    try { window.relayAutomaticReview?.submission({}, { queued: true }); }
+    catch (error) { showNotice(error.message); return; }
     if (state.localSelections[projectId]) { showNotice("Queue a cloud agent. Local models start from Continue locally."); return; }
     const routed = routeFor(text, attachments.length);
     if (routed?.error) { showNotice(routed.error); return; }
@@ -1053,6 +1055,7 @@
     ui.state.lastElementChild.textContent=status;
     ui.state.dataset.status=running?(approvals?'approval':'running'):resume?'waiting':incomplete?'stopped':!state.localSelections[state.projectId] && selectedConnection.blocked?'setup':'ready';
     renderConnectionNotice();
+    window.relayAutomaticReview?.render();
     document.title = currentProject() ? currentProject().name + " · Throughline" : "Throughline · Your project workspaces";
   }
   function render(forceScroll = false) { renderProjects(); renderStatus(); renderWorkspaceList(); renderMessages(forceScroll); renderControls(); window.dispatchEvent(new CustomEvent("relay-state")); }
@@ -1159,7 +1162,10 @@
     const approvalPolicy = state.approvalPolicy || 'ask';
     const originalDraft = ui.input.value;
     const localChoice = state.localSelections[state.projectId] || null;
-    const payloadKey = JSON.stringify([state.projectId,state.conversation?.id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice]);
+    let automaticReview;
+    try { automaticReview = window.relayAutomaticReview?.submission({ text, attachments, provider, model, mode, approvalPolicy }, { continuing }) || null; }
+    catch (error) { showNotice(error.message); return; }
+    const payloadKey = JSON.stringify([state.projectId,state.conversation?.id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
     const requestId = state.retrySubmission?.key === payloadKey ? state.retrySubmission.id : crypto.randomUUID();
     state.retrySubmission = { ...(state.retrySubmission?.key === payloadKey ? state.retrySubmission : {}), key:payloadKey,id:requestId };
     const projectId = state.projectId;
@@ -1171,7 +1177,7 @@
       await state.settingsPromise;
       if (!state.conversation) await ensureCanonicalConversation();
       const id = state.conversation.id;
-      state.retrySubmission.key = JSON.stringify([state.projectId,id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice]);
+      state.retrySubmission.key = JSON.stringify([state.projectId,id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
       if (localChoice) {
         if (!state.retrySubmission.localContext) {
           const catalog = await api('/api/local-models', {}, projectId);
@@ -1180,8 +1186,9 @@
           state.retrySubmission.localContext = catalog.context;
         }
         await post('/api/local-models/start', { model:localChoice.model, digest:localChoice.digest, task:continuing ? 'Continue the unfinished task from the saved conversation. Inspect current files first.' : text, attachments, requestId, context:state.retrySubmission.localContext }, projectId);
-      } else await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, billingConfirmed:window.relayBillingConfirmed === true }, projectId);
+      } else await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
       state.retrySubmission = null;
+      window.relayAutomaticReview?.accepted(projectId, automaticReview);
       if (!continuing) window.relayFiles?.accepted(projectId, attachments);
       if (!continuing && ui.input.value === originalDraft) {
         ui.input.value = "";

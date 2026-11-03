@@ -65,7 +65,7 @@ export class PromptQueue {
   // Starts the next prompt when the workspace is free: nothing running, no wait for a reset, and the queue not paused.
   tick(c) {
     const broker = this.broker;
-    if (this.closed || !c.queue.length || c.queuePaused || broker.running || c.resume) return;
+    if (this.closed || !c.queue.length || c.queuePaused || broker.running || c.resume || c.runs.some(run => ['building', 'reviewing'].includes(run.automaticReview?.status))) return;
     const item = c.queue[0];
     try {
       const { runId } = broker.start(c, { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, requestId: `queue-${item.id}` }, { queued: item.id });

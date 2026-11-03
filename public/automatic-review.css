@@ -1,0 +1,22 @@
+.automatic-review-toggle { flex: none; padding: 5px 7px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); font: 11px var(--font); cursor: pointer; white-space: nowrap; }
+.automatic-review-toggle:hover { color: var(--text); background: var(--hover); }
+.automatic-review-toggle[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
+.automatic-review-toggle:disabled { opacity: .45; cursor: default; }
+.automatic-review-armed, .automatic-review-status { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin: 0 0 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.automatic-review-armed[hidden], .automatic-review-status[hidden] { display: none; }
+.automatic-review-armed > span, .automatic-review-status > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.automatic-review-armed { border-left: 2px solid var(--accent); }
+.automatic-review-armed[data-stale=true], .automatic-review-status[data-status=blocked] { border-left: 2px solid var(--danger); }
+.automatic-review-status[data-status=reviewing] { border-left: 2px solid var(--accent); }
+.automatic-review-status[data-status=complete] { border-left: 2px solid var(--success); }
+.automatic-review-status[data-status=needs-fixes] { border-left: 2px solid var(--warning); }
+.automatic-review-armed .icon-button { width: 24px; height: 24px; flex: none; }
+.automatic-review-armed .text-link, .automatic-review-status .text-link { flex: none; font-size: 11px; }
+.automatic-review-pair { margin: 0 0 12px; color: var(--text-strong); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.automatic-review-folders { margin: 16px 0 0; padding: 4px 0; border: 1px solid var(--border); border-radius: 6px; }
+.automatic-review-folders legend { padding: 0 8px; margin-left: 4px; color: var(--text-strong); font-size: 12px; }
+.automatic-review-folders > div { max-height: 160px; overflow: auto; }
+.automatic-review-dialog[open] { display: flex; flex-direction: column; }
+.automatic-review-dialog .review-heading { flex: none; }
+.automatic-review-dialog .review-body { min-height: 0; overflow: auto; }
+.automatic-review-dialog .review-actions { flex-wrap: wrap; }

@@ -76,7 +76,7 @@ export class HandoffMonitor {
     if (!top || top.usedPercent < preferences.threshold) return;
     const offer = await this.offer(c, run, top);
     if (!offer) return;
-    if (preferences.automatic && offer.to.billingSource === 'subscription') {
+    if (preferences.automatic && !run.automaticReview && offer.to.billingSource === 'subscription') {
       try { await this.accept(c, { offerId: offer.id, automatic: true }); return; } catch {}
     }
     this.broker.emit('notify', { conversationId: c.id, kind: 'handoff', title: 'Usage limit is close', body: `${names[run.provider]} has used ${Math.round(top.usedPercent)}% of its limit. Hand off to ${names[offer.to.provider]}?` });
@@ -93,6 +93,7 @@ export class HandoffMonitor {
       throw Object.assign(new Error(`${reason} Review the updated offer before switching.`), { status: 409, offer: fresh });
     };
     if (!run || run.id !== offer.runId || run.c !== c) await stale('The task changed since this offer was made.');
+    if (automatic && run.automaticReview) throw Object.assign(new Error('This build has an approved reviewer. Choose a handoff explicitly to cancel that review sequence.'), { status: 409 });
     if (this.scope(c, run) !== offer.scope) await stale('The task, its folders or the saved project context changed since this offer was made.');
     const current = await this.destination(c, run);
     if (!current || current.provider !== offer.to.provider || current.model !== offer.to.model || current.mode !== offer.to.mode || current.approvalPolicy !== offer.to.approvalPolicy || current.billingSource !== offer.to.billingSource) await stale(`${names[offer.to.provider]} is no longer available with the same settings.`);

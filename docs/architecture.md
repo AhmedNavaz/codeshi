@@ -27,6 +27,7 @@ flowchart TD
 | Desktop lifecycle, native dialogs and trusted IPC | `desktop/main.mjs`, `desktop/preload.cjs` |
 | App-version announcements and bundled changelog entries | `desktop/updates.mjs` |
 | Isolated background review workers and immutable selected-file copies | `src/review-jobs.mjs` |
+| Per-prompt build-to-review authorization, bounded capture and journalled phases (#15) | `src/automatic-review.mjs`, `src/automatic-review-runs.mjs` |
 | Downloaded local-model discovery, validation and scoped launch routes | `src/local-models.mjs` |
 | Temporary development profiles and data migration | `desktop/launch.mjs`, `desktop/storage.mjs` |
 | Workspace identity, folders and one permanent conversation | `src/projects.mjs` |
@@ -78,6 +79,7 @@ Disposable generated assets belong in `output/`, which is excluded from Git and 
 | `files.js` | File explorer, previews and attachments |
 | `conversation-search.js` | Find in the conversation: match highlights, the match count and moving between matches |
 | `agent-review.js` | Cross-agent review selection, explicit preview/start, findings and fix drafts |
+| `automatic-review.js` | One-prompt review consent, scope selection and build/review phase status |
 | `rewind.js` | A run's checkpoint line, and the undo and redo preview |
 | `sounds.js` | Alert sounds made with Web Audio, and the Sounds section of Settings |
 | `workbench.js` | Ask a Friend review flow |
@@ -104,6 +106,8 @@ Google personal accounts use the official Antigravity ACP runtime (1.4.5+), inst
 Continue locally uses Codex as the tool harness and Ollama as the model provider. Its dedicated route validates the approved workspace, access mode and downloaded-model digest. Internal broker options select a fresh local run without changing cloud settings or sessions; ordinary message bodies cannot enable them. The adapter rechecks local model metadata, pins the loopback Responses endpoint, requires the native client to confirm the local provider before sending a task, disables hosted search/MCP and provider telemetry for this invocation, and retains native approvals, cancellation and mutation leases. The application journal remains canonical; local Codex threads are ephemeral. Reply metadata and conversation exports retain local-model attribution.
 
 Cross-agent reviews reuse that same run lifecycle, workspace mutation lease, billing gate, cancellation and provider adapters. Review requests are created by the dedicated route module; ordinary message bodies cannot enable the broker's internal review options. A review forces read-only access and a fresh provider session, preserves coding preferences, and never stores or advances the provider's normal coding session. The journal stores the selected diffs and their file-content/Git-base identities with the review submission, then a validated result record. Snapshot validation is repeated after acquiring the mutation lease. Review callbacks deny write/command approvals; existing native provider read-only policies remain in force.
+
+Optional automatic review authorizes a future scope rule for a single coding prompt. The preview digest binds the full task, immutable attachment identities, saved brief, builder/reviewer models, permissions and attached folder identities. The broker validates it before accepting the submission. After a successful build and configured test checks, it captures eligible uncommitted text changes under a mutation lease and starts the ordinary snapshot review job. Scope overflow stops instead of silently choosing a subset. The saved brief is copied into the review worker, and main-journal process ownership is persisted before its provider can launch. Each phase is journalled against the builder run and appears in its activity; recovery marks unfinished sequences interrupted without launching anything. A queue latch prevents queued work bypassing the review, and completion pauses the queue for the user. Findings use the existing freshness and selected-fix-draft path; there is no automatic fix or review loop. Quota handoffs require an explicit choice during these runs, and material task changes revoke the review authorization.
 
 Review findings must parse as a bounded JSON report with known severities, selected-file identities and valid line numbers. Invalid reports stay explicitly unstructured. Conversation responses expose compact review metadata; the scoped review endpoint supplies captured diffs and checks freshness. Fix preparation accepts finding IDs from a completed, current review and returns a draft without starting a provider. The interface uses text nodes for all agent-supplied review content and guards responses against workspace changes.
 

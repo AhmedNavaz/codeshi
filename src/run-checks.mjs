@@ -80,6 +80,11 @@ export class RunChecks {
     const result = await this.execute();
     if (this.closed) return;
     this.finish(c, run.id, check, result, Date.now() - started);
+    if (run.automaticReview) {
+      if (result.status === 'passed') this.broker.automaticReviews.runEnded(c, run, 'complete');
+      else this.broker.automaticReviews.invalidate(c, run, 'The build checks did not pass. Review stopped; inspect the test result before continuing.');
+      return;
+    }
     if (result.status === 'failed') return this.failed(c, run, command, result);
     if (result.status === 'timed-out') return this.hold(c, 'The tests didn’t finish after the last run.', 'The tests didn’t finish', 'They ran for 10 minutes and were stopped.');
     // Passed, stopped by the person, or skipped because the test command was already running: carry on.

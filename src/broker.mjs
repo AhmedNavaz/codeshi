@@ -16,6 +16,7 @@ import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
 import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mjs';
+import { validateAutomaticReview } from './automatic-review.mjs';
 import { ResumeScheduler } from './resume.mjs';
 import { readOnlyRequest, approvalScope } from './approval-rules.mjs';
 import { cleanQuestions, checkAnswers, answerSummary } from './agent-questions.mjs';
@@ -161,6 +162,9 @@ export class Broker extends EventEmitter {
         }
         this.record(conversation, { type: 'review_result', id: review.id, result: { status: 'interrupted', summary: 'Background review was interrupted. Start a new review when ready.', findings: [] } });
       }
+      for (const run of conversation.runs.filter(item => ['building', 'reviewing'].includes(item.automaticReview?.status))) {
+        this.record(conversation, { type: 'automatic_review_phase', runId: run.id, phase: { status: 'interrupted', summary: 'Throughline restarted. Review stopped; start a new review when ready.' } });
+      }
     }
     this.permissions = new PermissionRules(dataDir);
     this.resume = new ResumeScheduler(this);
@@ -191,6 +195,7 @@ export class Broker extends EventEmitter {
     if (!run || run.c !== c) throw Object.assign(new Error('Nothing is running in this workspace. Send your message instead.'), { status: 409 });
     if (!run.steerable) throw Object.assign(new Error('This run cannot take more input. Queue your message instead.'), { status: 409 });
     if (run.provider === 'gemini' && run.approvals.size) throw Object.assign(new Error('Answer Gemini’s waiting approval first, then add your note.'), { status: 409 });
+    this.automaticReviews?.invalidate(c, run, 'The task changed while the builder worked. Authorize a new review.');
     const id = randomUUID();
     const result = run.ending || !run.child?.connected ? { ok: false } : await new Promise(resolve => {
       const timer = setTimeout(() => { run.steers.delete(id); resolve({ ok: false }); }, 15000); timer.unref();
@@ -264,7 +269,7 @@ export class Broker extends EventEmitter {
       if (record.title) c.title = record.title;
       c.messages.push({ ...record.message, seq: record.seq });
       c.requests[record.requestId] = { runId: record.id, requestId: record.requestId, fingerprint: record.fingerprint };
-      c.activeRun = { id: record.id, provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.effectiveTransport || record.transport, baseline: record.baseline, context: record.context, ...(record.local ? { connection: 'local', local: record.local } : {}), ...(record.review ? { purpose: 'review', reviewId: record.id } : {}), ...(record.routing ? { routing: record.routing } : {}), effort: record.effort ?? null, phase: 'starting', lastEventAt: record.at, toolCount: 0, startedAt: record.at }; c.status = 'running';
+      c.activeRun = { id: record.id, provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.effectiveTransport || record.transport, baseline: record.baseline, context: record.context, ...(record.local ? { connection: 'local', local: record.local } : {}), ...(record.review ? { purpose: 'review', reviewId: record.id } : {}), ...(record.routing ? { routing: record.routing } : {}), ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building' } } : {}), effort: record.effort ?? null, phase: 'starting', lastEventAt: record.at, toolCount: 0, startedAt: record.at }; c.status = 'running';
     }
     if (record.type === 'background_review') { c.reviews = [record.review, ...c.reviews].slice(0, 10); c.reviewRequests[record.review.requestId] = { reviewId: record.review.id, requestId: record.review.requestId, fingerprint: record.review.fingerprint }; }
     if (record.type === 'review_process') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, { pid: record.pid, pidStart: record.pidStart }); }
@@ -294,11 +299,15 @@ export class Broker extends EventEmitter {
     // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
     if ((record.type === 'submission' && !record.review) || record.type === 'run_start') {
       c.runs = [...(c.runs || []), { id: record.id, provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
+        ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building', summary: 'Build first, then one read-only review of the selected folders.' } } : {}),
         ...(record.routing ? { routing: { mode: record.routing.mode, tier: record.routing.tier || null } } : {}), ...(record.retryOf ? { retryOf: record.retryOf } : {}) }].slice(-50);
     }
     if (record.type === 'run_end') {
       const run = c.runs?.findLast(item => item.id === c.lastRun?.id && !item.endedAt);
       if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at });
+    }
+    if (record.type === 'automatic_review_phase') {
+      for (const run of [c.activeRun, c.lastRun, ...c.runs]) if (run?.id === record.runId && run.automaticReview) Object.assign(run.automaticReview, record.phase);
     }
   }
 
@@ -403,7 +412,7 @@ export class Broker extends EventEmitter {
     if (!run.lastProgressNotice || Date.now() - run.lastProgressNotice > 750) { run.lastProgressNotice = Date.now(); this.emit('update', { conversationId: run.c.id }); }
   }
 
-  updateContext(c, input) { const context = validateContext(input, c.context); this.record(c, { type: 'context', context }); return this.view(c); }
+  updateContext(c, input) { const context = validateContext(input, c.context); if (JSON.stringify(context) !== JSON.stringify(c.context)) this.automaticReviews?.invalidate(c, this.running, 'The saved project brief changed. Authorize a new review.'); this.record(c, { type: 'context', context }); return this.view(c); }
 
   // `remember` keeps an allowed action's exact scope for the rest of the run ('run') or for the workspace ('workspace').
   approve(runId, approvalId, allow, remember = null) {
@@ -462,7 +471,7 @@ export class Broker extends EventEmitter {
 
   prompt(c, text, fresh = false) { return prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
 
-  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null } = {}) {
+  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
     if (local) { if (review || typeof verifyLocal !== 'function') throw Object.assign(new Error('Invalid local run.'), { status: 400 }); provider = 'codex'; model = local.model; transport = 'app-server'; effort = null; fresh = true; }
     checkSettings(provider, mode, approvalPolicy);
@@ -473,10 +482,14 @@ export class Broker extends EventEmitter {
     const attachments = this.attachments.select(attachmentIds);
     if (local && attachments.some(file => file.kind !== 'text')) throw Object.assign(new Error('This local connection supports text and code attachments. Remove image attachments or choose a cloud agent; your draft stays saved.'), { status: 400 });
     text = text.trim(); model = model || null;
-    const fingerprint = createHash('sha256').update(JSON.stringify({ text, ...(local ? { local } : {}), ...(review ? { review: review.snapshot.digest } : {}), ...(attachments.length ? { attachments: attachmentIds } : {}), provider, mode, approvalPolicy, fresh, model, ...(effort ? { effort } : {}), transport: transportFor(provider, transport, this.configuredBins[provider]) })).digest('hex');
+    const fingerprint = createHash('sha256').update(JSON.stringify({ text, ...(automaticReview !== null ? { automaticReview } : {}), ...(local ? { local } : {}), ...(review ? { review: review.snapshot.digest } : {}), ...(attachments.length ? { attachments: attachmentIds } : {}), provider, mode, approvalPolicy, fresh, model, ...(effort ? { effort } : {}), transport: transportFor(provider, transport, this.configuredBins[provider]) })).digest('hex');
     const accepted = c.requests[requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) throw Object.assign(new Error('This request ID was already used for another message.'), { status: 409 }); return { runId: accepted.runId, requestId, duplicate: true }; }
     if (this.running) throw Object.assign(new Error('An assistant is already working in this workspace. Stop it before starting another run.'), { status: 409 });
+    if (automaticReview !== null) {
+      if (review || local || resume || queued || retryOf || !this.automaticReviews || this.automaticReviews.closed || this.backgroundReview) throw Object.assign(new Error('Preview automatic review for a new coding prompt after the current review finishes.'), { status: 409 });
+      automaticReview = validateAutomaticReview(this, c, automaticReview, { text, provider, model, mode, approvalPolicy, attachments: attachmentIds });
+    }
     for (const directory of this.workspaces) {
       let available = false;
       try { available = fs.statSync(directory).isDirectory(); } catch {}
@@ -507,13 +520,14 @@ export class Broker extends EventEmitter {
     const runId = randomUUID();
     const run = { id: runId, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
       stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
-      model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf };
+      model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview };
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
       this.record(c, { type: 'submission', id: runId, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
         ...(local ? { local } : {}), ...(review ? { review } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
+        ...(automaticReview ? { automaticReview } : {}),
         message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
     // A message sent by hand takes the place of a wait for a reset.
@@ -527,7 +541,7 @@ export class Broker extends EventEmitter {
       let success = code === 0 && run.terminalSuccess && !run.failed && !run.stopped && !error;
       try {
         if (run.child?.pid) this.signal(run, 'SIGKILL');
-        run.approvals.clear();
+        run.hadPendingInput = run.approvals.size > 0; run.approvals.clear();
         for (const resolve of run.steers.values()) resolve({ ok: false, error: 'The run ended.' });
         run.steers.clear();
         if (!success) {
@@ -559,7 +573,9 @@ export class Broker extends EventEmitter {
         const ending = run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete';
         let checking = false;
         try { checking = this.checks.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not check the run:', error.message); }
-        if (!checking) try { this.queue.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not continue the prompt queue:', error.message); }
+        const automatic = !checking && run.automaticReview;
+        if (automatic) try { this.automaticReviews.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not start automatic review:', error.message); }
+        if (!checking && !automatic) try { this.queue.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not continue the prompt queue:', error.message); }
       } }
     };
     const launch = async () => {
@@ -774,6 +790,7 @@ export class Broker extends EventEmitter {
   }
 
   async close() {
+    if (this.automaticReviews) this.automaticReviews.closed = true;
     this.resume.close(); this.queue.close(); this.handoff.close(); this.checks.close();
     if (this.running) {
       const run = this.running;

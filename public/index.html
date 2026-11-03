@@ -43,6 +43,8 @@
     <script src="/recap.js" defer></script>
     <script src="/conversation-search.js" defer></script>
     <script src="/agent-review.js" defer></script>
+    <script src="/automatic-review.js" defer></script>
+    <link rel="stylesheet" href="/automatic-review.css" />
     <script src="/rewind.js" defer></script>
     <script src="/sounds.js" defer></script>
     <script src="/project-commands.js" defer></script>
@@ -169,6 +171,8 @@
           <div id="connection-notice" class="connection-notice" role="status" hidden><span id="connection-notice-text"></span><div class="connection-notice-actions"><button id="connection-install" class="secondary-action" type="button" hidden>How to install ↗</button><button id="connection-action" type="button">Connect account</button></div></div>
           <section id="run-plan" class="run-plan" aria-label="The agent's plan for this run" hidden><button id="run-plan-toggle" class="run-plan-summary" type="button" aria-expanded="false" aria-controls="run-plan-list"><span id="run-plan-ring" class="run-plan-ring" aria-hidden="true"></span><span id="run-plan-count" class="run-plan-count"></span><span id="run-plan-current" class="run-plan-current"></span><svg class="icon run-plan-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><ol id="run-plan-list" class="run-plan-list" hidden></ol></section>
           <button id="route-preview" class="route-preview" type="button" hidden title="Auto picks for each message. Click to choose a model yourself."><span class="route-icon" aria-hidden="true"></span><span id="route-choice" class="route-choice"></span><span id="route-reason" class="route-reason"></span><span class="route-change" aria-hidden="true">Change</span></button>
+          <div id="automatic-review-status" class="automatic-review-status" role="status" hidden><span id="automatic-review-status-text"></span><button id="automatic-review-view" class="text-link" type="button" hidden>View review</button></div>
+          <div id="automatic-review-armed" class="automatic-review-armed" hidden><span id="automatic-review-armed-text"></span><button id="automatic-review-change" class="text-link" type="button">Change</button><button id="automatic-review-remove" class="icon-button" type="button" aria-label="Remove review after this prompt">×</button></div>
           <div id="voice-status" class="voice-status" role="status" hidden><span class="voice-dot" aria-hidden="true"></span><span id="voice-status-text"></span><span id="voice-status-actions" class="voice-status-actions"></span></div>
           <form id="composer" class="composer">
             <div id="custom-model-editor" class="custom-model-editor" hidden><label for="custom-model-input">Custom model ID</label><input id="custom-model-input" maxlength="200" placeholder="Enter a supported model identifier" /><button id="save-custom-model" type="button">Use model</button><button id="cancel-custom-model" type="button">Cancel</button></div>
@@ -179,6 +183,7 @@
             <div class="composer-toolbar">
               <div class="composer-controls">
                 <button id="attach-files" class="attach-files" type="button" title="Attach images or text files · also paste or drop files" aria-label="Attach images or text files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 15l8-8"/></svg><span>Attach</span></button>
+                <button id="automatic-review-toggle" class="automatic-review-toggle" type="button" aria-pressed="false" aria-haspopup="dialog" aria-controls="automatic-review-dialog" title="Have another agent review after this prompt finishes">Review after</button>
                 <button id="model-picker-button" class="model-picker-button" type="button" aria-haspopup="dialog" aria-controls="model-picker-popover" aria-expanded="false"><i id="picked-agent-icon" class="agent-icon codex" aria-hidden="true"></i><span><span id="picked-agent">Codex</span><span id="picked-model">Provider default</span></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
                 <button id="effort-button" class="effort-button" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="effort-popover" hidden><span id="effort-bars" class="effort-bars" aria-hidden="true"></span><span id="effort-button-label">Default</span></button>
                 <span id="assistant-label" class="sr-only">Assistant</span>
@@ -393,6 +398,15 @@
       <div class="rewind-body"><p id="rewind-summary" class="rewind-summary"></p><div id="rewind-files" class="rewind-files"></div></div>
       <p id="rewind-error" class="project-error rewind-error" role="alert" hidden></p>
       <footer class="rewind-footer"><span id="rewind-note" class="rewind-note"></span><button id="cancel-rewind" class="secondary-button" type="button">Cancel</button><button id="confirm-rewind" class="primary-button" type="button" disabled>Undo changes</button></footer>
+
+    <dialog id="automatic-review-dialog" class="review-dialog automatic-review-dialog" aria-labelledby="automatic-review-title" aria-describedby="automatic-review-description">
+      <header class="review-heading"><div><h2 id="automatic-review-title">Build, then review</h2><p id="automatic-review-description">For this prompt only, another agent checks the changes when the builder finishes.</p></div><button id="automatic-review-close" class="icon-button" type="button" aria-label="Close automatic review">×</button></header>
+        <p id="automatic-review-pair" class="automatic-review-pair"></p>
+        <p id="automatic-review-usage" class="review-account"></p>
+        <fieldset class="automatic-review-folders"><legend>Review changes in</legend><div id="automatic-review-folders"></div></fieldset>
+        <label id="automatic-review-billing-label" class="review-check" hidden><input id="automatic-review-billing" type="checkbox" /><span id="automatic-review-billing-text"></span></label>
+        <p id="automatic-review-error" class="project-error" role="alert" hidden></p>
+        <div class="review-actions"><button id="automatic-review-cancel" class="secondary-button" type="button">Cancel</button><button id="automatic-review-enable" class="primary-button" type="button" disabled>Review after this prompt</button></div>
     </dialog>
 
     <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-title">

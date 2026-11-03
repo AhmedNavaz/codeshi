@@ -25,21 +25,26 @@ export class ReviewJobs {
     if (this.jobs.size >= 4) fail('Four background reviews are running. Wait for one to finish.');
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-review-'));
     fs.chmodSync(directory, 0o700);
-    let worker;
+    let worker, savedId;
     try {
       const folders = copyReviewFiles(review.snapshot, project.folders, path.join(directory, 'snapshot'));
       if (reviewFreshness(review, project.folders).stale) fail('The selected changes moved. Refresh the review preview.');
       worker = new Broker({ workspace: folders[0].path, workspaces: folders.map(folder => folder.path), workspaceFolders: folders, bins: main.configuredBins, dataDir: path.join(directory, 'journal') });
       const conversation = worker.get(worker.create().id), id = randomUUID();
-      const result = worker.start(conversation, { text: 'Review approved changes: ' + review.goal, provider: review.provider, model: review.model, mode: 'read', requestId: input.requestId, billingConfirmed: input.billingConfirmed === true }, { review: { ...review, background: true }, verifyReview() {} });
+      worker.updateContext(conversation, c.context);
+      // Save ownership before launching a provider. A crash in either journal can then be recovered as interrupted.
       main.record(c, { type: 'background_review', review: { ...review, id, requestId: input.requestId, fingerprint, background: true, startedAt: new Date().toISOString(), status: 'running', findings: [] } });
-      const job = { id, worker, conversation, directory, done: null }; this.jobs.set(project.id, job); main.backgroundReview = job;
+      savedId = id;
       const progress = () => {
         const current = c.reviews.find(item => item.id === id), run = conversation.activeRun;
         if (current && run?.pid && current.pid !== run.pid) main.record(c, { type: 'review_process', id, pid: run.pid, pidStart: run.pidStart });
         if (current && run) { current.progress = { phase: run.phase, toolCount: run.toolCount || 0, startedAt: run.startedAt }; main.emit('update', { conversationId: c.id }); }
       };
-      worker.on('update', progress); progress();
+      // Persist the worker PID in the main journal before its start message can launch the native provider.
+      worker.on('update', progress);
+      const result = worker.start(conversation, { text: 'Review approved changes: ' + review.goal, provider: review.provider, model: review.model, mode: 'read', requestId: input.requestId, billingConfirmed: input.billingConfirmed === true }, { review: { ...review, background: true }, verifyReview() {} });
+      const job = { id, worker, conversation, directory, done: null }; this.jobs.set(project.id, job); main.backgroundReview = job;
+      progress();
       job.done = worker.running.done.then(() => {
         const report = conversation.reviews[0];
         const failure = report?.status === 'failed' ? conversation.messages.filter(message => message.role === 'error').at(-1)?.text?.split('\n')[0].slice(0, 1000) : null;
@@ -54,6 +59,9 @@ export class ReviewJobs {
       });
       job.done.catch(() => {});
       return { reviewId: id, runId: result.runId, requestId: input.requestId, background: true };
-    } catch (error) { if (worker) worker.close().finally(() => fs.rmSync(directory, { recursive: true, force: true })).catch(() => {}); else fs.rmSync(directory, { recursive: true, force: true }); throw error; }
+    } catch (error) {
+      if (savedId) main.record(c, { type: 'review_result', id: savedId, result: { status: 'failed', summary: error.message, findings: [] } });
+      if (worker) worker.close().finally(() => fs.rmSync(directory, { recursive: true, force: true })).catch(() => {}); else fs.rmSync(directory, { recursive: true, force: true }); throw error;
+    }
   }
 }

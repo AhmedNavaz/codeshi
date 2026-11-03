@@ -33,6 +33,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/updates.js': ['updates.js', 'text/javascript; charset=utf-8'], '/updater.js': ['updater.js', 'text/javascript; charset=utf-8'], '/updates.css': ['updates.css', 'text/css; charset=utf-8'],
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
+  '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/sounds.js': ['sounds.js', 'text/javascript; charset=utf-8'], '/sounds.css': ['sounds.css', 'text/css; charset=utf-8'],
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],

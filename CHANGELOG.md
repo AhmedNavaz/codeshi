@@ -4,6 +4,14 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Build, then review** (#15). Turn on **Review after** for a prompt, and when the agent finishes, another agent reviews its changes. Before you send, you see who builds and who reviews, which repositories are reviewed and what the extra run uses. The review starts only after the build succeeds and its tests pass, if any run; it reads a saved copy of the changes, can't change your files, and uses your own account, asking first if that account uses API billing. Its progress shows in the run and above the message box, queued prompts wait for you when it ends, and you choose which findings go back to be fixed. It's one review for one prompt: a failed or stopped build, a usage limit or a restart ends it instead of carrying on.
+
+### Fixed
+
+- Background reviews now get the project's saved brief, like reviews in the conversation, and are saved before their agent starts, so one cut short by Throughline closing shows as interrupted after a restart.
+
 ## [0.21.2] - 2026-11-03
 
 ### Added

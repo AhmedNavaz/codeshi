@@ -1,10 +1,12 @@
 import { captureReview, fixPrompt, listReviewChanges, publicReview, reviewAgents, reviewFreshness, reviewLimits } from './agent-review.mjs';
 import { ReviewJobs, reviewRequestKey } from './review-jobs.mjs';
+import { automaticReviewPlan } from './automatic-review.mjs';
+import { AutomaticReviewRuns } from './automatic-review-runs.mjs';
 
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 
 export function createReviewRoutes({ registry, body, json }) {
-  const jobs = new ReviewJobs();
+  const jobs = new ReviewJobs(), controllers = new Set();
   const route = async ({ req, res, url }) => {
     if (url.pathname !== '/api/reviews' && !url.pathname.startsWith('/api/reviews/')) return false;
     const projectId = url.searchParams.get('projectId');
@@ -17,10 +19,17 @@ export function createReviewRoutes({ registry, body, json }) {
     }
     if (req.method === 'GET') { const review = selected(); json(res, 200, { ...review, ...reviewFreshness(review, project.folders) }); return true; }
     if (req.method !== 'POST') fail('Use POST to preview or start a review.', 405);
-    const input = await body(req, 32000);
+    const input = await body(req, url.pathname === '/api/reviews/automatic/preview' ? 512000 : 32000);
     project = registry.get(projectId);
     // Folder membership can change while a request body arrives; use the current broker and roots.
     broker = registry.broker(projectId); c = broker.get(registry.mainConversation(projectId).id); agents = reviewAgents(c);
+    if (url.pathname === '/api/reviews/automatic/preview') {
+      if (broker.running || broker.backgroundReview) fail('Finish the current run and review before configuring automatic review.', 409);
+      const folderIds = input.folderIds ?? listReviewChanges(project.folders).filter(repo => repo.available).map(repo => repo.folderId);
+      const plan = automaticReviewPlan(broker, c, { ...input, folderIds });
+      if (!broker.automaticReviews) { broker.automaticReviews = new AutomaticReviewRuns({ broker, jobs, project: () => registry.get(projectId) }); controllers.add(broker.automaticReviews); }
+      json(res, 200, plan); return true;
+    }
     if (url.pathname.endsWith('/stop')) { const review = selected(); json(res, 200, jobs.stop(projectId, review.id)); return true; }
     if (url.pathname === '/api/reviews/preview') {
       if (broker.running) fail('Wait for the current run to finish before preparing a review.', 409);
@@ -47,6 +56,6 @@ export function createReviewRoutes({ registry, body, json }) {
     }
     fail('Review operation not found.', 404);
   };
-  route.close = () => jobs.close();
+  route.close = () => { for (const controller of controllers) controller.closed = true; return jobs.close(); };
   return route;
 }

@@ -67,7 +67,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,questionsUI=false,soundsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,questionsUI=false,soundsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -205,6 +205,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(filesUI)vm.runInContext(fs.readFileSync(new URL('../public/files.js',import.meta.url),'utf8'),context,{filename:'public/files.js'});
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
+  if(automaticReviewUI)vm.runInContext(fs.readFileSync(new URL('../public/automatic-review.js',import.meta.url),'utf8'),context,{filename:'public/automatic-review.js'});
   if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
   if(soundsUI)vm.runInContext(fs.readFileSync(new URL('../public/sounds.js',import.meta.url),'utf8'),context,{filename:'public/sounds.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
@@ -2951,4 +2952,86 @@ test('with several folders, Run lists each command under the folder it runs in, 
   // + on a folder's heading opens the form for a command in that folder.
   list.querySelectorAll('.run-folder')[1].querySelector('.run-folder-add').click(); await flush();
   assert.deepEqual([ui.$('command-form').hidden, ui.$('command-folder').value, ui.$('command-form-title').textContent], [false, 'backend', 'Add a command']);
+});
+
+function automaticReviewRoutes(ui, intercept) {
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/reviews') return response({ repositories: [{ folderId: 'frontend', name: 'Frontend', available: true }, { folderId: 'backend', name: 'Backend', available: true }], reviews: [] });
+    if (request.path === '/api/reviews/automatic/preview') return response({ builder: request.body.provider, builderModel: request.body.model || null, reviewer: request.body.provider === 'claude' ? 'codex' : 'claude', model: null, folderIds: request.body.folderIds, folders: ui.projects[0].folders.filter(folder => request.body.folderIds.includes(folder.id)), approvedDigest: 'd'.repeat(64), goal: request.body.text, limits: { files: 12, diffBytes: 72000 } });
+    return intercept ? intercept(request, next) : next();
+  });
+}
+
+async function armAutomaticReview(ui, text = 'Build a safe checkout flow') {
+  ui.$('message-input').value = text; ui.fire('message-input', 'input');
+  ui.$('automatic-review-toggle').click(); await flush();
+  assert.equal(ui.$('automatic-review-dialog').open, true);
+  ui.$('automatic-review-enable').click(); await flush();
+}
+
+test('automatic review previews the pairing and scope, is billed separately and applies to only the approved send', async () => {
+  const ui = await browser({ automaticReviewUI: true, billingSource: { codex: 'subscription', claude: 'api' } }); automaticReviewRoutes(ui);
+  ui.$('message-input').value = 'Build the checkout flow'; ui.fire('message-input', 'input');
+  ui.$('automatic-review-toggle').click(); await flush();
+  assert.match(ui.$('automatic-review-pair').textContent, /Codex.*Claude/);
+  assert.equal(ui.$('automatic-review-folders').querySelectorAll('input').length, 2);
+  assert.equal(ui.$('automatic-review-billing-label').hidden, false);
+  assert.equal(ui.$('automatic-review-enable').disabled, true);
+  assert(!ui.requests.some(request => request.path.endsWith('/messages')), 'Preview consumes no agent run.');
+  ui.$('automatic-review-billing').checked = true; ui.fire('automatic-review-billing', 'change');
+  ui.$('automatic-review-enable').click(); await flush();
+  assert.equal(ui.$('automatic-review-armed').hidden, false);
+  ui.fire('composer', 'submit'); await flush();
+  const send = ui.requests.find(request => request.path.endsWith('/messages'));
+  assert.deepEqual(send.body.automaticReview, { approvedDigest: 'd'.repeat(64), folderIds: ['frontend', 'backend'], reviewer: 'claude', model: null, billingConfirmed: true });
+  assert.equal(ui.$('automatic-review-armed').hidden, true);
+  ui.$('message-input').value = 'Another task'; ui.fire('message-input', 'input'); ui.fire('composer', 'submit'); await flush();
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/messages'))[1].body.automaticReview, undefined);
+  assert(ui.requests.filter(request => request.path.startsWith('/api/reviews')).every(request => request.projectId === 'project-one'));
+});
+
+test('automatic review needs renewed approval after a changed task or model and never follows a draft into another workspace', async () => {
+  const ui = await browser({ automaticReviewUI: true, moreProjects: true }); automaticReviewRoutes(ui);
+  await armAutomaticReview(ui);
+  ui.$('message-input').value = 'A materially different task'; ui.fire('message-input', 'input'); ui.fire('composer', 'submit'); await flush();
+  assert(!ui.requests.some(request => request.path.endsWith('/messages')));
+  assert.match(ui.$('notice-text').textContent, /Confirm Review after again/);
+  assert.equal(ui.$('automatic-review-armed').dataset.stale, 'true');
+  ui.$('automatic-review-toggle').click(); await flush(); ui.$('automatic-review-enable').click(); await flush();
+  await ui.window.relayUI.setConfiguration({ model: 'model-two' });
+  ui.fire('composer', 'submit'); await flush();
+  assert(!ui.requests.some(request => request.path.endsWith('/messages')));
+  await ui.switchProject('project-two'); assert.equal(ui.$('automatic-review-armed').hidden, true);
+  ui.$('message-input').value = 'Only the other workspace'; ui.fire('message-input', 'input'); ui.fire('composer', 'submit'); await flush();
+  const send = ui.requests.find(request => request.path.endsWith('/messages'));
+  assert.equal(send.projectId, 'project-two'); assert.equal(send.body.automaticReview, undefined);
+});
+
+test('automatic review keeps its consent and request identity after an accepted-send response is lost', async () => {
+  const ui = await browser({ automaticReviewUI: true }); let lost = false;
+  automaticReviewRoutes(ui, (request, next) => { const value = next(); if (request.path.endsWith('/messages') && !lost) { lost = true; throw Error('Response lost after acceptance.'); } return value; });
+  await armAutomaticReview(ui); ui.fire('composer', 'submit'); await flush();
+  assert.equal(ui.$('automatic-review-armed').hidden, false);
+  ui.$('notice-retry').click(); await flush();
+  const sends = ui.requests.filter(request => request.path.endsWith('/messages'));
+  assert.equal(sends.length, 2); assert.equal(sends[0].body.requestId, sends[1].body.requestId);
+  assert.deepEqual(sends[0].body.automaticReview, sends[1].body.automaticReview);
+  assert.equal(ui.$('automatic-review-armed').hidden, true);
+});
+
+test('automatic review binds the exact attachments and saved project context, even when attachment count stays the same', async () => {
+  const ui = await browser({ automaticReviewUI: true, filesUI: true }); automaticReviewRoutes(ui);
+  await ui.window.relayFiles.addSnapshots([{ name: 'original.md', data: 'b3JpZ2luYWw=' }]); await flush();
+  const original = ui.window.relayFiles.ids()[0];
+  await armAutomaticReview(ui);
+  assert.deepEqual(ui.requests.find(request => request.path === '/api/reviews/automatic/preview').body.attachments, [original]);
+  ui.$('attachment-list').querySelector('.attachment-remove').click();
+  await ui.window.relayFiles.addSnapshots([{ name: 'different.md', data: 'ZGlmZmVyZW50' }]); await flush();
+  assert.equal(ui.window.relayFiles.ids().length, 1); assert.notEqual(ui.window.relayFiles.ids()[0], original);
+  assert.equal(ui.$('automatic-review-armed').dataset.stale, 'true');
+  ui.fire('composer', 'submit'); await flush(); assert(!ui.requests.some(request => request.path.endsWith('/messages')));
+  ui.$('automatic-review-toggle').click(); await flush(); ui.$('automatic-review-enable').click(); await flush();
+  ui.canonical.get('project-one').context.goal = 'A different goal for this workspace'; await ui.window.relayUI.refresh();
+  assert.equal(ui.$('automatic-review-armed').dataset.stale, 'true');
+  ui.fire('composer', 'submit'); await flush(); assert(!ui.requests.some(request => request.path.endsWith('/messages')));
 });
