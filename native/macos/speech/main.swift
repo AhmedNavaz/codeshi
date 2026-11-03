@@ -1,4 +1,4 @@
-// Throughline Speech: on-device speech recognition for voice mode (#11).
+// Codeshi Speech: on-device speech recognition for voice mode (#11).
 //
 // Listens to the microphone, or reads an audio file with --file, and writes one JSON object per line to stdout:
 //   {"type":"ready"}                      listening has started
@@ -10,7 +10,7 @@
 // receives "stop" or closes. Recognition always runs on this Mac (requiresOnDeviceRecognition): audio never leaves it.
 //
 // macOS asks for the microphone and speech recognition on behalf of the app responsible for a process. The helper
-// relaunches itself as its own responsible process, so the request names "Throughline Speech" and uses the usage
+// relaunches itself as its own responsible process, so the request names "Codeshi Speech" and uses the usage
 // descriptions embedded in this binary, whichever app started it.
 import AVFoundation
 import Darwin
@@ -73,7 +73,7 @@ if CommandLine.arguments.contains("--check") {
 let asked = DispatchSemaphore(value: 0)
 var speech = SFSpeechRecognizer.authorizationStatus()
 if speech == .notDetermined { SFSpeechRecognizer.requestAuthorization { speech = $0; asked.signal() }; asked.wait() }
-guard speech == .authorized else { fail("speech-denied", "Allow Throughline Speech in System Settings › Privacy & Security › Speech Recognition.") }
+guard speech == .authorized else { fail("speech-denied", "Allow Codeshi Speech in System Settings › Privacy & Security › Speech Recognition.") }
 guard recognizer.supportsOnDeviceRecognition else { fail("on-device", "On-device recognition isn't installed for \(recognizer.locale.identifier). Turn on Dictation for this language in System Settings › Keyboard, then try again.") }
 guard recognizer.isAvailable else { fail("unavailable", "Speech recognition is unavailable right now. Try again in a moment.") }
 
@@ -105,7 +105,7 @@ if let file = option("--file") {
 
 var microphone = AVCaptureDevice.authorizationStatus(for: .audio)
 if microphone == .notDetermined { AVCaptureDevice.requestAccess(for: .audio) { microphone = $0 ? .authorized : .denied; asked.signal() }; asked.wait() }
-guard microphone == .authorized else { fail("microphone-denied", "Allow Throughline Speech in System Settings › Privacy & Security › Microphone.") }
+guard microphone == .authorized else { fail("microphone-denied", "Allow Codeshi Speech in System Settings › Privacy & Security › Microphone.") }
 
 let engine = AVAudioEngine()
 let input = engine.inputNode

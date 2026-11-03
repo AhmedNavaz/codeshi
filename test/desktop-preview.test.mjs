@@ -54,8 +54,8 @@ test('the screenshot is the element with a margin, kept inside the visible page'
 
 test('the page’s framework is asked once, about the marked element only, and the toolbar runs only its own script', () => {
   const script = sourceScript('abc123def4');
-  assert.match(script, /\[data-throughline-pick="abc123def4"\]/);
-  assert.match(script, /removeAttribute\('data-throughline-pick'\)/);
+  assert.match(script, /\[data-codeshi-pick="abc123def4"\]/);
+  assert.match(script, /removeAttribute\('data-codeshi-pick'\)/);
   assert.doesNotThrow(() => new Function(`return ${script}`), 'The question is valid JavaScript.');
   const page = fs.readFileSync(new URL('../desktop/preview-toolbar.html', import.meta.url), 'utf8');
   const inline = page.match(/<script>([\s\S]*?)<\/script>/)[1];

@@ -1,7 +1,7 @@
 import { workspaceGit } from './workspace-git.mjs';
 
 // "While you were away" (#22): what ran, what changed and what is waiting, across every open workspace since a given
-// time. It is put together from what Throughline recorded, with no agent call: each conversation keeps a short run
+// time. It is put together from what Codeshi recorded, with no agent call: each conversation keeps a short run
 // history (src/broker.mjs), and each run's steps say which files it changed and which commands it ran.
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 export const TESTS = /\b(?:test|tests|jest|vitest|pytest|mocha|rspec|go test|cargo test)\b/;

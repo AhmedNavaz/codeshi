@@ -43,7 +43,7 @@ export class RunChecks {
       const run = c.runs?.findLast(item => item.check?.status === 'running');
       if (!run) continue;
       this.finish(c, run.id, run.check, { status: 'interrupted', exitCode: null, output: '' }, 0);
-      if (c.queue.length && !c.queuePaused) this.broker.queue.pause(c, 'Throughline restarted while the tests were running.');
+      if (c.queue.length && !c.queuePaused) this.broker.queue.pause(c, 'Codeshi restarted while the tests were running.');
     }
   }
 
@@ -68,7 +68,7 @@ export class RunChecks {
   runEnded(c, run, status) {
     const command = this.wanted(c, run, status);
     if (!command) return false;
-    const task = this.check(c, run, command).catch(error => { console.error('Throughline could not check the run:', error.message); this.hold(c, `Checking the run failed: ${error.message}`); });
+    const task = this.check(c, run, command).catch(error => { console.error('Codeshi could not check the run:', error.message); this.hold(c, `Checking the run failed: ${error.message}`); });
     this.pending.add(task); task.finally(() => this.pending.delete(task));
     return true;
   }
@@ -112,7 +112,7 @@ export class RunChecks {
     const word = { passed: 'passed', failed: 'failed', 'timed-out': 'timed out', stopped: 'stopped', skipped: 'skipped', interrupted: 'interrupted' }[result.status];
     const line = { passed: `Passed in ${seconds(durationMs)}.`, failed: `Exit code ${result.exitCode ?? 'none'} after ${seconds(durationMs)}.`,
       'timed-out': 'Still running after 10 minutes, so it was stopped. A test command that watches for changes never finishes; mark one that exits.',
-      stopped: 'Stopped before it finished.', skipped: 'The test command was already running, so this run wasn’t checked.', interrupted: 'Throughline closed while the tests were running.' }[result.status];
+      stopped: 'Stopped before it finished.', skipped: 'The test command was already running, so this run wasn’t checked.', interrupted: 'Codeshi closed while the tests were running.' }[result.status];
     const output = result.status === 'skipped' || !result.output.trim() ? '' : `\n\n${result.output.trim()}`;
     this.broker.record(c, { type: 'message_update', id: check.messageId, update: { text: `Tests ${word}: ${check.command}\n${line}${output}`, status: 'complete' } });
     this.broker.record(c, { type: 'check', runId, check: { ...check, status: result.status, exitCode: result.exitCode, durationMs } });

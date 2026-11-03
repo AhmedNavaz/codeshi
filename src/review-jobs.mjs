@@ -17,13 +17,13 @@ export class ReviewJobs {
     return job.worker.stop(job.conversation.id);
   }
   start(project, main, c, review, input) {
-    if (this.closing) fail('Throughline is shutting down.');
+    if (this.closing) fail('Codeshi is shutting down.');
     const fingerprint = reviewRequestKey(input), accepted = c.reviewRequests[input.requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) fail('This request ID was used for another review.'); return { ...accepted, duplicate: true }; }
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId)) fail('Invalid review request ID.', 400);
     if (this.jobs.has(project.id)) fail('A background review is already running in this workspace.');
     if (this.jobs.size >= 4) fail('Four background reviews are running. Wait for one to finish.');
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-review-'));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-review-'));
     fs.chmodSync(directory, 0o700);
     let worker, savedId;
     try {

@@ -66,7 +66,7 @@ test('a banner is the panel near the top of the screen when chosen and there, or
   assert.deepEqual([alertPlan({ kind: 'failed' }, off).panel, alertPlan({ kind: 'failed' }, off).notification], [false, false]);
 });
 
-test('the page is told which sound to play, at what volume and whether only when Throughline is not in front', () => {
+test('the page is told which sound to play, at what volume and whether only when Codeshi is not in front', () => {
   const preferences = mergeAlertPreferences(alertPreferences(), { sound: { on: true, volume: 40, background: true } });
   const sound = alertSound({ kind: 'handoff', projectId: 'p1' }, preferences);
   assert.match(sound.id, /^[\da-f-]{36}$/);

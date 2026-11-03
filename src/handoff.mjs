@@ -102,7 +102,7 @@ export class HandoffMonitor {
     run.handoff = offer; c.handoffOffer = null;
     this.broker.stop(c.id);
     await run.done;
-    this.broker.message(c, 'system', `${names[offer.from.provider]} was close to its usage limit, so ${automatic ? 'Throughline handed' : 'you handed'} the task to ${names[offer.to.provider]}.`);
+    this.broker.message(c, 'system', `${names[offer.from.provider]} was close to its usage limit, so ${automatic ? 'Codeshi handed' : 'you handed'} the task to ${names[offer.to.provider]}.`);
     const result = this.broker.start(c, { provider: offer.to.provider, model: offer.to.model, mode: offer.to.mode, approvalPolicy: offer.to.approvalPolicy, fresh: true, text: continuationRequest, billingConfirmed: offer.to.billingSource !== 'subscription' && billingConfirmed === true, requestId: `handoff-${offer.id}` });
     if (automatic) this.broker.emit('notify', { conversationId: c.id, kind: 'started', title: `Handed off to ${names[offer.to.provider]}`, body: `${names[offer.from.provider]} was close to its usage limit, so the task continues with ${names[offer.to.provider]}.` });
     return result;

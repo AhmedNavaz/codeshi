@@ -179,7 +179,7 @@
     const absent = value.baseline.filter(file => file.sha256 === null); if (absent.length) { parent.append(node('h4', 'Permitted new files')); list(parent, absent.map(file => file.path)); }
   }
   function showApproved(parent, handoff) {
-    parent.querySelector('.approved-actions')?.remove(); const area = node('div', undefined, 'approved-actions'); area.append(badge('Ready to share', 'positive'), node('p', 'Export the request and send the file to your friend. They choose Help someone in Throughline, import it, and return a solution file. Review it in Returned solutions before applying any changes.'));
+    parent.querySelector('.approved-actions')?.remove(); const area = node('div', undefined, 'approved-actions'); area.append(badge('Ready to share', 'positive'), node('p', 'Export the request and send the file to your friend. They choose Help someone in Codeshi, import it, and return a solution file. Review it in Returned solutions before applying any changes.'));
     const delivery = node('div');
     const link = button('Checking link service…', async () => { const result = await post(`/handoffs/${handoff.id}/publish`); delivery.replaceChildren(); deliverySummary(delivery, result); }, 'primary'); link.disabled = true;
     const hint = node('p', 'Request and solution files work without a sharing service.', 'muted');

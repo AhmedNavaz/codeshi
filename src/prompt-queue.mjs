@@ -12,7 +12,7 @@ export class PromptQueue {
 
   // Work queued when the app last closed waits for the person to resume it.
   restore() {
-    for (const c of this.broker.conversations.values()) if (c.queue.length && !c.queuePaused) this.pause(c, 'Throughline restarted while prompts were queued.');
+    for (const c of this.broker.conversations.values()) if (c.queue.length && !c.queuePaused) this.pause(c, 'Codeshi restarted while prompts were queued.');
   }
 
   pause(c, reason) {

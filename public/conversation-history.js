@@ -175,7 +175,7 @@
       // Saved files are indented, so the 2 MB limit applies to the conversation as the server measures it; only a file far over it is refused unread.
       const limit = 2 * 1024 * 1024;
       if (file.size > 2 * limit) throw new Error('This conversation file is larger than 2 MB.');
-      let data; try { data = JSON.parse(await file.text()); } catch { throw new Error('This file is not an Throughline conversation file.'); }
+      let data; try { data = JSON.parse(await file.text()); } catch { throw new Error('This file is not a Codeshi conversation file.'); }
       if (new Blob([JSON.stringify(data)]).size > limit) throw new Error('This conversation file is larger than 2 MB.');
       const preview = await api.post('/api/import-sources/file-preview', { package: data }, null);
       const session = { id: preview.sessionId, provider: 'file', title: preview.title, folder: 'Conversation files', cwd: null, updatedAt: preview.exportedAt || new Date().toISOString() }, key = sessionKey(session);
@@ -202,7 +202,7 @@
     finally { imports.busy = false; renderSessions(); importControls(); }
   });
 
-  // Export: a portable conversation file (and a readable Markdown copy) for another Throughline user.
+  // Export: a portable conversation file (and a readable Markdown copy) for another Codeshi user.
   const exportDialog = $('export-dialog');
   let exported = null, exportRequest = 0;
   const fileSize = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -230,7 +230,7 @@
   }
   function exportName() { const state = api.getState(), title = state.projects.find(project => project.id === state.projectId)?.name || 'conversation'; return `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'conversation'}-${new Date().toISOString().slice(0, 10)}`; }
   function markdown(file) {
-    const context = file.context || {}, lines = [`# ${file.workspace?.name || 'Conversation'}`, '', `Exported from Throughline on ${date(file.exportedAt)}.`, ''];
+    const context = file.context || {}, lines = [`# ${file.workspace?.name || 'Conversation'}`, '', `Exported from Codeshi on ${date(file.exportedAt)}.`, ''];
     if (context.goal) lines.push(`**Goal:** ${context.goal}`, '');
     if (context.summary) lines.push('**Summary**', '', context.summary, '');
     for (const [title, items] of [['Decisions', context.decisions], ['Unfinished tasks', context.tasks]]) if (items?.length) lines.push(`**${title}**`, '', ...items.map(item => `- ${item}`), '');
@@ -241,7 +241,7 @@
   $('open-export').addEventListener('click', () => { exported = null; $('export-range').value = 'all'; $('export-redact').checked = true; $('export-activity').checked = false; if (!exportDialog.open) exportDialog.showModal(); prepareExport(); });
   $('close-export').addEventListener('click', () => exportDialog.close());
   for (const id of ['export-range', 'export-redact', 'export-activity']) $(id).addEventListener('change', prepareExport);
-  $('export-download').addEventListener('click', () => { saveFile(`${exportName()}.throughline.json`, JSON.stringify(exported.package, null, 2), 'application/json'); api.announce?.('Conversation file saved.'); });
+  $('export-download').addEventListener('click', () => { saveFile(`${exportName()}.codeshi.json`, JSON.stringify(exported.package, null, 2), 'application/json'); api.announce?.('Conversation file saved.'); });
   $('export-markdown').addEventListener('click', () => saveFile(`${exportName()}.md`, markdown(exported.package), 'text/markdown'));
   $('export-ask-friend').addEventListener('click', () => { exportDialog.close(); $('ask-friend').click(); });
 

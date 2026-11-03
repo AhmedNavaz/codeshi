@@ -34,7 +34,7 @@ test('source layout reopens root-level development history and serves assets out
   assert.equal(fs.existsSync(path.join(directory, 'src/.data')), false);
   const page = await fetch(`http://127.0.0.1:${app.server.address().port}`);
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /<title>Throughline/);
+  assert.match(await page.text(), /<title>Codeshi/);
 });
 
 async function fixture(t, options = {}) {
@@ -110,7 +110,7 @@ test('serves the local interface and probes provider versions without inference'
   assert.equal(page.headers.get('x-content-type-options'), 'nosniff');
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   const html = await page.text();
-  assert.match(html, /<title>Throughline/);
+  assert.match(html, /<title>Codeshi/);
   assert.match(html, /id="select-codex"/);
   assert.match(html, /id="select-claude"/);
   for (const [, attribute, assetPath] of html.matchAll(/<(?:script|link)\b[^>]*\b(src|href)="(\/[^\"]+\.(?:js|css))"/g)) {
@@ -414,10 +414,10 @@ test('desktop keep awake preference persists without overwriting theme or assist
   const prefs=await (await fetch(`${next.url}/api/preferences`)).json();assert.equal(prefs.theme,'light');assert.equal(prefs.defaults.provider,'claude');
 });
 
-test('a settings file that cannot be read is named when Throughline starts and when a setting is saved, and is left as it is',async t=>{
+test('a settings file that cannot be read is named when Codeshi starts and when a setting is saved, and is left as it is',async t=>{
   const f=await fixture(t),settings=path.join(f.directory,'history','settings.json');f.app.setKeepAwakePreference(true);
   const named={message:`Cannot read the settings file: ${settings}. Fix it, or remove it to start with the default settings.`};
-  // Throughline saves the whole file at once, so files like these were changed by something else.
+  // Codeshi saves the whole file at once, so files like these were changed by something else.
   for(const contents of ['{"appearance":"light","keep','','null','[]','"light"']){
     fs.writeFileSync(settings,contents);
     assert.throws(()=>f.app.setKeepAwakePreference(false),named);

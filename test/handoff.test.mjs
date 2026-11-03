@@ -116,7 +116,7 @@ test('automatic handoff to a subscription agent switches and says so; Not now ho
   await automatic.broker.handoff.check(first);
   await first.done; assert.equal(automatic.broker.running?.provider, 'claude');
   await automatic.broker.running.done;
-  assert(automatic.c.messages.some(message => /Throughline handed the task to Claude/.test(message.text)));
+  assert(automatic.c.messages.some(message => /Codeshi handed the task to Claude/.test(message.text)));
   assert(automatic.notices.some(notice => notice.title === 'Handed off to Claude'));
 
   const manual = setup(t), run = await manual.start();

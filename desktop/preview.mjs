@@ -4,7 +4,7 @@ import path from 'node:path';
 // message box, with a screenshot of it, for the person to say or type what should change.
 //
 // The preview is its own window: a toolbar the app trusts above the page, each in its own view. The page only ever
-// shows local addresses, keeps its cookies and storage apart from Throughline's, and cannot open windows, download
+// shows local addresses, keeps its cookies and storage apart from Codeshi's, and cannot open windows, download
 // files or be given permissions. The element picker runs in the page's isolated world, so the page's scripts cannot
 // see or change it, and it never gives the page anything. What the picker reports is data: cleaned, bounded and
 // described in a sentence the person reads before sending. The helpers are pure, for tests; createPreview needs
@@ -93,9 +93,9 @@ export function captureRect(rect, viewport, padding = 8) {
 // world cannot see. It finds the element by a one-time mark the picker set, removes the mark and returns plain data.
 export function sourceScript(nonce) {
   return `(() => {
-    const element = document.querySelector('[data-throughline-pick=${JSON.stringify(nonce)}]');
+    const element = document.querySelector('[data-codeshi-pick=${JSON.stringify(nonce)}]');
     if (!element) return null;
-    element.removeAttribute('data-throughline-pick');
+    element.removeAttribute('data-codeshi-pick');
     const text = value => typeof value === 'string' ? value.slice(0, 2000) : null;
     const reactKey = Object.keys(element).find(key => key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$'));
     if (reactKey) {

@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // Alerts. When an agent needs you, finishes or stops while you are in another app, Throughline can show a banner,
+  // Alerts. When an agent needs you, finishes or stops while you are in another app, Codeshi can show a banner,
   // play a sound, bounce the Dock icon and count it on the Dock icon. Settings turns each way on or off, and for each
   // of those three moments (src/alerts.mjs keeps the rules). The page plays the sounds: each is a few short tones made
   // with Web Audio, so there are no audio files, and it plays in the desktop app and the browser alike.
@@ -64,7 +64,7 @@
   window.addEventListener('relay-alert', event => {
     const alert = event.detail;
     if (!alert?.sound || !TONES[alert.sound]) return;
-    // "Only when Throughline isn't in front" skips sounds while you are looking at it.
+    // "Only when Codeshi isn't in front" skips sounds while you are looking at it.
     if (alert.background && document.visibilityState !== 'hidden' && document.hasFocus?.()) return;
     if (alert.id && !claim(alert.id)) return;
     play(alert.sound, alert.volume);
@@ -102,7 +102,7 @@
     host.replaceChildren();
     if (!settings) { kit.note(host, 'Loading alert settings…'); return; }
     const { mac, desktop, rows } = ways();
-    const group = kit.group(host, 'Ways to alert you', 'How Throughline tells you that an agent needs you, finished or stopped while you’re in another app. Turn each way on or off, and choose the moments it’s for.');
+    const group = kit.group(host, 'Ways to alert you', 'How Codeshi tells you that an agent needs you, finished or stopped while you’re in another app. Turn each way on or off, and choose the moments it’s for.');
     const matrix = node('div', undefined, 'settings-row alert-matrix'); matrix.dataset.keywords = 'banner notification sound bounce dock badge needs you finished stopped approval';
     const table = node('table', undefined, 'alert-table'), head = node('tr'), body = node('tbody');
     head.append(node('th'));
@@ -135,7 +135,7 @@
     if (mac) {
       const style = kit.segmented([[false, 'macOS notification'], [true, 'Panel at the top of the screen']], settings.banner.panel, panel => { if (settings.banner.panel !== panel) save({ banner: { panel } }); }, 'Banner style');
       for (const choice of style.querySelectorAll('button')) choice.disabled = !settings.banner.on;
-      kit.row(options, { label: 'Banner style', description: settings.banner.panel ? 'A small panel under the menu bar, which shows even where macOS holds notifications back.' : 'If banners don’t appear, allow Throughline in System Settings › Notifications, or choose the panel.', keywords: 'notification panel overlay top of the screen', control: style });
+      kit.row(options, { label: 'Banner style', description: settings.banner.panel ? 'A small panel under the menu bar, which shows even where macOS holds notifications back.' : 'If banners don’t appear, allow Codeshi in System Settings › Notifications, or choose the panel.', keywords: 'notification panel overlay top of the screen', control: style });
     }
     const slider = node('input', undefined, 'alert-volume'), shown = node('output', `${settings.sound.volume}%`, 'alert-volume-value');
     slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '5'; slider.value = String(settings.sound.volume); slider.disabled = !settings.sound.on;
@@ -143,10 +143,10 @@
     slider.addEventListener('input', () => { shown.textContent = `${slider.value}%`; });
     slider.addEventListener('change', () => { const value = Number(slider.value); save({ sound: { volume: value } }); lastAt = 0; play('finished', value); });
     kit.row(options, { label: 'Volume', description: 'How loud alert sounds play.', keywords: 'sound loud', control: [slider, shown] });
-    kit.toggle(options, { label: 'Play sounds only when Throughline isn’t in front', description: 'Keep sounds quiet while you’re looking at Throughline.', keywords: 'sound background focus', checked: settings.sound.background, disabled: !settings.sound.on, onChange: value => save({ sound: { background: value } }) });
+    kit.toggle(options, { label: 'Play sounds only when Codeshi isn’t in front', description: 'Keep sounds quiet while you’re looking at Codeshi.', keywords: 'sound background focus', checked: settings.sound.background, disabled: !settings.sound.on, onChange: value => save({ sound: { background: value } }) });
     if (mac) {
       const bar = kit.group(host, 'Menu bar');
-      kit.toggle(bar, { label: 'Show what agents are doing in the menu bar', description: 'Throughline’s mark in the menu bar says what needs you and what is running, with a menu for each workspace.', keywords: 'status item tray', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
+      kit.toggle(bar, { label: 'Show what agents are doing in the menu bar', description: 'Codeshi’s mark in the menu bar says what needs you and what is running, with a menu for each workspace.', keywords: 'status item tray', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
     }
     if (!desktop) kit.note(host, 'Banners and the Dock icon are part of the desktop app.');
   }

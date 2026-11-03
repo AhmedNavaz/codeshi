@@ -1,4 +1,4 @@
-// Portable conversation files: one workspace conversation another Throughline user can import and continue
+// Portable conversation files: one workspace conversation another Codeshi user can import and continue
 // with their own Claude or Codex account. No filesystem, network or provider access.
 import { randomUUID } from 'node:crypto';
 import { byteLength, canonicalStringify, invalid, redactPublicText, scanSecrets, sha256 } from './collaboration-format.mjs';
@@ -57,8 +57,8 @@ export function exportConversation(conversation, project, { range = 'all', activ
 
 // Validates an untrusted conversation file and returns it in the importer's preview shape.
 export function readConversationPackage(input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || input.schema !== CONVERSATION_SCHEMA) throw invalid('This is not an Throughline conversation file.');
-  if (input.version !== 1) throw invalid('This conversation file needs a newer version of Throughline.');
+  if (!input || typeof input !== 'object' || Array.isArray(input) || input.schema !== CONVERSATION_SCHEMA) throw invalid('This is not a Codeshi conversation file.');
+  if (input.version !== 1) throw invalid('This conversation file needs a newer version of Codeshi.');
   if (byteLength(JSON.stringify(input)) > MAX_CONVERSATION_BYTES) throw invalid('This conversation file is larger than 2 MB.', 413);
   const { digest, ...value } = input;
   if (typeof digest !== 'string' || sha256(canonicalStringify(value)) !== digest) throw invalid('This conversation file was changed or damaged after it was exported.');

@@ -56,7 +56,7 @@ function describe(element) {
 // page's own rules and its content security policy leave them alone.
 function ensureOverlay() {
   if (overlay?.isConnected) return;
-  overlay = document.createElement('throughline-picker');
+  overlay = document.createElement('codeshi-picker');
   Object.assign(overlay.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647', display: 'none' });
   const shadow = overlay.attachShadow({ mode: 'closed' });
   box = document.createElement('div'); tag = document.createElement('div');
@@ -89,9 +89,9 @@ window.addEventListener('click', event => {
   const element = target(event) || hovered;
   if (!element) return;
   const nonce = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-  element.setAttribute('data-throughline-pick', nonce);
+  element.setAttribute('data-codeshi-pick', nonce);
   // The mark is for one question from the app; it goes even if the question never comes.
-  setTimeout(() => { if (element.getAttribute('data-throughline-pick') === nonce) element.removeAttribute('data-throughline-pick'); }, 3000);
+  setTimeout(() => { if (element.getAttribute('data-codeshi-pick') === nonce) element.removeAttribute('data-codeshi-pick'); }, 3000);
   const rect = element.getBoundingClientRect(), info = describe(element);
   picking = false; outline(null);
   ipcRenderer.send('preview:picked', { nonce, element: info, rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }, viewport: { width: innerWidth, height: innerHeight } });

@@ -10,7 +10,7 @@ import { commandEnvironment } from './resolve-binary.mjs';
 // or stacked. They are the person's own shells, so agent access settings such as Read only do not apply to them, and
 // like project commands they take no editing lease: a dev server keeps running while agents edit files. Output is
 // kept as bounded scrollback so a view that reconnects, or a workspace opened again, shows each session as it was.
-// Ending a session, removing its workspace or quitting Throughline stops the shell and every process it started.
+// Ending a session, removing its workspace or quitting Codeshi stops the shell and every process it started.
 const require = createRequire(import.meta.url);
 export const SCROLLBACK = 256 * 1024;
 const INPUT_LIMIT = 64 * 1024;
@@ -26,7 +26,7 @@ export function prepareHelper(root = path.dirname(require.resolve('node-pty/pack
   try { fs.accessSync(helper, fs.constants.X_OK); } catch { try { fs.chmodSync(helper, 0o755); } catch { /* A missing helper fails at start with node-pty's own error. */ } }
 }
 
-// The person's login shell, read from the environment Throughline was opened with. Windows has none, so PowerShell 7 is
+// The person's login shell, read from the environment Codeshi was opened with. Windows has none, so PowerShell 7 is
 // used when it is installed, then the Windows PowerShell every system has, then Command Prompt.
 export function loginShell(env = process.env, platform = process.platform) {
   if (platform === 'win32') {
@@ -94,7 +94,7 @@ export class TerminalSessions {
   // Opens a shell in an attached folder: in a tab of its own, as the second pane of a tab (split: the session to split
   // and 'right' or 'down'), or in place of a session that has ended (replace), keeping that one's tab and place.
   start(projectId, { folderId, cols, rows, split = null, replace = null } = {}) {
-    if (this.closing) fail('Throughline is stopping.', 503);
+    if (this.closing) fail('Codeshi is stopping.', 503);
     const project = this.registry.get(projectId), open = this.list(projectId);
     let place = { tabId: null, pane: 0, split: null, order: ++this.opened }, replaced = null;
     if (replace) {
@@ -123,7 +123,7 @@ export class TerminalSessions {
     if (replaced) { this.sessions.delete(replaced.id); for (const listener of replaced.listeners) listener({ type: 'closed' }); replaced.listeners.clear(); }
     this.sessions.set(session.id, session);
     try {
-      session.process = this.pty().spawn(this.shell, shellArguments(this.shell), { name: 'xterm-256color', ...size, cwd, env: { ...commandEnvironment(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'Throughline' } });
+      session.process = this.pty().spawn(this.shell, shellArguments(this.shell), { name: 'xterm-256color', ...size, cwd, env: { ...commandEnvironment(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'Codeshi' } });
       session.pid = session.process.pid;
     } catch (error) {
       Object.assign(session, { status: 'failed', error: `The shell could not start: ${error.message}`, endedAt: new Date().toISOString() });

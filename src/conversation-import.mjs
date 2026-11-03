@@ -33,7 +33,8 @@ function readGeminiLog(filename, home, limit = MAX_BYTES) {
 }
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const isoTime = (value, scale = 1) => { const time = typeof value === 'number' ? value * scale : Date.parse(value); return Number.isFinite(time) ? new Date(time).toISOString() : undefined; };
-const ownPrompt = /You are working in (?:Throughline|AI Relay)/;
+// The app's own runs, under its current name and the earlier ones, are not offered for import.
+const ownPrompt = /You are working in (?:Codeshi|Throughline|AI Relay)/;
 const relaySession = text => ownPrompt.test(String(text || ''));
 const textOf = content => typeof content === 'string' ? content : Array.isArray(content) ? content.filter(block => block?.type === 'text' || block?.type === 'input_text' || block?.type === 'output_text').map(block => block.text || '').join('\n') : '';
 // Claude Code saves slash commands and their local output as user turns; they are not part of the conversation.
@@ -42,8 +43,8 @@ export const conversationText = text => String(text || '').replace(commandMarkup
 export function conversationTitle(input, fallback = 'Untitled conversation') {
   let text = conversationText(input) || fallback;
   if (ownPrompt.test(text)) {
-    try { const envelope = JSON.parse(text.slice(text.indexOf('{'))); if (typeof envelope.currentRequest === 'string' && envelope.currentRequest.trim()) text = envelope.currentRequest; else text = 'Throughline coding session'; }
-    catch { text = 'Throughline coding session'; }
+    try { const envelope = JSON.parse(text.slice(text.indexOf('{'))); if (typeof envelope.currentRequest === 'string' && envelope.currentRequest.trim()) text = envelope.currentRequest; else text = 'Codeshi coding session'; }
+    catch { text = 'Codeshi coding session'; }
   }
   return text.replace(/\s+/g, ' ').trim().slice(0, 160);
 }
@@ -133,7 +134,7 @@ export class ConversationImporter {
     const client = this.clientFactory({ bin, cwd: workspace });
     try { await client.initialize(); return await fn(client); } finally { client.close(); }
   }
-  // Without folders, lists conversations from every project on this computer (newest first), excluding Throughline's own runs.
+  // Without folders, lists conversations from every project on this computer (newest first), excluding Codeshi's own runs.
   async list(provider, folders, { cursor } = {}) {
     if (!providers.includes(provider)) fail('Choose Codex, Claude or Gemini.');
     if (!folders) return this.discover(provider, { cursor });
@@ -180,7 +181,7 @@ export class ConversationImporter {
       return { sessions: (result.data || []).filter(thread => !relaySession(thread.preview) && !relaySession(thread.name)).map(thread => row(thread.id, conversationTitle(thread.name || thread.preview, 'Codex conversation'), new Date((thread.updatedAt || thread.createdAt) * 1000).toISOString(), thread.cwd)), nextCursor: result.nextCursor || null };
     });
     const sdk = await this.sdkLoader(), offset = Number.parseInt(cursor || '0', 10) || 0, limit = 50;
-    // Programmatic sessions include Throughline's own Claude runs.
+    // Programmatic sessions include Codeshi's own Claude runs.
     const rows = await sdk.listSessions({ limit, offset, includeProgrammatic: false });
     return { sessions: rows.map(session => row(session.sessionId, conversationTitle(session.customTitle || session.summary || session.firstPrompt, 'Claude conversation'), new Date(session.lastModified).toISOString(), session.cwd)), nextCursor: rows.length === limit ? String(offset + limit) : null };
   }

@@ -1091,7 +1091,7 @@ const updateLaunch={version:'0.10.0',previousVersion:'0.9.0',updated:true,releas
 test('an update opens the saved workspace with release notes instead of restart choices',async()=>{
   const ui=await browser({setup:true,desktop:true,launch:clone(updateLaunch)});
   assert.equal(ui.$('setup-dialog').open,false);assert.equal(ui.document.querySelector('.onboarding-choice'),null);
-  assert.equal(ui.$('updates-dialog').open,true);assert.equal(ui.$('updates-title').textContent,'Throughline 0.10.0');
+  assert.equal(ui.$('updates-dialog').open,true);assert.equal(ui.$('updates-title').textContent,'Codeshi 0.10.0');
   assert.match(ui.$('updates-description').textContent,/Updated from 0.9.0/);assert.match(ui.$('updates-content').textContent,/An earlier fix/);
   assert.match(ui.$('updates-content').textContent,/<img src=x onerror=alert\(1\)>/);assert.equal(ui.$('updates-content').querySelector('img'),null,'Changelog text never creates executable HTML.');
   assert.equal(ui.state().projectId,'project-one');assert.equal(ui.conversations.length,1);assert.equal(ui.updateAcknowledgements.length,0);
@@ -2054,7 +2054,7 @@ test('a handoff offer names the destination, its billing and the task, needs cha
   assert.equal(ui.$('handoff-offer').hidden,true,'An offer shows only while its run works.');
 });
 
-test('a check with the tests shows on its run’s timeline, a retry reads as Throughline’s, and an offered retry can be accepted or declined',async()=>{
+test('a check with the tests shows on its run’s timeline, a retry reads as Codeshi’s, and an offered retry can be accepted or declined',async()=>{
   const ui=await browser(),conversation=ui.canonical.get('project-one'),answers=[];
   ui.setIntercept((request,next)=>{if(!request.path.endsWith('/retry'))return next();answers.push(request.body);conversation.retryOffer=null;return response(request.body.accept?{runId:'retry-run'}:conversation,request.body.accept?202:200);});
   const at=new Date().toISOString();
@@ -2074,7 +2074,7 @@ test('a check with the tests shows on its run’s timeline, a retry reads as Thr
   assert.equal(row.querySelector('.activity-entry-title').textContent,'Tests failed');assert(row.classList.contains('activity-entry-error'));
   row.querySelector('.activity-output-toggle').click();assert.match(row.querySelector('.activity-output').textContent,/Exit code 1 after 4s\.[\s\S]*Expected 90/);
   const retry=ui.$('messages').querySelector('.message-retry');
-  assert.equal(retry.querySelector('.message-retry-label').textContent,'Sent by Throughline after the tests failed');
+  assert.equal(retry.querySelector('.message-retry-label').textContent,'Sent by Codeshi after the tests failed');
   assert(retry.classList.contains('long')&&!retry.classList.contains('expanded'),'The retry prompt stays short until opened.');
 
   conversation.retryOffer={id:'offer-one',runId:'r1',provider:'codex',model:'model-two',modelName:'Model Two',effort:'high',command:'npm test',blocked:'Codex is at 85% of its limit'};await ui.window.relayUI.refresh();
@@ -2369,7 +2369,7 @@ test('the chevron beside the update has its release notes and Skip, and Check fo
   more.click();
   assert.equal(popover.matches(':popover-open'), true);
   assert.equal(more.getAttribute('aria-expanded'), 'true');
-  assert.equal(ui.$('update-title').textContent, 'Throughline 0.15.0');
+  assert.equal(ui.$('update-title').textContent, 'Codeshi 0.15.0');
   assert.equal(ui.$('update-subtitle').textContent, 'You have 0.14.0');
   ui.findButton('Release notes ↗').click(); await flush();
   assert.deepEqual(ui.externalLinks, [latest.notesUrl]);
@@ -2385,7 +2385,7 @@ test('the chevron beside the update has its release notes and Skip, and Check fo
   assert.deepEqual(ui.updateCalls.at(-1), ['install'], 'The details can start the update too.');
 });
 
-test('an app that cannot replace itself offers the download instead, and a manual check says when Throughline is up to date', async () => {
+test('an app that cannot replace itself offers the download instead, and a manual check says when Codeshi is up to date', async () => {
   const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'available', error: null, progress: null, blocked: 'translocated', latest: { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0' } } });
   ui.$('update-status').click();
   assert.match(ui.$('update-content').textContent, /Move it to your Applications folder/);
@@ -2394,7 +2394,7 @@ test('an app that cannot replace itself offers the download instead, and a manua
   assert.deepEqual(ui.externalLinks, ['https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0']);
   ui.pushUpdate({ status: 'current', latest: null, blocked: null });
   ui.window.relayUI.commands['check-updates'](); await flush();
-  assert.match(ui.$('update-content').textContent, /Throughline 0\.14\.0 is the latest version/);
+  assert.match(ui.$('update-content').textContent, /Codeshi 0\.14\.0 is the latest version/);
 });
 
 test('Settings turns automatic update checks off and checks now', async () => {
@@ -2785,7 +2785,7 @@ test('alerts play their sound once, only when allowed, and Settings chooses whic
   assert.equal(tones.length, 4, 'The same alert plays once, even with several tabs open.');
   ui.document.hasFocus = () => true; ui.document.visibilityState = 'visible';
   alert({ id: 'two', sound: 'attention', volume: 70, background: true, kind: 'approval' });
-  assert.equal(tones.length, 4, 'Only when Throughline isn’t in front: nothing plays while it is.');
+  assert.equal(tones.length, 4, 'Only when Codeshi isn’t in front: nothing plays while it is.');
   ui.document.hasFocus = () => false;
   alert({ id: 'three', sound: 'attention', volume: 70, background: true, kind: 'approval' });
   assert.deepEqual(tones.slice(4, 6), [880, 1760]);

@@ -53,5 +53,7 @@ test('HTTP acceptance: both providers unavailable, private friend patch reviewed
 
 test('desktop session token protects local APIs while keeping static UI loadable',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'relay-session-'));const app=createRelayServer({dataRoot:root,accessToken:'secret-desktop-fixture'});const base=await listen(app.server);t.after(async()=>{await app.close();fs.rmSync(root,{recursive:true,force:true});});
- assert.equal((await fetch(base)).status,200);assert.equal((await fetch(base+'/api/projects')).status,403);assert.equal((await fetch(base+'/api/projects',{headers:{'X-AI-Relay-Token':'secret-desktop-fixture'}})).status,200);
+ assert.equal((await fetch(base)).status,200);assert.equal((await fetch(base+'/api/projects')).status,403);
+ // The logo and favicons load like the rest of the page, PNGs as images.
+ for(const [file,type] of [['/icon.svg','image/svg+xml'],['/logo.svg','image/svg+xml'],['/icon-16.png','image/png'],['/icon-32.png','image/png'],['/icon-180.png','image/png'],['/icon-512.png','image/png']]){const response=await fetch(base+file);assert.equal(response.status,200,file);assert.equal(response.headers.get('content-type'),type,file);if(type==='image/png')assert.deepEqual([...new Uint8Array(await response.arrayBuffer()).slice(1,4)],[80,78,71],file);}assert.equal((await fetch(base+'/api/projects',{headers:{'X-AI-Relay-Token':'secret-desktop-fixture'}})).status,200);
 });

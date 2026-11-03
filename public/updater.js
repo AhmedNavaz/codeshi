@@ -2,7 +2,7 @@
   'use strict';
   // Updates (#2): when a newer release is out, the status bar shows Update to <version>. One click downloads the update
   // for this Mac and checks it, with a ring for the download, and the button becomes Restart to update. Restarting
-  // never stops an agent: it waits for the run to finish. Quitting instead installs the update as Throughline closes.
+  // never stops an agent: it waits for the run to finish. Quitting instead installs the update as Codeshi closes.
   // The chevron beside the button has the release notes and Skip this version, and Settings turns automatic checks
   // off.
   const bridge = window.relayDesktop, api = window.relayUI, $ = id => document.getElementById(id);
@@ -35,7 +35,7 @@
     const host = node('div', undefined, 'update-body'), latest = state.latest, text = (value, cls = 'update-text') => host.append(node('p', value, cls));
     const row = (...buttons) => { const group = node('div', undefined, 'update-actions'); group.append(...buttons); host.append(group); };
     if (state.status === 'checking') { text('Checking for updates…'); return host; }
-    if (state.status === 'current' || state.status === 'idle') { text(`Throughline ${state.version} is the latest version.`); return host; }
+    if (state.status === 'current' || state.status === 'idle') { text(`Codeshi ${state.version} is the latest version.`); return host; }
     if (state.status === 'error' && !latest) { text(state.error, 'update-text update-error'); row(action('Try again', () => call(() => bridge.checkForUpdates()))); return host; }
     if (latest) { const notes = action('Release notes ↗', openNotes, 'text-link update-notes'); host.append(notes); }
     if (state.status === 'downloading') {
@@ -48,23 +48,23 @@
     }
     if (state.status === 'ready') {
       const busy = working();
-      text(`Downloaded and checked. ${busy ? 'Throughline restarts once the agent finishes, never in the middle of a run.' : 'Restart to use it; your workspaces and conversations stay as they are.'} If you quit instead, it installs as Throughline closes.`);
+      text(`Downloaded and checked. ${busy ? 'Codeshi restarts once the agent finishes, never in the middle of a run.' : 'Restart to use it; your workspaces and conversations stay as they are.'} If you quit instead, it installs as Codeshi closes.`);
       row(action(busy ? 'Restart after this run' : 'Restart now', restart, 'primary-button'));
       return host;
     }
     if (state.status === 'waiting') {
-      text('Throughline restarts into the new version as soon as no agent is working, and opens your workspaces as they were.');
+      text('Codeshi restarts into the new version as soon as no agent is working, and opens your workspaces as they were.');
       row(action('Don’t restart', () => call(() => bridge.cancelUpdate())));
       return host;
     }
     if (state.status === 'installing') { text('Restarting into the new version…'); return host; }
     if (state.status === 'error') text(state.error, 'update-text update-error');
     if (state.blocked) {
-      text(state.blocked === 'translocated' ? 'Throughline is running from a temporary copy, so it can’t replace itself. Move it to your Applications folder, or download the update.' : 'Throughline can’t replace itself in this folder. Download the update to install it yourself.');
+      text(state.blocked === 'translocated' ? 'Codeshi is running from a temporary copy, so it can’t replace itself. Move it to your Applications folder, or download the update.' : 'Codeshi can’t replace itself in this folder. Download the update to install it yourself.');
       row(action('Download ↗', openNotes, 'primary-button'));
       return host;
     }
-    text('Throughline downloads the update for this Mac and checks it. You restart when you’re ready, never in the middle of a run.');
+    text('Codeshi downloads the update for this Mac and checks it. You restart when you’re ready, never in the middle of a run.');
     const skip = action('Skip this version', () => call(() => bridge.skipUpdate(latest.version)), 'text-link');
     row(skip, action(state.status === 'error' ? 'Try again' : 'Update', install, 'primary-button'));
     return host;
@@ -88,12 +88,12 @@
     button.style.setProperty('--update-progress', String(value ?? 0));
     $('update-status-label').textContent = label();
     button.setAttribute('aria-label', value === null ? label() : `${label()}, ${value}%`);
-    button.title = { available: `Download Throughline ${state.latest?.version} and check it`, downloading: value === null ? 'Downloading the update' : `Downloading the update · ${value}%`, ready: 'Restart into the new version; your workspaces stay as they are', waiting: 'Throughline restarts once no agent is working', installing: 'Restarting into the new version', error: state.error || 'The update failed' }[state.status] || '';
+    button.title = { available: `Download Codeshi ${state.latest?.version} and check it`, downloading: value === null ? 'Downloading the update' : `Downloading the update · ${value}%`, ready: 'Restart into the new version; your workspaces stay as they are', waiting: 'Codeshi restarts once no agent is working', installing: 'Restarting into the new version', error: state.error || 'The update failed' }[state.status] || '';
     button.setAttribute('aria-haspopup', direct() ? 'false' : 'dialog');
     if (more) more.hidden = !shown || !direct();
     if (isOpen()) {
       const latest = state.latest && ['available', 'downloading', 'ready', 'waiting', 'installing', 'error'].includes(state.status);
-      $('update-title').textContent = latest ? `Throughline ${state.latest.version}` : 'Software update';
+      $('update-title').textContent = latest ? `Codeshi ${state.latest.version}` : 'Software update';
       $('update-subtitle').textContent = `You have ${state.version}`;
       $('update-content').replaceChildren(body());
       position();
@@ -115,17 +115,17 @@
     if (!kit) return;
     host.replaceChildren();
     const rows = kit.group(host, 'Updates');
-    if (!state?.supported) { kit.row(rows, { label: 'Updates', description: window.relayDesktop?.platform === 'win32' ? 'Updates install in the Throughline app for macOS. On Windows, run the installer again or download the latest release.' : 'Updates install in the Throughline app for macOS. This copy is updated from its source instead.', keywords: 'version' }); return; }
+    if (!state?.supported) { kit.row(rows, { label: 'Updates', description: window.relayDesktop?.platform === 'win32' ? 'Updates install in the Codeshi app for macOS. On Windows, run the installer again or download the latest release.' : 'Updates install in the Codeshi app for macOS. This copy is updated from its source instead.', keywords: 'version' }); return; }
     const checked = state.checkedAt ? new Date(state.checkedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : null;
     const summary = state.status === 'checking' ? 'Checking for updates…'
-      : ['ready', 'waiting'].includes(state.status) ? `Throughline ${state.latest.version} is downloaded and checked. Restart to use it.`
-      : offered() || ['downloading', 'installing'].includes(state.status) ? `Throughline ${state.latest.version} is available.`
+      : ['ready', 'waiting'].includes(state.status) ? `Codeshi ${state.latest.version} is downloaded and checked. Restart to use it.`
+      : offered() || ['downloading', 'installing'].includes(state.status) ? `Codeshi ${state.latest.version} is available.`
       : state.status === 'error' ? state.error : `${state.status === 'current' ? 'The latest version.' : ''}${checked ? ` Last checked ${checked}.` : ''}`.trim();
     const check = kit.button(state.status === 'checking' ? 'Checking…' : 'Check now', () => call(() => bridge.checkForUpdates()));
     check.disabled = ['checking', 'downloading', 'ready', 'waiting', 'installing'].includes(state.status);
     const controls = state.latest && (offered() || state.skipped === state.latest.version) ? [kit.button('Show update', () => { window.relaySettings?.close(); open(); }), check] : [check];
-    kit.row(rows, { label: `Throughline ${state.version}`, description: summary, keywords: 'update version check', control: controls });
-    kit.toggle(rows, { label: 'Check for updates automatically', description: 'Throughline looks for a new version in the background and offers it in the status bar.', keywords: 'update', checked: state.automatic, onChange: value => call(() => bridge.setAutomaticUpdates(value)) });
+    kit.row(rows, { label: `Codeshi ${state.version}`, description: summary, keywords: 'update version check', control: controls });
+    kit.toggle(rows, { label: 'Check for updates automatically', description: 'Codeshi looks for a new version in the background and offers it in the status bar.', keywords: 'update', checked: state.automatic, onChange: value => call(() => bridge.setAutomaticUpdates(value)) });
   }
 
   button.addEventListener('click', () => {

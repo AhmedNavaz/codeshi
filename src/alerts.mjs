@@ -1,4 +1,4 @@
-// Alerts: how Throughline tells you about work while you are in another app. Every alert is one of three moments: an
+// Alerts: how Codeshi tells you about work while you are in another app. Every alert is one of three moments: an
 // agent needs you, a task finished or a task stopped. Each way of telling you (a banner, a sound, the Dock icon
 // bouncing and a count on the Dock icon) is turned on or off as a whole, and for each moment. The menu bar status is
 // one more switch: it shows what is happening all the time rather than announcing it. The desktop app follows these
@@ -67,7 +67,7 @@ export function mergeAlertPreferences(current, patch) {
   return next;
 }
 
-// Where one alert goes. While Throughline is in front, the page shows what happened, so nothing goes outside the
+// Where one alert goes. While Codeshi is in front, the page shows what happened, so nothing goes outside the
 // window. A banner is the panel near the top of the screen when that is chosen and the panel is there, or else a
 // system notification, never both. Whether a sound plays in front of you is the page's choice, as it knows.
 export function alertPlan(notice, preferences, { focused = false, panelAvailable = true } = {}) {

@@ -4,7 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-// Voice input (#11): speech is recognized on this Mac by a small helper, "Throughline Speech"
+// Voice input (#11): speech is recognized on this Mac by a small helper, "Codeshi Speech"
 // (native/macos/speech), with Apple's on-device recognizer. Audio never leaves the computer. One listening session
 // runs at a time; the page follows its transcript as it is heard, and listening stops when asked or after two minutes.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -12,7 +12,7 @@ const SOURCE = path.join(root, 'native', 'macos', 'speech');
 export const LISTEN_LIMIT = 2 * 60 * 1000;
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 
-export const helperPath = (arch = process.arch) => path.join(root, 'native', 'bin', `darwin-${arch}`, 'Throughline Speech');
+export const helperPath = (arch = process.arch) => path.join(root, 'native', 'bin', `darwin-${arch}`, 'Codeshi Speech');
 
 // Builds the helper with the Swift compiler from Xcode or its command line tools: at packaging time for the release,
 // or on first use when running from source. Its usage descriptions are embedded, and it is signed so macOS can keep
@@ -53,7 +53,7 @@ export class VoiceSessions {
   }
 
   async start({ locale } = {}) {
-    if (this.closing) fail('Throughline is stopping.', 503);
+    if (this.closing) fail('Codeshi is stopping.', 503);
     if (locale !== undefined && (typeof locale !== 'string' || !/^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$/.test(locale))) fail('Choose a language for voice input.');
     if (this.session) fail('Voice input is already listening.', 409);
     const session = { id: randomUUID(), status: 'starting', text: '', events: [], listeners: new Set(), startedAt: new Date().toISOString() };
@@ -77,7 +77,7 @@ export class VoiceSessions {
     child.on('error', error => this.event(session, { type: 'error', code: 'helper', message: `The speech helper could not start: ${error.message}` }));
     child.on('close', () => { if (!session.done) this.event(session, session.text ? { type: 'final', text: session.text } : { type: 'error', code: 'helper', message: 'Voice input stopped unexpectedly.' }); });
     // macOS asks for permission the first time; a request nobody answers should not listen forever.
-    session.waiting = setTimeout(() => { if (session.status === 'starting') this.event(session, { type: 'error', code: 'permission-wait', message: 'Throughline Speech is waiting for permission. Answer the macOS prompt, then try again.' }); }, this.readyWait);
+    session.waiting = setTimeout(() => { if (session.status === 'starting') this.event(session, { type: 'error', code: 'permission-wait', message: 'Codeshi Speech is waiting for permission. Answer the macOS prompt, then try again.' }); }, this.readyWait);
     session.limit = setTimeout(() => this.stop(session.id).catch(() => {}), this.limit);
     return { id: session.id, status: session.status };
   }

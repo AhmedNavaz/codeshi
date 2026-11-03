@@ -104,7 +104,7 @@ test('Windows npm installs are followed from their .cmd script to the native pro
   const claude = f.executable(path.join(npm, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'));
   assert.equal(resolveBinary('claude', options), claude);
 
-  // Codex's npm script starts a Node launcher; Throughline starts the native build that launcher would.
+  // Codex's npm script starts a Node launcher; Codeshi starts the native build that launcher would.
   f.executable(path.join(npm, 'codex.cmd'), npmShim('node_modules\\@openai\\codex\\bin\\codex.js'));
   f.executable(path.join(npm, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
   assert.equal(resolveBinary('codex', options), null, 'a JavaScript program is never started through a shell');

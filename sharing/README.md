@@ -1,18 +1,18 @@
 # Private friend sharing
 
-This is a separate Node HTTP service. It only stores approved portable handoff JSON and returned solution JSON. It has no provider imports, model calls, credentials integration, shell execution, or arbitrary repository access. The friend can use a normal browser and their own tools; installing Throughline is unnecessary.
+This is a separate Node HTTP service. It only stores approved portable handoff JSON and returned solution JSON. It has no provider imports, model calls, credentials integration, shell execution, or arbitrary repository access. The friend can use a normal browser and their own tools; installing Codeshi is unnecessary.
 
 ## Local development
 
-From the Throughline project root, run `node sharing/server.mjs`, then configure the local application's sharing URL as `http://127.0.0.1:4319`. The service binds to loopback by default. Links created with that URL work only on the same computer. A localhost round trip is not a deployment or a remotely reachable link.
+From the Codeshi project root, run `node sharing/server.mjs`, then configure the local application's sharing URL as `http://127.0.0.1:4319`. The service binds to loopback by default. Links created with that URL work only on the same computer. A localhost round trip is not a deployment or a remotely reachable link.
 
 Run its automated tests with `node --test sharing/test/*.test.mjs`. Tests use temporary storage and make no provider requests.
 
 ## Deployment
 
-Use a separate host with HTTPS and a persistent private volume. Do not expose the main Throughline execution server, create a tunnel to it, or mount either person's project or home directory into this service.
+Use a separate host with HTTPS and a persistent private volume. Do not expose the main Codeshi execution server, create a tunnel to it, or mount either person's project or home directory into this service.
 
-Each release publishes a prebuilt image for `linux/amd64` and `linux/arm64`: `docker pull ghcr.io/ahmednavaz/throughline-sharing:latest`. To build it yourself, run this from the **project root**: `docker build -f sharing/Dockerfile -t throughline-sharing .`. Run one replica behind a TLS reverse proxy. Mount a volume writable by the container's `node` user at `/data`. Forward requests to port 4319 on a private network, set `X-Forwarded-Proto: https`, and keep the upstream port inaccessible to public clients. The built-in server is HTTP; the reverse proxy owns TLS. Set the approved application's service URL to the verified public `https://` origin. The local client rejects plaintext external URLs and redirects.
+Each release publishes a prebuilt image for `linux/amd64` and `linux/arm64`: `docker pull ghcr.io/ahmednavaz/throughline-sharing:latest`. The image keeps the name it had before Codeshi was renamed, so existing deployments keep updating. To build it yourself, run this from the **project root**: `docker build -f sharing/Dockerfile -t throughline-sharing .`. Run one replica behind a TLS reverse proxy. Mount a volume writable by the container's `node` user at `/data`. Forward requests to port 4319 on a private network, set `X-Forwarded-Proto: https`, and keep the upstream port inaccessible to public clients. The built-in server is HTTP; the reverse proxy owns TLS. Set the approved application's service URL to the verified public `https://` origin. The local client rejects plaintext external URLs and redirects.
 
 Configuration:
 

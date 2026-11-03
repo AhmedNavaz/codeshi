@@ -7,11 +7,15 @@ import { compareVersions, versionPattern } from './updates.mjs';
 
 // Updates from GitHub Releases, for the macOS builds the release workflow publishes. A newer release is offered, never
 // installed unasked. Installing downloads the zip for this Mac, checks it against the release's SHA256SUMS.txt and checks
-// the app inside (its version, bundle ID and signature), then a small helper replaces the app once Throughline has quit
+// the app inside (its version, bundle ID and signature), then a small helper replaces the app once Codeshi has quit
 // and opens the new version. Files the app downloads itself are not marked as downloaded from the internet, so the
-// updated app opens without the security prompt a browser download gets. Throughline never restarts while an agent works.
+// updated app opens without the security prompt a browser download gets. Codeshi never restarts while an agent works.
 export const REPOSITORY = 'AhmedNavaz/throughline';
 export const BUNDLE_ID = 'local.throughline.desktop';
+// Codeshi was called Throughline. Release files may come from the repository under either name, since GitHub sends
+// the old one to the new after a rename, and the zip and the app inside may carry either name.
+const REPOSITORIES = [REPOSITORY, 'AhmedNavaz/codeshi'], NAMES = ['Codeshi', 'Throughline'];
+const fromRepository = (url, part) => typeof url === 'string' && REPOSITORIES.some(repository => url.startsWith(`https://github.com/${repository}/${part}`));
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000, FIRST_CHECK = 15 * 1000;
 const MAX_DOWNLOAD = 1024 * 1024 * 1024, MAX_CHECKSUMS = 64 * 1024;
 
@@ -43,14 +47,14 @@ export function releaseFrom(json, build) {
   if (!json || json.draft || json.prerelease || typeof json.tag_name !== 'string') return null;
   const version = json.tag_name.replace(/^v/, '');
   if (!versionPattern.test(version)) return null;
-  const prefix = `https://github.com/${REPOSITORY}/releases/download/`;
-  const asset = name => (json.assets || []).find(item => item?.name === name && typeof item.browser_download_url === 'string' && item.browser_download_url.startsWith(prefix));
-  const file = `Throughline-${version}-mac-${build}.zip`, archive = asset(file), sums = asset('SHA256SUMS.txt');
-  const notesUrl = typeof json.html_url === 'string' && json.html_url.startsWith(`https://github.com/${REPOSITORY}/releases/`) ? json.html_url : `https://github.com/${REPOSITORY}/releases/tag/v${version}`;
+  const asset = name => (json.assets || []).find(item => item?.name === name && fromRepository(item.browser_download_url, 'releases/download/'));
+  const file = NAMES.map(name => `${name}-${version}-mac-${build}.zip`).find(asset) || `Codeshi-${version}-mac-${build}.zip`;
+  const archive = asset(file), sums = asset('SHA256SUMS.txt');
+  const notesUrl = fromRepository(json.html_url, 'releases/') ? json.html_url : `https://github.com/${REPOSITORY}/releases/tag/v${version}`;
   return { version, notesUrl, publishedAt: typeof json.published_at === 'string' ? json.published_at : null, file, url: archive?.browser_download_url || null, size: Number.isSafeInteger(archive?.size) ? archive.size : null, checksumsUrl: sums?.browser_download_url || null };
 }
 
-// Waits for Throughline to quit, moves the installed app aside, moves the verified new app into its place and opens it.
+// Waits for Codeshi to quit, moves the installed app aside, moves the verified new app into its place and opens it.
 // If the new app cannot be moved in, the previous one is put back and opened instead.
 export const HELPER = `#!/bin/sh
 pid=$1 target=$2 staged=$3 previous=$4
@@ -59,7 +63,7 @@ log() { printf '%s %s\\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$1"; }
 waited=0
 while kill -0 "$pid" 2>/dev/null; do
   waited=$((waited + 1))
-  if [ "$waited" -gt 1200 ]; then log "Throughline did not quit, so the update was not installed."; exit 1; fi
+  if [ "$waited" -gt 1200 ]; then log "Codeshi did not quit, so the update was not installed."; exit 1; fi
   sleep 0.1
 done
 rm -rf "$previous"
@@ -113,7 +117,7 @@ export function createUpdater({
     checking = (async () => {
       set('checking');
       try {
-        const response = await fetchImpl(`https://api.github.com/repos/${REPOSITORY}/releases/latest`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': `Throughline/${version}` }, signal: AbortSignal.timeout(20000) });
+        const response = await fetchImpl(`https://api.github.com/repos/${REPOSITORY}/releases/latest`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': `Codeshi/${version}` }, signal: AbortSignal.timeout(20000) });
         if (!response.ok) throw new Error(response.status === 403 || response.status === 429 ? 'GitHub is limiting update checks right now. Try again later.' : `GitHub answered ${response.status}.`);
         const release = releaseFrom(await response.json(), build);
         if (!release) throw new Error('The latest release could not be read.');
@@ -130,7 +134,7 @@ export function createUpdater({
 
   // Streams the zip to disk while hashing it, so a large download never sits in memory.
   async function download(release, file) {
-    const response = await fetchImpl(release.url, { signal: controller.signal, headers: { 'User-Agent': `Throughline/${version}` } });
+    const response = await fetchImpl(release.url, { signal: controller.signal, headers: { 'User-Agent': `Codeshi/${version}` } });
     if (!response.ok || !response.body) throw new Error(`The download failed (${response.status}).`);
     const total = Number(response.headers.get('content-length')) || release.size || null;
     if (total && total > MAX_DOWNLOAD) throw new Error('The download is larger than expected.');
@@ -154,7 +158,7 @@ export function createUpdater({
     fs.mkdirSync(work, { recursive: true, mode: 0o700 });
     const zip = path.join(work, release.file);
     const actual = await download(release, zip);
-    const sums = await fetchImpl(release.checksumsUrl, { signal: controller.signal, headers: { 'User-Agent': `Throughline/${version}` } });
+    const sums = await fetchImpl(release.checksumsUrl, { signal: controller.signal, headers: { 'User-Agent': `Codeshi/${version}` } });
     if (!sums.ok) throw new Error(`The checksums could not be downloaded (${sums.status}).`);
     const text = await sums.text();
     if (text.length > MAX_CHECKSUMS) throw new Error('The checksums file is larger than expected.');
@@ -163,10 +167,11 @@ export function createUpdater({
     const unpacked = path.join(work, 'app');
     await exec('/usr/bin/ditto', ['-x', '-k', zip, unpacked]);
     fs.rmSync(zip, { force: true });
-    const app = path.join(unpacked, 'Throughline.app'), plist = path.join(app, 'Contents', 'Info.plist');
-    if (!fs.existsSync(plist)) throw new Error('The download does not contain Throughline.app.');
+    const app = NAMES.map(name => path.join(unpacked, `${name}.app`)).find(bundle => fs.existsSync(path.join(bundle, 'Contents', 'Info.plist')));
+    if (!app) throw new Error('The download does not contain Codeshi.app.');
+    const plist = path.join(app, 'Contents', 'Info.plist');
     const read = async key => (await exec('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', plist])).trim();
-    if (await read('CFBundleIdentifier') !== BUNDLE_ID || await read('CFBundleShortVersionString') !== release.version) throw new Error('The downloaded app is not the expected version of Throughline.');
+    if (await read('CFBundleIdentifier') !== BUNDLE_ID || await read('CFBundleShortVersionString') !== release.version) throw new Error('The downloaded app is not the expected version of Codeshi.');
     try { await exec('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]); }
     catch { throw new Error('The downloaded app’s signature could not be verified, so nothing was installed.'); }
     await exec('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', app]).catch(() => {});
@@ -178,7 +183,7 @@ export function createUpdater({
   function swap({ reopen = true } = {}) {
     if (!staged || status === 'installing') return;
     set('installing');
-    const script = path.join(directory, 'install-update.sh'), previous = path.join(directory, 'previous', 'Throughline.app');
+    const script = path.join(directory, 'install-update.sh'), previous = path.join(directory, 'previous', 'Codeshi.app');
     fs.mkdirSync(path.dirname(previous), { recursive: true, mode: 0o700 });
     fs.writeFileSync(script, HELPER, { mode: 0o700 });
     launch(script, [String(pid), location.bundle, staged.app, previous, reopen ? '/usr/bin/open' : '/usr/bin/true'], path.join(directory, 'install.log'));
@@ -188,7 +193,7 @@ export function createUpdater({
   // Downloads the update and checks it, then waits as ready: the person restarts when they choose.
   async function install() {
     if (!enabled) throw new Error('Updates are installed from the macOS app.');
-    if (location.blocked) throw new Error(location.blocked === 'translocated' ? 'Move Throughline to your Applications folder to install updates.' : 'Throughline can’t replace itself in this folder. Download the update instead.');
+    if (location.blocked) throw new Error(location.blocked === 'translocated' ? 'Move Codeshi to your Applications folder to install updates.' : 'Codeshi can’t replace itself in this folder. Download the update instead.');
     if (['downloading', 'ready', 'waiting', 'installing'].includes(status)) return state();
     if (!latest) throw new Error('There is no update to install.');
     if (staged?.version === latest.version) { set('ready'); return state(); }
@@ -219,7 +224,7 @@ export function createUpdater({
   // Called when runs start or finish: a restart that is waiting goes ahead once no agent is working.
   function idle() { if (status === 'waiting' && !busy()) swap(); }
 
-  // Quitting with an update ready installs it as Throughline closes, without opening it again.
+  // Quitting with an update ready installs it as Codeshi closes, without opening it again.
   function finishOnQuit() { if (staged && ['ready', 'waiting'].includes(status)) swap({ reopen: false }); }
 
   function cancel() {

@@ -82,7 +82,7 @@ export class CodexClient extends EventEmitter {
       this.pending.set(id, { resolve, reject, timer }); this.send({ id, method, params });
     });
   }
-  async initialize() { await this.request('initialize', { clientInfo: { name: 'ai_relay', title: 'Throughline', version: '0.2.0' } }); this.send({ method: 'initialized', params: {} }); }
+  async initialize() { await this.request('initialize', { clientInfo: { name: 'ai_relay', title: 'Codeshi', version: '0.2.0' } }); this.send({ method: 'initialized', params: {} }); }
   close() { if (!this.closed) { this.child.stdin.end(); this.child.kill('SIGTERM'); } }
 }
 
@@ -103,10 +103,10 @@ export async function runCodex(config, { event, approval, question = null, metad
           const allow = config.mode === 'read' ? false : await approval({ id: String(message.id), kind: message.method, ...p });
           client.send({ id: message.id, result: { decision: allow ? 'accept' : 'decline' } });
         } else if (message.method === 'item/tool/requestUserInput' && question && !config.reviewSnapshot) {
-          // Codex asks you to choose: the question waits in Throughline like an approval, and skipping it sends no answers.
+          // Codex asks you to choose: the question waits in Codeshi like an approval, and skipping it sends no answers.
           const questions = codexQuestions(p), answers = questions.length ? await question({ id: String(message.id), questions }) : null;
           client.send({ id: message.id, result: codexAnswers(p, answers || null) });
-        } else client.send({ id: message.id, error: { code: -32601, message: 'This interaction is not supported by Throughline; use the native client.' } });
+        } else client.send({ id: message.id, error: { code: -32601, message: 'This interaction is not supported by Codeshi; use the native client.' } });
         return;
       }
       if (p.threadId && threadId && p.threadId !== threadId) return;
@@ -201,7 +201,7 @@ export async function runClaude(config, { event, approval, question = null, meta
       includePartialMessages: true, ...(config.effort ? { effort: config.effort } : {}), abortController: controller, ...(config.sessionId ? { resume: config.sessionId } : {}), model: config.model || 'default',
       canUseTool: async (toolName, input, options) => {
         if (toolName === 'TodoWrite') return { behavior: 'allow', updatedInput: input };
-        // The questions wait in Throughline like an approval; the answers go back with them, and skipping tells Claude to decide.
+        // The questions wait in Codeshi like an approval; the answers go back with them, and skipping tells Claude to decide.
         if (toolName === 'AskUserQuestion') {
           const questions = question && !config.reviewSnapshot ? claudeQuestions(input) : [];
           const answers = questions.length ? await question({ id: options?.toolUseID || `${Date.now()}-${Math.random()}`, questions }) : null;
@@ -257,7 +257,7 @@ export async function accountStatus(provider, { bin = resolveBinary(provider), w
   if (!bin) return { ...base, ...(provider === 'gemini' ? { message: geminiSetup } : {}) };
   if (provider === 'gemini' && isAntigravityACP(bin)) {
     const { models, ...status } = await sharedGoogleMetadata({ bin, googleRoot, refresh });
-    return { ...base, ...status, capabilities: { ...base.capabilities, readOnly: 'unavailable', hooks: 'Antigravity manages native hooks and workspace trust. Throughline does not grant workspace-trust questions automatically.' }, message: 'Google Antigravity connection. Sign in with Google to use the models and allowance available to your account. Coding uses native approvals; read-only work uses Codex or Claude.' };
+    return { ...base, ...status, capabilities: { ...base.capabilities, readOnly: 'unavailable', hooks: 'Antigravity manages native hooks and workspace trust. Codeshi does not grant workspace-trust questions automatically.' }, message: 'Google Antigravity connection. Sign in with Google to use the models and allowance available to your account. Coding uses native approvals; read-only work uses Codex or Claude.' };
   }
   const version = await probeCli(bin, ['--version'], 4000);
   // An installed CLI that answers too slowly is unverified, not missing.
@@ -413,7 +413,7 @@ export async function connectAccount(provider, { bin = resolveBinary(provider), 
   clearUsage(provider);
   if (provider === 'gemini') {
     if (isAntigravityACP(bin)) { googleChecks.clear(); return connectGoogle({ bin, googleRoot }); }
-    if (isAgy(bin)) return { started: false, nativeFlow: true, message: 'Sign in to Google using the Antigravity app or CLI (agy), then refresh status in Throughline.' };
+    if (isAgy(bin)) return { started: false, nativeFlow: true, message: 'Sign in to Google using the Antigravity app or CLI (agy), then refresh status in Codeshi.' };
     return { started: false, nativeFlow: true, message: geminiSetup };
   }
   if (!bin) throw Object.assign(new Error('Install the provider CLI first.'), { status: 503 });
@@ -438,7 +438,7 @@ export async function connectAccount(provider, { bin = resolveBinary(provider), 
 export async function disconnectAccount(provider, { bin = resolveBinary(provider), workspace = os.homedir(), googleRoot } = {}) {
   clearUsage(provider);
   if (provider === 'gemini' && isAntigravityACP(bin)) { googleChecks.clear(); return disconnectGoogle({ bin, googleRoot }); }
-  if (provider === 'gemini') throw Object.assign(new Error('Manage Google and Gemini authentication in the native Antigravity or Gemini CLI. Throughline stores no credentials.'), { status: 400 });
+  if (provider === 'gemini') throw Object.assign(new Error('Manage Google and Gemini authentication in the native Antigravity or Gemini CLI. Codeshi stores no credentials.'), { status: 400 });
   if (!bin) throw Object.assign(new Error('Install the provider CLI first.'), { status: 503 });
   if (provider === 'claude') { const result = spawnSync(bin, ['auth', 'logout'], { cwd: workspace, encoding: 'utf8', timeout: 5000, shell: false }); if (result.status !== 0) throw new Error(result.stderr || 'Claude logout failed.'); return { disconnected: true }; }
   const client = new CodexClient({ bin, cwd: workspace }); try { await client.initialize(); await client.request('account/logout'); return { disconnected: true }; } finally { client.close(); }

@@ -51,7 +51,7 @@
   function renderHero() {
     const host = $('setup-hero-content'); host.replaceChildren();
     if (screen === 'welcome') {
-      $('setup-title').textContent = 'Throughline';
+      $('setup-title').textContent = 'Codeshi';
       const points = node('ul',undefined,'onboarding-points');
       for (const text of ['Shared project context','Your own agent accounts','One conversation per project']) points.append(node('li',text));
       const start = button('Get started',()=>{ reviewing = false; show('flow'); },'primary-button onboarding-cta');
@@ -66,7 +66,7 @@
       item(connected,`${providerName(draft.provider)} starts the conversation`,connected ? 'Connected with your own account.' : 'Connect it in Settings before your first message.');
       item(true,{light:'Light theme',graphite:'Dark theme'}[window.relayTheme?.preference()] || 'System theme',draft.mode === 'read' ? 'New workspaces start read only.' : 'Agents can edit files in your workspaces.');
       item(count > 0,count ? (created ? `${created} is ready` : `${count} workspace${count === 1 ? ' is' : 's are'} ready`) : 'No workspace yet',count ? 'Your conversation is waiting.' : 'Choose your project folders from the sidebar.');
-      const open = button('Open Throughline',()=>complete(),'primary-button onboarding-cta');
+      const open = button('Open Codeshi',()=>complete(),'primary-button onboarding-cta');
       host.append(node('p','You can change any of this later in Settings.','onboarding-tagline'),summary,open); open.focus();
     }
   }
@@ -85,7 +85,7 @@
   }
   function agents(host) {
     connectionSignature = connectionState();
-    host.append(node('p',`Throughline works with Claude Code, Codex and Gemini on ${computer}, signed in with your own accounts. Choose which one starts the conversation; you can switch at any time without losing the thread.`,'setup-description'));
+    host.append(node('p',`Codeshi works with Claude Code, Codex and Gemini on ${computer}, signed in with your own accounts. Choose which one starts the conversation; you can switch at any time without losing the thread.`,'setup-description'));
     const cards = node('div',undefined,'setup-agent-grid'); host.append(cards);
     for (const provider of ['claude','codex','gemini']) {
       const account = api.getState().accounts?.[provider], check = api.getState().accountChecks?.[provider], selected = draft.provider === provider, plan = account?.planType || account?.subscriptionType;
@@ -113,7 +113,7 @@
     const advanced = node('details',undefined,'setup-advanced'); advanced.append(node('summary','Billing preference'),billing.wrap,node('p','Uses the accounts already on this computer. This does not purchase or change a plan. API billing requires review before a run.','setup-footnote')); host.append(advanced);
   }
   function preferencesStep(host,version) {
-    host.append(node('p','Choose how Throughline looks and what agents can do by default. You can change both at any time.','setup-description'),node('h3','Appearance','setup-section-title'));
+    host.append(node('p','Choose how Codeshi looks and what agents can do by default. You can change both at any time.','setup-description'),node('h3','Appearance','setup-section-title'));
     const themes = node('div',undefined,'setup-theme-grid');
     // System shows both palettes, as it follows the computer.
     const sample = value => {

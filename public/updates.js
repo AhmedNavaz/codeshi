@@ -9,7 +9,7 @@
   }).catch(error => api.showNotice('Update details could not be loaded. ' + error.message));
   function render(automatic) {
     $('updates-eyebrow').textContent = automatic ? 'UPDATE INSTALLED' : 'WHAT’S NEW';
-    $('updates-title').textContent = `Throughline ${launch.version}`;
+    $('updates-title').textContent = `Codeshi ${launch.version}`;
     $('updates-description').textContent = automatic ? launch.previousVersion ? `Updated from ${launch.previousVersion}. Your workspace is ready to continue.` : 'Your update is installed. Your workspace is ready to continue.' : 'Features and improvements in your installed version.';
     const content = $('updates-content'); content.replaceChildren();
     if (!launch.releases?.length) content.append(node('p', 'Release details are not bundled with this build. You can view the full release notes below.', 'updates-empty'));

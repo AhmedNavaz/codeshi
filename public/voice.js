@@ -4,7 +4,7 @@
   // appears in the message box as it is heard, for you to review and send; "Send when I stop talking" sends it after
   // a three-second countdown that Esc cancels. When a run you started by voice finishes, a short summary is read
   // aloud. It is built here from the run's recorded steps and reply, so it costs no agent usage, and spoken with the
-  // system's own voice. Speech is recognized on this Mac by Throughline Speech; audio never leaves it.
+  // system's own voice. Speech is recognized on this Mac by Codeshi Speech; audio never leaves it.
   const $ = id => document.getElementById(id), api = window.relayUI;
   const button = $('voice-input'), status = $('voice-status'), input = $('message-input');
   if (!api || !button || !status || !input) return;
@@ -46,7 +46,7 @@
     const base = input.value && !/\s$/.test(input.value) ? input.value + ' ' : input.value;
     session = { id: null, original: input.value, base, text: '', state: 'starting' };
     render();
-    show(support.helper === 'ready' ? 'Starting…' : 'Preparing voice input… The first time, Throughline builds its speech helper.', [['Cancel', cancel]], 'starting');
+    show(support.helper === 'ready' ? 'Starting…' : 'Preparing voice input… The first time, Codeshi builds its speech helper.', [['Cancel', cancel]], 'starting');
     try {
       const started = await api.post('/api/voice/start', {}, null);
       if (!session) { api.post('/api/voice/cancel', { id: started.id }, null).catch(() => {}); return; }
@@ -206,9 +206,9 @@
     if (!kit) return;
     host.replaceChildren();
     if (support?.supported) {
-      const input = kit.group(host, 'Voice input', `Speak a message with ${shortcut} or the microphone in the message box. Speech is recognized on this Mac by Throughline Speech and the audio never leaves it; what you say appears in the message box for you to review.`);
+      const input = kit.group(host, 'Voice input', `Speak a message with ${shortcut} or the microphone in the message box. Speech is recognized on this Mac by Codeshi Speech and the audio never leaves it; what you say appears in the message box for you to review.`);
       const denied = [support.speech, support.microphone].includes('denied');
-      kit.row(input, { label: 'Permissions', description: permissions(support) + (denied ? ' To allow it, open System Settings › Privacy & Security, then Speech Recognition and Microphone, and turn on Throughline Speech.' : ''), keywords: 'microphone speech recognition privacy' });
+      kit.row(input, { label: 'Permissions', description: permissions(support) + (denied ? ' To allow it, open System Settings › Privacy & Security, then Speech Recognition and Microphone, and turn on Codeshi Speech.' : ''), keywords: 'microphone speech recognition privacy' });
       kit.toggle(input, { label: 'Send when I stop talking', description: 'After a 3-second countdown, which Esc cancels.', keywords: 'voice dictation automatic send', checked: prefs.sendAfter, onChange: value => save({ sendAfter: value }) });
     } else kit.note(host, 'Voice input is available on macOS for now. Summaries of finished runs can still be read aloud.');
     const aloud = kit.group(host, 'Reading aloud');

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
-  // Settings (⌘,): how Throughline looks and behaves, on four pages. General has the theme, what happens while agents
-  // work and updates; Accounts each agent's account; Alerts how Throughline tells you about work while you're in
+  // Settings (⌘,): how Codeshi looks and behaves, on four pages. General has the theme, what happens while agents
+  // work and updates; Accounts each agent's account; Alerts how Codeshi tells you about work while you're in
   // another app; Voice speaking and reading aloud. Every setting is one row in a titled group: what it is and what it
   // does on the left, its control on the right. The search box finds a setting on any page. Other modules draw their
   // own groups with the kit below, so every page reads the same way. Ask a friend is a dialog of its own.
@@ -101,7 +101,7 @@
   const installGuides = {
     codex: { command: 'npm install -g @openai/codex', url: 'https://github.com/openai/codex', note: 'Install the Codex CLI, or the ChatGPT or Codex app for macOS, on this computer, then refresh.' },
     claude: { command: 'curl -fsSL https://claude.ai/install.sh | bash', url: 'https://code.claude.com/docs/en/overview', note: 'Install Claude Code and run claude in Terminal to sign in, then refresh.' },
-    gemini: { command: '', url: 'https://antigravity.google/docs/install', note: 'Throughline downloads Google’s official Antigravity connection and checks it, then you sign in with Google. Google’s terms and account limits apply.' },
+    gemini: { command: '', url: 'https://antigravity.google/docs/install', note: 'Codeshi downloads Google’s official Antigravity connection and checks it, then you sign in with Google. Google’s terms and account limits apply.' },
   };
   function accountLabel(account) { return !account.installed ? 'Not installed' : account.authenticated === true ? 'Connected' : account.authenticated === false ? 'Sign-in required' : 'Connection not confirmed'; }
   function billingLabel(account) { return account.authMode === 'google-oauth' && account.billingSource === 'subscription' ? 'Google account allowance' : account.billingSource === 'subscription' ? 'Your subscription' : account.billingSource === 'api' ? 'API usage' : 'Billing not reported'; }
@@ -118,7 +118,7 @@
   // Checks run in the background; the row shows progress at once and redraws when the answer arrives.
   function recheck() { api().refreshAccounts({ force: true }).catch(() => {}); render('accounts'); }
   function accounts(host) {
-    const state = api().getState(), rows = kit.group(host, 'Agent accounts', 'Throughline uses the accounts already signed in on this computer. Models and reasoning effort are chosen in the message box.');
+    const state = api().getState(), rows = kit.group(host, 'Agent accounts', 'Codeshi uses the accounts already signed in on this computer. Models and reasoning effort are chosen in the message box.');
     accountSignature = accountState();
     for (const provider of ['codex', 'claude', 'gemini']) {
       const account = state.accounts?.[provider], check = state.accountChecks?.[provider] || {}, checking = Boolean(state.accountsChecking?.[provider]), guide = installGuides[provider];
@@ -139,7 +139,7 @@
       const text = row.querySelector('.settings-row-text'), line = node('span', undefined, 'settings-row-description');
       const dot = node('span', status, `settings-status ${tone}`); line.append(dot); if (summary) line.append(document.createTextNode(` · ${summary}`)); text.append(line);
       if (account && check.failure) text.append(node('span', `The last check ${check.failure === 'timeout' ? 'timed out' : 'failed'} at ${date(check.failedAt)}, so this shows the result from ${date(check.checkedAt)}.`, 'settings-row-description warning'));
-      // The details: what Throughline knows about the account, and the actions you need less often.
+      // The details: what Codeshi knows about the account, and the actions you need less often.
       const details = kit.details(row, 'Details'), facts = node('dl', undefined, 'settings-facts'), fact = (label, value) => { const item = node('div'); item.append(node('dt', label), node('dd', value)); facts.append(item); };
       if (account?.installed) {
         fact('Billing', billingLabel(account)); if (account.planType || account.subscriptionType) fact('Plan', String(account.planType || account.subscriptionType).replace(/[_-]/g, ' ')); fact('Usage', usageLabel(account.usage, state.usage?.[provider]));
@@ -158,7 +158,7 @@
     const billing = kit.group(host, 'Billing');
     kit.toggle(billing, { label: 'Allow API and unconfirmed billing', description: 'For this session, let runs use an account billed by API usage, or one whose billing can’t be confirmed. Subscription accounts don’t need this.', keywords: 'api charges cost billing accept', checked: window.relayBillingConfirmed === true, onChange: value => { window.relayBillingConfirmed = value; window.dispatchEvent(new CustomEvent('relay-billing')); } });
     const about = kit.details(host, 'About account connections');
-    kit.note(about, 'Sign-in uses each provider’s own flow, and credentials stay with the provider; Throughline never switches you to API billing by itself. Codex read-only uses its own sandbox, and Claude and the Gemini CLI connection restrict their tools. Antigravity coding uses its own approvals and workspace trust, so choose Codex or Claude for read-only work. Managed runs turn off project hooks where supported; administrator policy may still apply.');
+    kit.note(about, 'Sign-in uses each provider’s own flow, and credentials stay with the provider; Codeshi never switches you to API billing by itself. Codex read-only uses its own sandbox, and Claude and the Gemini CLI connection restrict their tools. Antigravity coding uses its own approvals and workspace trust, so choose Codex or Claude for read-only work. Managed runs turn off project hooks where supported; administrator policy may still apply.');
   }
   // Downloading Google's connection takes a moment, so its button says so until it is done.
   function installButton() {

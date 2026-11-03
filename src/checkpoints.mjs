@@ -1,5 +1,5 @@
 // Checkpoints (#20): each run's folders are saved before and after it, so the run's changes can be undone later,
-// whichever agent made them. Snapshots live in a private Git object store per folder, inside Throughline's data
+// whichever agent made them. Snapshots live in a private Git object store per folder, inside Codeshi's data
 // folder. The project's own .git, branches, index and stash are never read or written.
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -24,7 +24,7 @@ export const ACTIONS = ['remove', 'restore', 'merge', 'recreate'];
 function environment() {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
   return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_ATTR_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C',
-    GIT_AUTHOR_NAME: 'Throughline', GIT_AUTHOR_EMAIL: 'checkpoints@throughline.invalid', GIT_COMMITTER_NAME: 'Throughline', GIT_COMMITTER_EMAIL: 'checkpoints@throughline.invalid' };
+    GIT_AUTHOR_NAME: 'Codeshi', GIT_AUTHOR_EMAIL: 'checkpoints@throughline.invalid', GIT_COMMITTER_NAME: 'Codeshi', GIT_COMMITTER_EMAIL: 'checkpoints@throughline.invalid' };
 }
 export function git(args, { gitDir, workTree, input, buffer = false, timeout = 60000, codes = [0], literal = false } = {}) {
   const bin = gitExecutable();
@@ -94,7 +94,7 @@ export class RunCheckpoints {
     this.ready.add(gitDir);
     return gitDir;
   }
-  // Throughline's own data, when it sits inside a workspace folder, is never part of a snapshot.
+  // Codeshi's own data, when it sits inside a workspace folder, is never part of a snapshot.
   ownData(folder) {
     try { const relative = path.relative(fs.realpathSync(folder.path), fs.realpathSync(this.broker.dataDir)); return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? [relative.split(path.sep).join('/')] : []; }
     catch { return []; }
@@ -107,7 +107,7 @@ export class RunCheckpoints {
       // Only this process uses the store, so a lock left behind is from an interrupted snapshot.
       fs.rmSync(path.join(gitDir, 'index.lock'), { force: true });
       const listed = [...new Set((await run(['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).stdout.split('\0').filter(Boolean))];
-      if (listed.length > this.limits.files) return { ...base, commit: null, error: `This folder has more than ${this.limits.files.toLocaleString('en-US')} files. Add a .gitignore so Throughline can keep checkpoints.` };
+      if (listed.length > this.limits.files) return { ...base, commit: null, error: `This folder has more than ${this.limits.files.toLocaleString('en-US')} files. Add a .gitignore so Codeshi can keep checkpoints.` };
       const large = [];
       for (const name of listed) {
         let stat; try { stat = fs.lstatSync(path.join(folder.path, ...name.split('/'))); } catch { continue; }
@@ -146,7 +146,7 @@ export class RunCheckpoints {
     if (this.closed) return;
     const folders = await this.serial(() => this.capture(`runs/${run.id}/before`, this.limits.beforeMs));
     run.checkpoint = folders.some(folder => folder.commit);
-    try { this.broker.record(c, { type: 'run_snapshot', runId: run.id, phase: 'before', folders }); } catch (error) { console.error('Throughline could not save a checkpoint:', error.message); run.checkpoint = false; }
+    try { this.broker.record(c, { type: 'run_snapshot', runId: run.id, phase: 'before', folders }); } catch (error) { console.error('Codeshi could not save a checkpoint:', error.message); run.checkpoint = false; }
   }
   // Saved once the agent's process has ended. Queued after anything pending, so a next run's "before" follows it.
   after(c, run) {
@@ -156,7 +156,7 @@ export class RunCheckpoints {
       const files = await this.count(c.snapshots?.[run.id]?.before?.folders || [], folders).catch(() => 0);
       this.broker.record(c, { type: 'run_snapshot', runId: run.id, phase: 'after', folders, files });
       await this.prune(c);
-    }).catch(error => console.error('Throughline could not save a checkpoint:', error.message));
+    }).catch(error => console.error('Codeshi could not save a checkpoint:', error.message));
   }
   // Keeps the newest runs and undos; older ones are let go, with their snapshots.
   async prune(c) {
@@ -291,7 +291,7 @@ export class RunCheckpoints {
       try {
         for (const file of work) { await this.put(folderOf.get(file.folderId), file.gitDir, file.path, file.result); done.push(file); }
       } catch (error) {
-        for (const file of done.reverse()) try { await this.put(folderOf.get(file.folderId), file.gitDir, file.path, file.now); } catch (restoreError) { console.error('Throughline could not put a file back:', restoreError.message); }
+        for (const file of done.reverse()) try { await this.put(folderOf.get(file.folderId), file.gitDir, file.path, file.now); } catch (restoreError) { console.error('Codeshi could not put a file back:', restoreError.message); }
         throw Object.assign(new Error(`Undo stopped and put back the files it had changed: ${error.message}`), { status: error.status || 500 });
       }
       for (const store of plan.stores) {

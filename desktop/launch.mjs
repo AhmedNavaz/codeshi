@@ -11,7 +11,7 @@ export function launchDesktop({ args = [], env = process.env, spawnImpl = spawn 
   const childEnv = { ...env };
   const noAgents = args.includes('--no-agents');
   const fresh = args.includes('--fresh') || noAgents;
-  const temporary = fresh ? fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-fresh-')) : null;
+  const temporary = fresh ? fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-fresh-')) : null;
   const cleanup = () => { if (temporary) fs.rmSync(temporary, { recursive: true, force: true }); };
   if (fresh) {
     childEnv.AI_RELAY_DESKTOP_DATA = path.join(temporary, 'profile');
@@ -44,7 +44,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const terminate = () => forward('SIGTERM');
   process.on('SIGINT', interrupt);
   process.on('SIGTERM', terminate);
-  child.on('error', error => { console.error(`Could not launch Throughline: ${error.message}`); process.exitCode = 1; });
+  child.on('error', error => { console.error(`Could not launch Codeshi: ${error.message}`); process.exitCode = 1; });
   child.on('close', (code, signal) => {
     process.removeListener('SIGINT', interrupt);
     process.removeListener('SIGTERM', terminate);

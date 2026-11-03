@@ -10,7 +10,7 @@ const REPOSITORY = 'https://github.com/AhmedNavaz/throughline';
 
 export function updateDemo({ version, build, relaunch, chunks = 40, pause = 120 }) {
   const [major, minor] = version.split('.').map(Number), next = `${major}.${minor + 1}.0`;
-  const file = `Throughline-${next}-mac-${build}.zip`, base = `${REPOSITORY}/releases/download/v${next}/`;
+  const file = `Codeshi-${next}-mac-${build}.zip`, base = `${REPOSITORY}/releases/download/v${next}/`;
   const bytes = Buffer.alloc(chunks * 64 * 1024, 7), sum = createHash('sha256').update(bytes).digest('hex');
   const release = { tag_name: `v${next}`, html_url: `${REPOSITORY}/releases/tag/v${next}`, draft: false, prerelease: false, published_at: new Date().toISOString(),
     assets: [{ name: file, size: bytes.length, browser_download_url: base + file }, { name: 'SHA256SUMS.txt', browser_download_url: base + 'SHA256SUMS.txt' }] };
@@ -30,9 +30,9 @@ export function updateDemo({ version, build, relaunch, chunks = 40, pause = 120 
   };
   // Unpacking makes an empty app with the expected name and version, and the signature check passes.
   const exec = async (tool, args) => {
-    if (tool.endsWith('/ditto')) { const contents = path.join(args[3], 'Throughline.app', 'Contents'); fs.mkdirSync(contents, { recursive: true }); fs.writeFileSync(path.join(contents, 'Info.plist'), 'demo'); }
+    if (tool.endsWith('/ditto')) { const contents = path.join(args[3], 'Codeshi.app', 'Contents'); fs.mkdirSync(contents, { recursive: true }); fs.writeFileSync(path.join(contents, 'Info.plist'), 'demo'); }
     if (tool.endsWith('/plutil')) return `${args[1] === 'CFBundleIdentifier' ? BUNDLE_ID : next}\n`;
     return '';
   };
-  return { fetchImpl, exec, launch: () => {}, quit: relaunch, location: { bundle: path.join(path.sep, 'Applications', 'Throughline (update demo).app'), blocked: null } };
+  return { fetchImpl, exec, launch: () => {}, quit: relaunch, location: { bundle: path.join(path.sep, 'Applications', 'Codeshi (update demo).app'), blocked: null } };
 }

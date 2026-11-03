@@ -44,7 +44,7 @@ test('a terminal opens the person’s login shell in the chosen folder, as a tab
   const session = sessions.start('project-0', { folderId: 'api', cols: 120, rows: 40 });
   assert.deepEqual([session.status, session.folderName, session.cwd, session.cols, session.rows], ['running', 'api', projects.get('project-0').folders[1].path, 120, 40]);
   const [shell] = pty.spawned;
-  assert.deepEqual([shell.file, shell.args, shell.options.cwd, shell.options.name, shell.options.env.TERM, shell.options.env.TERM_PROGRAM], ['/bin/zsh', ['-l'], projects.get('project-0').folders[1].path, 'xterm-256color', 'xterm-256color', 'Throughline']);
+  assert.deepEqual([shell.file, shell.args, shell.options.cwd, shell.options.name, shell.options.env.TERM, shell.options.env.TERM_PROGRAM], ['/bin/zsh', ['-l'], projects.get('project-0').folders[1].path, 'xterm-256color', 'xterm-256color', 'Codeshi']);
   assert.deepEqual([session.tabId, session.pane, session.split], [session.id, 0, null]);
   assert.throws(() => sessions.start('project-1', { folderId: 'missing' }), /Choose an attached workspace folder/);
   assert.equal(sessions.start('project-1', { folderId: 'web', cols: 5000 }).cols, 1000, 'Sizes are kept within bounds.');

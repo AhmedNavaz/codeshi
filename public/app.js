@@ -98,7 +98,7 @@
         headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.method === "POST" ? { "X-AI-Relay": "1" } : {}), ...(window.relayDesktop?.token ? {"X-AI-Relay-Token":window.relayDesktop.token} : {}), ...options.headers },
       });
     } catch {
-      throw new Error("Cannot reach Throughline. Make sure its local server is still running.");
+      throw new Error("Cannot reach Codeshi. Make sure its local server is still running.");
     }
     const raw = await response.text();
     let data;
@@ -663,7 +663,7 @@
     row.append(body);
     // A prompt stays at the top of its turn while the results scroll past (see .message-prompt). A long one shows its
     // first lines until opened, so it never fills the view; an opened one scrolls normally.
-    if (user && message.retry) { row.classList.add("message-retry"); row.insertBefore(element("div", "message-retry-label", "Sent by Throughline after the tests failed"), body); }
+    if (user && message.retry) { row.classList.add("message-retry"); row.insertBefore(element("div", "message-retry-label", "Sent by Codeshi after the tests failed"), body); }
     if (user && !message.steer) {
       row.classList.add("message-prompt");
       const text = message.text || "";
@@ -824,7 +824,7 @@
     }
     state.pending = null; renderControls();
   }
-  // Auto (#12): Throughline picks the agent, model and effort for each message, shown before it is sent.
+  // Auto (#12): Codeshi picks the agent, model and effort for each message, shown before it is sent.
   const autoRouting = () => !state.localSelections[state.projectId] && state.conversation?.routing ? state.conversation.routing : null;
   function routeFor(text, attachments = 0) {
     const routing = autoRouting(); if (!routing || !window.relayRouting) return null;
@@ -1063,7 +1063,7 @@
     if (resume) $("resume-waiting-text").textContent = resumeText(resume);
     renderQueue(); renderHandoff(); renderRetry(); renderPlan(); renderRoute();
     const hasMessages = Boolean(state.conversation?.messages?.length);
-    ui.title.textContent=state.loading&&state.projectId?'Opening workspace…':currentProject()?.name||'Throughline';
+    ui.title.textContent=state.loading&&state.projectId?'Opening workspace…':currentProject()?.name||'Codeshi';
     // With the sidebar hidden, the top bar names the open workspace; clicking it shows the sidebar again.
     $("workspace-chip-name").textContent=currentProject()?.name||'No workspace';
     $("workspace-chip").setAttribute("aria-label",`${currentProject()?.name||'No workspace'}. Show the sidebar.`);
@@ -1083,7 +1083,7 @@
     ui.state.dataset.status=running?(approvals?'approval':'running'):resume?'waiting':incomplete?'stopped':!state.localSelections[state.projectId] && selectedConnection.blocked?'setup':'ready';
     renderConnectionNotice();
     window.relayAutomaticReview?.render();
-    document.title = currentProject() ? currentProject().name + " · Throughline" : "Throughline · Your project workspaces";
+    document.title = currentProject() ? currentProject().name + " · Codeshi" : "Codeshi · Your project workspaces";
   }
   function render(forceScroll = false) { renderProjects(); renderStatus(); renderWorkspaceList(); renderMessages(forceScroll); renderControls(); window.dispatchEvent(new CustomEvent("relay-state")); }
   // The message box grows with its text up to 200px. Lines can be a fraction of a pixel tall while scrollHeight is a

@@ -1,8 +1,14 @@
 # Changelog
 
-Notable changes to Throughline. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
+Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+### Changed
+
+- **Throughline is now Codeshi.** The app, its menus, alerts, setup and installers use the new name. Existing installations keep their workspaces, conversations, settings, undo history and permissions. The installers replace Throughline with Codeshi, including the Windows Start menu entry. Exported conversations are saved as `.codeshi.json`, and `.throughline.json` files still open.
+- **A new C logo in Paper and Ink.** The brush-stroke C has a red seal carved with シ ("shi"): black ink on paper, or cream on black in dark mode. On macOS 26 and later the app icon follows the system's light, dark, tinted and clear looks; earlier versions and Windows show Paper. The menu bar, welcome animation and in-app logos use the same mark, with simpler artwork at small sizes.
+- Codeshi's Mac updater accepts releases under both repository names. After the GitHub repository is renamed to `codeshi`, Throughline 0.22 and earlier need the installer once because their updater only accepts download URLs under the old name. Their saved data is preserved; later updates work from inside Codeshi. A copy updated from inside the app keeps its old Applications folder name until the installer replaces it.
 
 ## [0.22.0] - 2026-11-03
 

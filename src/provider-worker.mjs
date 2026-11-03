@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { runCodex, runClaude, classifyError } from './providers.mjs';
 import { withBinaryPath } from './resolve-binary.mjs';
 // The desktop app runs this worker as Node through its Electron binary. Agents and the commands they run must not
-// inherit that setting, or an Electron app they start (such as Throughline itself, run from source) runs as plain
+// inherit that setting, or an Electron app they start (such as Codeshi itself, run from source) runs as plain
 // Node and fails.
 delete process.env.ELECTRON_RUN_AS_NODE;
 let running = false;

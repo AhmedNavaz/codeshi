@@ -71,7 +71,7 @@
     const data = cache.get(scope + ':' + provider);
     if (provider === 'local') return (data?.models || []).map(row => ({ ...row, tag: row.parameterSize || '' }));
     const reported = (data?.models || []).filter(row => row.value !== 'default').map(row => ({ ...row, tag: row.isDefault ? 'Default' : '' }));
-    // The agent's own default, named so it isn't confused with Throughline's Auto above.
+    // The agent's own default, named so it isn't confused with Codeshi's Auto above.
     return [{ id: '', displayName: `Let ${names[provider]} choose`, description: `${names[provider]} uses its default model`, tag: '' }, ...reported];
   }
   function isSelected(provider, row) {

@@ -13,7 +13,7 @@ export class PermissionRules {
     try {
       const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       if (Array.isArray(saved?.rules)) this.rules = saved.rules.filter(rule => rule && typeof rule.key === 'string' && typeof rule.id === 'string');
-    } catch (error) { if (error.code !== 'ENOENT') console.error('Throughline could not read saved permission rules:', error.message); }
+    } catch (error) { if (error.code !== 'ENOENT') console.error('Codeshi could not read saved permission rules:', error.message); }
   }
   save() { atomicJSON(this.file, { rules: this.rules }); }
   find(key) { return this.rules.find(rule => rule.key === key) || null; }

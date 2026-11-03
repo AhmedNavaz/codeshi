@@ -1,19 +1,21 @@
-<p align="center"><img src="assets/icon.svg" width="96" alt="Throughline logo: one thread, teal to coral, looping once"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/icon-dark.svg"><img src="assets/icon.svg" width="96" alt="Codeshi logo: a brush-stroke C with a red seal carved with シ"></picture></p>
 
-<h1 align="center">Throughline</h1>
+<h1 align="center">Codeshi</h1>
 
 <p align="center"><b>Claude Code, Codex, Gemini and local models in one conversation.</b><br>
 Switch agents mid-task, keep going when one hits its limit, and use the plans you already pay for.</p>
 
 <p align="center"><a href="#install"><b>Install</b></a> &nbsp;·&nbsp; <a href="docs/guide.md"><b>Guide</b></a> &nbsp;·&nbsp; <a href="ROADMAP.md"><b>Roadmap</b></a> &nbsp;·&nbsp; <a href="CONTRIBUTING.md"><b>Contribute</b></a></p>
 
-<p align="center"><a href="https://github.com/AhmedNavaz/throughline/releases/latest"><img src="https://img.shields.io/github/v/release/AhmedNavaz/throughline?label=release" alt="Latest release"></a> <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Runs on macOS and Windows"> <a href="https://github.com/AhmedNavaz/throughline/actions/workflows/ci.yml"><img src="https://github.com/AhmedNavaz/throughline/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a> <a href="https://www.patreon.com/17048317/join"><img src="https://img.shields.io/badge/Support-Patreon-FF424D?logo=patreon&amp;logoColor=white" alt="Support Throughline on Patreon"></a></p>
+<p align="center"><a href="https://github.com/AhmedNavaz/throughline/releases/latest"><img src="https://img.shields.io/github/v/release/AhmedNavaz/throughline?label=release" alt="Latest release"></a> <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Runs on macOS and Windows"> <a href="https://github.com/AhmedNavaz/throughline/actions/workflows/ci.yml"><img src="https://github.com/AhmedNavaz/throughline/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a> <a href="https://www.patreon.com/17048317/join"><img src="https://img.shields.io/badge/Support-Patreon-FF424D?logo=patreon&amp;logoColor=white" alt="Support Codeshi on Patreon"></a></p>
 
-<p align="center"><img src="docs/hero.jpg" width="900" alt="Throughline with the acme-shop project open: Claude adds a promo code field to checkout, then Codex finishes the API side and runs its tests in the same conversation"></p>
+<p align="center"><img src="docs/hero.jpg" width="900" alt="Codeshi with the acme-shop project open: Claude adds a promo code field to checkout, then Codex finishes the API side and runs its tests in the same conversation"></p>
 
-Every coding agent runs out of usage at some point, and moving to another one usually means explaining your project all over again. Throughline gives each project one permanent conversation that all your agents share. Claude can start a task, Codex can finish it, and a model on your own machine can take over when both are out, each picking up from everything said and done so far.
+Every coding agent runs out of usage at some point, and moving to another one usually means explaining your project all over again. Codeshi gives each project one permanent conversation that all your agents share. Claude can start a task, Codex can finish it, and a model on your own machine can take over when both are out, each picking up from everything said and done so far.
 
 It's a free, open-source desktop app for multi-agent coding on macOS and Windows. It runs the official Claude Code, Codex and Gemini integrations, signed in with your own accounts: no API keys, and no extra subscription.
+
+Codeshi was called Throughline until version 0.23. Your workspaces, conversations and settings are kept. After the GitHub repository is renamed to `codeshi`, Throughline 0.22 and earlier need the installer below once to switch to Codeshi; later Mac updates work from inside the app. On Windows, run the installer again to update.
 
 ## What makes it different
 
@@ -21,11 +23,11 @@ It's a free, open-source desktop app for multi-agent coding on macOS and Windows
 
 <img src="docs/features/limits.jpg" alt="Codex has used 92% of its 5-hour limit and offers to hand the running task to Claude, which has 69% left in the Agents panel; a queued prompt waits below">
 
-Throughline keeps an eye on each agent's plan usage. Before one runs out mid-task, it offers to hand the task to an agent that still has room, and shows you who takes over and how it's billed before anything switches. If every agent is out, the task waits and carries on with whichever resets first, or you can continue it on a local model.
+Codeshi keeps an eye on each agent's plan usage. Before one runs out mid-task, it offers to hand the task to an agent that still has room, and shows you who takes over and how it's billed before anything switches. If every agent is out, the task waits and carries on with whichever resets first, or you can continue it on a local model.
 
 ### Point at what should change
 
-<img src="docs/features/point-and-tell.jpg" alt="A store's product page open in Throughline's preview while picking, with its Add to bag button outlined under the pointer, and Throughline's message box holding the button's screenshot and a sentence naming the button and where its code is, followed by the change asked for">
+<img src="docs/features/point-and-tell.jpg" alt="A store's product page open in Codeshi's preview while picking, with its Add to bag button outlined under the pointer, and Codeshi's message box holding the button's screenshot and a sentence naming the button and where its code is, followed by the change asked for">
 
 Open your running app in a preview, click the button or section you mean, and say or type the change. The agent gets that element, a screenshot of it and, from your app's development build, where its code is, so it changes the right thing.
 
@@ -37,7 +39,7 @@ When a task is done, ask the other agent for a second opinion. It reviews a snap
 
 ### Know when your agents need you
 
-<img src="docs/features/menu-bar.jpg" alt="Throughline in the macOS menu bar while another app is in front: the status says Approval needed, its menu lists each busy workspace, and an alert under the menu bar names the workspace waiting for approval">
+<img src="docs/features/menu-bar.jpg" alt="Codeshi in the macOS menu bar while another app is in front: the status says Approval needed, its menu lists each busy workspace, and an alert under the menu bar names the workspace waiting for approval">
 
 Keep working in your editor or browser. On a Mac, the menu bar shows what every project's agents are doing and flags anything waiting on you, like an approval. A banner, a short sound or the Dock icon tells you when an agent needs you, finishes or stops, and you choose which ones, for each of those moments, in one place. When you come back, a short recap shows what finished, what changed and what still needs you, and can read it aloud.
 
@@ -111,7 +113,7 @@ The [guide](docs/guide.md) describes every feature and its limits.
 | **Rewind timeline** | Every checkpoint in one list, and restoring the project to any of them | Next ([#20](https://github.com/AhmedNavaz/throughline/issues/20)) |
 | **Everything in the thread** | GitHub issues, pull requests and failing CI checks as context, then a pull request from the conversation | Planned in stages ([#18](https://github.com/AhmedNavaz/throughline/issues/18)) |
 | **More agents** | Grok, DeepSeek, Qwen and more, each on your own account | In progress ([#4](https://github.com/AhmedNavaz/throughline/issues/4)) |
-| **Linux builds** | Throughline on Linux, alongside macOS and Windows | Help wanted ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) |
+| **Linux builds** | Codeshi on Linux, alongside macOS and Windows | Help wanted ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) |
 | **Hands-free voice** | Say "send", and keep talking while the agent works | Needs design ([#72](https://github.com/AhmedNavaz/throughline/issues/72)) |
 | **Approve from your phone** | Answer an approval when you're away from your desk | Exploring ([#23](https://github.com/AhmedNavaz/throughline/issues/23)) |
 | **Signed macOS builds** | Downloads that open without a security prompt, and Homebrew | Waiting on an Apple Developer account ([#1](https://github.com/AhmedNavaz/throughline/issues/1)) |
@@ -132,16 +134,16 @@ curl -fsSL https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install
 irm https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install.ps1 | iex
 ```
 
-Both install the latest release after checking its published checksum. On Windows, Throughline goes in your user folder with a Start menu shortcut, and running the command again updates it.
+Both install the latest release after checking its published checksum. On Windows, Codeshi goes in your user folder with a Start menu shortcut, and running the command again updates it.
 
 Then connect at least one agent: sign in to [Claude Code](https://code.claude.com/docs/en/overview) or the [Codex CLI](https://github.com/openai/codex), or, for Gemini on a Mac, choose **Settings › Install Google connection**, then **Connect account**. The download comes from Google and is checked before it installs. Local models need [Ollama](https://ollama.com/download) and the Codex CLI, but no subscription.
 
 <details>
 <summary>Download manually or run from source</summary>
 
-**macOS download.** Get the zip for your Mac from [Releases](https://github.com/AhmedNavaz/throughline/releases/latest) and move **Throughline** to Applications. The app is not notarized by Apple yet, so the first time you open a browser download macOS says it cannot verify the developer: open **System Settings › Privacy & Security** and click **Open Anyway**. If macOS says the app is damaged, run `xattr -cr /Applications/Throughline.app`.
+**macOS download.** Get the zip for your Mac from [Releases](https://github.com/AhmedNavaz/throughline/releases/latest) and move **Codeshi** to Applications. The app is not notarized by Apple yet, so the first time you open a browser download macOS says it cannot verify the developer: open **System Settings › Privacy & Security** and click **Open Anyway**. If macOS says the app is damaged, run `xattr -cr /Applications/Codeshi.app`.
 
-**Windows download.** Get the Windows zip from [Releases](https://github.com/AhmedNavaz/throughline/releases/latest), unzip it anywhere and open **Throughline.exe** in the **Throughline** folder. The app is not signed yet, so Windows may say it protected your PC: click **More info**, then **Run anyway**. Installing the Google connection from Settings is not available on Windows yet; use Claude Code or the Codex CLI.
+**Windows download.** Get the Windows zip from [Releases](https://github.com/AhmedNavaz/throughline/releases/latest), unzip it anywhere and open **Codeshi.exe** in the **Codeshi** folder. The app is not signed yet, so Windows may say it protected your PC: click **More info**, then **Run anyway**. Installing the Google connection from Settings is not available on Windows yet; use Claude Code or the Codex CLI.
 
 **From source**, with Node.js 22.12 or later:
 
@@ -160,11 +162,11 @@ npm start
 2. **Send a task to any agent.** Pick Claude, Codex or Gemini, or let Routing choose. Switch whenever you like; the next agent reads the shared conversation first.
 3. **Stay in charge.** Agents ask before changing your project, you review the diffs, and you decide what gets committed.
 
-Throughline runs the agents you have installed, on your own accounts. It ships no API keys, adds no model service of its own and stores your conversations on your computer. The [guide](docs/guide.md) covers each feature in detail, including what is stored where.
+Codeshi runs the agents you have installed, on your own accounts. It ships no API keys, adds no model service of its own and stores your conversations on your computer. The [guide](docs/guide.md) covers each feature in detail, including what is stored where.
 
 ## Contributing
 
-Throughline is built in the open, and help of every size is welcome:
+Codeshi is built in the open, and help of every size is welcome:
 
 - **Use it and tell us what you find.** [Report a bug](https://github.com/AhmedNavaz/throughline/issues/new?template=bug_report.yml) or [share design feedback](https://github.com/AhmedNavaz/throughline/issues/new?template=ux_feedback.yml); a small UI note is as useful as a crash report.
 - **Pick up an issue.** Issues labelled [help wanted](https://github.com/AhmedNavaz/throughline/labels/help%20wanted) are ready to work on, including Linux builds and Windows features.
@@ -172,10 +174,10 @@ Throughline is built in the open, and help of every size is welcome:
 
 Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
-## Support Throughline
+## Support Codeshi
 
-If Throughline helps your work, you can [support its development on Patreon](https://www.patreon.com/17048317/join). Sponsorship helps fund maintenance, fixes and new features.
+If Codeshi helps your work, you can [support its development on Patreon](https://www.patreon.com/17048317/join). Sponsorship helps fund maintenance, fixes and new features.
 
 ## License
 
-[MIT](LICENSE). Throughline is an independent project, not affiliated with or endorsed by Anthropic, OpenAI or Google. Claude, Claude Code, Codex, Gemini and related names are trademarks of their respective owners.
+[MIT](LICENSE). Codeshi is an independent project, not affiliated with or endorsed by Anthropic, OpenAI or Google. Claude, Claude Code, Codex, Gemini and related names are trademarks of their respective owners.

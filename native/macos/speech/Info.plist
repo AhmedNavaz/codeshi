@@ -5,12 +5,12 @@
   <key>CFBundleIdentifier</key>
   <string>local.throughline.speech</string>
   <key>CFBundleName</key>
-  <string>Throughline Speech</string>
+  <string>Codeshi Speech</string>
   <key>CFBundleDisplayName</key>
-  <string>Throughline Speech</string>
+  <string>Codeshi Speech</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Throughline listens while voice input is on, to turn what you say into a message.</string>
+  <string>Codeshi listens while voice input is on, to turn what you say into a message.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Throughline recognizes your speech on this Mac. The audio never leaves it.</string>
+  <string>Codeshi recognizes your speech on this Mac. The audio never leaves it.</string>
 </dict>
 </plist>

@@ -10,11 +10,11 @@ import { scriptCLIs } from './platform.mjs';
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, ms = 5000) { const end = Date.now() + ms; while (!check()) { if (Date.now() > end) throw new Error('Timed out waiting'); await wait(10); } }
-// A stand-in for Throughline Speech: it prints the lines a scenario gives it, and its final transcript once told to stop.
+// A stand-in for Codeshi Speech: it prints the lines a scenario gives it, and its final transcript once told to stop.
 function helper(t, lines = ['{"type":"ready"}', '{"type":"partial","text":"add a"}', '{"type":"partial","text":"add a spinner"}'], { final = 'Add a spinner.', exitEarly = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-voice-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const file = path.join(directory, 'Throughline Speech');
+  const file = path.join(directory, 'Codeshi Speech');
   fs.writeFileSync(file, `#!${process.execPath}
 const fs = require('fs');
 fs.writeFileSync(${JSON.stringify(path.join(directory, 'args'))}, JSON.stringify(process.argv.slice(2)));
@@ -76,25 +76,25 @@ test('a helper that ends early keeps what it heard, and failures are reported pl
   await until(() => events.some(event => event.type === 'final'));
   assert.equal(events.find(event => event.type === 'final').text, 'half a sentence');
 
-  const denied = helper(t, ['{"type":"error","code":"speech-denied","message":"Allow Throughline Speech in System Settings."}']);
+  const denied = helper(t, ['{"type":"error","code":"speech-denied","message":"Allow Codeshi Speech in System Settings."}']);
   const refused = new VoiceSessions({ platform: 'darwin', helper: denied.file });
   t.after(() => refused.close());
   const second = await refused.start(), errors = collect(refused, second.id);
   await until(() => errors.some(event => event.type === 'error'));
-  assert.deepEqual(errors.find(event => event.type === 'error'), { type: 'error', code: 'speech-denied', message: 'Allow Throughline Speech in System Settings.' });
+  assert.deepEqual(errors.find(event => event.type === 'error'), { type: 'error', code: 'speech-denied', message: 'Allow Codeshi Speech in System Settings.' });
 });
 
 test('other systems are told voice input is on macOS, and a language must look like one', async () => {
-  const windows = new VoiceSessions({ platform: 'win32', helper: 'Throughline Speech' });
+  const windows = new VoiceSessions({ platform: 'win32', helper: 'Codeshi Speech' });
   assert.deepEqual(await windows.status(), { supported: false });
   await assert.rejects(windows.start(), /available on macOS/);
-  await assert.rejects(new VoiceSessions({ platform: 'darwin', helper: 'Throughline Speech' }).start({ locale: 'en; rm -rf /' }), /Choose a language/);
+  await assert.rejects(new VoiceSessions({ platform: 'darwin', helper: 'Codeshi Speech' }).start({ locale: 'en; rm -rf /' }), /Choose a language/);
 });
 
 test('a copy run from source builds the helper on first use, once, and explains a missing compiler', { skip: scriptCLIs }, async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-voice-build-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const fake = helper(t), target = path.join(directory, 'Throughline Speech');
+  const fake = helper(t), target = path.join(directory, 'Codeshi Speech');
   let builds = 0;
   const sessions = new VoiceSessions({ platform: 'darwin', helper: target, build: async () => { builds++; await wait(20); fs.copyFileSync(fake.file, target); fs.chmodSync(target, 0o755); return target; } });
   t.after(() => sessions.close());
@@ -130,10 +130,10 @@ test('the voice routes start, stream and stop listening, and the stream accepts 
   assert.equal((await post('stop', { id: started.data.id })).status, 409);
 });
 
-test('Throughline Speech builds with its usage descriptions and reports permission without asking', { skip: process.platform !== 'darwin' || spawnSync('/usr/bin/xcrun', ['--find', 'swiftc']).status !== 0, timeout: 300000 }, async t => {
+test('Codeshi Speech builds with its usage descriptions and reports permission without asking', { skip: process.platform !== 'darwin' || spawnSync('/usr/bin/xcrun', ['--find', 'swiftc']).status !== 0, timeout: 300000 }, async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-speech-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const out = await buildHelper({ out: path.join(directory, 'Throughline Speech') });
+  const out = await buildHelper({ out: path.join(directory, 'Codeshi Speech') });
   const plist = execFileSync('/usr/bin/otool', ['-X', '-s', '__TEXT', '__info_plist', out]).toString();
   assert(plist.length > 0, 'The usage descriptions are embedded.');
   assert.match(execFileSync('/usr/bin/codesign', ['-dv', out], { stdio: ['ignore', 'pipe', 'pipe'] }).toString() + spawnSync('/usr/bin/codesign', ['-dv', out], { encoding: 'utf8' }).stderr, /Identifier=local\.throughline\.speech/);

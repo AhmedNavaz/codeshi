@@ -122,7 +122,7 @@ export class ProjectCommands {
   detect(id, input) { return suggestions(this.registry.get(id), input); }
   // Adds a command, or changes one. Marking one for checks unmarks the others.
   save(id, input = {}) {
-    if (this.closing) fail('Throughline is stopping.', 503);
+    if (this.closing) fail('Codeshi is stopping.', 503);
     const config = configuration(this.registry.get(id), input), name = tidyName(input.name), commands = this.list(id);
     if (!name || name.length > 40) fail('Name the command in 40 characters or fewer.');
     const existing = input.id === undefined || input.id === null ? null : commands.find(command => command.id === input.id);
@@ -152,7 +152,7 @@ export class ProjectCommands {
     return this.state(id, { output: null });
   }
   start(id, commandId) {
-    if (this.closing) fail('Throughline is stopping.', 503);
+    if (this.closing) fail('Codeshi is stopping.', 503);
     const command = this.find(id, commandId), key = this.key(id, commandId);
     if (commandActive(this.sessions.get(key))) fail(`${command.name} is already running. Stop it or restart it.`, 409);
     if ([...this.sessions.values()].filter(commandActive).length >= 16) fail('Stop an active project command before starting another.', 409);

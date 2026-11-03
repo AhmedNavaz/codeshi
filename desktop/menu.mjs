@@ -80,7 +80,7 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command(page.continue ? `Continue with ${names[page.continue]}` : 'Continue with…', ['continue'], { id: 'continue', enabled: page.continue !== null }),
     separator(),
     command('Keep Awake', ['keep-awake'], { type: 'checkbox', checked: keepAwake }),
-    // How Throughline tells you about work while you are in another app: each way on or off here, and for each moment
+    // How Codeshi tells you about work while you are in another app: each way on or off here, and for each moment
     // in Settings.
     { label: 'Alerts', submenu: alertMenu(notifications, { platform, set: setNotifications, settings: () => send('alert-settings') }) },
     separator(),
@@ -100,7 +100,7 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
   ] };
   const report = `${repository}/issues/new?${new URLSearchParams({ template: 'bug_report.yml', version, system: system(platform, osVersion, arch) })}`;
   const help = { role: 'help', submenu: [
-    link('Throughline Guide', `${repository}/blob/main/docs/guide.md`),
+    link('Codeshi Guide', `${repository}/blob/main/docs/guide.md`),
     link('Keyboard Shortcuts', `${repository}/blob/main/docs/guide.md#keyboard-shortcuts`),
     ...mac ? [] : [setup],
     separator(),
@@ -111,6 +111,6 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command('What’s New', ['whats-new'], { id: 'whats-new' }),
     ...mac ? [] : [separator(), { role: 'about' }],
   ] };
-  const application = { label: 'Throughline', submenu: [{ role: 'about' }, ...updates ? [command('Check for Updates…', ['check-updates'], { id: 'check-updates' })] : [], separator(), settings, setup, separator(), { role: 'services' }, separator(), { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator(), { role: 'quit' }] };
+  const application = { label: 'Codeshi', submenu: [{ role: 'about' }, ...updates ? [command('Check for Updates…', ['check-updates'], { id: 'check-updates' })] : [], separator(), settings, setup, separator(), { role: 'services' }, separator(), { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator(), { role: 'quit' }] };
   return [...mac ? [application] : [], file, edit, view, agent, workspace, { role: 'windowMenu' }, help];
 }

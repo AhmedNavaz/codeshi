@@ -1,5 +1,5 @@
 {
-  "name": "throughline",
+  "name": "codeshi",
   "version": "0.22.0",
   "description": "An open-source desktop control plane for agentic development. Multi-agent orchestration, persistent project context, and human-in-the-loop collaboration across Claude Code, Codex, Gemini and local models—powered by your own accounts.",
   "keywords": [
@@ -32,7 +32,7 @@
     "node": ">=22.12"
   },
   "main": "desktop/main.mjs",
-  "productName": "Throughline",
+  "productName": "Codeshi",
   "scripts": {
     "start": "node desktop/launch.mjs",
     "start:fresh": "node desktop/launch.mjs --fresh",

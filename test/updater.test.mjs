@@ -8,16 +8,16 @@ import test from 'node:test';
 import { HELPER, bundleLocation, checksumFor, createUpdater, releaseFrom, updateBuild } from '../desktop/updater.mjs';
 
 const download = 'https://github.com/AhmedNavaz/throughline/releases/download/v0.15.0/';
-const zipBytes = Buffer.from('the Apple Silicon build of Throughline 0.15.0');
+const zipBytes = Buffer.from('the Apple Silicon build of Codeshi 0.15.0');
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const release = (overrides = {}) => ({
   tag_name: 'v0.15.0', html_url: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0', draft: false, prerelease: false,
-  assets: [{ name: 'Throughline-0.15.0-mac-apple-silicon.zip', size: zipBytes.length, browser_download_url: download + 'Throughline-0.15.0-mac-apple-silicon.zip' }, { name: 'Throughline-0.15.0-mac-intel.zip', size: 10, browser_download_url: download + 'Throughline-0.15.0-mac-intel.zip' }, { name: 'SHA256SUMS.txt', browser_download_url: download + 'SHA256SUMS.txt' }],
+  assets: [{ name: 'Codeshi-0.15.0-mac-apple-silicon.zip', size: zipBytes.length, browser_download_url: download + 'Codeshi-0.15.0-mac-apple-silicon.zip' }, { name: 'Codeshi-0.15.0-mac-intel.zip', size: 10, browser_download_url: download + 'Codeshi-0.15.0-mac-intel.zip' }, { name: 'SHA256SUMS.txt', browser_download_url: download + 'SHA256SUMS.txt' }],
   ...overrides,
 });
 
 // An updater with GitHub, the macOS tools and the helper replaced by recordings.
-function setup(t, { json = release(), sums = `${sha(zipBytes)}  Throughline-0.15.0-mac-apple-silicon.zip\n`, plist = {}, codesign = true, platform = 'darwin', busy = () => false, slow = false, status = 200 } = {}) {
+function setup(t, { json = release(), sums = `${sha(zipBytes)}  Codeshi-0.15.0-mac-apple-silicon.zip\n`, plist = {}, bundle = 'Codeshi.app', codesign = true, platform = 'darwin', busy = () => false, slow = false, status = 200 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-updater-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const calls = { fetch: [], exec: [], launch: [], quit: 0, states: [], timers: [] };
@@ -35,13 +35,13 @@ function setup(t, { json = release(), sums = `${sha(zipBytes)}  Throughline-0.15
   const values = { CFBundleIdentifier: 'local.throughline.desktop', CFBundleShortVersionString: '0.15.0', ...plist };
   const exec = async (file, args) => {
     calls.exec.push([path.basename(file), ...args.slice(0, 2)]);
-    if (file.endsWith('ditto')) { const app = path.join(args[3], 'Throughline.app', 'Contents'); fs.mkdirSync(app, { recursive: true }); fs.writeFileSync(path.join(app, 'Info.plist'), 'plist'); return ''; }
+    if (file.endsWith('ditto')) { const app = path.join(args[3], bundle, 'Contents'); fs.mkdirSync(app, { recursive: true }); fs.writeFileSync(path.join(app, 'Info.plist'), 'plist'); return ''; }
     if (file.endsWith('plutil')) return values[args[1]] + '\n';
     if (file.endsWith('codesign') && !codesign) throw new Error('invalid signature');
     return '';
   };
   const options = {
-    version: '0.14.0', build: 'apple-silicon', platform, location: { bundle: path.join(root, 'Applications', 'Throughline.app'), blocked: null }, directory: path.join(root, 'updates'),
+    version: '0.14.0', build: 'apple-silicon', platform, location: { bundle: path.join(root, 'Applications', 'Codeshi.app'), blocked: null }, directory: path.join(root, 'updates'),
     fetchImpl, exec, busy, pid: 4242, launch: (script, args, log) => calls.launch.push({ script, args, log }), quit: () => { calls.quit++; },
     onState: state => calls.states.push(state), timers: { setTimeout: (_fn, delay) => { calls.timers.push(delay); return null; }, clearTimeout: () => {} },
   };
@@ -53,17 +53,36 @@ test('updates come only from this repository’s releases, for this Mac', { skip
   assert.equal(updateBuild({ arch: 'x64', translated: true }), 'apple-silicon', 'The Intel build running under Rosetta moves to the Apple Silicon build.');
   assert.equal(updateBuild({ arch: 'x64' }), 'intel');
   const found = releaseFrom(release(), 'intel');
-  assert.deepEqual([found.version, found.file, found.url, found.checksumsUrl], ['0.15.0', 'Throughline-0.15.0-mac-intel.zip', download + 'Throughline-0.15.0-mac-intel.zip', download + 'SHA256SUMS.txt']);
-  const elsewhere = release({ assets: [{ name: 'Throughline-0.15.0-mac-intel.zip', browser_download_url: 'https://example.com/Throughline-0.15.0-mac-intel.zip' }] });
+  assert.deepEqual([found.version, found.file, found.url, found.checksumsUrl], ['0.15.0', 'Codeshi-0.15.0-mac-intel.zip', download + 'Codeshi-0.15.0-mac-intel.zip', download + 'SHA256SUMS.txt']);
+  const elsewhere = release({ assets: [{ name: 'Codeshi-0.15.0-mac-intel.zip', browser_download_url: 'https://example.com/Codeshi-0.15.0-mac-intel.zip' }] });
   assert.equal(releaseFrom(elsewhere, 'intel').url, null, 'A file hosted anywhere else is never downloaded.');
   assert.equal(releaseFrom(release({ prerelease: true }), 'intel'), null);
   assert.equal(releaseFrom(release({ tag_name: 'nightly' }), 'intel'), null);
-  assert.equal(checksumFor(`${'a'.repeat(64)}  other.zip\n${'B'.repeat(64)}  Throughline-0.15.0-mac-intel.zip\n`, 'Throughline-0.15.0-mac-intel.zip'), 'b'.repeat(64));
-  assert.equal(checksumFor(`${'a'.repeat(64)}  Throughline-0.15.0-mac-intel.zip.old\n`, 'Throughline-0.15.0-mac-intel.zip'), null);
-  assert.deepEqual(bundleLocation('/Applications/Throughline.app/Contents/MacOS/Throughline', () => {}), { bundle: '/Applications/Throughline.app', blocked: null });
-  assert.equal(bundleLocation('/private/var/folders/x/AppTranslocation/1234/d/Throughline.app/Contents/MacOS/Throughline', () => {}).blocked, 'translocated');
-  assert.equal(bundleLocation('/Applications/Throughline.app/Contents/MacOS/Throughline', () => { throw new Error('EACCES'); }).blocked, 'read-only');
+  assert.equal(checksumFor(`${'a'.repeat(64)}  other.zip\n${'B'.repeat(64)}  Codeshi-0.15.0-mac-intel.zip\n`, 'Codeshi-0.15.0-mac-intel.zip'), 'b'.repeat(64));
+  assert.equal(checksumFor(`${'a'.repeat(64)}  Codeshi-0.15.0-mac-intel.zip.old\n`, 'Codeshi-0.15.0-mac-intel.zip'), null);
+  assert.deepEqual(bundleLocation('/Applications/Codeshi.app/Contents/MacOS/Codeshi', () => {}), { bundle: '/Applications/Codeshi.app', blocked: null });
+  assert.equal(bundleLocation('/private/var/folders/x/AppTranslocation/1234/d/Codeshi.app/Contents/MacOS/Codeshi', () => {}).blocked, 'translocated');
+  assert.equal(bundleLocation('/Applications/Codeshi.app/Contents/MacOS/Codeshi', () => { throw new Error('EACCES'); }).blocked, 'read-only');
   assert.equal(bundleLocation('/usr/local/bin/electron', () => {}).blocked, 'not-bundle');
+});
+
+test('Codeshi updates from releases made under its old name, Throughline, and from the renamed repository', { skip: process.platform === 'win32' && 'The in-app updater replaces macOS app bundles' }, async t => {
+  const asset = (name, base = download) => ({ name, size: 10, browser_download_url: base + name });
+  const old = release({ assets: [asset('Throughline-0.15.0-mac-intel.zip'), asset('SHA256SUMS.txt')] });
+  assert.deepEqual([releaseFrom(old, 'intel').file, releaseFrom(old, 'intel').url], ['Throughline-0.15.0-mac-intel.zip', download + 'Throughline-0.15.0-mac-intel.zip'], 'A release from before the rename names its files after Throughline.');
+  const both = release({ assets: [asset('Throughline-0.15.0-mac-intel.zip'), asset('Codeshi-0.15.0-mac-intel.zip'), asset('SHA256SUMS.txt')] });
+  assert.equal(releaseFrom(both, 'intel').file, 'Codeshi-0.15.0-mac-intel.zip', 'A release with both names is installed from the Codeshi file.');
+  const renamed = 'https://github.com/AhmedNavaz/codeshi/releases/download/v0.15.0/';
+  const moved = releaseFrom(release({ html_url: 'https://github.com/AhmedNavaz/codeshi/releases/tag/v0.15.0', assets: [asset('Codeshi-0.15.0-mac-intel.zip', renamed), asset('SHA256SUMS.txt', renamed)] }), 'intel');
+  assert.deepEqual([moved.url, moved.checksumsUrl, moved.notesUrl], [renamed + 'Codeshi-0.15.0-mac-intel.zip', renamed + 'SHA256SUMS.txt', 'https://github.com/AhmedNavaz/codeshi/releases/tag/v0.15.0'], 'Once the repository is renamed, GitHub serves its files under the new name.');
+  const stranger = 'https://github.com/someone/codeshi/releases/download/v0.15.0/';
+  assert.equal(releaseFrom(release({ assets: [asset('Codeshi-0.15.0-mac-intel.zip', stranger), asset('SHA256SUMS.txt', stranger)] }), 'intel').url, null, 'Another account’s repository is never used.');
+  // A zip from a release that still holds Throughline.app installs the same way.
+  const { updater, calls, options } = setup(t, { bundle: 'Throughline.app' });
+  await updater.check();
+  assert.equal((await updater.install()).status, 'ready');
+  updater.restart();
+  assert.equal(calls.launch[0].args[2], path.join(options.directory, 'download-0.15.0', 'app', 'Throughline.app'));
 });
 
 test('a newer release is offered, the installed one or an older one is not, and a failed check says why', async t => {
@@ -93,19 +112,19 @@ test('Update downloads and checks the update and waits as ready; Restart hands t
   assert.equal((await updater.install()).status, 'ready');
   assert.equal(updater.restart().status, 'installing');
   assert.equal(calls.launch.length, 1);
-  const [{ script, args }] = calls.launch, staged = path.join(options.directory, 'download-0.15.0', 'app', 'Throughline.app');
-  assert.deepEqual(args, ['4242', options.location.bundle, staged, path.join(options.directory, 'previous', 'Throughline.app'), '/usr/bin/open']);
+  const [{ script, args }] = calls.launch, staged = path.join(options.directory, 'download-0.15.0', 'app', 'Codeshi.app');
+  assert.deepEqual(args, ['4242', options.location.bundle, staged, path.join(options.directory, 'previous', 'Codeshi.app'), '/usr/bin/open']);
   assert.equal(fs.readFileSync(script, 'utf8'), HELPER);
   assert(fs.existsSync(staged));
-  assert(!fs.existsSync(path.join(options.directory, 'download-0.15.0', 'Throughline-0.15.0-mac-apple-silicon.zip')), 'The zip is removed once unpacked.');
+  assert(!fs.existsSync(path.join(options.directory, 'download-0.15.0', 'Codeshi-0.15.0-mac-apple-silicon.zip')), 'The zip is removed once unpacked.');
   assert.equal(calls.quit, 1);
   assert(calls.states.some(item => item.status === 'downloading' && item.progress?.total === zipBytes.length));
 });
 
 test('a download that does not match its checksum, or an app that is not the expected one, installs nothing', async t => {
   for (const [options, message] of [
-    [{ sums: `${'0'.repeat(64)}  Throughline-0.15.0-mac-apple-silicon.zip\n` }, /does not match its published checksum/],
-    [{ sums: `${sha(zipBytes)}  Throughline-0.15.0-mac-intel.zip\n` }, /does not match its published checksum/],
+    [{ sums: `${'0'.repeat(64)}  Codeshi-0.15.0-mac-apple-silicon.zip\n` }, /does not match its published checksum/],
+    [{ sums: `${sha(zipBytes)}  Codeshi-0.15.0-mac-intel.zip\n` }, /does not match its published checksum/],
     [{ plist: { CFBundleShortVersionString: '0.14.9' } }, /not the expected version/],
     [{ plist: { CFBundleIdentifier: 'com.example.other' } }, /not the expected version/],
     [{ codesign: false }, /signature could not be verified/],
@@ -119,7 +138,7 @@ test('a download that does not match its checksum, or an app that is not the exp
   }
 });
 
-test('while an agent works a restart waits, and Throughline restarts only once no agent is working', async t => {
+test('while an agent works a restart waits, and Codeshi restarts only once no agent is working', async t => {
   let working = true;
   const { updater, calls } = setup(t, { busy: () => working });
   await updater.check();
@@ -137,7 +156,7 @@ test('while an agent works a restart waits, and Throughline restarts only once n
   assert.equal(calls.launch.length, 1); assert.equal(calls.quit, 1);
 });
 
-test('quitting with an update ready installs it as Throughline closes, without opening it again', async t => {
+test('quitting with an update ready installs it as Codeshi closes, without opening it again', async t => {
   const { updater, calls, options } = setup(t);
   updater.finishOnQuit();
   assert.equal(calls.launch.length, 0, 'Nothing is ready, so nothing is installed.');
@@ -147,7 +166,7 @@ test('quitting with an update ready installs it as Throughline closes, without o
   assert.equal(calls.launch.length, 1);
   assert.equal(calls.launch[0].args.at(-1), '/usr/bin/true', 'The helper puts the update in place and opens nothing.');
   assert.equal(calls.launch[0].args[1], options.location.bundle);
-  assert.equal(calls.quit, 0, 'Throughline is already quitting.');
+  assert.equal(calls.quit, 0, 'Codeshi is already quitting.');
   updater.finishOnQuit();
   assert.equal(calls.launch.length, 1, 'It is handed over once.');
 });
@@ -194,28 +213,28 @@ test('a skipped version and automatic checks being off are remembered', async t 
   assert.throws(() => updater.skip('latest'), /Choose a version/);
 });
 
-test('the helper replaces the app once Throughline has quit, and puts the previous version back if the new one cannot be moved in', { skip: process.platform === 'win32' }, async t => {
+test('the helper replaces the app once Codeshi has quit, and puts the previous version back if the new one cannot be moved in', { skip: process.platform === 'win32' }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-helper-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const script = path.join(root, 'install-update.sh'), recorder = path.join(root, 'open.sh'), opened = path.join(root, 'opened');
   fs.writeFileSync(script, HELPER); fs.writeFileSync(recorder, `printf '%s' "$1" > "${opened}"\n`);
   const app = (where, version) => { fs.mkdirSync(path.join(where, 'Contents'), { recursive: true }); fs.writeFileSync(path.join(where, 'Contents', 'version'), version); };
-  const target = path.join(root, 'Applications', 'Throughline.app'), staged = path.join(root, 'staged', 'Throughline.app'), previous = path.join(root, 'previous', 'Throughline.app');
+  const target = path.join(root, 'Applications', 'Codeshi.app'), staged = path.join(root, 'staged', 'Codeshi.app'), previous = path.join(root, 'previous', 'Codeshi.app');
   app(target, '0.14.0'); app(staged, '0.15.0'); fs.mkdirSync(path.dirname(previous));
-  // Run without blocking, so the stand-in for Throughline is reaped when it exits, as the system does for the app.
+  // Run without blocking, so the stand-in for Codeshi is reaped when it exits, as the system does for the app.
   const helper = args => new Promise(resolve => { const child = spawn('/bin/sh', [script, ...args]); let stdout = ''; child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stdout += chunk; }); child.on('close', status => resolve({ status, stdout })); });
   const running = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 400)']);
   const started = Date.now();
   const result = await helper([String(running.pid), target, staged, previous, '/bin/sh', recorder]);
   assert.equal(result.status, 0, result.stdout);
-  assert(Date.now() - started >= 300, 'The helper waits for Throughline to quit.');
+  assert(Date.now() - started >= 300, 'The helper waits for Codeshi to quit.');
   assert.equal(fs.readFileSync(path.join(target, 'Contents', 'version'), 'utf8'), '0.15.0');
   assert(!fs.existsSync(previous) && !fs.existsSync(staged));
   assert.equal(fs.readFileSync(opened, 'utf8'), target, 'The new version is opened.');
   assert.match(result.stdout, /Installed the update/);
 
   fs.rmSync(opened);
-  const failed = await helper(['999999', target, path.join(root, 'missing', 'Throughline.app'), previous, '/bin/sh', recorder]);
+  const failed = await helper(['999999', target, path.join(root, 'missing', 'Codeshi.app'), previous, '/bin/sh', recorder]);
   assert.equal(fs.readFileSync(path.join(target, 'Contents', 'version'), 'utf8'), '0.15.0', 'The installed version is put back.');
   assert.equal(fs.readFileSync(opened, 'utf8'), target);
   assert.match(failed.stdout, /previous version was restored/);

@@ -38,7 +38,8 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'], '/alerts.css': ['alerts.css', 'text/css; charset=utf-8'],
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],
-  '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/settings.js': ['settings.js', 'text/javascript; charset=utf-8'], '/settings.css': ['settings.css', 'text/css; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'] };
+  '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/settings.js': ['settings.js', 'text/javascript; charset=utf-8'], '/settings.css': ['settings.css', 'text/css; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/logo.svg': ['logo.svg', 'image/svg+xml'],
+  '/icon-16.png': ['icon-16.png', 'image/png'], '/icon-32.png': ['icon-32.png', 'image/png'], '/icon-180.png': ['icon-180.png', 'image/png'], '/icon-512.png': ['icon-512.png', 'image/png'] };
 const json = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
@@ -69,7 +70,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   for (const folder of [...(workspace ? [workspace] : []), ...workspaces]) registry.add({ path: folder });
   const collaboration = new CollaborationService({ registry, dataRoot: registry.dataRoot });
   const settingsFile=path.join(registry.dataRoot,'settings.json');
-  // Settings are saved whole, so a file that can't be read was changed outside Throughline. It is named instead of
+  // Settings are saved whole, so a file that can't be read was changed outside Codeshi. It is named instead of
   // replaced with defaults, which would quietly turn a saved Read only default back into Can edit files.
   const readSettings=()=>{
     if(!fs.existsSync(settingsFile))return null;
@@ -116,7 +117,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     return next;
   };
   registry.on('notify', notice => {
-    try { onNotify(notice); } catch (error) { console.error('Throughline could not show a notification:', error.message); }
+    try { onNotify(notice); } catch (error) { console.error('Codeshi could not show a notification:', error.message); }
     // The page plays the alert's sound, when sounds are on for its kind.
     const sound = alertSound(notice, notificationPreferences());
     if (sound) for (const res of listeners) res.write(`event: alert\ndata: ${JSON.stringify(sound)}\n\n`);
@@ -124,7 +125,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   // Workspaces waiting for a usage limit to reset reopen at startup, so the wait continues after a restart.
   for (const project of registry.list()) {
     if (!fs.existsSync(path.join(registry.dataRoot, project.id, 'resume-pending'))) continue;
-    try { registry.broker(project.id); } catch (error) { console.error(`Throughline could not resume waiting work in ${project.name}:`, error.message); }
+    try { registry.broker(project.id); } catch (error) { console.error(`Codeshi could not resume waiting work in ${project.name}:`, error.message); }
   }
   function selectedProjectId(url) {
     const id=url.searchParams.get('projectId');
@@ -143,7 +144,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
-      if (closing) return json(res, 503, { error: 'Throughline is stopping.' });
+      if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
       const port = server.address()?.port;
       const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
       if (!allowedHosts.includes(req.headers.host)) return json(res, 403, { error: 'Only localhost is allowed.' });
@@ -180,7 +181,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         if (req.headers['x-ai-relay'] !== '1') return json(res, 403, { error: 'Missing local application header.' });
         if (url.pathname === '/api/projects') {
           const input = await body(req);
-          if (closing) return json(res, 503, { error: 'Throughline is stopping.' });
+          if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
           return json(res, 201, registry.add(input));
         }
       }
@@ -248,7 +249,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (req.method === 'POST') {
         if (url.pathname === '/api/conversations') {
           await body(req);
-          if (closing) return json(res, 503, { error: 'Throughline is stopping.' });
+          if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
           const projectId=selectedProjectId(url),existed=Boolean(registry.get(projectId).conversationId);
           return json(res,existed?200:201,registry.mainConversation(projectId));
         }
@@ -261,7 +262,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         if (req.method === 'POST') {
           if(registry.mainConversation(selectedProjectId(url)).id!==c.id)return json(res,409,{error:'This project has one active chat. Open its project conversation to continue.'});
           const input = await body(req);
-          if (closing) return json(res, 503, { error: 'Throughline is stopping.' });
+          if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
           if (match[2] === 'context') return json(res, 200, await broker.updateContext(c, input));
           if (match[2] === 'approval') return json(res, 200, await broker.approve(input.runId, input.approvalId, input.allow === true, input.remember ?? null));
           if (match[2] === 'answer') return json(res, 200, await broker.answer(input.runId, input.questionId, input.skip === true ? null : input.answers));
@@ -281,7 +282,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       }
       return json(res, 404, { error: 'Not found.' });
     } catch (error) {
-      if (!error.status) console.error('Throughline request failed:', error.message);
+      if (!error.status) console.error('Codeshi request failed:', error.message);
       // A stale or unconfirmed handoff answers with the current offer, so the person can review it.
       return json(res, error.status || 500, { error: error.status ? error.message : 'Local server error. Check the terminal for details.', ...(error.status && 'offer' in error ? { offer: error.offer, billingRequired: error.billingRequired === true } : {}), ...(error.status && error.details ? { details: error.details } : {}) });
     }
@@ -318,7 +319,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
 function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    console.log('Throughline — shared Codex/Claude chats for your projects\n\nnpm run web -- [--workspace /absolute/project/path] [--port 4318]\n\nAdd projects in the browser, or repeat --workspace to register folders. Uses your installed CLIs and their existing logins.');
+    console.log('Codeshi — shared Codex/Claude chats for your projects\n\nnpm run web -- [--workspace /absolute/project/path] [--port 4318]\n\nAdd projects in the browser, or repeat --workspace to register folders. Uses your installed CLIs and their existing logins.');
     return;
   }
   const options = { workspaces: [] };
@@ -331,12 +332,12 @@ function main() {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535.');
   const app = createRelayServer({ workspaces: options.workspaces, dataRoot: process.env.AI_RELAY_DATA_DIR });
   app.server.once('error', async error => {
-    console.error(`Could not start Throughline: ${error.message}`);
+    console.error(`Could not start Codeshi: ${error.message}`);
     await app.close();
     process.exitCode = 1;
   });
   app.server.listen(port, '127.0.0.1', () => {
-    console.log(`Throughline: http://127.0.0.1:${port}\n${app.registry.list().length} saved project(s). Add or switch projects in the browser.\nPress Ctrl+C to stop.`);
+    console.log(`Codeshi: http://127.0.0.1:${port}\n${app.registry.list().length} saved project(s). Add or switch projects in the browser.\nPress Ctrl+C to stop.`);
   });
   let shuttingDown = false;
   const shutdown = async () => {

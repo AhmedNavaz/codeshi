@@ -87,7 +87,7 @@ export class ResumeScheduler {
     for (const c of this.pending()) {
       if (this.closed) return;
       if (this.now() >= Date.parse(c.resume.expiresAt)) {
-        this.broker.message(c, 'error', 'Throughline stopped waiting for a usage limit to reset after a day. Continue when you are ready.');
+        this.broker.message(c, 'error', 'Codeshi stopped waiting for a usage limit to reset after a day. Continue when you are ready.');
         this.notify(c, 'expired', 'Stopped waiting for a reset', 'No agent had room within a day. Continue when you are ready.');
         this.end(c, 'expired'); continue;
       }
@@ -129,13 +129,13 @@ export class ResumeScheduler {
   launch(c, provider) {
     const resume = c.resume, model = provider === c.provider ? c.model : c.models[provider] || null;
     try {
-      this.broker.message(c, 'system', `${names[provider]} has room again, so Throughline is continuing the task.`);
+      this.broker.message(c, 'system', `${names[provider]} has room again, so Codeshi is continuing the task.`);
       const { runId } = this.broker.start(c, { provider, mode: resume.mode, approvalPolicy: resume.approvalPolicy, fresh: true, text: continuationRequest, model, billingConfirmed: resume.billingConfirmed, requestId: `resume-${resume.id}` }, { resume });
       this.end(c, 'started', { provider, runId });
       this.notify(c, 'started', `Continuing with ${names[provider]}`, `${names[provider]} has room again, so the unfinished task is continuing.`);
     } catch (error) {
       if (error.status === 409 && this.broker.running) return;
-      this.broker.message(c, 'error', `Throughline could not continue with ${names[provider]}: ${error.message}`);
+      this.broker.message(c, 'error', `Codeshi could not continue with ${names[provider]}: ${error.message}`);
       this.notify(c, 'failed', 'Could not continue the task', error.message);
       this.end(c, 'failed', { provider, reason: String(error.message).slice(0, 500) });
     }
@@ -148,7 +148,7 @@ export class ResumeScheduler {
     const provider = names[run.provider] || run.provider;
     const resume = { ...run.resume, id: randomUUID(), attempts: (run.resume.attempts || 0) + 1 };
     this.broker.record(c, { type: 'resume', resume });
-    this.notify(c, 'waiting', 'Waiting for another reset', `${provider} reached a limit again. Throughline will continue when an agent has room.`);
+    this.notify(c, 'waiting', 'Waiting for another reset', `${provider} reached a limit again. Codeshi will continue when an agent has room.`);
     this.arm();
     return true;
   }

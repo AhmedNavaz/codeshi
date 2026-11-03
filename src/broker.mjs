@@ -145,7 +145,7 @@ export class Broker extends EventEmitter {
           try {
             process.kill(-conversation.activeRun.pid, 0);
             // A leader with another start time than the one the run saved means the ID now names a new group.
-            if (!reused(conversation.activeRun.pid, conversation.activeRun.pidStart)) throw Object.assign(new Error(`An assistant from the previous run may still be active (process group ${conversation.activeRun.pid}). Stop that process group before restarting Throughline.`), { status: 409 });
+            if (!reused(conversation.activeRun.pid, conversation.activeRun.pidStart)) throw Object.assign(new Error(`An assistant from the previous run may still be active (process group ${conversation.activeRun.pid}). Stop that process group before restarting Codeshi.`), { status: 409 });
           } catch (error) { if (!groupGone(error)) throw error; }
         }
         for (const message of conversation.messages.filter(m => m.runId === conversation.activeRun.id && m.role === 'assistant')) {
@@ -157,13 +157,13 @@ export class Broker extends EventEmitter {
       }
       for (const review of conversation.reviews.filter(item => item.background && item.status === 'running')) {
         if (review.pid && process.platform !== 'win32') {
-          try { process.kill(-review.pid, 0); if (!reused(review.pid, review.pidStart)) throw Object.assign(new Error(`A background reviewer from the previous run may still be active (process group ${review.pid}). Stop that process group before restarting Throughline.`), { status: 409 }); }
+          try { process.kill(-review.pid, 0); if (!reused(review.pid, review.pidStart)) throw Object.assign(new Error(`A background reviewer from the previous run may still be active (process group ${review.pid}). Stop that process group before restarting Codeshi.`), { status: 409 }); }
           catch (error) { if (!groupGone(error)) throw error; }
         }
         this.record(conversation, { type: 'review_result', id: review.id, result: { status: 'interrupted', summary: 'Background review was interrupted. Start a new review when ready.', findings: [] } });
       }
       for (const run of conversation.runs.filter(item => ['building', 'reviewing'].includes(item.automaticReview?.status))) {
-        this.record(conversation, { type: 'automatic_review_phase', runId: run.id, phase: { status: 'interrupted', summary: 'Throughline restarted. Review stopped; start a new review when ready.' } });
+        this.record(conversation, { type: 'automatic_review_phase', runId: run.id, phase: { status: 'interrupted', summary: 'Codeshi restarted. Review stopped; start a new review when ready.' } });
       }
     }
     this.permissions = new PermissionRules(dataDir);
@@ -366,7 +366,7 @@ export class Broker extends EventEmitter {
     return this.view(c);
   }
 
-  // Auto (#12): Throughline picks the agent, model and effort for each message, in one of three modes. Agents billed
+  // Auto (#12): Codeshi picks the agent, model and effort for each message, in one of three modes. Agents billed
   // outside a subscription are only chosen when allowed. Choosing a model by hand turns it off.
   setRouting(c, input = {}) {
     const routing = input.mode === null || input.mode === undefined ? null : { mode: input.mode, allowApi: input.allowApi === true, check: input.check === true };
@@ -562,7 +562,7 @@ export class Broker extends EventEmitter {
         this.running = null; this.emit('update', { conversationId: c.id }); finish({ success, error: run.persistenceError });
         // A run that continued after a reset may wait again if it reached another limit; otherwise say how the run ended.
         let waiting = false;
-        try { waiting = this.resume.runEnded(c, run, run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete'); } catch (error) { console.error('Throughline could not report a resumed run:', error.message); }
+        try { waiting = this.resume.runEnded(c, run, run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete'); } catch (error) { console.error('Codeshi could not report a resumed run:', error.message); }
         const agent = provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : run.local ? 'The local model' : 'Codex';
         if (!review && !waiting && !run.stopped) this.emit('notify', success
           ? { conversationId: c.id, kind: 'finished', title: 'Task finished', body: `${agent} finished${run.resume ? ' the work it continued while you were away' : ''}.` }
@@ -572,10 +572,10 @@ export class Broker extends EventEmitter {
         // after anything else.
         const ending = run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete';
         let checking = false;
-        try { checking = this.checks.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not check the run:', error.message); }
+        try { checking = this.checks.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not check the run:', error.message); }
         const automatic = !checking && run.automaticReview;
-        if (automatic) try { this.automaticReviews.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not start automatic review:', error.message); }
-        if (!checking && !automatic) try { this.queue.runEnded(c, run, ending); } catch (error) { console.error('Throughline could not continue the prompt queue:', error.message); }
+        if (automatic) try { this.automaticReviews.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not start automatic review:', error.message); }
+        if (!checking && !automatic) try { this.queue.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not continue the prompt queue:', error.message); }
       } }
     };
     const launch = async () => {

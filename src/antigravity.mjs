@@ -23,7 +23,7 @@ export const antigravityRelay = options => options.relay !== undefined ? Promise
 // The runtime reports a failed Google request as a bare "Internal error"; its log says what actually went wrong.
 export function googleConnectionError(error, log) {
   if (!/CCPAConnectionError|Network connection failed|URLError|SSLEOFError|timed out/i.test(log || '')) return error;
-  return Object.assign(new Error('Throughline could not reach Google’s Antigravity service. Check your internet connection, then refresh the Gemini status.'), { category: 'network' });
+  return Object.assign(new Error('Codeshi could not reach Google’s Antigravity service. Check your internet connection, then refresh the Gemini status.'), { category: 'network' });
 }
 export const initializeAntigravity = client => client.request('initialize', { protocolVersion: 1, clientInfo: { name: 'throughline', version: '0.11.0' }, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false } }, 15000);
 export function verifyAntigravity(initialized) {

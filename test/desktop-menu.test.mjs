@@ -14,17 +14,17 @@ function menu(options={}){
 }
 const disabled=entry=>entry.enabled===false;
 
-test('the macOS menu bar has Throughline, File, Edit, View, Agent, Workspace, Window and Help, with the shortcuts the page uses',()=>{
+test('the macOS menu bar has Codeshi, File, Edit, View, Agent, Workspace, Window and Help, with the shortcuts the page uses',()=>{
   const {template,all,item,roles,labels}=menu();
-  assert.deepEqual(labels(template),['Throughline','File','Edit','View','Agent','Workspace','windowMenu','help']);
-  assert.deepEqual(labels(item('Throughline').submenu),['about','-','Settings…','Setup Guide','-','services','-','hide','hideOthers','unhide','-','quit']);
+  assert.deepEqual(labels(template),['Codeshi','File','Edit','View','Agent','Workspace','windowMenu','help']);
+  assert.deepEqual(labels(item('Codeshi').submenu),['about','-','Settings…','Setup Guide','-','services','-','hide','hideOthers','unhide','-','quit']);
   assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','close']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','pasteAndMatchStyle','delete','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces','-','Speech']);
   assert.deepEqual(labels(item('View').submenu),['Show Git Activity','Show Files','Terminal','Focus Message Box','-','Appearance','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen']);
   assert.deepEqual(labels(item('Appearance').submenu),['System','Dark','Light']);
   assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Alerts','-','Hand Off Near Usage Limits']);
   assert.deepEqual(labels(item('Workspace').submenu),['Frontend','R&D','-','Workspace Settings…','Remove Workspace…']);
-  assert.deepEqual(labels(item('help').submenu),['Throughline Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New']);
+  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New']);
   // These are the page's own shortcuts plus ⌘, ⌘N and ⌘G, which the page leaves to the menu.
   assert.deepEqual(Object.fromEntries(all.filter(entry=>entry.accelerator).map(entry=>[entry.label,entry.accelerator])),{'Settings…':'CmdOrCtrl+,','New Workspace':'CmdOrCtrl+N','Find in Conversation':'CmdOrCtrl+F','Find Next':'CmdOrCtrl+G','Filter Workspaces':'CmdOrCtrl+K','Show Git Activity':'CmdOrCtrl+Shift+G',Terminal:'Ctrl+`','Focus Message Box':'CmdOrCtrl+L','Stop Run':'CmdOrCtrl+.','Voice Input':'Alt+Cmd+V',Frontend:'CmdOrCtrl+1','R&D':'CmdOrCtrl+2'});
   for(const role of ['reload','forceReload','toggleDevTools'])assert(!roles.includes(role),`A packaged app leaves out ${role}.`);
@@ -36,7 +36,7 @@ test('menu items enable and tick from the page, the saved appearance and Keep Aw
   // Until the page reports, nothing that needs a workspace is offered.
   const starting=menu({state:null});
   for(const label of pageItems)assert(disabled(starting.item(label)),label);
-  for(const label of ['Settings…','Setup Guide','New Workspace','Filter Workspaces','Keep Awake','System','Dark','Light','Throughline Guide','Report a Bug'])assert(!disabled(starting.item(label)),label);
+  for(const label of ['Settings…','Setup Guide','New Workspace','Filter Workspaces','Keep Awake','System','Dark','Light','Codeshi Guide','Report a Bug'])assert(!disabled(starting.item(label)),label);
   assert.deepEqual(starting.labels(starting.item('Workspace').submenu),['Workspace Settings…','Remove Workspace…']);
   const open=menu();
   for(const label of pageItems.filter(label=>label!=='Stop Run'&&label!=='continue'))assert(!disabled(open.item(label)),label);
@@ -72,7 +72,7 @@ test('page items and in-app release notes send commands, and external Help links
   for(const [label,command] of Object.entries(commands)){sent.length=0;item(label).click();assert.deepEqual(sent,[command],label);}
   assert.deepEqual(opened,[]);
   const repository='https://github.com/AhmedNavaz/throughline';
-  const pages={'Throughline Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`};
+  const pages={'Codeshi Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`};
   for(const [label,url] of Object.entries(pages)){opened.length=0;item(label).click();assert.deepEqual(opened,[url],label);}
   // The five alert and status switches and the five handoff choices are handled by the desktop app itself and tested separately.
   assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+10,'Every other item is a standard role.');
@@ -85,7 +85,7 @@ for(const platform of ['win32','linux'])test(`on ${platform} the menus have no a
   assert.deepEqual(labels(template),['File','Edit','View','Agent','Workspace','windowMenu','help']);
   assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Settings…','-','close','quit']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','delete','-','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces']);
-  assert.deepEqual(labels(item('help').submenu),['Throughline Guide','Keyboard Shortcuts','Setup Guide','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New','-','about']);
+  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','Setup Guide','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New','-','about']);
   for(const role of ['services','hide','hideOthers','unhide','pasteAndMatchStyle'])assert(!roles.includes(role),role);
   // & marks a keyboard mnemonic in Windows and Linux menus, so a workspace name doubles it to show it.
   assert.equal(item('workspace-2').label,'R&&D');assert.equal(menu().item('workspace-2').label,'R&D');
@@ -127,7 +127,7 @@ test('the Agent menu chooses when a handoff is offered near a usage limit, and w
 
 test('the installed app offers Check for Updates… after About, which asks the page to check and show the answer',()=>{
   const {item,sent,labels}=menu({updates:true});
-  assert.deepEqual(labels(item('Throughline').submenu).slice(0,3),['about','Check for Updates…','-']);
+  assert.deepEqual(labels(item('Codeshi').submenu).slice(0,3),['about','Check for Updates…','-']);
   item('check-updates').click();
   assert.deepEqual(sent,[['check-updates']]);
   assert(!menu().all.some(entry=>entry.label==='Check for Updates…'),'A copy that cannot update itself, such as one run from source, leaves it out.');

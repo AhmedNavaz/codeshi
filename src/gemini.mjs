@@ -15,7 +15,7 @@ export const agyUnsupported = 'Antigravity CLI does not expose interactive tool 
 export const geminiSetup = 'Connect Gemini with Google Antigravity in Settings: install the official connection, then sign in with Google. Available models and usage limits come from your Google account. Gemini CLI remains an advanced option for API-key and enterprise connections.';
 
 // Antigravity headless mode may soft-deny tools and still exit successfully.
-// Never replace Throughline approvals with pre-approved native write permissions.
+// Never replace Codeshi approvals with pre-approved native write permissions.
 export async function runAgy() { throw new Error(agyUnsupported); }
 
 // Isolate invocation policy without changing the user's settings or authentication.
@@ -24,10 +24,10 @@ export function geminiInvocation(config, { env = process.env, platform = process
   const system = systemDirectory || (platform === 'darwin' ? '/Library/Application Support/GeminiCli' : platform === 'win32' ? path.join(env.ProgramData || 'C:\\ProgramData', 'gemini-cli') : '/etc/gemini-cli');
   let policies = [];
   try { policies = fs.readdirSync(path.join(system, 'policies')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || fs.existsSync(path.join(system, 'settings.json')) || policies.some(name => name.endsWith('.toml'))) throw new Error('Gemini uses managed system settings or policy. This connection cannot enforce Throughline access settings alongside that configuration. Use the native CLI.');
+  if (env.GEMINI_CLI_SYSTEM_SETTINGS_PATH || fs.existsSync(path.join(system, 'settings.json')) || policies.some(name => name.endsWith('.toml'))) throw new Error('Gemini uses managed system settings or policy. This connection cannot enforce Codeshi access settings alongside that configuration. Use the native CLI.');
   const folders = [...new Set([config.workspace, ...(config.workspaces || [])])];
   if (folders.length > 6) throw new Error('Gemini supports a primary folder and up to five additional folders. Use a workspace with at most six folders.');
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-gemini-'));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-gemini-'));
   const cleanup = () => fs.rmSync(temporary, { recursive: true, force: true });
   try {
     fs.chmodSync(temporary, 0o700);
@@ -75,7 +75,7 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
         if (message.method === 'session/request_permission') {
           const once = p.options?.find(option => option.kind === 'allow_once');
           const tool = p.toolCall || {};
-          if (antigravity && /^interaction_/.test(tool.toolCallId || '')) throw new Error('Antigravity needs an interactive answer. Continue in its native client; Throughline did not choose an answer for you.');
+          if (antigravity && /^interaction_/.test(tool.toolCallId || '')) throw new Error('Antigravity needs an interactive answer. Continue in its native client; Codeshi did not choose an answer for you.');
           const allow = !cancelled() && config.mode !== 'read' && once && await approval({ id: String(message.id), kind: tool.kind || 'tool', title: tool.title, input: tool.rawInput || { action: tool.title }, toolCall: tool });
           if (!allow || cancelled()) { denied = true; result = { outcome: { outcome: 'cancelled' } }; }
           else result = { outcome: { outcome: 'selected', optionId: once.optionId } };
@@ -90,7 +90,7 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
           const allow = await approval({ id: String(message.id), kind: 'write_file', input: { path: p.path, content: p.content } });
           if (!allow || cancelled()) { denied = true; throw new Error('Write permission denied.'); }
           writeWorkspaceFile(file.root, file.relative, p.content, { expectedHash: before.sha256 }); result = {};
-        } else throw new Error('This Gemini interaction is unsupported by Throughline.');
+        } else throw new Error('This Gemini interaction is unsupported by Codeshi.');
         client.send({ id: message.id, result }); return;
       }
       if (message.method !== 'session/update') return;

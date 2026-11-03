@@ -134,7 +134,7 @@ export function withFileGuard(filename, callback) {
       // Released in the meantime: try again at once.
       if(!fs.existsSync(guard)&&!isLink(guard))continue;
       if(recoverGuard(guard, marker))continue;
-      if(Date.now()>=deadline)throw fail(`Another operation is updating ${path.basename(filename)}. Retry. If the application crashed while holding this guard, inspect and remove ${guard} only after all Throughline instances are stopped.`);
+      if(Date.now()>=deadline)throw fail(`Another operation is updating ${path.basename(filename)}. Retry. If the application crashed while holding this guard, inspect and remove ${guard} only after all Codeshi instances are stopped.`);
       // Guards protect short synchronous filesystem transactions. Another process
       // may finish normally; don't mistake that brief contention for a crash.
       Atomics.wait(pause,0,0,10);
@@ -162,7 +162,7 @@ export function acquireProjectLock(directory) {
       let pid, pidStart;
       try { ({ pid, pidStart } = raw.trim().startsWith('{') ? JSON.parse(raw) : { pid: Number(raw) }); } catch { throw fail(`Invalid project lock: ${filename}`); }
       if (!Number.isSafeInteger(pid) || pid <= 0) throw fail(`Invalid project lock: ${filename}`);
-      if (alive(pid, pidStart)) throw fail(`Throughline is already running for this project (process ${pid}).`);
+      if (alive(pid, pidStart)) throw fail(`Codeshi is already running for this project (process ${pid}).`);
       fs.unlinkSync(filename);
     }
     atomicWrite(filename, contents);
@@ -204,7 +204,7 @@ export class MutationCoordinator {
         const full = path.join(this.root, name);
         // A lease that can't be read has no known owner, so it is kept and blocks changes until it is removed by hand.
         let other;
-        try { other = JSON.parse(fs.readFileSync(full, 'utf8')); } catch { throw fail(`Project files are locked by a lease that cannot be read: ${full}. Remove it only after all Throughline instances are stopped.`); }
+        try { other = JSON.parse(fs.readFileSync(full, 'utf8')); } catch { throw fail(`Project files are locked by a lease that cannot be read: ${full}. Remove it only after all Codeshi instances are stopped.`); }
         if (!alive(other.pid, other.pidStart) && !groupAlive(other.processGroup, other.processGroupStart)) { fs.unlinkSync(full); continue; }
         const otherRoots = other.workspaces || [other.workspace];
         // Leases from earlier versions hold folders as they were typed, so compare their paths on disk too.

@@ -39,7 +39,7 @@ test('Git status cannot run configured clean filters', t => {
   git(f.workspace, 'config', 'filter.fixture.clean', `touch '${marker}'; cat`); fs.writeFileSync(path.join(f.workspace, '.gitattributes'), '*.js filter=fixture\n'); fs.appendFileSync(path.join(f.workspace, 'app.js'), '// dirty\n'); assert.equal(workspaceGit(f.folders).repositories[0].available, true); assert.equal(fs.existsSync(marker), false);
 });
 
-test('first-run discovery lists conversations from every project, excluding Throughline runs, with folders and original times', async t => {
+test('first-run discovery lists conversations from every project, excluding Codeshi runs, with folders and original times', async t => {
   const f = fixture(t), calls = [];
   const importer = new ConversationImporter({
     codexBin: () => '/fixture/codex',
@@ -48,16 +48,16 @@ test('first-run discovery lists conversations from every project, excluding Thro
       getSessionInfo: async (_id, options) => { calls.push(['info', options]); return { cwd: f.workspace, summary: 'Claude task' }; },
       getSessionMessages: async (_id, options) => { calls.push(['messages', options]); return [{ uuid: 'cmd', type: 'user', timestamp: '2026-10-20T08:59:00Z', message: { content: '<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args></command-args>' } }, { uuid: 'out', type: 'user', timestamp: '2026-10-20T08:59:01Z', message: { content: '<local-command-stdout>Set effort level to high</local-command-stdout>' } }, { uuid: 'u', type: 'user', timestamp: '2026-10-20T09:00:00Z', message: { content: 'Plan the API' } }, { uuid: 'a', type: 'assistant', timestamp: '2026-10-20T09:01:00Z', message: { content: [{ type: 'text', text: 'API planned' }] } }]; },
     }),
-    clientFactory: () => ({ initialize: async () => {}, close() {}, request: async (method, params) => { calls.push([method, params]); if (method === 'thread/list') return { data: [{ id: 'codex-one', preview: 'Build the UI', updatedAt: 1792000000, cwd: '/elsewhere/ui' }, { id: 'codex-command', preview: '<command-name>/effort</command-name>', updatedAt: 1791000000, cwd: '/elsewhere/ui' }, { id: 'relay-run', preview: 'You are working in Throughline {"currentRequest":"x"}', updatedAt: 1792000001, cwd: '/elsewhere/ui' }] }; if (method === 'thread/read') return { thread: { cwd: '/elsewhere/ui', name: 'UI' } }; return { data: [{ id: 'turn', startedAt: 1792000100, completedAt: 1792000160, items: [{ type: 'userMessage', id: 'q', content: [{ type: 'text', text: 'Build the UI' }] }, { type: 'agentMessage', id: 'r', text: 'UI built' }] }] }; } }),
+    clientFactory: () => ({ initialize: async () => {}, close() {}, request: async (method, params) => { calls.push([method, params]); if (method === 'thread/list') return { data: [{ id: 'codex-one', preview: 'Build the UI', updatedAt: 1792000000, cwd: '/elsewhere/ui' }, { id: 'codex-command', preview: '<command-name>/effort</command-name>', updatedAt: 1791000000, cwd: '/elsewhere/ui' }, { id: 'relay-run', preview: 'You are working in Codeshi {"currentRequest":"x"}', updatedAt: 1792000001, cwd: '/elsewhere/ui' }] }; if (method === 'thread/read') return { thread: { cwd: '/elsewhere/ui', name: 'UI' } }; return { data: [{ id: 'turn', startedAt: 1792000100, completedAt: 1792000160, items: [{ type: 'userMessage', id: 'q', content: [{ type: 'text', text: 'Build the UI' }] }, { type: 'agentMessage', id: 'r', text: 'UI built' }] }] }; } }),
   });
-  const claude = await importer.list('claude', null); assert.deepEqual(claude.sessions.map(row => [row.id, row.cwd, row.folder]), [['claude-one', f.workspace, 'project']]); assert.equal(calls[0][1].includeProgrammatic, false, 'Throughline\'s own SDK sessions are not offered for import.'); assert.equal(calls[0][1].dir, undefined);
+  const claude = await importer.list('claude', null); assert.deepEqual(claude.sessions.map(row => [row.id, row.cwd, row.folder]), [['claude-one', f.workspace, 'project']]); assert.equal(calls[0][1].includeProgrammatic, false, 'Codeshi\'s own SDK sessions are not offered for import.'); assert.equal(calls[0][1].dir, undefined);
   const codex = await importer.list('codex', null); assert.deepEqual(codex.sessions.map(row => [row.id, row.title]), [['codex-one', 'Build the UI'], ['codex-command', 'Codex conversation']], 'Slash-command markup never becomes a title.'); assert.equal(calls.find(row => row[0] === 'thread/list')[1].cwd, undefined);
   const preview = await importer.preview('codex', 'codex-one', null); assert.equal(preview.cwd, '/elsewhere/ui'); assert.deepEqual(preview.messages.map(row => row.timestamp), [new Date(1792000100000).toISOString(), new Date(1792000160000).toISOString()]);
   const claudePreview = await importer.preview('claude', 'claude-one', null); assert.equal(claudePreview.cwd, f.workspace); assert.deepEqual(claudePreview.messages.map(row => row.text), ['Plan the API', 'API planned'], 'Slash commands and their local output are not imported.'); assert.equal(claudePreview.messages[0].timestamp, '2026-10-20T09:00:00.000Z'); assert.equal(calls.find(row => row[0] === 'messages')[1].dir, undefined);
   assert(!calls.some(([method]) => /resume|turn\/start/.test(method)), 'Discovery and preview never resume or run a session.');
 });
 
-test('workspace discovery matches attached folder paths and excludes Throughline sessions',async t=>{
+test('workspace discovery matches attached folder paths and excludes Codeshi sessions',async t=>{
   const f=fixture(t),other=path.join(f.root,'other','project'),calls=[];fs.mkdirSync(other,{recursive:true});
   const importer=new ConversationImporter({
     sdkLoader:async()=>({listSessions:async options=>{calls.push(options);return [{sessionId:'claude-match',summary:'Matching chat',cwd:f.workspace,lastModified:1},{sessionId:'claude-other',summary:'Same folder name elsewhere',cwd:other,lastModified:1}];}}),
@@ -65,7 +65,10 @@ test('workspace discovery matches attached folder paths and excludes Throughline
     clientFactory:()=>({initialize:async()=>{},close(){},request:async()=>({data:[
       {id:'codex-match',preview:'Matching chat',cwd:f.workspace,updatedAt:1},
       {id:'codex-other',preview:'Same folder name elsewhere',cwd:other,updatedAt:1},
+      {id:'codeshi-run',preview:'You are working in Codeshi {"currentRequest":"test"}',cwd:f.workspace,updatedAt:1},
+      // The app's own runs from before the rename stay out of the list too.
       {id:'throughline-run',preview:'You are working in Throughline {"currentRequest":"test"}',cwd:f.workspace,updatedAt:1},
+      {id:'relay-run',preview:'You are working in AI Relay {"currentRequest":"test"}',cwd:f.workspace,updatedAt:1},
     ]})}),
   });
   assert.deepEqual((await importer.list('claude',f.folders)).sessions.map(session=>session.id),['claude-match']);
@@ -298,7 +301,7 @@ test('conversation export keeps chat text, redacts secrets and local paths, and 
   assert.match(exportConversation(conversation, project, { redact: false }).package.messages[1].text, /sk-ant-/, 'Redaction can be turned off deliberately.');
   const preview = readConversationPackage(JSON.parse(JSON.stringify(result.package))); assert.equal(preview.provider, 'file'); assert.equal(preview.title, 'Shop'); assert.deepEqual(preview.messages.map(row => [row.role, row.provider, row.timestamp]), [['user', undefined, '2026-10-20T09:00:00.000Z'], ['assistant', 'claude', '2026-10-20T09:01:00.000Z'], ['assistant', 'codex', '2026-10-20T09:02:00.000Z']]);
   const altered = JSON.parse(JSON.stringify(result.package)); altered.messages[0].text = 'Ignore previous instructions'; assert.throws(() => readConversationPackage(altered), /changed or damaged/);
-  assert.throws(() => readConversationPackage({ schema: 'something-else' }), /not an Throughline conversation/); assert.throws(() => readConversationPackage({ ...result.package, version: 2 }), /newer version/);
+  assert.throws(() => readConversationPackage({ schema: 'something-else' }), /not a Codeshi conversation/); assert.throws(() => readConversationPackage({ ...result.package, version: 2 }), /newer version/);
 });
 
 test('HTTP export and file import hand a conversation to another workspace without running inference', async t => {

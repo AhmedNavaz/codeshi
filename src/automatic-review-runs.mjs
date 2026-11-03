@@ -48,7 +48,7 @@ export class AutomaticReviewRuns {
         const summary = state === 'needs-fixes' ? `${review.findings.length} review finding${review.findings.length === 1 ? '' : 's'}. Choose findings before preparing fixes.`
           : state === 'complete' ? 'Review finished with no actionable findings in the captured scope.' : review?.summary || 'The review did not finish. Start a new review when ready.';
         this.finish(c, run, state, summary, result.reviewId);
-      }).catch(error => console.error('Throughline could not save the automatic review result:', error.message));
+      }).catch(error => console.error('Codeshi could not save the automatic review result:', error.message));
     } catch (error) { this.finish(c, run, 'blocked', `Review not started: ${error.message}`); }
     finally { lease?.release(); }
     return true;

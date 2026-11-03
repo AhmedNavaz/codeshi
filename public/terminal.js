@@ -32,7 +32,7 @@
   let notice = '', tone = '';
   function showNotice() {
     const failed = focusedPane(activeTab())?.status === 'failed' ? focusedPane(activeTab()).error : '';
-    const shown = !Terminal || !FitAddon ? 'The terminal could not load. Reinstall Throughline to restore it.' : notice || failed;
+    const shown = !Terminal || !FitAddon ? 'The terminal could not load. Reinstall Codeshi to restore it.' : notice || failed;
     $('terminal-message').textContent = shown || ''; $('terminal-message').hidden = !shown;
     $('terminal-message').dataset.tone = shown && shown === notice ? tone : '';
   }

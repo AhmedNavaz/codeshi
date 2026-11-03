@@ -7,7 +7,7 @@ import { gitExecutable } from './resolve-binary.mjs';
 // looking should never run code. A commit is a deliberate action, so these use the person's own Git setup instead, as a
 // commit from their terminal would: their identity and signing, filters such as Git LFS, and the project's commit hooks.
 // A hook that stops the commit is reported with its output, and committing without hooks is a separate, explicit choice.
-// Throughline never pushes.
+// Codeshi never pushes.
 const HOOKS = ['pre-commit', 'prepare-commit-msg', 'commit-msg'];
 const MESSAGE_LIMIT = 20000, OUTPUT_LIMIT = 6000;
 // Details reach the panel with the message: why a commit stopped, and a hook's output.
@@ -81,7 +81,7 @@ export function unstageChanges(folder, { paths, all = false } = {}) {
   });
 }
 
-// The person's own name and email, which a commit from Throughline uses.
+// The person's own name and email, which a commit from Codeshi uses.
 export async function committer(folder) {
   const [name, email] = await Promise.all(['user.name', 'user.email'].map(key => git(folder.path, ['config', '--get', key], { timeout: 5000 })));
   return { name: name.status ? null : name.stdout.trim() || null, email: email.status ? null : email.stdout.trim() || null };

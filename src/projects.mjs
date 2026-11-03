@@ -108,7 +108,7 @@ export class ProjectRegistry extends EventEmitter {
       fs.renameSync(temporary, this.filename); this.needsMigration = false;
     } finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
   }
-  assertOpen() { if (this.closing) throw fail('Throughline is shutting down. Start it again to open a project.', 503); }
+  assertOpen() { if (this.closing) throw fail('Codeshi is shutting down. Start it again to open a project.', 503); }
   entry(id, includeRemoved = false) { const entry = this.projects.get(id); if (!entry || entry.removedAt && !includeRemoved) throw fail('Project not found.', 404); return entry; }
   journalIds(id) { try { return fs.readdirSync(path.join(this.dataRoot, id)).filter(name => journalName.test(name)).map(name => name.slice(0, -6)); } catch (error) { if (error.code === 'ENOENT') return []; throw error; } }
   workspace(id) { this.reload(); const entry = this.entry(id); return { path: entry.path, folders: entry.folders.map(folder => ({ ...folder, available: folderAvailable(folder.path) })) }; }

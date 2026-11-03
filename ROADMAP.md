@@ -1,6 +1,6 @@
 # Roadmap
 
-What Throughline already does, what is coming next and the bigger ideas being explored. **Now** is the current focus, **Next** is follow-up work, **Later** is further out, and **Exploring** holds larger ideas that need design before implementation. Dependencies are listed per item; blocked work does not hold up independent improvements. Priorities can change with feedback, so treat this as a plan rather than a promise.
+What Codeshi already does, what is coming next and the bigger ideas being explored. **Now** is the current focus, **Next** is follow-up work, **Later** is further out, and **Exploring** holds larger ideas that need design before implementation. Dependencies are listed per item; blocked work does not hold up independent improvements. Priorities can change with feedback, so treat this as a plan rather than a promise.
 
 A core goal is to get more work from existing agent allowances and available free or local options, so users can keep projects moving within their chosen budget without needing a higher subscription tier.
 
@@ -8,7 +8,7 @@ Every planned item has an issue. Comment there to shape it or to pick it up, and
 
 ## Use it and tell us what breaks
 
-The fastest way to make Throughline better is to use it on your real projects and tell us what you find: bugs, confusing screens, slow spots and rough edges in the design. A small UI or UX note is as welcome as a crash report. [Report a bug](https://github.com/AhmedNavaz/throughline/issues/new?template=bug_report.yml) or [share design feedback](https://github.com/AhmedNavaz/throughline/issues/new?template=ux_feedback.yml).
+The fastest way to make Codeshi better is to use it on your real projects and tell us what you find: bugs, confusing screens, slow spots and rough edges in the design. A small UI or UX note is as welcome as a crash report. [Report a bug](https://github.com/AhmedNavaz/throughline/issues/new?template=bug_report.yml) or [share design feedback](https://github.com/AhmedNavaz/throughline/issues/new?template=ux_feedback.yml).
 
 ## Shipped
 
@@ -18,7 +18,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Claude Code and Codex in the same conversation, switching mid-task with shared context | [0.4.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.4.0) |
 | Model, reasoning effort and access chosen per message, with approvals and a live run view | [0.4.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.4.0) |
 | Import Claude Code and Codex chats from any project, merged in time order | [0.4.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.4.0) |
-| Conversation export for other Throughline users, with secrets and local paths removed | [0.4.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.4.0) |
+| Conversation export for other Codeshi users, with secrets and local paths removed | [0.4.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.4.0) |
 | Ask a Friend: share an approved snapshot and apply a reviewed patch | [0.4.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.4.0) |
 | Git activity with per-file diffs and recent commits | [0.4.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.4.0) |
 | File browser with syntax-highlighted previews, and file and image attachments | [0.4.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.4.0) |
@@ -91,13 +91,13 @@ The fastest way to make Throughline better is to use it on your real projects an
 
 Bring the work around the code into the project conversation, so an agent sees what you see on GitHub, and finish the loop with a pull request. Collaborators with access to the repository work this way rather than through Ask a Friend.
 
-1. **GitHub as context.** Paste or pick an issue, a pull request or the current branch, and Throughline reads it through your own `gh` login: the issue or pull request with its comments and review threads, and the failing checks with the end of each failing job's log. It never asks for a token of its own and only reads. What comes in is shown for review before it is sent, as part of your message, with secrets and local paths removed by the same step that cleans exports. Nothing is fetched in the background.
+1. **GitHub as context.** Paste or pick an issue, a pull request or the current branch, and Codeshi reads it through your own `gh` login: the issue or pull request with its comments and review threads, and the failing checks with the end of each failing job's log. It never asks for a token of its own and only reads. What comes in is shown for review before it is sent, as part of your message, with secrets and local paths removed by the same step that cleans exports. Nothing is fetched in the background.
 2. **Logs from the app.** A failed command in **Run** puts its command and the end of its output in the message box in one click, since [0.19.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0); selected terminal output follows in [#71](https://github.com/AhmedNavaz/throughline/issues/71).
-3. **A pull request from the conversation.** After you review the diff and commit in the Git panel, **Open pull request** pushes the branch and opens the pull request with `gh`, with a title and description drafted from the conversation for you to edit. It is the one place Throughline pushes, only when you click it and after showing the remote and branch; agents never push.
+3. **A pull request from the conversation.** After you review the diff and commit in the Git panel, **Open pull request** pushes the branch and opens the pull request with `gh`, with a title and description drafted from the conversation for you to edit. It is the one place Codeshi pushes, only when you click it and after showing the remote and branch; agents never push.
 
 ### Adaptive agent and model routing
 
-Extend [smart model and effort selection (#12)](https://github.com/AhmedNavaz/throughline/issues/12) into an optional routing mode. For each prompt, Throughline should choose an eligible agent, model and reasoning effort using the task, project context, required tools, available allowance and the user's budget. Larger requests may be split into subtasks when doing so improves the result enough to justify the extra usage and coordination.
+Extend [smart model and effort selection (#12)](https://github.com/AhmedNavaz/throughline/issues/12) into an optional routing mode. For each prompt, Codeshi should choose an eligible agent, model and reasoning effort using the task, project context, required tools, available allowance and the user's budget. Larger requests may be split into subtasks when doing so improves the result enough to justify the extra usage and coordination.
 
 | Mode | Planned behavior |
 | --- | --- |
@@ -150,7 +150,7 @@ Larger ideas for bringing project context, execution and collaboration into one 
 A board for each project to capture work as it comes up, in a meeting or anywhere else, and let agents work through it while you review the results. Tasks can also run on a schedule.
 
 1. **The board and running tasks.** Columns for Backlog, Ready, Doing, Review and Done. A card has a title, a description, a priority, labels, a checklist of what done means, and the agent to use, Auto by default so routing chooses. Running a card sends it to the agent and moves it to Doing; when the run ends, the card keeps the files it changed, the result of **Check with tests** and a short summary. **Run the Ready column** works through cards in priority order with the prompt queue, one at a time in each project and in parallel across projects. Cards can be dictated with voice input, and the saved context's unfinished tasks become the board's open cards, so agents know the backlog.
-2. **Schedules.** Run a card or a prompt once at a set time, or repeat it daily, on weekdays or weekly. Throughline can keep running in the menu bar after its window closes, and open at login. Schedules run while the Mac is awake; a missed run shows in the "While you were away" recap and waits for you, unless you let it run late.
+2. **Schedules.** Run a card or a prompt once at a set time, or repeat it daily, on weekdays or weekly. Codeshi can keep running in the menu bar after its window closes, and open at login. Schedules run while the Mac is awake; a missed run shows in the "While you were away" recap and waits for you, unless you let it run late.
 3. **Later.** Turn pasted meeting notes into cards with an agent, checked by you before any is added; sync cards with GitHub Issues through the access from [#18](https://github.com/AhmedNavaz/throughline/issues/18); and run cards in parallel in separate worktrees with [#16](https://github.com/AhmedNavaz/throughline/issues/16).
 
 Design boundaries:
@@ -158,11 +158,11 @@ Design boundaries:
 - An agent never marks its own work done. A finished card waits in Review with its diff and test result until you accept it; a failed one goes back to Ready with the reason.
 - A scheduled run uses the access chosen when it was scheduled. Anything that needs approval waits and shows in the menu bar; nothing is approved for it unless the project already allows it, and nothing is pushed.
 - Usage limits, routing and billing rules apply as they do to any run, and a schedule never wakes a sleeping Mac.
-- Cards are kept with the project in Throughline's own data, not in the repository, and work offline.
+- Cards are kept with the project in Codeshi's own data, not in the repository, and work offline.
 
 ## Good places to start
 
-- Use Throughline on a real project and report what you notice, from bugs to design details.
+- Use Codeshi on a real project and report what you notice, from bugs to design details.
 - Issues labelled [good first issue](https://github.com/AhmedNavaz/throughline/labels/good%20first%20issue) or [help wanted](https://github.com/AhmedNavaz/throughline/labels/help%20wanted), such as tests for Windows and Linux CLI discovery ([#28](https://github.com/AhmedNavaz/throughline/issues/28)).
 - Small interface polish and clearer documentation in the [guide](docs/guide.md).
 

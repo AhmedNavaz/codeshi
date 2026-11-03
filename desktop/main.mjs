@@ -29,9 +29,10 @@ const smoke=process.argv.includes('--smoke-test');
 const development=!app.isPackaged;
 // `npm run start:update-demo`: from source only, an update is offered and installed without downloading or replacing anything.
 const updateDemo=development&&process.argv.includes('--update-demo');
-if(development)app.setName('Throughline Dev');
+if(development)app.setName('Codeshi Dev');
 if(process.env.AI_RELAY_DESKTOP_DATA) app.setPath('userData',path.resolve(process.env.AI_RELAY_DESKTOP_DATA));
-else if(development) app.setPath('userData',path.join(app.getPath('appData'),'Throughline Dev'));
+// A development profile from before the rename keeps its workspaces.
+else if(development) app.setPath('userData',preferredUserData(app.getPath('appData'),path.join(app.getPath('appData'),'Codeshi Dev'),['Throughline Dev']));
 else app.setPath('userData',preferredUserData(app.getPath('appData'),app.getPath('userData')));
 // Windows ties notifications and the taskbar entry to this ID (see windows.mjs).
 if(process.platform==='win32'&&!development)app.setAppUserModelId(APP_ID);
@@ -44,7 +45,8 @@ else {
   app.on('will-quit',()=>{keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
-    if(process.platform==='darwin'&&!app.isPackaged) app.dock?.setIcon(path.join(root,'assets','icon.png'));
+    // The packaged app's layered icon switches between Paper and Ink with the appearance; in development the Dock shows a picture, so swap it.
+    if(process.platform==='darwin'&&!app.isPackaged){const dockIcon=()=>app.dock?.setIcon(path.join(root,'assets',nativeTheme.shouldUseDarkColors?'icon-dark.png':'icon.png'));dockIcon();nativeTheme.on('updated',dockIcon);}
     if(process.platform==='win32'&&!development&&!smoke){try{ensureStartMenuShortcut({shell,programs:path.join(app.getPath('appData'),'Microsoft','Windows','Start Menu','Programs'),target:process.execPath});}catch(error){console.warn('Windows notifications need a Start menu shortcut:',error.message);}}
     const data=path.join(app.getPath('userData'),'relay-data');
     migrateLegacyData(process.env.AI_RELAY_LEGACY_DATA_DIR || path.join(root,'.data'),data);
@@ -56,7 +58,7 @@ else {
     const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
       send:(...command)=>{if(win&&!win.isDestroyed())win.webContents.send('relay:menu-command',...command);updateMenu();}})));
-    app.setAboutPanelOptions({applicationName:'Throughline',applicationVersion:app.getVersion(),version:''});
+    app.setAboutPanelOptions({applicationName:'Codeshi',applicationVersion:app.getVersion(),version:''});
     // Work that finishes or needs an answer while the person is elsewhere is reported outside the window, in the ways
     // chosen under Alerts (src/alerts.mjs). While the window is in front the page already shows it. The Dock badge
     // counts what happened since the window was last in front and needs no permission; something that needs you
@@ -81,7 +83,7 @@ else {
       const notice=new Notification({title:projectName?`${title} · ${projectName}`:title,body:String(body||'').slice(0,240),silent:true});
       // An approval opens its own request card; it is never answered from the notification.
       notice.on('click',()=>openTarget(projectId?{projectId,approvalId:kind==='approval'?approvalId:null}:null));
-      notice.on('failed',(_event,error)=>{notificationsRefused=true;console.warn('macOS did not show a Throughline notification:',error);});
+      notice.on('failed',(_event,error)=>{notificationsRefused=true;console.warn('macOS did not show a Codeshi notification:',error);});
       notice.show();
     }
     const statusIcons=process.platform==='darwin'?{idle:nativeImage.createFromPath(path.join(root,'assets','status','StatusTemplate.png')),attention:nativeImage.createFromPath(path.join(root,'assets','status','StatusAttentionTemplate.png'))}:null;
@@ -94,7 +96,7 @@ else {
       const preferences=relay.getNotificationPreferences();
       if(!preferences.statusItem){tray?.destroy();tray=null;return;}
       const snapshot=statusSnapshot(relay.registry);
-      if(!tray){for(const icon of Object.values(statusIcons))icon.setTemplateImage(true);tray=new Tray(statusIcons.idle);tray.setToolTip('Throughline');}
+      if(!tray){for(const icon of Object.values(statusIcons))icon.setTemplateImage(true);tray=new Tray(statusIcons.idle);tray.setToolTip('Codeshi');}
       tray.setImage(snapshot.attention?statusIcons.attention:statusIcons.idle);
       tray.setTitle(statusTitle(snapshot),{fontType:'monospacedDigit'});
       tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
@@ -108,7 +110,7 @@ else {
       origin=`http://127.0.0.1:${relay.server.address().port}`;
     }
     await start();
-    // Throughline restarts to update only when no agent is working and no queued prompt is about to start.
+    // Codeshi restarts to update only when no agent is working and no queued prompt is about to start.
     const busy=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.running||broker.backgroundReview||[...broker.conversations.values()].some(c=>c.queue?.length&&!c.queuePaused));
     const build=updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation}),demo=updateDemo?(await import('./update-demo.mjs')).updateDemo({version:app.getVersion(),build,relaunch:()=>{app.relaunch();app.quit();}}):null;
     updater=createUpdater({version:app.getVersion(),build,location:demo?.location||bundleLocation(process.execPath),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
@@ -120,7 +122,7 @@ else {
       relay.registry.on('update',scheduleStatus);relay.registry.on('projects',scheduleStatus);
     }
     updateMenu();syncStatus();
-    win=new BrowserWindow({width:1440,height:1000,minWidth:900,minHeight:680,show:false,title:'Throughline',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences:{preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]}});
+    win=new BrowserWindow({width:1440,height:1000,minWidth:900,minHeight:680,show:false,title:'Codeshi',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences:{preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]}});
     // Back in the window, the page shows what happened, including the recap after a while away, so the badge clears
     // and the panel near the top of the screen goes; it would otherwise cover the recap.
     win.on('focus',()=>{attention=0;app.dock?.setBadge('');overlay?.hide();if(process.platform!=='darwin')win.flashFrame(false);});
@@ -198,7 +200,7 @@ else {
           for(let step=0,until=Date.now()+5000;!outlined&&Date.now()<until;step++){
             contents.sendInputEvent({type:'mouseMove',x:point.x+step%2,y:point.y});
             await new Promise(resolve=>setTimeout(resolve,100));
-            outlined=await contents.executeJavaScript(`document.querySelector('throughline-picker')?.style.display==='block'`);
+            outlined=await contents.executeJavaScript(`document.querySelector('codeshi-picker')?.style.display==='block'`);
           }
           contents.sendInputEvent({type:'mouseDown',x:point.x,y:point.y,button:'left',clickCount:1});
           contents.sendInputEvent({type:'mouseUp',x:point.x,y:point.y,button:'left',clickCount:1});
@@ -214,7 +216,7 @@ else {
       }
       if(process.platform==='darwin'&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));
       result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'`);
-      // The menu bar is Throughline's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
+      // The menu bar is Codeshi's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
       const settled=async done=>{for(let tries=0;!done()&&tries<250;tries++)await new Promise(resolve=>setTimeout(resolve,20));return done();};
       const reported=await settled(()=>page!==null);
       Menu.getApplicationMenu().getMenuItemById('appearance-light').click();
@@ -230,5 +232,5 @@ else {
       if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.voiceUI||result.speech===false||result.statusItem===false||result.overlay===false||!result.preview||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
       console.log('AI_RELAY_DESKTOP_SMOKE '+JSON.stringify(result));app.quit();
     }
-  }).catch(error=>{console.error(error);if(!smoke)dialog.showErrorBox('Throughline could not start',error.message);app.exit(1);});
+  }).catch(error=>{console.error(error);if(!smoke)dialog.showErrorBox('Codeshi could not start',error.message);app.exit(1);});
 }

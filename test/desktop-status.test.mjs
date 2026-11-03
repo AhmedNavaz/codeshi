@@ -80,7 +80,7 @@ test('the status menu opens the right workspace or request and only changes Keep
   const alerts = alertPreferences({ sound: { on: true } });
   const template = statusMenu(snapshot, { keepAwake: { enabled: true, active: true }, alerts, setAlerts: patch => calls.push(['alerts', patch]), alertSettings: () => calls.push(['alert-settings']), open: target => calls.push(['open', target]), show: () => calls.push(['show']), setKeepAwake: value => calls.push(['keep-awake', value]), hide: () => calls.push(['hide']), quit: () => calls.push(['quit']) });
   const labels = items => items.map(item => item.type === 'separator' ? '-' : item.label);
-  assert.deepEqual(labels(template), ['1 needs you · 1 working', '-', 'payments-api — Approval needed: npm install', 'acme-shop — Codex · Reading files', '-', 'Open Throughline', 'Keep Awake', 'Keeping your Mac awake while agents work', 'Alerts', 'Hide from Menu Bar', '-', 'Quit Throughline']);
+  assert.deepEqual(labels(template), ['1 needs you · 1 working', '-', 'payments-api — Approval needed: npm install', 'acme-shop — Codex · Reading files', '-', 'Open Codeshi', 'Keep Awake', 'Keeping your Mac awake while agents work', 'Alerts', 'Hide from Menu Bar', '-', 'Quit Codeshi']);
   assert.equal(calls.length, 0, 'Building the menu changes nothing.');
   const item = label => template.find(entry => entry.label === label);
   // The status item's own Alerts menu turns each way on or off; hiding the status item has its own item.

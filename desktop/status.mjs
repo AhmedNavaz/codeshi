@@ -2,7 +2,7 @@ import { alertDefaults } from '../src/alerts.mjs';
 import { runSteps, TESTS } from '../src/recap.mjs';
 
 // Live status outside the window on macOS (#13): a status item in the menu bar and, when turned on, alerts near the
-// top of the screen. Both read the same run state as the page and the Dock badge, from the workspaces Throughline
+// top of the screen. Both read the same run state as the page and the Dock badge, from the workspaces Codeshi
 // has open; nothing here starts, answers or changes work, except Keep Awake when it is clicked. Like notifications,
 // they never show commands, chat text or file paths, which anyone looking at the screen could read: an action is
 // said in general words with a count. The state and the menu are built without Electron so they can be tested;
@@ -73,18 +73,18 @@ export function statusMenu(snapshot, { keepAwake = { enabled: false, active: fal
     { label: summary, enabled: false },
     ...rows.length ? [separator, ...rows] : [],
     separator,
-    { label: 'Open Throughline', click: show },
+    { label: 'Open Codeshi', click: show },
     { label: 'Keep Awake', type: 'checkbox', checked: keepAwake.enabled, click: () => setKeepAwake(!keepAwake.enabled) },
     ...keepAwake.active ? [{ label: 'Keeping your Mac awake while agents work', enabled: false }] : [],
     // This menu belongs to the status item, so hiding it has its own item rather than a switch under Alerts.
     { label: 'Alerts', submenu: alertMenu(alerts, { statusItem: false, set: setAlerts, settings: alertSettings }) },
     { label: 'Hide from Menu Bar', click: hide },
     separator,
-    { label: 'Quit Throughline', click: quit },
+    { label: 'Quit Codeshi', click: quit },
   ];
 }
 
-// The ways Throughline alerts you while you are in another app, each on or off, for the Agent menu and the status
+// The ways Codeshi alerts you while you are in another app, each on or off, for the Agent menu and the status
 // item's menu. Alert Settings… chooses each way for each moment, and how banners show. Other systems have no Dock or
 // menu bar status: the taskbar button flashes instead of the icon bouncing.
 export function alertMenu(preferences, { platform = 'darwin', statusItem = true, set = () => {}, settings = () => {} } = {}) {
