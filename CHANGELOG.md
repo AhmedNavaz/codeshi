@@ -4,6 +4,8 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-03
+
 ### Added
 
 - **Terminal tabs and split panes** (#70). A workspace keeps up to eight shells: each is a tab, listed at the right of the terminal and named after its folder, **+** opens another in a folder you choose, and a tab splits into two panes, side by side or stacked (⌥), each its own shell. Input goes only to the pane it was typed in, the trash button ends the shell you're in, closing a tab ends its shells, and a shell that exited can start again in its place. ⌃⇧` opens another shell.
@@ -18,6 +20,12 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 ### Fixed
 
 - A message that wrapped to three lines showed a scroll bar in the message box, though all of it was visible. The box now grows a pixel more and only scrolls once it reaches its full height.
+- Imported chats went after newer messages, so with little room for context an agent could lose today's request and keep an old reply. Imported messages now go in time order between runs, never inside one; conversations imported before keep their order ([#55](https://github.com/AhmedNavaz/throughline/issues/55), [#76](https://github.com/AhmedNavaz/throughline/pull/76)).
+- Files pasted or dropped while another attachment was uploading, including a screenshot picked in the preview, were silently dropped. They now wait their turn, sending waits for all of them, and any problems show together ([#77](https://github.com/AhmedNavaz/throughline/pull/77)).
+- Cancelling the removal of a workspace moved keyboard focus to the first workspace in the list; it now returns to the one you kept ([#78](https://github.com/AhmedNavaz/throughline/pull/78)).
+- Exporting a long conversation, or previewing a long chat to import, could keep Throughline from answering anything else for several seconds while it trimmed the history to fit the 2 MB limit, because it measured the whole file again after each message it dropped. Each message is now measured once, so trimming takes a fraction of a second and keeps the same messages ([#79](https://github.com/AhmedNavaz/throughline/pull/79)).
+
+Thanks to [@seeebbii](https://github.com/seeebbii) for the import, attachment, focus and long-history fixes.
 
 ## [0.20.0] - 2026-11-03
 
@@ -353,6 +361,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.21.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.21.0
 [0.20.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.20.0
 [0.19.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0
 [0.18.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0
