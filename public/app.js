@@ -491,6 +491,11 @@
       if (name === "WebSearch" || name === "search_web") return step("web", "Search the web", input.query || "");
       if (["Task", "Agent"].includes(name)) return step("agent", "Agent", input.description || "");
       if (name === "TodoWrite") return { kind: "tool", skip: true, raw: text };
+      // Claude asking you to choose: its questions, which you answer in the card where approvals wait.
+      if (name === "AskUserQuestion") {
+        const questions = Array.isArray(input.questions) ? input.questions : [], asked = questions.map(question => String(question?.question || "").trim()).filter(Boolean);
+        return step("question", asked.length > 1 ? `Asked ${asked.length} questions` : "Asked", asked.length === 1 ? asked[0] : questions.map(question => question?.header).filter(Boolean).join(" · "), asked.join("\n"));
+      }
       const summary = Object.values(input).find(value => typeof value === "string" && value.trim()) || "";
       return step("tool", name, summary.split("\n")[0].slice(0, 200), result || (Object.keys(input).length ? JSON.stringify(input, null, 2) : ""));
     }
@@ -503,6 +508,11 @@
     if (rule) return { kind: "approval", icon: "approval", verb: rule[1].startsWith("by your rule") ? "Allowed by your rule" : rule[1] === "for this run" ? "Allowed for this run" : "Allowed and remembered", detail: rule[2].split("\n")[0], mono: true, output: "", raw: text };
     if (/^Approval allowed/.test(text)) return { kind: "approval", icon: "approval", verb: "You allowed the request", detail: "", output: "", raw: text };
     if (/^Approval denied/.test(text)) return { kind: "approval", icon: "denied", verb: "You denied the request", detail: "", output: "", error: true, raw: text };
+    // Your answers to an agent's questions, one line each as "question → answer", or that you skipped them.
+    const answered = text.match(/^Answered:\n([\s\S]+)$/);
+    if (answered) { const lines = answered[1].split("\n"); return { kind: "question", icon: "question", verb: "You answered", detail: lines.map(line => line.slice(line.lastIndexOf(" → ") + 3)).join(" · "), output: lines.length > 1 || lines[0].length > 120 ? lines.join("\n") : "", raw: text }; }
+    const skipped = text.match(/^Skipped (the question|\d+ questions);/);
+    if (skipped) return { kind: "question", icon: "question", verb: `You skipped ${skipped[1]}`, detail: "The agent decides", output: "", raw: text };
     if (/diagnostic/i.test(first)) return { kind: "error", icon: "error", verb: "Error", detail: first.replace(/^\w+ diagnostic:\s*/i, "").slice(0, 200), output: text, error: true, raw: text };
     return { kind: "general", icon: "general", verb: first.slice(0, 200), detail: "", output: text.includes("\n") ? text : "", raw: text };
   }
@@ -1033,8 +1043,8 @@
     ui.subtitle.textContent=state.projectId?'Conversation':'Workspace';
     ui.state.classList.toggle('running',running);
     ui.state.hidden=!state.projectId||!state.ready;
-    const approvals=state.conversation?.pendingApprovals?.length;
-    let status=running?(approvals?'Approval required':'Running'):selectedConnection.needsSignIn||!selectedConnection.installed?'Connection required':selectedConnection.needsBilling?'Review billing':selectedConnection.checking?'Checking connection':selectedConnection.account?.authenticated!==true?'Not verified':'Ready';
+    const approvals=state.conversation?.pendingApprovals?.length,questions=approvals&&state.conversation.pendingApprovals.every(item=>item.kind==='question');
+    let status=running?(approvals?(questions?'Question for you':'Approval required'):'Running'):selectedConnection.needsSignIn||!selectedConnection.installed?'Connection required':selectedConnection.needsBilling?'Review billing':selectedConnection.checking?'Checking connection':selectedConnection.account?.authenticated!==true?'Not verified':'Ready';
     if (state.localSelections[state.projectId] && !running) status = 'Local selected';
     if (running && run?.purpose === 'review') status = 'Reviewing';
     if(incomplete && run?.provider===state.provider)status='Stopped';

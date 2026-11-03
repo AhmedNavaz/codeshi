@@ -39,7 +39,8 @@ export function statusSnapshot(registry) {
     const name = names.get(projectId) || 'Workspace', running = broker.running?.c === c ? broker.running : null;
     const add = (kind, text, extra = {}) => rows.push({ projectId, name, kind, text, attention: ['approval', 'failed', 'offer'].includes(kind), ...extra });
     const approval = running && [...running.approvals.values()][0];
-    if (approval) add('approval', `Approval needed · ${agents[running.provider] || 'Agent'}`, { approvalId: approval.id, agent: agents[running.provider] });
+    // An agent's question waits like an approval, and says it is a question.
+    if (approval) add('approval', approval.kind === 'question' ? `${agents[running.provider] || 'The agent'} has a question` : `Approval needed · ${agents[running.provider] || 'Agent'}`, { approvalId: approval.id, agent: agents[running.provider], ...(approval.kind === 'question' ? { question: true } : {}) });
     else if (c.retryOffer && !running) add('offer', `Tests failed · retry with ${agents[c.retryOffer.provider]}?`);
     else if (c.handoffOffer && running) add('offer', `${agents[c.handoffOffer.from.provider]} is at ${Math.round(c.handoffOffer.from.usedPercent)}% · hand off?`);
     else if (!running && c.lastRun?.check?.status === 'failed' && !c.resume) add('failed', 'Tests failed');
@@ -55,7 +56,7 @@ export function statusSnapshot(registry) {
 
 // The words beside the icon: what needs the person, or what the one running agent is doing, or how many are working.
 export function statusTitle({ rows, attention, running }) {
-  if (attention === 1) { const row = rows.find(item => item.attention); return row.kind === 'approval' ? 'Approval needed' : row.kind === 'failed' ? 'Tests failed' : 'Needs you'; }
+  if (attention === 1) { const row = rows.find(item => item.attention); return row.kind === 'approval' ? row.question ? 'Question for you' : 'Approval needed' : row.kind === 'failed' ? 'Tests failed' : 'Needs you'; }
   if (attention > 1) return `${attention} need you`;
   if (running === 1) { const row = rows.find(item => item.kind === 'running'); return clip(row.agent ? `${row.agent} · ${row.action}` : row.action, 32); }
   if (running > 1) return `${running} working`;

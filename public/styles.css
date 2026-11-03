@@ -387,6 +387,7 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .activity-diff.folded { color: var(--faint); font-style: italic; }
 .activity-icon.icon-approval { --activity-icon: var(--icon-check); background: var(--success); }
 .activity-icon.icon-denied { --activity-icon: var(--icon-minus-circle); background: var(--danger); }
+.activity-icon.icon-question { --activity-icon: var(--icon-question); background: var(--link); }
 .activity-icon.icon-error { --activity-icon: var(--icon-alert); background: var(--danger); }
 .activity-icon.icon-tests-passed { --activity-icon: var(--icon-check); background: var(--success); }
 .activity-icon.icon-tests-failed { --activity-icon: var(--icon-alert); background: var(--danger); }

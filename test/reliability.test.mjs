@@ -310,6 +310,45 @@ if(message.id===77&&message.result){send({method:'item/completed',params:{thread
   assert.deepEqual(messages.find(message => message.id === 77).result, { decision: 'accept' });
 });
 
+test('An agent’s question traverses its worker and actual Codex JSON-RPC adapter, and only a checked answer goes back', { skip: scriptCLIs }, async t => {
+  const f = setup(t); const log = path.join(f.root, 'rpc.jsonl');
+  fs.writeFileSync(f.bins.codex, `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';
+if(process.argv.includes('--version')){console.log('question-fixture 1');process.exit(0);}
+const send=value=>console.log(JSON.stringify(value));
+readline.createInterface({input:process.stdin}).on('line',line=>{const message=JSON.parse(line);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(message)+'\\n');
+if(message.method==='initialize')send({id:message.id,result:{}});
+if(message.method==='model/list')send({id:message.id,result:{data:[]}});
+if(message.method==='thread/start')send({id:message.id,result:{thread:{id:'question-thread'},model:'actual-model'}});
+if(message.method==='turn/start'){send({id:message.id,result:{turn:{id:'question-turn'}}});send({id:78,method:'item/tool/requestUserInput',params:{threadId:'question-thread',turnId:'question-turn',itemId:'ask',isBlocking:true,questions:[{id:'storage',header:'Storage',question:'Where should sessions be kept?',isOther:false,options:[{label:'Cookies (Recommended)',description:'Sent with each request'},{label:'Database',description:'One row per session'}]}]}});}
+if(message.id===78&&message.result){const chosen=message.result.answers.storage?.answers?.[0]||'nothing';send({method:'item/completed',params:{threadId:'question-thread',item:{id:'answer',type:'agentMessage',text:'Keeping sessions in '+chosen}}});send({method:'turn/completed',params:{threadId:'question-thread',turn:{id:'question-turn',status:'completed'}}});}
+});\n`);
+  const broker = f.broker(); const c = broker.get(broker.create().id), notices = [];
+  broker.on('notify', notice => { if (notice.kind === 'approval') notices.push(notice); });
+  const { runId } = broker.start(c, { text: 'Add sessions', provider: 'codex', transport: 'app-server', requestId: 'real-adapter-question' });
+  const active = broker.running;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { broker.off('update', check); reject(new Error('No question arrived.')); }, 5000);
+    const check = () => { if (broker.view(c).pendingApprovals.length) { clearTimeout(timer); broker.off('update', check); resolve(); } };
+    broker.on('update', check); check();
+  });
+  const pending = broker.view(c).pendingApprovals[0];
+  assert.equal(pending.kind, 'question'); assert.equal(pending.runId, runId);
+  assert.deepEqual(pending.questions.map(question => [question.id, question.header, question.other, question.options.map(option => [option.label, option.recommended])]), [['storage', 'Storage', false, [['Cookies (Recommended)', true], ['Database', false]]]]);
+  assert.deepEqual(notices.map(notice => [notice.title, notice.body, notice.approvalId]), [['Codex has a question', 'Where should sessions be kept?', pending.id]]);
+  assert.throws(() => broker.approve(runId, pending.id, true), { status: 409 }, 'A question is answered, not approved.');
+  assert.throws(() => broker.answer(runId, pending.id, [['Redis']]), { status: 400 }, 'This question takes only its options.');
+  assert.throws(() => broker.answer('another-run', pending.id, [['Database']]), { status: 409 });
+  assert.equal(c.messages.some(m => /Keeping sessions/.test(m.text)), false, 'Codex waits for the answer.');
+  assert.deepEqual(broker.answer(runId, pending.id, [['Database']]), { resolved: true });
+  await active.done;
+  assert.equal(c.status, 'complete');
+  assert.ok(c.messages.some(m => m.text === 'Keeping sessions in Database'));
+  assert.ok(c.messages.some(m => m.role === 'activity' && m.text === 'Answered:\nWhere should sessions be kept? → Database'), 'The conversation keeps what was asked and answered.');
+  assert.throws(() => broker.answer(runId, pending.id, [['Database']]), { status: 409 });
+  const messages = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(messages.find(message => message.id === 78).result, { answers: { storage: { answers: ['Database'] } } });
+});
+
 test('a long final Codex answer reaches the broker before its worker exits', { skip: scriptCLIs }, async t => {
   const f = setup(t);
   // The final item is far larger than a pipe buffer, so its IPC write is still pending when the turn ends.

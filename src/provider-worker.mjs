@@ -18,6 +18,8 @@ const sendLast = value => new Promise(resolve => { if (process.connected) proces
 process.on('disconnect', () => { if (!finished && process.platform !== 'win32') { try { process.kill(-process.pid, 'SIGTERM'); } catch {} } process.exit(finished ? process.exitCode || 0 : 1); });
 process.on('message', async message => {
   if (message.type === 'approval-result') { pending.get(message.id)?.(message.allow); pending.delete(message.id); return; }
+  // Answers to an agent's questions, one list per question, or null when the person skipped them.
+  if (message.type === 'question-result') { pending.get(message.id)?.(Array.isArray(message.answers) ? message.answers : null); pending.delete(message.id); return; }
   if (message.type === 'steer') {
     let error = 'This run cannot take more input now.';
     try { if (steer && !cancelled) { await steer(String(message.text)); error = null; } } catch (failure) { error = failure.message; }
@@ -42,6 +44,8 @@ process.on('message', async message => {
       metadata: metadata => send({ type: 'metadata', metadata }),
       cancelled: () => cancelled,
       approval: request => new Promise(resolve => { const id = String(request.id); pending.set(id, resolve); send({ type: 'approval', request: { ...request, id } }); }),
+      // Stopping the run answers a waiting question with nothing, as it declines a waiting approval.
+      question: request => new Promise(resolve => { const id = String(request.id); pending.set(id, answers => resolve(Array.isArray(answers) ? answers : null)); send({ type: 'question', request: { ...request, id } }); }),
       steerable: handler => { steer = handler; },
     };
     await (config.transport === 'acp' ? runGemini(config, callbacks) : config.transport === 'app-server' ? runCodex(config, callbacks) : runClaude(config, callbacks));

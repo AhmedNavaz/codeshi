@@ -206,6 +206,28 @@ test('rejects invalid providers, malformed JSON and unknown conversations', asyn
   assert.equal((await (await fetch(`${f.url}/api/conversations`)).json()).length, 1);
 });
 
+test('an answer reaches only a question still waiting, and skipping must be said outright', async t => {
+  const f = await fixture(t);
+  const created = await (await post(`${f.url}/api/conversations`, {})).json(), endpoint = `${f.url}/api/conversations/${created.id}/answer`;
+  const stale = await post(endpoint, { runId: 'run-one', questionId: 'ask-1', skip: true });
+  assert.equal(stale.status, 409); assert.match((await stale.json()).error, /no longer waiting/);
+  // A run waiting on a question, as the broker holds it while its agent waits.
+  const { broker } = [...f.app.registry.brokers.values()][0], c = broker.get(created.id), sent = [];
+  const question = { id: 'ask-1', kind: 'question', runId: 'run-one', provider: 'claude', questions: [{ id: 'q1', header: 'Region', question: 'Which region?', options: [{ label: 'EU', description: '', recommended: false }], multiple: false, other: false, secret: false }] };
+  broker.running = { id: 'run-one', c, provider: 'claude', approvals: new Map([['ask-1', question]]), child: { send: message => sent.push(message) } };
+  t.after(() => { broker.running = null; });
+  const missing = await post(endpoint, { runId: 'run-one', questionId: 'ask-1' });
+  assert.equal(missing.status, 400, 'No answers is not a skip.'); assert.match((await missing.json()).error, /Answer each question, or skip them/);
+  assert.equal((await post(`${f.url}/api/conversations/${created.id}/approval`, { runId: 'run-one', approvalId: 'ask-1', allow: true })).status, 409, 'A question is not approved.');
+  const answered = await post(endpoint, { runId: 'run-one', questionId: 'ask-1', answers: [['EU']] });
+  assert.equal(answered.status, 200); assert.deepEqual(await answered.json(), { resolved: true });
+  assert.deepEqual(sent, [{ type: 'question-result', id: 'ask-1', answers: [['EU']] }]);
+  broker.running.approvals.set('ask-1', question);
+  assert.equal((await post(endpoint, { runId: 'run-one', questionId: 'ask-1', skip: true })).status, 200);
+  assert.deepEqual(sent.at(-1), { type: 'question-result', id: 'ask-1', answers: null });
+  assert.deepEqual(c.messages.filter(message => message.role === 'activity').map(message => message.text), ['Answered:\nWhich region? → EU', 'Skipped the question; the agent continues on its own judgement.']);
+});
+
 test('keeps multi-byte characters that arrive split across request chunks', async t => {
   const f = await fixture(t);
   const { id } = await (await fetch(`${f.url}/api/conversation`)).json();

@@ -64,6 +64,15 @@ test('the words beside the icon say what needs you, or what the one running agen
   assert.equal(statusTitle(rows('approval', 'offer', 'running')), '2 need you');
 });
 
+test('an agent’s question waits like an approval, says it is a question, and keeps its words in the app', () => {
+  const question = { id: 'ask-1', kind: 'question', questions: [{ id: 'q1', header: 'Storage', question: 'Where should the secret sessions be kept?', options: [], multiple: false, other: true, secret: false }] };
+  const snapshot = statusSnapshot(registry([{ id: 'api', name: 'payments-api', c: working([]), running: { provider: 'claude', approvals: new Map([['ask-1', question]]) } }]));
+  assert.deepEqual(snapshot.rows.map(row => [row.name, row.kind, row.text, row.approvalId]), [['payments-api', 'approval', 'Claude has a question', 'ask-1']]);
+  assert.equal(snapshot.attention, 1);
+  assert.equal(statusTitle(snapshot), 'Question for you');
+  assert.doesNotMatch(JSON.stringify(snapshot.rows), /secret sessions/, 'The question itself is the agent’s text and stays in the app.');
+});
+
 test('the status menu opens the right workspace or request and only changes Keep Awake when it is clicked', () => {
   const calls = [];
   const snapshot = { rows: [{ projectId: 'api', name: 'payments-api', kind: 'approval', text: 'Approval needed: npm install', approvalId: 'ap1', attention: true }, { projectId: 'shop', name: 'acme-shop', kind: 'running', text: 'Codex · Reading files' }], attention: 1, running: 1 };

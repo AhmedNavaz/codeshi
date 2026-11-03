@@ -32,6 +32,7 @@ flowchart TD
 | Workspace identity, folders and one permanent conversation | `src/projects.mjs` |
 | Conversation journal, accepted submissions, approvals and run lifecycle | `src/broker.mjs` |
 | Run checkpoints in a private Git object store per folder, and previewed undo and redo (#20) | `src/checkpoints.mjs`, `src/checkpoint-routes.mjs` |
+| An agent's questions with options: Claude's AskUserQuestion and Codex's request_user_input in one shape, answer checks, and the card where they are answered | `src/agent-questions.mjs`, `public/questions.js` |
 | Which sound an alert plays, and the saved sound settings; the page plays it from the `alert` event | `src/alert-sounds.mjs` |
 | Waiting for a usage limit to reset and continuing on the first agent with room (#32) | `src/resume.mjs` |
 | Loopback relay that reaches Google over IPv4 first for the Antigravity runtime | `src/google-relay.mjs` |

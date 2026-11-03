@@ -67,7 +67,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,soundsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,questionsUI=false,soundsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences);
   window.innerWidth=1280;window.innerHeight=800;
@@ -189,7 +189,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
   const previewOpens=[],previewListeners=[];
   if(previewUI)window.relayDesktop=Object.assign(window.relayDesktop||{},{openPreview:async input=>{previewOpens.push(clone(input));return true;},onPreviewPick:callback=>{previewListeners.push(callback);return ()=>{};}});
-  vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(workbench)vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});
+  vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(questionsUI)vm.runInContext(fs.readFileSync(new URL('../public/questions.js',import.meta.url),'utf8'),context,{filename:'public/questions.js'});if(workbench)vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});
   if(insights)vm.runInContext(fs.readFileSync(new URL('../public/insights.js',import.meta.url),'utf8'),context,{filename:'public/insights.js'});
   if(modelPickerUI)vm.runInContext(fs.readFileSync(new URL('../public/model-picker.js',import.meta.url),'utf8'),context,{filename:'public/model-picker.js'});
   if(layoutUI)vm.runInContext(fs.readFileSync(new URL('../public/layout.js',import.meta.url),'utf8'),context,{filename:'public/layout.js'});
@@ -2740,4 +2740,91 @@ test('the message box grows a pixel past its text and only scrolls at its full h
   type('', 20);
   assert.equal(input.style.height, '64px');
   assert.equal(input.style.overflowY, 'hidden');
+});
+
+// An agent's two questions, as the broker lists them with the approvals: the first suggests an option, the second
+// allows several, and both take your own words.
+const agentQuestion = () => ({ id: 'ask-1', kind: 'question', runId: 'run-one', provider: 'claude', questions: [
+  { id: 'q1', header: 'Library', question: 'Which library should we use for dates?', multiple: false, other: true, secret: false, options: [{ label: 'date-fns (Recommended)', description: 'Small and tree-shakeable', recommended: true }, { label: 'Luxon', description: 'Time zones built in', recommended: false }] },
+  { id: 'q2', header: 'Storage', question: 'Where should sessions be kept?', multiple: true, other: true, secret: false, options: [{ label: 'Cookies', description: '', recommended: false }, { label: 'Local storage', description: '', recommended: false }] },
+] });
+async function askedUI(question = agentQuestion()) {
+  const ui = await browser({ workbench: true, questionsUI: true, insights: true }), conversation = ui.canonical.get('project-one'), answers = [];
+  ui.setIntercept((request, next) => { if (!request.path.endsWith('/answer')) return next(); answers.push(request.body); conversation.pendingApprovals = []; return response({ resolved: true }); });
+  const now = new Date().toISOString();
+  Object.assign(conversation, { status: 'running', activeRun: { id: 'run-one', provider: 'claude', startedAt: now, lastEventAt: now }, pendingApprovals: [question] });
+  await ui.window.relayUI.refresh(); await flush();
+  const card = ui.$('pending-approvals').querySelectorAll('article')[0], groups = () => card.querySelectorAll('.question');
+  const choice = (index, value) => groups()[index].querySelectorAll('input').find(input => input.value === value && input.type !== 'text');
+  const own = index => groups()[index].querySelectorAll('.question-own')[0];
+  const button = text => card.querySelectorAll('button').find(node => node.textContent === text);
+  const key = (target, value) => card.dispatchEvent(new UIEvent('keydown', { key: value, target }));
+  return { ui, card, answers, choice, own, button, key };
+}
+
+test('an agent’s questions show one at a time with their choices, the suggested one marked, and your own answer', async () => {
+  const { ui, card, answers, choice, own, button, key } = await askedUI();
+  const shown = () => card.querySelectorAll('.question').map(field => !field.hidden), tabs = () => card.querySelectorAll('.question-tab');
+  assert.equal(card.dataset.approvalId, 'ask-1');
+  assert.equal(card.querySelectorAll('h3')[0].textContent, 'Claude has 2 questions');
+  assert.deepEqual(tabs().map(tab => [tab.textContent, tab.getAttribute('aria-selected')]), [['Library', 'true'], ['Storage', 'false']], 'Several questions get their headers as tabs.');
+  assert.deepEqual(shown(), [true, false], 'One question shows at a time.');
+  assert.deepEqual(card.querySelectorAll('.question-option-label').map(node => node.textContent), ['date-fnsRecommended', 'Luxon', 'Cookies', 'Local storage'], 'The suggested option shows a badge instead of its "(Recommended)".');
+  assert.deepEqual([choice(0, 'Luxon').type, choice(1, 'Cookies').type], ['radio', 'checkbox']);
+  assert.deepEqual([button('Next')?.disabled, button('Submit')], [true, undefined], 'Next waits for an answer to this question.');
+  // A number key makes a single choice and moves on to the question still without an answer.
+  key(choice(0, 'Luxon'), '2');
+  assert.equal(choice(0, 'Luxon').checked, true);
+  assert.deepEqual(shown(), [false, true]);
+  assert.equal(tabs()[0].classList.contains('answered'), true);
+  // Its tab goes back, and one choice replaces another.
+  tabs()[0].click(); key(choice(0, 'Luxon'), '1');
+  assert.deepEqual([choice(0, 'date-fns (Recommended)').checked, choice(0, 'Luxon').checked], [true, false]);
+  assert.deepEqual(shown(), [false, true]);
+  // Several can be chosen in the second, and typing your own answer chooses it; number keys stay in the text.
+  const cookies = choice(1, 'Cookies'); cookies.checked = true; cookies.dispatchEvent(new UIEvent('change'));
+  own(1).value = 'A signed token'; own(1).dispatchEvent(new UIEvent('input'));
+  key(own(1), '2');
+  assert.equal(choice(1, 'Local storage').checked, false);
+  assert.equal(button('Submit').disabled, false, 'With every question answered, Next becomes Submit.');
+  button('Submit').click(); await flush();
+  assert.deepEqual(answers, [{ runId: 'run-one', questionId: 'ask-1', answers: [['date-fns (Recommended)'], ['Cookies', 'A signed token']] }]);
+  assert.equal(ui.$('pending-approvals').querySelectorAll('article').length, 0, 'The answered card goes away.');
+});
+
+test('skipping an agent’s question lets it decide, Enter submits, and the status says it waits for your answer', async () => {
+  const one = agentQuestion(); one.questions = one.questions.slice(0, 1);
+  const { ui, card, answers, choice, button, key } = await askedUI(one);
+  assert.equal(card.querySelectorAll('h3')[0].textContent, 'Claude has a question');
+  assert.equal(ui.$('conversation-state').lastElementChild.textContent, 'Question for you');
+  assert.equal(ui.$('run-action').textContent, 'Waiting for your answer');
+  key(choice(0, 'Luxon'), 'Enter');
+  assert.equal(answers.length, 0, 'Enter does nothing until each question has an answer.');
+  key(choice(0, 'Luxon'), '1'); key(choice(0, 'date-fns (Recommended)'), 'Enter'); await flush();
+  assert.deepEqual(answers, [{ runId: 'run-one', questionId: 'ask-1', answers: [['date-fns (Recommended)']] }]);
+  ui.canonical.get('project-one').pendingApprovals = [one]; await ui.window.relayUI.refresh(); await flush();
+  const again = ui.$('pending-approvals').querySelectorAll('article')[0];
+  again.querySelectorAll('button').find(node => node.textContent === 'Skip').click(); await flush();
+  assert.deepEqual(answers[1], { runId: 'run-one', questionId: 'ask-1', skip: true });
+  assert.equal(button('Skip').title, 'Claude continues with its own judgement');
+});
+
+test('a run shows what an agent asked and what you answered or skipped', async () => {
+  const ui = await browser(), conversation = ui.canonical.get('project-one'), runId = 'run-asked', step = (id, text) => ({ id, runId, role: 'activity', provider: 'claude', text });
+  Object.assign(conversation, { status: 'complete', lastRun: { id: runId, provider: 'claude', status: 'complete' }, messages: [
+    { id: 'u1', runId, role: 'user', text: 'Add sessions', provider: 'claude' },
+    step('s1', 'AskUserQuestion\n{"questions":[{"header":"Library","question":"Which library should we use for dates?","options":[{"label":"Luxon","description":""}],"multiSelect":false}]}\nUser has answered your questions.'),
+    step('s2', 'Answered:\nWhich library should we use for dates? → Luxon'),
+    step('s3', 'AskUserQuestion\n{"questions":[{"header":"Library","question":"Which library?"},{"header":"Storage","question":"Where?"}]}'),
+    step('s4', 'Skipped 2 questions; the agent continues on its own judgement.'),
+    { id: 'a1', runId, role: 'assistant', provider: 'claude', text: 'Done.', status: 'complete' },
+  ] });
+  await ui.window.relayUI.refresh(); await flush();
+  const rows = ui.document.querySelectorAll('.activity-entry').map(row => [row.querySelectorAll('.activity-entry-title')[0]?.textContent, row.querySelectorAll('.activity-entry-detail')[0]?.textContent, row.querySelectorAll('.activity-icon')[0]?.className]);
+  assert.deepEqual(rows, [
+    ['Asked', 'Which library should we use for dates?', 'activity-icon icon-question'],
+    ['You answered', 'Luxon', 'activity-icon icon-question'],
+    ['Asked 2 questions', 'Library · Storage', 'activity-icon icon-question'],
+    ['You skipped 2 questions', 'The agent decides', 'activity-icon icon-question'],
+  ]);
 });

@@ -8,6 +8,7 @@ import os from 'node:os';
 import { probeCli } from './cli-probe.mjs';
 import { resolveBinary, withBinaryPath } from './resolve-binary.mjs';
 import { localEndpoint, verifyLocalModel } from './local-models.mjs';
+import { claudeQuestions, claudeAnswers, codexQuestions, codexAnswers } from './agent-questions.mjs';
 
 export function classifyError(error) {
   const text = typeof error === 'string' ? error : `${error?.code || ''} ${error?.message || ''} ${JSON.stringify(error?.data || error || {})}`;
@@ -85,7 +86,7 @@ export class CodexClient extends EventEmitter {
   close() { if (!this.closed) { this.child.stdin.end(); this.child.kill('SIGTERM'); } }
 }
 
-export async function runCodex(config, { event, approval, metadata, cancelled = () => false, steerable = () => {}, clientFactory = options => new CodexClient(options), verifyLocal = verifyLocalModel }) {
+export async function runCodex(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, clientFactory = options => new CodexClient(options), verifyLocal = verifyLocalModel }) {
   if (config.reviewSnapshot && (config.mode !== 'read' || config.sessionId)) throw new Error('Snapshot reviews require read-only access and a fresh native session.');
   if (config.local) config.local = { ...config.local, ...await verifyLocal(config.local.model, config.local.digest, { endpoint: config.local.endpoint }) };
   const client = clientFactory({ bin: config.bin, cwd: config.workspace, ...(config.local ? { local: config.local } : {}), ...(config.reviewSnapshot ? { reviewSnapshot: true } : {}) });
@@ -101,6 +102,10 @@ export async function runCodex(config, { event, approval, metadata, cancelled = 
         if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) {
           const allow = config.mode === 'read' ? false : await approval({ id: String(message.id), kind: message.method, ...p });
           client.send({ id: message.id, result: { decision: allow ? 'accept' : 'decline' } });
+        } else if (message.method === 'item/tool/requestUserInput' && question && !config.reviewSnapshot) {
+          // Codex asks you to choose: the question waits in Throughline like an approval, and skipping it sends no answers.
+          const questions = codexQuestions(p), answers = questions.length ? await question({ id: String(message.id), questions }) : null;
+          client.send({ id: message.id, result: codexAnswers(p, answers || null) });
         } else client.send({ id: message.id, error: { code: -32601, message: 'This interaction is not supported by Throughline; use the native client.' } });
         return;
       }
@@ -162,7 +167,7 @@ export async function runCodex(config, { event, approval, metadata, cancelled = 
   } finally { steerable(null); client.close(); }
 }
 
-export async function runClaude(config, { event, approval, metadata, cancelled = () => false, steerable = () => {}, queryImpl } = {}) {
+export async function runClaude(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, queryImpl } = {}) {
   const query = queryImpl || (await import('@anthropic-ai/claude-agent-sdk')).query;
   const controller = new AbortController();
   const timer = setInterval(() => { if (cancelled()) controller.abort(); }, 100);
@@ -189,11 +194,19 @@ export async function runClaude(config, { event, approval, metadata, cancelled =
       cwd: config.workspace, pathToClaudeCodeExecutable: config.bin, permissionMode: config.mode === 'read' ? 'plan' : 'default',
       additionalDirectories: [...new Set(config.workspaces || [])].filter(directory => directory !== config.workspace),
       settingSources: [], settings: { disableAllHooks: true }, mcpServers: {}, strictMcpConfig: true, disallowedTools: ['mcp__*'],
-      // TodoWrite only keeps Claude's own to-do list, shown as the run's plan; it reads and changes nothing.
-      tools: config.mode === 'read' ? ['Read', 'Glob', 'Grep', 'TodoWrite'] : ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'TodoWrite'],
+      // TodoWrite only keeps Claude's own to-do list, shown as the run's plan; it reads and changes nothing. With
+      // AskUserQuestion Claude can ask you to choose between options; asking changes nothing either, so read-only runs
+      // keep it, and only a background review, which nobody answers, goes without.
+      tools: [...(config.mode === 'read' ? ['Read', 'Glob', 'Grep', 'TodoWrite'] : ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'TodoWrite']), ...(question && !config.reviewSnapshot ? ['AskUserQuestion'] : [])],
       includePartialMessages: true, ...(config.effort ? { effort: config.effort } : {}), abortController: controller, ...(config.sessionId ? { resume: config.sessionId } : {}), model: config.model || 'default',
       canUseTool: async (toolName, input, options) => {
         if (toolName === 'TodoWrite') return { behavior: 'allow', updatedInput: input };
+        // The questions wait in Throughline like an approval; the answers go back with them, and skipping tells Claude to decide.
+        if (toolName === 'AskUserQuestion') {
+          const questions = question && !config.reviewSnapshot ? claudeQuestions(input) : [];
+          const answers = questions.length ? await question({ id: options?.toolUseID || `${Date.now()}-${Math.random()}`, questions }) : null;
+          return answers ? { behavior: 'allow', updatedInput: { ...input, answers: claudeAnswers(input, answers) } } : { behavior: 'deny', message: 'The user skipped these questions. Continue with your best judgement, and say which choices you made.' };
+        }
         if (config.mode === 'read' && !['Read', 'Glob', 'Grep'].includes(toolName)) return { behavior: 'deny', message: 'Read-only mode blocks this tool.' };
         const allow = await approval({ id: options?.toolUseID || `${Date.now()}-${Math.random()}`, kind: toolName, input });
         return allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'The user declined this action.' };

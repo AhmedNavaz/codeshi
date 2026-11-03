@@ -94,8 +94,10 @@
     const elapsed = running ? Date.now() - Date.parse(run.startedAt) : run.elapsedMs || Date.parse(run.endedAt) - Date.parse(run.startedAt);
     const silence = Date.now() - Date.parse(run.lastEventAt || run.startedAt);
     const phase = c.pendingApprovals?.length ? 'approval' : run.phase || 'starting';
+    // An agent waiting only on its questions is waiting for your answer, not your approval.
+    const asking = Boolean(c.pendingApprovals?.length) && c.pendingApprovals.every(item => item.kind === 'question');
     const quiet = running && !c.pendingApprovals?.length && silence > 30000;
-    const phaseLabel = { starting: 'Starting agent', working: 'Working', reasoning: 'Reasoning', responding: 'Writing response', tool: 'Running tools', compacting: 'Organizing context', approval: 'Waiting for approval' }[phase] || 'Working';
+    const phaseLabel = { starting: 'Starting agent', working: 'Working', reasoning: 'Reasoning', responding: 'Writing response', tool: 'Running tools', compacting: 'Organizing context', approval: asking ? 'Waiting for your answer' : 'Waiting for approval' }[phase] || 'Working';
     $('run-phase').textContent = running ? state.streamConnected === false ? 'Reconnecting to app' : quiet ? 'Waiting for provider' : phaseLabel : run.status === 'complete' ? 'Completed' : run.errorCategory === 'quota' ? 'Usage limit reached' : 'Run stopped';
     $('run-phase').className = `run-phase sr-only ${running ? quiet ? 'quiet' : phase === 'approval' ? 'approval' : 'active' : run.status === 'complete' ? 'complete' : 'quiet'}`;
     // A finished run states its duration in the action text.
@@ -108,7 +110,7 @@
     let actionText;
     if (running) {
       if (state.streamConnected === false) actionText = 'Reconnecting to the app';
-      else if (c.pendingApprovals?.length) actionText = 'Waiting for your approval';
+      else if (c.pendingApprovals?.length) actionText = asking ? 'Waiting for your answer' : 'Waiting for your approval';
       else if (quiet) actionText = `Waiting for ${agent}`;
       else actionText = { starting: `Starting ${agent}`, reasoning: 'Thinking', responding: 'Writing', compacting: 'Organizing context' }[phase] || 'Working';
     } else if (run.status === 'complete') actionText = `Completed in ${Number.isFinite(elapsed) ? duration(elapsed) : 'recorded duration'}`;

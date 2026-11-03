@@ -35,6 +35,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/sounds.js': ['sounds.js', 'text/javascript; charset=utf-8'], '/sounds.css': ['sounds.css', 'text/css; charset=utf-8'],
+  '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'] };
 const json = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -253,7 +254,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           return json(res,existed?200:201,registry.mainConversation(projectId));
         }
       }
-      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|approval|resume|queue|handoff|steer|routing|retry))?$/);
+      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|approval|answer|resume|queue|handoff|steer|routing|retry))?$/);
       if (match) {
         const broker = selectedBroker(url);
         const c = broker.get(match[1]);
@@ -264,6 +265,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (closing) return json(res, 503, { error: 'Throughline is stopping.' });
           if (match[2] === 'context') return json(res, 200, await broker.updateContext(c, input));
           if (match[2] === 'approval') return json(res, 200, await broker.approve(input.runId, input.approvalId, input.allow === true, input.remember ?? null));
+          if (match[2] === 'answer') return json(res, 200, await broker.answer(input.runId, input.questionId, input.skip === true ? null : input.answers));
           if (match[2] === 'provider') return json(res, 200, await broker.settings(c, input));
           if (match[2] === 'stop') return json(res, 200, broker.stop(c.id));
           if (match[2] === 'resume') return json(res, 200, input.cancel === true ? broker.cancelResume(c) : broker.scheduleResume(c, input));

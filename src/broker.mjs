@@ -18,6 +18,7 @@ import { processStart, reused } from './mutation-lock.mjs';
 import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mjs';
 import { ResumeScheduler } from './resume.mjs';
 import { readOnlyRequest, approvalScope } from './approval-rules.mjs';
+import { cleanQuestions, checkAnswers, answerSummary } from './agent-questions.mjs';
 import { PermissionRules } from './permission-rules.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
 import { HandoffMonitor } from './handoff.mjs';
@@ -411,12 +412,25 @@ export class Broker extends EventEmitter {
     if (typeof allow !== 'boolean') throw Object.assign(new Error('Choose allow or deny.'), { status: 400 });
     if (remember !== null && !['run', 'workspace'].includes(remember)) throw Object.assign(new Error('Choose this run or this workspace.'), { status: 400 });
     const approval = run.approvals.get(approvalId);
+    if (approval.kind === 'question') throw Object.assign(new Error('This is a question. Choose your answers, or skip it.'), { status: 409 });
     if (remember && (!allow || !approval.scope)) throw Object.assign(new Error('Only an allowed action with an exact scope can be remembered.'), { status: 400 });
     run.approvals.delete(approvalId);
     if (remember === 'run') (run.allowances ||= new Set()).add(approval.scope.key);
     if (remember === 'workspace') this.permissions.remember(approval.scope, run.provider);
     run.child?.send({ type: 'approval-result', id: approvalId, allow });
     this.message(run.c, 'activity', remember ? `Allowed ${remember === 'run' ? 'for this run' : 'and remembered for this workspace'}: ${approval.scope.label}` : `Approval ${allow ? 'allowed' : 'denied'} by the user.`, run.provider);
+    return { resolved: true };
+  }
+
+  // Answers to an agent's questions: one list per question, each an option's label or the person's own words, or
+  // null to skip them. The conversation keeps what was asked and answered, for the agents that read it later.
+  answer(runId, questionId, answers) {
+    const run = this.running, item = run && run.id === runId ? run.approvals.get(questionId) : null;
+    if (!item || item.kind !== 'question') throw Object.assign(new Error('This question is no longer waiting for an answer.'), { status: 409 });
+    const checked = checkAnswers(item.questions, answers);
+    run.approvals.delete(questionId);
+    run.child?.send({ type: 'question-result', id: questionId, answers: checked });
+    this.message(run.c, 'activity', answerSummary(item.questions, checked), run.provider);
     return { resolved: true };
   }
 
@@ -614,6 +628,15 @@ export class Broker extends EventEmitter {
               const approval = { ...message.request, runId, provider, ...(scope ? { scope } : {}) }; run.approvals.set(approval.id, approval); this.emit('update', { conversationId: c.id });
               // The run pauses here until the person answers, so tell them.
               this.emit('notify', { conversationId: c.id, kind: 'approval', approvalId: approval.id, title: 'Approval needed', body: `${provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex'} is waiting for your approval.` });
+            }
+            // A question with options waits with the approvals, so everything that shows an approval waiting shows it
+            // too. It is never answered by a policy or a rule; a background review, which nobody answers, skips it.
+            if (message.type === 'question') {
+              const questions = cleanQuestions(message.request?.questions), id = String(message.request?.id || '');
+              if (review || !questions.length || !id || run.approvals.has(id)) { run.child.send({ type: 'question-result', id, answers: null }); return; }
+              run.approvals.set(id, { id, kind: 'question', runId, provider, questions }); this.emit('update', { conversationId: c.id });
+              const name = provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex';
+              this.emit('notify', { conversationId: c.id, kind: 'approval', approvalId: id, title: questions.length === 1 ? `${name} has a question` : `${name} has ${questions.length} questions`, body: questions[0].question });
             }
           } catch (error) { run.failed = true; run.errorCategory = classifyError(error); run.stderr = error.message; this.cancel(run); }
         });

@@ -4,6 +4,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **Questions from agents.** When Claude stops to ask you to choose, such as which library to use, the question shows where approvals wait: its choices with the agent's suggestion marked **Recommended**, and room for your own answer. Several questions show one at a time, as tabs. Choose with a click or a number key, then **Submit**, or **Skip** to let the agent decide. The agent waits as it does for an approval, with the same alerts and sound, and your answers stay in the conversation for the next agent. Codex's questions work the same way where its connection asks them.
+
 ### Fixed
 
 - A message that wrapped to three lines showed a scroll bar in the message box, though all of it was visible. The box now grows a pixel more and only scrolls once it reaches its full height.
