@@ -89,6 +89,20 @@ export function routingNote(routing) {
   return { mode: routing.mode, reason: typeof routing.reason === 'string' ? routing.reason.slice(0, 300) : '', ...(TIERS.includes(routing.tier) ? { tier: routing.tier } : {}), ...(escalation ? { escalation } : {}) };
 }
 
+// Where each new imported message goes, as the id of the message it follows (null for the start). A run's prompt and replies stay together as one turn,
+// timed from its prompt, and each message goes before the first later turn, so on equal times the turn already there comes first (#55).
+function importPlaces(existing, entries) {
+  const turns = [];
+  for (const message of existing) { const turn = turns.at(-1); if (message.runId && turn?.runId === message.runId) turn.end = message.id; else turns.push({ runId: message.runId, time: Date.parse(message.createdAt), end: message.id }); }
+  // The entries are in time order, so the first later turn never moves back.
+  const after = {}; let index = 0, tail = null;
+  for (const { time, message } of entries) {
+    while (index < turns.length && !(turns[index].time > time)) tail = turns[index++].end;
+    after[message.id] = tail; tail = message.id;
+  }
+  return after;
+}
+
 export class Broker extends EventEmitter {
   constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), handoffPreferences = () => ({ threshold: 90, automatic: false }), tests = null }) {
     super();
@@ -228,10 +242,14 @@ export class Broker extends EventEmitter {
     }
     if (record.type === 'import') {
       for (const importId of record.importIds || [record.importId]) c.imports[importId] = true;
+      let last = -1;
       for (const message of record.messages) {
         const previous = c.messages.find(item => item.id === message.id && item.importSource === message.importSource);
-        if (previous) Object.assign(previous, message, { seq: record.seq, imported: true });
-        else c.messages.push({ ...message, seq: record.seq, imported: true });
+        if (previous) { Object.assign(previous, message, { seq: record.seq, imported: true }); continue; }
+        // The record names the message each new one follows (null for the start). Older records name none, so theirs go at the end, as does one whose message is gone (#55).
+        const follows = record.after?.[message.id], found = follows == null ? -1 : c.messages[last]?.id === follows ? last : c.messages.findIndex(item => item.id === follows);
+        last = follows === null ? 0 : found < 0 ? c.messages.length : found + 1;
+        c.messages.splice(last, 0, { ...message, seq: record.seq, imported: true });
       }
     }
     if (record.type === 'message_delta') { const message = c.messages.find(m => m.id === record.id); if (!message) throw new Error('Message delta has no original message.'); message.text += record.text; message.seq = record.seq; if (record.status) message.status = record.status; }
@@ -361,15 +379,18 @@ export class Broker extends EventEmitter {
     const pending = previews.map(preview => ({ preview, importId: `${preview.provider}:${preview.sessionId}:${preview.digest}` })).filter(({ importId }) => !c.imports[importId]);
     if (!pending.length) return { imported: 0, updated: 0, duplicate: true, conversationId: c.id };
     const known = new Map(c.messages.filter(m => m.importSource).map(m => [m.importSource, m]));
-    // A message without a timestamp keeps its place after the previous timed message of the same conversation.
-    const rows = pending.flatMap(({ preview }, source) => { let time = 0; return preview.messages.map((message, index) => { const at = Date.parse(message.timestamp); if (Number.isFinite(at)) time = at; return { preview, message, time, source, index }; }); });
-    rows.sort((first, second) => first.time - second.time || first.source - second.source || first.index - second.index);
-    const messages = rows.map(({ preview, message: { timestamp, ...message } }) => {
+    // A message without a timestamp takes the time of the nearest timed message before it in its conversation (or after it, at the start), so it stays beside it. A conversation with no times at all goes at the end.
+    const rows = pending.flatMap(({ preview }, source) => {
+      const times = preview.messages.map(message => Date.parse(message.timestamp)); let time = times.find(Number.isFinite) ?? Infinity;
+      return preview.messages.map((message, index) => { if (Number.isFinite(times[index])) time = times[index]; return { preview, message, time, source, index }; });
+    });
+    rows.sort((first, second) => (first.time > second.time) - (first.time < second.time) || first.source - second.source || first.index - second.index);
+    const entries = rows.map(({ preview, time, message: { timestamp, ...message } }) => {
       const importSource = `${preview.provider}:${preview.sessionId}:${message.sourceId}`, previous = known.get(importSource);
-      return { ...message, provider: preview.provider === 'file' ? message.provider : preview.provider, id: previous?.id || randomUUID(), createdAt: previous?.createdAt || (Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : new Date().toISOString()), importSource };
-    }).filter(message => !known.has(message.importSource) || known.get(message.importSource).text !== message.text);
-    const updated = messages.filter(message => known.has(message.importSource)).length;
-    this.record(c, { type: 'import', importId: pending[0].importId, importIds: pending.map(row => row.importId), messages });
+      return { time, message: { ...message, provider: preview.provider === 'file' ? message.provider : preview.provider, id: previous?.id || randomUUID(), createdAt: previous?.createdAt || (Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : new Date().toISOString()), importSource } };
+    }).filter(({ message }) => !known.has(message.importSource) || known.get(message.importSource).text !== message.text);
+    const messages = entries.map(entry => entry.message), updated = messages.filter(message => known.has(message.importSource)).length;
+    this.record(c, { type: 'import', importId: pending[0].importId, importIds: pending.map(row => row.importId), messages, after: importPlaces(c.messages, entries.filter(({ message }) => !known.has(message.importSource))) });
     return { imported: messages.length - updated, updated, duplicate: !messages.length, conversationId: c.id };
   }
 
