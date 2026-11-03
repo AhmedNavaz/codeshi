@@ -117,7 +117,7 @@ export function sourceScript(nonce) {
 }
 
 export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#181818', captureWait = 1500 }) {
-  let win = null, toolbar = null, page = null, projectId = null, workspace = '', picking = false, pickCount = 0;
+  let win = null, toolbar = null, page = null, projectId = null, workspace = '', picking = false, pickCount = 0, capture = 'none';
   const previewSession = session.fromPartition(PREVIEW_PARTITION);
   previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   previewSession.setPermissionCheckHandler(() => false);
@@ -186,12 +186,13 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     const rect = captureRect(pick?.rect, pick?.viewport);
     let image = null;
     // The screenshot helps but never holds up the pick. A blank one (from a view that has not painted yet) is taken
-    // once more; a capture that hangs, as it can on a covered window, is left out.
+    // once more; a capture that hangs, as it can on a covered window, is left out. How it went is kept for checks.
+    capture = rect ? 'blank' : 'none';
     for (let attempt = 0; rect && !image && attempt < 2; attempt++) {
       if (attempt) await new Promise(resolve => setTimeout(resolve, 250));
       let shot = await Promise.race([contents.capturePage(rect).catch(() => null), new Promise(resolve => setTimeout(resolve, captureWait, 'hung'))]);
-      if (shot === 'hung') break;
-      if (shot && !shot.isEmpty()) { if (shot.getSize().width > 1600) shot = shot.resize({ width: 1600 }); image = { name: `preview-${element.tag}.png`, data: shot.toPNG().toString('base64') }; }
+      if (shot === 'hung') { capture = 'hung'; break; }
+      if (shot && !shot.isEmpty()) { if (shot.getSize().width > 1600) shot = shot.resize({ width: 1600 }); image = { name: `preview-${element.tag}.png`, data: shot.toPNG().toString('base64') }; capture = 'captured'; }
     }
     const value = { projectId, url, element, source, image, text: pickText({ element, url, source }) };
     pickCount++;
@@ -219,5 +220,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     open, setPicking, close: () => { if (win && !win.isDestroyed()) win.close(); },
     dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); if (win && !win.isDestroyed()) win.destroy(); win = null; },
     get page() { return page; }, get picking() { return picking; },
+    // How the last pick's screenshot went: captured, blank, hung, or none when the pick had no area.
+    get lastCapture() { return capture; },
   };
 }

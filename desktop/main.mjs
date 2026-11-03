@@ -203,9 +203,13 @@ else {
           contents.sendInputEvent({type:'mouseDown',x:point.x,y:point.y,button:'left',clickCount:1});
           contents.sendInputEvent({type:'mouseUp',x:point.x,y:point.y,button:'left',clickCount:1});
           const pick=await Promise.race([picked,new Promise(resolve=>setTimeout(()=>resolve(null),8000))]),title=await contents.executeJavaScript('document.title');
-          result.preview=Boolean(outlined&&pick&&pick.element?.selector==='#buy'&&pick.element.text==='Buy now'&&pick.image?.data?.length>100&&pick.text.includes('the “Buy now” button (#buy)')&&title==='Smoke app');
+          // The screenshot only helps a pick: the app leaves it out when the window hasn't painted or the capture hangs,
+          // as on a CI machine's display. There a pick without one passes, and the check says why it is missing.
+          const pictured=pick?.image?.data?.length>100,picture=pictured||(process.env.CI==='true'&&['blank','hung'].includes(preview.lastCapture));
+          result.preview=Boolean(outlined&&pick&&pick.element?.selector==='#buy'&&pick.element.text==='Buy now'&&picture&&pick.text.includes('the “Buy now” button (#buy)')&&title==='Smoke app');
+          if(!pictured)result.previewCapture=preview.lastCapture;
           // A failure says which step went wrong.
-          if(!result.preview)result.previewSteps={outlined,picked:Boolean(pick),selector:pick?.element?.selector??null,image:pick?.image?.data?.length??0,title};
+          if(!result.preview)result.previewSteps={outlined,picked:Boolean(pick),selector:pick?.element?.selector??null,image:pick?.image?.data?.length??0,capture:preview.lastCapture,title};
         }finally{preview.close();server.close();}
       }
       if(process.platform==='darwin'&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));

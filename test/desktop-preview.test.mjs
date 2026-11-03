@@ -80,11 +80,14 @@ test('a pick always arrives: a blank screenshot is taken once more, and a captur
     handlers['preview:picked']({ sender: preview.page.webContents }, { nonce: 'abcdef1234', element: { tag: 'button', text: 'Apply', selector: '#apply' }, rect: { x: 10, y: 10, width: 50, height: 20 }, viewport: { width: 1000, height: 656 } });
     for (const until = Date.now() + 2000; !picks.length && Date.now() < until;) await new Promise(resolve => setTimeout(resolve, 10));
     preview.dispose();
-    return { pick: picks[0], captures: calls.length };
+    return { pick: picks[0], captures: calls.length, capture: preview.lastCapture };
   }
   const blank = { isEmpty: () => true }, shot = { isEmpty: () => false, getSize: () => ({ width: 66, height: 36 }), toPNG: () => Buffer.from('png') };
   const retried = await pickWith([async () => blank, async () => shot]);
-  assert.deepEqual([retried.pick.image, retried.captures], [{ name: 'preview-button.png', data: Buffer.from('png').toString('base64') }, 2]);
+  assert.deepEqual([retried.pick.image, retried.captures, retried.capture], [{ name: 'preview-button.png', data: Buffer.from('png').toString('base64') }, 2, 'captured']);
   const hung = await pickWith([() => new Promise(() => {})]);
   assert.deepEqual([hung.pick.text, hung.pick.image, hung.captures], ['In the preview of localhost:5173, the “Apply” button (#apply): ', null, 1], 'Without the screenshot, the pick still comes, and a hang is not waited on twice.');
+  // How the screenshot went is kept, so a check can say why a pick came without one.
+  const unpainted = await pickWith([async () => blank, async () => blank]);
+  assert.deepEqual([hung.capture, unpainted.capture, unpainted.pick.image, unpainted.captures], ['hung', 'blank', null, 2]);
 });
