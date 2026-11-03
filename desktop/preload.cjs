@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('relayDesktop', Object.freeze({
   getUpdateState: () => ipcRenderer.invoke('relay:update:get'),
   checkForUpdates: () => ipcRenderer.invoke('relay:update:check'),
   installUpdate: () => ipcRenderer.invoke('relay:update:install'),
+  restartToUpdate: () => ipcRenderer.invoke('relay:update:restart'),
   cancelUpdate: () => ipcRenderer.invoke('relay:update:cancel'),
   skipUpdate: version => ipcRenderer.invoke('relay:update:skip', version),
   setAutomaticUpdates: enabled => ipcRenderer.invoke('relay:update:automatic', enabled),

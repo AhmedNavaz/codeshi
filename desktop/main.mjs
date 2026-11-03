@@ -26,6 +26,8 @@ const smoke=process.argv.includes('--smoke-test');
 // lock. Both run side by side in their own windows, and testing from source never opens or changes the installed
 // app's workspaces and conversations.
 const development=!app.isPackaged;
+// `npm run start:update-demo`: from source only, an update is offered and installed without downloading or replacing anything.
+const updateDemo=development&&process.argv.includes('--update-demo');
 if(development)app.setName('Throughline Dev');
 if(process.env.AI_RELAY_DESKTOP_DATA) app.setPath('userData',path.resolve(process.env.AI_RELAY_DESKTOP_DATA));
 else if(development) app.setPath('userData',path.join(app.getPath('appData'),'Throughline Dev'));
@@ -37,7 +39,7 @@ let relay,win,origin,keepAwake,updater,tray=null,overlay=null,preview=null,quitt
 if(!primary) app.quit();
 else {
   app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
-  app.on('before-quit',event=>{if(relay&&!quitting){event.preventDefault();quitting=true;keepAwake?.dispose();updater?.dispose();relay.close().finally(()=>app.quit());}});
+  app.on('before-quit',event=>{if(relay&&!quitting){event.preventDefault();quitting=true;keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();relay.close().finally(()=>app.quit());}});
   app.on('will-quit',()=>{keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
@@ -110,7 +112,9 @@ else {
     await start();
     // Throughline restarts to update only when no agent is working and no queued prompt is about to start.
     const busy=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.running||broker.backgroundReview||[...broker.conversations.values()].some(c=>c.queue?.length&&!c.queuePaused));
-    updater=createUpdater({version:app.getVersion(),build:updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation}),location:bundleLocation(process.execPath),directory:path.join(app.getPath('userData'),'updates'),supported:app.isPackaged&&!smoke,busy,quit:()=>app.quit(),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
+    const build=updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation}),demo=updateDemo?(await import('./update-demo.mjs')).updateDemo({version:app.getVersion(),build,relaunch:()=>{app.relaunch();app.quit();}}):null;
+    updater=createUpdater({version:app.getVersion(),build,location:demo?.location||bundleLocation(process.execPath),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
+    if(demo)updater.check();
     relay.registry.on('update',()=>setTimeout(()=>updater.idle(),0));
     // Live status on the Mac (#13): the menu bar item follows every workspace's runs, approvals and waits.
     if(process.platform==='darwin'){
@@ -131,6 +135,7 @@ else {
     ipcMain.handle('relay:update:get',event=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.state();});
     ipcMain.handle('relay:update:check',event=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.check();});
     ipcMain.handle('relay:update:install',event=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.install();});
+    ipcMain.handle('relay:update:restart',event=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.restart();});
     ipcMain.handle('relay:update:cancel',event=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.cancel();});
     ipcMain.handle('relay:update:skip',(event,version)=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.skip(version);});
     ipcMain.handle('relay:update:automatic',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.setAutomatic(enabled);});

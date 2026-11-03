@@ -36,6 +36,7 @@
   "scripts": {
     "start": "node desktop/launch.mjs",
     "start:fresh": "node desktop/launch.mjs --fresh",
+    "start:update-demo": "node desktop/launch.mjs --update-demo",
     "desktop": "node desktop/launch.mjs",
     "web": "node src/server.mjs",
     "test": "node --test test/*.test.mjs sharing/test/*.test.mjs",

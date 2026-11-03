@@ -179,7 +179,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const eventSources=[],terminals=[],spoken=[];
   const updateCalls=[],updateListeners=[];let updateState=update&&clone(update);
   const answer=(name,next)=>async(...args)=>{updateCalls.push([name,...args]);if(next)updateState={...updateState,...next(...args)};return clone(updateState);};
-  if(desktop&&update)Object.assign(window.relayDesktop,{getUpdateState:answer('get'),checkForUpdates:answer('check',()=>({status:updateState.latest?'available':'current'})),installUpdate:answer('install',()=>({status:'downloading',progress:{received:0,total:null}})),cancelUpdate:answer('cancel',()=>({status:'available',progress:null})),skipUpdate:answer('skip',version=>({skipped:version})),setAutomaticUpdates:answer('automatic',automatic=>({automatic})),onUpdateState:callback=>{updateListeners.push(callback);return ()=>{};}});
+  if(desktop&&update)Object.assign(window.relayDesktop,{getUpdateState:answer('get'),checkForUpdates:answer('check',()=>({status:updateState.latest?'available':'current'})),installUpdate:answer('install',()=>({status:'downloading',progress:{received:0,total:null}})),restartToUpdate:answer('restart',()=>({status:'installing'})),cancelUpdate:answer('cancel',()=>({status:updateState.status==='waiting'?'ready':'available',progress:null})),skipUpdate:answer('skip',version=>({skipped:version})),setAutomaticUpdates:answer('automatic',automatic=>({automatic})),onUpdateState:callback=>{updateListeners.push(callback);return ()=>{};}});
   // Custom Highlight API stand-ins: ranges record their boundaries, and the registry is a Map.
   class Range{setStart(node,offset){this.startContainer=node;this.startOffset=offset;}setEnd(node,offset){this.endContainer=node;this.endOffset=offset;}getBoundingClientRect(){return this.startContainer.parentNode.getBoundingClientRect();}}
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
@@ -2264,49 +2264,76 @@ test('with the sidebar hidden, the top bar names the open workspace, and clickin
   ui.$('workspace-chip').click();assert(!ui.$('app-shell').classList.contains('sidebar-collapsed'),'Clicking the name shows the sidebar.');
 });
 
-test('a newer release shows in the status bar; its popover links the notes, installs with one click and can skip the version', async () => {
+test('an update is one click in the status bar: Update downloads it with a ring, then Restart to update restarts', async () => {
   const latest = { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0', publishedAt: null };
   const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'current', error: null, progress: null, blocked: null, latest: null } });
-  const button = ui.$('update-status');
+  const button = ui.$('update-status'), more = ui.$('update-more'), popover = ui.$('update-popover');
   assert.equal(button.hidden, true, 'Nothing shows while this is the latest version.');
 
   ui.pushUpdate({ status: 'available', latest });
-  assert.equal(button.hidden, false);
-  assert.equal(ui.$('update-status-label').textContent, 'Update available · 0.15.0');
+  assert.deepEqual([button.hidden, more.hidden, button.dataset.status], [false, false, 'available']);
+  assert.equal(ui.$('update-status-label').textContent, 'Update to 0.15.0');
+  button.click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['install'], 'One click starts the update.');
+  assert.equal(popover.matches(':popover-open'), false, 'Nothing to read first.');
+
+  // The download is a ring that fills; its share is only in the button's name, and there are no megabytes.
+  ui.pushUpdate({ status: 'downloading', progress: { received: 52428800, total: 136314880 } });
+  assert.equal(ui.$('update-status-label').textContent, 'Downloading update');
+  assert.deepEqual([button.dataset.progress, button.style['--update-progress'], button.getAttribute('aria-label')], ['determinate', '38', 'Downloading update, 38%']);
+  assert.equal(more.hidden, true);
   button.click();
-  assert.equal(ui.$('update-popover').matches(':popover-open'), true);
+  assert.equal(popover.matches(':popover-open'), true, 'While it downloads, the button opens the details.');
+  assert.doesNotMatch(ui.$('update-content').textContent, /MB/);
+  ui.findButton('Cancel').click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['cancel']);
+  popover.hidePopover();
+  ui.pushUpdate({ status: 'downloading', progress: { received: 0, total: null } });
+  assert.equal(button.dataset.progress, 'indeterminate', 'A download of unknown size turns the ring instead.');
+
+  // Downloaded and checked: Restart to update restarts with one click.
+  ui.pushUpdate({ status: 'ready', progress: null });
+  assert.equal(ui.$('update-status-label').textContent, 'Restart to update');
+  assert.equal(more.hidden, false);
+  button.click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['restart']);
+  // An agent at work: the restart waits for the run, and the details can call it off.
+  ui.pushUpdate({ status: 'waiting' });
+  assert.equal(ui.$('update-status-label').textContent, 'Restarts after this run');
+  button.click();
+  assert.match(ui.$('update-content').textContent, /as soon as no agent is working/);
+  ui.findButton('Don’t restart').click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['cancel']);
+  popover.hidePopover();
+  ui.pushUpdate({ status: 'error', error: 'The download does not match its published checksum, so nothing was installed.' });
+  assert.equal(ui.$('update-status-label').textContent, 'Update failed');
+  button.click();
+  assert.match(ui.$('update-content').textContent, /does not match its published checksum/);
+  ui.findButton('Try again').click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['install']);
+});
+
+test('the chevron beside the update has its release notes and Skip, and Check for Updates shows a skipped version', async () => {
+  const latest = { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0', publishedAt: null };
+  const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'available', error: null, progress: null, blocked: null, latest } });
+  const button = ui.$('update-status'), more = ui.$('update-more'), popover = ui.$('update-popover');
+  more.click();
+  assert.equal(popover.matches(':popover-open'), true);
+  assert.equal(more.getAttribute('aria-expanded'), 'true');
   assert.equal(ui.$('update-title').textContent, 'Throughline 0.15.0');
   assert.equal(ui.$('update-subtitle').textContent, 'You have 0.14.0');
   ui.findButton('Release notes ↗').click(); await flush();
   assert.deepEqual(ui.externalLinks, [latest.notesUrl]);
-
-  // An agent at work: the update downloads now and the restart waits for the run.
-  ui.projects[0].runningConversationId = 'busy'; await ui.window.relayUI.refreshProjects(); ui.window.dispatchEvent(new UIEvent('relay-state'));
-  assert(ui.findButton('Update after this run'));
-  ui.projects[0].runningConversationId = null; await ui.window.relayUI.refreshProjects(); ui.window.dispatchEvent(new UIEvent('relay-state'));
-  ui.findButton('Update and restart').click(); await flush();
-  assert.deepEqual(ui.updateCalls.at(-1), ['install']);
-  ui.pushUpdate({ status: 'downloading', progress: { received: 52428800, total: 136314880 } });
-  assert.equal(ui.$('update-status-label').textContent, 'Downloading update · 38%');
-  assert.match(ui.$('update-content').textContent, /Downloading 50\.0 MB of 130 MB/);
-  ui.findButton('Cancel').click(); await flush();
-  assert.deepEqual(ui.updateCalls.at(-1), ['cancel']);
-  ui.pushUpdate({ status: 'waiting', progress: null });
-  assert.equal(ui.$('update-status-label').textContent, 'Updates after this run');
-  ui.pushUpdate({ status: 'error', error: 'The download does not match its published checksum, so nothing was installed.' });
-  assert.equal(ui.$('update-status-label').textContent, 'Update failed');
-  assert.match(ui.$('update-content').textContent, /does not match its published checksum/);
-
   // Skipping hides this version until the next one, and Check for Updates… shows it again.
-  ui.pushUpdate({ status: 'available', error: null });
   ui.findButton('Skip this version').click(); await flush();
   assert.deepEqual(ui.updateCalls.at(-1), ['skip', '0.15.0']);
-  assert.equal(button.hidden, true);
-  ui.$('update-popover').hidePopover();
+  assert.deepEqual([button.hidden, more.hidden], [true, true]);
+  popover.hidePopover();
   ui.window.relayUI.commands['check-updates'](); await flush();
   assert.deepEqual(ui.updateCalls.at(-1), ['check']);
-  assert.equal(ui.$('update-popover').matches(':popover-open'), true);
-  assert(ui.findButton('Update and restart'), 'A manual check offers the skipped version.');
+  assert.equal(popover.matches(':popover-open'), true);
+  ui.findButton('Update').click(); await flush();
+  assert.deepEqual(ui.updateCalls.at(-1), ['install'], 'The details can start the update too.');
 });
 
 test('an app that cannot replace itself offers the download instead, and a manual check says when Throughline is up to date', async () => {

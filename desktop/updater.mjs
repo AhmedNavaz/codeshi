@@ -11,7 +11,7 @@ import { compareVersions, versionPattern } from './updates.mjs';
 // and opens the new version. Files the app downloads itself are not marked as downloaded from the internet, so the
 // updated app opens without the security prompt a browser download gets. Throughline never restarts while an agent works.
 export const REPOSITORY = 'AhmedNavaz/throughline';
-const BUNDLE_ID = 'local.throughline.desktop';
+export const BUNDLE_ID = 'local.throughline.desktop';
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000, FIRST_CHECK = 15 * 1000;
 const MAX_DOWNLOAD = 1024 * 1024 * 1024, MAX_CHECKSUMS = 64 * 1024;
 
@@ -108,7 +108,7 @@ export function createUpdater({
 
   async function check() {
     if (!enabled) return state();
-    if (['downloading', 'waiting', 'installing'].includes(status)) return state();
+    if (['downloading', 'ready', 'waiting', 'installing'].includes(status)) return state();
     if (checking) return checking;
     checking = (async () => {
       set('checking');
@@ -173,23 +173,25 @@ export function createUpdater({
     return { version: release.version, app, work };
   }
 
-  // Hands the swap to the helper and quits; the helper opens the new version once this process has exited.
-  function restart() {
+  // Hands the swap to the helper; the helper puts the new version in place once this process has exited. Restarting
+  // opens it, and quitting with an update ready leaves it in place for the next launch.
+  function swap({ reopen = true } = {}) {
     if (!staged || status === 'installing') return;
     set('installing');
     const script = path.join(directory, 'install-update.sh'), previous = path.join(directory, 'previous', 'Throughline.app');
     fs.mkdirSync(path.dirname(previous), { recursive: true, mode: 0o700 });
     fs.writeFileSync(script, HELPER, { mode: 0o700 });
-    launch(script, [String(pid), location.bundle, staged.app, previous, '/usr/bin/open'], path.join(directory, 'install.log'));
-    quit();
+    launch(script, [String(pid), location.bundle, staged.app, previous, reopen ? '/usr/bin/open' : '/usr/bin/true'], path.join(directory, 'install.log'));
+    if (reopen) quit();
   }
 
+  // Downloads the update and checks it, then waits as ready: the person restarts when they choose.
   async function install() {
     if (!enabled) throw new Error('Updates are installed from the macOS app.');
     if (location.blocked) throw new Error(location.blocked === 'translocated' ? 'Move Throughline to your Applications folder to install updates.' : 'Throughline can’t replace itself in this folder. Download the update instead.');
-    if (status === 'waiting' || status === 'installing' || status === 'downloading') return state();
+    if (['downloading', 'ready', 'waiting', 'installing'].includes(status)) return state();
     if (!latest) throw new Error('There is no update to install.');
-    if (staged?.version === latest.version) { if (busy()) set('waiting'); else restart(); return state(); }
+    if (staged?.version === latest.version) { set('ready'); return state(); }
     controller = new AbortController();
     set('downloading', { progress: { received: 0, total: latest.size } });
     try {
@@ -203,16 +205,26 @@ export function createUpdater({
       return state();
     }
     controller = null;
-    if (busy()) set('waiting'); else restart();
+    set('ready');
     return state();
   }
 
-  // Called when runs start or finish: a staged update waits until no agent is working.
-  function idle() { if (status === 'waiting' && !busy()) restart(); }
+  // Restarting into a ready update never stops an agent: it happens now, or once no agent is working.
+  function restart() {
+    if (!staged || !['ready', 'waiting'].includes(status)) return state();
+    if (busy()) set('waiting'); else swap();
+    return state();
+  }
+
+  // Called when runs start or finish: a restart that is waiting goes ahead once no agent is working.
+  function idle() { if (status === 'waiting' && !busy()) swap(); }
+
+  // Quitting with an update ready installs it as Throughline closes, without opening it again.
+  function finishOnQuit() { if (staged && ['ready', 'waiting'].includes(status)) swap({ reopen: false }); }
 
   function cancel() {
     if (status === 'downloading') controller?.abort();
-    else if (status === 'waiting') set('available');
+    else if (status === 'waiting') set('ready');
     return state();
   }
 
@@ -229,5 +241,5 @@ export function createUpdater({
   // A previous attempt's files are removed at launch; a finished update leaves nothing behind.
   if (enabled) for (const entry of fs.existsSync(directory) ? fs.readdirSync(directory) : []) if (/^(download-|previous$|install-update\.sh$)/.test(entry)) fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
   schedule(FIRST_CHECK);
-  return { state, check, install, cancel, skip, setAutomatic, idle, dispose() { if (timer) timers.clearTimeout(timer); controller?.abort(); } };
+  return { state, check, install, restart, cancel, skip, setAutomatic, idle, finishOnQuit, dispose() { if (timer) timers.clearTimeout(timer); controller?.abort(); } };
 }

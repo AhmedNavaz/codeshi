@@ -17,6 +17,7 @@ You need Node.js 22.12 or later. Claude Code, Codex CLI or Gemini CLI are only n
 npm ci
 npm start        # desktop app
 npm run start:fresh # replay onboarding with a temporary profile
+npm run start:update-demo # try the update button: a pretend update, nothing downloaded or replaced
 npm run web      # browser-only session on http://127.0.0.1:4318
 ```
 

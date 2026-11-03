@@ -671,11 +671,28 @@ button.commit-hash:hover { text-decoration: underline; }
 .status-button { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px; border: 0; border-radius: 3px; background: none; color: var(--muted); font-size: 11px; }
 .status-button .icon { width: 13px; height: 13px; }
 .status-button:hover { color: var(--text); background: var(--hover); }
-/* Software update: a status bar button while an update is offered or installing, and its popover. */
+/* Software update in the status bar. Update to <version> and Restart to update are filled accent buttons that act on a
+   click, with a chevron beside them for the release notes and Skip. The download shows as a ring that fills, and
+   waiting or restarting keep a light accent tint; each state has its own icon. */
 .update-status { color: var(--link); }
 .update-status:hover { color: var(--link); }
+.update-glyph { display: none; }
+.update-status[data-status="available"] .update-glyph-download, .update-status[data-status="ready"] .update-glyph-restart, .update-status[data-status="waiting"] .update-glyph-wait, .update-status[data-status="error"] .update-glyph-alert, .update-status:is([data-status="downloading"], [data-status="installing"]) .update-ring { display: block; }
+.update-status:is([data-status="available"], [data-status="ready"]) { padding: 0 8px; color: var(--on-accent); background: var(--accent); font-weight: 600; }
+.update-status:is([data-status="available"], [data-status="ready"]):hover { color: var(--on-accent); background: var(--accent-strong); }
+.update-status:has(+ .update-more:not([hidden])) { border-radius: 3px 0 0 3px; }
+.update-more { width: 17px; margin-left: 1px; padding: 0; justify-content: center; border-radius: 0 3px 3px 0; color: var(--on-accent); background: var(--accent); }
+.update-more:hover, .update-more[aria-expanded="true"] { color: var(--on-accent); background: var(--accent-strong); }
+.update-more .icon { width: 12px; height: 12px; }
+.update-status:is([data-status="downloading"], [data-status="waiting"], [data-status="installing"]) { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .update-status[data-status="error"] { color: var(--danger); }
-.update-status[data-status="downloading"] .icon, .update-status[data-status="installing"] .icon { animation: pulse 1.4s ease-in-out infinite; }
+.update-ring circle { stroke-width: 2.5; }
+.update-ring-track { stroke: color-mix(in srgb, currentColor 28%, transparent); }
+.update-ring-value { stroke-dasharray: var(--update-progress, 0) 100; transform: rotate(-90deg); transform-origin: 12px 12px; transition: stroke-dasharray .25s ease-out; }
+.update-status[data-progress="indeterminate"] .update-ring { animation: update-spin .9s linear infinite; }
+.update-status[data-progress="indeterminate"] .update-ring-value { stroke-dasharray: 30 100; transition: none; }
+@keyframes update-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .update-status[data-progress="indeterminate"] .update-ring { animation: none; } }
 .update-popover #update-subtitle { margin: 2px 0 0; color: var(--faint); font-size: 11px; }
 .update-body { display: grid; gap: 10px; padding: 0 16px 16px; }
 .update-text { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
@@ -685,6 +702,8 @@ button.commit-hash:hover { text-decoration: underline; }
 .update-actions > .text-link { margin-right: auto; padding: 0; font-size: 12px; }
 .update-progress { height: 4px; overflow: hidden; border-radius: 2px; background: var(--chip-bg); }
 .update-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
+.update-progress.indeterminate > span { width: 30%; animation: update-slide 1.2s ease-in-out infinite; }
+@keyframes update-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 .appearance-options { display: inline-flex; }
 .appearance-options button { display: inline-grid; place-items: center; width: 22px; height: 20px; padding: 0; border: 0; border-radius: 3px; background: none; color: var(--faint); }
 .appearance-options button .icon { width: 13px; height: 13px; }

@@ -82,12 +82,16 @@ test('a newer release is offered, the installed one or an older one is not, and 
   assert.deepEqual(elsewhere.calls.fetch, [], 'Only the macOS app checks; there is no build for other systems yet.');
 });
 
-test('installing downloads the update, checks it, and hands the swap to the helper before quitting', async t => {
+test('Update downloads and checks the update and waits as ready; Restart hands the swap to the helper and quits', async t => {
   const { updater, calls, options } = setup(t);
   await updater.check();
-  const state = await updater.install();
-  assert.equal(state.status, 'installing');
+  const ready = await updater.install();
+  assert.equal(ready.status, 'ready');
   assert.deepEqual(calls.exec.map(([tool]) => tool), ['ditto', 'plutil', 'plutil', 'codesign', 'xattr']);
+  assert.deepEqual([calls.launch.length, calls.quit], [0, 0], 'Nothing restarts until the person says so.');
+  assert.equal((await updater.check()).status, 'ready', 'A ready update is not checked again.');
+  assert.equal((await updater.install()).status, 'ready');
+  assert.equal(updater.restart().status, 'installing');
   assert.equal(calls.launch.length, 1);
   const [{ script, args }] = calls.launch, staged = path.join(options.directory, 'download-0.15.0', 'app', 'Throughline.app');
   assert.deepEqual(args, ['4242', options.location.bundle, staged, path.join(options.directory, 'previous', 'Throughline.app'), '/usr/bin/open']);
@@ -115,20 +119,54 @@ test('a download that does not match its checksum, or an app that is not the exp
   }
 });
 
-test('while an agent works the update waits, and Throughline restarts only once no agent is working', async t => {
+test('while an agent works a restart waits, and Throughline restarts only once no agent is working', async t => {
   let working = true;
   const { updater, calls } = setup(t, { busy: () => working });
   await updater.check();
-  assert.equal((await updater.install()).status, 'waiting');
+  assert.equal(updater.restart().status, 'available', 'Nothing is ready to restart into yet.');
+  assert.equal((await updater.install()).status, 'ready', 'An agent at work does not stop the download.');
+  assert.equal(updater.restart().status, 'waiting');
   assert.equal(calls.launch.length, 0);
   updater.idle();
   assert.equal(calls.launch.length, 0, 'Still working.');
-  assert.equal(updater.cancel().status, 'available');
-  assert.equal((await updater.install()).status, 'waiting', 'The checked download is reused.');
+  assert.equal(updater.cancel().status, 'ready', 'Calling the restart off keeps the checked download.');
+  assert.equal(updater.restart().status, 'waiting');
   assert.deepEqual(calls.exec.filter(([tool]) => tool === 'ditto').length, 1);
   working = false;
   updater.idle();
   assert.equal(calls.launch.length, 1); assert.equal(calls.quit, 1);
+});
+
+test('quitting with an update ready installs it as Throughline closes, without opening it again', async t => {
+  const { updater, calls, options } = setup(t);
+  updater.finishOnQuit();
+  assert.equal(calls.launch.length, 0, 'Nothing is ready, so nothing is installed.');
+  await updater.check(); await updater.install();
+  updater.finishOnQuit();
+  assert.equal(updater.state().status, 'installing');
+  assert.equal(calls.launch.length, 1);
+  assert.equal(calls.launch[0].args.at(-1), '/usr/bin/true', 'The helper puts the update in place and opens nothing.');
+  assert.equal(calls.launch[0].args[1], options.location.bundle);
+  assert.equal(calls.quit, 0, 'Throughline is already quitting.');
+  updater.finishOnQuit();
+  assert.equal(calls.launch.length, 1, 'It is handed over once.');
+});
+
+test('the update demo for a source checkout offers the next version, passes every check and only relaunches', async t => {
+  const { updateDemo } = await import('../desktop/update-demo.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-update-demo-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let relaunched = 0, launched = 0;
+  const demo = updateDemo({ version: '0.20.3', build: 'apple-silicon', relaunch: () => { relaunched++; }, chunks: 4, pause: 1 });
+  const states = [];
+  const updater = createUpdater({ version: '0.20.3', build: 'apple-silicon', directory: path.join(root, 'updates'), location: demo.location, fetchImpl: demo.fetchImpl, exec: demo.exec, launch: () => { launched++; demo.launch(); }, quit: demo.quit, onState: state => states.push(state.status), timers: { setTimeout: () => null, clearTimeout: () => {} } });
+  const offered = await updater.check();
+  assert.deepEqual([offered.status, offered.latest.version], ['available', '0.21.0']);
+  assert.equal((await updater.install()).status, 'ready', 'The stand-in download passes the checksum, version and signature checks.');
+  assert(states.includes('downloading'));
+  updater.restart();
+  assert.deepEqual([launched, relaunched], [1, 1], 'Restarting relaunches this copy; the demo helper replaces nothing.');
+  assert.equal(demo.location.bundle.includes('update demo'), true);
 });
 
 test('cancelling a download returns to the offer', async t => {

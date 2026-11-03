@@ -8,6 +8,10 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 - **Questions from agents.** When Claude stops to ask you to choose, such as which library to use, the question shows where approvals wait: its choices with the agent's suggestion marked **Recommended**, and room for your own answer. Several questions show one at a time, as tabs. Choose with a click or a number key, then **Submit**, or **Skip** to let the agent decide. The agent waits as it does for an approval, with the same alerts and sound, and your answers stay in the conversation for the next agent. Codex's questions work the same way where its connection asks them.
 
+### Changed
+
+- Updating takes two clicks on the status bar and no reading: **Update to 0.x.y** is a blue button that downloads the update and checks it, with a ring that fills instead of megabytes, and then **Restart to update** restarts into it. Restarting still waits for any agent at work, and quitting instead puts the update in place as Throughline closes. The release notes and **Skip this version** are in the chevron beside the button. `npm run start:update-demo` shows the whole flow from a source checkout without downloading or replacing anything.
+
 ### Fixed
 
 - A message that wrapped to three lines showed a scroll bar in the message box, though all of it was visible. The box now grows a pixel more and only scrolls once it reaches its full height.
