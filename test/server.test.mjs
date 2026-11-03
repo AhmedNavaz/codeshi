@@ -483,22 +483,34 @@ test('a note for the working run is refused clearly when nothing is running',asy
 });
 
 test('desktop alert preferences default to on and silent, reject other values and persist',async t=>{
-  const f=await fixture(t),sounds={attention:true,finished:true,stopped:true,background:false,volume:70};assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:false,statusItem:true,overlay:false,sounds},'The menu bar status shows unless hidden; alerts near the top of the screen only when asked for.');
-  f.app.setNotificationPreferences({sound:true});assert.deepEqual(f.app.getNotificationPreferences(),{enabled:true,sound:true,statusItem:true,overlay:false,sounds});
-  f.app.setNotificationPreferences({enabled:false,overlay:true});assert.throws(()=>f.app.setNotificationPreferences({enabled:'no'}),/turned on or off/);
-  assert.throws(()=>f.app.setNotificationPreferences({banner:true}),/turned on or off/,'Only known preferences are saved.');
-  await f.app.close();const next=await f.launch();assert.deepEqual(next.app.getNotificationPreferences(),{enabled:false,sound:true,statusItem:true,overlay:true,sounds});
+  const f=await fixture(t),every={attention:true,finished:true,stopped:true};
+  assert.deepEqual(f.app.getNotificationPreferences(),{banner:{on:true,...every,panel:false},sound:{on:false,...every,volume:70,background:false},bounce:{on:true,...every},badge:{on:true,...every},statusItem:true},'The menu bar status shows unless hidden; the panel near the top of the screen only when asked for.');
+  f.app.setNotificationPreferences({sound:{on:true}});assert.equal(f.app.getNotificationPreferences().sound.on,true);
+  f.app.setNotificationPreferences({banner:{on:false,panel:true},bounce:{finished:false}});assert.throws(()=>f.app.setNotificationPreferences({banner:{on:'no'}}),/on or off/);
+  assert.throws(()=>f.app.setNotificationPreferences({enabled:false}),/Unknown alert setting/,'Only known preferences are saved.');
+  await f.app.close();const next=await f.launch(),saved=next.app.getNotificationPreferences();
+  assert.deepEqual([saved.banner,saved.sound.on,saved.bounce],[{on:false,...every,panel:true},true,{on:true,...every,finished:false}]);
 });
 
-test('alerts tell the page which sound to play, as chosen per kind, and sound settings are checked and kept', { timeout: 10000 }, async t => {
-  const f = await fixture(t), defaults = { attention: true, finished: true, stopped: true, background: false, volume: 70 };
-  assert.deepEqual(await (await fetch(`${f.url}/api/notifications`)).json(), { enabled: true, sound: false, statusItem: true, overlay: false, sounds: defaults });
+test('alert settings saved by an earlier version keep working and are saved in the current shape when changed',async t=>{
+  const f=await fixture(t),settings=path.join(f.app.registry.dataRoot,'settings.json');await f.app.close();
+  const saved=fs.existsSync(settings)?JSON.parse(fs.readFileSync(settings,'utf8')):{};
+  fs.writeFileSync(settings,JSON.stringify({...saved,notifications:{enabled:false,sound:true,statusItem:true,overlay:true,sounds:{attention:true,finished:false,stopped:true,background:false,volume:40}}}));
+  const next=await f.launch(),before=next.app.getNotificationPreferences();
+  assert.deepEqual([before.banner.on,before.bounce.on,before.banner.panel,before.sound.on,before.sound.finished,before.sound.volume],[false,false,true,true,false,40]);
+  next.app.setNotificationPreferences({badge:{on:false}});
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(settings,'utf8')).notifications).sort(),['badge','banner','bounce','sound','statusItem']);
+});
+
+test('alerts tell the page which sound to play, as chosen per moment, and sound settings are checked and kept', { timeout: 10000 }, async t => {
+  const f = await fixture(t), defaults = { on: false, attention: true, finished: true, stopped: true, volume: 70, background: false };
+  assert.deepEqual((await (await fetch(`${f.url}/api/notifications`)).json()).sound, defaults);
   const controller = new AbortController(); f.controllers.push(controller);
   const reader = (await fetch(`${f.url}/api/events`, { signal: controller.signal })).body.getReader(), nextEvent = eventReader(reader);
   assert.deepEqual(await nextEvent(), { type: 'ready', data: {} });
   f.app.registry.emit('notify', { kind: 'finished', title: 'Task finished', projectId: 'p1' });
-  const saved = await (await post(`${f.url}/api/notifications`, { sound: true, sounds: { finished: false, volume: 40 } })).json();
-  assert.deepEqual(saved.sounds, { ...defaults, finished: false, volume: 40 });
+  const saved = await (await post(`${f.url}/api/notifications`, { sound: { on: true, finished: false, volume: 40 } })).json();
+  assert.deepEqual(saved.sound, { ...defaults, on: true, finished: false, volume: 40 });
   f.app.registry.emit('notify', { kind: 'finished', title: 'Task finished', projectId: 'p1' });
   f.app.registry.emit('notify', { kind: 'started', title: 'Continuing with Claude', projectId: 'p1' });
   f.app.registry.emit('notify', { kind: 'approval', title: 'Approval needed', projectId: 'p1', approvalId: 'a1' });
@@ -508,8 +520,8 @@ test('alerts tell the page which sound to play, as chosen per kind, and sound se
   assert.deepEqual({ ...alert.data, id: null }, { id: null, sound: 'attention', volume: 40, background: false, kind: 'approval', projectId: 'p1' });
   f.app.registry.emit('notify', { kind: 'stopped', title: 'Task stopped', projectId: 'p1' });
   assert.equal((await nextEvent()).data.sound, 'stopped');
-  for (const wrong of [{ sounds: { volume: 101 } }, { sounds: { volume: 2.5 } }, { sounds: { finished: 'yes' } }, { sounds: { chime: true } }, { sound: 'on' }, { banner: true }, { sounds: [] }]) assert.equal((await post(`${f.url}/api/notifications`, wrong)).status, 400, JSON.stringify(wrong));
+  for (const wrong of [{ sound: { volume: 101 } }, { sound: { volume: 2.5 } }, { sound: { finished: 'yes' } }, { sound: { chime: true } }, { sound: 'on' }, { banner: true }, { sound: [] }, { sounds: { volume: 40 } }]) assert.equal((await post(`${f.url}/api/notifications`, wrong)).status, 400, JSON.stringify(wrong));
   controller.abort(); await reader.cancel().catch(() => {});
   await f.app.close(); const next = await f.launch();
-  assert.deepEqual(next.app.getNotificationPreferences().sounds, { ...defaults, finished: false, volume: 40 }, 'Sound settings are kept across restarts.');
+  assert.deepEqual(next.app.getNotificationPreferences().sound, { ...defaults, on: true, finished: false, volume: 40 }, 'Sound settings are kept across restarts.');
 });

@@ -177,7 +177,7 @@
     reviewing = review; step = review ? 0 : Math.min(preferences.onboarding?.step || 0, last); hideLaunch(); show('flow');
   }
   $('open-setup').addEventListener('click',()=>perform(()=>open()));
-  $('open-setup-guide')?.addEventListener('click',()=>{$('workbench').close();perform(()=>open({review:Boolean(preferences?.onboarding?.completedAt)}));});
+  $('open-setup-guide')?.addEventListener('click',()=>{$('settings')?.close();perform(()=>open({review:Boolean(preferences?.onboarding?.completedAt)}));});
   $('close-setup').addEventListener('click',()=>perform(dismiss));
   dialog.addEventListener('cancel',event=>{event.preventDefault();if(screen === 'flow')perform(dismiss);});
   // Enter continues, except where Enter already means something.

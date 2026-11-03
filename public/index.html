@@ -13,11 +13,13 @@
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/run-plan.css" />
     <link rel="stylesheet" href="/workbench.css" />
+    <link rel="stylesheet" href="/settings.css" />
     <script src="/routing.js" defer></script>
     <script src="/layout.js" defer></script>
     <script src="/app.js" defer></script>
     <script src="/questions.js" defer></script>
     <script src="/workbench.js" defer></script>
+    <script src="/settings.js" defer></script>
     <script src="/insights.js" defer></script>
     <link rel="stylesheet" href="/model-picker.css" />
     <script src="/model-picker.js" defer></script>
@@ -47,7 +49,7 @@
     <script src="/automatic-review.js" defer></script>
     <link rel="stylesheet" href="/automatic-review.css" />
     <script src="/rewind.js" defer></script>
-    <script src="/sounds.js" defer></script>
+    <script src="/alerts.js" defer></script>
     <script src="/project-commands.js" defer></script>
     <link rel="stylesheet" href="/project-commands.css" />
     <link rel="stylesheet" href="/polish.css" />
@@ -55,7 +57,7 @@
     <link rel="stylesheet" href="/onboarding.css" />
     <link rel="stylesheet" href="/agent-review.css" />
     <link rel="stylesheet" href="/rewind.css" />
-    <link rel="stylesheet" href="/sounds.css" />
+    <link rel="stylesheet" href="/alerts.css" />
     <link rel="stylesheet" href="/questions.css" />
   </head>
   <body>
@@ -391,23 +393,46 @@
     </dialog>
     <dialog id="workbench" aria-labelledby="workbench-title" aria-describedby="workbench-description">
       <header><div><h2 id="workbench-title">Ask a friend</h2><p id="workbench-description">Choose the context and files to include in your request.</p></div><button id="workbench-close" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
-      <nav id="workbench-tabs" aria-label="Settings and collaboration"><button data-tab="request">Ask a friend</button><button data-tab="solutions">Returned solutions</button><button data-tab="friend">Help someone</button><button data-tab="accounts">Connections</button><button data-tab="preferences">Preferences</button><button id="open-setup-guide" class="workbench-nav-extra" type="button">Setup guide</button></nav>
+      <nav id="workbench-tabs" aria-label="Ask a friend"><button data-tab="request">Ask for help</button><button data-tab="solutions">Returned solutions</button><button data-tab="friend">Help someone</button></nav>
       <p id="workbench-error" role="alert" hidden></p><div id="workbench-content"></div>
+    </dialog>
+    <dialog id="settings" class="settings-dialog" aria-labelledby="settings-title">
+      <aside class="settings-sidebar">
+        <label class="settings-search"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg><input id="settings-search" type="search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false" /></label>
+        <nav id="settings-nav" aria-label="Settings pages">
+          <button type="button" data-page="general"><span class="settings-nav-icon" data-icon="general" aria-hidden="true"></span>General</button>
+          <button type="button" data-page="accounts"><span class="settings-nav-icon" data-icon="accounts" aria-hidden="true"></span>Accounts</button>
+          <button type="button" data-page="alerts"><span class="settings-nav-icon" data-icon="alerts" aria-hidden="true"></span>Alerts</button>
+          <button type="button" data-page="voice"><span class="settings-nav-icon" data-icon="voice" aria-hidden="true"></span>Voice</button>
+        </nav>
+        <button id="open-setup-guide" class="settings-guide" type="button">Setup guide</button>
+      </aside>
+      <div class="settings-main">
+        <header class="settings-header"><h2 id="settings-title">General</h2><button id="settings-close" class="icon-button" type="button" aria-label="Close settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
+        <p id="settings-error" class="settings-error" role="alert" hidden></p>
+        <div id="settings-content" class="settings-content"></div>
+        <p id="settings-empty" class="settings-empty" hidden>No settings match. Try another word.</p>
+      </div>
     </dialog>
     <dialog id="rewind-dialog" class="rewind-dialog" aria-labelledby="rewind-title" aria-describedby="rewind-summary">
       <header><div><h2 id="rewind-title">Undo changes?</h2><p id="rewind-meta"></p></div><button id="close-rewind" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
       <div class="rewind-body"><p id="rewind-summary" class="rewind-summary"></p><div id="rewind-files" class="rewind-files"></div></div>
       <p id="rewind-error" class="project-error rewind-error" role="alert" hidden></p>
       <footer class="rewind-footer"><span id="rewind-note" class="rewind-note"></span><button id="cancel-rewind" class="secondary-button" type="button">Cancel</button><button id="confirm-rewind" class="primary-button" type="button" disabled>Undo changes</button></footer>
+    </dialog>
 
     <dialog id="automatic-review-dialog" class="review-dialog automatic-review-dialog" aria-labelledby="automatic-review-title" aria-describedby="automatic-review-description">
       <header class="review-heading"><div><h2 id="automatic-review-title">Build, then review</h2><p id="automatic-review-description">For this prompt only, another agent checks the changes when the builder finishes.</p></div><button id="automatic-review-close" class="icon-button" type="button" aria-label="Close automatic review">×</button></header>
+      <div class="review-body">
         <p id="automatic-review-pair" class="automatic-review-pair"></p>
         <p id="automatic-review-usage" class="review-account"></p>
         <fieldset class="automatic-review-folders"><legend>Review changes in</legend><div id="automatic-review-folders"></div></fieldset>
+        <p class="review-hint">All uncommitted text changes in these repositories after the run, including changes that already exist. Private files, binary files and symbolic links are excluded. Up to 12 files and 72 KB; larger scopes stop for your attention.</p>
+        <p class="review-hint">One read-only review after a successful build and any configured test check. If tests fail, the workflow pauses instead of retrying automatically. You choose findings and approve the next fix request. A stopped or failed build never starts the reviewer.</p>
         <label id="automatic-review-billing-label" class="review-check" hidden><input id="automatic-review-billing" type="checkbox" /><span id="automatic-review-billing-text"></span></label>
         <p id="automatic-review-error" class="project-error" role="alert" hidden></p>
         <div class="review-actions"><button id="automatic-review-cancel" class="secondary-button" type="button">Cancel</button><button id="automatic-review-enable" class="primary-button" type="button" disabled>Review after this prompt</button></div>
+      </div>
     </dialog>
 
     <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-title">

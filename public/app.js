@@ -202,13 +202,16 @@
       state.installUrl=installGuides[state.provider]||null;
       if(install&&state.installUrl){install.hidden=false;install.textContent='How to install '+name+' ↗';}
       if(available(other)){action='Use '+label(other);state.connectionAction=()=>changeSettings(other,state.mode,state.approvalPolicy);}
-      else {action='Open settings';state.connectionAction=()=>$('relay-settings').click();}
-    } else if(info.needsSignIn){text=name+' is not signed in.';action='Connect account';state.connectionAction=()=>$('relay-settings').click();}
-    else if(info.needsBilling){text=info.account.billingSource==='api'?'This connection uses API billing. Review it before sending.':'Billing could not be confirmed. Review this connection before sending.';action='Review connection';state.connectionAction=()=>$('relay-settings').click();}
+      else {action='Open settings';state.connectionAction=openAccounts;}
+    } else if(info.needsSignIn){text=name+' is not signed in.';action='Connect account';state.connectionAction=openAccounts;}
+    else if(info.needsBilling){text=info.account.billingSource==='api'?'This connection uses API billing. Review it before sending.':'Billing could not be confirmed. Review this connection before sending.';action='Review connection';state.connectionAction=openAccounts;}
     // Progress for a first check or an explicit recheck shows in the header and composer state, not as a notice.
-    else if(!info.checking&&info.account?.authenticated!==true){text='Sign-in status has not been verified.';action='Check connection';state.connectionAction=()=>$('relay-settings').click();}
+    else if(!info.checking&&info.account?.authenticated!==true){text='Sign-in status has not been verified.';action='Check connection';state.connectionAction=openAccounts;}
     if(text){notice.hidden=false;$('connection-notice-text').textContent=text;$('connection-action').textContent=action;$('connection-action').hidden=!action;}
   }
+
+  // Setting up or fixing an agent's account happens on the Accounts page of Settings.
+  function openAccounts() { if (window.relaySettings) window.relaySettings.open("accounts"); else $("relay-settings")?.click(); }
 
   function dateLabel(value) {
     const date = new Date(value);
@@ -1509,7 +1512,8 @@
     ...(window.relayDesktop?.openPreview ? [{ label: "Preview your app and point at what to change", run: () => { const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
     { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
-    { label: "Preferences: appearance, updates, voice and recaps", run: () => window.relaySettings?.open("preferences") },
+    { label: "General: appearance, keep awake, handoff and updates", run: () => window.relaySettings?.open("general") },
+    { label: "Alert settings: banners, sounds, the Dock and the menu bar", run: () => window.relaySettings?.open("preferences", "Alerts") },
     { label: "Voice settings", run: () => window.relaySettings?.open("preferences", "Voice") },
   ];
   let commandActive = 0, commandItems = [], commandFiles = { query: "", files: [] }, fileSearch = 0, fileTimer = null;
@@ -1588,6 +1592,8 @@
     stop: () => { if (!isRunning()) return false; stop(); return true; },
     workspace: number => { const project = filteredProjects()[number - 1]; if (!project) return false; selectProject(project.id); return true; },
     settings: press("relay-settings"), "setup-guide": press("open-setup-guide"), "new-workspace": press("create-workspace"), review: press("open-review"),
+    // Settings may already be open on another tab; any other dialog waits.
+    "alert-settings": () => { if ([...document.querySelectorAll("dialog")].some(dialog => dialog.open && dialog.id !== "settings") || !window.relaySettings) return false; window.relaySettings.open("alerts"); return true; },
     "whats-new": () => { if (covered() || !window.relayUpdates) return false; window.relayUpdates.open(); return true; },
     "check-updates": () => { if (!window.relayUpdater) return false; window.relayUpdater.checkNow(); return true; },
     terminal: () => { if (!state.projectId || !window.relayTerminal) return false; window.relayTerminal.toggle(); return true; },
@@ -1700,13 +1706,13 @@
     ui.input.value = button.dataset.prompt;
     resizeInput(); saveDraft(); renderControls(); ui.input.focus();
   }));
-  $('connect-assistant')?.addEventListener('click',()=>$('relay-settings').click());
+  $('connect-assistant')?.addEventListener('click',openAccounts);
   $('connection-install')?.addEventListener('click',()=>{if(state.installUrl)openExternal(state.installUrl);});
   $('connection-action')?.addEventListener('click',()=>state.connectionAction?.());
   // Each agent in Plan usage does one thing: a connected agent shows its limits, any other opens its setup in Settings.
   for(const provider of ['codex','claude','gemini'])$(`${provider}-status`)?.addEventListener('click',event=>{
     if(state.accounts?.[provider]?.authenticated===true&&window.relayUsage)window.relayUsage.open(provider,event.currentTarget||$(`${provider}-status`));
-    else if(window.relaySettings)window.relaySettings.open('accounts');else $('relay-settings')?.click();
+    else openAccounts();
   });
   window.addEventListener('relay-account',()=>{renderStatus();renderControls();});
   window.addEventListener('relay-billing',()=>{renderStatus();renderControls();});

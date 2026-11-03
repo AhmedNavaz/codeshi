@@ -1,6 +1,9 @@
 // The menu bar. The template is built without Electron so it can be tested; desktop/main.mjs builds it with
 // Menu.buildFromTemplate and rebuilds it when the page, the saved appearance or Keep Awake changes. Items that
 // act on the page send it a command, so each runs the same code as the shortcut or button it stands for.
+import { alertDefaults } from '../src/alerts.mjs';
+import { alertMenu } from './status.mjs';
+
 const repository = 'https://github.com/AhmedNavaz/throughline';
 const agents = ['codex', 'claude', 'gemini'], names = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini' };
 const flags = ['workspace', 'running', 'codex', 'claude', 'gemini', 'files', 'git', 'terminal', 'imports', 'export'];
@@ -22,7 +25,7 @@ function system(platform, osVersion, arch) {
   return `${name} ${osVersion}, ${platform === 'darwin' ? arch === 'arm64' ? 'Apple Silicon' : 'Intel' : arch}`;
 }
 
-export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = { enabled: true, sound: false, statusItem: true, overlay: false }, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open }) {
+export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = alertDefaults, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open }) {
   const page = state || initial, mac = platform === 'darwin', separator = () => ({ type: 'separator' });
   const command = (label, name, options = {}) => ({ label, ...options, click: () => send(...name) });
   const link = (label, url) => ({ label, click: () => open(url) });
@@ -77,14 +80,9 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command(page.continue ? `Continue with ${names[page.continue]}` : 'Continue with…', ['continue'], { id: 'continue', enabled: page.continue !== null }),
     separator(),
     command('Keep Awake', ['keep-awake'], { type: 'checkbox', checked: keepAwake }),
-    // Alerts when Throughline is not in front: a notification and Dock bounce. Sounds are separate, chosen per kind in Settings.
-    { label: 'Notify When Runs Finish or Need Approval', type: 'checkbox', checked: notifications.enabled, click: () => setNotifications({ enabled: !notifications.enabled }) },
-    { label: 'Play Sounds', type: 'checkbox', checked: notifications.sound, click: () => setNotifications({ sound: !notifications.sound }) },
-    // Live status on the Mac (#13): the menu bar item, and alerts near the top of the screen instead of banners.
-    ...mac ? [
-      { label: 'Show Status in Menu Bar', type: 'checkbox', checked: notifications.statusItem !== false, click: () => setNotifications({ statusItem: notifications.statusItem === false }) },
-      { label: 'Show Alerts Near the Top of the Screen', type: 'checkbox', checked: notifications.overlay === true, enabled: notifications.enabled, click: () => setNotifications({ overlay: notifications.overlay !== true }) },
-    ] : [],
+    // How Throughline tells you about work while you are in another app: each way on or off here, and for each moment
+    // in Settings.
+    { label: 'Alerts', submenu: alertMenu(notifications, { platform, set: setNotifications, settings: () => send('alert-settings') }) },
     separator(),
     // When to offer moving a run to another agent before its usage limit stops it, and whether to do it unasked.
     { label: 'Hand Off Near Usage Limits', submenu: [

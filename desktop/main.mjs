@@ -16,7 +16,8 @@ import os from 'node:os';
 import http from 'node:http';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
-import {statusSnapshot,statusTitle,statusMenu,alertChannels} from './status.mjs';
+import {statusSnapshot,statusTitle,statusMenu} from './status.mjs';
+import {alertPlan} from '../src/alerts.mjs';
 import {createOverlay} from './overlay.mjs';
 import {createPreview} from './preview.mjs';
 import {APP_ID,ensureStartMenuShortcut} from './windows.mjs';
@@ -56,11 +57,11 @@ else {
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
       send:(...command)=>{if(win&&!win.isDestroyed())win.webContents.send('relay:menu-command',...command);updateMenu();}})));
     app.setAboutPanelOptions({applicationName:'Throughline',applicationVersion:app.getVersion(),version:''});
-    // Work that finishes or needs an answer while the person is elsewhere is reported outside the window. While the
-    // window is in front the page already shows it. The Dock badge counts what happened since the window was last in
-    // front and needs no permission; an approval bounces the Dock until the app is opened. A system notification is
-    // added where macOS allows one: an app without a Developer ID signature is refused, so the Dock always carries it.
-    // On Windows and Linux the taskbar button flashes instead of the Dock bouncing.
+    // Work that finishes or needs an answer while the person is elsewhere is reported outside the window, in the ways
+    // chosen under Alerts (src/alerts.mjs). While the window is in front the page already shows it. The Dock badge
+    // counts what happened since the window was last in front and needs no permission; something that needs you
+    // bounces the Dock until the app is opened. A system notification is shown where macOS allows one: an app without
+    // a Developer ID signature is refused. On Windows and Linux the taskbar button flashes instead of the Dock bouncing.
     let attention=0,notificationsRefused=false;
     // Brings the window forward, opening a workspace or an approval's request card. Nothing is answered on the way.
     function openTarget(target){
@@ -68,17 +69,14 @@ else {
       if(win.isMinimized())win.restore();win.show();win.focus();app.focus?.({steal:true});
       if(target?.projectId)win.webContents.send('relay:menu-command',target.approvalId?'open-approval':'open-workspace',target.approvalId?{projectId:target.projectId,approvalId:target.approvalId}:target.projectId);
     }
-    // Turned off in the Agent menu, only the Dock badge and the sidebar's approval count remain. With alerts near the
-    // top of the screen turned on (#13), they take the place of the system banner, so nothing is announced twice.
+    // A banner is the panel near the top of the screen when that is chosen (#13), or else a system notification, so
+    // nothing is announced twice. Each way is skipped when it is turned off for this moment.
     function notify({kind,title,body,projectId,projectName,approvalId}){
-      const preferences=relay.getNotificationPreferences(),channels=alertChannels({focused:Boolean(win&&!win.isDestroyed()&&win.isFocused()),preferences,overlayAvailable:Boolean(overlay)});
-      if(!channels.badge)return;
-      attention++;app.dock?.setBadge(String(attention));
-      if(!channels.bounce)return;
-      app.dock?.bounce(kind==='approval'?'critical':'informational');
-      if(process.platform!=='darwin'&&win&&!win.isDestroyed())win.flashFrame(true);
-      if(channels.overlay){overlay.show({kind,title,body,projectId,projectName,approvalId});return;}
-      if(notificationsRefused||!Notification.isSupported())return;
+      const plan=alertPlan({kind},relay.getNotificationPreferences(),{focused:Boolean(win&&!win.isDestroyed()&&win.isFocused()),panelAvailable:Boolean(overlay)});
+      if(plan.badge&&app.dock){attention++;app.dock.setBadge(String(attention));}
+      if(plan.bounce){app.dock?.bounce(plan.moment==='attention'?'critical':'informational');if(process.platform!=='darwin'&&win&&!win.isDestroyed())win.flashFrame(true);}
+      if(plan.panel){overlay.show({kind,title,body,projectId,projectName,approvalId});return;}
+      if(!plan.notification||notificationsRefused||!Notification.isSupported())return;
       // Banners are silent: the page plays alert sounds itself, as chosen in Settings, so a sound is never heard twice.
       const notice=new Notification({title:projectName?`${title} · ${projectName}`:title,body:String(body||'').slice(0,240),silent:true});
       // An approval opens its own request card; it is never answered from the notification.
@@ -99,7 +97,7 @@ else {
       if(!tray){for(const icon of Object.values(statusIcons))icon.setTemplateImage(true);tray=new Tray(statusIcons.idle);tray.setToolTip('Throughline');}
       tray.setImage(snapshot.attention?statusIcons.attention:statusIcons.idle);
       tray.setTitle(statusTitle(snapshot),{fontType:'monospacedDigit'});
-      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{keepAwake:keepAwake?.getState()||{enabled:false,active:false},overlay:preferences.overlay,open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),setOverlay:value=>setStatusPreferences({overlay:value}),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
+      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
       overlay?.reconcile(snapshot);
     }
     async function start(){
@@ -123,7 +121,9 @@ else {
     }
     updateMenu();syncStatus();
     win=new BrowserWindow({width:1440,height:1000,minWidth:900,minHeight:680,show:false,title:'Throughline',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences:{preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]}});
-    win.on('focus',()=>{attention=0;app.dock?.setBadge('');if(process.platform!=='darwin')win.flashFrame(false);});
+    // Back in the window, the page shows what happened, including the recap after a while away, so the badge clears
+    // and the panel near the top of the screen goes; it would otherwise cover the recap.
+    win.on('focus',()=>{attention=0;app.dock?.setBadge('');overlay?.hide();if(process.platform!=='darwin')win.flashFrame(false);});
     // The window list and the app switcher tell the two copies apart.
     if(development)win.on('page-title-updated',(event,title)=>{event.preventDefault();win.setTitle(`${title} (Development)`);});
     if(!smoke) win.once('ready-to-show',()=>win.show());

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {menuTemplate,menuState} from '../desktop/menu.mjs';
+import {alertPreferences} from '../src/alerts.mjs';
 
 const page={workspace:true,running:false,agent:'codex',codex:true,claude:true,gemini:true,continue:null,files:true,git:false,terminal:false,imports:true,export:true,workspaces:[{name:'Frontend',current:true},{name:'R&D',current:false}]};
 // Builds the template with recording callbacks. Items are found by label, id or role, and must be unique.
@@ -21,7 +22,7 @@ test('the macOS menu bar has Throughline, File, Edit, View, Agent, Workspace, Wi
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','pasteAndMatchStyle','delete','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces','-','Speech']);
   assert.deepEqual(labels(item('View').submenu),['Show Git Activity','Show Files','Terminal','Focus Message Box','-','Appearance','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen']);
   assert.deepEqual(labels(item('Appearance').submenu),['System','Dark','Light']);
-  assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Notify When Runs Finish or Need Approval','Play Sounds','Show Status in Menu Bar','Show Alerts Near the Top of the Screen','-','Hand Off Near Usage Limits']);
+  assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Alerts','-','Hand Off Near Usage Limits']);
   assert.deepEqual(labels(item('Workspace').submenu),['Frontend','R&D','-','Workspace Settings…','Remove Workspace…']);
   assert.deepEqual(labels(item('help').submenu),['Throughline Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New']);
   // These are the page's own shortcuts plus ⌘, ⌘N and ⌘G, which the page leaves to the menu.
@@ -67,13 +68,14 @@ test('page items and in-app release notes send commands, and external Help links
   commands['Voice Input']=['voice'];
   commands['Use Gemini']=['agent','gemini'];
   commands['Continue Locally…']=['local-models'];
+  commands['Alert Settings…']=['alert-settings'];
   for(const [label,command] of Object.entries(commands)){sent.length=0;item(label).click();assert.deepEqual(sent,[command],label);}
   assert.deepEqual(opened,[]);
   const repository='https://github.com/AhmedNavaz/throughline';
   const pages={'Throughline Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`};
   for(const [label,url] of Object.entries(pages)){opened.length=0;item(label).click();assert.deepEqual(opened,[url],label);}
-  // The four alert and status toggles and the five handoff choices are handled by the desktop app itself and tested separately.
-  assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+9,'Every other item is a standard role.');
+  // The five alert and status switches and the five handoff choices are handled by the desktop app itself and tested separately.
+  assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+10,'Every other item is a standard role.');
   for(const entry of all)assert(!(entry.role&&entry.click),`${entry.role} keeps its native behaviour.`);
   const intel=[];menu({arch:'x64',osVersion:'15.7.1',open:url=>intel.push(url)}).item('Report a Bug').click();assert.match(intel[0],/&system=macOS\+15\.7\.1%2C\+Intel$/);
 });
@@ -101,12 +103,15 @@ test('menu state from the page is used only in the expected shape',()=>{
   const copy=menuState(page);assert.notEqual(copy.workspaces,page.workspaces,'The state is copied, not kept by reference.');
 });
 
-test('the Agent menu turns alerts outside the window on or off, and sounds on or off separately',()=>{
-  const changes=[],open=menu({notifications:{enabled:true,sound:false},setNotifications:patch=>changes.push(patch)});
-  const alerts=open.item('Notify When Runs Finish or Need Approval'),sound=open.item('Play Sounds');
-  assert.deepEqual([alerts.type,alerts.checked,sound.checked,disabled(sound)],['checkbox',true,false,false]);
-  alerts.click();sound.click();assert.deepEqual(changes,[{enabled:false},{sound:true}]);
-  assert.equal(disabled(menu({notifications:{enabled:false,sound:true}}).item('Play Sounds')),false,'Sounds play from the page, so they do not depend on banners.');
+test('the Agent menu has one Alerts menu that turns each way of alerting on or off, and opens their settings',()=>{
+  const changes=[],open=menu({notifications:alertPreferences({sound:{on:false}}),setNotifications:patch=>changes.push(patch)});
+  assert.deepEqual(open.labels(open.item('Alerts').submenu),['Banners','Sounds','Bounce the Dock Icon','Badge on the Dock Icon','Status in the Menu Bar','-','Alert Settings…']);
+  const banners=open.item('Banners'),sounds=open.item('Sounds');
+  assert.deepEqual([banners.type,banners.checked,sounds.checked,disabled(sounds)],['checkbox',true,false,false]);
+  banners.click();sounds.click();open.item('Bounce the Dock Icon').click();open.item('Status in the Menu Bar').click();
+  assert.deepEqual(changes,[{banner:{on:false}},{sound:{on:true}},{bounce:{on:false}},{statusItem:false}]);
+  open.item('Alert Settings…').click();assert.deepEqual(open.sent,[['alert-settings']],'Alert Settings… opens the Alerts section of Settings.');
+  assert(!menu().all.some(entry=>/^(Notify When|Play Sounds|Show Alerts Near|Show Status in Menu Bar)/.test(entry.label||'')),'The separate alert items are gone.');
 });
 
 test('the Agent menu chooses when a handoff is offered near a usage limit, and whether it may switch to subscription agents on its own',()=>{
@@ -128,14 +133,10 @@ test('the installed app offers Check for Updates… after About, which asks the 
   assert(!menu().all.some(entry=>entry.label==='Check for Updates…'),'A copy that cannot update itself, such as one run from source, leaves it out.');
 });
 
-test('on macOS the Agent menu shows or hides the menu bar status and turns alerts near the top of the screen on or off',()=>{
-  const changes=[],options={setNotifications:patch=>changes.push(patch)};
-  const shown=menu({...options,notifications:{enabled:true,sound:false,statusItem:true,overlay:false}});
-  assert.equal(shown.item('Show Status in Menu Bar').checked,true);assert.equal(shown.item('Show Alerts Near the Top of the Screen').checked,false);
-  shown.item('Show Status in Menu Bar').click();shown.item('Show Alerts Near the Top of the Screen').click();
-  assert.deepEqual(changes,[{statusItem:false},{overlay:true}]);
-  assert.equal(disabled(menu({notifications:{enabled:false,sound:false,statusItem:true,overlay:true}}).item('Show Alerts Near the Top of the Screen')),true,'Alerts need notifications to be on.');
-  assert(!menu({platform:'win32'}).all.some(entry=>/Menu Bar|Top of the Screen/.test(entry.label||'')));
+test('other systems flash the taskbar button instead of bouncing an icon, with no Dock badge or menu bar status',()=>{
+  const windows=menu({platform:'win32'});
+  assert.deepEqual(windows.labels(windows.item('Alerts').submenu),['Banners','Sounds','Flash the Taskbar Button','-','Alert Settings…']);
+  assert(!windows.all.some(entry=>/Menu Bar|Dock/.test(entry.label||'')));
 });
 
 test('Voice Input is in the Agent menu on macOS, where speech is recognized on the Mac, and nowhere else yet',()=>{

@@ -3,13 +3,13 @@
   const $ = id => document.getElementById(id), api = () => window.relayUI;
   const modal = $('workbench'), content = $('workbench-content'), error = $('workbench-error');
   let renderRevision = 0;
-  let tab = 'request', busy = false, projectScope = null, accountSignature = '';
+  // Ask a friend: asking another person for help, reviewing what they send back, and helping someone else. Settings
+  // has a dialog of its own (settings.js); this module also draws the approval cards above the message box.
+  let tab = 'request', busy = false, projectScope = null;
   const page = {
     request: ['Ask a friend', 'Ask another person for help. They work in their own workspace and send back changes for you to review.'],
-    solutions: ['Returned solutions', 'Manage shared requests and review the changes your friend sends back.'],
-    friend: ['Help someone', 'Open a request in your workspace and return your proposed changes.'],
-    accounts: ['Connections', 'Manage your Codex, Claude and Gemini accounts and model preferences.'],
-    preferences: ['Preferences', 'Appearance, sounds, updates, voice and recaps.'],
+    solutions: ['Ask a friend', 'Your shared requests, and the changes your friends send back for you to review.'],
+    friend: ['Ask a friend', 'Open someone’s request in your workspace and send back your proposed changes.'],
   };
   const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const field = (label, type = 'input', value = '') => { const l = node('label', label), i = node(type); i.value = value; l.append(i); return { l, i }; };
@@ -19,12 +19,6 @@
   const post = (path, value = {}, projectId) => api().post('/api/collaboration' + path, value, projectId ?? projectScope);
   const get = (path, projectId) => api().api('/api/collaboration' + path, {}, projectId ?? projectScope);
   const providerName = provider => provider === 'gemini' ? 'Gemini' : provider === 'codex' ? 'Codex' : 'Claude';
-  const openExternal = async url => { if (window.relayDesktop) await window.relayDesktop.openExternal(url); else window.open(url, '_blank', 'noopener,noreferrer'); };
-  const installGuides = {
-    codex: { command: 'npm install -g @openai/codex', url: 'https://github.com/openai/codex', note: 'Install Codex CLI (or the ChatGPT / Codex macOS app) on this computer, then refresh status.' },
-    claude: { command: 'curl -fsSL https://claude.ai/install.sh | bash', url: 'https://code.claude.com/docs/en/overview', note: 'Install Claude Code and run claude in Terminal to sign in, then refresh status.' },
-    gemini: { command: '', url: 'https://antigravity.google/docs/install', note: 'Use Install Google connection below, then sign in with Google. Throughline downloads the official Antigravity ACP runtime and verifies its checksum. Google’s terms and account limits apply.' },
-  };
   const bytes = count => count < 1024 ? `${count} B` : `${(count / 1024).toFixed(count < 10240 ? 1 : 0)} KB`;
   const date = value => { if (!value) return ''; const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
   const download = (name, value) => { const a = node('a'), url = URL.createObjectURL(new Blob([describe(value)], { type: 'application/json' })); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
@@ -44,13 +38,11 @@
   function empty(parent, title, text) { const box = node('div', undefined, 'workbench-empty'); box.append(node('h4', title), node('p', text)); parent.append(box); return box; }
   function list(parent, items, fallback) { if (!items?.length) { parent.append(node('p', fallback || 'None provided.', 'muted')); return; } const ul = node('ul', undefined, 'workbench-list'); for (const item of items) ul.append(node('li', item)); parent.append(ul); }
   async function open(next = 'request') { if (busy) return; tab = next; error.hidden = true; if (!modal.open) modal.showModal(); await perform(render); }
-  async function render(forceAccounts = false) {
+  async function render() {
     ++renderRevision; projectScope = api().getState().projectId; content.replaceChildren();
     const [title, description] = page[tab] || page.request; $('workbench-title').textContent = title;
     if ($('workbench-description')) $('workbench-description').textContent = description;
     document.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
-    if (tab === 'accounts') return accounts(forceAccounts);
-    if (tab === 'preferences') return preferences();
     if (!projectScope) { empty(content, 'Choose a workspace first', 'Add a workspace from the sidebar to use this feature.'); return; }
     if (tab === 'request') return request(); if (tab === 'solutions') return solutions(); if (tab === 'friend') return friend();
   }
@@ -274,65 +266,6 @@
     actions(build, button('Build and export solution', async () => { if (!choice.i.value) throw Error('Choose an imported request first.'); const solution = await post(`/handoffs/${choice.i.value}/build`, { files: lines(files.i.value), deletedPaths: lines(deletes.i.value), explanation: explanation.i.value, assumptions: lines(assumptions.i.value), verification: lines(verification.i.value) }); notice(build, `Solution exported with ${solution.patch.files.length} proposed file change${solution.patch.files.length === 1 ? '' : 's'}. Send the file back to the person who requested help.`); diagnostics(build, solution, 'Exported solution details'); download(`solution-${solution.id}.json`, solution); }, 'primary'));
   }
 
-  function accountLabel(account) { return !account.installed ? 'Not installed' : account.authenticated === true ? 'Connected' : account.authenticated === false ? 'Sign-in required' : 'Connection not confirmed'; }
-  function billingLabel(value) { return value === 'subscription' ? 'Your subscription' : value === 'api' ? 'API usage' : 'Not reported'; }
-  function usageLabel(usage, plan) {
-    if (plan?.available && plan.windows?.length) return plan.windows.map(row => `${row.label}: ${row.disabled ? 'Disabled' : Number.isFinite(row.usedPercent) ? Math.round(row.usedPercent) + '% used' : Number.isFinite(row.remainingAmount) ? row.remainingAmount.toLocaleString() + ' units left' : row.status || 'Not reported'}`).join(' · ');
-    if (plan?.available === false) return plan.reason || 'Not reported for this connection';
-    if (!usage || typeof usage !== 'object') return 'Not reported by provider';
-    const periods = [usage.primary, usage.secondary].filter(period => period && typeof period.usedPercent === 'number');
-    if (periods.length) return periods.map(period => { const minutes = period.windowDurationMins, label = minutes >= 10080 ? 'Weekly' : minutes >= 1440 ? 'Daily' : minutes >= 60 ? `${Math.round(minutes / 60)}-hour` : 'Current'; return `${label}: ${Math.round(period.usedPercent)}% used`; }).join(' · ');
-    if (typeof usage.utilization === 'number') return `${Math.round(usage.utilization * 100)}% used`;
-    return 'Available in technical details';
-  }
-  function fact(parent, label, value) { const row = node('div', undefined, 'connection-fact'); row.append(node('dt', label), node('dd', value)); parent.append(row); }
-  function modelLocked(provider) { const state = api().getState(); return !state.projectId || !state.conversation?.id || state.provider !== provider || Boolean(state.pending || state.settingsPending || state.conversation?.status === 'running' || state.status?.runningConversationId); }
-  function accountState() { const state = api().getState(); return JSON.stringify([state.accounts, state.accountChecks, state.accountsChecking]); }
-  async function accounts(force = false) {
-    const state = api().getState(), cards = node('div', undefined, 'connection-grid'); content.append(cards);
-    // The app owns account checks. Each card shows its last result or progress at once and redraws when an answer arrives.
-    api().refreshAccounts({ force }).catch(() => {}); accountSignature = accountState();
-    for (const provider of ['codex', 'claude', 'gemini']) {
-      const card = node('section', undefined, 'connection-card'); card.dataset.provider = provider; cards.append(card);
-      const account = state.accounts?.[provider], check = state.accountChecks?.[provider] || {}, checking = Boolean(state.accountsChecking?.[provider]);
-      if (!account) { card.append(node('h3', providerName(provider)), badge(checking ? 'Checking…' : check.failure === 'timeout' ? 'Check timed out' : 'Status unavailable', checking ? '' : 'warning')); if (!checking) { card.append(node('p', check.failure === 'timeout' ? `${providerName(provider)} did not answer in time.` : check.error || 'This connection has not been checked yet.')); actions(card, button('Try again', () => render(true))); } continue; }
-      const heading = node('div', undefined, 'connection-heading'); heading.append(node('h3', providerName(provider)), checking ? badge('Checking…') : badge(accountLabel(account), account.authenticated === true ? 'positive' : !account.installed ? '' : 'warning')); card.append(heading);
-      if (!account.installed) {
-        const guide = installGuides[provider];
-        card.append(node('p', guide.note, 'muted'));
-        if (guide.command) output(card, guide.command);
-        const install = provider === 'gemini' ? button('Install Google connection', async () => { notice(card, 'Downloading the official Google connection…', 'info'); await api().post('/api/providers/gemini/install', {}, null); await render(true); }, 'primary') : button(`How to install ${providerName(provider)} ↗`, () => openExternal(guide.url), 'primary');
-        actions(card, install, ...(provider === 'gemini' ? [button('Google terms ↗', () => openExternal('https://antigravity.google/terms'))] : []), button('Refresh status', () => render(true)));
-        diagnostics(card, account);
-        continue;
-      }
-      const facts = node('dl', undefined, 'connection-facts'); fact(facts, 'Billing', account.authMode === 'google-oauth' && account.billingSource === 'subscription' ? 'Google account allowance' : billingLabel(account.billingSource)); if (account.planType || account.subscriptionType) fact(facts, 'Plan', String(account.planType || account.subscriptionType).replace(/[_-]/g, ' ')); fact(facts, 'Usage', usageLabel(account.usage, state.usage?.[provider]));
-      const selected = state.conversation?.models?.[provider] || (state.provider === provider ? state.model : '') || ''; fact(facts, 'Selected model', selected || 'Provider default');
-      if (state.conversation?.lastRun?.provider === provider && state.conversation.lastRun.effectiveModel) fact(facts, 'Last used', state.conversation.lastRun.effectiveModel); fact(facts, 'Last checked', date(check.checkedAt) || 'Not yet'); card.append(facts);
-      if (check.failure) notice(card, `The latest check ${check.failure === 'timeout' ? 'timed out' : 'failed'} at ${date(check.failedAt)}, so this shows the result from ${date(check.checkedAt)}.`, 'info');
-      if (provider === 'gemini') card.append(node('p', account.message || 'Connect Gemini with Google Antigravity. Models and usage limits come from your Google account.', 'muted'));
-      const controls = [button('Refresh status', () => render(true)), button('Usage & reset times', () => { modal.close(); window.relayUsage?.open(provider); })];
-      if (provider === 'gemini') { if (account.source !== 'antigravity-acp') controls.unshift(button('Install Google connection', async () => { notice(card, 'Downloading the official Google connection…', 'info'); await api().post('/api/providers/gemini/install', {}, null); await render(true); }, 'primary')); controls.push(button('Antigravity setup guide ↗', () => openExternal(installGuides.gemini.url))); }
-      if (account.authenticated !== true) controls.unshift(button('Connect account', async () => { const result = await api().post(`/api/providers/${provider}/connect`), url = result.authUrl || result.url; notice(card, result.message || (url ? 'Open the provider sign-in page to finish connecting, then refresh status.' : 'Complete sign-in in the provider’s browser window, then refresh status.'), 'info'); if (url) actions(card, button('Open provider sign-in', () => openExternal(url), 'primary')); }, 'primary'));
-      if (account.authenticated === true) controls.push(button('Disconnect account', async () => { await api().post(`/api/providers/${provider}/disconnect`); await render(true); }, 'quiet-danger'));
-      actions(card, ...controls);
-      if (state.projectId) card.append(node('p', 'Choose the model and reasoning effort in the message composer.', 'muted'));
-      diagnostics(card, account);
-    }
-    const billing = section('Usage and billing', 'Provider runs use your own connected account. Subscription allowances and API charges are managed by the provider.');
-    const acceptance = check('For explicit provider runs in this app session, I accept the displayed API or unknown billing source.'); acceptance.i.checked = window.relayBillingConfirmed === true; acceptance.i.addEventListener('change', () => { window.relayBillingConfirmed = acceptance.i.checked; window.dispatchEvent(new CustomEvent('relay-billing')); }); billing.append(acceptance.l);
-    const permissions = details(content, 'Permissions and account details'); permissions.append(node('p', 'Codex read-only uses its native sandbox. Claude and the advanced Gemini CLI connection restrict tools. Antigravity coding uses native approvals and workspace trust; choose Codex or Claude for read-only work. Managed runs disable project hooks where supported; administrator policy may still apply. Tool approval requests appear in the workspace chat.')); permissions.append(node('p', 'Sign-in uses the provider’s own flow. Account credentials stay with the provider. There is no automatic switch to API billing.'));
-  }
-  // How Throughline looks and behaves, apart from the agent accounts: appearance, updates, voice and recaps.
-  function preferences() {
-    const look = section('Appearance', 'System follows your computer’s light or dark setting.'), choices = node('div', undefined, 'segmented'); choices.setAttribute('role', 'group'); choices.setAttribute('aria-label', 'Appearance'); look.append(choices);
-    for (const [value, label] of [['system', 'System'], ['graphite', 'Dark'], ['light', 'Light']]) { const choice = node('button', label); choice.type = 'button'; choice.setAttribute('data-appearance', value); choice.setAttribute('aria-pressed', String(window.relayTheme?.preference() === value)); choice.addEventListener('click', () => window.relayTheme?.choose(value)); choices.append(choice); }
-    if (window.relaySounds) { const sounds = node('section', undefined, 'workbench-section'); content.append(sounds); window.relaySounds.settings(sounds); }
-    if (window.relayUpdater) { const updates = node('section', undefined, 'workbench-section'); content.append(updates); window.relayUpdater.settings(updates); }
-    if (window.relayVoice) { const voice = node('section', undefined, 'workbench-section'); content.append(voice); window.relayVoice.settings(voice); }
-    if (window.relayRecap) { const recap = node('section', undefined, 'workbench-section'); content.append(recap); window.relayRecap.settings(recap); }
-    const setup = section('App preferences', 'Choose your default assistant, model, theme and starting workspace.'); actions(setup, button('Open setup checklist', () => { modal.close(); window.relaySetup?.open(); }));
-  }
   function approvals() {
     let host = $('pending-approvals'); if (!host) { host = node('section', undefined, 'pending-approvals'); host.id = 'pending-approvals'; $('transcript-footer').prepend(host); }
     const state = api().getState(), pending = state.conversation?.pendingApprovals || [], signature = describe(pending); if (host.dataset.signature === signature) return; host.dataset.signature = signature; host.replaceChildren();
@@ -376,9 +309,10 @@
     finally { choices.forEach(choice => { choice.disabled = false; }); await api().refresh(); }
   }
   modal.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-  $('ask-friend').addEventListener('click', () => open('request')); $('relay-settings').addEventListener('click', () => open('accounts')); $('connection-action')?.addEventListener('click', () => open('accounts')); $('workbench-close').addEventListener('click', () => modal.close());
-  // Other parts of the app open Settings on a tab, and can bring one of its sections into view.
-  window.relaySettings = { open: async (next = 'accounts', heading = null) => { await open(next); if (heading) [...content.querySelectorAll('h3')].find(item => item.textContent === heading)?.scrollIntoView?.({ block: 'start' }); } };
+  $('ask-friend').addEventListener('click', () => open('request')); $('workbench-close').addEventListener('click', () => modal.close());
+  // Other parts of the app open Ask a friend on one of its tabs.
+  window.relayFriend = { open: (next = 'request') => open(page[next] ? next : 'request') };
   $('workbench-tabs').addEventListener('click', event => { const target = event.target.closest('[data-tab]'); if (target?.dataset.tab) perform(async () => { tab = target.dataset.tab; await render(); }); });
-  window.addEventListener('relay-state', () => { if (modal.open && tab !== 'accounts' && projectScope !== api().getState().projectId) { ++renderRevision; modal.close(); } approvals(); $('ask-friend').disabled = !api().getState().projectId; for (const save of document.querySelectorAll('.model-save')) save.disabled = modelLocked(save.dataset.provider); if (modal.open && tab === 'accounts' && !busy && accountSignature !== accountState()) perform(render); }); approvals();
+  // A request belongs to the workspace it was made in, so switching workspace closes the dialog.
+  window.addEventListener('relay-state', () => { if (modal.open && projectScope !== api().getState().projectId) { ++renderRevision; modal.close(); } approvals(); $('ask-friend').disabled = !api().getState().projectId; }); approvals();
 })();

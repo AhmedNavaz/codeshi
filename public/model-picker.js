@@ -115,7 +115,7 @@
           const setup = node('button', undefined, 'picker-row picker-setup');
           setup.type = 'button'; setup.dataset.nav = 'true';
           setup.append(node('span', provider === 'local' ? 'Set up local models…' : `Connect ${names[provider]}…`, 'picker-row-name'));
-          setup.addEventListener('click', () => { close(); if (provider === 'local') window.relayLocal?.open(); else $('relay-settings')?.click(); });
+          setup.addEventListener('click', () => { close(); if (provider === 'local') window.relayLocal?.open(); else if (window.relaySettings) window.relaySettings.open('accounts'); else $('relay-settings')?.click(); });
           section.push(setup);
         }
       } else {

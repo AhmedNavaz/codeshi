@@ -1,3 +1,4 @@
+import { alertDefaults } from '../src/alerts.mjs';
 import { runSteps, TESTS } from '../src/recap.mjs';
 
 // Live status outside the window on macOS (#13): a status item in the menu bar and, when turned on, alerts near the
@@ -63,7 +64,7 @@ export function statusTitle({ rows, attention, running }) {
   return '';
 }
 
-export function statusMenu(snapshot, { keepAwake = { enabled: false, active: false }, overlay = false, open = () => {}, show = () => {}, setKeepAwake = () => {}, setOverlay = () => {}, hide = () => {}, quit = () => {} } = {}) {
+export function statusMenu(snapshot, { keepAwake = { enabled: false, active: false }, alerts = alertDefaults, setAlerts = () => {}, alertSettings = () => {}, open = () => {}, show = () => {}, setKeepAwake = () => {}, hide = () => {}, quit = () => {} } = {}) {
   const separator = { type: 'separator' };
   const summary = snapshot.rows.length ? [snapshot.attention ? `${snapshot.attention} need${snapshot.attention === 1 ? 's' : ''} you` : '', snapshot.running ? `${snapshot.running} working` : ''].filter(Boolean).join(' · ') || 'Waiting' : 'Nothing running';
   // An approval opens its own request card; it is never answered from here.
@@ -75,20 +76,28 @@ export function statusMenu(snapshot, { keepAwake = { enabled: false, active: fal
     { label: 'Open Throughline', click: show },
     { label: 'Keep Awake', type: 'checkbox', checked: keepAwake.enabled, click: () => setKeepAwake(!keepAwake.enabled) },
     ...keepAwake.active ? [{ label: 'Keeping your Mac awake while agents work', enabled: false }] : [],
-    { label: 'Show Alerts Near the Top of the Screen', type: 'checkbox', checked: overlay, click: () => setOverlay(!overlay) },
+    // This menu belongs to the status item, so hiding it has its own item rather than a switch under Alerts.
+    { label: 'Alerts', submenu: alertMenu(alerts, { statusItem: false, set: setAlerts, settings: alertSettings }) },
     { label: 'Hide from Menu Bar', click: hide },
     separator,
     { label: 'Quit Throughline', click: quit },
   ];
 }
 
-// Where an alert goes when something finishes or needs an answer while the window is elsewhere. The Dock badge
-// always counts it. The overlay, when turned on, takes the place of the system banner, so an alert is never shown twice.
-export function alertChannels({ focused, preferences, overlayAvailable = true }) {
-  if (focused) return { badge: false, bounce: false, notification: false, overlay: false };
-  if (!preferences.enabled) return { badge: true, bounce: false, notification: false, overlay: false };
-  const overlay = preferences.overlay === true && overlayAvailable;
-  return { badge: true, bounce: true, notification: !overlay, overlay };
+// The ways Throughline alerts you while you are in another app, each on or off, for the Agent menu and the status
+// item's menu. Alert Settings… chooses each way for each moment, and how banners show. Other systems have no Dock or
+// menu bar status: the taskbar button flashes instead of the icon bouncing.
+export function alertMenu(preferences, { platform = 'darwin', statusItem = true, set = () => {}, settings = () => {} } = {}) {
+  const mac = platform === 'darwin', way = (label, channel) => ({ label, type: 'checkbox', checked: preferences[channel].on, click: () => set({ [channel]: { on: !preferences[channel].on } }) });
+  return [
+    way('Banners', 'banner'),
+    way('Sounds', 'sound'),
+    way(mac ? 'Bounce the Dock Icon' : 'Flash the Taskbar Button', 'bounce'),
+    ...mac ? [way('Badge on the Dock Icon', 'badge')] : [],
+    ...mac && statusItem ? [{ label: 'Status in the Menu Bar', type: 'checkbox', checked: preferences.statusItem, click: () => set({ statusItem: !preferences.statusItem }) }] : [],
+    { type: 'separator' },
+    { label: 'Alert Settings…', click: settings },
+  ];
 }
 
 // The overlay sits centred under the menu bar of the display the pointer is on, clear of the notch.

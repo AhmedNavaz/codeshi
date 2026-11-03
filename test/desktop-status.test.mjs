@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
-import { alertChannels, currentAction, overlayBounds, statusMenu, statusSnapshot, statusTitle } from '../desktop/status.mjs';
+import { alertMenu, currentAction, overlayBounds, statusMenu, statusSnapshot, statusTitle } from '../desktop/status.mjs';
+import { alertPreferences } from '../src/alerts.mjs';
 import { createOverlay } from '../desktop/overlay.mjs';
 
 // A registry stand-in: workspaces with their main conversation and, when an agent works, its run.
@@ -76,25 +77,30 @@ test('an agent’s question waits like an approval, says it is a question, and k
 test('the status menu opens the right workspace or request and only changes Keep Awake when it is clicked', () => {
   const calls = [];
   const snapshot = { rows: [{ projectId: 'api', name: 'payments-api', kind: 'approval', text: 'Approval needed: npm install', approvalId: 'ap1', attention: true }, { projectId: 'shop', name: 'acme-shop', kind: 'running', text: 'Codex · Reading files' }], attention: 1, running: 1 };
-  const template = statusMenu(snapshot, { keepAwake: { enabled: true, active: true }, overlay: false, open: target => calls.push(['open', target]), show: () => calls.push(['show']), setKeepAwake: value => calls.push(['keep-awake', value]), setOverlay: value => calls.push(['overlay', value]), hide: () => calls.push(['hide']), quit: () => calls.push(['quit']) });
-  const labels = template.map(item => item.type === 'separator' ? '-' : item.label);
-  assert.deepEqual(labels, ['1 needs you · 1 working', '-', 'payments-api — Approval needed: npm install', 'acme-shop — Codex · Reading files', '-', 'Open Throughline', 'Keep Awake', 'Keeping your Mac awake while agents work', 'Show Alerts Near the Top of the Screen', 'Hide from Menu Bar', '-', 'Quit Throughline']);
+  const alerts = alertPreferences({ sound: { on: true } });
+  const template = statusMenu(snapshot, { keepAwake: { enabled: true, active: true }, alerts, setAlerts: patch => calls.push(['alerts', patch]), alertSettings: () => calls.push(['alert-settings']), open: target => calls.push(['open', target]), show: () => calls.push(['show']), setKeepAwake: value => calls.push(['keep-awake', value]), hide: () => calls.push(['hide']), quit: () => calls.push(['quit']) });
+  const labels = items => items.map(item => item.type === 'separator' ? '-' : item.label);
+  assert.deepEqual(labels(template), ['1 needs you · 1 working', '-', 'payments-api — Approval needed: npm install', 'acme-shop — Codex · Reading files', '-', 'Open Throughline', 'Keep Awake', 'Keeping your Mac awake while agents work', 'Alerts', 'Hide from Menu Bar', '-', 'Quit Throughline']);
   assert.equal(calls.length, 0, 'Building the menu changes nothing.');
   const item = label => template.find(entry => entry.label === label);
+  // The status item's own Alerts menu turns each way on or off; hiding the status item has its own item.
+  const submenu = item('Alerts').submenu, way = label => submenu.find(entry => entry.label === label);
+  assert.deepEqual(labels(submenu), ['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon', '-', 'Alert Settings…']);
+  assert.deepEqual(['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon'].map(label => [way(label).type, way(label).checked]), [['checkbox', true], ['checkbox', true], ['checkbox', true], ['checkbox', true]]);
   item('payments-api — Approval needed: npm install').click(); item('acme-shop — Codex · Reading files').click();
-  item('Keep Awake').click(); item('Show Alerts Near the Top of the Screen').click(); item('Hide from Menu Bar').click();
-  assert.deepEqual(calls, [['open', { projectId: 'api', approvalId: 'ap1' }], ['open', { projectId: 'shop' }], ['keep-awake', false], ['overlay', true], ['hide']]);
+  item('Keep Awake').click(); way('Sounds').click(); way('Badge on the Dock Icon').click(); way('Alert Settings…').click(); item('Hide from Menu Bar').click();
+  assert.deepEqual(calls, [['open', { projectId: 'api', approvalId: 'ap1' }], ['open', { projectId: 'shop' }], ['keep-awake', false], ['alerts', { sound: { on: false } }], ['alerts', { badge: { on: false } }], ['alert-settings'], ['hide']]);
   assert.equal(item('Keep Awake').checked, true);
   assert.equal(statusMenu({ rows: [], attention: 0, running: 0 })[0].label, 'Nothing running');
 });
 
-test('alerts go to the overlay instead of a banner when it is on, never both, and nowhere while the window is in front', () => {
-  const on = { enabled: true, overlay: true }, off = { enabled: true, overlay: false };
-  assert.deepEqual(alertChannels({ focused: true, preferences: on }), { badge: false, bounce: false, notification: false, overlay: false });
-  assert.deepEqual(alertChannels({ focused: false, preferences: on }), { badge: true, bounce: true, notification: false, overlay: true });
-  assert.deepEqual(alertChannels({ focused: false, preferences: off }), { badge: true, bounce: true, notification: true, overlay: false });
-  assert.deepEqual(alertChannels({ focused: false, preferences: on, overlayAvailable: false }), { badge: true, bounce: true, notification: true, overlay: false }, 'Without the overlay, the banner shows.');
-  assert.deepEqual(alertChannels({ focused: false, preferences: { enabled: false, overlay: true } }), { badge: true, bounce: false, notification: false, overlay: false }, 'Alerts turned off leave only the Dock badge.');
+test('the Alerts menu lists the ways each system has: the taskbar flashes elsewhere, with no Dock badge or menu bar status', () => {
+  const changes = [], labels = items => items.map(item => item.type === 'separator' ? '-' : item.label);
+  const mac = alertMenu(alertPreferences({ statusItem: false }), { set: patch => changes.push(patch) });
+  assert.deepEqual(labels(mac), ['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon', 'Status in the Menu Bar', '-', 'Alert Settings…']);
+  mac.find(entry => entry.label === 'Status in the Menu Bar').click(); mac.find(entry => entry.label === 'Banners').click();
+  assert.deepEqual(changes, [{ statusItem: true }, { banner: { on: false } }]);
+  assert.deepEqual(labels(alertMenu(alertPreferences(), { platform: 'win32' })), ['Banners', 'Sounds', 'Flash the Taskbar Button', '-', 'Alert Settings…']);
 });
 
 test('the overlay sits centred under the menu bar of its display, and its page runs only its own script', () => {

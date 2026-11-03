@@ -10,7 +10,7 @@
   const defaults = { show: true, speak: false };
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const load = () => { try { return { ...defaults, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return { ...defaults }; } };
-  let prefs = load(), awaySince = null, lastAway = null, current = null, settingsHost = null;
+  let prefs = load(), awaySince = null, lastAway = null, current = null, settingsHost = null, settingsKit = null;
   const openedAt = Date.now();
   const save = patch => { prefs = { ...prefs, ...patch }; try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch { /* A preference for this device only. */ } };
 
@@ -96,17 +96,19 @@
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && !panel.hidden) { event.preventDefault(); hide(); } });
 
   // The recap's part of Settings.
-  function renderSettings(host) {
-    settingsHost = host;
-    host.replaceChildren(node('h3', 'While you were away'), node('p', 'Coming back after two minutes or more, a short recap shows what ran, what changed and what is waiting in each workspace. It is put together from what Throughline recorded, with no agent call.', 'section-description'));
-    const check = (text, key) => { const label = node('label', undefined, 'review-check'), box = node('input'); box.type = 'checkbox'; box.checked = prefs[key]; box.addEventListener('change', () => save({ [key]: box.checked })); label.append(box, document.createTextNode(text)); host.append(label); };
-    check('Show a recap when I come back', 'show');
-    if (window.relayVoice?.speak) check('Read it aloud', 'speak');
+  // "When you come back" on the Alerts page of Settings, drawn with the kit Settings lends (settings.js).
+  function renderSettings(host, kit = settingsKit) {
+    settingsHost = host; settingsKit = kit;
+    if (!kit) return;
+    host.replaceChildren();
+    const rows = kit.group(host, 'When you come back');
+    kit.toggle(rows, { label: 'Show a recap when I come back', description: 'After two minutes or more away: what ran, what changed and what is waiting in each workspace, from what Throughline recorded.', keywords: 'while you were away summary return', checked: prefs.show, onChange: value => save({ show: value }) });
+    if (window.relayVoice?.speak) kit.toggle(rows, { label: 'Read it aloud', description: 'Speak the recap in the voice chosen under Voice.', keywords: 'recap speech speak', checked: prefs.speak, onChange: value => save({ speak: value }) });
   }
   window.relayRecap = {
     open: () => show(lastAway ?? openedAt, false),
     close: hide,
-    settings: host => renderSettings(host),
+    settings: (host, kit) => renderSettings(host, kit),
     spoken,
     isOpen: () => !panel.hidden,
   };

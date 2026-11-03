@@ -10,11 +10,14 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
+- **Settings** has its own dialog, with **General**, **Accounts**, **Alerts** and **Voice** pages in a sidebar and a search that finds a setting on any page. Each setting is a row with a short description: General has appearance, Keep awake, handoffs and updates; Accounts has agent connections and billing; Alerts also has the recap for when you come back. **Ask a friend** opens on its own, and folders and remembered approvals stay in Workspace settings.
 - Runs are easier to read. What the agent says between its steps is now the main text, brighter and larger than the steps around it, with room above and below. A step that changes several files lists them one per line, each file's name stronger than its folder, with the lines it added and removed. A command step leaves off an outer shell wrapper such as `/bin/zsh -lc`; its details still hold the exact command and output. The task plan above the message box is one line with how many steps are done and the current one, and opens into its checklist.
+- **Alerts** are in one place. **Settings › Alerts** replaces the Sounds section: each way Throughline tells you about work while you're in another app (a banner, a sound, bouncing the Dock icon and the badge on it) is a row you turn on or off, with a box for each moment it's for: an agent needs you, a task finished or a task stopped. The banner style (a macOS notification or the panel at the top of the screen), the volume and the menu bar status are set there too. In the menu bar, **Agent › Alerts** and the same menu in Throughline's status item turn each way on or off, and **Alert Settings…** opens the section. Your current choices carry over.
 
 ### Fixed
 
 - Background reviews now get the project's saved brief, like reviews in the conversation, and are saved before their agent starts, so one cut short by Throughline closing shows as interrupted after a restart.
+- The panel at the top of the screen could cover the "While you were away" recap: an approval's panel stayed up after you came back to Throughline. It now closes when Throughline comes to the front, where the recap and the request already show.
 
 ## [0.21.2] - 2026-11-03
 

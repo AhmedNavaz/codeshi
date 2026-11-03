@@ -16,7 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
 import { createReviewRoutes } from './agent-review-routes.mjs';
 import { createCheckpointRoutes } from './checkpoint-routes.mjs';
-import { alertSound, soundPatch, soundSettings } from './alert-sounds.mjs';
+import { alertPreferences, alertSound, mergeAlertPreferences } from './alerts.mjs';
 import { createLocalRoutes } from './local-models.mjs';
 import { atomicJSON } from './patches.mjs';
 import { continuationRequest } from './context.mjs';
@@ -36,9 +36,9 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
-  '/sounds.js': ['sounds.js', 'text/javascript; charset=utf-8'], '/sounds.css': ['sounds.css', 'text/css; charset=utf-8'],
+  '/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'], '/alerts.css': ['alerts.css', 'text/css; charset=utf-8'],
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],
-  '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'] };
+  '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/settings.js': ['settings.js', 'text/javascript; charset=utf-8'], '/settings.css': ['settings.css', 'text/css; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'] };
 const json = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
@@ -99,13 +99,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   registry.on('projects', () => {
     for (const res of listeners) res.write('event: projects\ndata: {}\n\n');
   });
-  const notificationPreferences = () => ({ enabled: config.notifications?.enabled !== false, sound: config.notifications?.sound === true, statusItem: config.notifications?.statusItem !== false, overlay: config.notifications?.overlay === true, sounds: soundSettings(config.notifications?.sounds) });
-  // Alert settings change from the desktop menu or from Settings; each change is saved whole and tells the other.
+  const notificationPreferences = () => alertPreferences(config.notifications);
+  // Alert settings change from the desktop menus or from Settings; each change is saved whole and tells the others.
   const setNotificationPreferences = patch => {
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw Object.assign(new Error('Notifications must be turned on or off.'), { status: 400 });
-    const { sounds, ...switches } = patch, current = notificationPreferences();
-    if (Object.entries(switches).some(([key, value]) => !['enabled', 'sound', 'statusItem', 'overlay'].includes(key) || typeof value !== 'boolean')) throw Object.assign(new Error('Notifications must be turned on or off.'), { status: 400 });
-    const next = { ...current, ...switches, sounds: { ...current.sounds, ...(sounds === undefined ? {} : soundPatch(sounds)) } };
+    const next = mergeAlertPreferences(notificationPreferences(), patch);
     saveSettings({ notifications: next }); onNotifications(next);
     return next;
   };

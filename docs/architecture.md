@@ -34,7 +34,7 @@ flowchart TD
 | Conversation journal, accepted submissions, approvals and run lifecycle | `src/broker.mjs` |
 | Run checkpoints in a private Git object store per folder, and previewed undo and redo (#20) | `src/checkpoints.mjs`, `src/checkpoint-routes.mjs` |
 | An agent's questions with options: Claude's AskUserQuestion and Codex's request_user_input in one shape, answer checks, and the card where they are answered | `src/agent-questions.mjs`, `public/questions.js` |
-| Which sound an alert plays, and the saved sound settings; the page plays it from the `alert` event | `src/alert-sounds.mjs` |
+| Alert settings (each way on or off, for each moment), where each alert goes, and which sound the page plays from the `alert` event | `src/alerts.mjs` |
 | Waiting for a usage limit to reset and continuing on the first agent with room (#32) | `src/resume.mjs` |
 | Loopback relay that reaches Google over IPv4 first for the Antigravity runtime | `src/google-relay.mjs` |
 | Shared prompt context | `src/context.mjs` |
@@ -81,9 +81,12 @@ Disposable generated assets belong in `output/`, which is excluded from Git and 
 | `agent-review.js` | Cross-agent review selection, explicit preview/start, findings and fix drafts |
 | `automatic-review.js` | One-prompt review consent, scope selection and build/review phase status |
 | `rewind.js` | A run's checkpoint line, and the undo and redo preview |
-| `sounds.js` | Alert sounds made with Web Audio, and the Sounds section of Settings |
-| `workbench.js` | Ask a Friend review flow |
+| `alerts.js` | Alert sounds made with Web Audio, and channel/event controls on the Alerts page of Settings |
+| `settings.js`, `settings.css` | Searchable Settings dialog with General, Accounts, Alerts and Voice pages; a shared row/group kit used by feature modules |
+| `workbench.js` | Separate Ask a Friend dialog and review flow, plus pending approval and question cards |
 | `desktop-controls.js` | Native keep-awake controls |
+
+Settings owns app-wide preferences and account connections, while the composer and Agents panel retain conversation-specific model, access and routing choices. General contains appearance, Keep awake, global handoff preferences and updates; Accounts contains connection, usage and session billing consent; Alerts contains channels and return recaps; Voice contains input and read-aloud choices. Feature modules (`updater.js`, `alerts.js`, `recap.js` and `voice.js`) render their controls through the Settings kit so rows have consistent labels, descriptions and controls. Search filters settings across pages. Ask a Friend has its own dialog; workspace folders and remembered approvals remain in Workspace settings.
 
 The deferred scripts in `index.html` load the core API before its features, and history before setup can announce readiness. New scripts and styles also need an entry in the server's explicit static-asset allowlist. Interface tests exercise the actual scripts; HTTP tests check that the page's scripts and styles are served.
 

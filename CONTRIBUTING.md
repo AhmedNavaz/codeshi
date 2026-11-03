@@ -44,7 +44,7 @@ Backend code lives in `src/`; Electron, browser UI and the separately deployable
 | `src/conversation-routes.mjs`, `src/conversation-import.mjs`, `src/conversation-export.mjs` | Previous-chat discovery, reviewed imports and conversation files for other users |
 | `src/collaboration*.mjs`, `src/patches.mjs`, `src/sharing-client.mjs` | Ask a Friend: approved packages, returned patches and the private-link client |
 | `src/workspace-*.mjs`, `src/file-explorer.mjs`, `src/mutation-lock.mjs` | Safe file access, Git activity, snapshots and locks that prevent conflicting edits |
-| `public/` | Interface: `app.js` (core), `insights.js` (models, progress, Git and usage), `conversation-history.js` (import and export), `conversation-search.js` (find in the conversation), `files.js`, `setup.js`, `workbench.js` (Ask a Friend) and the CSS |
+| `public/` | Interface: `app.js` (core), `insights.js` (models, progress, Git and usage), `conversation-history.js` (import and export), `conversation-search.js` (find in the conversation), `files.js`, `setup.js`, `settings.js` (searchable app settings), `workbench.js` (the separate Ask a Friend dialog) and the CSS |
 | `desktop/` | Electron main process, preload bridge, packaging and icon generation |
 | `sharing/` | The self-hostable private-link service and its container image |
 | `test/` | Node test runner suites; the interface tests use a small fake DOM |
@@ -62,6 +62,7 @@ npm run test:desktop
 - Match the surrounding style: plain JavaScript ES modules, no build step and no new runtime dependencies without discussion.
 - The interface must work under the server's Content Security Policy: no inline scripts or `style` attributes, and no `innerHTML` for provider or user content. Build DOM nodes instead.
 - Colors, sizes and icons come from the tokens in `public/editor-theme.css`; please don't hard-code colors in components.
+- App settings belong on General, Accounts, Alerts or Voice in `public/settings.js`; use its shared group/row kit when a feature supplies its own controls. Keep workspace-specific choices in their workspace controls and Ask a Friend actions in its separate dialog.
 - Some identifiers still use the project's former name (`ai-relay.*` file formats, the `X-AI-Relay` header, `AI_RELAY_*` variables). They are kept on purpose for compatibility; don't rename them without a migration.
 
 ## Reporting bugs

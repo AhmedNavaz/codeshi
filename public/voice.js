@@ -13,7 +13,7 @@
   const mac = /Mac/.test(globalThis.navigator?.platform || '') || window.relayDesktop?.platform === 'darwin';
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const load = () => { try { return { ...defaults, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return { ...defaults }; } };
-  let prefs = load(), support = null, session = null, countdown = null, speaking = false, voiceDraft = false, awaitingRun = false, settingsHost = null;
+  let prefs = load(), support = null, session = null, countdown = null, speaking = false, voiceDraft = false, awaitingRun = false, settingsHost = null, settingsKit = null;
   const voiceRuns = new Set();
   const save = patch => { prefs = { ...prefs, ...patch }; try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch { /* A preference for this device only. */ } };
   const shortcut = mac ? '⌥⌘V' : 'Ctrl+Alt+V';
@@ -199,33 +199,25 @@
     if (info.onDevice === false) text += ' On-device recognition isn’t installed for this language; turn on Dictation for it in System Settings › Keyboard.';
     return text;
   }
-  function renderSettings(host) {
-    settingsHost = host;
-    host.replaceChildren(node('h3', 'Voice'));
+  // The Voice page of Settings: speaking a message, and reading summaries aloud. Settings lends the kit its rows are
+  // built with (settings.js).
+  function renderSettings(host, kit = settingsKit) {
+    settingsHost = host; settingsKit = kit;
+    if (!kit) return;
+    host.replaceChildren();
     if (support?.supported) {
-      host.append(node('p', `Speak a message with ${shortcut} or the microphone in the message box. Speech is recognized on this Mac by Throughline Speech; the audio never leaves it. What you say appears in the message box for you to review.`, 'section-description'));
-      host.append(node('p', permissions(support), 'section-description voice-facts'));
-      if ([support.speech, support.microphone].includes('denied')) host.append(node('p', 'To allow it, open System Settings › Privacy & Security, then Speech Recognition and Microphone, and turn on Throughline Speech.', 'section-description'));
-      const check = node('label', undefined, 'review-check'), box = node('input');
-      box.type = 'checkbox'; box.checked = prefs.sendAfter; box.addEventListener('change', () => save({ sendAfter: box.checked }));
-      check.append(box, document.createTextNode('Send when I stop talking, after a 3-second countdown that Esc cancels'));
-      host.append(check);
-    } else host.append(node('p', 'Voice input is available on macOS for now. Summaries of finished runs can still be read aloud.', 'section-description'));
-    const field = (text, control) => { const label = node('label', undefined, 'voice-field'); label.append(node('span', text), control); host.append(label); return control; };
-    const read = node('select');
-    for (const [value, text] of [['voice', 'After runs I started by voice'], ['always', 'After every run'], ['never', 'Never']]) { const option = node('option', text); option.value = value; read.append(option); }
-    read.value = prefs.readAloud; read.addEventListener('change', () => save({ readAloud: read.value }));
-    field('Read a summary aloud', read);
-    const voices = synth()?.getVoices?.() || [], picker = node('select'), automatic = node('option', 'System voice'); automatic.value = ''; picker.append(automatic);
-    const language = (globalThis.navigator?.language || 'en').split('-')[0];
-    for (const voice of [...voices].sort((a, b) => Number(b.lang.startsWith(language)) - Number(a.lang.startsWith(language)) || a.name.localeCompare(b.name))) { const option = node('option', `${voice.name} (${voice.lang})`); option.value = voice.voiceURI; picker.append(option); }
-    picker.value = voices.some(voice => voice.voiceURI === prefs.voice) ? prefs.voice : ''; picker.addEventListener('change', () => save({ voice: picker.value }));
-    if (synth()) {
-      field('Voice', picker);
-      const test = node('button', 'Play a sample', 'secondary-button'); test.type = 'button';
-      test.addEventListener('click', () => speak('Claude finished in 1 minute 40 seconds. It changed checkout.js and promo.js, and ran the tests. The checkout now applies promo codes.'));
-      const actions = node('div', undefined, 'workbench-actions'); actions.append(test); host.append(actions);
-    }
+      const input = kit.group(host, 'Voice input', `Speak a message with ${shortcut} or the microphone in the message box. Speech is recognized on this Mac by Throughline Speech and the audio never leaves it; what you say appears in the message box for you to review.`);
+      const denied = [support.speech, support.microphone].includes('denied');
+      kit.row(input, { label: 'Permissions', description: permissions(support) + (denied ? ' To allow it, open System Settings › Privacy & Security, then Speech Recognition and Microphone, and turn on Throughline Speech.' : ''), keywords: 'microphone speech recognition privacy' });
+      kit.toggle(input, { label: 'Send when I stop talking', description: 'After a 3-second countdown, which Esc cancels.', keywords: 'voice dictation automatic send', checked: prefs.sendAfter, onChange: value => save({ sendAfter: value }) });
+    } else kit.note(host, 'Voice input is available on macOS for now. Summaries of finished runs can still be read aloud.');
+    const aloud = kit.group(host, 'Reading aloud');
+    kit.select(aloud, { label: 'Read a summary aloud', description: 'A short spoken summary when a run finishes.', keywords: 'speech speak voice summary', options: [['voice', 'After runs I started by voice'], ['always', 'After every run'], ['never', 'Never']], value: prefs.readAloud, onChange: value => save({ readAloud: value }) });
+    if (!synth()) return;
+    const voices = synth().getVoices?.() || [], language = (globalThis.navigator?.language || 'en').split('-')[0];
+    const options = [['', 'System voice'], ...[...voices].sort((a, b) => Number(b.lang.startsWith(language)) - Number(a.lang.startsWith(language)) || a.name.localeCompare(b.name)).map(voice => [voice.voiceURI, `${voice.name} (${voice.lang})`])];
+    kit.select(aloud, { label: 'Voice', description: 'The voice that reads summaries and recaps.', keywords: 'speech speak', options, value: voices.some(voice => voice.voiceURI === prefs.voice) ? prefs.voice : '', onChange: value => save({ voice: value }) });
+    kit.row(aloud, { label: 'Hear it', description: 'A sample summary in the chosen voice.', keywords: 'voice test sample', control: kit.button('Play a sample', () => speak('Claude finished in 1 minute 40 seconds. It changed checkout.js and promo.js, and ran the tests. The checkout now applies promo codes.')) });
   }
   synth()?.addEventListener?.('voiceschanged', () => { if (settingsHost?.isConnected) renderSettings(settingsHost); });
 
@@ -237,7 +229,7 @@
   window.relayVoice = {
     toggle: () => { if (!support?.supported) return false; toggle(); return true; },
     available: () => Boolean(support?.supported),
-    settings: host => { renderSettings(host); refreshSupport(); },
+    settings: (host, kit) => { renderSettings(host, kit); refreshSupport(); },
     summarize, speak,
   };
 })();

@@ -13,7 +13,7 @@
   const isOpen = () => typeof popover.matches === 'function' && popover.matches(':popover-open');
   // Agents working in any workspace; a restart waits for them.
   const working = () => (api.getState().projects || []).some(project => project.runningConversationId);
-  let state = null, attempted = false, settingsHost = null, anchor = button;
+  let state = null, attempted = false, settingsHost = null, settingsKit = null, anchor = button;
 
   const offered = () => state?.status === 'available' && state.latest && state.latest.version !== state.skipped;
   const visible = () => Boolean(state?.supported && (offered() || ['downloading', 'ready', 'waiting', 'installing'].includes(state.status) || state.status === 'error' && attempted));
@@ -108,29 +108,24 @@
   }
   function close() { if (isOpen()) popover.hidePopover(); }
 
-  // The Updates part of Settings: automatic checks, a manual check and the last result.
-  function renderSettings(host) {
-    settingsHost = host;
+  // The Updates group of Settings: the version you have with a manual check, and automatic checks. Settings lends the
+  // kit its rows are built with (settings.js).
+  function renderSettings(host, kit = settingsKit) {
+    settingsHost = host; settingsKit = kit;
+    if (!kit) return;
     host.replaceChildren();
-    host.append(node('h3', 'Updates'));
-    if (!state?.supported) { host.append(node('p', window.relayDesktop?.platform === 'win32' ? 'Updates install in the Throughline app for macOS. On Windows, run the installer again or download the latest release to update.' : 'Updates install in the Throughline app for macOS. This copy is updated from its source instead.', 'section-description')); return; }
+    const rows = kit.group(host, 'Updates');
+    if (!state?.supported) { kit.row(rows, { label: 'Updates', description: window.relayDesktop?.platform === 'win32' ? 'Updates install in the Throughline app for macOS. On Windows, run the installer again or download the latest release.' : 'Updates install in the Throughline app for macOS. This copy is updated from its source instead.', keywords: 'version' }); return; }
     const checked = state.checkedAt ? new Date(state.checkedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : null;
     const summary = state.status === 'checking' ? 'Checking for updates…'
       : ['ready', 'waiting'].includes(state.status) ? `Throughline ${state.latest.version} is downloaded and checked. Restart to use it.`
-      : offered() || ['downloading', 'installing'].includes(state.status) ? `Throughline ${state.latest.version} is available. You have ${state.version}.`
-      : state.status === 'error' ? state.error : `You have ${state.version}${state.status === 'current' ? ', the latest version' : ''}.${checked ? ` Last checked ${checked}.` : ''}`;
-    host.append(node('p', summary, 'section-description'));
-    const toggle = node('label', undefined, 'review-check'), input = node('input');
-    input.type = 'checkbox'; input.checked = state.automatic;
-    input.addEventListener('change', () => call(() => bridge.setAutomaticUpdates(input.checked)));
-    toggle.append(input, document.createTextNode('Check for updates automatically'));
-    host.append(toggle);
-    const group = node('div', undefined, 'workbench-actions');
-    const check = action(state.status === 'checking' ? 'Checking…' : 'Check now', () => call(() => bridge.checkForUpdates()));
+      : offered() || ['downloading', 'installing'].includes(state.status) ? `Throughline ${state.latest.version} is available.`
+      : state.status === 'error' ? state.error : `${state.status === 'current' ? 'The latest version.' : ''}${checked ? ` Last checked ${checked}.` : ''}`.trim();
+    const check = kit.button(state.status === 'checking' ? 'Checking…' : 'Check now', () => call(() => bridge.checkForUpdates()));
     check.disabled = ['checking', 'downloading', 'ready', 'waiting', 'installing'].includes(state.status);
-    group.append(check);
-    if (state.latest && (offered() || state.skipped === state.latest.version)) group.append(action('Show update', () => open()));
-    host.append(group);
+    const controls = state.latest && (offered() || state.skipped === state.latest.version) ? [kit.button('Show update', () => { window.relaySettings?.close(); open(); }), check] : [check];
+    kit.row(rows, { label: `Throughline ${state.version}`, description: summary, keywords: 'update version check', control: controls });
+    kit.toggle(rows, { label: 'Check for updates automatically', description: 'Throughline looks for a new version in the background and offers it in the status bar.', keywords: 'update', checked: state.automatic, onChange: value => call(() => bridge.setAutomaticUpdates(value)) });
   }
 
   button.addEventListener('click', () => {
@@ -158,7 +153,7 @@
       render();
       return true;
     },
-    settings: host => renderSettings(host),
+    settings: (host, kit) => renderSettings(host, kit),
     open,
   };
 })();

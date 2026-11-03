@@ -25,6 +25,7 @@ class UIEvent {
 }
 class Element extends Events {
   constructor(tag,document){super();this.tagName=tag.toUpperCase();this.document=document;this.childNodes=[];this.parentNode=null;this.attributes={};this.dataset={};this.style={setProperty(name,value){this[name]=String(value);},removeProperty(name){delete this[name];}};this.className='';this.id='';this.value='';this.disabled=false;this.hidden=false;this.checked=false;this.open=false;this.scrollTop=0;this.scrollHeight=100;this.clientHeight=500;this.classList={contains:name=>this.className.split(/\s+/).includes(name),add:name=>this.classList.toggle(name,true),remove:name=>this.classList.toggle(name,false),toggle:(name,on)=>{const set=new Set(this.className.split(/\s+/).filter(Boolean));if(on===undefined)on=!set.has(name);if(on)set.add(name);else set.delete(name);this.className=[...set].join(' ');return on;}};}
+  get isConnected(){for(let current=this;current;current=current.parentNode)if(current===this.document.body)return true;return false;}
   get nodeType(){return this.tagName==='#TEXT'?3:1;}
   get children(){return this.childNodes.filter(child=>child.tagName!=='#TEXT');}
   get firstChild(){return this.childNodes[0]||null;}get lastChild(){return this.childNodes.at(-1)||null;}get firstElementChild(){return this.children[0]||null;}get lastElementChild(){return this.children.at(-1)||null;}
@@ -35,6 +36,7 @@ class Element extends Events {
   prepend(child){child.remove();child.parentNode=this;this.childNodes.unshift(child);}
   insertBefore(child,reference){child.remove();child.parentNode=this;const index=this.childNodes.indexOf(reference);this.childNodes.splice(index<0?this.childNodes.length:index,0,child);return child;}
   replaceChildren(...nodes){for(const child of this.childNodes)child.parentNode=null;this.childNodes=[];this.append(...nodes);}
+  replaceWith(node){const parent=this.parentNode;if(!parent)return;parent.insertBefore(node,this);this.remove();}
   remove(){if(this.parentNode){this.parentNode.childNodes=this.parentNode.childNodes.filter(child=>child!==this);this.parentNode=null;}}
   setAttribute(key,value){this.attributes[key]=String(value);if(key==='id')this.id=String(value);if(key==='class')this.className=String(value);if(key.startsWith('data-'))this.dataset[key.slice(5)]=String(value);}
   getAttribute(key){return this.attributes[key]??null;}removeAttribute(key){delete this.attributes[key];}
@@ -58,6 +60,7 @@ function documentFixture(){
   const page=document.createElement('html');page.palettes=[];const setPageAttribute=page.setAttribute.bind(page);page.setAttribute=(key,value)=>{if(key==='data-theme')page.palettes.push(String(value));setPageAttribute(key,value);};document.documentElement=page;
   const meta=document.createElement('meta');meta.setAttribute('name','theme-color');root.append(meta);
   const appearance=document.getElementById('appearance-options')||root;for(const match of html.matchAll(/<button\b[^>]*data-appearance="([^"]+)"[^>]*>/g)){const button=document.createElement('button');button.setAttribute('data-appearance',match[1]);appearance.append(button);}
+  for(const match of html.matchAll(/<button\b[^>]*data-page="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)){const button=document.createElement('button');button.setAttribute('data-page',match[1]);button.textContent=match[2].replace(/<[^>]+>/g,'');document.getElementById('settings-nav').append(button);}
   for(const id of ['send-button','stop-button','conversation-state'])document.getElementById(id).append(document.createElement('span'),document.createElement('span'));
   for(const id of ['save-project','save-folder'])document.getElementById(id).append(document.createTextNode('Save '),document.createElement('span'));
   return document;
@@ -67,9 +70,9 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,questionsUI=false,soundsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,questionsUI=false,alertsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
-  let preferences=clone(savedPreferences);
+  let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
   const awakeChanges=[],menuListeners=[],menuStates=[];
   const folder=(id,name,folderPath)=>({id,name,displayName:name,path:folderPath,available:true});
@@ -117,6 +120,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
       if(request.path==='/api/local-models') { const target=projects.find(item=>item.id===request.projectId);assert(target);return response({installed:true,endpoint:'http://127.0.0.1:11434',models:[{id:'fixture-local:8b',model:'fixture-local:8b',digest:'a'.repeat(64),parameterSize:'8B',contextWindow:65536}],context:{conversationId:ensureChat(target).id,workspaceSignature:'fixture-scope',mode:ensureChat(target).mode}}); }
       if(request.path==='/api/local-models/start') { const target=projects.find(item=>item.id===request.projectId);assert(target);if(submissions.has(request.body.requestId))return response({...submissions.get(request.body.requestId),duplicate:true},202);submissions.set(request.body.requestId,{runId:'local-run',requestId:request.body.requestId});const conversation=ensureChat(target);conversation.messages.push({id:'local-reply',role:'assistant',provider:'codex',connection:'local',model:request.body.model,text:'Local task complete.'});conversation.lastRun={provider:'codex',connection:'local',model:request.body.model,status:'complete'};conversation.status='complete';return response({runId:'local-run',requestId:request.body.requestId},202); }
       if(request.path==='/api/appearance'){if(request.method==='POST'){try{preferences={...preferences,...preferencePatch({theme:request.body.theme},preferences)};}catch(error){return response({error:error.message},400);}return response({theme:request.body.theme});}return response({theme:publicPreferences(preferences,true).theme});}
+      if(request.path==='/api/handoff-preferences'){if(request.method==='POST')handoffPreferences={...handoffPreferences,...request.body};return response(handoffPreferences);}
       if(request.path==='/api/sharing/config')return response({baseUrl:null});
       const rename=request.path.match(/^\/api\/projects\/([^/]+)$/);if(rename&&request.method==='POST'){const project=projects.find(item=>item.id===rename[1]);if(request.body.name!==undefined)project.name=request.body.name;if(request.body.previousConversationsDismissed!==undefined)project.previousConversationsDismissed=request.body.previousConversationsDismissed;return response(clone(project));}
       if(request.path==='/api/projects'&&request.method==='GET')return response(clone(projects));
@@ -189,7 +193,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
   const previewOpens=[],previewListeners=[];
   if(previewUI)window.relayDesktop=Object.assign(window.relayDesktop||{},{openPreview:async input=>{previewOpens.push(clone(input));return true;},onPreviewPick:callback=>{previewListeners.push(callback);return ()=>{};}});
-  vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(questionsUI)vm.runInContext(fs.readFileSync(new URL('../public/questions.js',import.meta.url),'utf8'),context,{filename:'public/questions.js'});if(workbench)vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});
+  vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(questionsUI)vm.runInContext(fs.readFileSync(new URL('../public/questions.js',import.meta.url),'utf8'),context,{filename:'public/questions.js'});if(workbench){vm.runInContext(fs.readFileSync(new URL('../public/settings.js',import.meta.url),'utf8'),context,{filename:'public/settings.js'});vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});}
   if(insights)vm.runInContext(fs.readFileSync(new URL('../public/insights.js',import.meta.url),'utf8'),context,{filename:'public/insights.js'});
   if(modelPickerUI)vm.runInContext(fs.readFileSync(new URL('../public/model-picker.js',import.meta.url),'utf8'),context,{filename:'public/model-picker.js'});
   if(layoutUI)vm.runInContext(fs.readFileSync(new URL('../public/layout.js',import.meta.url),'utf8'),context,{filename:'public/layout.js'});
@@ -207,7 +211,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
   if(automaticReviewUI)vm.runInContext(fs.readFileSync(new URL('../public/automatic-review.js',import.meta.url),'utf8'),context,{filename:'public/automatic-review.js'});
   if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
-  if(soundsUI)vm.runInContext(fs.readFileSync(new URL('../public/sounds.js',import.meta.url),'utf8'),context,{filename:'public/sounds.js'});
+  if(alertsUI)vm.runInContext(fs.readFileSync(new URL('../public/alerts.js',import.meta.url),'utf8'),context,{filename:'public/alerts.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
   // A stand-in for xterm.js: it records what the page writes and lets a test type into it.
   if(terminalUI){
@@ -317,7 +321,7 @@ test('known signed-out provider offers account setup and blocks Send and Continu
   const conversation=ui.canonical.get('project-one');conversation.status='incomplete';conversation.lastRun={provider:'codex',errorCategory:'auth'};await ui.window.relayUI.refresh();
   assert.equal(ui.$('continue-button').disabled,true);ui.fire('composer','submit');ui.$('continue-button').click();await flush();
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue)$/.test(request.path)).length,0);
-  ui.$('connection-action').click();await flush();assert.equal(ui.$('workbench').open,true);assert.equal(ui.$('workbench-title').textContent,'Connections');
+  ui.$('connection-action').click();await flush();assert.equal(ui.$('settings').open,true);assert.equal(ui.$('settings-title').textContent,'Accounts');
   assert.equal(ui.$('message-input').value,'Keep this draft while I sign in');
 });
 
@@ -325,7 +329,7 @@ test('Settings is available before any workspace and account discovery is global
   const ui=await browser({empty:true,existing:false,workbench:true});
   assert.equal(ui.$('relay-settings').disabled,false);assert.equal(ui.$('ask-friend').disabled,true);
   ui.$('relay-settings').click();await flush();
-  assert.equal(ui.$('workbench').open,true);assert.equal(ui.$('workbench-title').textContent,'Connections');assert.equal(ui.$('workbench-error').hidden,true);
+  assert.equal(ui.$('settings').open,true);assert.equal(ui.$('settings-title').textContent,'General');assert.equal(ui.$('settings-error').hidden,true);
   const requests=ui.requests.filter(request=>/^\/api\/providers\/[^/]+\/account$/.test(request.path));assert.deepEqual(requests.map(request=>request.path.split('/')[3]).sort(),['claude','codex','gemini']);assert(requests.every(request=>request.projectId===null));
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue|connect|models)$/.test(request.path)).length,0);
 });
@@ -346,7 +350,7 @@ test('both missing providers show one setup next action while offline collaborat
   assert.equal(ui.$('provider-empty-state').hidden,false);assert.equal(ui.$('empty-state').hidden,true);assert.equal(ui.$('connection-notice').hidden,true);
   assert.equal(ui.$('conversation-state').textContent,'Connection required');assert.equal(ui.$('ask-friend').disabled,false);assert.equal(ui.$('relay-settings').disabled,false);
   assert.equal(ui.requests.filter(request=>request.path.startsWith('/api/providers/')).length,0,'Installed-false providers are not probed during startup.');
-  ui.$('connect-assistant').click();await flush();assert.equal(ui.$('workbench').open,true);assert.equal(ui.$('workbench-title').textContent,'Connections');
+  ui.$('connect-assistant').click();await flush();assert.equal(ui.$('settings').open,true);assert.equal(ui.$('settings-title').textContent,'Accounts');
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue|connect)$/.test(request.path)).length,0);
 });
 
@@ -384,13 +388,13 @@ test('a check that times out or fails keeps the last verified connection, and Se
   reply=()=>accountReply('unknown',{errorCategory:'timeout'});await ui.window.relayUI.refreshAccounts({force:true});
   assert.equal(ui.state().accounts.codex.authenticated,true);assert.equal(ui.$('codex-status-text').textContent,'Connected');assert.equal(ui.$('connection-notice').hidden,true);assert.equal(ui.$('conversation-state').textContent,'Ready');
   ui.$('relay-settings').click();await flush();
-  const card=()=>ui.document.querySelectorAll('.connection-card').find(card=>card.dataset.provider==='codex'),refresh=()=>card().querySelectorAll('button').find(button=>button.textContent==='Refresh status');
-  assert.match(card().textContent,/Connected/);assert.match(card().textContent,/Last checked/);assert.match(card().textContent,/latest check timed out/i);
+  const card=()=>ui.document.querySelectorAll('.settings-account').find(card=>card.dataset.provider==='codex'),refresh=()=>card().querySelectorAll('button').find(button=>button.textContent==='Refresh status');
+  assert.match(card().textContent,/Connected/);assert.match(card().textContent,/Last checked/);assert.match(card().textContent,/last check timed out/i);
   reply=()=>response({error:'Account metadata is unavailable.'},503);refresh().click();await flush();
-  assert.match(card().textContent,/Connected/);assert.match(card().textContent,/latest check failed/i);assert.equal(ui.$('codex-status-text').textContent,'Connected');
+  assert.match(card().textContent,/Connected/);assert.match(card().textContent,/last check failed/i);assert.equal(ui.$('codex-status-text').textContent,'Connected');
   reply=()=>accountReply(false);ui.state().accountsCheckedAt=0;ui.window.dispatchEvent(new UIEvent('focus'));await flush();
   assert.equal(ui.$('codex-status-text').textContent,'Sign in required','A real change still replaces the last result.');assert.equal(ui.$('connection-notice-text').textContent,'Codex is not signed in.');assert.equal(ui.$('send-button').disabled,true);
-  assert.match(card().textContent,/Sign-in required/);assert.doesNotMatch(card().textContent,/latest check/i);
+  assert.match(card().textContent,/Sign-in required/);assert.doesNotMatch(card().textContent,/last check (timed out|failed)/i);
 });
 
 test('overlapping routine checks share one probe, and an older answer cannot overwrite a newer recheck',async()=>{
@@ -419,23 +423,23 @@ test('a CLI removed after a failed check shows as not installed, without the ear
   await ui.window.relayUI.refreshAccounts({force:true});assert.equal(ui.$('codex-status-text').textContent,'Connected');
   providers.codex.available=false;await ui.window.relayUI.refresh();await ui.window.relayUI.refreshAccounts({force:true});
   assert.equal(ui.$('codex-status-text').textContent,'Not installed');assert.equal(ui.$('connection-notice-text').textContent,'Codex is not installed.');assert.equal(ui.$('connection-action').textContent,'Use Claude');
-  ui.$('relay-settings').click();await flush();const card=ui.document.querySelectorAll('.connection-card').find(card=>card.dataset.provider==='codex').textContent;
+  ui.$('relay-settings').click();await flush();const card=ui.document.querySelectorAll('.settings-account').find(card=>card.dataset.provider==='codex').textContent;
   assert.match(card,/Not installed/);assert.doesNotMatch(card,/latest check|Not yet/i);
 });
 
 test('Settings shows every connection at once, with progress on the card being rechecked',async()=>{
   const ui=await browser({workbench:true}),held=deferred();ui.$('relay-settings').click();await flush();
   ui.setIntercept((request,next)=>request.path==='/api/providers/codex/account'?held.promise.then(next):next());
-  const text=provider=>ui.document.querySelectorAll('.connection-card').find(card=>card.dataset.provider===provider)?.textContent;
-  ui.document.querySelectorAll('.connection-card')[0].querySelectorAll('button').find(button=>button.textContent==='Refresh status').click();await flush();
+  const text=provider=>ui.document.querySelectorAll('.settings-account').find(card=>card.dataset.provider===provider)?.textContent;
+  ui.document.querySelectorAll('.settings-account')[0].querySelectorAll('button').find(button=>button.textContent==='Refresh status').click();await flush();
   assert.match(text('codex'),/Checking…/);assert.match(text('claude'),/Connected/,'A slow Codex check does not hide Claude.');assert.doesNotMatch(text('claude'),/Checking…/);
-  assert.equal(ui.$('workbench').getAttribute('aria-busy'),null,'The dialog stays usable while the check runs.');
+  assert.equal(ui.$('settings').getAttribute('aria-busy'),null,'The dialog stays usable while the check runs.');
   held.resolve();await flush();assert.match(text('codex'),/Connected/);assert.doesNotMatch(text('codex'),/Checking…/);
 });
 
 test('Settings retries a connection that has not been checked successfully yet',async()=>{
   const ui=await browser({workbench:true,accountErrors:['codex']});ui.$('relay-settings').click();await flush();
-  const card=()=>ui.document.querySelectorAll('.connection-card').find(card=>card.dataset.provider==='codex');
+  const card=()=>ui.document.querySelectorAll('.settings-account').find(card=>card.dataset.provider==='codex');
   assert.match(card().textContent,/Status unavailable/);assert.match(card().textContent,/Account metadata is unavailable/);
   ui.setIntercept((request,next)=>request.path==='/api/providers/codex/account'?accountReply(true):next());
   card().querySelectorAll('button').find(button=>button.textContent==='Try again').click();await flush();
@@ -456,7 +460,7 @@ test('setup shows progress while it refreshes connections, and none after a chec
 test('an explicit recheck reloads the model list, but opening Settings does not',async()=>{
   const ui=await browser({workbench:true,insights:true}),models=()=>ui.requests.filter(request=>request.path==='/api/providers/codex/models').length,before=models();
   ui.$('relay-settings').click();await flush();assert.equal(models(),before,'Opening Settings does not ask Codex for its models again.');
-  ui.document.querySelectorAll('.connection-card')[0].querySelectorAll('button').find(button=>button.textContent==='Refresh status').click();await flush();
+  ui.document.querySelectorAll('.settings-account')[0].querySelectorAll('button').find(button=>button.textContent==='Refresh status').click();await flush();
   assert(models()>before,'A connection that may have changed loads its models again.');
 });
 
@@ -576,7 +580,7 @@ test('Gemini quota uses the reported default model and shows absolute and disabl
   ui.state().model='gemini-flash';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.match(ui.$('usage-chip').textContent,/80% left/);
   ui.window.relayUsage.open('gemini');await flush();const content=ui.$('usage-details');assert.match(content.textContent,/1,200 units left/);assert.match(content.textContent,/Disabled/);assert.equal(content.querySelectorAll('.usage-track').length,2);
   ui.state().model=null;ui.state().usage.gemini.defaultModel=null;ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('gemini-usage').hidden,true,'An unknown provider default never assumes Flash.');
-  ui.$('relay-settings').click();await flush();assert.match(ui.$('workbench-content').textContent,/1,200 units left/);assert.match(ui.$('workbench-content').textContent,/Disabled/);assert.doesNotMatch(ui.$('workbench-content').textContent,/NaN/);
+  ui.$('relay-settings').click();await flush();assert.match(ui.$('settings-content').textContent,/1,200 units left/);assert.match(ui.$('settings-content').textContent,/Disabled/);assert.doesNotMatch(ui.$('settings-content').textContent,/NaN/);
 });
 
 test('unavailable Gemini quota never shows estimates or stale percentage rows',async()=>{
@@ -668,8 +672,8 @@ test('the setup launcher shows only while setup is unfinished, and Settings reop
   fresh.$('open-setup').click();await flush();assert.equal(fresh.$('setup-dialog').dataset.screen,'flow','Resuming skips the welcome.');assert.match(fresh.$('setup-step-status').textContent,/2 of 3/);assert.equal(fresh.$('close-setup').textContent,'Skip for now');
   fresh.$('close-setup').click();await flush();assert.equal(fresh.$('setup-dialog').open,false);assert.equal(fresh.$('open-setup').hidden,true,'Closing setup removes the sidebar launcher.');
   const done=await browser({setup:true,workbench:true,savedPreferences:{onboarding:{step:2,completedAt:'2026-10-29T00:00:00.000Z'}}});assert.equal(done.$('open-setup').hidden,true);
-  done.$('relay-settings').click();await flush();assert.equal(done.$('workbench').open,true);done.$('open-setup-guide').click();await flush();
-  assert.equal(done.$('workbench').open,false);assert.equal(done.$('setup-dialog').open,true);assert.match(done.$('setup-step-status').textContent,/1 of 3/,'The guide starts from the beginning once setup is complete.');
+  done.$('relay-settings').click();await flush();assert.equal(done.$('settings').open,true);done.$('open-setup-guide').click();await flush();
+  assert.equal(done.$('settings').open,false);assert.equal(done.$('setup-dialog').open,true);assert.match(done.$('setup-step-status').textContent,/1 of 3/,'The guide starts from the beginning once setup is complete.');
   assert.equal(done.$('close-setup').textContent,'Close');assert.equal(done.$('setup-back').disabled,true);
   done.$('setup-next').click();await flush();done.$('setup-next').click();await flush();assert.equal(done.$('setup-next').textContent,'Done');
   done.$('setup-next').click();await flush();assert.equal(done.$('setup-dialog').open,false,'Reviewing skips the welcome and the summary.');
@@ -1027,14 +1031,14 @@ test('an appearance chosen in the status bar survives reopening the setup checkl
 test('Settings, setup, the status bar and other windows agree on one appearance preference',async()=>{
   const ui=await browser({theme:true,setup:true,workbench:true,systemDark:true,savedPreferences:{onboarding:{step:1}}});
   ui.$('relay-settings').click();await flush();
-  assert.equal(ui.$('workbench-content').querySelectorAll('[data-appearance]').length,0,'Connections holds the agent accounts; appearance is under Preferences.');
+  assert.equal(ui.$('settings-title').textContent,'General');assert.equal(ui.$('workbench').open,false,'Settings is separate from Ask a friend.');
   await ui.window.relaySettings.open('preferences');await flush();
-  assert.equal(ui.$('workbench-title').textContent,'Preferences');
-  const settings=ui.$('workbench-content').querySelectorAll('[data-appearance]');
-  assert.deepEqual(settings.map(button=>button.textContent),['System','Dark','Light']);assert.deepEqual(pressedAppearance(ui,ui.$('workbench-content')),['system']);
+  assert.equal(ui.$('settings-title').textContent,'General');
+  const settings=ui.$('settings-content').querySelectorAll('[data-appearance]');
+  assert.deepEqual(settings.map(button=>button.textContent),['System','Dark','Light']);assert.deepEqual(pressedAppearance(ui,ui.$('settings-content')),['system']);
   settings.find(button=>button.dataset.appearance==='light').click();await flush();
   assert.equal(palette(ui),'light');assert.deepEqual([...new Set(pressedAppearance(ui))],['light'],'The status bar shows the choice made in Settings.');
-  ui.findButton('Open setup checklist').click();await flush();assert.equal(ui.$('setup-dialog').open,true);
+  ui.$('open-setup-guide').click();await flush();assert.equal(ui.$('setup-dialog').open,true);
   const cards=ui.document.querySelectorAll('.setup-theme');assert.deepEqual(cards.map(card=>card.dataset.appearance),['system','graphite','light']);
   assert.deepEqual(pressedCards(ui),['Light']);
   cards.find(card=>card.dataset.appearance==='system').click();await flush();
@@ -1207,11 +1211,11 @@ test('a shortcut and its menu item run one command with the same checks, so a ke
 test('menu items that stand in for a button do what the button does, and wait while a dialog covers the page',async()=>{
   const ui=await browser({desktop:true,desktopControls:true,workbench:true,historyUI:true,filesUI:true,theme:true,setup:true}),opened=id=>Boolean(ui.$(id).open);
   const continues=()=>ui.requests.filter(request=>request.path.endsWith('/continue')).length,appearances=()=>ui.requests.filter(request=>request.path==='/api/appearance'&&request.method==='POST').map(request=>request.body.theme);
-  ui.menu('settings');await flush();assert.equal(opened('workbench'),true,'Settings… opens Settings, as the status bar button does.');
+  ui.menu('settings');await flush();assert.equal(opened('settings'),true,'Settings… opens Settings, as the status bar button does.');
   for(const command of ['new-workspace','add-folder','previous-chats','files','keep-awake','workspace-settings','remove-workspace','setup-guide'])ui.menu(command);
   ui.menu('agent','claude');await flush();
   assert.deepEqual([ui.$('project-panel').hidden,ui.$('folder-panel').hidden,opened('import-dialog'),ui.$('file-tree').hidden,ui.awakeChanges.length,opened('workspace-options-dialog'),opened('remove-workspace-dialog'),opened('setup-dialog'),ui.state().provider],[true,true,false,false,0,false,false,false,'codex'],'Nothing behind the open dialog changes.');
-  ui.$('workbench').close();
+  ui.$('settings').close();
   ui.menu('new-workspace');assert.equal(ui.$('project-panel').hidden,false);ui.$('close-project').click();
   ui.menu('add-folder');assert.equal(ui.$('folder-panel').hidden,false);ui.$('close-folder').click();
   ui.menu('previous-chats');await flush();assert.equal(opened('import-dialog'),true);ui.$('import-dialog').close();
@@ -1506,8 +1510,8 @@ test('Gemini requires explicit unverified-billing confirmation, supports custom 
   assert.equal(ui.$('send-button').disabled,true,'Unverified Gemini billing blocks sending until reviewed.');
   assert.match(ui.$('connection-notice-text').textContent,/Billing could not be confirmed/);
   ui.$('relay-settings').click();await flush();
-  const billingCheck=ui.$('workbench-content').querySelector('input');billingCheck.checked=true;billingCheck.dispatchEvent(new UIEvent('change'));
-  ui.$('workbench').close();await flush();assert.equal(ui.$('send-button').disabled,false);
+  await ui.window.relaySettings.open('accounts');const billingCheck=ui.labelledInput('Allow API and unconfirmed billing');billingCheck.checked=true;billingCheck.dispatchEvent(new UIEvent('change'));
+  ui.$('settings').close();await flush();assert.equal(ui.$('send-button').disabled,false);
   ui.$('model-select').value='__custom__';ui.fire('model-select','change');
   ui.$('custom-model-input').value='gemini-2.5-pro';ui.$('save-custom-model').click();await flush();
   assert.equal(ui.state().model,'gemini-2.5-pro');
@@ -2273,10 +2277,10 @@ test('the search bar at the top finds workspaces, files in every workspace and a
   ui.runTimers();await flush();await flush();
   assert.deepEqual(searches,['sett']);
   assert.deepEqual(results.querySelectorAll('.command-group').map(node=>node.textContent),['Files','Actions']);
-  assert.deepEqual(labels(),['settings.js','Settings','Voice settings']);
+  assert.deepEqual(labels(),['settings.js','Settings','Alert settings: banners, sounds, the Dock and the menu bar','Voice settings']);
   assert.match(results.querySelectorAll('.command-result')[0].textContent,/Other workspace · src/);
   search.value='>sett';ui.fire('workspace-search','input');ui.runTimers();await flush();
-  assert.deepEqual(labels(),['Settings','Voice settings'],'A leading > shows actions only.');assert.deepEqual(searches,['sett'],'Actions-only searches look up no files.');
+  assert.deepEqual(labels(),['Settings','Alert settings: banners, sounds, the Dock and the menu bar','Voice settings'],'A leading > shows actions only.');assert.deepEqual(searches,['sett'],'Actions-only searches look up no files.');
   search.dispatchEvent(new UIEvent('keydown',{key:'Enter',preventDefault(){}}));
   assert.equal(settings,1);assert.equal(search.value,'','Running a result clears the search.');assert.equal(results.hidden,true);
   search.value='sett';ui.fire('workspace-search','input');ui.runTimers();await flush();await flush();
@@ -2768,7 +2772,7 @@ test('a run that changed files offers Undo, previews every file before anything 
 });
 
 test('alerts play their sound once, only when allowed, and Settings chooses which sounds play', async () => {
-  const ui = await browser({ workbench: true, soundsUI: true });
+  const ui = await browser({ workbench: true, alertsUI: true });
   // A stand-in for Web Audio that records each tone's pitch.
   const tones = [];
   ui.window.AudioContext = class { constructor() { this.state = 'running'; this.currentTime = 0; this.destination = {}; }
@@ -2788,26 +2792,59 @@ test('alerts play their sound once, only when allowed, and Settings chooses whic
   alert({ id: 'four', sound: 'chime', volume: 70 }); alert({ id: 'five', sound: 'stopped', volume: 0 });
   assert.equal(tones.length, 10, 'An unknown sound or no volume plays nothing.');
 
-  let saved = { enabled: true, sound: false, statusItem: true, overlay: false, sounds: { attention: true, finished: true, stopped: true, background: false, volume: 70 } };
-  const posts = [];
+  const { posts } = alertSettings(ui);
+  await ui.window.relaySettings.open('alerts'); await flush();
+  assert.equal(ui.$('settings-title').textContent, 'Alerts');
+  assert.deepEqual(ui.document.querySelectorAll('tr').map(row => row.dataset.channel).filter(Boolean), ['sound'], 'In a browser, only sounds apply.');
+  assert.equal(ui.document.querySelectorAll('p').some(line => line.textContent === 'Banners and the Dock icon are part of the desktop app.'), true);
+  const master = ui.labelledInput('Sound'), box = label => ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === label);
+  assert.equal(master.checked, false); assert.equal(box('Sound when a task finishes').disabled, true, 'Each moment waits for sounds to be turned on, keeping its choice.');
+  master.checked = true; master.dispatchEvent(new UIEvent('change')); await flush();
+  const finished = box('Sound when a task finishes');
+  assert.equal(finished.disabled, false);
+  finished.checked = false; finished.dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(posts, [{ sound: { on: true } }, { sound: { finished: false } }]);
+  const before = tones.length;
+  ui.document.querySelectorAll('button').find(button => button.getAttribute('aria-label') === 'Play the Stopped sound').click();
+  assert.deepEqual(tones.slice(before), [493.88, 987.76, 369.99, 739.98], 'Play lets you hear each sound first.');
+});
+
+// A stand-in for the saved alert settings, which records each change and keeps it the way the server does.
+function alertSettings(ui) {
+  const every = { attention: true, finished: true, stopped: true }, posts = [];
+  let saved = { banner: { on: true, ...every, panel: false }, sound: { on: false, ...every, volume: 70, background: false }, bounce: { on: true, ...every }, badge: { on: true, ...every }, statusItem: true };
   const reply = data => ({ ok: true, status: 200, text: async () => JSON.stringify(data), json: async () => clone(data) });
   ui.setIntercept((request, next) => {
     if (request.path !== '/api/notifications') return next();
-    if (request.method === 'POST') { posts.push(clone(request.body)); const { sounds, ...rest } = request.body; saved = { ...saved, ...rest, sounds: { ...saved.sounds, ...sounds } }; }
+    if (request.method === 'POST') { posts.push(clone(request.body)); for (const [key, value] of Object.entries(request.body)) saved = { ...saved, [key]: typeof value === 'object' ? { ...saved[key], ...value } : value }; }
     return reply(saved);
   });
-  await ui.window.relaySettings.open('preferences'); await flush();
-  assert(ui.document.querySelectorAll('h3').some(heading => heading.textContent === 'Sounds'));
-  const master = ui.labelledInput('Play sounds');
-  assert.equal(master.checked, false); assert.equal(ui.labelledInput('A task finishes').disabled, true, 'Each kind waits for sounds to be turned on.');
-  master.checked = true; master.dispatchEvent(new UIEvent('change')); await flush();
-  const finished = ui.labelledInput('A task finishes');
-  assert.equal(finished.disabled, false);
-  finished.checked = false; finished.dispatchEvent(new UIEvent('change')); await flush();
-  assert.deepEqual(posts, [{ sound: true }, { sounds: { finished: false } }]);
-  const before = tones.length;
-  ui.document.querySelectorAll('button').find(button => button.getAttribute('aria-label') === 'Play the sound for: A task stops: an error, a usage limit or failing tests').click();
-  assert.deepEqual(tones.slice(before), [493.88, 987.76, 369.99, 739.98], 'Play lets you hear each sound first.');
+  return { posts, saved: () => saved };
+}
+
+test('Alerts in Settings turn each way on or off for each moment, with the banner style and the menu bar status in the Mac app', async () => {
+  const ui = await browser({ workbench: true, alertsUI: true, desktop: true, desktopControls: true }), { posts, saved } = alertSettings(ui);
+  await ui.window.relaySettings.open('preferences', 'Alerts'); await flush();
+  const rows = ui.document.querySelectorAll('tr').filter(row => row.dataset.channel);
+  assert.deepEqual(rows.map(row => [row.dataset.channel, row.querySelectorAll('th')[0].textContent, row.querySelectorAll('input').map(input => input.checked)]), [
+    ['banner', 'Banner', [true, true, true, true]], ['sound', 'Sound', [false, true, true, true]], ['bounce', 'Bounce the Dock icon', [true, true, true, true]], ['badge', 'Badge on the Dock icon', [true, true, true, true]],
+  ]);
+  assert.deepEqual(ui.document.querySelectorAll('th').filter(column => column.scope === 'col').map(column => [column.textContent, column.title]), [['Needs you', 'An approval, a question or a handoff offer'], ['Finished', 'A task finishes, or continues by itself after a usage limit'], ['Stopped', 'An error, a usage limit or failing tests']]);
+  const box = label => ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === label);
+  // A way turned off keeps its moments for when it is turned back on.
+  const bounce = box('Bounce the Dock icon when a task finishes'); bounce.checked = false; bounce.dispatchEvent(new UIEvent('change')); await flush();
+  const banner = ui.labelledInput('Banner'); banner.checked = false; banner.dispatchEvent(new UIEvent('change')); await flush();
+  assert.equal(box('Banner when an agent needs you').disabled, true); assert.equal(box('Banner when an agent needs you').checked, true);
+  assert.equal(ui.document.querySelectorAll('tr').find(row => row.dataset.channel === 'banner').dataset.off, '');
+  const again = ui.labelledInput('Banner'); again.checked = true; again.dispatchEvent(new UIEvent('change')); await flush();
+  ui.findButton('Panel at the top of the screen').click(); await flush();
+  assert.equal(ui.findButton('Panel at the top of the screen').getAttribute('aria-pressed'), 'true');
+  const status = ui.labelledInput('Show what agents are doing in the menu bar'); status.checked = false; status.dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(posts, [{ bounce: { finished: false } }, { banner: { on: false } }, { banner: { on: true } }, { banner: { panel: true } }, { statusItem: false }]);
+  assert.deepEqual([saved().bounce.finished, saved().banner.panel, saved().statusItem], [false, true, false]);
+  // The menus' Alert Settings… opens this section, even with Settings already open on another tab.
+  await ui.window.relaySettings.open('accounts'); ui.menu('alert-settings'); await flush();
+  assert.equal(ui.$('settings-title').textContent, 'Alerts');
 });
 
 test('steps are coloured by kind, changed files show their line counts, and a cut-off Write still names its file', async () => {
@@ -3125,4 +3162,92 @@ test('automatic review binds the exact attachments and saved project context, ev
   ui.canonical.get('project-one').context.goal = 'A different goal for this workspace'; await ui.window.relayUI.refresh();
   assert.equal(ui.$('automatic-review-armed').dataset.stale, 'true');
   ui.fire('composer', 'submit'); await flush(); assert(!ui.requests.some(request => request.path.endsWith('/messages')));
+});
+
+test('Settings has its own pages, keeps Ask a friend separate and opens Accounts from a connection action', async () => {
+  const ui = await browser({ workbench: true, authenticated: { codex: false, claude: true } });
+  const pages = () => ui.$('settings-content').querySelectorAll('.settings-page').filter(section => !section.hidden).map(section => section.dataset.page);
+  const navigate = name => { const target = ui.$('settings-nav').querySelectorAll('[data-page]').find(button => button.dataset.page === name); ui.$('settings-nav').dispatchEvent(new UIEvent('click', { target })); };
+  ui.$('relay-settings').click(); await flush();
+  assert.equal(ui.$('settings').open, true); assert.equal(ui.$('workbench').open, false);
+  assert.equal(ui.$('settings-title').textContent, 'General'); assert.deepEqual(pages(), ['general']);
+  assert.deepEqual(ui.$('settings-nav').querySelectorAll('[data-page]').map(button => button.textContent), ['General', 'Accounts', 'Alerts', 'Voice']);
+  navigate('accounts');
+  assert.deepEqual(pages(), ['accounts']); assert.equal(ui.$('settings-title').textContent, 'Accounts');
+  assert.equal(ui.$('settings-nav').querySelectorAll('[data-page]').find(button => button.dataset.page === 'accounts').getAttribute('aria-current'), 'page');
+  assert.deepEqual(ui.document.querySelectorAll('.settings-account').map(row => row.dataset.provider), ['codex', 'claude', 'gemini']);
+  ui.$('settings-close').click(); assert.equal(ui.$('settings').open, false);
+  ui.$('ask-friend').click(); await flush();
+  assert.equal(ui.$('workbench').open, true); assert.equal(ui.$('settings').open, false);
+  assert.match(ui.$('workbench-content').textContent, /Share with a person/); assert.equal(ui.$('workbench-content').querySelectorAll('.settings-row').length, 0);
+  ui.$('workbench').close(); ui.$('connection-action').click(); await flush();
+  assert.equal(ui.$('settings').open, true); assert.equal(ui.$('settings-title').textContent, 'Accounts');
+});
+
+test('Settings searches across pages, restores its page on Escape and handles no matches', async () => {
+  const ui = await browser({ workbench: true, alertsUI: true, voiceUI: true, recapUI: true, desktop: true }), { posts } = alertSettings(ui);
+  await ui.window.relaySettings.open('accounts'); await flush();
+  const visiblePages = () => ui.$('settings-content').querySelectorAll('.settings-page').filter(section => !section.hidden).map(section => section.dataset.page);
+  const visibleRows = () => ui.$('settings-content').querySelectorAll('.settings-row').filter(row => !row.hidden).map(row => row.textContent);
+  const search = text => { ui.$('settings-search').value = text; ui.fire('settings-search', 'input'); };
+  search('sleep');
+  assert.deepEqual(visiblePages(), ['general']); assert.equal(visibleRows().length, 1); assert.match(visibleRows()[0], /Keep awake/);
+  assert.equal(ui.$('settings-empty').hidden, true);
+  search('sound volume');
+  assert.deepEqual(visiblePages(), ['alerts']); assert.equal(visibleRows().length, 1); assert.match(visibleRows()[0], /Volume/);
+  // Redrawing one module after a saved preference must preserve search results.
+  await ui.window.relaySettings.open('alerts'); await flush();
+  ui.labelledInput('Sound').checked = true; ui.labelledInput('Sound').dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(posts, [{ sound: { on: true } }]);
+  search('sound volume');
+  const volume = ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === 'Sound volume');
+  volume.value = '35'; volume.dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(visiblePages(), ['alerts']); assert.equal(visibleRows().length, 1); assert.match(visibleRows()[0], /Volume/);
+  search('no-such-setting'); assert.deepEqual(visiblePages(), []); assert.equal(ui.$('settings-empty').hidden, false);
+  const escape = new UIEvent('keydown', { key: 'Escape' }); ui.$('settings-search').dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, true); assert.equal(ui.$('settings-search').value, ''); assert.equal(ui.$('settings').open, true); assert.deepEqual(visiblePages(), ['alerts']);
+});
+
+test('Settings applies a search again when delayed alert settings arrive', async () => {
+  const ui = await browser({ workbench: true, alertsUI: true }), pending = deferred();
+  ui.setIntercept((request, next) => request.path === '/api/notifications' ? pending.promise.then(() => response({ banner: { on: true }, sound: { on: false, attention: true, finished: true, stopped: true, volume: 70, background: false }, bounce: { on: false }, badge: { on: false }, statusItem: true })) : next());
+  await ui.window.relaySettings.open();
+  ui.$('settings-search').value = 'sound volume'; ui.fire('settings-search', 'input');
+  assert.equal(ui.$('settings-empty').hidden, false);
+  pending.resolve(); await flush();
+  const page = ui.$('settings-content').querySelectorAll('.settings-page').find(section => section.dataset.page === 'alerts');
+  assert.equal(page.hidden, false); assert.equal(ui.$('settings-empty').hidden, true);
+  assert.equal(page.querySelectorAll('.settings-row').filter(row => !row.hidden).length, 1);
+});
+
+test('General Settings saves handoff and keep-awake controls and reports a save failure', async () => {
+  const ui = await browser({ workbench: true, desktop: true });
+  await ui.window.relaySettings.open(); await flush();
+  const threshold = () => ui.labelledInput('Offer a handoff near a usage limit'), automatic = () => ui.labelledInput('Hand off automatically');
+  assert.equal(threshold().value, '90'); assert.equal(automatic().checked, false);
+  threshold().value = '0'; threshold().dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(ui.requests.filter(request => request.path === '/api/handoff-preferences' && request.method === 'POST').at(-1).body, { threshold: 0 }); assert.equal(automatic().disabled, true);
+  threshold().value = '80'; threshold().dispatchEvent(new UIEvent('change')); await flush();
+  automatic().checked = true; automatic().dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(ui.requests.filter(request => request.path === '/api/handoff-preferences' && request.method === 'POST').at(-1).body, { automatic: true });
+  const awake = ui.$('settings-keep-awake'); awake.checked = true; awake.dispatchEvent(new UIEvent('change')); await flush(); assert.deepEqual(ui.awakeChanges, [true]);
+  ui.window.dispatchEvent(new UIEvent('desktop-keep-awake', { detail: { enabled: false, active: false, runningCount: 0 } })); assert.equal(ui.$('settings-keep-awake').checked, false);
+  ui.setIntercept((request, next) => request.path === '/api/handoff-preferences' && request.method === 'POST' ? response({ error: 'Cannot save handoff settings.' }, 503) : next());
+  threshold().value = '95'; threshold().dispatchEvent(new UIEvent('change')); await flush();
+  assert.equal(ui.$('settings-error').hidden, false); assert.match(ui.$('settings-error').textContent, /Cannot save/); assert.equal(threshold().value, '80');
+});
+
+test('Accounts connects through the provider flow, preserves a draft and shows failed actions', async () => {
+  const ui = await browser({ workbench: true, desktop: true, authenticated: { codex: false, claude: true } });
+  ui.$('message-input').value = 'Keep my draft'; ui.fire('message-input', 'input');
+  ui.setIntercept((request, next) => request.path === '/api/providers/codex/connect' ? response({ authUrl: 'https://auth.openai.com/fixture', message: 'Finish sign-in in your browser.' }) : next());
+  await ui.window.relaySettings.open('accounts'); await flush();
+  const card = () => ui.document.querySelectorAll('.settings-account').find(row => row.dataset.provider === 'codex');
+  card().querySelectorAll('button').find(button => button.textContent === 'Connect account').click(); await flush();
+  assert.match(card().textContent, /Finish sign-in in your browser/);
+  card().querySelectorAll('button').find(button => button.textContent === 'Open sign-in page').click(); await flush();
+  assert.deepEqual(ui.externalLinks, ['https://auth.openai.com/fixture']); assert.equal(ui.$('message-input').value, 'Keep my draft');
+  ui.setIntercept((request, next) => request.path === '/api/providers/codex/connect' ? response({ error: 'Connection unavailable.' }, 503) : next());
+  card().querySelectorAll('button').find(button => button.textContent === 'Connect account').click(); await flush();
+  assert.equal(ui.$('settings-error').hidden, false); assert.equal(ui.$('settings-error').textContent, 'Connection unavailable.'); assert.equal(ui.$('settings').open, true);
 });

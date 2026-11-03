@@ -39,7 +39,7 @@ When a task is done, ask the other agent for a second opinion. It reviews a snap
 
 <img src="docs/features/menu-bar.jpg" alt="Throughline in the macOS menu bar while another app is in front: the status says Approval needed, its menu lists each busy workspace, and an alert under the menu bar names the workspace waiting for approval">
 
-Keep working in your editor or browser. On a Mac, the menu bar shows what every project's agents are doing and flags anything waiting on you, like an approval, with optional alerts at the top of the screen. A short sound tells you when an agent needs you, finishes or stops; turn each one on or off and hear it first. When you come back, a short recap shows what finished, what changed and what still needs you, and can read it aloud.
+Keep working in your editor or browser. On a Mac, the menu bar shows what every project's agents are doing and flags anything waiting on you, like an approval. A banner, a short sound or the Dock icon tells you when an agent needs you, finishes or stops, and you choose which ones, for each of those moments, in one place. When you come back, a short recap shows what finished, what changed and what still needs you, and can read it aloud.
 
 ## Everything else, built in
 
