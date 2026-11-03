@@ -49,7 +49,7 @@
   function theme() {
     const style = typeof getComputedStyle === 'function' ? getComputedStyle(document.documentElement) : null, read = name => style?.getPropertyValue(name).trim() || '';
     const light = document.documentElement.getAttribute('data-theme') === 'light';
-    return { ...palettes[light ? 'light' : 'dark'], background: read('--panel-bg') || (light ? '#f8f8f8' : '#181818'), foreground: read('--text') || (light ? '#1f1f1f' : '#cccccc'), cursor: read('--text-strong') || read('--text'), cursorAccent: read('--panel-bg') || (light ? '#f8f8f8' : '#181818'), selectionBackground: light ? '#add6ff' : '#264f78' };
+    return { ...palettes[light ? 'light' : 'dark'], background: read('--panel-bg') || (light ? '#f4efe6' : '#161513'), foreground: read('--text') || (light ? '#3d362f' : '#d6cec2'), cursor: read('--text-strong') || read('--text'), cursorAccent: read('--panel-bg') || (light ? '#f8f8f8' : '#181818'), selectionBackground: light ? '#add6ff' : '#264f78' };
   }
 
   // A workspace's tabs in the order they opened, each with its panes in order.

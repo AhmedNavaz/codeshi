@@ -122,7 +122,7 @@
       canvas.append(node('b','acme-shop'),node('em','✓ Tests pass'),node('i'),node('i'),node('small','Ask anything about your project…')); preview.append(rail,canvas); return preview;
     };
     // Choosing saves at once, as in the status bar and Settings, and all three show the same preference.
-    for (const [value,label,text] of [['system','System','Follows your computer'],['graphite','Dark','Quiet graphite surfaces'],['light','Light','Bright, clear contrast']]) {
+    for (const [value,label,text] of [['system','System','Follows your computer'],['graphite','Dark','Warm black surfaces'],['light','Light','Cream paper surfaces']]) {
       const choice = button('',()=>window.relayTheme?.choose(value),'setup-theme'); choice.setAttribute('data-appearance',value); choice.setAttribute('aria-pressed',String(window.relayTheme?.preference() === value));
       choice.append(sample(value),node('strong',label),node('span',text,'muted')); themes.append(choice);
     }

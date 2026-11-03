@@ -996,8 +996,8 @@ test('a new profile paints the system appearance first and follows the OS while 
   for(const systemDark of [false,true]){
     const ui=await browser({theme:true,systemDark});
     assert.equal(ui.document.documentElement.palettes[0],systemDark?'graphite':'light','The palette set before the stylesheets load already matches the OS.');
-    assert.equal(ui.window.relayTheme.preference(),'system');assert.deepEqual(pressedAppearance(ui),['system']);assert.equal(themeColor(ui),systemDark?'#181818':'#f8f8f8');
-    ui.setSystemDark(!systemDark);assert.equal(palette(ui),systemDark?'light':'graphite');assert.equal(themeColor(ui),systemDark?'#f8f8f8':'#181818');
+    assert.equal(ui.window.relayTheme.preference(),'system');assert.deepEqual(pressedAppearance(ui),['system']);assert.equal(themeColor(ui),systemDark?'#161513':'#f4efe6');
+    ui.setSystemDark(!systemDark);assert.equal(palette(ui),systemDark?'light':'graphite');assert.equal(themeColor(ui),systemDark?'#f4efe6':'#161513');
     ui.setSystemDark(systemDark);assert.equal(palette(ui),systemDark?'graphite':'light');assert.deepEqual(pressedAppearance(ui),['system']);
     assert.deepEqual(appearanceSaves(ui),[],'Following the OS never saves a choice.');assert.equal(ui.storage.get('ai-relay:appearance'),'system','The preference is cached, not the palette it resolved to.');
   }
@@ -1007,7 +1007,7 @@ test('a saved Light or Dark choice ignores OS changes, and returning to System a
   const ui=await browser({theme:true,systemDark:true,savedPreferences:{appearance:'light'}});
   assert.equal(palette(ui),'light');assert.deepEqual(pressedAppearance(ui),['light']);
   ui.setSystemDark(false);ui.setSystemDark(true);assert.equal(palette(ui),'light','A manual choice ignores the OS.');
-  appearanceButton(ui,'system').click();assert.equal(palette(ui),'graphite');assert.equal(themeColor(ui),'#181818');assert.deepEqual(pressedAppearance(ui),['system']);
+  appearanceButton(ui,'system').click();assert.equal(palette(ui),'graphite');assert.equal(themeColor(ui),'#161513');assert.deepEqual(pressedAppearance(ui),['system']);
   appearanceButton(ui,'graphite').click();ui.setSystemDark(false);assert.equal(palette(ui),'graphite');
   await flush();assert.deepEqual(appearanceSaves(ui),['system','graphite']);assert.equal(ui.storage.get('ai-relay:appearance'),'graphite');
 });

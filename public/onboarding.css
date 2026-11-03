@@ -128,22 +128,22 @@
 .setup-theme[aria-pressed="true"] { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
 .setup-theme strong { margin: 8px 4px 0; color: var(--text-strong); font-size: 13px; font-weight: 600; }
 .setup-theme > .muted { margin: 0 4px; font-size: 12px; }
-.theme-preview { display: flex; width: 100%; height: 132px; overflow: hidden; border: 1px solid #3c3c3c; border-radius: 9px; background: #1f1f1f; color: #cccccc; }
-.theme-preview > i { width: 26%; padding: 16px 10px; background: #181818; border-right: 1px solid #2b2b2b; }
-.theme-preview > i b { display: block; height: 4px; margin-bottom: 11px; border-radius: 2px; background: #3c3c3c; }
-.theme-preview > i b:first-child { width: 70%; background: #4d78cc; }
+.theme-preview { display: flex; width: 100%; height: 132px; overflow: hidden; border: 1px solid #3e3a35; border-radius: 9px; background: #1c1a18; color: #d6cec2; }
+.theme-preview > i { width: 26%; padding: 16px 10px; background: #161513; border-right: 1px solid #2c2926; }
+.theme-preview > i b { display: block; height: 4px; margin-bottom: 11px; border-radius: 2px; background: #3e3a35; }
+.theme-preview > i b:first-child { width: 70%; background: #d9381e; }
 .theme-preview-canvas { display: flex; flex: 1; flex-direction: column; gap: 7px; padding: 18px 14px 12px; font-size: 10px; }
 .theme-preview-canvas b { font-weight: 600; }
-.theme-preview-canvas em { color: #6ccf8e; font-style: normal; }
-.theme-preview-canvas i { height: 4px; border-radius: 2px; background: #3c3c3c; }
+.theme-preview-canvas em { color: #73c991; font-style: normal; }
+.theme-preview-canvas i { height: 4px; border-radius: 2px; background: #3e3a35; }
 .theme-preview-canvas i + i { width: 62%; }
-.theme-preview-canvas small { margin-top: auto; padding: 6px 8px; border: 1px solid #3c3c3c; border-radius: 6px; color: #8b8b8b; }
-.theme-preview.light { border-color: #d4d4d4; background: #ffffff; color: #3b3b3b; }
-.theme-preview.light > i { background: #f3f3f3; border-color: #e5e5e5; }
-.theme-preview.light :is(i b, .theme-preview-canvas i) { background: #e1e1e1; }
-.theme-preview.light > i b:first-child { background: #005fb8; }
-.theme-preview.light .theme-preview-canvas em { color: #267e43; }
-.theme-preview.light .theme-preview-canvas small { border-color: #d4d4d4; color: #8b8b8b; }
+.theme-preview-canvas small { margin-top: auto; padding: 6px 8px; border: 1px solid #3e3a35; border-radius: 6px; color: #958c80; }
+.theme-preview.light { border-color: #d9cfbf; background: #fbf8f3; color: #3d362f; }
+.theme-preview.light > i { background: #f4efe6; border-color: #e8e0d3; }
+.theme-preview.light :is(i b, .theme-preview-canvas i) { background: #e5dccd; }
+.theme-preview.light > i b:first-child { background: #d9381e; }
+.theme-preview.light .theme-preview-canvas em { color: #2b7530; }
+.theme-preview.light .theme-preview-canvas small { border-color: #d9cfbf; color: #71675c; }
 /* System shows both palettes, split along the diagonal. */
 .theme-preview-pair { display: grid; width: 100%; }
 .theme-preview-pair > .theme-preview { grid-area: 1 / 1; }

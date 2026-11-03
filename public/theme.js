@@ -12,7 +12,7 @@
     preference = choices.includes(value) ? value : 'system';
     const theme = preference === 'system' ? (system?.matches === false ? 'light' : 'graphite') : preference;
     document.documentElement.setAttribute('data-theme', theme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'graphite' ? '#181818' : '#f8f8f8');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'graphite' ? '#161513' : '#f4efe6');
     document.querySelectorAll('[data-appearance]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.appearance === preference)));
     try { localStorage.setItem(key, preference); } catch { /* Appearance also works without storage. */ }
     if (save) {

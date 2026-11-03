@@ -1,5 +1,7 @@
-/* Design tokens. Every component in styles.css and workbench.css reads these;
-   Graphite is a neutral editor palette and Light mirrors it. */
+/* Design tokens. Every component in styles.css and workbench.css reads these.
+   The palette is the logo's: Dark is Ink (warm black surfaces, cream text) and Light is Paper (cream surfaces, ink
+   text). Vermilion, the seal's colour, is the one accent, for primary actions, selection and focus. Errors use
+   crimson, so a failure never reads as the accent. */
 :root {
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
@@ -55,16 +57,16 @@
 :root,
 :root[data-theme="graphite"] {
   color-scheme: dark;
-  --bg: #1f1f1f;
-  --sidebar: #181818;
-  --statusbar-bg: #181818;
+  --bg: #1c1a18;
+  --sidebar: #161513;
+  --statusbar-bg: #161513;
   /* The bottom panel (Terminal, Run) sits apart from the conversation. */
-  --panel-bg: #181818;
-  --overlay-bg: #252526;
-  --surface-raised: #252526;
-  --surface-input: #2a2a2a;
-  --surface-strong: #3a3a3c;
-  --bubble-bg: #2d2d30;
+  --panel-bg: #161513;
+  --overlay-bg: #242220;
+  --surface-raised: #242220;
+  --surface-input: #282624;
+  --surface-strong: #3a3632;
+  --bubble-bg: #2b2826;
   /* Reasoning effort, from light to heaviest: cool to warm. */
   --effort-low: #4ec9b0;
   --effort-medium: #4daafc;
@@ -79,24 +81,24 @@
   --step-delete: #f28b82;
   --step-web: #4ec9b0;
   --step-agent: #f0a35e;
-  --code-bg: #181818;
-  --code-inline-bg: #ffffff14;
-  --hover: #ffffff0f;
-  --list-active: #37373d;
-  --chip-bg: #ffffff12;
-  --border: #2b2b2b;
-  --border-strong: #3c3c3c;
-  --input-border: #3c3c3c;
-  --text: #cccccc;
-  --text-strong: #ececec;
-  --muted: #a3a3a3;
-  --faint: #8f8f8f;
-  --accent: #0078d4;
-  --accent-strong: #026ec1;
+  --code-bg: #161513;
+  --code-inline-bg: #fff4e314;
+  --hover: #fff4e30f;
+  --list-active: #36322e;
+  --chip-bg: #fff4e312;
+  --border: #2c2926;
+  --border-strong: #3e3a35;
+  --input-border: #3e3a35;
+  --text: #d6cec2;
+  --text-strong: #f4ede1;
+  --muted: #aaa194;
+  --faint: #958c80;
+  --accent: #d9381e;
+  --accent-strong: #c2301a;
   --on-accent: #ffffff;
-  --focus: #0078d4;
-  --link: #4daafc;
-  --selection: #264f78;
+  --focus: #ef6448;
+  --link: #f2896f;
+  --selection: #7a2e1f;
   --search-match: #e2c08d4d;
   --search-match-current: #e2c08d;
   --search-match-current-text: #1f1f1f;
@@ -111,9 +113,9 @@
   --warning: #e2c08d;
   --warning-bg: #e2c08d14;
   --warning-border: #e2c08d4d;
-  --danger: #f48771;
-  --danger-bg: #f487711a;
-  --danger-border: #f4877159;
+  --danger: #f26b85;
+  --danger-bg: #f26b851a;
+  --danger-border: #f26b8559;
   --syntax-text: #d4d4d4;
   --syntax-keyword: #569cd6;
   --syntax-string: #ce9178;
@@ -121,22 +123,22 @@
   --syntax-number: #b5cea8;
   --syntax-function: #dcdcaa;
   --syntax-property: #9cdcfe;
-  --backdrop: #0000008c;
+  --backdrop: #0c0a088c;
   --shadow-sm: 0 1px 2px #0000004d;
   --shadow-lg: 0 16px 48px #00000080, 0 0 0 1px #ffffff0a;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #ffffff;
-  --sidebar: #f8f8f8;
-  --statusbar-bg: #f8f8f8;
-  --panel-bg: #f8f8f8;
-  --overlay-bg: #ffffff;
-  --surface-raised: #f8f8f8;
-  --surface-input: #ffffff;
-  --surface-strong: #ffffff;
-  --bubble-bg: #f0f0f2;
+  --bg: #fbf8f3;
+  --sidebar: #f4efe6;
+  --statusbar-bg: #f4efe6;
+  --panel-bg: #f4efe6;
+  --overlay-bg: #fffdf9;
+  --surface-raised: #f6f1e9;
+  --surface-input: #fffdfa;
+  --surface-strong: #fffdfa;
+  --bubble-bg: #f0e9de;
   --effort-low: #16825d;
   --effort-medium: #005fb8;
   --effort-high: #9a6700;
@@ -149,24 +151,24 @@
   --step-delete: #c4314b;
   --step-web: #0e7c6b;
   --step-agent: #b55a00;
-  --code-bg: #f8f8f8;
-  --code-inline-bg: #0000000d;
-  --hover: #0000000a;
-  --list-active: #e4e6f1;
-  --chip-bg: #0000000d;
-  --border: #e5e5e5;
-  --border-strong: #d4d4d4;
-  --input-border: #cecece;
-  --text: #3b3b3b;
-  --text-strong: #1f1f1f;
-  --muted: #5f5f5f;
-  --faint: #6e6e6e;
-  --accent: #005fb8;
-  --accent-strong: #0258a8;
+  --code-bg: #f4efe6;
+  --code-inline-bg: #3b2a1a0d;
+  --hover: #3b2a1a0a;
+  --list-active: #ebe3d6;
+  --chip-bg: #3b2a1a0d;
+  --border: #e8e0d3;
+  --border-strong: #d9cfbf;
+  --input-border: #d3c8b6;
+  --text: #3d362f;
+  --text-strong: #1d1a17;
+  --muted: #655c52;
+  --faint: #71675c;
+  --accent: #d9381e;
+  --accent-strong: #bf3019;
   --on-accent: #ffffff;
-  --focus: #005fb8;
-  --link: #005fb8;
-  --selection: #add6ff;
+  --focus: #d9381e;
+  --link: #b02e17;
+  --selection: #f6cdbf;
   --search-match: #bf8a0040;
   --search-match-current: #f2cc60;
   --search-match-current-text: #1f1f1f;
@@ -176,14 +178,14 @@
   --claude-bg: #a4552a14;
   --gemini: #1a63c7;
   --gemini-bg: #1a63c714;
-  --success: #2f7d32;
-  --success-bg: #2f7d3214;
+  --success: #2b7530;
+  --success-bg: #2b753014;
   --warning: #8a5d00;
   --warning-bg: #bf8a0014;
   --warning-border: #bf8a0059;
-  --danger: #b42318;
-  --danger-bg: #b4231810;
-  --danger-border: #b4231840;
+  --danger: #b51f45;
+  --danger-bg: #b51f4510;
+  --danger-border: #b51f4540;
   --syntax-text: #1f1f1f;
   --syntax-keyword: #0000ff;
   --syntax-string: #a31515;
@@ -191,7 +193,7 @@
   --syntax-number: #098658;
   --syntax-function: #795e26;
   --syntax-property: #0451a5;
-  --backdrop: #0000004d;
-  --shadow-sm: 0 1px 2px #0000000f;
-  --shadow-lg: 0 16px 48px #0000002e, 0 0 0 1px #0000000d;
+  --backdrop: #2a1d104d;
+  --shadow-sm: 0 1px 2px #3b2a1a14;
+  --shadow-lg: 0 16px 48px #3b2a1a30, 0 0 0 1px #3b2a1a10;
 }

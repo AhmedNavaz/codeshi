@@ -4,6 +4,10 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Changed
+
+- **Codeshi's colours throughout the app.** Dark is now warm black with cream text, and Light is cream paper with dark ink, the two looks of the logo. Vermilion, the red of the seal, replaces blue for the main buttons, selection, focus and links, including in the alert panel and in Point and tell's toolbar and the outline it draws round the element you pick. Errors and failed checks use a deeper crimson, so they don't look like the accent.
+
 ## [0.23.0] - 2026-11-03
 
 ### Changed

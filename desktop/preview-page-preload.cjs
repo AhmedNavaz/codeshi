@@ -52,7 +52,7 @@ function describe(element) {
   return { tag: element.tagName.toLowerCase(), text, label: clip(label, 120), selector: clip(selectorFor(element), 300), attributeSource: attributeSource(element) };
 }
 
-// The outline and its name live in a closed shadow root that ignores the pointer, styled through the CSSOM so a
+// The outline (in the seal's vermilion) and its name live in a closed shadow root that ignores the pointer, styled through the CSSOM so a
 // page's own rules and its content security policy leave them alone.
 function ensureOverlay() {
   if (overlay?.isConnected) return;
@@ -60,8 +60,8 @@ function ensureOverlay() {
   Object.assign(overlay.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647', display: 'none' });
   const shadow = overlay.attachShadow({ mode: 'closed' });
   box = document.createElement('div'); tag = document.createElement('div');
-  Object.assign(box.style, { position: 'fixed', border: '2px solid #3b8eea', background: 'rgba(59, 142, 234, 0.12)', borderRadius: '3px', boxSizing: 'border-box', transition: 'all 60ms ease-out' });
-  Object.assign(tag.style, { position: 'fixed', padding: '3px 7px', borderRadius: '5px', background: '#1f1f1f', color: '#ffffff', font: '12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.3)' });
+  Object.assign(box.style, { position: 'fixed', border: '2px solid #d9381e', background: 'rgba(217, 56, 30, 0.12)', borderRadius: '3px', boxSizing: 'border-box', transition: 'all 60ms ease-out' });
+  Object.assign(tag.style, { position: 'fixed', padding: '3px 7px', borderRadius: '5px', background: '#1c1a18', color: '#f4ede1', font: '12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.3)' });
   shadow.append(box, tag);
   (document.documentElement || document).appendChild(overlay);
 }
