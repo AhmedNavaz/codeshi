@@ -1387,8 +1387,10 @@
   }
   function closeRemoveWorkspace() {
     if (state.projectSaving) return;
+    // Focus returns to the options of the workspace that was kept, or the first one if the list no longer shows it.
+    const id = state.removingProjectId, options = [...ui.workspaceList.querySelectorAll('.workspace-options')];
     ui.removeDialog.close(); state.removingProjectId = null;
-    ui.workspaceList.querySelector('.workspace-options')?.focus();
+    (options.find(button => button.dataset.projectId === id) || options[0])?.focus();
   }
   async function removeWorkspace() {
     const id = state.removingProjectId;
