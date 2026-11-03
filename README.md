@@ -39,7 +39,7 @@ When a task is done, ask the other agent for a second opinion. It reviews a snap
 
 <img src="docs/features/menu-bar.jpg" alt="Throughline in the macOS menu bar while another app is in front: the status says Approval needed, its menu lists each busy workspace, and an alert under the menu bar names the workspace waiting for approval">
 
-Keep working in your editor or browser. On a Mac, the menu bar shows what every project's agents are doing and flags anything waiting on you, like an approval, with optional alerts at the top of the screen. When you come back, a short recap shows what finished, what changed and what still needs you, and can read it aloud.
+Keep working in your editor or browser. On a Mac, the menu bar shows what every project's agents are doing and flags anything waiting on you, like an approval, with optional alerts at the top of the screen. A short sound tells you when an agent needs you, finishes or stops; turn each one on or off and hear it first. When you come back, a short recap shows what finished, what changed and what still needs you, and can read it aloud.
 
 ## Everything else, built in
 
@@ -58,26 +58,26 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 </tr>
 <tr>
 <td width="50%" valign="top">
+<img src="docs/features/awake.jpg" alt="Codex fourteen minutes into a migration, with its plan on step 2 of 4, while Keep awake · On shows in the status bar">
+<h3>Keep awake while agents work</h3>
+<p>Leave a long task running and step away. With <b>Keep awake</b> on, your computer stays awake while any agent works or waits for a usage limit to reset, then sleeps as usual once everything is done.</p>
+</td>
+<td width="50%" valign="top">
 <img src="docs/features/voice.jpg" alt="Voice input listening, with the spoken request appearing in the message box">
 <h3>Voice</h3>
 <p>Say what you want instead of typing it. Speech is recognized on your Mac and never leaves it.</p>
 </td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 <img src="docs/features/approvals.jpg" alt="Codex asks to run npm install, with options to allow it for this run or always in this workspace">
 <h3>Approvals your way</h3>
 <p>Agents read your project freely and ask before changing it. Allow an exact action once, for the whole task, or always in that project.</p>
 </td>
-</tr>
-<tr>
 <td width="50%" valign="top">
 <img src="docs/features/plan.jpg" alt="A note added to a running task, a queued prompt, and the agent's plan with two of four steps done">
 <h3>Queue and steer</h3>
 <p>Line up your next prompts, add a note to a running task without stopping it, and follow the agent's plan as a live checklist.</p>
-</td>
-<td width="50%" valign="top">
-<img src="docs/features/search.jpg" alt="The search bar finding a workspace and files from two workspaces">
-<h3>Find anything</h3>
-<p>One search bar (⌘K) for your projects, the files in all of them and the app's actions, and ⌘F inside the conversation.</p>
 </td>
 </tr>
 <tr>
@@ -87,9 +87,9 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 <p>Each step is coloured by what it did, and every changed file shows the lines it added and removed.</p>
 </td>
 <td width="50%" valign="top">
-<img src="docs/features/sounds.jpg" alt="The Sounds settings: separate sounds for approvals, finished tasks and stopped tasks, with volume">
-<h3>Sounds</h3>
-<p>A short sound when an agent needs you, finishes or stops. Turn each on or off and hear it first.</p>
+<img src="docs/features/search.jpg" alt="The search bar finding a workspace and files from two workspaces">
+<h3>Find anything</h3>
+<p>One search bar (⌘K) for your projects, the files in all of them and the app's actions, and ⌘F inside the conversation.</p>
 </td>
 </tr>
 </table>
@@ -97,10 +97,10 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 Also included:
 
 - **Undo and redo** for any run, after a preview of every line that changes
-- **Terminal, Run and Git** panels for each workspace
+- **Terminal, Run and Git** for each workspace: shells in tabs or side by side, and each project's dev server and tests one click away
 - **Chat import** from your earlier Claude Code and Codex sessions
 - **Ask a Friend**, for help from another developer with a patch you review
-- **Light, dark and system themes**, native menus and shortcuts, updates from inside the app on macOS, and keeping your computer awake while agents work
+- **Light, dark and system themes**, native menus and shortcuts, and updates from inside the app on macOS
 
 The [guide](docs/guide.md) describes every feature and its limits.
 
@@ -112,7 +112,6 @@ The [guide](docs/guide.md) describes every feature and its limits.
 | **Everything in the thread** | GitHub issues, pull requests and failing CI checks as context, then a pull request from the conversation | Planned in stages ([#18](https://github.com/AhmedNavaz/throughline/issues/18)) |
 | **More agents** | Grok, DeepSeek, Qwen and more, each on your own account | In progress ([#4](https://github.com/AhmedNavaz/throughline/issues/4)) |
 | **Linux builds** | Throughline on Linux, alongside macOS and Windows | Help wanted ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) |
-| **Terminal tabs** | Several shells per project, side by side | Help wanted ([#70](https://github.com/AhmedNavaz/throughline/issues/70)) |
 | **Hands-free voice** | Say "send", and keep talking while the agent works | Needs design ([#72](https://github.com/AhmedNavaz/throughline/issues/72)) |
 | **Approve from your phone** | Answer an approval when you're away from your desk | Exploring ([#23](https://github.com/AhmedNavaz/throughline/issues/23)) |
 | **Signed macOS builds** | Downloads that open without a security prompt, and Homebrew | Waiting on an Apple Developer account ([#1](https://github.com/AhmedNavaz/throughline/issues/1)) |
