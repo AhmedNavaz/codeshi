@@ -379,13 +379,18 @@
     }
   }
   // A path as the person knows it: relative to its workspace folder, with the folder named when there are several.
+  // A long path outside the workspace, such as an agent's own temporary files, keeps only its last folder and its
+  // name after "…/", so the name is never cut off; steps show the full path when you point at it.
   function displayPath(value) {
     const text = String(value || ""), folders = currentProject()?.folders || [];
     for (const folder of folders) {
       if (folder.path && text === folder.path) return folders.length > 1 ? folder.name : "";
       if (folder.path && text.startsWith(folder.path + "/")) return (folders.length > 1 ? folder.name + "/" : "") + text.slice(folder.path.length + 1);
     }
-    return text;
+    const separator = text.includes("\\") ? "\\" : "/", parts = text.split(separator);
+    if (!(text.startsWith("/") || /^[A-Za-z]:[\\/]/.test(text)) || parts.length <= 4) return text;
+    const tail = parts.slice(-2).join(separator);
+    return "…" + separator + (tail.length <= 48 ? tail : parts.at(-1));
   }
   // Lines in a text, and lines removed and added between two texts after the lines they share at either end.
   function lineTotal(text) { const value = String(text ?? ""); return value ? value.split("\n").length - (value.endsWith("\n") ? 1 : 0) : 0; }
@@ -480,7 +485,7 @@
       }
       const path = input.file_path || input.notebook_path || input.path || "", file = displayPath(path);
       const step = (icon, verb, detail, output = result, mono = false) => ({ kind: "tool", icon, verb, detail, mono, output, toolName: name, input, raw: text });
-      if (["Read", "read_file"].includes(name)) return step("read", "Read", file);
+      if (["Read", "read_file"].includes(name)) return { ...step("read", "Read", file), title: path };
       if (["Edit", "MultiEdit", "edit_file", "NotebookEdit"].includes(name)) {
         const edits = (Array.isArray(input.edits) ? input.edits : [input]).filter(edit => typeof edit.old_string === "string" || typeof edit.new_string === "string");
         const diff = edits.map(edit => lineDiff(edit.old_string, edit.new_string).join("\n")).join("\n\n");
@@ -568,7 +573,7 @@
     const toggle = element(more ? "button" : "div", "activity-output-toggle");
     toggle.append(element("span", "activity-entry-title", step.verb));
     if (step.files?.length) toggle.append(fileList(step.files));
-    else if (step.detail) { const detail = element(step.mono ? "code" : "span", "activity-entry-detail", step.detail); detail.title = step.cmd || step.detail; toggle.append(detail); }
+    else if (step.detail) { const detail = element(step.mono ? "code" : "span", "activity-entry-detail", step.detail); detail.title = step.cmd || step.title || step.detail; toggle.append(detail); }
     if (more) toggle.append(element("span", "disclosure-chevron"));
     head.append(toggle, copyButton("activity-copy", "Copy", step.output || step.copy || step.raw));
     entry.append(node, head);

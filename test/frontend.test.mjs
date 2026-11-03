@@ -2876,6 +2876,28 @@ test('steps are coloured by kind, changed files show their line counts, and a cu
   assert.deepEqual(edit.querySelectorAll('.activity-diff').map(line => [line.className, line.textContent.trim()]), [['activity-diff', 'a'], ['activity-diff removed', '- b'], ['activity-diff added', '+ X'], ['activity-diff', 'c'], ['activity-diff added', '+ d']]);
 });
 
+test('a long path outside the workspace keeps its file name in view, with the full path on the step', async () => {
+  const ui = await browser(), c = ui.canonical.get('project-one'), runId = 'outside-run', describe = text => ui.window.relayUI.describeActivity(text);
+  // An agent's own scratch file, far outside the project.
+  const scratch = '/private/tmp/claude-501/-Users-pat-Projects-acme/691bf325-a87d-4d75-a7d1-4c38cee24c68/scratchpad/palette/after/hero-graphite.png';
+  assert.equal(describe(`Read\n{"file_path":"${scratch}"}`).detail, '…/after/hero-graphite.png');
+  assert.equal(describe('Read\n{"file_path":"/etc/hosts"}').detail, '/etc/hosts', 'a short path stays whole');
+  assert.equal(describe(`Read\n{"file_path":"/Users/pat/notes/${'a-very-long-folder-name'.repeat(3)}/todo.md"}`).detail, '…/todo.md', 'a folder too long to show drops out');
+  assert.equal(describe('Read\n{"file_path":"C:\\\\Users\\\\pat\\\\AppData\\\\Local\\\\Temp\\\\shot.png"}').detail, '…\\Temp\\shot.png');
+  Object.assign(c, { status: 'complete', lastRun: { id: runId, provider: 'claude', status: 'complete' }, messages: [
+    { id: 'u', runId, role: 'user', text: 'Check the screenshot.', provider: 'claude' },
+    { id: 'r', runId, role: 'activity', provider: 'claude', text: `Read\n{"file_path":"${scratch}"}` },
+    { id: 'w', runId, role: 'activity', provider: 'claude', text: `Write\n{"file_path":"${scratch.replace('hero-graphite.png', 'shots.mjs')}","content":"x\\n"}\nFile created successfully` },
+  ] });
+  await ui.window.relayUI.refresh(); await flush();
+  const read = ui.document.querySelectorAll('.activity-entry')[0].querySelector('.activity-entry-detail');
+  assert.equal(read.textContent, '…/after/hero-graphite.png');
+  assert.equal(read.title, scratch, 'pointing at the step shows where the file is');
+  const written = ui.document.querySelector('.activity-file');
+  assert.deepEqual([written.querySelector('.activity-file-directory').textContent, written.querySelector('.activity-file-name').textContent], ['…/after/', 'shots.mjs']);
+  assert.match(written.title, /scratchpad\/palette\/after\/shots\.mjs$/);
+});
+
 test('what the agent says carries its agent, and changed files list one per line with their folder, name and counts', async () => {
   const ui = await browser(), c = ui.canonical.get('project-one'), runId = 'readable-run';
   const change = (path, kind, added = 0, removed = 0) => ({ path, kind, added, removed });
