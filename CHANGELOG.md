@@ -4,7 +4,7 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
-## [0.21.0] - 2026-11-03
+## [0.21.1] - 2026-11-03
 
 ### Added
 
@@ -26,6 +26,8 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 - Exporting a long conversation, or previewing a long chat to import, could keep Throughline from answering anything else for several seconds while it trimmed the history to fit the 2 MB limit, because it measured the whole file again after each message it dropped. Each message is now measured once, so trimming takes a fraction of a second and keeps the same messages ([#79](https://github.com/AhmedNavaz/throughline/pull/79)).
 
 Thanks to [@seeebbii](https://github.com/seeebbii) for the import, attachment, focus and long-history fixes.
+
+0.21.0 was tagged but not published: a test of the update demo failed on Windows before its builds were released. 0.21.1 is the same release with that test fixed.
 
 ## [0.20.0] - 2026-11-03
 
@@ -361,7 +363,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
-[0.21.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.21.0
+[0.21.1]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.21.1
 [0.20.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.20.0
 [0.19.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0
 [0.18.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0
