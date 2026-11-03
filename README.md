@@ -1,6 +1,4 @@
-<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/icon-dark.svg"><img src="assets/icon.svg" width="96" alt="Codeshi logo: a brush-stroke C with a red seal carved with シ"></picture></p>
-
-<h1 align="center">Codeshi</h1>
+<h1 align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/icon-dark.svg"><img src="assets/icon.svg" width="96" align="top" alt=""></picture><br>Codeshi</h1>
 
 <p align="center"><b>Claude Code, Codex, Gemini and local models in one conversation.</b><br>
 Switch agents mid-task, keep going when one hits its limit, and use the plans you already pay for.</p>
