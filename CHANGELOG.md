@@ -4,6 +4,8 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-04
+
 ### Changed
 
 - **Codeshi's colours throughout the app.** Dark is now warm black with cream text, and Light is cream paper with dark ink, the two looks of the logo. Vermilion, the red of the seal, replaces blue for the main buttons, selection, focus and links, including in the alert panel and in Point and tell's toolbar and the outline it draws round the element you pick. Errors and failed checks use a deeper crimson, so they don't look like the accent.
@@ -397,6 +399,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.24.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.24.0
 [0.23.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.23.0
 [0.22.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.22.0
 [0.21.2]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.21.2
