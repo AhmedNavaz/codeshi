@@ -895,6 +895,21 @@ test('input token counts include cached input for Claude as they do for Codex',a
   assert.match(metrics(),tokens(25128));
 });
 
+test('cancelling a workspace removal returns focus to that workspace, not the first one',async()=>{
+  const ui=await browser({moreProjects:true,desktop:true,desktopControls:true}),options=id=>ui.document.querySelectorAll('.workspace-options').find(button=>button.dataset.projectId===id);
+  // Compared by name, since a failed comparison of two elements would print the whole page.
+  const focused=()=>{const node=ui.document.activeElement;return node?.className==='workspace-options'?'options of '+node.dataset.projectId:node?.id||node?.tagName;};
+  options('project-two').click();ui.$('workspace-remove').click();assert.equal(ui.$('remove-workspace-name').textContent,'Other workspace');
+  ui.$('cancel-remove-workspace').click();await flush();
+  assert.equal(focused(),'options of project-two','Focus goes back to the workspace whose removal was cancelled.');
+  await ui.switchProject('project-two');ui.menu('remove-workspace');assert.equal(ui.$('remove-workspace-dialog').open,true);assert.equal(ui.$('remove-workspace-name').textContent,'Other workspace');
+  ui.$('remove-workspace-dialog').dispatchEvent(new UIEvent('cancel'));await flush();
+  assert.equal(focused(),'options of project-two','Escape from the menu’s removal does the same.');
+  ui.menu('remove-workspace');assert.equal(ui.$('remove-workspace-dialog').open,true);
+  ui.projects.splice(1,1);await ui.window.relayUI.refreshProjects();await flush();assert.deepEqual(ui.document.querySelectorAll('.workspace-options').map(button=>button.dataset.projectId),['project-one'],'Another window removed it meanwhile.');
+  ui.$('cancel-remove-workspace').click();await flush();assert.equal(focused(),'options of project-one','With that workspace gone from the list, focus goes to the first one.');
+});
+
 test('workspace removal confirms, switches safely, and Undo restores the same chat and draft', async()=>{
   const ui=await browser({moreProjects:true}), chatId=ui.state().conversation.id;
   ui.$('message-input').value='Keep my draft';ui.fire('message-input','input');
