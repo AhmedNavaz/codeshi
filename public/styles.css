@@ -328,10 +328,16 @@ details[open] > summary > .disclosure-chevron, .activity-entry.open .activity-ou
 .run-thread-body > :last-child::after { content: ""; position: absolute; left: -17px; top: var(--node-y); bottom: 0; width: 4px; background: var(--bg); }
 .run-thread .message { padding: 2px 0 0; --node-y: 13.5px; }
 .run-thread .message > .message-heading { display: none; }
-.run-thread .message-assistant .message-text { padding-left: 0; }
+/* What the agent says between its steps is the main text: brighter and larger than the steps, with room around it. */
+.run-thread-body > .message-assistant { margin: 10px 0 2px; }
+.run-thread-body > .message-assistant:first-child { margin-top: 0; }
+.run-thread .message-assistant .message-text { padding-left: 0; color: var(--text-strong); }
 .run-thread .message-assistant .message-actions { height: 18px; margin: 0 0 2px -4px; }
-/* Nodes sit above the line's end. */
+/* Nodes sit above the line's end. What the agent says has a dot in its colour. */
 .run-thread .message-assistant::before, .run-thread-body > .message-steer::before, .run-thread-body > .message-system::before { content: ""; position: absolute; z-index: 1; left: -18px; top: 10.5px; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); box-shadow: 0 0 0 3px var(--bg); }
+.run-thread .message-assistant[data-provider="codex"]::before { background: var(--codex); }
+.run-thread .message-assistant[data-provider="claude"]::before { background: var(--claude); }
+.run-thread .message-assistant[data-provider="gemini"]::before { background: var(--gemini); }
 .run-thread .message-steer { padding-top: 6px; }
 .run-thread .message-steer > .message-heading { display: flex; }
 .run-thread-body > .message-steer::before { top: 13px; background: var(--link); }
@@ -348,7 +354,7 @@ details[open] > summary > .disclosure-chevron, .activity-entry.open .activity-ou
 .timeline-node { position: absolute; z-index: 1; left: -24px; top: 4px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--bg); }
 .activity-entry { color: var(--text); font-size: 12.5px; }
 .activity-entry-header { display: flex; align-items: center; min-width: 0; }
-.activity-output-toggle { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; }
+.activity-output-toggle { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; min-height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; }
 .activity-output-toggle:hover:enabled { color: var(--text); background: var(--hover); }
 div.activity-output-toggle { cursor: default; }
 .activity-entry-title { flex: none; max-width: 100%; overflow: hidden; color: var(--text); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
@@ -374,14 +380,24 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .activity-entry[data-tone="agent"] { --tone: var(--step-agent); }
 .activity-entry[data-tone] .activity-icon { background: var(--tone); }
 .activity-entry[data-tone] .activity-entry-title { color: var(--tone); }
-/* Changed files read clearly: the name in full text colour, new files green and deleted ones red, with line counts. */
-.activity-files { color: var(--muted); }
-.activity-file { color: var(--text); }
-.activity-file[data-change="add"] { color: var(--step-add); }
-.activity-file[data-change="delete"] { color: var(--step-delete); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--step-delete) 55%, transparent); }
-.line-count { margin-left: 5px; font: 11.5px/1 var(--mono); font-variant-numeric: tabular-nums; }
+/* Changed files, one per line beside the verb: the folder quiet and the name in full text colour, then its line
+   counts. New files are green, deleted ones red and struck through. */
+.activity-files { display: flex; flex-direction: column; gap: 1px; color: var(--muted); }
+.activity-file-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.activity-file { display: flex; min-width: 0; overflow: hidden; color: var(--text); white-space: nowrap; }
+.activity-file-directory { flex: 0 1 auto; min-width: 2ch; overflow: hidden; color: var(--muted); text-overflow: ellipsis; }
+.activity-file-name { flex: none; font-weight: 500; }
+.activity-file-counts { display: flex; flex: none; gap: 4px; }
+.activity-files-more { color: var(--faint); }
+.activity-file[data-change="add"] .activity-file-name { color: var(--step-add); }
+.activity-file[data-change="delete"] { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--step-delete) 55%, transparent); }
+.activity-file[data-change="delete"] .activity-file-name { color: var(--step-delete); }
+/* Several files stack under the first; the verb, node and chevron stay on its line. */
+.activity-entry-files .activity-output-toggle { align-items: flex-start; padding-block: 4px; line-height: 18px; }
+.activity-entry-files .activity-output-toggle > .disclosure-chevron { margin-top: 3px; }
+.line-count { font: 11.5px/1 var(--mono); font-variant-numeric: tabular-nums; }
 .line-count.added { color: var(--success); }
-.line-count.removed { margin-left: 4px; color: var(--danger); }
+.line-count.removed { color: var(--danger); }
 .activity-diff.added { color: var(--success); }
 .activity-diff.removed { color: var(--danger); }
 .activity-diff.folded { color: var(--faint); font-style: italic; }
@@ -976,25 +992,6 @@ button.commit-hash:hover { text-decoration: underline; }
 .handoff-actions #handoff-accept:disabled, .handoff-actions #retry-accept:disabled { background: var(--chip-bg); color: var(--faint); opacity: 1; }
 /* A retry after failed tests (#12). */
 .retry-icon { background: var(--danger); -webkit-mask-image: var(--icon-alert); mask-image: var(--icon-alert); }
-
-/* The agent's plan for the run (#32): one line docked above the message box that opens into the to-do list. */
-.run-plan { display: grid; margin: 0 0 6px; }
-.run-plan-summary { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 4px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-size: 12.5px; text-align: left; cursor: pointer; transition: background .12s; }
-.run-plan-summary:hover { background: var(--hover); }
-.run-plan-ring { --progress: 0; flex: none; width: 14px; height: 14px; border-radius: 50%; background: conic-gradient(var(--success) calc(var(--progress) * 360deg), var(--chip-bg) 0); -webkit-mask: radial-gradient(circle, transparent 3.5px, #000 4px); mask: radial-gradient(circle, transparent 3.5px, #000 4px); }
-.run-plan-count { flex: none; color: var(--text-strong); font-weight: 600; font-variant-numeric: tabular-nums; }
-.run-plan-current { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-plan-chevron { flex: none; width: 14px; height: 14px; color: var(--faint); transition: transform .15s; }
-.run-plan-summary[aria-expanded="true"] .run-plan-chevron { transform: rotate(180deg); }
-.run-plan-list { display: grid; gap: 1px; max-height: 240px; margin: 2px 0 4px; padding: 0 10px; overflow-y: auto; list-style: none; }
-.run-plan-step { display: flex; align-items: flex-start; gap: 9px; padding: 3px 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
-.run-plan-mark { position: relative; flex: none; width: 14px; height: 14px; margin-top: 2.5px; border: 1.5px solid var(--faint); border-radius: 50%; }
-.run-plan-step.done .run-plan-mark { border-color: var(--success); background: var(--success); }
-.run-plan-step.done .run-plan-mark::after { content: ""; position: absolute; inset: 0; background: var(--on-accent, #fff); -webkit-mask: var(--icon-check) center / 9px no-repeat; mask: var(--icon-check) center / 9px no-repeat; }
-.run-plan-step.done .run-plan-text { color: var(--faint); }
-.run-plan-step.active .run-plan-mark { border-color: var(--link); border-right-color: transparent; animation: spin 1s linear infinite; }
-.run-plan-step.active .run-plan-text { color: var(--text-strong); font-weight: 500; }
-@media (prefers-reduced-motion: reduce) { .run-plan-step.active .run-plan-mark { animation: none; border-right-color: var(--link); } }
 
 /* Auto (#12): before sending, one quiet line says which agent, model and effort will take the message, and why. */
 .route-preview { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; margin: 0 0 6px; padding: 4px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-size: 12.5px; text-align: left; cursor: pointer; transition: background .12s; }

@@ -434,11 +434,14 @@
     return ["add", "added", "create", "created"].includes(kind) ? "add" : ["delete", "deleted", "remove", "removed"].includes(kind) ? "delete" : "update";
   }
   // One step of a run, shown as a timeline row: a short verb, what it acted on, and the full text behind a chevron.
+  // A shell wrapper adds little to the summary. Only remove its outer presentation; the exact command remains in
+  // the saved entry, expanded output and Copy. No shell text is evaluated or unescaped here.
+  const displayCommand = command => command.match(/^(?:\/[\w./-]+\/)?(?:bash|zsh|sh)\s+(?:-(?:lc|cl|c)|-l\s+-c)\s+(['"])(.*)\1$/)?.[2] || command;
   function parseActivity(raw) {
     const text = String(raw || "").trim(), first = text.split("\n")[0];
     if (text.startsWith("$ ")) {
       const newline = text.indexOf("\n"), cmd = (newline === -1 ? text.slice(2) : text.slice(2, newline)).trim();
-      return { kind: "command", icon: "command", verb: "Run", detail: cmd, mono: true, cmd, output: text, raw: text };
+      return { kind: "command", icon: "command", verb: "Run", detail: displayCommand(cmd), mono: true, cmd, output: text, raw: text };
     }
     // A check with the workspace's tests after a routed run (#12): running, then how it ended, with its output.
     const check = text.match(/^Tests (running|passed|failed|timed out|stopped|skipped|interrupted): ([^\n]*)(?:\n([\s\S]*))?$/);
@@ -457,7 +460,9 @@
       }).filter(file => file.path);
       const paths = files.map(file => file.path), kinds = new Set(files.map(file => file.change)), tone = kinds.size === 1 ? [...kinds][0] : "update";
       const [verb, icon] = { add: ["Create", "create"], delete: ["Delete", "delete"], update: ["Edit", "edit"] }[tone];
-      return { kind: "file", icon, verb, detail: paths.map(displayPath).join(", ") || "files", files, paths, output: paths.length > 1 ? paths.map(displayPath).join("\n") : "", raw: text };
+      // The row lists up to six files; its details hold the full list only when some are left out.
+      const list = paths.map(displayPath).join("\n");
+      return { kind: "file", icon, verb, detail: paths.map(displayPath).join(", ") || "files", files, paths, output: paths.length > 6 ? list : "", copy: list, raw: text };
     }
     // A Claude tool: its name, its input as one line of JSON, then its result once it arrives. A line an earlier
     // version cut short still says which tool it was and what it acted on.
@@ -486,7 +491,7 @@
       }
       if (name === "Glob") return step("search", "Find", input.pattern || "", result, true);
       if (["Grep", "search_files"].includes(name)) return step("search", "Search", [input.pattern, input.path && displayPath(input.path) ? "in " + displayPath(input.path) : ""].filter(Boolean).join(" "), result, true);
-      if (name === "Bash") return { ...step("command", "Run", input.description || input.command || "", [input.command ? "$ " + input.command : "", result].filter(Boolean).join("\n"), !input.description), cmd: input.command || "" };
+      if (name === "Bash") return { ...step("command", "Run", input.description || displayCommand(input.command || ""), [input.command ? "$ " + input.command : "", result].filter(Boolean).join("\n"), !input.description), cmd: input.command || "" };
       if (name === "WebFetch") return step("web", "Fetch", input.url || "");
       if (name === "WebSearch" || name === "search_web") return step("web", "Search the web", input.query || "");
       if (["Task", "Agent"].includes(name)) return step("agent", "Agent", input.description || "");
@@ -521,24 +526,34 @@
   // and other agents. Approvals, errors and tests keep their own.
   const STEP_TONES = { read: "read", search: "read", command: "run", edit: "edit", create: "add", delete: "delete", web: "web", agent: "agent" };
   const CHANGES = { add: "Added", delete: "Deleted", update: "Changed" };
-  // The files a step changed, each with its added and removed lines when known.
+  // The files a step changed, one per line: the folder, the file's name, then its added and removed lines when known.
+  // Whether a file is new or deleted shows in its colour, and is said in words for screen readers.
   function fileList(files) {
     const list = element("span", "activity-entry-detail activity-files");
-    files.slice(0, 6).forEach((file, index) => {
-      if (index) list.append(document.createTextNode(", "));
-      const name = element("span", "activity-file", displayPath(file.path) || file.path);
+    files.slice(0, 6).forEach(file => {
+      const row = element("span", "activity-file-row"), path = displayPath(file.path) || file.path, split = path.lastIndexOf("/");
+      const name = element("span", "activity-file");
+      if (split >= 0) name.append(element("span", "activity-file-directory", path.slice(0, split + 1)));
+      name.append(element("span", "activity-file-name", path.slice(split + 1)));
       name.dataset.change = file.change; name.title = `${CHANGES[file.change] || "Changed"}: ${file.path}`;
-      list.append(name);
-      if (file.added > 0) list.append(element("span", "line-count added", `+${file.added}`));
-      if (file.removed > 0) list.append(element("span", "line-count removed", `−${file.removed}`));
+      row.append(name);
+      if (file.change !== "update") row.append(element("span", "sr-only", `(${(CHANGES[file.change] || "Changed").toLowerCase()})`));
+      if (file.added > 0 || file.removed > 0) {
+        const counts = element("span", "activity-file-counts");
+        if (file.added > 0) counts.append(element("span", "line-count added", `+${file.added}`));
+        if (file.removed > 0) counts.append(element("span", "line-count removed", `−${file.removed}`));
+        row.append(counts);
+      }
+      list.append(row);
     });
-    if (files.length > 6) list.append(document.createTextNode(` and ${files.length - 6} more`));
+    if (files.length > 6) list.append(element("span", "activity-file-row activity-files-more", `and ${files.length - 6} more`));
     return list;
   }
   // A timeline row: its node on the run's line, the step's first line, and its full text behind the chevron.
   function renderStep(step, entryId, openOutputs) {
     const open = openOutputs.has(entryId), more = Boolean(step.output);
     const entry = element("div", `activity-entry activity-entry-${step.kind}${step.error ? " activity-entry-error" : ""}${open ? " open" : ""}`);
+    if (step.files?.length > 1) entry.classList.add("activity-entry-files");
     entry.setAttribute("data-entry-id", entryId);
     entry.dataset.entryId = entryId;
     if (STEP_TONES[step.icon]) entry.dataset.tone = STEP_TONES[step.icon];
@@ -550,9 +565,9 @@
     const toggle = element(more ? "button" : "div", "activity-output-toggle");
     toggle.append(element("span", "activity-entry-title", step.verb));
     if (step.files?.length) toggle.append(fileList(step.files));
-    else if (step.detail) toggle.append(element(step.mono ? "code" : "span", "activity-entry-detail", step.detail));
+    else if (step.detail) { const detail = element(step.mono ? "code" : "span", "activity-entry-detail", step.detail); detail.title = step.cmd || step.detail; toggle.append(detail); }
     if (more) toggle.append(element("span", "disclosure-chevron"));
-    head.append(toggle, copyButton("activity-copy", "Copy", step.output || step.raw));
+    head.append(toggle, copyButton("activity-copy", "Copy", step.output || step.copy || step.raw));
     entry.append(node, head);
     if (!more) return entry;
     const output = element("pre", "activity-output", step.diff ? undefined : step.output), outputId = "activity-output-" + entryId;
@@ -594,6 +609,7 @@
     const provider = message.provider || state.conversation?.provider || "codex";
     const streaming = !user && (message.status === "streaming" || message.status === "running");
     const row = element("article", `message ${user ? "message-user" : "message-assistant"}${user && message.steer ? " message-steer" : ""}${streaming ? " message-streaming" : ""}`);
+    if (!user) row.dataset.provider = message.connection === "local" ? "local" : provider;
     if (message.id) {
       row.id = "message-" + message.id;
       row.dataset.messageId = message.id;
@@ -847,22 +863,30 @@
     } catch (error) { showNotice(error.message); }
     finally { state.pending = null; await refresh(); }
   }
-  // The agent's own plan for the run, as a to-do list docked above the message box: one line that opens into the list.
+  // The agent's plan above the message box: one line with how many steps are done and the current one, which opens
+  // into the checklist. The list stays as the reader left it while the run goes on, and starts closed for a new run.
   function renderPlan() {
     const run = isRunning() ? state.conversation?.activeRun : null, steps = run?.plan?.steps || [], section = $("run-plan");
     section.hidden = !steps.length;
-    if (!steps.length) { state.planSignature = null; return; }
-    const signature = JSON.stringify([run.id, steps]);
+    if (!steps.length) { state.planSignature = state.planScope = null; return; }
+    const scope = JSON.stringify([state.projectId, state.conversation.id, run.id]);
+    const signature = JSON.stringify([scope, steps]);
     if (signature === state.planSignature) return;
-    const newRun = state.planSignature && JSON.parse(state.planSignature)[0] !== run.id;
-    state.planSignature = signature;
+    const newRun = scope !== state.planScope;
+    state.planSignature = signature; state.planScope = scope;
     const done = steps.filter(step => step.status === "done").length, current = steps.find(step => step.status === "active") || steps.find(step => step.status === "pending");
+    const complete = done === steps.length, status = complete ? "Complete" : current?.status === "active" ? "In progress" : "Up next";
+    section.dataset.complete = String(complete);
     $("run-plan-ring").style.setProperty("--progress", String(done / steps.length));
-    $("run-plan-count").textContent = `${done} of ${steps.length}`;
-    $("run-plan-current").textContent = done === steps.length ? "All steps done" : current?.text || "";
+    $("run-plan-count").textContent = `${done} of ${steps.length} done`;
+    $("run-plan-current").textContent = complete ? "All steps done" : current?.text || "";
+    $("run-plan-current").title = current?.text || "All steps done";
+    $("run-plan-toggle").setAttribute("aria-label", `Task plan: ${done} of ${steps.length} done. ${status}: ${complete ? "All steps done" : current?.text || ""}. Toggle steps.`);
     $("run-plan-list").replaceChildren(...steps.map(step => {
-      const item = element("li", `run-plan-step ${step.status}`);
-      item.append(element("span", "run-plan-mark"), element("span", "run-plan-text", step.text));
+      const item = element("li", `run-plan-step ${step.status}`), mark = element("span", "run-plan-mark");
+      mark.setAttribute("aria-hidden", "true");
+      item.append(mark, element("span", "run-plan-text", step.text));
+      if (step.status === "active") item.setAttribute("aria-current", "step");
       item.setAttribute("aria-label", `${step.status === "done" ? "Done" : step.status === "active" ? "In progress" : "To do"}: ${step.text}`);
       return item;
     }));

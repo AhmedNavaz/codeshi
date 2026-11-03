@@ -1756,7 +1756,7 @@ test('user prompts read as bubbles distinct from labelled agent replies and stay
   assert.equal(assistantMsg.querySelector('.message-jump-prompt'), null);
 });
 
-test('each step of a run shows its first line on the run’s timeline, with its full text behind a chevron', async () => {
+test('each step shows its target on the run’s timeline, with file changes separated and full output behind a chevron', async () => {
   const ui = await browser();
   const chat = ui.canonical.get('project-one');
   chat.messages.push(
@@ -1772,7 +1772,8 @@ test('each step of a run shows its first line on the run’s timeline, with its 
 
   // Every step shows without opening anything; notes from full auto-approval add nothing and are left out.
   const entries = ui.document.querySelectorAll('.activity-entry');
-  assert.deepEqual(entries.map(entry => [entry.querySelector('.activity-entry-title').textContent, entry.querySelector('.activity-entry-detail')?.textContent || '']), [
+  const target = entry => entry.querySelectorAll('.activity-file-row').map(row => row.querySelector('.activity-file').textContent + (row.querySelector('.activity-file-counts')?.textContent || '')).join(', ') || entry.querySelector('.activity-entry-detail')?.textContent || '';
+  assert.deepEqual(entries.map(entry => [entry.querySelector('.activity-entry-title').textContent, target(entry)]), [
     ['Edit', 'src/index.js, src/utils.js'], ['Run', 'npm run build'], ['Run', 'Run the unit tests'], ['Edit', 'src/a.js+1−1'], ['You denied the request', '']
   ]);
   assert.equal(ui.document.querySelector('.activity-group'), null, 'Steps are not folded into a summary.');
@@ -2100,8 +2101,8 @@ test('while a run works, a note can be added to it, shown inside that run, and t
   await ui.window.relayUI.refresh();
   assert.equal(ui.$('steer-button').hidden,false);assert.equal(ui.$('steer-button').disabled,true,'Nothing to add yet.');
   assert.match(ui.$('message-input').placeholder,/add it to this run/);
-  assert.equal(ui.$('run-plan').hidden,false);assert.equal(ui.$('run-plan-count').textContent,'1 of 3');assert.equal(ui.$('run-plan-current').textContent,'Writing tests');
-  assert.equal(ui.$('run-plan-list').hidden,true,'The plan is one line until opened.');
+  assert.equal(ui.$('run-plan').hidden,false);assert.equal(ui.$('run-plan-count').textContent,'1 of 3 done');assert.equal(ui.$('run-plan-current').textContent,'Writing tests');
+  assert.equal(ui.$('run-plan-list').hidden,true,'The plan keeps its list closed until opened.');
   ui.$('run-plan-toggle').click();
   assert.equal(ui.$('run-plan-list').hidden,false);assert.equal(ui.$('run-plan-toggle').getAttribute('aria-expanded'),'true');
   assert.deepEqual(ui.$('run-plan-list').querySelectorAll('li').map(item=>item.className),['run-plan-step done','run-plan-step active','run-plan-step pending']);
@@ -2124,6 +2125,45 @@ test('while a run works, a note can be added to it, shown inside that run, and t
   assert.equal(ui.$('steer-button').hidden,true,'Connections that cannot take notes only queue.');
   conversation.status='complete';conversation.activeRun=null;conversation.lastRun={id:'run-one',status:'complete'};await ui.window.relayUI.refresh();
   assert.equal(ui.$('run-plan').hidden,true,'The plan shows while its run works.');
+});
+
+test('the task plan keeps its list open during progress and closes it for another run or workspace',async()=>{
+  const ui=await browser({moreProjects:true}),conversation=ui.canonical.get('project-one');
+  const steps=[{text:'Read the code',status:'done'},{text:'Write tests',status:'active'},{text:'Run the suite',status:'pending'}];
+  conversation.status='running';conversation.activeRun={id:'planned-run',provider:'codex',plan:{steps}};
+  await ui.window.relayUI.refresh();
+  assert.match(ui.$('run-plan-toggle').getAttribute('aria-label'),/^Task plan: 1 of 3 done\. In progress: Write tests/);
+  assert.equal(ui.$('run-plan-list').hidden,true);
+  ui.$('run-plan-toggle').click();
+  // Each step says where it stands in words; its mark is only a picture.
+  let rows=ui.$('run-plan-list').querySelectorAll('li');
+  assert.deepEqual(rows.map(row=>row.getAttribute('aria-label')),['Done: Read the code','In progress: Write tests','To do: Run the suite']);
+  assert.deepEqual(rows.map(row=>row.querySelector('.run-plan-mark').textContent),['','','']);
+  assert.equal(rows[1].getAttribute('aria-current'),'step');
+
+  steps[1].status='done';steps[2].status='active';await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-plan-list').hidden,false,'Progress does not close a list the reader opened.');
+  assert.equal(ui.$('run-plan-count').textContent,'2 of 3 done');
+  assert.equal(ui.$('run-plan-current').textContent,'Run the suite');
+  steps[2].status='done';await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-plan-current').textContent,'All steps done');
+  assert.match(ui.$('run-plan-toggle').getAttribute('aria-label'),/3 of 3 done\. Complete: All steps done/);
+  assert.equal(ui.$('run-plan').dataset.complete,'true');
+
+  conversation.activeRun={id:'next-plan',provider:'codex',plan:{steps:[{text:'Prepare the next change',status:'pending'}]}};
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-plan-list').hidden,true,'Another run starts compact.');
+  assert.match(ui.$('run-plan-toggle').getAttribute('aria-label'),/0 of 1 done\. Up next: Prepare the next change/);
+  ui.$('run-plan-toggle').click();
+  await ui.switchProject('project-two');
+  assert.equal(ui.$('run-plan').hidden,true,'A workspace without a plan shows no card.');
+  const second=ui.canonical.get('project-two');
+  second.status='running';second.activeRun={id:'next-plan',provider:'claude',plan:{steps:[{text:'Inspect the other project',status:'active'}]}};
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-plan-list').hidden,true,'A matching run ID in another workspace does not inherit expansion.');
+  assert.equal(ui.$('run-plan-current').textContent,'Inspect the other project');
+  second.activeRun.plan.steps=[];await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-plan').hidden,true,'An empty plan has no blank card.');
 });
 
 test('routing is chosen in the Agents panel; the model button then shows the mode and opens it, and what will run is shown before sending',async()=>{
@@ -2785,7 +2825,8 @@ test('steps are coloured by kind, changed files show their line counts, and a cu
     { id: 'a1', runId, role: 'assistant', provider: 'claude', text: 'Done.', status: 'complete' },
   ] });
   await ui.window.relayUI.refresh(); await flush();
-  const rows = ui.document.querySelectorAll('.activity-entry').map(row => [row.dataset.tone || '', row.querySelectorAll('.activity-entry-title')[0]?.textContent, row.querySelectorAll('.activity-entry-detail')[0]?.textContent]);
+  const target = row => row.querySelectorAll('.activity-file-row').map(file => file.querySelector('.activity-file').textContent + (file.querySelector('.activity-file-counts')?.textContent || '')).join(', ') || row.querySelector('.activity-entry-detail')?.textContent;
+  const rows = ui.document.querySelectorAll('.activity-entry').map(row => [row.dataset.tone || '', row.querySelectorAll('.activity-entry-title')[0]?.textContent, target(row)]);
   assert.deepEqual(rows, [
     ['read', 'Read', 'src/checkout.js'], ['run', 'Run', 'Run the tests'], ['edit', 'Edit', 'src/checkout.js+2−1'], ['add', 'Create', 'src/promo.js+2'],
     ['edit', 'Write', 'src/generated.js'], ['edit', 'Edit', 'api/new.js+2, api/old.js'], ['add', 'Create', 'api/a.js, api/b.js+4'],
@@ -2796,6 +2837,56 @@ test('steps are coloured by kind, changed files show their line counts, and a cu
   const edit = ui.document.querySelectorAll('.activity-entry').find(row => row.querySelectorAll('.activity-entry-title')[0]?.textContent === 'Edit');
   edit.querySelectorAll('button')[0].click(); await flush();
   assert.deepEqual(edit.querySelectorAll('.activity-diff').map(line => [line.className, line.textContent.trim()]), [['activity-diff', 'a'], ['activity-diff removed', '- b'], ['activity-diff added', '+ X'], ['activity-diff', 'c'], ['activity-diff added', '+ d']]);
+});
+
+test('what the agent says carries its agent, and changed files list one per line with their folder, name and counts', async () => {
+  const ui = await browser(), c = ui.canonical.get('project-one'), runId = 'readable-run';
+  const change = (path, kind, added = 0, removed = 0) => ({ path, kind, added, removed });
+  const many = Array.from({ length: 7 }, (_, index) => change(`src/module-${index + 1}.js`, 'update', 1));
+  c.status = 'running'; c.activeRun = { id: runId, provider: 'codex' };
+  c.messages = [
+    { id: 'task', runId, role: 'user', text: 'Update both settings modules.' },
+    { id: 'note', runId, role: 'assistant', provider: 'codex', text: 'I found the two settings modules.', status: 'complete' },
+    { id: 'files', runId, role: 'activity', provider: 'codex', text: `File changes: ${JSON.stringify([change('web/settings.js', 'update', 3, 1), change('api/settings.js', 'add', 4), change('api/legacy.js', 'delete')])}` },
+    { id: 'many', runId, role: 'activity', provider: 'codex', text: `File changes: ${JSON.stringify(many)}` },
+    { id: 'local', runId, role: 'assistant', provider: 'codex', connection: 'local', text: 'Checked with the local model.', status: 'complete' },
+  ];
+  await ui.window.relayUI.refresh();
+  // The dot beside what the agent says takes the agent's colour; a local model has its own.
+  assert.deepEqual(ui.document.querySelectorAll('.message-assistant').map(message => message.dataset.provider), ['codex', 'local']);
+  const [files, more] = ui.document.querySelectorAll('.activity-entry-files');
+  assert.deepEqual(files.querySelectorAll('.activity-file-row').map(row => [row.querySelector('.activity-file-directory').textContent, row.querySelector('.activity-file-name').textContent, row.querySelector('.activity-file-counts')?.textContent || '', row.querySelector('.sr-only')?.textContent || '']), [
+    ['web/', 'settings.js', '+3−1', ''], ['api/', 'settings.js', '+4', '(added)'], ['api/', 'legacy.js', '', '(deleted)'],
+  ]);
+  // Every file is already on its line, so the step has nothing more to open; Copy still copies the paths.
+  assert.equal(files.querySelector('.activity-output'), null);
+  assert.equal(files.querySelector('.activity-output-toggle').tagName, 'DIV');
+  assert.equal(ui.window.relayUI.describeActivity(c.messages[2].text).copy, 'web/settings.js\napi/settings.js\napi/legacy.js');
+  // Past six files, the rest are counted and the step opens to list them all, and stays open as the run goes on.
+  assert.equal(more.querySelectorAll('.activity-file').length, 6);
+  assert.equal(more.querySelector('.activity-files-more').textContent, 'and 1 more');
+  more.querySelector('.activity-output-toggle').click();
+  c.messages.push({ id: 'next', runId, role: 'assistant', provider: 'codex', text: 'Now checking the callers.', status: 'streaming' });
+  await ui.window.relayUI.refresh();
+  const output = ui.document.querySelectorAll('.activity-entry-files')[1].querySelector('.activity-output');
+  assert.equal(output.hidden, false);
+  assert.equal(output.textContent.split('\n').length, 7);
+});
+
+test('command summaries remove shell wrappers while preserving exact commands and output in details', async () => {
+  const ui = await browser(), c = ui.canonical.get('project-one');
+  const command = `/bin/zsh -lc 'rg -n "review" src/server.mjs && sed -n "1,20p" src/broker.mjs'`;
+  const raw = '$ ' + command + '\nFound the review route.';
+  c.messages = [{ id: 'task', role: 'user', runId: 'shell-run', text: 'Find the route' }, { id: 'shell', role: 'activity', runId: 'shell-run', text: raw }];
+  await ui.window.relayUI.refresh();
+  const entry = ui.document.querySelector('.activity-entry'), detail = entry.querySelector('.activity-entry-detail');
+  assert.equal(detail.textContent, 'rg -n "review" src/server.mjs && sed -n "1,20p" src/broker.mjs');
+  assert.equal(detail.title, command);
+  entry.querySelector('.activity-output-toggle').click();
+  assert.equal(entry.querySelector('.activity-output').textContent, raw);
+  assert.equal(ui.window.relayUI.describeActivity(raw).cmd, command);
+  assert.equal(ui.window.relayUI.describeActivity('$ npm test').detail, 'npm test');
+  assert.equal(ui.window.relayUI.describeActivity('Bash\n{"command":"/bin/sh -c \\\"npm test\\\"","description":"Check the unit tests"}').detail, 'Check the unit tests');
 });
 
 test('a changed image opens as pictures, before and after, instead of a binary note', async () => {
