@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import * as brand from '../desktop/brand.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+// Git may check text out with CRLF on Windows; line endings do not change the generated artwork.
+const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n');
 const numbers = d => d.match(/-?\d+(?:\.\d+)?/g).map(Number);
 
 test('the brush C is drawn the same way every time, with finite coordinates', () => {
