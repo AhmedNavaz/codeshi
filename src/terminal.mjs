@@ -5,14 +5,17 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { commandEnvironment } from './resolve-binary.mjs';
 
-// The workspace terminal (#7): one interactive shell per workspace, in a pseudo-terminal from node-pty, started in an
-// attached folder. It is the person's own shell, so agent access settings such as Read only do not apply to it, and
-// like project commands it takes no editing lease: a dev server keeps running while agents edit files. Output is kept
-// as bounded scrollback so a view that reconnects, or a workspace opened again, shows the session as it was. Ending a
-// session, removing its workspace or quitting Throughline stops the shell and every process it started.
+// The workspace terminal (#7, #70): interactive shells in pseudo-terminals from node-pty, each started in an attached
+// folder. A workspace keeps several: each opens as a tab of its own, or as the second pane of a tab split side by side
+// or stacked. They are the person's own shells, so agent access settings such as Read only do not apply to them, and
+// like project commands they take no editing lease: a dev server keeps running while agents edit files. Output is
+// kept as bounded scrollback so a view that reconnects, or a workspace opened again, shows each session as it was.
+// Ending a session, removing its workspace or quitting Throughline stops the shell and every process it started.
 const require = createRequire(import.meta.url);
 export const SCROLLBACK = 256 * 1024;
 const INPUT_LIMIT = 64 * 1024;
+// Shells one workspace keeps open at once, and panes in one tab.
+export const MAX_SESSIONS = 8, MAX_PANES = 2;
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 export const terminalActive = session => ['running', 'stopping'].includes(session?.status);
 
@@ -61,21 +64,26 @@ const signal = (pid, kind) => { try { process.kill(pid, kind); return true; } ca
 export class TerminalSessions {
   constructor({ registry, pty = null, shell = loginShell(), stopGrace = 1500, tree = processTree, flushMs = 8, platform = process.platform, endTree = endProcessTree } = {}) {
     this.registry = registry; this.ptyImpl = pty; this.shell = shell; this.stopGrace = stopGrace; this.tree = tree; this.flushMs = flushMs; this.platform = platform; this.endTree = endTree;
-    this.sessions = new Map(); this.closing = false;
-    // A removed workspace takes its terminal with it.
-    this.onProjects = () => { for (const projectId of this.sessions.keys()) { try { registry.get(projectId); } catch { this.stop(projectId).catch(() => {}); } } };
+    // Every session, by its own id; each knows its workspace, its tab and its place in that tab.
+    // Tabs keep the order they opened in, counted rather than timed so two opened at once keep theirs.
+    this.sessions = new Map(); this.closing = false; this.opened = 0;
+    // A removed workspace takes its terminals with it.
+    this.onProjects = () => { for (const session of [...this.sessions.values()]) { try { registry.get(session.projectId); } catch { this.stop(session.projectId, session.id).catch(() => {}); } } };
     registry.on?.('projects', this.onProjects);
   }
   pty() { if (!this.ptyImpl) { prepareHelper(); this.ptyImpl = require('node-pty'); } return this.ptyImpl; }
   view(session) {
     if (!session) return null;
-    return Object.fromEntries(['id', 'projectId', 'folderId', 'folderName', 'cwd', 'shell', 'status', 'exitCode', 'signal', 'error', 'startedAt', 'endedAt', 'cols', 'rows'].map(key => [key, session[key]]));
+    return Object.fromEntries(['id', 'projectId', 'folderId', 'folderName', 'cwd', 'shell', 'status', 'exitCode', 'signal', 'error', 'startedAt', 'endedAt', 'cols', 'rows', 'tabId', 'pane', 'split', 'order'].map(key => [key, session[key]]));
   }
-  state(projectId) { this.registry.get(projectId); return { session: this.view(this.sessions.get(projectId)), shell: path.win32.basename(this.shell).replace(/\.exe$/i, '') }; }
+  // A workspace's sessions in the order its tabs opened, each tab's panes in their order.
+  list(projectId) { return [...this.sessions.values()].filter(session => session.projectId === projectId).sort((a, b) => a.order - b.order || a.pane - b.pane); }
+  state(projectId) { this.registry.get(projectId); return { sessions: this.list(projectId).map(session => this.view(session)), shell: path.win32.basename(this.shell).replace(/\.exe$/i, '') }; }
+  // A session of this workspace; an id from another workspace is refused like one that ended.
   session(projectId, id) {
     this.registry.get(projectId);
-    const session = this.sessions.get(projectId);
-    if (!session || session.id !== id) fail('That terminal session ended. Open the terminal again.', 409);
+    const session = this.sessions.get(id);
+    if (!session || session.projectId !== projectId) fail('That terminal session ended. Open the terminal again.', 409);
     return session;
   }
   size(cols, rows) {
@@ -83,19 +91,37 @@ export class TerminalSessions {
     return { cols: value(cols, 100), rows: value(rows, 30) };
   }
 
-  start(projectId, { folderId, cols, rows } = {}) {
+  // Opens a shell in an attached folder: in a tab of its own, as the second pane of a tab (split: the session to split
+  // and 'right' or 'down'), or in place of a session that has ended (replace), keeping that one's tab and place.
+  start(projectId, { folderId, cols, rows, split = null, replace = null } = {}) {
     if (this.closing) fail('Throughline is stopping.', 503);
-    const project = this.registry.get(projectId), existing = this.sessions.get(projectId);
-    if (terminalActive(existing)) fail('This workspace already has a terminal. End it before starting another.', 409);
+    const project = this.registry.get(projectId), open = this.list(projectId);
+    let place = { tabId: null, pane: 0, split: null, order: ++this.opened }, replaced = null;
+    if (replace) {
+      replaced = this.session(projectId, replace);
+      if (terminalActive(replaced)) fail('That shell is still running. End it before starting another in its place.', 409);
+      place = { tabId: replaced.tabId, pane: replaced.pane, split: replaced.split, order: replaced.order };
+    } else {
+      if (open.length >= MAX_SESSIONS) fail(`A workspace keeps up to ${MAX_SESSIONS} terminals. End one to open another.`, 409);
+      if (split) {
+        if (!['right', 'down'].includes(split.direction)) fail('Split the terminal to the right or down.');
+        const beside = this.session(projectId, split.of);
+        if (open.filter(session => session.tabId === beside.tabId).length >= MAX_PANES) fail('This tab already has two panes. Open a new tab instead.', 409);
+        place = { tabId: beside.tabId, pane: 1, split: split.direction, order: beside.order };
+      }
+    }
     const folder = project.folders.find(entry => entry.id === folderId);
     if (!folder) fail('Choose an attached workspace folder.');
     let cwd;
     try { cwd = fs.realpathSync(folder.path); if (!fs.statSync(cwd).isDirectory()) throw new Error(); }
     catch { fail('That folder is unavailable. Restore it or choose another folder.', 404); }
     const size = this.size(cols, rows);
-    const session = { id: randomUUID(), projectId, folderId: folder.id, folderName: folder.displayName || folder.name, cwd, shell: this.shell, status: 'running', exitCode: null, signal: null, error: null, startedAt: new Date().toISOString(), endedAt: null, ...size, scrollback: '', offset: 0, pending: '', timer: null, listeners: new Set() };
+    const session = { id: randomUUID(), projectId, folderId: folder.id, folderName: folder.displayName || folder.name, cwd, shell: this.shell, status: 'running', exitCode: null, signal: null, error: null, startedAt: new Date().toISOString(), endedAt: null, ...size, ...place, scrollback: '', offset: 0, pending: '', timer: null, listeners: new Set() };
+    session.tabId ||= session.id;
     session.done = new Promise(resolve => { session.resolve = resolve; });
-    this.sessions.set(projectId, session);
+    // A session that ended gives its place to the new one; its views are told it closed.
+    if (replaced) { this.sessions.delete(replaced.id); for (const listener of replaced.listeners) listener({ type: 'closed' }); replaced.listeners.clear(); }
+    this.sessions.set(session.id, session);
     try {
       session.process = this.pty().spawn(this.shell, shellArguments(this.shell), { name: 'xterm-256color', ...size, cwd, env: { ...commandEnvironment(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'Throughline' } });
       session.pid = session.process.pid;
@@ -158,9 +184,9 @@ export class TerminalSessions {
 
   // Ends the shell and everything it started: the shell gets a hangup, as when a terminal window closes, and its
   // processes are asked to stop, then stopped.
-  async stop(projectId, id = null) {
-    const session = this.sessions.get(projectId);
-    if (!session || (id && session.id !== id)) return null;
+  async stop(projectId, id) {
+    const session = this.sessions.get(id);
+    if (!session || session.projectId !== projectId) return null;
     if (terminalActive(session) && session.status !== 'stopping') {
       session.status = 'stopping';
       if (this.platform === 'win32') {
@@ -177,7 +203,12 @@ export class TerminalSessions {
       await Promise.race([session.done, new Promise(resolve => setTimeout(resolve, this.stopGrace))]);
       if (!session.endedAt) this.exited(session, null, 'SIGKILL');
     }
-    if (this.sessions.get(projectId) === session) this.sessions.delete(projectId);
+    if (this.sessions.get(id) === session) {
+      this.sessions.delete(id);
+      // The other pane of a split tab is now the tab's only one.
+      const partner = this.list(projectId).find(other => other.tabId === session.tabId);
+      if (partner) Object.assign(partner, { pane: 0, split: null });
+    }
     for (const listener of session.listeners) listener({ type: 'closed' });
     session.listeners.clear();
     return this.view(session);
@@ -185,7 +216,7 @@ export class TerminalSessions {
   async close() {
     this.closing = true;
     this.registry.off?.('projects', this.onProjects);
-    await Promise.all([...this.sessions.keys()].map(projectId => this.stop(projectId)));
+    await Promise.all([...this.sessions.values()].map(session => this.stop(session.projectId, session.id)));
   }
 }
 

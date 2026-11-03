@@ -2436,20 +2436,33 @@ test('with nothing staged, Commit commits every change listed: it stages exactly
 });
 
 
-test('the terminal opens a shell for the workspace, keeps each workspace’s session to itself, and hiding leaves it running', async () => {
+test('the terminal opens shells as tabs named after their folders, splits a tab into panes, and keeps each workspace’s shells to themselves', async () => {
   const ui = await browser({ terminalUI: true, moreProjects: true });
-  const sessions = new Map(), posts = [];
-  const session = (projectId, folderId) => ({ id: `${projectId}-session`, projectId, folderId, folderName: { backend: 'Backend', api: 'API' }[folderId] || folderId, cwd: `/workspace/${folderId}`, shell: '/bin/zsh', status: 'running', exitCode: null, signal: null, error: null, startedAt: new Date().toISOString(), endedAt: null, cols: 80, rows: 24 });
+  const lists = new Map(), posts = [], names = { backend: 'Backend', api: 'API', frontend: 'Frontend' }; let counter = 0;
   ui.setIntercept((request, next) => {
     if (!request.path.startsWith('/api/terminal')) return next();
-    if (request.path === '/api/terminal') return response({ session: sessions.get(request.projectId) || null, shell: 'zsh' });
-    posts.push([request.path.slice('/api/terminal/'.length), request.projectId, clone(request.body)]);
-    if (request.path === '/api/terminal/start') { const value = session(request.projectId, request.body.folderId); sessions.set(request.projectId, value); return response(value, 201); }
-    if (request.path === '/api/terminal/stop') { const value = { ...sessions.get(request.projectId), status: 'stopped' }; sessions.delete(request.projectId); return response(value); }
+    const id = request.projectId, list = lists.get(id) || [];
+    if (request.path === '/api/terminal') return response({ sessions: clone(list), shell: 'zsh' });
+    posts.push([request.path.slice('/api/terminal/'.length), id, clone(request.body)]);
+    if (request.path === '/api/terminal/start') {
+      const { folderId, split, replace } = request.body, number = ++counter, sessionId = `${id}-shell-${number}`;
+      const replaced = replace && list.find(item => item.id === replace), beside = split && list.find(item => item.id === split.of);
+      const value = { id: sessionId, projectId: id, folderId, folderName: names[folderId] || folderId, cwd: `/workspace/${folderId}`, shell: '/bin/zsh', status: 'running', exitCode: null, signal: null, error: null, startedAt: new Date().toISOString(), endedAt: null, cols: request.body.cols, rows: request.body.rows,
+        tabId: replaced?.tabId || beside?.tabId || sessionId, pane: replaced ? replaced.pane : beside ? 1 : 0, split: replaced ? replaced.split : beside ? split.direction : null, order: replaced?.order || beside?.order || number };
+      lists.set(id, [...list.filter(item => item.id !== replace), value]);
+      return response(value, 201);
+    }
+    if (request.path === '/api/terminal/stop') {
+      const gone = list.find(item => item.id === request.body.id);
+      lists.set(id, list.filter(item => item !== gone).map(item => item.tabId === gone?.tabId ? { ...item, pane: 0, split: null } : item));
+      return response({ ...gone, status: 'stopped' });
+    }
     return response({ written: 1 });
   });
   const streams = () => ui.eventSources.filter(source => source.url.startsWith('/api/terminal/stream'));
   const send = (stream, type, data) => stream.dispatchEvent(new UIEvent(type, { data: JSON.stringify(data) }));
+  const tabNames = () => ui.$('terminal-tabs').querySelectorAll('.terminal-tab-name').map(node => node.textContent);
+  const selected = () => ui.$('terminal-tabs').querySelectorAll('.terminal-tab-pick').map(button => button.getAttribute('aria-selected'));
 
   // A workspace with several folders asks which one the shell starts in. Terminal is in the status bar.
   ui.$('status-terminal').click(); await flush();
@@ -2462,23 +2475,63 @@ test('the terminal opens a shell for the workspace, keeps each workspace’s ses
   folders[1].click(); await flush();
   assert.deepEqual(posts[0], ['start', 'project-one', { folderId: 'backend', cols: 100, rows: 24 }]);
   const [first] = ui.terminals, [firstStream] = streams();
-  assert.equal(firstStream.url, '/api/terminal/stream?projectId=project-one&id=project-one-session');
+  assert.equal(firstStream.url, '/api/terminal/stream?projectId=project-one&id=project-one-shell-1');
   send(firstStream, 'reset', { data: 'welcome\r\n' }); send(firstStream, 'data', { data: '$ ' });
   assert.equal(first.written, 'welcome\r\n$ ');
   first.type('ls\r'); await flush();
-  assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-session', data: 'ls\r' }]);
-  assert.equal(ui.$('terminal-place').textContent, 'zsh · Backend', 'The header names the shell and its folder.');
+  assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-shell-1', data: 'ls\r' }]);
+  assert.deepEqual(tabNames(), ['Backend'], 'The shell is a tab named after its folder.');
+  assert.equal(ui.$('terminal-tabs').hidden, false, 'The list of shells shows from the first one, so its folder is always in view.');
+  assert.equal(ui.$('terminal-tabs').querySelectorAll('.terminal-tab-pick')[0].title, 'zsh in /workspace/backend');
   assert.equal(ui.$('terminal-start').hidden, true);
 
-  // Another workspace gets its own session, and the first one's input still goes to the first workspace.
+  // + offers the workspace's folders and opens another shell in a tab of its own; only the open tab shows.
+  ui.$('terminal-new').click(); await flush();
+  assert.equal(ui.$('terminal-new').getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(ui.$('terminal-new-menu').querySelectorAll('.terminal-menu-name').map(node => node.textContent), ['Frontend', 'Backend']);
+  ui.$('terminal-new-menu').querySelectorAll('button')[0].click(); await flush();
+  assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'frontend', cols: 80, rows: 24 }]);
+  assert.equal(ui.$('terminal-new-menu').hidden, true);
+  assert.deepEqual([tabNames(), selected()], [['Backend', 'Frontend'], ['false', 'true']]);
+  const frontend = ui.terminals[1];
+  assert.deepEqual([first.host.hidden, frontend.host.hidden], [true, false]);
+  // The arrow keys move between the listed shells, and Tab reaches only the open one's row.
+  const arrow = key => { const event = new UIEvent('keydown', { key }); ui.$('terminal-tabs').dispatchEvent(event); return event.defaultPrevented; };
+  assert.equal(arrow('ArrowUp'), true);
+  assert.deepEqual([selected(), first.host.hidden, frontend.host.hidden], [['true', 'false'], false, true]);
+  assert.equal(ui.document.activeElement, ui.$('terminal-tabs').querySelectorAll('.terminal-tab-pick')[0], 'Focus follows the row the arrows chose.');
+  assert.deepEqual(ui.$('terminal-tabs').querySelectorAll('.terminal-tab-pick').map(button => button.tabIndex), [0, -1]);
+  arrow('ArrowDown'); assert.deepEqual(selected(), ['false', 'true']);
+  arrow('ArrowDown'); assert.deepEqual(selected(), ['true', 'false'], 'The arrows wrap around.');
+  arrow('End'); assert.deepEqual(selected(), ['false', 'true']);
+  assert.equal(arrow('a'), false, 'Other keys are left alone.');
+  // Split puts a second shell in the same folder beside it, and input goes only to the pane it was typed in.
+  ui.$('terminal-split').click(); await flush();
+  assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'frontend', cols: 80, rows: 24, split: { of: 'project-one-shell-2', direction: 'right' } }]);
+  const beside = ui.terminals[2];
+  assert.deepEqual(tabNames(), ['Backend', 'Frontend'], 'The split shell joins the open tab.');
+  assert.deepEqual([ui.$('terminal-views').dataset.split, frontend.host.hidden, beside.host.hidden, beside.host.dataset.pane], ['right', false, false, '1']);
+  assert.equal(ui.$('terminal-split').disabled, true, 'A tab holds two panes.');
+  beside.type('npm run dev\r'); await flush();
+  assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-shell-3', data: 'npm run dev\r' }]);
+  // End acts on the pane in use; the other pane stays as the tab's only one.
+  ui.$('terminal-end').click(); await flush();
+  assert.deepEqual(posts.at(-1), ['stop', 'project-one', { id: 'project-one-shell-3' }]);
+  assert.deepEqual([beside.disposed, ui.$('terminal-views').dataset.split, frontend.host.hidden], [true, '', false]);
+  // Closing a tab ends its shell, and the tab beside it opens.
+  ui.$('terminal-tabs').querySelectorAll('.terminal-tab-close')[1].click(); await flush();
+  assert.deepEqual(posts.at(-1), ['stop', 'project-one', { id: 'project-one-shell-2' }]);
+  assert.deepEqual([tabNames(), first.host.hidden, frontend.disposed], [['Backend'], false, true]);
+
+  // Another workspace gets its own shells, and the first one's input still goes to the first workspace.
   await ui.switchProject('project-two'); await flush();
   assert.deepEqual(posts.at(-1).slice(0, 2), ['start', 'project-two'], 'A single-folder workspace opens its shell at once.');
-  const second = ui.terminals[1];
+  const second = ui.terminals.at(-1), secondId = posts.length && lists.get('project-two')[0].id;
   assert.equal(first.host.hidden, true); assert.equal(second.host.hidden, false);
   first.type('pwd\r'); await flush();
-  assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-session', data: 'pwd\r' }]);
+  assert.deepEqual(posts.at(-1), ['input', 'project-one', { id: 'project-one-shell-1', data: 'pwd\r' }]);
 
-  // Hiding the panel, or switching to Run, leaves the sessions running; the menu command shows the terminal again.
+  // Hiding the panel, or switching to Run, leaves the shells running; the menu command shows the terminal again.
   ui.$('bottom-hide').click(); await flush();
   assert.equal(ui.$('terminal-panel').hidden, true); assert.equal(ui.$('bottom-panel').hidden, true);
   assert.deepEqual(JSON.parse(ui.storage.get('throughline:panel')), { open: false, tool: 'terminal' });
@@ -2490,22 +2543,23 @@ test('the terminal opens a shell for the workspace, keeps each workspace’s ses
   assert.equal(ui.$('terminal-panel').hidden, true); assert.equal(second.host.hidden, true);
   ui.$('bottom-tab-terminal').click(); await flush();
   assert.equal(second.host.hidden, false);
-  assert(!posts.some(([name]) => name === 'stop'));
+  assert(!posts.some(([name, id]) => name === 'stop' && id === 'project-two'));
 
-  // Ending a session stops it; an exited shell keeps its output and offers a new session.
+  // Ending a shell stops it; an exited shell keeps its output and offers a new session in its own tab.
   ui.$('terminal-end').click(); await flush();
-  assert.deepEqual(posts.at(-1), ['stop', 'project-two', { id: 'project-two-session' }]);
+  assert.deepEqual(posts.at(-1), ['stop', 'project-two', { id: secondId }]);
   assert.equal(second.disposed, true);
   await ui.switchProject('project-one'); await flush();
-  assert.equal(first.host.hidden, false, 'The first workspace’s view returns as it was.');
-  send(firstStream, 'exit', { ...session('project-one', 'backend'), status: 'exited', exitCode: 1 });
+  assert.equal(first.host.hidden, false, 'The first workspace’s shell returns as it was.');
+  send(firstStream, 'exit', { ...lists.get('project-one')[0], status: 'exited', exitCode: 1 });
   assert.equal(firstStream.closed, true);
-  assert.match(first.written, /\[The shell exited with code 1\. Its output stays until you start a new session\.\]/, 'The exit is said once, in the terminal.');
+  assert.match(first.written, /\[The shell exited with code 1\. Its output stays until you close this tab or start a new session\.\]/, 'The exit is said once, in the terminal.');
   assert.equal(ui.$('terminal-message').hidden, true);
-  assert.equal(ui.$('terminal-place').textContent, 'zsh · Backend · exited');
+  assert.equal(ui.$('terminal-tabs').querySelectorAll('.terminal-tab')[0].dataset.state, 'ended');
   assert.equal(ui.$('terminal-restart').hidden, false); assert.equal(ui.$('terminal-end').hidden, true);
   ui.$('terminal-restart').click(); await flush();
-  assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'backend', cols: 100, rows: 24 }]);
+  assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'backend', cols: 80, rows: 24, replace: 'project-one-shell-1' }]);
+  assert.deepEqual([tabNames(), first.disposed], [['Backend'], true], 'The new shell takes the ended one’s tab.');
 });
 
 test('voice input fills the message box as you speak, Esc cancels it, and a run started by voice is summarized aloud', async () => {

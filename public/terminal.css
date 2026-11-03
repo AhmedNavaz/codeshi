@@ -1,23 +1,67 @@
-/* The workspace terminal: a tab of the bottom panel (see project-commands.css). */
+/* The workspace terminal: a tab of the bottom panel (see project-commands.css). Its shells are listed at the right of
+   the terminal, each named after its folder, and a shell split into two panes shows them side by side or stacked. The
+   panel's header holds +, Split and End. */
 .terminal-panel { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .terminal-panel[hidden] { display: none; }
-.terminal-place { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin-right: 4px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.terminal-place:empty { display: none; }
-.terminal-place::before { content: ""; width: 13px; height: 13px; flex: none; background: currentColor; -webkit-mask: var(--icon-terminal) center / contain no-repeat; mask: var(--icon-terminal) center / contain no-repeat; }
-.terminal-place[data-status="exited"], .terminal-place[data-status="stopped"] { color: var(--faint); }
-.terminal-place[data-status="failed"] { color: var(--danger); }
+.bottom-panel { --terminal-split-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='2'/%3E%3Cpath d='M12 4.5v15'/%3E%3C/svg%3E"); }
+
+/* The header: New session when the shell in use has ended, then +, Split and End. */
+.terminal-tools { gap: 2px; }
+.terminal-add { position: relative; display: inline-flex; flex: none; }
+.terminal-new::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-plus) center / contain no-repeat; mask: var(--icon-plus) center / contain no-repeat; }
+/* + sits near the panel's right edge, so its folder menu opens leftwards. */
+.terminal-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; display: grid; min-width: 200px; max-width: 320px; padding: 4px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-raised); box-shadow: var(--shadow-lg); }
+.terminal-menu[hidden] { display: none; }
+.terminal-menu-item { display: grid; gap: 1px; padding: 5px 9px; border: 0; border-radius: 5px; background: none; color: var(--text); text-align: left; }
+.terminal-menu-item:hover, .terminal-menu-item:focus-visible { background: var(--hover); outline: none; }
+.terminal-menu-name { font-size: 12.5px; font-weight: 500; }
+.terminal-menu-path { overflow: hidden; color: var(--faint); font: 11px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.terminal-split::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--terminal-split-icon) center / contain no-repeat; mask: var(--terminal-split-icon) center / contain no-repeat; }
 .terminal-restart { height: 24px; margin-right: 4px; background: var(--accent); color: var(--on-accent); }
 .terminal-restart:hover:enabled { background: var(--accent-strong); }
-.terminal-end::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--terminal-icon) center / contain no-repeat; mask: var(--terminal-icon) center / contain no-repeat; }
-.terminal-end { --terminal-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3'/%3E%3C/svg%3E"); }
+.terminal-end::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-trash) center / contain no-repeat; mask: var(--icon-trash) center / contain no-repeat; }
+
+/* No shell yet, with several folders: each folder is a button that opens one there. */
 .terminal-start { display: grid; justify-items: start; gap: 8px; padding: 14px 18px; }
 .terminal-start[hidden] { display: none; }
 .terminal-start-title { margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
 .terminal-folders { margin: 0; }
+
+/* The body: the open shell's panes, with the list of shells at the right. */
+.terminal-body { display: flex; flex: 1; min-height: 0; }
+.terminal-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .terminal-message { margin: 0; padding: 6px 18px; color: var(--danger); font-size: 12px; }
-.terminal-views { position: relative; flex: 1; min-height: 0; }
-.terminal-view { position: absolute; inset: 6px 8px 6px 16px; }
+.terminal-message[data-tone="progress"] { color: var(--muted); }
+
+/* The open tab's panes: one, or two side by side or stacked with a line between them. */
+.terminal-views { position: relative; flex: 1; min-height: 0; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); padding: 6px 8px 6px 16px; }
+.terminal-views[data-split="right"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.terminal-views[data-split="down"] { grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+.terminal-view { position: relative; min-width: 0; min-height: 0; }
 .terminal-view[hidden] { display: none; }
+.terminal-views[data-split="right"] .terminal-view[data-pane="1"] { margin-left: 10px; padding-left: 12px; border-left: 1px solid var(--border); }
+.terminal-views[data-split="down"] .terminal-view[data-pane="1"] { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+/* In a split tab, the pane the header's buttons act on is the brighter one. */
+.terminal-views:is([data-split="right"], [data-split="down"]) .terminal-view[data-active="false"] { opacity: .78; }
 .terminal-view .xterm { height: 100%; }
 .terminal-view .xterm-viewport { scrollbar-width: thin; }
 .terminal-view .xterm-viewport, .terminal-view .xterm-screen { background: var(--panel-bg) !important; }
+
+/* The shells, one row each as in VS Code's terminal list: named after its folder, and a split one after both of its
+   folders, with the split's icon. The row in use is highlighted; × closes a row's shells. */
+.terminal-tabs { display: flex; flex-direction: column; gap: 1px; flex: none; width: 168px; padding: 4px 6px 8px; overflow-y: auto; border-left: 1px solid var(--border); scrollbar-width: thin; }
+.terminal-tabs[hidden] { display: none; }
+.terminal-tab { display: flex; flex: none; align-items: center; border-radius: 5px; color: var(--muted); }
+.terminal-tab:hover { background: var(--hover); color: var(--text); }
+.terminal-tab:has(.terminal-tab-pick[aria-selected="true"]) { background: var(--list-active); color: var(--text-strong); }
+.terminal-tab-pick { display: flex; flex: 1; min-width: 0; align-items: center; gap: 7px; height: 26px; padding: 0 4px 0 8px; border: 0; border-radius: 5px; background: none; color: inherit; font-size: 12px; text-align: left; white-space: nowrap; }
+.terminal-tab-pick:focus-visible { outline-offset: -2px; }
+.terminal-tab-pick::before { content: ""; width: 13px; height: 13px; flex: none; background: currentColor; -webkit-mask: var(--icon-terminal) center / contain no-repeat; mask: var(--icon-terminal) center / contain no-repeat; }
+.terminal-tab[data-split] .terminal-tab-pick::before { -webkit-mask-image: var(--terminal-split-icon); mask-image: var(--terminal-split-icon); }
+.terminal-tab[data-split="down"] .terminal-tab-pick::before { transform: rotate(90deg); }
+.terminal-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.terminal-tab[data-state="ended"] .terminal-tab-pick { color: var(--faint); }
+.terminal-tab-close { flex: none; width: 20px; height: 20px; margin-right: 3px; border-radius: 4px; opacity: 0; }
+.terminal-tab-close::before { content: ""; width: 11px; height: 11px; background: currentColor; -webkit-mask: var(--icon-close) center / contain no-repeat; mask: var(--icon-close) center / contain no-repeat; }
+.terminal-tab:hover .terminal-tab-close, .terminal-tab:has(.terminal-tab-pick[aria-selected="true"]) .terminal-tab-close, .terminal-tab-close:focus-visible { opacity: 1; }
+@media (max-width: 760px) { .terminal-tabs { width: 128px; } }

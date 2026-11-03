@@ -62,6 +62,7 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Live status in the Mac menu bar, and optional alerts near the top of the screen ([#13](https://github.com/AhmedNavaz/throughline/issues/13)) | [0.18.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0) |
 | Point and tell: click an element in your app's preview and say what should change ([#19](https://github.com/AhmedNavaz/throughline/issues/19)) | [0.19.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0) |
 | Undo and redo any run's changes, whichever agent made them, after a preview of every file and line ([#20](https://github.com/AhmedNavaz/throughline/issues/20), stage 1) | [0.20.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.20.0) |
+| Terminal tabs and split panes: several shells per workspace, each in a folder you choose, side by side or stacked ([#70](https://github.com/AhmedNavaz/throughline/issues/70)) | Next release |
 
 ## Now
 
@@ -76,7 +77,6 @@ The fastest way to make Throughline better is to use it on your real projects an
 | Feature | Status | Issue |
 | --- | --- | --- |
 | Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.14.0) as **Routing**; stage 2's retry one step up after failed tests shipped in [0.18.0](https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0) as **Check with tests**; a free or local fallback and subtask coordination are next; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/throughline/issues/12) |
-| Terminal tabs and split panes | Planned, help wanted; follows the terminal in 0.15.0 | [#70](https://github.com/AhmedNavaz/throughline/issues/70) |
 | Send selected terminal output to the conversation | Needs design | [#71](https://github.com/AhmedNavaz/throughline/issues/71) |
 | Hands-free voice conversations: say "send", keep talking while the agent works, hear what it did | Needs design; follows voice mode | [#72](https://github.com/AhmedNavaz/throughline/issues/72) |
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/throughline/issues/73) |

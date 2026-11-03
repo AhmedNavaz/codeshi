@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { SCROLLBACK, TerminalSessions, loginShell, prepareHelper, processTree, shellArguments } from '../src/terminal.mjs';
+import { MAX_SESSIONS, SCROLLBACK, TerminalSessions, loginShell, prepareHelper, processTree, shellArguments } from '../src/terminal.mjs';
 import { createRelayServer } from '../src/server.mjs';
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -37,7 +37,7 @@ function workspaces(t, count = 2) {
   return { root, projects, registry };
 }
 
-test('a terminal opens the person’s login shell in the chosen folder, one session per workspace', async t => {
+test('a terminal opens the person’s login shell in the chosen folder, as a tab of its own', async t => {
   const { registry, projects } = workspaces(t), pty = fakePty();
   const sessions = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1 });
   t.after(() => sessions.close());
@@ -45,11 +45,43 @@ test('a terminal opens the person’s login shell in the chosen folder, one sess
   assert.deepEqual([session.status, session.folderName, session.cwd, session.cols, session.rows], ['running', 'api', projects.get('project-0').folders[1].path, 120, 40]);
   const [shell] = pty.spawned;
   assert.deepEqual([shell.file, shell.args, shell.options.cwd, shell.options.name, shell.options.env.TERM, shell.options.env.TERM_PROGRAM], ['/bin/zsh', ['-l'], projects.get('project-0').folders[1].path, 'xterm-256color', 'xterm-256color', 'Throughline']);
-  assert.throws(() => sessions.start('project-0', { folderId: 'web' }), /already has a terminal/);
+  assert.deepEqual([session.tabId, session.pane, session.split], [session.id, 0, null]);
   assert.throws(() => sessions.start('project-1', { folderId: 'missing' }), /Choose an attached workspace folder/);
   assert.equal(sessions.start('project-1', { folderId: 'web', cols: 5000 }).cols, 1000, 'Sizes are kept within bounds.');
-  assert.equal(sessions.state('project-1').session.folderId, 'web');
+  assert.deepEqual(sessions.state('project-1').sessions.map(item => item.folderId), ['web']);
   assert.equal(sessions.state('project-1').shell, 'zsh');
+});
+
+test('a workspace keeps several shells: tabs of their own, or two panes of a tab split side by side or stacked', async t => {
+  const { registry } = workspaces(t), pty = fakePty();
+  const sessions = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1 });
+  t.after(() => sessions.close());
+  const web = sessions.start('project-0', { folderId: 'web' }), api = sessions.start('project-0', { folderId: 'api' });
+  assert.notEqual(web.tabId, api.tabId, 'Each new shell opens in a tab of its own.');
+  const beside = sessions.start('project-0', { folderId: 'web', split: { of: web.id, direction: 'right' } });
+  assert.deepEqual([beside.tabId, beside.pane, beside.split], [web.tabId, 1, 'right']);
+  assert.throws(() => sessions.start('project-0', { folderId: 'api', split: { of: web.id, direction: 'down' } }), /already has two panes/);
+  assert.throws(() => sessions.start('project-0', { folderId: 'api', split: { of: api.id, direction: 'sideways' } }), /right or down/);
+  assert.throws(() => sessions.start('project-1', { folderId: 'web', split: { of: web.id, direction: 'down' } }), /session ended/, 'A tab of another workspace cannot be split.');
+  assert.deepEqual(sessions.state('project-0').sessions.map(item => [item.folderId, item.tabId === web.tabId ? 'first' : 'second', item.pane]), [['web', 'first', 0], ['web', 'first', 1], ['api', 'second', 0]], 'Tabs in the order they opened, each tab’s panes in order.');
+  // Input reaches only the pane it was typed in.
+  sessions.write('project-0', beside.id, 'npm run dev\r');
+  assert.deepEqual(pty.spawned.map(shell => shell.input.length), [0, 0, 1]);
+  // Ending the first pane leaves the other as the tab's only pane, and the tab can be split again.
+  await sessions.stop('project-0', web.id);
+  assert.deepEqual(sessions.state('project-0').sessions.filter(item => item.tabId === web.tabId).map(item => [item.id, item.pane, item.split]), [[beside.id, 0, null]]);
+  const stacked = sessions.start('project-0', { folderId: 'api', split: { of: beside.id, direction: 'down' } });
+  assert.deepEqual([stacked.tabId, stacked.pane, stacked.split], [web.tabId, 1, 'down']);
+  // A shell that ended can be started again in its place, keeping its tab; a running one cannot be replaced.
+  assert.throws(() => sessions.start('project-0', { folderId: 'api', replace: api.id }), /still running/);
+  pty.spawned[1].exit(0);
+  const again = sessions.start('project-0', { folderId: 'web', replace: api.id });
+  assert.deepEqual([again.tabId, again.pane, again.folderId], [api.tabId, 0, 'web']);
+  assert.equal(sessions.state('project-0').sessions.some(item => item.id === api.id), false);
+  // Each workspace keeps up to eight shells.
+  while (sessions.state('project-0').sessions.length < MAX_SESSIONS) sessions.start('project-0', { folderId: 'api' });
+  assert.throws(() => sessions.start('project-0', { folderId: 'api' }), /keeps up to 8 terminals/);
+  assert.equal(sessions.start('project-1', { folderId: 'api' }).status, 'running', 'Another workspace has its own eight.');
 });
 
 test('input, resizing and output stay with their own workspace’s session', async t => {
@@ -119,7 +151,7 @@ test('ending a session hangs up the shell and stops every process it started; re
   assert.deepEqual(pty.spawned[0].killed, ['SIGHUP']);
   await until(() => first.every(pid => !alive(pid)));
   assert(second.every(alive), 'Another workspace’s terminal keeps running.');
-  assert.equal(sessions.state('project-0').session, null);
+  assert.deepEqual(sessions.state('project-0').sessions, []);
   projects.delete('project-1'); registry.emit('projects');
   await until(() => second.every(pid => !alive(pid)));
   sessions.start('project-0', { folderId: 'api' }); trees.set(pty.spawned[2].pid, [started()]);

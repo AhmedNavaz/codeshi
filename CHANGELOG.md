@@ -6,6 +6,7 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ### Added
 
+- **Terminal tabs and split panes** (#70). A workspace keeps up to eight shells: each is a tab, listed at the right of the terminal and named after its folder, **+** opens another in a folder you choose, and a tab splits into two panes, side by side or stacked (⌥), each its own shell. Input goes only to the pane it was typed in, the trash button ends the shell you're in, closing a tab ends its shells, and a shell that exited can start again in its place. ⌃⇧` opens another shell.
 - **Questions from agents.** When Claude stops to ask you to choose, such as which library to use, the question shows where approvals wait: its choices with the agent's suggestion marked **Recommended**, and room for your own answer. Several questions show one at a time, as tabs. Choose with a click or a number key, then **Submit**, or **Skip** to let the agent decide. The agent waits as it does for an approval, with the same alerts and sound, and your answers stay in the conversation for the next agent. Codex's questions work the same way where its connection asks them.
 
 ### Changed

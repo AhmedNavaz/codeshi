@@ -208,14 +208,16 @@
         <section id="bottom-panel" class="bottom-panel" aria-label="Terminal and Run" hidden>
           <header class="bottom-heading">
             <div class="bottom-tabs" role="tablist" aria-label="Panel"><button id="bottom-tab-terminal" class="bottom-tab" type="button" role="tab" aria-selected="false" aria-controls="terminal-panel" data-tool="terminal" title="Your own shell. Agent access settings such as Read only don’t apply to it.">Terminal</button><button id="bottom-tab-run" class="bottom-tab" type="button" role="tab" aria-selected="false" aria-controls="project-commands" data-tool="run" title="Your dev servers, tests and scripts">Run<span id="run-tab-count" class="bottom-tab-count" hidden></span></button></div>
-            <div id="terminal-tools" class="bottom-tools" data-tool="terminal" hidden><span id="terminal-place" class="terminal-place"></span><button id="terminal-restart" class="pill-button terminal-restart" type="button" hidden>New session</button><button id="terminal-end" class="icon-button terminal-end" type="button" aria-label="End terminal session" title="End session: stops the shell and what it started" hidden></button></div>
+            <div id="terminal-tools" class="bottom-tools terminal-tools" data-tool="terminal" hidden><button id="terminal-restart" class="pill-button terminal-restart" type="button" hidden>New session</button><span class="terminal-add"><button id="terminal-new" class="icon-button terminal-new" type="button" aria-label="New terminal" aria-haspopup="menu" aria-expanded="false" aria-controls="terminal-new-menu" title="New terminal (⌃⇧`)" hidden></button><div id="terminal-new-menu" class="terminal-menu" role="menu" aria-label="Open a terminal in" hidden></div></span><button id="terminal-split" class="icon-button terminal-split" type="button" aria-label="Split terminal" title="Split right · ⌥-click to split down" hidden></button><button id="terminal-end" class="icon-button terminal-end" type="button" aria-label="End this terminal" title="End this shell and what it started" hidden></button></div>
             <div id="run-tools" class="bottom-tools" data-tool="run" hidden><button id="command-add" class="toolbar-button command-add" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add command</button></div>
             <button id="bottom-hide" class="icon-button bottom-hide" type="button" aria-label="Hide panel" title="Hide (the terminal and commands keep running)"></button>
           </header>
           <div id="terminal-panel" class="terminal-panel" role="tabpanel" aria-labelledby="bottom-tab-terminal" hidden>
             <div id="terminal-start" class="terminal-start" hidden><p class="terminal-start-title">Open a shell in</p><div id="terminal-folders" class="command-chips terminal-folders" role="group" aria-label="Folders"></div></div>
-            <p id="terminal-message" class="terminal-message" role="status" hidden></p>
-            <div id="terminal-views" class="terminal-views"></div>
+            <div class="terminal-body">
+              <div class="terminal-main"><p id="terminal-message" class="terminal-message" role="status" hidden></p><div id="terminal-views" class="terminal-views"></div></div>
+              <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Terminals" aria-orientation="vertical" hidden></div>
+            </div>
           </div>
           <div id="project-commands" class="project-commands" role="tabpanel" aria-labelledby="bottom-tab-run" hidden>
             <nav id="command-list" class="command-list" aria-label="Commands"></nav>
