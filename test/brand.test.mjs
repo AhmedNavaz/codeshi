@@ -11,9 +11,9 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\
 const numbers = d => d.match(/-?\d+(?:\.\d+)?/g).map(Number);
 
 test('the brush C is drawn the same way every time, with finite coordinates', () => {
-  const full = brand.brush(), small = brand.brush({ detail: 'small' });
+  const full = brand.brush();
   assert.deepEqual(brand.brush(), full);
-  for (const d of [full.solid, full.centreline, ...full.textured, small.solid]) assert.ok(numbers(d).every(Number.isFinite), d.slice(0, 60));
+  for (const d of [full.solid, full.centreline, ...full.textured]) assert.ok(numbers(d).every(Number.isFinite), d.slice(0, 60));
 });
 
 // Angle in degrees between the curve arriving at an anchor and the curve leaving it.
@@ -26,32 +26,26 @@ const cubic = (b, t) => [0, 1].map(k => (1 - t) ** 3 * b[0][k] + 3 * (1 - t) ** 
 const sampleOutline = segments => segments.flatMap(b => Array.from({ length: 64 }, (_, k) => cubic(b, k / 64)));
 
 test('the outline is one closed curve of cubic Béziers, with a corner only at the point of the tail', () => {
-  for (const detail of ['full', 'small']) {
-    const { segments } = brand.anchors({ detail });
-    assert.ok(segments.length >= 8 && segments.length <= 32, `${detail}: ${segments.length} cubic segments`);
-    for (let i = 0; i < segments.length; i++) assert.ok(distance(segments[i][3], segments[(i + 1) % segments.length][0]) < 1e-8, `${detail}: contour closes without gaps`);
-    const corners = segments.filter((b, i) => turn(segments[(i + segments.length - 1) % segments.length], b) > 0.5);
-    assert.equal(corners.length, detail === 'full' ? 1 : 0, `${detail}: the rounded start and the edges meet without a kink`);
-    assert.match(brand.brush({ detail }).solid, /^M[^MLCZ]*(?:C[^MLCZ]+)+Z$/, 'the outline uses cubic Béziers');
-  }
+  const { segments } = brand.anchors();
+  assert.ok(segments.length >= 8 && segments.length <= 32, `${segments.length} cubic segments`);
+  for (let i = 0; i < segments.length; i++) assert.ok(distance(segments[i][3], segments[(i + 1) % segments.length][0]) < 1e-8, 'the contour closes without gaps');
+  const corners = segments.filter((b, i) => turn(segments[(i + segments.length - 1) % segments.length], b) > 0.5);
+  assert.equal(corners.length, 1, 'the rounded start and the edges meet without a kink');
+  assert.match(brand.brush().solid, /^M[^MLCZ]*(?:C[^MLCZ]+)+Z$/, 'the outline uses cubic Béziers');
 });
 
 test('the stroke starts as a round cap of its own width, holds that width, then lifts', () => {
-  for (const detail of ['full', 'small']) {
-    const trace = brand.debugTrace(detail), { f: { c, r }, dir } = trace.edges[0];
-    // Everything on the fitted outline behind the start centre lies on a half circle of the stroke's half-width.
-    const cap = sampleOutline(brand.anchors({ detail }).segments).filter(p => (p[0] - c[0]) * dir[0] + (p[1] - c[1]) * dir[1] < -0.3 && distance(p, c) < r + 2);
-    assert.ok(cap.length > 50, `${detail}: the cap is sampled`);
-    for (const p of cap) assert.ok(Math.abs(distance(p, c) - r) < 0.02, `${detail}: a cap point is ${distance(p, c)} from the centre, not ${r}`);
-    // The width holds from the start until the brush lifts, then falls all the way to the end.
-    const width = t => { const e = trace.edges[Math.round(t / trace.last * (trace.edges.length - 1))]; return distance(e.L, e.R); };
-    const lifts = detail === 'full' ? 0.5 : 0.4;
-    for (const t of [0, 0.1, 0.25, lifts]) assert.ok(Math.abs(width(t) - 2 * r) < 0.01, `${detail}: the width at ${t} is ${width(t)}, not ${2 * r}`);
-    const falling = [0.6, 0.7, 0.8, 0.9, trace.last].map(width);
-    for (let i = 0; i < falling.length; i++) assert.ok(falling[i] < (i ? falling[i - 1] : 2 * r), `${detail}: the stroke keeps thinning past ${[0.6, 0.7, 0.8, 0.9, 1][i]}`);
-    if (detail === 'full') assert.ok(width(trace.last) < 0.2, 'the full stroke ends in a point');
-    else assert.ok(Math.abs(width(trace.last) - r / 2) < 0.05, 'the small stroke ends in a rounded tip a quarter of its width');
-  }
+  const trace = brand.debugTrace(), { f: { c, r }, dir } = trace.edges[0];
+  // Everything on the fitted outline behind the start centre lies on a half circle of the stroke's half-width.
+  const cap = sampleOutline(brand.anchors().segments).filter(p => (p[0] - c[0]) * dir[0] + (p[1] - c[1]) * dir[1] < -0.3 && distance(p, c) < r + 2);
+  assert.ok(cap.length > 50, 'the cap is sampled');
+  for (const p of cap) assert.ok(Math.abs(distance(p, c) - r) < 0.02, `a cap point is ${distance(p, c)} from the centre, not ${r}`);
+  // The width holds from the start until the brush lifts, then falls all the way to a point.
+  const width = t => { const e = trace.edges[Math.round(t / trace.last * (trace.edges.length - 1))]; return distance(e.L, e.R); };
+  for (const t of [0, 0.1, 0.25, 0.5]) assert.ok(Math.abs(width(t) - 2 * r) < 0.01, `the width at ${t} is ${width(t)}, not ${2 * r}`);
+  const falling = [0.6, 0.7, 0.8, 0.9, trace.last].map(width);
+  for (let i = 0; i < falling.length; i++) assert.ok(falling[i] < (i ? falling[i - 1] : 2 * r), `the stroke keeps thinning past ${[0.6, 0.7, 0.8, 0.9, 1][i]}`);
+  assert.ok(width(trace.last) < 0.2, 'the stroke ends in a point');
 });
 
 test('the drawing exports the parts its callers expect', () => {
@@ -61,21 +55,32 @@ test('the drawing exports the parts its callers expect', () => {
   assert.ok(coarse.solid.length < full.solid.length, 'the coarse drawing has fewer digits');
   assert.match(full.centreline, /^M[^MLCZ]+(?:L[^MLCZ]+)+$/, 'the centreline is an open polyline for the welcome animation');
   assert.deepEqual(Object.keys(brand.brush({ detail: 'medium' })), ['solid']);
-  assert.deepEqual(Object.keys(brand.brush({ detail: 'small' })), ['solid']);
-  assert.notEqual(brand.brush({ detail: 'small', pixels: 16 }).solid, brand.brush({ detail: 'small', pixels: 32 }).solid, 'the 16 px C is drawn larger');
+  assert.throws(() => brand.brush({ detail: 'small' }), /seal/, 'small sizes show the seal, never a small C');
 });
 
 test('each level of detail draws what it should', () => {
   assert.deepEqual([16, 32, 33, 64, 127, 128, 1024].map(brand.detailFor), ['small', 'small', 'medium', 'medium', 'medium', 'full', 'full']);
   const small = brand.tile({ pixels: 32 }), medium = brand.tile({ pixels: 64 }), full = brand.tile();
-  assert.doesNotMatch(small, new RegExp(brand.colors.seal));
-  assert.equal(small.match(/<path /g).length, 1);
+  // 32 px and below: the seal on its own, シ carved in cream, with no brush.
+  assert.match(small, new RegExp(brand.colors.seal));
+  assert.match(small, new RegExp(brand.colors.carve));
+  assert.equal(small.match(/<path /g).length, 1, 'small detail is the seal and シ, one path');
+  assert.doesNotMatch(small, new RegExp(brand.colors.paper.brush));
   assert.match(medium, new RegExp(brand.colors.seal));
   assert.equal(medium.match(/<path /g).length, 1, 'medium detail is one solid path with a plain seal');
   assert.match(full, new RegExp(brand.colors.seal));
   assert.ok(full.match(/<path /g).length > 22, 'full detail has the dry-brush tail');
   assert.match(full, /clip-path="url\(#brush-outline\)"/);
-  assert.doesNotMatch(brand.mark({ pixels: 16 }), new RegExp(brand.colors.seal));
+  assert.match(brand.mark({ pixels: 16 }), new RegExp(brand.colors.seal));
+  assert.match(brand.mark({ pixels: 16, square: true }), /rx="0"/, 'the square touch icon leaves the rounding to the system');
+});
+
+test('the seal at small sizes is the same in both looks and keeps シ inside it', () => {
+  assert.equal(brand.tile({ look: 'paper', pixels: 32 }).replace(/slope="[\d.]+"/, ''), brand.tile({ look: 'ink', pixels: 32 }).replace(/slope="[\d.]+"/, ''), 'only the shadow differs');
+  const svg = brand.mark({ pixels: 16 }), shi = numbers(svg.match(/<path d="([^"]+)"/)[1]), half = brand.stamp.stroke / 2;
+  assert.equal(svg.match(/<path d="[^"]+"/)[0].match(/M/g).length, 3, 'シ is three strokes');
+  // Its strokes stay clear of the square's rounded corners and edges, so the carving is never cut off.
+  assert.ok(Math.min(...shi) - half >= 8 && Math.max(...shi) + half <= 92, `シ spans ${Math.min(...shi)} to ${Math.max(...shi)}`);
 });
 
 test('the tile\'s gradient is drawn outside the shadow filter, which would band it', () => {
@@ -84,22 +89,40 @@ test('the tile\'s gradient is drawn outside the shadow filter, which would band 
   assert.doesNotMatch(svg, /fill="url\(#tile\)" filter=/);
 });
 
-test('the in-app logos and favicon show Paper, or Ink when the page is dark', () => {
-  for (const svg of [brand.autoMark({ detail: 'medium' }), brand.autoMark({ detail: 'small' })]) {
-    assert.match(svg, /@media \(prefers-color-scheme:dark\)/);
-    for (const color of [brand.colors.paper.brush, brand.colors.ink.brush, ...brand.colors.paper.tile, ...brand.colors.ink.tile]) assert.ok(svg.includes(color), color);
-  }
+test('the in-app logo shows Paper, or Ink when the page is dark; the small logo is the seal in both', () => {
+  const logo = brand.autoMark({ detail: 'medium' });
+  assert.match(logo, /@media \(prefers-color-scheme:dark\)/);
+  for (const color of [brand.colors.paper.brush, brand.colors.ink.brush, ...brand.colors.paper.tile, ...brand.colors.ink.tile]) assert.ok(logo.includes(color), color);
+  const small = brand.autoMark({ detail: 'small' });
+  assert.doesNotMatch(small, /@media/);
+  assert.equal(small, brand.mark({ pixels: 16 }));
 });
 
-test('the menu bar images are 16 points tall and a whole number of points wide', () => {
+test('the menu bar images are シ alone, 16 points square, with the dot only when something needs you', () => {
   const idle = brand.template(), attention = brand.template({ attention: true });
   for (const image of [idle, attention]) {
-    assert.equal(image.height, 16);
-    assert.ok(Number.isInteger(image.width) && image.width >= 12 && image.width <= 24, String(image.width));
+    assert.deepEqual([image.width, image.height], [16, 16], 'the dot sits inside the image, so the icon never changes width');
+    assert.doesNotMatch(image.svg, /<rect/, 'no square behind シ');
+    assert.equal(image.svg.match(/<path /g).length, 1);
   }
-  assert.ok(attention.width > idle.width);
   assert.doesNotMatch(idle.svg, /<circle/);
   assert.match(attention.svg, /<circle/);
+});
+
+test('シ on its own fills its box without being cut off, and the dot sits clear of its strokes', () => {
+  const mark = brand.glyphMark(), d = mark.match(/ d="([^"]+)"/)[1], points = numbers(d), half = brand.glyph.stroke / 2;
+  assert.doesNotMatch(mark, /<rect/, 'no background');
+  assert.match(mark, new RegExp(`path\\{stroke:${brand.colors.seal}\\}`));
+  assert.match(mark, new RegExp(`@media \\(prefers-color-scheme:dark\\)\\{path\\{stroke:${brand.glyph.dark}\\}\\}`));
+  assert.ok(Math.min(...points) - half >= 0 && Math.max(...points) + half <= 100, `the strokes span ${Math.min(...points) - half} to ${Math.max(...points) + half}`);
+  // Sample all three strokes and keep the dot at least a stroke's width from them.
+  const [, ...strokes] = d.split('M'), samples = strokes.flatMap(stroke => {
+    const n = numbers(stroke), at = t => n.length === 4 ? [n[0] + (n[2] - n[0]) * t, n[1] + (n[3] - n[1]) * t]
+      : [0, 1].map(k => (1 - t) ** 2 * n[k] + 2 * (1 - t) * t * n[2 + k] + t ** 2 * n[4 + k]);
+    return Array.from({ length: 101 }, (_, i) => at(i / 100));
+  });
+  const { x, y, r } = brand.glyph.dot, gap = Math.min(...samples.map(p => distance(p, [x, y]))) - half - r;
+  assert.ok(gap >= brand.glyph.stroke / 2, `the dot is ${gap.toFixed(1)} units from シ`);
 });
 
 test('the macOS 26 icon has Paper and Ink looks, and every layer it names exists', () => {
@@ -119,6 +142,8 @@ test('the committed icon sources match the drawings (run `npm run icons` after c
   assert.equal(read('assets/icon-dark.svg'), brand.tile({ look: 'ink' }));
   assert.equal(read('public/icon.svg'), brand.autoMark({ detail: 'small' }));
   assert.equal(read('public/logo.svg'), brand.autoMark({ detail: 'medium' }));
+  assert.equal(read('public/mark.svg'), brand.glyphMark());
+  assert.ok(read('desktop/overlay.html').includes(brand.inlineGlyph('mark-shi')), 'the alert panel シ in desktop/overlay.html');
   for (const [name, content] of Object.entries(brand.iconComposer())) assert.equal(read(path.join('assets/AppIcon.icon', name)), content, name);
   assert.ok(read('public/index.html').includes(brand.onboardingMark()), 'the welcome screen logo in public/index.html');
   for (const file of ['assets/Assets.car', 'assets/icon.icns', 'assets/icon.ico', 'assets/status/StatusTemplate@2x.png', 'assets/status/StatusAttentionTemplate@2x.png']) assert.ok(fs.statSync(path.join(root, file)).size > 0, file);

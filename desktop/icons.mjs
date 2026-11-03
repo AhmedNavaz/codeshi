@@ -7,9 +7,12 @@
 //   assets/icon.icns, icon.png        Paper, for macOS 15 and earlier and for the window in development
 //   assets/icon-dark.png              Ink, for the Dock in development when the appearance is dark
 //   assets/icon.ico                   Windows (Paper)
-//   assets/status/*.png               menu bar template images
-//   assets/brand/*.png                both looks at every size from 16 to 1024
-//   public/icon.svg, logo.svg         favicon and in-app logo (small and medium detail); each shows Paper or Ink with the page
+//   assets/status/*.png               menu bar template images: シ on its own, with a dot when something needs you
+//   assets/brand/*.png                both looks at every size from 16 to 1024 (16 and 32 are the seal)
+//   public/icon.svg                   favicon: the seal, the same in both themes
+//   public/mark.svg                   the mark beside the name in the app: シ in vermilion
+//   desktop/overlay.html              the alert panel's シ, drawn inside the page
+//   public/logo.svg                   in-app logo (medium detail), Paper or Ink with the page
 //   public/index.html                 the welcome screen's animated logo
 //   public/icon-{16,32,180,512}.png   PNG favicons and touch icon (Paper)
 //   assets/social-preview.png         the GitHub repository card
@@ -75,6 +78,11 @@ app.whenReady().then(async () => {
   write(path.join(assets, 'icon-dark.svg'), brand.tile({ look: 'ink' }));
   write(path.join(pub, 'icon.svg'), brand.autoMark({ detail: 'small' }));
   write(path.join(pub, 'logo.svg'), brand.autoMark({ detail: 'medium' }));
+  write(path.join(pub, 'mark.svg'), brand.glyphMark());
+  // The alert panel's page loads no images, so its シ is drawn inside it.
+  const panel = path.join(root, 'desktop', 'overlay.html'), panelHtml = fs.readFileSync(panel, 'utf8'), at = panelHtml.indexOf('<svg class="mark-shi"');
+  if (at < 0) throw new Error('desktop/overlay.html has no mark-shi drawing to update.');
+  write(panel, panelHtml.slice(0, at) + brand.inlineGlyph('mark-shi') + panelHtml.slice(panelHtml.indexOf('</svg>', at) + '</svg>'.length));
   // The welcome screen draws its logo inside the page, so it can animate.
   const page = path.join(pub, 'index.html'), html = fs.readFileSync(page, 'utf8'), start = html.indexOf('<svg class="onboarding-mark"');
   if (start < 0) throw new Error('public/index.html has no onboarding-mark drawing to update.');

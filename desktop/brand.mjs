@@ -11,7 +11,7 @@
 // through a few evenly spaced anchor points.
 //
 // Three levels of detail, by the size the icon is drawn at (`detailFor`):
-//   small   32 px and below   a heavier C with a round end; no seal, no dry brush
+//   small   32 px and below   the seal on its own, with シ carved in cream (the C would only read as a plain letter)
 //   medium  33 to 127 px      the C with a clean solid taper, and a simpler seal
 //   full    128 px and up     the dry-brush tail and the carved seal
 //
@@ -92,7 +92,7 @@ function trace(model, { until = 1, samples = 1400 } = {}) {
   else if (until < 1) pins.push({ index: endIndex - 1, corner: true }, { index: endIndex, corner: true });
   else {
     const ahead = p => (p[0] - finish.f.c[0]) * finish.dir[0] + (p[1] - finish.f.c[1]) * finish.dir[1];
-    // The small brush lifts to a narrow rounded tip: anchor both sides of that cap and its front.
+    // A brush that lifts to a rounded tip: anchor both sides of that cap and its front.
     pins.push(meet(endIndex - 1, finish.left), meet(endIndex + end.length, finish.right));
     pins.push({ index: endIndex + end.reduce((best, p, i) => ahead(p) > ahead(end[best]) ? i : best, 0) });
   }
@@ -212,33 +212,20 @@ function bristles(traced, { count = 22, from = 0.5, seed = 11, dryFrom = 0.62, s
 // Both brushes travel the same centreline, and each holds one width before it lifts.
 const taper = s => s >= 1 ? 0 : Math.pow(1 - s, 1.05) * (1 + 1.05 * s);
 const fullPath = ensoPath({ cx: 46, cy: 49.5, rx: 23, ry: 24.5, rot: -8, start: -38, sweep: 282, flick: 0.03 });
-// Full and medium: an even stroke over the first half, thinning to a point over the second.
+// An even stroke over the first half, thinning to a point over the second.
 const fullModel = { path: fullPath, radius: t => t < 0.5 ? 5.865 : 5.865 * taper((t - 0.5) / 0.5), end: 'point' };
-// Small: the same centreline enlarged, with a bolder stroke that lifts from the bottom to a rounded tip a quarter of
-// its width, rather than a font-like cap.
-const smallModel = {
-  path: t => { const p = fullPath(t); return [50.5 + (p[0] - 46) * 1.28, 49 + (p[1] - 49.5) * 1.28]; },
-  radius: t => 8.26 * (1 - 0.75 * smooth(0.4, 1, t)), end: 'round',
-};
 
 const traced = new Map();
 const traceOnce = (key, make) => { if (!traced.has(key)) traced.set(key, make()); return traced.get(key); };
 const fullTrace = () => traceOnce('full', () => trace(fullModel));
 const bodyTrace = () => traceOnce('body', () => trace(fullModel, { until: 0.6, samples: 840 }));
-const smallTrace = () => traceOnce('small', () => trace(smallModel));
 const fitted = (key, make) => traceOnce('fit:' + key, make);
-// The small C is only drawn at 32 px and below, where 0.25 units is under a tenth of a pixel.
-const smallFit = { tolerance: 0.25 };
 
-// The brush C as SVG path data. full: { solid, textured: [body, ...bristles], centreline }; medium and small: { solid }.
-// `coarse` uses fewer points and one decimal place, for drawings shown no larger than about 100 px.
-export function brush({ detail = 'full', coarse = false, pixels = 32 } = {}) {
-  if (detail === 'small') {
-    const fit = fitted('small', () => toBeziers(smallTrace(), smallFit));
-    // At 16 px every bit of space counts. Enlarge the actual outline, without a transform or a resampled bitmap.
-    const segments = pixels <= 16 ? fit.segments.map(b => b.map(([x, y]) => [50 + (x - 50) * 1.08, 50 + (y - 50) * 1.08])) : fit.segments;
-    return { solid: pathData({ segments }) };
-  }
+// The brush C as SVG path data. full: { solid, textured: [body, ...bristles], centreline }; medium: { solid }. Small
+// sizes show the seal instead (`stamp`). `coarse` uses fewer points and one decimal place, for drawings shown no
+// larger than about 100 px.
+export function brush({ detail = 'full', coarse = false } = {}) {
+  if (detail === 'small') throw new Error('Small sizes show the seal, not the brush C.');
   const solid = pathData(fitted('full', () => toBeziers(fullTrace())), coarse ? 1 : 2);
   if (detail === 'medium') return { solid };
   const digits = coarse ? 1 : 2;
@@ -252,14 +239,17 @@ export function brush({ detail = 'full', coarse = false, pixels = 32 } = {}) {
 }
 
 // The dense outline the Béziers are fitted to, for checking the fit.
-export const debugTrace = detail => detail === 'small' ? smallTrace() : fullTrace();
+export const debugTrace = () => fullTrace();
 
 // Anchor points and handles of a drawing's outline, for checking its curves.
-export function anchors({ detail = 'full', ...options } = {}) {
-  const fit = Object.keys(options).length ? toBeziers(detail === 'small' ? smallTrace() : fullTrace(), options)
-    : detail === 'small' ? fitted('small', () => toBeziers(smallTrace(), smallFit)) : fitted('full', () => toBeziers(fullTrace()));
+export function anchors(options = {}) {
+  const fit = Object.keys(options).length ? toBeziers(fullTrace(), options) : fitted('full', () => toBeziers(fullTrace()));
   return { anchors: fit.segments.map(b => b[0]), segments: fit.segments };
 }
+
+// シ in three strokes, in a unit square: two short ticks, then the long sweep up to the right.
+const shiStrokes = [[[0.25, 0.26], [0.4, 0.36]], [[0.2, 0.47], [0.35, 0.57]], [[0.25, 0.8], [0.62, 0.7], [0.79, 0.22]]];
+const strokeData = (points, u) => `M${u(...points[0])}` + (points.length === 2 ? `L${u(...points[1])}` : `Q${u(...points[1])} ${u(...points[2])}`);
 
 // The seal where the stroke ends, pressed by hand at a slight angle, with シ carved into it. At medium detail it is a
 // plain vermilion square: at 64 px the carving is too small to read and only adds noise.
@@ -269,69 +259,93 @@ export function seal({ carve = colors.carve, fill = colors.seal, parts = false, 
   const transform = `rotate(${rotate} ${fmt(x + s / 2)} ${fmt(y + s / 2)})`;
   const body = `<rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(s)}" height="${fmt(s)}" rx="${fmt(s * 0.1)}" fill="${fill}"/>`;
   const shi = detail === 'medium' ? '' : `<g fill="none" stroke="${carve}" stroke-width="${fmt(s * 0.115)}" stroke-linecap="round" stroke-linejoin="round">`
-    + `<path d="M${u(0.25, 0.26)}L${u(0.4, 0.36)}"/><path d="M${u(0.2, 0.47)}L${u(0.35, 0.57)}"/><path d="M${u(0.25, 0.8)}Q${u(0.62, 0.7)} ${u(0.79, 0.22)}"/></g>`;
+    + shiStrokes.map(points => `<path d="${strokeData(points, u)}"/>`).join('') + '</g>';
   if (parts) return { transform, body, shi };
   return `<g transform="${transform}">${body}${shi}</g>`;
 }
 
+// The seal on its own, the mark at 32 px and below: upright so its edges stay sharp, the same in both looks, and with
+// シ enlarged to fill the square and centred on it. Drawn in the 100-unit square; `radius` rounds its corners.
+export const stamp = { radius: 18, stroke: 12.5, scale: 1.12 };
+const stampShi = ({ scale = stamp.scale } = {}) => {
+  const u = (x, y) => `${fmt(50 + (x - 0.495) * scale * 100)} ${fmt(50 + (y - 0.51) * scale * 100)}`;
+  return shiStrokes.map(points => strokeData(points, u)).join('');
+};
+const stampParts = (radius = stamp.radius) => `<rect width="100" height="100" rx="${fmt(radius)}" fill="${colors.seal}"/>`
+  + `<path d="${stampShi()}" fill="none" stroke="${colors.carve}" stroke-width="${stamp.stroke}" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+// シ on its own, without the square: the mark beside the name inside the app, and the menu bar icon. It fills the
+// 100-unit square, and its sweep leaves the bottom right corner empty, where `dot` puts the "needs you" dot. On dark
+// surfaces the strokes use a lighter vermilion, so their thin lines keep their contrast.
+export const glyph = { scale: 1.42, stroke: 14, dark: '#ef6448', dot: { x: 89, y: 89, r: 17 } };
+// `color` null leaves the stroke colour to a stylesheet.
+const glyphPath = (color = 'currentColor') => `<path d="${stampShi({ scale: glyph.scale })}" fill="none"${color ? ` stroke="${color}"` : ''} stroke-width="${glyph.stroke}" stroke-linecap="round" stroke-linejoin="round"/>`;
+// public/mark.svg: vermilion, lighter when the page is dark (it follows the page's color-scheme).
+export function glyphMark() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><title>Codeshi</title>`
+    + `<style>path{stroke:${colors.seal}}@media (prefers-color-scheme:dark){path{stroke:${glyph.dark}}}</style>${glyphPath(null)}</svg>`;
+}
+// The same drawing inline, in the page's current colour, for pages that may not load images (the alert panel).
+export const inlineGlyph = className => `<svg class="${className}" viewBox="0 0 100 100" aria-hidden="true">${glyphPath()}</svg>`;
+
 const gradient = (id, [top, bottom]) => `<linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient>`;
-const brushPaths = (detail, pixels) => {
-  const shape = brush({ detail, pixels });
+const brushPaths = detail => {
+  const shape = brush({ detail });
   // The fit and the sampled bristles can differ by a fraction of a unit. Clip to the final Bézier silhouette,
   // so not even a hair can escape the outside edge in a raster export or an Icon Composer layer.
   return detail === 'full' ? `<defs><clipPath id="brush-outline"><path d="${shape.solid}"/></clipPath></defs>`
     + `<g clip-path="url(#brush-outline)">${shape.textured.map(d => `<path d="${d}"/>`).join('')}</g>` : `<path d="${shape.solid}"/>`;
 };
-const sealFor = detail => detail === 'small' ? '' : seal({ detail });
+// The tile's drop shadow, its own layer under the tile, so the tile's gradient never passes through a filter
+// (Chromium runs filters in 8-bit linear colour, which bands dark gradients).
+const tileShadow = look => `<filter id="shadow" x="-20%" y="-20%" width="140%" height="145%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="16"/><feOffset dy="14"/>`
+  + `<feComponentTransfer><feFuncA type="linear" slope="${look === 'paper' ? 0.22 : 0.3}"/></feComponentTransfer></filter>`;
 
 // macOS app icon on a 1024 canvas: an 824px tile with the system's margin and shadow (Paper or Ink). `pixels` is the
-// size it will be drawn at: it picks the level of detail, and keeps Paper's edge line about half a pixel wide.
+// size it will be drawn at: it picks the level of detail, and keeps Paper's edge line about half a pixel wide. At
+// small detail the tile is the seal, in the system's tile shape.
 export function tile({ look = 'paper', pixels = 1024, detail = detailFor(pixels) } = {}) {
-  const c = colors[look], edge = Math.max(2.5, (detail === 'small' ? 0.75 : 0.6) * 1024 / pixels);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><title>Codeshi</title><defs>${gradient('tile', c.tile)}`
-    // The shadow is its own layer under the tile, so the tile's gradient never passes through a filter (Chromium runs
-    // filters in 8-bit linear colour, which bands dark gradients).
-    + `<filter id="shadow" x="-20%" y="-20%" width="140%" height="145%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="16"/><feOffset dy="14"/>`
-    + `<feComponentTransfer><feFuncA type="linear" slope="${look === 'paper' ? 0.22 : 0.3}"/></feComponentTransfer></filter></defs>`
-    + `<rect x="100" y="100" width="824" height="824" rx="186" filter="url(#shadow)"/><rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>`
+  const c = colors[look], edge = Math.max(2.5, 0.6 * 1024 / pixels), shape = 'x="100" y="100" width="824" height="824" rx="186"';
+  if (detail === 'small') return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><title>Codeshi</title><defs>${tileShadow(look)}</defs>`
+    + `<rect ${shape} filter="url(#shadow)"/><g transform="translate(100 100) scale(8.24)">${stampParts(186 / 8.24)}</g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><title>Codeshi</title><defs>${gradient('tile', c.tile)}${tileShadow(look)}</defs>`
+    + `<rect ${shape} filter="url(#shadow)"/><rect ${shape} fill="url(#tile)"/>`
     + `<rect x="${fmt(100 + edge / 2)}" y="${fmt(100 + edge / 2)}" width="${fmt(824 - edge)}" height="${fmt(824 - edge)}" rx="${fmt(186 - edge / 2)}" fill="none" stroke="${c.edge}" stroke-width="${fmt(edge)}"/>`
-    + `<g transform="translate(100 100) scale(8.24)"><g fill="${c.brush}">${brushPaths(detail, pixels)}</g>${sealFor(detail)}</g></svg>`;
+    + `<g transform="translate(100 100) scale(8.24)"><g fill="${c.brush}">${brushPaths(detail)}</g>${seal({ detail })}</g></svg>`;
 }
 
 // Full-bleed tile (favicon, in-app logo, Windows icon) in one look. `square` drops the rounded corners and edge line,
 // for icons that the system rounds itself (Apple touch icon, web app icons).
 export function mark({ look = 'paper', pixels = 1024, detail = detailFor(pixels), square = false } = {}) {
-  const c = colors[look], edge = detail === 'small' ? 4 : 1.6;
+  if (detail === 'small') return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><title>Codeshi</title>${stampParts(square ? 0 : stamp.radius)}</svg>`;
+  const c = colors[look], edge = 1.6;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><title>Codeshi</title><defs>${gradient('tile', c.tile)}</defs>`
     + `<rect width="100" height="100" rx="${square ? 0 : 22}" fill="url(#tile)"/>`
     + (square ? '' : `<rect x="${edge / 2}" y="${edge / 2}" width="${100 - edge}" height="${100 - edge}" rx="${22 - edge / 2}" fill="none" stroke="${c.edge}" stroke-width="${edge}"/>`)
-    + `<g fill="${c.brush}">${brushPaths(detail, pixels)}</g>${sealFor(detail)}</svg>`;
+    + `<g fill="${c.brush}">${brushPaths(detail)}</g>${seal({ detail })}</svg>`;
 }
 
-// One file for both looks: Paper, or Ink when the page or system is dark (it follows the page's color-scheme).
-export function autoMark({ detail = 'full', pixels = 16 } = {}) {
-  const edge = detail === 'small' ? 4 : 1.6, { paper, ink } = colors;
+// One file for both looks: Paper, or Ink when the page or system is dark (it follows the page's color-scheme). The
+// seal at small detail is the same in both looks.
+export function autoMark({ detail = 'full' } = {}) {
+  if (detail === 'small') return mark({ detail });
+  const edge = 1.6, { paper, ink } = colors;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><title>Codeshi</title>`
     + `<style>.tile{fill:url(#paper)}.edge{stroke:${paper.edge}}.brush{fill:${paper.brush}}`
     + `@media (prefers-color-scheme:dark){.tile{fill:url(#ink)}.edge{stroke:${ink.edge}}.brush{fill:${ink.brush}}}</style>`
     + `<defs>${gradient('paper', paper.tile)}${gradient('ink', ink.tile)}</defs>`
     + `<rect class="tile" width="100" height="100" rx="22"/>`
     + `<rect class="edge" x="${edge / 2}" y="${edge / 2}" width="${100 - edge}" height="${100 - edge}" rx="${22 - edge / 2}" fill="none" stroke-width="${edge}"/>`
-    + `<g class="brush">${brushPaths(detail, pixels)}</g>${sealFor(detail)}</svg>`;
+    + `<g class="brush">${brushPaths(detail)}</g>${seal({ detail })}</svg>`;
 }
 
-// macOS menu bar template image: the small C in black, 16 points tall, with a dot beside it when something needs you.
-// Returns the SVG and its size in points; the width is a whole number of points so the image stays sharp.
+// macOS menu bar template image: シ in black, 14 points square with a 1-point margin, so the image is 16 points square,
+// with a dot in its empty bottom right corner when something needs you. Returns the SVG and its size in points. The
+// macOS menu bar colours it to match.
 export function template({ attention = false } = {}) {
-  const { points } = smallTrace(), xs = points.map(p => p[0]), ys = points.map(p => p[1]);
-  const top = Math.min(...ys) - 1.5, height = Math.max(...ys) + 1.5 - top, unit = height / 16;
-  const left = Math.min(...xs) - 1.5, right = Math.max(...xs) + 1.5;
-  const dot = { r: 8, gap: 5.5 }, dotX = right + dot.gap + dot.r - 1.5;
-  const width = Math.ceil(((attention ? dotX + dot.r + 1.5 : right) - left) / unit);
-  const shift = attention ? 0 : (width * unit - (right - left)) / 2;
-  const viewBox = [left - shift, top, width * unit, height].map(fmt).join(' ');
-  return { width, height: 16, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}"><path d="${brush({ detail: 'small' }).solid}"/>`
-    + (attention ? `<circle cx="${fmt(dotX)}" cy="${fmt(top + dot.r + 1.5)}" r="${dot.r}"/>` : '') + '</svg>' };
+  const unit = 100 / 14, box = [-unit, -unit, 16 * unit, 16 * unit].map(fmt).join(' '), { x, y, r } = glyph.dot;
+  return { width: 16, height: 16, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box}">${glyphPath('#000')}`
+    + (attention ? `<circle cx="${x}" cy="${y}" r="${r}"/>` : '') + '</svg>' };
 }
 
 // The welcome screen's animated logo, kept in public/index.html by `npm run icons`. Its colours come from

@@ -7,6 +7,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 ### Changed
 
 - **Codeshi's colours throughout the app.** Dark is now warm black with cream text, and Light is cream paper with dark ink, the two looks of the logo. Vermilion, the red of the seal, replaces blue for the main buttons, selection, focus and links, including in the alert panel and in Point and tell's toolbar and the outline it draws round the element you pick. Errors and failed checks use a deeper crimson, so they don't look like the accent.
+- **シ instead of a small C.** At small sizes the C looked like any letter, so the small marks now use シ ("shi"). Beside the name in the sidebar and in setup it's シ in vermilion; in the menu bar it's シ alone, with a dot in its corner when an agent needs you. The panel at the top of the screen shows シ too, with a dot for what happened: amber when an agent needs you, green when it finished, red when it stopped. The browser tab icon and the smallest app icon sizes show the vermilion seal carved with シ, and larger icons keep the brush C with its seal.
 
 ## [0.23.0] - 2026-11-03
 
