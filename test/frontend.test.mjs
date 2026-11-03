@@ -15,6 +15,10 @@ class Events {
   addEventListener(type,fn){const list=this.listeners.get(type)||[];list.push(fn);this.listeners.set(type,list);}
   dispatchEvent(event){event.target ||= this;for(const fn of this.listeners.get(event.type)||[])fn(event);return !event.defaultPrevented;}
 }
+// Reads a pasted or dropped file as the browser does, for the composer's paste and drop handlers.
+class FileReader {
+  readAsDataURL(blob){blob.arrayBuffer().then(bytes=>{this.result='data:'+blob.type+';base64,'+Buffer.from(bytes).toString('base64');this.onload();},()=>this.onerror());}
+}
 class UIEvent {
   constructor(type,properties={}){this.type=type;this.defaultPrevented=false;Object.assign(this,properties);}
   preventDefault(){this.defaultPrevented=true;}
@@ -180,7 +184,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   class Range{setStart(node,offset){this.startContainer=node;this.startOffset=offset;}setEnd(node,offset){this.endContainer=node;this.endOffset=offset;}getBoundingClientRect(){return this.startContainer.parentNode.getBoundingClientRect();}}
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
   const highlights=new Map();document.createRange=()=>new Range();
-  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,navigator:{clipboard:{writeText:async()=>{}}}});
+  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async()=>{}}}});
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
   const previewOpens=[],previewListeners=[];
@@ -1372,6 +1376,42 @@ test('late attachment uploads stay with their original workspace and block prema
   ui.$('message-input').value='Review';ui.fire('message-input','input');assert.equal(ui.$('send-button').disabled,true);
   await ui.switchProject('project-two');gate.resolve();await adding;await flush();assert.equal(ui.window.relayFiles.ids().length,0);
   await ui.switchProject('project-one');assert.equal(ui.window.relayFiles.ids().length,1);assert.equal(ui.$('send-button').disabled,false);
+});
+
+test('a paste or drop while an attachment is uploading is added after it instead of being dropped',async()=>{
+  const ui=await browser({filesUI:true}),gates=[deferred(),deferred()],names=[];
+  ui.setIntercept(async(request,next)=>{if(request.path==='/api/attachments'){names.push(request.body.name);await gates[names.length-1]?.promise;}return next();});
+  const paste=name=>ui.$('message-input').dispatchEvent(new UIEvent('paste',{clipboardData:{items:[{kind:'file',getAsFile:()=>new File([name],name,{type:'text/plain'})}]}}));
+  paste('first.txt');await flush();assert.deepEqual(names,['first.txt']);
+  paste('second.txt');ui.$('composer').dispatchEvent(new UIEvent('drop',{dataTransfer:{files:[new File(['third'],'third.txt',{type:'text/plain'})]}}));await flush();
+  ui.$('message-input').value='Review';ui.fire('message-input','input');assert.equal(ui.$('send-button').disabled,true,'Sending waits for every queued file.');
+  gates[0].resolve();await flush();assert.deepEqual(names,['first.txt','second.txt']);
+  assert.equal(ui.$('send-button').disabled,true,'One file is done, but sending still waits for the others.');assert.equal(ui.$('attachment-status').textContent,'Adding attachments…');
+  gates[1].resolve();await flush();
+  assert.deepEqual(names,['first.txt','second.txt','third.txt'],'Each file is uploaded once, in the order it was added.');
+  assert.deepEqual(ui.$('attachment-list').querySelectorAll('.attachment-name').map(node=>node.textContent),['first.txt','second.txt','third.txt']);
+  assert.equal(ui.$('attachment-status').textContent,'3 attached · sent with your next message');assert.equal(ui.$('send-button').disabled,false);
+});
+
+test('a problem with a file that waited its turn still shows after the files behind it are added',async()=>{
+  const ui=await browser({filesUI:true}),gate=deferred();let held=true;
+  ui.setIntercept(async(request,next)=>{if(request.path==='/api/attachments'&&held){held=false;await gate.promise;}return next();});
+  const paste=file=>ui.$('message-input').dispatchEvent(new UIEvent('paste',{clipboardData:{items:[{kind:'file',getAsFile:()=>file}]}}));
+  paste(new File(['first'],'first.txt',{type:'text/plain'}));await flush();
+  paste(new File([new Uint8Array(5*1024*1024+1)],'huge.txt',{type:'text/plain'}));paste(new File(['last'],'last.txt',{type:'text/plain'}));await flush();
+  assert.equal(ui.$('attachment-status').textContent,'Adding attachments…');
+  gate.resolve();await flush();
+  assert.deepEqual(ui.$('attachment-list').querySelectorAll('.attachment-name').map(node=>node.textContent),['first.txt','last.txt']);
+  assert.equal(ui.$('attachment-status').textContent,'huge.txt: files must be 5 MB or smaller.');
+});
+
+test('a screenshot picked in the preview while an attachment is uploading is still attached',async()=>{
+  const ui=await browser({filesUI:true,previewUI:true,desktop:true}),gate=deferred();let held=true;
+  ui.setIntercept(async(request,next)=>{if(request.path==='/api/attachments'&&held){held=false;await gate.promise;}return next();});
+  const uploading=ui.window.relayFiles.addSnapshots([{name:'notes.md',data:'bm90ZXM='}]);await flush();
+  const picked=ui.pickInPreview({projectId:'project-one',text:'The Apply button: ',image:{name:'preview-button.png',data:'iVBORw0KGgo='}});await flush();
+  gate.resolve();await uploading;await picked;await flush();
+  assert.deepEqual(ui.$('attachment-list').querySelectorAll('.attachment-name').map(node=>node.textContent),['notes.md','preview-button.png']);
 });
 
 test('Continue locally works without cloud sign-in and requires a model choice and explicit start',async()=>{

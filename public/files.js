@@ -4,7 +4,7 @@
   const el = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
   const button = (text, cls, fn) => { const node = el('button', cls, text); node.type = 'button'; node.addEventListener('click', fn); return node; };
   const size = bytes => bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.ceil(bytes / 1024)) + ' KB';
-  const drafts = new Map(), pending = new Map(), thumbnails = new Map();
+  const drafts = new Map(), uploads = new Map(), thumbnails = new Map();
   let project = '', signature = '', treeVersion = 0, previewVersion = 0, selected = null, dragDepth = 0;
   const key = id => 'relay-attachments:' + id;
   function files(id = api.getState().projectId) {
@@ -32,34 +32,42 @@
       chip.append(open, remove); list.append(chip);
     }
     list.hidden = !files().length;
-    $('attach-files').disabled = !state.ready || Boolean(state.pending) || Boolean(pending.get(state.projectId));
+    $('attach-files').disabled = !state.ready || Boolean(state.pending) || uploads.has(state.projectId);
     $('attach-files').title = 'Attach up to 6 files · PNG, JPEG, GIF, WebP (5 MB) or text/code (64 KB) · paste or drop also works';
     api.renderControls();
   }
+  // Files added while others upload wait their turn instead of being dropped, so the limits below always count what is already attached.
+  // Problems are kept until the last waiting file is done, so a later success can't hide them.
   async function addSnapshots(snapshots, id = api.getState().projectId) {
-    if (!id || pending.get(id)) return;
-    pending.set(id, true); update();
-    if (id === api.getState().projectId) status('Adding attachments…');
-    const errors = [], added = [];
-    try {
-      for (const source of snapshots) {
-        if (files(id).length >= 6) { errors.push('You can attach up to 6 files per message.'); break; }
-        try {
-          const data = typeof source === 'function' ? await source() : source;
-          const meta = await api.post('/api/attachments', { name: data.name, data: data.data }, id);
-          if (files(id).some(f => f.id === meta.id)) { added.push(meta.id); continue; }
-          if (files(id).reduce((sum,f) => sum + f.bytes, meta.bytes) > 20 * 1024 * 1024) throw Error('Attachments must total 20 MB or less.');
-          if (meta.kind === 'text' && files(id).filter(f => f.kind === 'text').reduce((sum,f) => sum + f.bytes, meta.bytes) > 128 * 1024) throw Error('Text attachments must total 128 KB or less.');
-          if (meta.kind === 'image') thumbnails.set(meta.id,'data:'+meta.mime+';base64,'+data.data);
-          files(id).push(meta); added.push(meta.id); save(id);
-        } catch (error) { errors.push(error.message); }
+    if (!id) return;
+    const queue = uploads.get(id) || { count: 0, last: Promise.resolve(), errors: new Set() }, turn = queue.last.then(() => upload(snapshots, id, queue.errors));
+    queue.count++; queue.last = turn; uploads.set(id, queue); update();
+    try { return await turn; } finally {
+      if (!--queue.count) {
+        uploads.delete(id); update();
+        const errors = [...queue.errors].join(' ');
+        if (id === api.getState().projectId) status(errors || files(id).length + ' attached · sent with your next message');
+        else if (errors) api.showNotice(errors);
       }
-      return added;
-    } finally {
-      pending.delete(id); update();
-      if (id === api.getState().projectId) status(errors.length ? errors.join(' ') : files(id).length + ' attached · sent with your next message');
-      else if (errors.length) api.showNotice(errors.join(' '));
     }
+  }
+  async function upload(snapshots, id, errors) {
+    if (id === api.getState().projectId) status('Adding attachments…');
+    const added = [];
+    for (const source of snapshots) {
+      if (files(id).length >= 6) { errors.add('You can attach up to 6 files per message.'); break; }
+      try {
+        const data = typeof source === 'function' ? await source() : source;
+        const meta = await api.post('/api/attachments', { name: data.name, data: data.data }, id);
+        if (files(id).some(f => f.id === meta.id)) { added.push(meta.id); continue; }
+        if (files(id).reduce((sum,f) => sum + f.bytes, meta.bytes) > 20 * 1024 * 1024) throw Error('Attachments must total 20 MB or less.');
+        if (meta.kind === 'text' && files(id).filter(f => f.kind === 'text').reduce((sum,f) => sum + f.bytes, meta.bytes) > 128 * 1024) throw Error('Text attachments must total 128 KB or less.');
+        if (meta.kind === 'image') thumbnails.set(meta.id,'data:'+meta.mime+';base64,'+data.data);
+        files(id).push(meta); added.push(meta.id); save(id);
+      } catch (error) { errors.add(error.message); }
+    }
+    update();
+    return added;
   }
   function addFiles(input) {
     if (!api.getState().ready || api.getState().pending) return;
@@ -179,7 +187,7 @@
       const target = $('file-preview-content').querySelectorAll('.source-line')[line - 1];
       if (target) { target.classList.add('review-line'); target.scrollIntoView({ block: 'center' }); }
     },
-    ids: () => files().map(file => file.id), uploading: () => Boolean(pending.get(api.getState().projectId)), addFiles, addSnapshots,
+    ids: () => files().map(file => file.id), uploading: () => uploads.has(api.getState().projectId), addFiles, addSnapshots,
     accepted(id, ids) { drafts.set(id, files(id).filter(file => !ids.includes(file.id))); save(id); pruneThumbnails(); if (id === api.getState().projectId) { status(); closePreview(); update(); } },
     renderMessageAttachments(row, attachments = []) { if (!attachments.length) return; const host = el('div','message-attachments'), id = api.getState().projectId; for (const file of attachments) { const chip = button((file.kind === 'image' ? '▧ ' : '≡ ') + file.name + ' · ' + size(file.bytes),'saved-attachment',() => openSaved(file,id)); host.append(chip); } row.append(host); },
   };
