@@ -63,7 +63,7 @@
   dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
   dialog.addEventListener('close', () => { if (scope) drafts.set(scope, $('local-task').value); ++revision; loading = false; previousFocus?.focus(); });
   $('local-setup-guide').addEventListener('click', () => {
-    const url = 'https://github.com/AhmedNavaz/throughline/blob/main/docs/guide.md#local-models';
+    const url = 'https://github.com/AhmedNavaz/codeshi/blob/main/docs/guide.md#local-models';
     const opened = window.relayDesktop ? window.relayDesktop.openExternal(url) : Promise.resolve(window.open(url, '_blank', 'noopener,noreferrer'));
     opened.catch(e => error(e.message));
   });

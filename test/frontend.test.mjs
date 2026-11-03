@@ -1111,7 +1111,7 @@ test('ordinary launches and first-run setup do not open update notes automatical
 test('Help reopens in-app notes and Close or Escape dismisses them without resetting the app',async()=>{
   const ui=await browser({setup:true,desktop:true,desktopControls:true,launch:{...clone(updateLaunch),updated:false}});
   ui.menu('whats-new');await flush();assert.equal(ui.$('updates-dialog').open,true);assert.equal(ui.$('updates-eyebrow').textContent,'WHAT’S NEW');
-  ui.$('updates-release-notes').click();await flush();assert.deepEqual(ui.externalLinks,['https://github.com/AhmedNavaz/throughline/releases']);
+  ui.$('updates-release-notes').click();await flush();assert.deepEqual(ui.externalLinks,['https://github.com/AhmedNavaz/codeshi/releases']);
   ui.$('updates-close').click();await flush();assert.equal(ui.$('updates-dialog').open,false);
   ui.menu('whats-new');await flush();const event=new UIEvent('cancel');ui.$('updates-dialog').dispatchEvent(event);await flush();
   assert.equal(event.defaultPrevented,true);assert.equal(ui.$('updates-dialog').open,false);assert.equal(ui.state().projectId,'project-one');
@@ -2314,7 +2314,7 @@ test('with the sidebar hidden, the top bar names the open workspace, and clickin
 });
 
 test('an update is one click in the status bar: Update downloads it with a ring, then Restart to update restarts', async () => {
-  const latest = { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0', publishedAt: null };
+  const latest = { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/codeshi/releases/tag/v0.15.0', publishedAt: null };
   const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'current', error: null, progress: null, blocked: null, latest: null } });
   const button = ui.$('update-status'), more = ui.$('update-more'), popover = ui.$('update-popover');
   assert.equal(button.hidden, true, 'Nothing shows while this is the latest version.');
@@ -2363,7 +2363,7 @@ test('an update is one click in the status bar: Update downloads it with a ring,
 });
 
 test('the chevron beside the update has its release notes and Skip, and Check for Updates shows a skipped version', async () => {
-  const latest = { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0', publishedAt: null };
+  const latest = { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/codeshi/releases/tag/v0.15.0', publishedAt: null };
   const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'available', error: null, progress: null, blocked: null, latest } });
   const button = ui.$('update-status'), more = ui.$('update-more'), popover = ui.$('update-popover');
   more.click();
@@ -2386,12 +2386,12 @@ test('the chevron beside the update has its release notes and Skip, and Check fo
 });
 
 test('an app that cannot replace itself offers the download instead, and a manual check says when Codeshi is up to date', async () => {
-  const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'available', error: null, progress: null, blocked: 'translocated', latest: { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0' } } });
+  const ui = await browser({ desktop: true, update: { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'available', error: null, progress: null, blocked: 'translocated', latest: { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/codeshi/releases/tag/v0.15.0' } } });
   ui.$('update-status').click();
   assert.match(ui.$('update-content').textContent, /Move it to your Applications folder/);
   assert.equal(ui.findButton('Update and restart'), undefined);
   ui.findButton('Download ↗').click(); await flush();
-  assert.deepEqual(ui.externalLinks, ['https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0']);
+  assert.deepEqual(ui.externalLinks, ['https://github.com/AhmedNavaz/codeshi/releases/tag/v0.15.0']);
   ui.pushUpdate({ status: 'current', latest: null, blocked: null });
   ui.window.relayUI.commands['check-updates'](); await flush();
   assert.match(ui.$('update-content').textContent, /Codeshi 0\.14\.0 is the latest version/);

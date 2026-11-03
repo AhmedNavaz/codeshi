@@ -10,11 +10,11 @@ import { compareVersions, versionPattern } from './updates.mjs';
 // the app inside (its version, bundle ID and signature), then a small helper replaces the app once Codeshi has quit
 // and opens the new version. Files the app downloads itself are not marked as downloaded from the internet, so the
 // updated app opens without the security prompt a browser download gets. Codeshi never restarts while an agent works.
-export const REPOSITORY = 'AhmedNavaz/throughline';
+export const REPOSITORY = 'AhmedNavaz/codeshi';
 export const BUNDLE_ID = 'local.throughline.desktop';
 // Codeshi was called Throughline. Release files may come from the repository under either name, since GitHub sends
 // the old one to the new after a rename, and the zip and the app inside may carry either name.
-const REPOSITORIES = [REPOSITORY, 'AhmedNavaz/codeshi'], NAMES = ['Codeshi', 'Throughline'];
+const REPOSITORIES = [REPOSITORY, 'AhmedNavaz/throughline'], NAMES = ['Codeshi', 'Throughline'];
 const fromRepository = (url, part) => typeof url === 'string' && REPOSITORIES.some(repository => url.startsWith(`https://github.com/${repository}/${part}`));
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000, FIRST_CHECK = 15 * 1000;
 const MAX_DOWNLOAD = 1024 * 1024 * 1024, MAX_CHECKSUMS = 64 * 1024;

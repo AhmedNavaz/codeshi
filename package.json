@@ -16,13 +16,13 @@
     "desktop",
     "electron"
   ],
-  "homepage": "https://github.com/AhmedNavaz/throughline#readme",
+  "homepage": "https://github.com/AhmedNavaz/codeshi#readme",
   "bugs": {
-    "url": "https://github.com/AhmedNavaz/throughline/issues"
+    "url": "https://github.com/AhmedNavaz/codeshi/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AhmedNavaz/throughline.git"
+    "url": "git+https://github.com/AhmedNavaz/codeshi.git"
   },
   "license": "MIT",
   "author": "Ahmed Nawaz",

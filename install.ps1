@@ -1,5 +1,5 @@
 # Installs the latest Codeshi release on Windows:
-#   irm https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/AhmedNavaz/codeshi/main/install.ps1 | iex
 # $env:CODESHI_VERSION = '0.16.0' installs a specific version. $env:CODESHI_INSTALL_DIR changes the folder that holds
 # the Codeshi folder (default %LOCALAPPDATA%\Programs). Codeshi was called Throughline: the THROUGHLINE_ names work too,
 # and the Throughline folder and Start menu shortcut there are replaced, keeping your workspaces and settings.
@@ -10,7 +10,7 @@
   $ProgressPreference = 'SilentlyContinue'
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-  $repo = 'AhmedNavaz/throughline'
+  $repo = 'AhmedNavaz/codeshi'
   function Fail([string]$message) { throw "codeshi: $message" }
 
   if (-not [Environment]::Is64BitOperatingSystem) { Fail 'Codeshi needs 64-bit Windows.' }

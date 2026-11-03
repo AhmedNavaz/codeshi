@@ -4,7 +4,7 @@ Thanks for helping. Bug reports, fixes and focused improvements are all welcome.
 
 ## Where to start
 
-- Check the [roadmap](ROADMAP.md) for planned work, and issues labelled [good first issue](https://github.com/AhmedNavaz/throughline/labels/good%20first%20issue) or [help wanted](https://github.com/AhmedNavaz/throughline/labels/help%20wanted).
+- Check the [roadmap](ROADMAP.md) for planned work, and issues labelled [good first issue](https://github.com/AhmedNavaz/codeshi/labels/good%20first%20issue) or [help wanted](https://github.com/AhmedNavaz/codeshi/labels/help%20wanted).
 - For anything bigger than a bug fix, open an issue first so we can agree on the approach before you write code.
 - When a feature ships in stages, the remaining work stays in open issues, linked from the issue that shipped and listed on the roadmap. Closed issues don't hold planned work.
 - The [guide](docs/guide.md) describes how each feature behaves, which is useful context before changing it.
@@ -63,11 +63,11 @@ npm run test:desktop
 - The interface must work under the server's Content Security Policy: no inline scripts or `style` attributes, and no `innerHTML` for provider or user content. Build DOM nodes instead.
 - Colors, sizes and icons come from the tokens in `public/editor-theme.css`; please don't hard-code colors in components.
 - App settings belong on General, Accounts, Alerts or Voice in `public/settings.js`; use its shared group/row kit when a feature supplies its own controls. Keep workspace-specific choices in their workspace controls and Ask a Friend actions in its separate dialog.
-- Some identifiers still use the project's former names, AI Relay and Throughline: `ai-relay.*` file formats, the `X-AI-Relay` header and `AI_RELAY_*` variables; the app's bundle ID `local.throughline.desktop` and the speech helper's `local.throughline.speech`; `throughline:` keys in the page's storage; the `Throughline` and `AI Relay` data folders; the `throughline-sharing` container image; and the `AhmedNavaz/throughline` repository in URLs. Installed copies, saved data and exported files depend on them, so they are kept on purpose; don't rename them without a migration.
+- Some identifiers still use the project's former names, AI Relay and Throughline: `ai-relay.*` file formats, the `X-AI-Relay` header and `AI_RELAY_*` variables; the app's bundle ID `local.throughline.desktop` and the speech helper's `local.throughline.speech`; `throughline:` keys in the page's storage; the `Throughline` and `AI Relay` data folders; and the `throughline-sharing` container image. Installed copies, saved data and exported files depend on them, so they are kept on purpose; don't rename them without a migration. The repository is now `AhmedNavaz/codeshi`; keep the old `AhmedNavaz/throughline` name unused so GitHub can redirect old links.
 
 ## Reporting bugs
 
-Use the [bug report](https://github.com/AhmedNavaz/throughline/issues/new?template=bug_report.yml) form, or [design feedback](https://github.com/AhmedNavaz/throughline/issues/new?template=ux_feedback.yml) for anything confusing or rough in the interface. Include your Codeshi version, your system (macOS or Windows) and its version, the agent you used and the steps to reproduce. Please remove anything private from logs and screenshots. For security problems, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+Use the [bug report](https://github.com/AhmedNavaz/codeshi/issues/new?template=bug_report.yml) form, or [design feedback](https://github.com/AhmedNavaz/codeshi/issues/new?template=ux_feedback.yml) for anything confusing or rough in the interface. Include your Codeshi version, your system (macOS or Windows) and its version, the agent you used and the steps to reproduce. Please remove anything private from logs and screenshots. For security problems, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ## Releasing
 

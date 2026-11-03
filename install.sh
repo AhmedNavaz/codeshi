@@ -1,12 +1,12 @@
 #!/bin/sh
 # Installs the latest Codeshi release on macOS:
-#   curl -fsSL https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/AhmedNavaz/codeshi/main/install.sh | sh
 # CODESHI_VERSION=0.4.0 installs a specific version. CODESHI_INSTALL_DIR changes the folder (default /Applications).
 # Codeshi was called Throughline: THROUGHLINE_VERSION and THROUGHLINE_INSTALL_DIR work too, and a Throughline.app in
 # the same folder is replaced, keeping your workspaces and settings.
 set -eu
 
-repo="AhmedNavaz/throughline"
+repo="AhmedNavaz/codeshi"
 
 fail() { printf 'codeshi: %s\n' "$1" >&2; exit 1; }
 

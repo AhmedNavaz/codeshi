@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BUNDLE_ID } from './updater.mjs';
 
-const REPOSITORY = 'https://github.com/AhmedNavaz/throughline';
+const REPOSITORY = 'https://github.com/AhmedNavaz/codeshi';
 
 export function updateDemo({ version, build, relaunch, chunks = 40, pause = 120 }) {
   const [major, minor] = version.split('.').map(Number), next = `${major}.${minor + 1}.0`;

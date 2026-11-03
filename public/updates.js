@@ -48,7 +48,7 @@
   $('updates-close').addEventListener('click', dismiss);
   dialog.addEventListener('cancel', event => { event.preventDefault(); dismiss(); });
   $('updates-release-notes').addEventListener('click', () => {
-    bridge.openExternal('https://github.com/AhmedNavaz/throughline/releases').catch(error => api.showNotice(error.message));
+    bridge.openExternal('https://github.com/AhmedNavaz/codeshi/releases').catch(error => api.showNotice(error.message));
   });
   window.addEventListener('relay-state', maybeShow);
   document.addEventListener('close', maybeShow, true);

@@ -92,7 +92,7 @@ test('a newer release is offered, the installed one or an older one is not, and 
   assert.equal(offered.status, 'available');
   assert.deepEqual(offered.latest, { version: '0.15.0', notesUrl: 'https://github.com/AhmedNavaz/throughline/releases/tag/v0.15.0', publishedAt: null });
   assert.match(offered.checkedAt, /^\d{4}-/);
-  assert.deepEqual(calls.fetch, ['https://api.github.com/repos/AhmedNavaz/throughline/releases/latest']);
+  assert.deepEqual(calls.fetch, ['https://api.github.com/repos/AhmedNavaz/codeshi/releases/latest']);
   assert.equal((await setup(t, { json: release({ tag_name: 'v0.14.0' }) }).updater.check()).status, 'current');
   assert.equal((await setup(t, { json: release({ tag_name: 'v0.13.2' }) }).updater.check()).status, 'current');
   assert.match((await setup(t, { status: 403 }).updater.check()).error, /GitHub is limiting update checks/);

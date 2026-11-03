@@ -7,7 +7,7 @@ Switch agents mid-task, keep going when one hits its limit, and use the plans yo
 
 <p align="center"><a href="#install"><b>Install</b></a> &nbsp;·&nbsp; <a href="docs/guide.md"><b>Guide</b></a> &nbsp;·&nbsp; <a href="ROADMAP.md"><b>Roadmap</b></a> &nbsp;·&nbsp; <a href="CONTRIBUTING.md"><b>Contribute</b></a></p>
 
-<p align="center"><a href="https://github.com/AhmedNavaz/throughline/releases/latest"><img src="https://img.shields.io/github/v/release/AhmedNavaz/throughline?label=release" alt="Latest release"></a> <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Runs on macOS and Windows"> <a href="https://github.com/AhmedNavaz/throughline/actions/workflows/ci.yml"><img src="https://github.com/AhmedNavaz/throughline/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a> <a href="https://www.patreon.com/17048317/join"><img src="https://img.shields.io/badge/Support-Patreon-FF424D?logo=patreon&amp;logoColor=white" alt="Support Codeshi on Patreon"></a></p>
+<p align="center"><a href="https://github.com/AhmedNavaz/codeshi/releases/latest"><img src="https://img.shields.io/github/v/release/AhmedNavaz/codeshi?label=release" alt="Latest release"></a> <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Runs on macOS and Windows"> <a href="https://github.com/AhmedNavaz/codeshi/actions/workflows/ci.yml"><img src="https://github.com/AhmedNavaz/codeshi/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a> <a href="https://www.patreon.com/17048317/join"><img src="https://img.shields.io/badge/Support-Patreon-FF424D?logo=patreon&amp;logoColor=white" alt="Support Codeshi on Patreon"></a></p>
 
 <p align="center"><img src="docs/hero.jpg" width="900" alt="Codeshi with the acme-shop project open: Claude adds a promo code field to checkout, then Codex finishes the API side and runs its tests in the same conversation"></p>
 
@@ -15,7 +15,7 @@ Every coding agent runs out of usage at some point, and moving to another one us
 
 It's a free, open-source desktop app for multi-agent coding on macOS and Windows. It runs the official Claude Code, Codex and Gemini integrations, signed in with your own accounts: no API keys, and no extra subscription.
 
-Codeshi was called Throughline until version 0.23. Your workspaces, conversations and settings are kept. After the GitHub repository is renamed to `codeshi`, Throughline 0.22 and earlier need the installer below once to switch to Codeshi; later Mac updates work from inside the app. On Windows, run the installer again to update.
+Codeshi was called Throughline until version 0.23. Your workspaces, conversations and settings are kept. The repository is now `AhmedNavaz/codeshi`. Throughline 0.22 and earlier need the installer below once to switch to Codeshi; later Mac updates work from inside the app. On Windows, run the installer again to update.
 
 ## What makes it different
 
@@ -110,13 +110,13 @@ The [guide](docs/guide.md) describes every feature and its limits.
 
 | | What it brings | Status |
 | --- | --- | --- |
-| **Rewind timeline** | Every checkpoint in one list, and restoring the project to any of them | Next ([#20](https://github.com/AhmedNavaz/throughline/issues/20)) |
-| **Everything in the thread** | GitHub issues, pull requests and failing CI checks as context, then a pull request from the conversation | Planned in stages ([#18](https://github.com/AhmedNavaz/throughline/issues/18)) |
-| **More agents** | Grok, DeepSeek, Qwen and more, each on your own account | In progress ([#4](https://github.com/AhmedNavaz/throughline/issues/4)) |
-| **Linux builds** | Codeshi on Linux, alongside macOS and Windows | Help wanted ([#5](https://github.com/AhmedNavaz/throughline/issues/5)) |
-| **Hands-free voice** | Say "send", and keep talking while the agent works | Needs design ([#72](https://github.com/AhmedNavaz/throughline/issues/72)) |
-| **Approve from your phone** | Answer an approval when you're away from your desk | Exploring ([#23](https://github.com/AhmedNavaz/throughline/issues/23)) |
-| **Signed macOS builds** | Downloads that open without a security prompt, and Homebrew | Waiting on an Apple Developer account ([#1](https://github.com/AhmedNavaz/throughline/issues/1)) |
+| **Rewind timeline** | Every checkpoint in one list, and restoring the project to any of them | Next ([#20](https://github.com/AhmedNavaz/codeshi/issues/20)) |
+| **Everything in the thread** | GitHub issues, pull requests and failing CI checks as context, then a pull request from the conversation | Planned in stages ([#18](https://github.com/AhmedNavaz/codeshi/issues/18)) |
+| **More agents** | Grok, DeepSeek, Qwen and more, each on your own account | In progress ([#4](https://github.com/AhmedNavaz/codeshi/issues/4)) |
+| **Linux builds** | Codeshi on Linux, alongside macOS and Windows | Help wanted ([#5](https://github.com/AhmedNavaz/codeshi/issues/5)) |
+| **Hands-free voice** | Say "send", and keep talking while the agent works | Needs design ([#72](https://github.com/AhmedNavaz/codeshi/issues/72)) |
+| **Approve from your phone** | Answer an approval when you're away from your desk | Exploring ([#23](https://github.com/AhmedNavaz/codeshi/issues/23)) |
+| **Signed macOS builds** | Downloads that open without a security prompt, and Homebrew | Waiting on an Apple Developer account ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)) |
 
 The [roadmap](ROADMAP.md) has everything that has shipped and the full plan.
 
@@ -125,13 +125,13 @@ The [roadmap](ROADMAP.md) has everything that has shipped and the full plan.
 **macOS** (Apple Silicon or Intel), in Terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/AhmedNavaz/codeshi/main/install.sh | sh
 ```
 
 **Windows** (64-bit), in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/AhmedNavaz/throughline/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/AhmedNavaz/codeshi/main/install.ps1 | iex
 ```
 
 Both install the latest release after checking its published checksum. On Windows, Codeshi goes in your user folder with a Start menu shortcut, and running the command again updates it.
@@ -141,15 +141,15 @@ Then connect at least one agent: sign in to [Claude Code](https://code.claude.co
 <details>
 <summary>Download manually or run from source</summary>
 
-**macOS download.** Get the zip for your Mac from [Releases](https://github.com/AhmedNavaz/throughline/releases/latest) and move **Codeshi** to Applications. The app is not notarized by Apple yet, so the first time you open a browser download macOS says it cannot verify the developer: open **System Settings › Privacy & Security** and click **Open Anyway**. If macOS says the app is damaged, run `xattr -cr /Applications/Codeshi.app`.
+**macOS download.** Get the zip for your Mac from [Releases](https://github.com/AhmedNavaz/codeshi/releases/latest) and move **Codeshi** to Applications. The app is not notarized by Apple yet, so the first time you open a browser download macOS says it cannot verify the developer: open **System Settings › Privacy & Security** and click **Open Anyway**. If macOS says the app is damaged, run `xattr -cr /Applications/Codeshi.app`.
 
-**Windows download.** Get the Windows zip from [Releases](https://github.com/AhmedNavaz/throughline/releases/latest), unzip it anywhere and open **Codeshi.exe** in the **Codeshi** folder. The app is not signed yet, so Windows may say it protected your PC: click **More info**, then **Run anyway**. Installing the Google connection from Settings is not available on Windows yet; use Claude Code or the Codex CLI.
+**Windows download.** Get the Windows zip from [Releases](https://github.com/AhmedNavaz/codeshi/releases/latest), unzip it anywhere and open **Codeshi.exe** in the **Codeshi** folder. The app is not signed yet, so Windows may say it protected your PC: click **More info**, then **Run anyway**. Installing the Google connection from Settings is not available on Windows yet; use Claude Code or the Codex CLI.
 
 **From source**, with Node.js 22.12 or later:
 
 ```sh
-git clone https://github.com/AhmedNavaz/throughline.git
-cd throughline
+git clone https://github.com/AhmedNavaz/codeshi.git
+cd codeshi
 npm ci
 npm start
 ```
@@ -168,8 +168,8 @@ Codeshi runs the agents you have installed, on your own accounts. It ships no AP
 
 Codeshi is built in the open, and help of every size is welcome:
 
-- **Use it and tell us what you find.** [Report a bug](https://github.com/AhmedNavaz/throughline/issues/new?template=bug_report.yml) or [share design feedback](https://github.com/AhmedNavaz/throughline/issues/new?template=ux_feedback.yml); a small UI note is as useful as a crash report.
-- **Pick up an issue.** Issues labelled [help wanted](https://github.com/AhmedNavaz/throughline/labels/help%20wanted) are ready to work on, including Linux builds and Windows features.
+- **Use it and tell us what you find.** [Report a bug](https://github.com/AhmedNavaz/codeshi/issues/new?template=bug_report.yml) or [share design feedback](https://github.com/AhmedNavaz/codeshi/issues/new?template=ux_feedback.yml); a small UI note is as useful as a crash report.
+- **Pick up an issue.** Issues labelled [help wanted](https://github.com/AhmedNavaz/codeshi/labels/help%20wanted) are ready to work on, including Linux builds and Windows features.
 - **Start with the code.** [CONTRIBUTING.md](CONTRIBUTING.md) covers setup (plain JavaScript, no build step) and maps the codebase: `src/` is the local backend, `desktop/` the Electron shell, `public/` the interface and `sharing/` the optional link service.
 
 Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).

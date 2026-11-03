@@ -4,7 +4,7 @@
 import { alertDefaults } from '../src/alerts.mjs';
 import { alertMenu } from './status.mjs';
 
-const repository = 'https://github.com/AhmedNavaz/throughline';
+const repository = 'https://github.com/AhmedNavaz/codeshi';
 const agents = ['codex', 'claude', 'gemini'], names = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini' };
 const flags = ['workspace', 'running', 'codex', 'claude', 'gemini', 'files', 'git', 'terminal', 'imports', 'export'];
 // What the menu offers until the page reports: nothing that needs a workspace.

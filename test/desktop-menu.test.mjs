@@ -71,7 +71,7 @@ test('page items and in-app release notes send commands, and external Help links
   commands['Alert Settings…']=['alert-settings'];
   for(const [label,command] of Object.entries(commands)){sent.length=0;item(label).click();assert.deepEqual(sent,[command],label);}
   assert.deepEqual(opened,[]);
-  const repository='https://github.com/AhmedNavaz/throughline';
+  const repository='https://github.com/AhmedNavaz/codeshi';
   const pages={'Codeshi Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`};
   for(const [label,url] of Object.entries(pages)){opened.length=0;item(label).click();assert.deepEqual(opened,[url],label);}
   // The five alert and status switches and the five handoff choices are handled by the desktop app itself and tested separately.
