@@ -4,7 +4,7 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
-## [0.21.1] - 2026-11-03
+## [0.21.2] - 2026-11-03
 
 ### Added
 
@@ -27,7 +27,7 @@ Notable changes to Throughline. The format follows [Keep a Changelog](https://ke
 
 Thanks to [@seeebbii](https://github.com/seeebbii) for the import, attachment, focus and long-history fixes.
 
-0.21.0 was tagged but not published: a test of the update demo failed on Windows before its builds were released. 0.21.1 is the same release with that test fixed.
+0.21.0 and 0.21.1 were tagged but not published: checks that run before the builds are released failed, a test of the update demo on Windows and the preview screenshot check on Apple Silicon build machines. 0.21.2 is the same release with both checks fixed.
 
 ## [0.20.0] - 2026-11-03
 
@@ -363,7 +363,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
-[0.21.1]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.21.1
+[0.21.2]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.21.2
 [0.20.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.20.0
 [0.19.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.19.0
 [0.18.0]: https://github.com/AhmedNavaz/throughline/releases/tag/v0.18.0
