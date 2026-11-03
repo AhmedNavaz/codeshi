@@ -16,6 +16,7 @@ const noSqlite = process.platform === 'win32' ? 'Reading Antigravity’s convers
 import { ConversationImporter } from '../src/conversation-import.mjs';
 import { exportConversation, readConversationPackage } from '../src/conversation-export.mjs';
 import { Broker, commandFor } from '../src/broker.mjs';
+import { prepareContext } from '../src/context.mjs';
 import { runCodex, runClaude, codexUsageWindows, claudeUsageWindows } from '../src/providers.mjs';
 import { createRelayServer } from '../src/server.mjs';
 
@@ -194,6 +195,72 @@ test('separate Claude and Codex chats merge into one conversation in original ti
   assert.deepEqual(c.messages.map(row => [row.provider, row.text]), [['claude', 'Design the schema'], ['codex', 'Implement the schema'], ['claude', 'Schema designed'], ['codex', 'Implemented']]);
   assert.equal(c.messages[0].createdAt, '2026-10-20T09:00:00.000Z', 'Imported messages keep their original time.'); assert(!c.messages.some(row => 'timestamp' in row));
   await broker.close(); broker = new Broker(options); const restored = broker.get(c.id); assert.equal(broker.importTranscript(restored, codex).duplicate, true, 'Both merged sources are remembered after reload.'); assert.equal(restored.messages.length, 4); await broker.close();
+});
+
+// Saves messages with fixed times, as a conversation from an earlier day: a run's prompt and replies share its runId.
+function seedMessages(broker, c, rows) { for (const [id, role, text, createdAt, runId] of rows) broker.record(c, { type: 'message', message: { id, role, text, provider: 'codex', createdAt, ...(runId ? { runId } : {}) } }); }
+const textsOf = c => c.messages.map(message => message.text);
+const today = [['p1', 'user', 'Today: add the promo field', '2026-11-02T10:00:00.000Z', 'r1'], ['a1', 'assistant', 'Today: done', '2026-11-02T10:05:00.000Z', 'r1']];
+const october = { provider: 'codex', sessionId: 'cart', digest: 'cart', messages: [{ sourceId: 'q', role: 'user', text: '20 Oct: set up the cart', timestamp: '2026-10-20T09:00:00Z' }, { sourceId: 'a', role: 'assistant', text: '20 Oct: cart ready', timestamp: '2026-10-20T09:05:00Z' }] };
+
+test('imported older messages go before newer ones and keep that place after a reload', async t => {
+  const f = fixture(t), options = { workspace: f.workspace, dataDir: path.join(f.root, 'journal') }; let broker = new Broker(options); const c = broker.get(broker.create().id); seedMessages(broker, c, today);
+  const later = { provider: 'claude', sessionId: 'later', digest: 'later', messages: [{ sourceId: 'l', role: 'user', text: '3 Nov: ship it', timestamp: '2026-11-03T08:00:00Z' }] };
+  broker.importTranscripts(c, [october, later]);
+  const expected = ['20 Oct: set up the cart', '20 Oct: cart ready', 'Today: add the promo field', 'Today: done', '3 Nov: ship it'];
+  assert.deepEqual(textsOf(c), expected);
+  await broker.close(); broker = new Broker(options); assert.deepEqual(textsOf(broker.get(c.id)), expected, 'The journal keeps each imported message in its place.'); await broker.close();
+});
+
+test('an imported message goes between runs, never inside one', async t => {
+  const f = fixture(t), broker = new Broker({ workspace: f.workspace, dataDir: path.join(f.root, 'journal') }), c = broker.get(broker.create().id);
+  seedMessages(broker, c, [['p1', 'user', 'Run one', '2026-11-02T10:00:00.000Z', 'r1'], ['s1', 'activity', 'Run one step', '2026-11-02T10:01:00.000Z', 'r1'], ['a1', 'assistant', 'Run one reply', '2026-11-02T10:05:00.000Z', 'r1'], ['p2', 'user', 'Run two', '2026-11-02T11:00:00.000Z', 'r2'], ['a2', 'assistant', 'Run two reply', '2026-11-02T11:05:00.000Z', 'r2'], ['n1', 'assistant', 'Note at noon', '2026-11-02T12:00:00.000Z']]);
+  broker.importTranscript(c, { provider: 'claude', sessionId: 'side', digest: 'side', messages: [{ sourceId: 'during', role: 'assistant', text: 'Imported 10:02', timestamp: '2026-11-02T10:02:00Z' }, { sourceId: 'tie', role: 'user', text: 'Imported 11:00', timestamp: '2026-11-02T11:00:00Z' }, { sourceId: 'noon', role: 'user', text: 'Imported 12:00', timestamp: '2026-11-02T12:00:00Z' }] });
+  // A run counts from its prompt, and on equal times the message already there comes first.
+  assert.deepEqual(textsOf(c), ['Run one', 'Run one step', 'Run one reply', 'Imported 10:02', 'Run two', 'Run two reply', 'Imported 11:00', 'Note at noon', 'Imported 12:00']);
+  await broker.close();
+});
+
+test('an untimed imported message stays next to its own chat, and a chat with no times goes at the end', async t => {
+  const f = fixture(t), broker = new Broker({ workspace: f.workspace, dataDir: path.join(f.root, 'journal') }), c = broker.get(broker.create().id); seedMessages(broker, c, today);
+  const partly = { provider: 'codex', sessionId: 'partly', digest: 'partly', messages: [{ sourceId: 'first', role: 'user', text: 'Partly: untimed start' }, { sourceId: 'timed', role: 'assistant', text: 'Partly: 20 Oct', timestamp: '2026-10-20T09:00:00Z' }, { sourceId: 'last', role: 'user', text: 'Partly: untimed end' }] };
+  const never = { provider: 'claude', sessionId: 'never', digest: 'never', messages: [{ sourceId: 'one', role: 'user', text: 'No times: one' }, { sourceId: 'two', role: 'assistant', text: 'No times: two' }] };
+  broker.importTranscripts(c, [partly, never]);
+  assert.deepEqual(textsOf(c), ['Partly: untimed start', 'Partly: 20 Oct', 'Partly: untimed end', 'Today: add the promo field', 'Today: done', 'No times: one', 'No times: two']);
+  await broker.close();
+});
+
+test('messages imported by an earlier version keep their saved order', async t => {
+  const f = fixture(t), dataDir = path.join(f.root, 'journal'), id = '6f0c2a52-5d1e-4c8e-9b7a-3d2f1e0a9b8c'; fs.mkdirSync(dataDir, { recursive: true });
+  // Records as 0.20.0 writes them: its import record has no placement, so the imported messages were added at the end.
+  const records = [{ type: 'created', title: 'Cart', seq: 1, at: '2026-11-02T09:59:00.000Z' }, ...today.map(([mid, role, text, createdAt, runId], index) => ({ type: 'message', message: { id: mid, role, text, provider: 'codex', createdAt, runId }, seq: index + 2, at: createdAt })),
+    { type: 'import', importId: 'codex:cart:cart', importIds: ['codex:cart:cart'], messages: [{ sourceId: 'q', role: 'user', text: '20 Oct: set up the cart', provider: 'codex', id: 'old-q', createdAt: '2026-10-20T09:00:00.000Z', importSource: 'codex:cart:q' }, { sourceId: 'a', role: 'assistant', text: '20 Oct: cart ready', provider: 'codex', id: 'old-a', createdAt: '2026-10-20T09:05:00.000Z', importSource: 'codex:cart:a' }], seq: 4, at: '2026-11-02T10:10:00.000Z' }];
+  fs.writeFileSync(path.join(dataDir, `${id}.jsonl`), records.map(record => JSON.stringify(record) + '\n').join(''));
+  const broker = new Broker({ workspace: f.workspace, dataDir }), c = broker.get(id);
+  assert.deepEqual(textsOf(c), ['Today: add the promo field', 'Today: done', '20 Oct: set up the cart', '20 Oct: cart ready']);
+  // A new import goes before the first newer message and leaves the saved ones where they are.
+  broker.importTranscript(c, { provider: 'claude', sessionId: 'mid', digest: 'mid', messages: [{ sourceId: 'm', role: 'user', text: '25 Oct: pick a theme', timestamp: '2026-10-25T09:00:00Z' }] });
+  assert.deepEqual(textsOf(c), ['25 Oct: pick a theme', 'Today: add the promo field', 'Today: done', '20 Oct: set up the cart', '20 Oct: cart ready']);
+  await broker.close();
+});
+
+test('with a tight context budget the newest request survives an import of older messages', async t => {
+  const f = fixture(t), broker = new Broker({ workspace: f.workspace, dataDir: path.join(f.root, 'journal') }), c = broker.get(broker.create().id), long = 'Checked the field and its tests. '.repeat(60);
+  seedMessages(broker, c, [today[0], ['a1', 'assistant', `Today: done. ${long}`, '2026-11-02T10:05:00.000Z', 'r1']]);
+  broker.importTranscript(c, { ...october, messages: [october.messages[0], { ...october.messages[1], text: `20 Oct: cart ready. ${long}` }] });
+  // Both requests are kept; room is left for about one reply, which is taken from the end.
+  const prompt = prepareContext(c, 'Next request', { workspace: f.workspace, maxBytes: 3000 }).prompt, context = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1)).context.map(item => item.text);
+  assert.deepEqual(context.map(text => text.split('.')[0]), ['20 Oct: set up the cart', 'Today: add the promo field', 'Today: done']);
+  await broker.close();
+});
+
+test('imported messages placed earlier still reach a resumed native session', async t => {
+  const f = fixture(t), broker = new Broker({ workspace: f.workspace, dataDir: path.join(f.root, 'journal') }), c = broker.get(broker.create().id); seedMessages(broker, c, today);
+  broker.record(c, { type: 'session', provider: 'codex', id: 'native', workspaceSignature: broker.workspaceSignature }); broker.record(c, { type: 'checkpoint', provider: 'codex' });
+  broker.importTranscript(c, october); assert.equal(c.messages[0].text, '20 Oct: set up the cart');
+  // The session already saw today's messages, so only the imported ones are new to it, wherever they sit.
+  const prompt = prepareContext(c, 'Next request', { workspace: f.workspace, provider: 'codex' }).prompt; assert.deepEqual(JSON.parse(prompt.slice(prompt.indexOf('\n') + 1)).context.map(item => item.text), ['20 Oct: set up the cart', '20 Oct: cart ready']);
+  await broker.close();
 });
 
 test('HTTP import from any project creates or extends a workspace, merges chats, and starts no inference', async t => {
