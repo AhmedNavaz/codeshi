@@ -159,7 +159,8 @@ test('the update demo for a source checkout offers the next version, passes ever
   let relaunched = 0, launched = 0;
   const demo = updateDemo({ version: '0.20.3', build: 'apple-silicon', relaunch: () => { relaunched++; }, chunks: 4, pause: 1 });
   const states = [];
-  const updater = createUpdater({ version: '0.20.3', build: 'apple-silicon', directory: path.join(root, 'updates'), location: demo.location, fetchImpl: demo.fetchImpl, exec: demo.exec, launch: () => { launched++; demo.launch(); }, quit: demo.quit, onState: state => states.push(state.status), timers: { setTimeout: () => null, clearTimeout: () => {} } });
+  // The demo stands in for the macOS app, the only one that updates itself, whichever system runs the test.
+  const updater = createUpdater({ version: '0.20.3', build: 'apple-silicon', platform: 'darwin', directory: path.join(root, 'updates'), location: demo.location, fetchImpl: demo.fetchImpl, exec: demo.exec, launch: () => { launched++; demo.launch(); }, quit: demo.quit, onState: state => states.push(state.status), timers: { setTimeout: () => null, clearTimeout: () => {} } });
   const offered = await updater.check();
   assert.deepEqual([offered.status, offered.latest.version], ['available', '0.21.0']);
   assert.equal((await updater.install()).status, 'ready', 'The stand-in download passes the checksum, version and signature checks.');
