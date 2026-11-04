@@ -79,8 +79,8 @@ Codeshi cannot change subscription allowances or reset rules. Keep five-hour, we
 | Undo and redo any run's changes, whichever agent made them, after a preview of every file and line ([#20](https://github.com/AhmedNavaz/codeshi/issues/20), stage 1) | [0.20.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.20.0) |
 | Terminal tabs and split panes: several shells per workspace, each in a folder you choose, side by side or stacked ([#70](https://github.com/AhmedNavaz/codeshi/issues/70)) | [0.21.2](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.21.2) |
 | Build, then review: one prompt's finished changes go to another agent for a read-only review once the build and its tests pass, and you choose which findings go back ([#15](https://github.com/AhmedNavaz/codeshi/issues/15)) | [0.22.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.22.0) |
-| Network commands such as `git push` work with Full auto-approval on Codex, and under every setting on Gemini ([#81](https://github.com/AhmedNavaz/codeshi/issues/81)) | [0.25.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.0) |
-| Continue on another agent when a run reaches a usage limit, or wait for the first reset if every agent is out; opt-in ([#91](https://github.com/AhmedNavaz/codeshi/issues/91)) | [0.25.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.0) |
+| Network commands such as `git push` work with Full auto-approval on Codex, and under every setting on Gemini ([#81](https://github.com/AhmedNavaz/codeshi/issues/81)) | [0.25.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.1) |
+| Continue on another agent when a run reaches a usage limit, or wait for the first reset if every agent is out; opt-in ([#91](https://github.com/AhmedNavaz/codeshi/issues/91)) | [0.25.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.1) |
 
 ## Now
 

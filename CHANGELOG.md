@@ -4,19 +4,15 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
-### Changed
-
-- **Dividers you can drag now show it.** While the mouse moves, a small grip appears at the middle of each divider that can be resized, and it fades when the mouse stops.
-
-### Fixed
-
-- The divider above **Files** could only be grabbed a few pixels above its line. It now sits on the line.
-
-## [0.25.0] - 2026-11-04
+## [0.25.1] - 2026-11-04
 
 ### Added
 
 - **A run that reaches its limit continues on another agent** (#91). With **Hand off automatically** on, a task no longer stops when usage jumped between checks or an offer was missed. It continues on a subscription-billed agent with room, with the same access, and the conversation names both agents and when the limit resets. If every agent is out, the task waits for the first reset. It's off until you turn it on: the first time a run stops on a limit, **Always do this** beside **Continue with…** does that.
+
+### Changed
+
+- **Dividers you can drag now show it.** While the mouse moves, a small grip appears at the middle of each divider that can be resized, and it fades when the mouse stops.
 
 ### Fixed
 
@@ -26,6 +22,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 - **Recovering from a crash can't let two processes in at once.** On Windows, if two processes picked up after a crash at the same moment, one could fail with an error and, rarely, both could change the same saved files. They now take turns on every platform, and a crash at any point during recovery is recovered from too.
 - Stopping a command in **Run** just as it exits no longer shows an error (macOS).
 - **Long conversations stay responsive.** In a long conversation, dragging the side and bottom panels stuttered, and the whole window froze for up to a second when an approval arrived or a run finished. Codeshi now skips messages out of view, redraws only what changed, and fetches only the messages that changed. The terminal fits its new size once a drag settles.
+- The divider above **Files** could only be grabbed a few pixels above its line. It now sits on the line.
 
 ## [0.24.0] - 2026-11-04
 
@@ -422,7 +419,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
-[0.25.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.0
+[0.25.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.1
 [0.24.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.24.0
 [0.23.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.23.0
 [0.22.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.22.0
