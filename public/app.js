@@ -519,6 +519,11 @@
     if (remote) return { kind: "tool", icon: remote[1] === "web_search" ? "web" : "tool", verb: remote[1] === "web_search" ? "Search the web" : "Tool", detail: remote[2], output: (remote[3] || "").replace(/^""$/, "").trim(), raw: text };
     // Full auto-approval allows every request, so its notes add nothing to the timeline.
     if (/^Tool .* auto-approved by policy\.?$/.test(text)) return { kind: "approval", skip: true, raw: text };
+    // Codex asks only for what its sandbox blocks, so what Full auto-approval allowed for it stays in the timeline.
+    const automatic = text.match(/^Auto-approved: ([\s\S]*)$/);
+    if (automatic) return { kind: "approval", icon: "approval", verb: "Auto-approved", detail: automatic[1].split("\n")[0], mono: true, output: "", raw: text };
+    const blocked = text.match(/^Blocked by Read only: ([\s\S]*)$/);
+    if (blocked) return { kind: "approval", icon: "denied", verb: "Blocked by Read only", detail: blocked[1].charAt(0).toUpperCase() + blocked[1].slice(1), output: "", raw: text };
     // Remembered approvals say which rule allowed the action.
     const rule = text.match(/^Allowed (by your rule for this workspace|by your rule for this run|for this run|and remembered for this workspace): ([\s\S]*)$/);
     if (rule) return { kind: "approval", icon: "approval", verb: rule[1].startsWith("by your rule") ? "Allowed by your rule" : rule[1] === "for this run" ? "Allowed for this run" : "Allowed and remembered", detail: rule[2].split("\n")[0], mono: true, output: "", raw: text };

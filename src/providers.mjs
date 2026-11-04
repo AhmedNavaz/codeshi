@@ -144,7 +144,12 @@ export async function runCodex(config, { event, approval, question = null, metad
       } catch { /* Older clients may not expose defaults; do not invent one. */ }
     }
     const roots = [...new Set([config.workspace, ...(config.workspaces || [])])];
-    const options = { cwd: config.workspace, approvalPolicy: config.mode === 'read' ? 'never' : (config.approvalPolicy === 'auto' ? 'never' : 'on-request'), approvalsReviewer: 'user', sandbox: config.mode === 'read' ? 'read-only' : 'workspace-write', config: { 'sandbox_workspace_write.writable_roots': config.mode === 'read' ? [] : roots, ...(selectedEffort ? { model_reasoning_effort: selectedEffort } : {}), ...(config.local ? localCodexConfig(config.local) : {}), ...(config.reviewSnapshot ? { mcp_servers: {}, web_search: 'disabled' } : {}) }, ...(selectedModel ? { model: selectedModel } : {}), ...(config.local ? { modelProvider: 'throughline_ollama' } : {}), ...(config.local || config.reviewSnapshot ? { ephemeral: true } : {}) };
+    // Full auto-approval keeps asking: with "never", Codex cannot request anything its sandbox blocks, so writing outside
+    // the workspace would simply fail instead of reaching the broker, which approves it. It also has the network. Codex
+    // only asks for that after a command has failed, and it can report an outage instead. Any request would be approved
+    // and then run outside the sandbox altogether, so this allows less than asking does.
+    const network = config.mode !== 'read' && config.approvalPolicy === 'auto';
+    const options = { cwd: config.workspace, approvalPolicy: config.mode === 'read' ? 'never' : 'on-request', approvalsReviewer: 'user', sandbox: config.mode === 'read' ? 'read-only' : 'workspace-write', config: { 'sandbox_workspace_write.writable_roots': config.mode === 'read' ? [] : roots, 'sandbox_workspace_write.network_access': network, ...(selectedEffort ? { model_reasoning_effort: selectedEffort } : {}), ...(config.local ? localCodexConfig(config.local) : {}), ...(config.reviewSnapshot ? { mcp_servers: {}, web_search: 'disabled' } : {}) }, ...(selectedModel ? { model: selectedModel } : {}), ...(config.local ? { modelProvider: 'throughline_ollama' } : {}), ...(config.local || config.reviewSnapshot ? { ephemeral: true } : {}) };
     if (config.local && (!selectedModel || config.sessionId)) throw new Error('Local runs require an explicit model and a fresh session.');
     // Codex keeps its plan for the run with its plan tool, shown as a to-do list. A Codex that doesn't know the
     // setting refuses it, so the thread then starts without it.
@@ -158,7 +163,7 @@ export async function runCodex(config, { event, approval, question = null, metad
     event({ type: 'thread.started', thread_id: threadId });
     metadata({ effectiveModel: started.model || started.thread.model || selectedModel || 'unknown', transport: 'app-server', effectiveEffort: started.reasoningEffort || selectedEffort || null, ...(config.local ? { connection: 'local', account: { authenticated: true, authMode: 'local', billingSource: 'local' } } : {}) });
     const turn = await client.request('turn/start', { threadId, ...(selectedEffort ? { effort: selectedEffort } : {}), input: [{ type: 'text', text: config.prompt }, ...(config.images || []).flatMap(image => [{ type: 'text', text: 'Attached image: ' + image.name }, { type: 'localImage', path: image.path }])], cwd: config.workspace,
-      approvalPolicy: options.approvalPolicy, approvalsReviewer: 'user', sandboxPolicy: config.mode === 'read' ? { type: 'readOnly', networkAccess: false } : { type: 'workspaceWrite', writableRoots: roots, networkAccess: false }, ...(selectedModel ? { model: selectedModel } : {}) });
+      approvalPolicy: options.approvalPolicy, approvalsReviewer: 'user', sandboxPolicy: config.mode === 'read' ? { type: 'readOnly', networkAccess: false } : { type: 'workspaceWrite', writableRoots: roots, networkAccess: network }, ...(selectedModel ? { model: selectedModel } : {}) });
     turnId = turn.turn.id;
     // A note the person adds while Codex works joins this same turn; it fails once the turn has finished.
     if (!config.reviewSnapshot) steerable(async text => { await client.request('turn/steer', { threadId, expectedTurnId: turnId, input: [{ type: 'text', text }] }, 10000); });

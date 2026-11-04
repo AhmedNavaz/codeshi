@@ -1,6 +1,17 @@
 import os from 'node:os';
 import path from 'node:path';
 
+// One line saying what an agent asked to do, for the run's activity.
+export function requestSummary(request = {}) {
+  let command = request.command ?? request.input?.command;
+  if (Array.isArray(command)) command = command.length === 3 && ['-c', '-lc'].includes(command[1]) ? command[2] : command.join(' ');
+  return String(command || request.reason || request.title || 'A change outside the sandbox').split('\n')[0].slice(0, 200);
+}
+
+// What a command prints when a read-only sandbox stopped it. It reads like a network or disk fault, not like a setting.
+const sandboxBlock = /could not resolve host|temporary failure in name resolution|name or service not known|network is unreachable|enotfound|eai_again|read-only file system|erofs|operation not permitted/i;
+export const blockedBySandbox = output => sandboxBlock.test(String(output || ''));
+
 // "Ask before changes": approval requests for actions that only read the workspace are allowed without asking.
 // Anything that could write, delete, install, reach the network, run project code, or read outside the workspace
 // folders still asks. The rules err toward asking: shell features the check cannot fully reason about (chaining,

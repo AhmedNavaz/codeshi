@@ -18,7 +18,7 @@ import { processStart, reused } from './mutation-lock.mjs';
 import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mjs';
 import { validateAutomaticReview } from './automatic-review.mjs';
 import { ResumeScheduler } from './resume.mjs';
-import { readOnlyRequest, approvalScope } from './approval-rules.mjs';
+import { readOnlyRequest, approvalScope, requestSummary, blockedBySandbox } from './approval-rules.mjs';
 import { cleanQuestions, checkAnswers, answerSummary } from './agent-questions.mjs';
 import { PermissionRules } from './permission-rules.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
@@ -630,7 +630,9 @@ export class Broker extends EventEmitter {
               if (review && !['Read', 'Glob', 'Grep'].includes(message.request.kind)) { run.child.send({ type: 'approval-result', id: message.request.id, allow: false }); return; }
               if (run.approvalPolicy === 'auto') {
                 run.child.send({ type: 'approval-result', id: message.request.id, allow: true });
-                this.message(c, 'activity', `Tool ${message.request.kind || message.request.title || 'use'} auto-approved by policy.`, run.provider);
+                // Codex asks only for what its sandbox blocks, such as the network, so each request is worth showing.
+                // The others ask for every tool, and their steps already show those.
+                this.message(c, 'activity', provider === 'codex' ? `Auto-approved: ${requestSummary(message.request)}` : `Tool ${message.request.kind || message.request.title || 'use'} auto-approved by policy.`, run.provider);
                 return;
               }
               // Ask before changes: an action that only reads the workspace folders goes ahead without asking.
@@ -702,7 +704,14 @@ export class Broker extends EventEmitter {
       if (item.type === 'agent_message' && typeof item.text === 'string') {
         this.message(c, 'assistant', item.text, provider, id, event.type === 'item.completed' ? 'complete' : 'streaming');
       }
-      if (item.type === 'command_execution') this.message(c, 'activity', clip(`$ ${item.command}\n${item.aggregated_output || ''}`), provider, id);
+      if (item.type === 'command_execution') {
+        this.message(c, 'activity', clip(`$ ${item.command}\n${item.aggregated_output || ''}`), provider, id);
+        // In Read only, a blocked command looks like a network or disk fault, so the run says what stopped it, once.
+        if (event.type === 'item.completed' && provider === 'codex' && run.mode === 'read' && !run.review && !run.blockExplained && blockedBySandbox(item.aggregated_output)) {
+          run.blockExplained = true;
+          this.message(c, 'activity', 'Blocked by Read only: switch to Can edit files to let Codex use the network or change files.', provider);
+        }
+      }
       if (item.type === 'file_change') this.message(c, 'activity', `File changes: ${JSON.stringify(fileChanges(item.changes))}`, provider, id);
       if (['mcp_tool_call', 'web_search'].includes(item.type)) this.message(c, 'activity', clip(`${item.type}: ${item.tool || item.query || ''}\n${JSON.stringify(item.result || item.arguments || '')}`), provider, id);
       return;

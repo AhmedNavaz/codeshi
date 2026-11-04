@@ -36,7 +36,7 @@ flowchart TD
 | An agent's questions with options: Claude's AskUserQuestion and Codex's request_user_input in one shape, answer checks, and the card where they are answered | `src/agent-questions.mjs`, `public/questions.js` |
 | Alert settings (each way on or off, for each moment), where each alert goes, and which sound the page plays from the `alert` event | `src/alerts.mjs` |
 | Waiting for a usage limit to reset and continuing on the first agent with room (#32) | `src/resume.mjs` |
-| Loopback relay that reaches Google over IPv4 first for the Antigravity runtime | `src/google-relay.mjs` |
+| Loopback relay that reaches Google over IPv4 first for the Antigravity runtime, and carries the agent's commands during a run | `src/google-relay.mjs` |
 | Shared prompt context | `src/context.mjs` |
 | Agent protocol adapters and worker entry point | `src/gemini.mjs`, `src/providers.mjs`, `src/provider-worker.mjs`, `src/resolve-binary.mjs` |
 | Review snapshots, validated findings, freshness and review HTTP routes | `src/agent-review.mjs`, `src/agent-review-routes.mjs` |

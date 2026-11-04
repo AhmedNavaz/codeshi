@@ -52,6 +52,32 @@ test('the Google relay tunnels only authorized CONNECTs to Google hosts on 443, 
   assert.match((await tunnel(url, 'oauth2.googleapis.com:443')).status, / 502 /);
 });
 
+test('a run’s relay also carries the agent’s commands, to any host and port, for clients holding the token', async t => {
+  const echo = net.createServer(socket => socket.pipe(socket)); await new Promise(resolve => echo.listen(0, '127.0.0.1', resolve)); t.after(() => echo.close());
+  const attempts = [];
+  const relay = createGoogleRelay({ commands: true, lookup: async host => [{ address: host === '::1' ? '::1' : '192.0.2.1', family: host === '::1' ? 6 : 4 }], connect: ({ host, port }) => { attempts.push([host, port]); return net.connect(echo.address().port, '127.0.0.1'); } });
+  t.after(() => relay.close());
+  const url = await relay.ready;
+  const refused = await tunnel(url, 'github.com:443', { auth: false });
+  assert.match(refused.status, / 407 /, 'The token is still required.');
+  assert.deepEqual(attempts, []);
+  for (const [target, expected] of [['github.com:443', ['192.0.2.1', 443]], ['registry.example.com:8443', ['192.0.2.1', 8443]], ['[::1]:9443', ['::1', 9443]]]) {
+    const open = await tunnel(url, target);
+    assert.match(open.status, / 200 /, target); assert.deepEqual(attempts.at(-1), expected);
+    open.socket.destroy();
+  }
+  assert.match((await tunnel(url, 'github.com:70000')).status, / 403 /, 'A port that does not exist is refused.');
+  assert.match((await tunnel(url, 'not a host:443')).status, / 400 | 403 /);
+});
+
+test('asked without credentials, the relay says how to send them, because git only sends them then', async t => {
+  const relay = createGoogleRelay(); t.after(() => relay.close());
+  const url = new URL(await relay.ready), socket = net.connect(+url.port, url.hostname);
+  socket.write('CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n');
+  const reply = await new Promise(resolve => { let data = ''; socket.on('data', chunk => { data += chunk; }); socket.on('close', () => resolve(data)); });
+  assert.match(reply, /^HTTP\/1\.1 407 /); assert.match(reply, /\r\nProxy-Authenticate: Basic realm="Codeshi"\r\n/);
+});
+
 test('the runtime uses the relay unless the user already configured a proxy', () => {
   const env = relayEnvironment({ PATH: '/bin' }, 'http://throughline:token@127.0.0.1:1');
   assert.equal(env.HTTPS_PROXY, 'http://throughline:token@127.0.0.1:1'); assert.equal(env.https_proxy, env.HTTPS_PROXY); assert.match(env.NO_PROXY, /127\.0\.0\.1/);

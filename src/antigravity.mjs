@@ -19,7 +19,7 @@ export function antigravityInvocation(config) {
   return { args: process.platform === 'linux' ? ['--uid='] : [], env: relayEnvironment(env, config.relay), cleanup() {} };
 }
 // The relay is a convenience: without it the runtime connects directly, as it would on its own.
-export const antigravityRelay = options => options.relay !== undefined ? Promise.resolve(options.relay) : googleRelay().catch(() => null);
+export const antigravityRelay = (options, { commands = false } = {}) => options.relay !== undefined ? Promise.resolve(options.relay) : googleRelay({ commands }).catch(() => null);
 // The runtime reports a failed Google request as a bare "Internal error"; its log says what actually went wrong.
 export function googleConnectionError(error, log) {
   if (!/CCPAConnectionError|Network connection failed|URLError|SSLEOFError|timed out/i.test(log || '')) return error;

@@ -428,7 +428,7 @@ if(message.id===88&&message.result){send({method:'item/completed',params:{thread
   await active.done;
   assert.equal(c.status, 'complete');
   assert.ok(c.messages.some(m => m.text === 'Auto-approved action finished'));
-  assert.ok(c.messages.some(m => m.role === 'activity' && /auto-approved by policy/.test(m.text)));
+  assert.ok(c.messages.some(m => m.role === 'activity' && m.text === 'Auto-approved: auto-command'), 'Codex asks only for what its sandbox blocks, so the run shows what was allowed.');
   const messages = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(messages.find(message => message.id === 88).result, { decision: 'accept' });
 });

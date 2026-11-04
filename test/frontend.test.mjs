@@ -1713,6 +1713,18 @@ test('commands are added and edited in a short form, stay with their workspace, 
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
 });
 
+test('what Full auto-approval allowed for Codex shows in the run, and a block by Read only names the setting', async () => {
+  const ui = await browser({ setup: true }), describe = ui.window.relayUI.describeActivity;
+  const allowed = describe('Auto-approved: git push origin main');
+  assert.equal(allowed.verb, 'Auto-approved');
+  assert.equal(allowed.detail, 'git push origin main');
+  assert.notEqual(allowed.skip, true);
+  assert.equal(describe('Tool Bash auto-approved by policy.').skip, true, 'Agents that ask for every tool still show only the steps.');
+  const blocked = describe('Blocked by Read only: switch to Can edit files to let Codex use the network or change files.');
+  assert.equal(blocked.verb, 'Blocked by Read only');
+  assert.match(blocked.detail, /^Switch to Can edit files/);
+});
+
 test('while the app quits or restarts, what stops answering is not shown as an error', async () => {
   const ui = await browser({ desktop: true });
   ui.window.relayUI.showNotice('Something earlier');
