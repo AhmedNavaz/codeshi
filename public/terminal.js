@@ -272,7 +272,10 @@
     if (!shown()) window.relayPanel?.show('terminal');
     start(folderId);
   });
-  if (typeof ResizeObserver === 'function') new ResizeObserver(() => fitVisible()).observe($('terminal-views'));
+  // Dragging a panel or the window changes the size many times a second, and each fit measures and redraws the
+  // terminal, so it waits for the size to settle.
+  let fitTimer = null;
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => { clearTimeout(fitTimer); fitTimer = setTimeout(fitVisible, 80); }).observe($('terminal-views'));
   if (typeof MutationObserver === 'function') new MutationObserver(() => { const colours = theme(); for (const view of views.values()) view.term.options.theme = colours; }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   let lastProject = null;
   window.addEventListener('relay-state', () => {

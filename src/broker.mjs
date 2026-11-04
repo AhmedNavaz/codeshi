@@ -247,6 +247,7 @@ export class Broker extends EventEmitter {
       c.efforts[record.provider][record.model || 'default'] = c.effort;
     }
     if (record.type === 'import') {
+      c.reordered = record.seq;
       for (const importId of record.importIds || [record.importId]) c.imports[importId] = true;
       let last = -1;
       for (const message of record.messages) {
@@ -341,9 +342,11 @@ export class Broker extends EventEmitter {
     return conversation;
   }
 
-  view(c) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, ...visible } = c;
-    return { ...visible, checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: c.messages.map(({ seq, ...m }) => m) };
+  // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
+  view(c, { since = null } = {}) {
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, ...visible } = c;
+    const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
+    return { ...visible, cursor: records, ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
 
   list() {

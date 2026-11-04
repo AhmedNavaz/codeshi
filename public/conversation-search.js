@@ -75,8 +75,17 @@
       }
       ancestor = ancestor.parentNode;
     }
-    const view = scroller.getBoundingClientRect(), rect = range.getBoundingClientRect();
-    if (rect.top < view.top || rect.bottom > view.bottom) scroller.scrollTop += rect.top - view.top - (view.height - rect.height) / 2;
+    let shownAt = null;
+    const reveal = () => {
+      const view = scroller.getBoundingClientRect(), rect = range.getBoundingClientRect();
+      if (rect.top !== shownAt && (rect.top < view.top || rect.bottom > view.bottom)) scroller.scrollTop += rect.top - view.top - (view.height - rect.height) / 2;
+      shownAt = rect.top;
+    };
+    reveal();
+    // Turns out of view have only an estimated height, so the match can move once they are drawn.
+    let frames = 6;
+    const settle = () => { if (frames-- <= 0 || matches[current] !== range) return; reveal(); requestAnimationFrame(settle); };
+    requestAnimationFrame(settle);
   }
   function find(keep = false) {
     const previous = current;

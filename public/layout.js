@@ -14,6 +14,8 @@
   }
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(sizes)); } catch { /* Sizes are a convenience. */ } };
   const clamp = (value, min, max) => Math.round(Math.max(min, Math.min(max, value)));
+  // Covers the window during a drag, so the cursor stays the same over everything.
+  const shield = document.createElement('div');
   const sidePanels = () => ['git-panel', 'agents-panel', 'review-panel'].map($).filter(Boolean);
 
   // name: [how to measure the current size, how to apply a size, min, max, axis, sign, label]
@@ -37,11 +39,12 @@
     let start = null;
     bar.addEventListener('pointerdown', event => {
       start = { at: section.axis === 'x' ? event.clientX : event.clientY, size: section.measure() || 0 };
-      bar.setPointerCapture?.(event.pointerId); bar.classList.add('dragging'); root.classList.add('resizing', section.axis === 'x' ? 'resizing-columns' : 'resizing-rows');
+      bar.setPointerCapture?.(event.pointerId); bar.classList.add('dragging');
+      shield.className = `resize-shield ${section.axis === 'x' ? 'columns' : 'rows'}`; document.body.append(shield);
       event.preventDefault();
     });
     bar.addEventListener('pointermove', event => { if (start) set(name, start.size + section.sign * ((section.axis === 'x' ? event.clientX : event.clientY) - start.at)); });
-    const end = () => { if (!start) return; start = null; bar.classList.remove('dragging'); root.classList.remove('resizing', 'resizing-columns', 'resizing-rows'); save(); };
+    const end = () => { if (!start) return; start = null; bar.classList.remove('dragging'); shield.remove(); save(); };
     bar.addEventListener('pointerup', end); bar.addEventListener('pointercancel', end);
     bar.addEventListener('dblclick', () => { set(name, null); save(); });
     bar.addEventListener('keydown', event => {

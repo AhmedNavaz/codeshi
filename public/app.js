@@ -277,9 +277,11 @@
     }
   }
 
+  let timeFormat = null; // Creating a formatter for each message took longer than drawing it.
   function messageTime(value) {
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    timeFormat ||= new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+    return Number.isNaN(date.getTime()) ? "" : timeFormat.format(date);
   }
   // Assistant replies use a small Markdown subset, built as DOM nodes so provider text is never parsed as HTML.
   function renderInline(parent, text) {
@@ -697,96 +699,195 @@
     return row;
   }
   function updateJump() { $("jump-latest").hidden = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 240; }
+  // Turns out of view have only an estimated height, so the end can move once the last ones are drawn; this stays with it for a few frames.
+  function scrollToLatest(frames = 8) {
+    ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump();
+    if (frames > 0) requestAnimationFrame(() => scrollToLatest(frames - 1));
+  }
+  // Makes parent's children exactly these nodes, touching only what differs, so what stayed keeps its layout and scroll position.
+  function syncChildren(parent, nodes) {
+    let at = 0;
+    while (at < nodes.length && parent.childNodes[at] === nodes[at]) at++;
+    if (at === nodes.length && parent.childNodes.length === at) return;
+    const wanted = new Set(nodes);
+    for (const node of [...parent.childNodes].slice(at)) if (!wanted.has(node)) node.remove();
+    for (; at < nodes.length; at++) if (parent.childNodes[at] !== nodes[at]) parent.insertBefore(nodes[at], parent.childNodes[at] || null);
+  }
+  // What the transcript last drew. A long conversation holds tens of thousands of elements, and rebuilding them for one
+  // new line froze the window for half a second, so a turn whose messages kept their objects (see keepMessageObjects)
+  // is left alone, and a changed turn replaces only the messages and steps that changed.
+  const drawn = { scope: null, base: null, messages: [], turns: new Map(), steps: new WeakMap(), version: 0 };
+  const noOpenOutputs = new Set();
   function renderMessages(forceScroll = false) {
-    const messages = state.conversation?.messages || [];
-    const signature = JSON.stringify([state.projectId, state.conversation?.id, messages, state.conversation?.reviews?.map(({ id, status, summary }) => [id, status, summary]), state.conversation?.status, state.conversation?.activeRun?.id, state.conversation?.lastRun?.id, state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path), state.conversation?.pendingApprovals?.map(({ id, runId }) => [id, runId]), state.conversation?.checkpoints]);
+    const c = state.conversation, messages = c?.messages || [];
+    const folders = state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path);
+    const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
+    const scope = JSON.stringify([state.projectId, c?.id, folders]);
     const noProvider=state.ready&&!messages.length&&!['codex','claude','gemini'].some(available);
     ui.empty.hidden = messages.length > 0 || !state.ready || noProvider;
     if($('provider-empty-state'))$('provider-empty-state').hidden=!noProvider;
-    if (signature === state.messagesSignature) return;
-    state.messagesSignature = signature;
+    if (scope === drawn.scope && base === drawn.base && messages.length === drawn.messages.length && messages.every((message, index) => message === drawn.messages[index])) return;
+    if (scope !== drawn.scope) { drawn.turns = new Map(); drawn.steps = new WeakMap(); }
+    drawn.scope = scope; drawn.base = base; drawn.messages = messages;
+    state.messagesSignature = String(++drawn.version);
     const nearBottom = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 110;
     const oldTop = ui.scroll.scrollTop;
-    const openOutputs = new Set([...ui.messages.querySelectorAll(".activity-output")].filter(node => !node.hidden).map(node => node.getAttribute("data-entry-id") || node.dataset?.entryId));
-    const openEarlier = new Set([...ui.messages.querySelectorAll("details")].filter(node => node.open && node.classList.contains("activity-earlier")).map(node => node.getAttribute("data-group") || node.dataset?.group));
-    const fragment = document.createDocumentFragment();
-    const c = state.conversation, liveRun = c?.status === "running" ? c.activeRun : null, shownRun = liveRun || c?.lastRun;
+    const liveRun = c?.status === "running" ? c.activeRun : null, shownRun = liveRun || c?.lastRun;
+    const running = c?.status === "running";
     // Each prompt starts a turn holding everything that answers it, so the prompt can stay at the top while its results scroll.
     // Inside a turn, each run is one thread under the agent's name: its replies and steps sit on one line, in order.
-    let turn = null, thread = null;
-    const threads = [];
-    const place = node => (turn || fragment).append(node);
-    const openThread = (key, provider, connection, source, forRun = null) => {
-      const node = element("div", "run-thread"), body = element("div", "run-thread-body");
-      if (key) { node.setAttribute("data-run-id", key); node.dataset.runId = key; }
-      const run = forRun || (key && shownRun?.id === key ? shownRun : null);
-      const heading = element("div", "message-heading run-thread-heading");
-      const avatar = element("span", `message-avatar ${connection === "local" ? "local" : provider}`);
-      avatar.setAttribute("aria-hidden", "true");
-      heading.append(avatar, element("span", "message-author", connection === "local" ? "Local · Ollama" : label(provider)));
-      const model = source?.model && source.model !== "unknown" ? source.model : run?.effectiveModel && run.effectiveModel !== "unknown" ? run.effectiveModel : run?.model || "";
-      const effort = source?.effort || run?.effectiveEffort || run?.effort || "";
-      const details = [model, effort ? effort + " effort" : ""].filter(Boolean).join(" · ");
-      if (details) heading.append(element("span", "message-model", details));
-      if (source?.imported) heading.append(element("span", "message-label", "Imported"));
-      node.append(heading, body);
-      thread = { key, provider, connection, node, body, turn };
-      threads.push(thread);
-      place(node);
-      return thread;
+    const starts = [];
+    messages.forEach((message, index) => { if (message.role === "user" && !message.steer) starts.push(index); });
+    const segments = starts[0] > 0 || (!starts.length && messages.length) ? [{ from: 0, to: starts[0] ?? messages.length, loose: true }] : [];
+    starts.forEach((from, index) => segments.push({ from, to: starts[index + 1] ?? messages.length }));
+    const lastSegmentOfRun = new Map();
+    segments.forEach((segment, index) => { for (let at = segment.from; at < segment.to; at++) if (messages[at].runId) lastSegmentOfRun.set(messages[at].runId, index); });
+    // What a message's drawing reads besides the message itself.
+    const messageExtra = message => {
+      let extra = "";
+      if (message.reviewId) { const review = c?.reviews?.find(item => item.id === message.reviewId); extra += JSON.stringify([Boolean(review), review?.summary]); }
+      if (message.routing) extra += (window.relayModelPicker?.modelName?.(message.provider, message.routing.model) || "") + (window.relayRouting?.modeNames?.[message.routing.mode] || "");
+      if (message.attachments?.length && window.relayFiles) extra += "attachments";
+      if (!message.provider) extra += c?.provider || "";
+      return extra;
     };
-    // The thread for a message of this run, continuing the open one when it is the same run and agent.
-    const threadFor = (message, index) => {
-      const key = message.runId || "", provider = message.provider || c?.provider || "codex";
-      if (thread && thread.turn === turn && thread.key === key && (key || thread.provider === provider)) return thread;
-      const source = messages.slice(index).find(item => item.role === "assistant" && (item.runId || "") === key && (key || item === message));
-      return openThread(key, source?.provider || provider, source?.connection || message.connection, source);
-    };
-    for (let index = 0; index < messages.length; index++) {
-      const message = messages[index];
-      if (message.role === "user" && !message.steer) {
-        turn = element("section", "turn"); fragment.append(turn); thread = null;
-        turn.append(renderMessage(message));
-        continue;
+    const rootKids = [], turns = new Map(), footer = $("transcript-footer"), progress = $("run-progress");
+    let footerHost = rootKids;
+    segments.forEach((segment, segmentIndex) => {
+      const last = segmentIndex === segments.length - 1, first = messages[segment.from];
+      const turnKey = segment.loose ? "loose" : String(first.id || segment.from), saved = drawn.turns.get(turnKey);
+      const runIds = new Set(), extras = [];
+      for (let at = segment.from; at < segment.to; at++) { const message = messages[at]; if (message.runId) runIds.add(message.runId); const extra = messageExtra(message); if (extra) extras.push(extra); }
+      const rows = [...runIds].filter(id => lastSegmentOfRun.get(id) === segmentIndex && c?.checkpoints?.[id]?.files).map(id => [id, c.checkpoints[id].files, c.checkpoints[id].undone || null]);
+      const extra = JSON.stringify([last, extras, rows, rows.length ? [running, c?.activeRun?.id, Boolean(window.relayRewind)] : null, shownRun && runIds.has(shownRun.id) ? [shownRun.id, shownRun.provider, shownRun.effectiveModel, shownRun.model, shownRun.effectiveEffort, shownRun.effort, liveRun?.id] : null]);
+      const count = segment.to - segment.from;
+      if (saved && !last && !segment.loose && saved.extra === extra && saved.messages.length === count && saved.messages.every((message, index) => message === messages[segment.from + index])) {
+        turns.set(turnKey, saved); rootKids.push(saved.node);
+        return;
       }
-      if (message.role !== "activity") {
-        const row = renderMessage(message);
-        // Replies, errors and notes added while the agent worked belong to their run's thread.
-        const inRun = message.role === "assistant" || (message.runId && (message.role === "error" || message.steer || thread?.key === message.runId));
-        if (inRun) threadFor(message, index).body.append(row); else { thread = null; place(row); }
-        continue;
+      const oldNodes = saved?.nodes || new Map(), nodes = new Map(), kids = segment.loose ? rootKids : [], threads = [];
+      const turnNode = segment.loose ? null : saved?.node || element("section", "turn");
+      if (turnNode) rootKids.push(turnNode);
+      let thread = null, ordinal = 0;
+      const place = node => kids.push(node);
+      const messageNode = (message, index) => {
+        const key = "message:" + (message.id || index), extra = messageExtra(message), kept = oldNodes.get(key);
+        if (kept?.message === message && kept.extra === extra) { nodes.set(key, kept); return kept.node; }
+        const node = renderMessage(message);
+        nodes.set(key, { message, extra, node });
+        return node;
+      };
+      const stepOf = activity => {
+        let step = drawn.steps.get(activity);
+        if (!step) { step = { ...parseActivity(activity.text), message: activity }; drawn.steps.set(activity, step); }
+        return step;
+      };
+      const stepNode = (step, entryId) => {
+        const key = "step:" + entryId, kept = oldNodes.get(key);
+        if (kept?.message === step.message) { nodes.set(key, kept); return kept.node; }
+        const node = renderStep(step, entryId, kept?.node.classList.contains("open") ? new Set([entryId]) : noOpenOutputs);
+        nodes.set(key, { message: step.message, node });
+        return node;
+      };
+      const openThread = (key, provider, connection, source, forRun = null) => {
+        const run = forRun || (key && shownRun?.id === key ? shownRun : null);
+        const model = source?.model && source.model !== "unknown" ? source.model : run?.effectiveModel && run.effectiveModel !== "unknown" ? run.effectiveModel : run?.model || "";
+        const effort = source?.effort || run?.effectiveEffort || run?.effort || "";
+        const details = [model, effort ? effort + " effort" : ""].filter(Boolean).join(" · ");
+        const nodeKey = "thread:" + (ordinal++) + ":" + key, headKey = JSON.stringify([provider, connection, details, Boolean(source?.imported)]);
+        let parts = oldNodes.get(nodeKey);
+        if (!parts) {
+          parts = { node: element("div", "run-thread"), body: element("div", "run-thread-body") };
+          if (key) { parts.node.setAttribute("data-run-id", key); parts.node.dataset.runId = key; }
+        }
+        if (parts.headKey !== headKey) {
+          const heading = element("div", "message-heading run-thread-heading");
+          const avatar = element("span", `message-avatar ${connection === "local" ? "local" : provider}`);
+          avatar.setAttribute("aria-hidden", "true");
+          heading.append(avatar, element("span", "message-author", connection === "local" ? "Local · Ollama" : label(provider)));
+          if (details) heading.append(element("span", "message-model", details));
+          if (source?.imported) heading.append(element("span", "message-label", "Imported"));
+          parts.heading = heading; parts.headKey = headKey;
+        }
+        nodes.set(nodeKey, parts);
+        thread = { key, provider, connection, node: parts.node, body: parts.body, heading: parts.heading, kids: [] };
+        threads.push(thread);
+        place(thread.node);
+        return thread;
+      };
+      // The thread for a message of this run, continuing the open one when it is the same run and agent.
+      const threadFor = (message, index) => {
+        const key = message.runId || "", provider = message.provider || c?.provider || "codex";
+        if (thread && thread.key === key && (key || thread.provider === provider)) return thread;
+        let source = null;
+        for (let at = index; at < messages.length && !source; at++) { const item = messages[at]; if (item.role === "assistant" && (item.runId || "") === key && (key || item === message)) source = item; }
+        return openThread(key, source?.provider || provider, source?.connection || message.connection, source);
+      };
+      for (let index = segment.from; index < segment.to; index++) {
+        const message = messages[index];
+        if (message.role === "user" && !message.steer) {
+          thread = null;
+          place(messageNode(message, index));
+          continue;
+        }
+        if (message.role !== "activity") {
+          const row = messageNode(message, index);
+          // Replies, errors and notes added while the agent worked belong to their run's thread.
+          const inRun = message.role === "assistant" || (message.runId && (message.role === "error" || message.steer || thread?.key === message.runId));
+          if (inRun) threadFor(message, index).kids.push(row); else { thread = null; place(row); }
+          continue;
+        }
+        const activities = [message];
+        while (messages[index + 1]?.role === "activity" && (messages[index + 1].runId || "") === (message.runId || "")) activities.push(messages[++index]);
+        const steps = activities.map(stepOf).filter(step => !step.skip);
+        if (!steps.length) continue;
+        const host = threadFor(message, index - activities.length + 1);
+        const groupKey = String(message.id || `${message.runId || "run"}-${index - activities.length + 1}`);
+        // Every step shows; only a very long stretch keeps its earlier steps behind one row.
+        if (steps.length > 12) {
+          const earlier = steps.slice(0, -6), key = "earlier:" + groupKey;
+          let group = oldNodes.get(key);
+          if (!group) {
+            const disclosure = element("details", "activity-earlier"), summary = element("summary", "activity-earlier-toggle"), node = element("span", "timeline-node"), text = element("span", "");
+            disclosure.setAttribute("data-group", `${groupKey}-earlier`);
+            disclosure.dataset.group = `${groupKey}-earlier`;
+            node.setAttribute("aria-hidden", "true"); node.append(element("span", "activity-icon icon-more"));
+            summary.append(node, text);
+            group = { disclosure, summary, text };
+          }
+          nodes.set(key, group);
+          group.text.textContent = `${earlier.length} earlier steps`;
+          syncChildren(group.disclosure, [group.summary, ...earlier.map((step, idx) => stepNode(step, step.message.id || `${groupKey}-${idx}`))]);
+          host.kids.push(group.disclosure);
+          steps.slice(-6).forEach((step, idx) => host.kids.push(stepNode(step, step.message.id || `${groupKey}-${idx + earlier.length}`)));
+        } else steps.forEach((step, idx) => host.kids.push(stepNode(step, step.message.id || `${groupKey}-${idx}`)));
       }
-      const activities = [message];
-      while (messages[index + 1]?.role === "activity" && (messages[index + 1].runId || "") === (message.runId || "")) activities.push(messages[++index]);
-      const steps = activities.map(act => ({ ...parseActivity(act.text), message: act })).filter(step => !step.skip);
-      if (!steps.length) continue;
-      const host = threadFor(message, index).body;
-      const groupKey = String(message.id || `${message.runId || "run"}-${index}`);
-      // Every step shows; only a very long stretch keeps its earlier steps behind one row.
-      if (steps.length > 12) {
-        const earlier = steps.slice(0, -6), disclosure = element("details", "activity-earlier");
-        disclosure.setAttribute("data-group", `${groupKey}-earlier`);
-        disclosure.dataset.group = `${groupKey}-earlier`;
-        disclosure.open = openEarlier.has(`${groupKey}-earlier`);
-        const summary = element("summary", "activity-earlier-toggle");
-        const node = element("span", "timeline-node"); node.setAttribute("aria-hidden", "true"); node.append(element("span", "activity-icon icon-more"));
-        summary.append(node, element("span", "", `${earlier.length} earlier steps`));
-        disclosure.append(summary, ...earlier.map((step, idx) => renderStep(step, step.message.id || `${groupKey}-${idx}`, openOutputs)));
-        host.append(disclosure);
-        steps.slice(-6).forEach((step, idx) => host.append(renderStep(step, step.message.id || `${groupKey}-${idx + earlier.length}`, openOutputs)));
-      } else steps.forEach((step, idx) => host.append(renderStep(step, step.message.id || `${groupKey}-${idx}`, openOutputs)));
-    }
-    // The run's status line is the last step of its thread, so the live run has one indicator, where its work is.
-    if (shownRun) {
-      let host = threads.findLast(item => item.turn === turn && shownRun.id && item.key === shownRun.id);
-      if (!host && liveRun) host = thread && thread.turn === turn && !shownRun.id ? thread : openThread(shownRun.id || "", shownRun.provider || c?.provider || "codex", shownRun.connection, null, shownRun);
-      if (host) host.body.append($("run-progress")); else $("transcript-footer").prepend($("run-progress"));
-    } else $("transcript-footer").prepend($("run-progress"));
-    // A run that changed files ends with its checkpoint line, after its status line (#20).
-    for (const item of new Map(threads.filter(entry => entry.key).map(entry => [entry.key, entry])).values()) { const line = window.relayRewind?.row(item.key); if (line) item.body.append(line); }
-    place($("transcript-footer"));
-    ui.messages.replaceChildren(fragment);
-    if (forceScroll || nearBottom) requestAnimationFrame(() => { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); });
+      if (last) {
+        // The run's status line is the last step of its thread, so the live run has one indicator, where its work is.
+        let host = null;
+        if (shownRun) {
+          host = threads.findLast(item => shownRun.id && item.key === shownRun.id) || null;
+          if (!host && liveRun) host = thread && !shownRun.id ? thread : openThread(shownRun.id || "", shownRun.provider || c?.provider || "codex", shownRun.connection, null, shownRun);
+        }
+        if (host) host.kids.push(progress); else if (footer.firstElementChild !== progress) footer.prepend(progress);
+      }
+      // A run that changed files ends with its checkpoint line, after its status line (#20).
+      for (const item of new Map(threads.filter(entry => entry.key && lastSegmentOfRun.get(entry.key) === segmentIndex).map(entry => [entry.key, entry])).values()) {
+        const key = "rewind:" + item.key, checkpoint = c?.checkpoints?.[item.key], inputs = JSON.stringify([checkpoint?.files, checkpoint?.undone, running, c?.activeRun?.id, Boolean(window.relayRewind)]), kept = oldNodes.get(key);
+        const line = kept?.inputs === inputs ? kept.line : window.relayRewind?.row(item.key);
+        nodes.set(key, { inputs, line });
+        if (line) item.kids.push(line);
+      }
+      for (const item of threads) { syncChildren(item.body, item.kids); syncChildren(item.node, [item.heading, item.body]); }
+      if (last) footerHost = kids;
+      turns.set(turnKey, { node: turnNode, extra, nodes, messages: messages.slice(segment.from, segment.to), kids });
+    });
+    footerHost.push(footer);
+    for (const entry of turns.values()) if (entry.node) syncChildren(entry.node, entry.kids);
+    drawn.turns = turns;
+    syncChildren(ui.messages, rootKids);
+    if (forceScroll) requestAnimationFrame(() => scrollToLatest());
+    else if (nearBottom) requestAnimationFrame(() => { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); });
     else { ui.scroll.scrollTop = oldTop; updateJump(); }
   }
 
@@ -1101,9 +1202,29 @@
     ui.input.style.overflowY = needed > 200 ? "auto" : "hidden";
   }
 
+  // A message that did not change keeps its object, which is how drawing tells what changed (see renderMessages).
+  function keepMessageObjects(previous, conversation) {
+    if (!previous || previous.id !== conversation.id) return conversation;
+    const known = new Map(previous.messages.map(message => [message.id, message]));
+    conversation.messages = conversation.messages.map(message => { const old = known.get(message.id); return old && old !== message && JSON.stringify(old) === JSON.stringify(message) ? old : message; });
+    return conversation;
+  }
+  // A long conversation is many megabytes, so an update asks only for the messages changed since the copy it has.
+  async function fetchConversation(projectId) {
+    const known = state.conversation;
+    const update = await api('/api/conversation' + (Number.isSafeInteger(known?.cursor) ? '?since=' + known.cursor : ''), {}, projectId);
+    if (update.messageCount === undefined) return update;
+    let messages = null;
+    if (known?.id === update.id) {
+      const at = new Map(known.messages.map((message, index) => [message.id, index]));
+      messages = [...known.messages];
+      for (const message of update.messages) { const index = at.get(message.id); if (index === undefined) messages.push(message); else messages[index] = message; }
+    }
+    return messages?.length === update.messageCount ? { ...update, messages } : api('/api/conversation', {}, projectId);
+  }
   function applyConversation(conversation, { adoptSettings = true } = {}) {
     const previousStatus = state.conversation?.status;
-    state.conversation = conversation;
+    state.conversation = keepMessageObjects(state.conversation, conversation);
     if (adoptSettings && !state.settingsPending) {
       state.provider = ['codex','claude','gemini'].includes(conversation.provider) ? conversation.provider : 'codex';
       state.mode = conversation.mode === "read" ? "read" : "edit";
@@ -1133,7 +1254,7 @@
     state.refreshPromise = request;
     request.promise = (async () => {
       try {
-        const [status, conversation] = await Promise.all([api('/api/status',{},projectId),api('/api/conversation',{},projectId)]);
+        const [status, conversation] = await Promise.all([api('/api/status',{},projectId),fetchConversation(projectId)]);
         if (!sameProject(projectId,projectVersion)) return;
         state.status = status;
         applyConversation(conversation,{adoptSettings:settingsRevision === state.settingsRevision});
@@ -1638,7 +1759,16 @@
   let following = true;
   ui.scroll.addEventListener("scroll", () => { following = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 110; }, { passive: true });
   if (typeof ResizeObserver === "function") new ResizeObserver(() => { if (following) ui.scroll.scrollTop = ui.scroll.scrollHeight; }).observe($("transcript-footer"));
-  $("jump-latest").addEventListener("click", () => { ui.scroll.scrollTo({ top: ui.scroll.scrollHeight, behavior: "smooth" }); ui.input.focus(); });
+  // From far away it goes straight there: scrolling past every turn would draw them all, and that moves the end further away.
+  $("jump-latest").addEventListener("click", () => {
+    const distance = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight;
+    if (distance > ui.scroll.clientHeight * 2) scrollToLatest();
+    else {
+      ui.scroll.scrollTo({ top: ui.scroll.scrollHeight, behavior: "smooth" });
+      ui.scroll.addEventListener("scrollend", () => { if (ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 240) scrollToLatest(); }, { once: true });
+    }
+    ui.input.focus();
+  });
   ui.projectSelect.addEventListener("change", () => selectProject(ui.projectSelect.value));
   ui.addProject.addEventListener("click", () => toggleProjectForm(ui.projectPanel.hidden));
   ui.addFirstProject.addEventListener("click", () => toggleProjectForm(true));
@@ -1753,7 +1883,7 @@
       try {
         const conversation = await operation;
         if (sameProject(projectId,version) && revision === state.settingsRevision) {
-          state.conversation = conversation; state.model = model || ''; state.effort = effort;
+          state.conversation = keepMessageObjects(state.conversation, conversation); state.model = model || ''; state.effort = effort;
         }
       } finally { state.settingsPending--; if (sameProject(projectId,version)) render(); }
     },

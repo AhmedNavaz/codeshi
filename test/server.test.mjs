@@ -145,6 +145,8 @@ test('a forced close drops requests still in flight instead of waiting for them'
 test('opens one permanent project chat and reuses it across requests, switching and restart', async t => {
   const f = await fixture(t);
   const initial=await (await fetch(`${f.url}/api/conversation`)).json();
+  const changes=await (await fetch(`${f.url}/api/conversation?since=${initial.cursor}`)).json();assert.equal(changes.messageCount,initial.messages.length,'An update asks only for what changed.');assert.deepEqual(changes.messages,[]);
+  assert.equal((await (await fetch(`${f.url}/api/conversation?since=nonsense`)).json()).messageCount,undefined,'A position that makes no sense gets the whole conversation.');
   assert.equal((await (await fetch(`${f.url}/api/conversations`)).json()).length,1);
   const createdResponse = await post(`${f.url}/api/conversations`, {}, { Origin: f.url });
   assert.equal(createdResponse.status, 200);

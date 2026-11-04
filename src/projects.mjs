@@ -277,7 +277,7 @@ export class ProjectRegistry extends EventEmitter {
     return broker;
   }
 
-  mainConversation(id) {
+  mainConversation(id, options) {
     this.assertOpen(); const broker = this.broker(id); let changed = false;
     const conversationId = withFileGuard(this.filename, () => {
       this.reload(); const entry = this.entry(id);
@@ -289,7 +289,7 @@ export class ProjectRegistry extends EventEmitter {
     });
     broker.mainConversationId = conversationId;
     if (changed) this.emit('projects', { projectId: id });
-    return broker.view(broker.get(conversationId));
+    return broker.view(broker.get(conversationId), options);
   }
 
   close() {

@@ -1713,6 +1713,118 @@ test('commands are added and edited in a short form, stay with their workspace, 
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
 });
 
+test('an update redraws only what changed, so what stayed keeps its elements and what was opened', async () => {
+  const ui = await browser({ setup: true });
+  const chat = ui.canonical.get('project-one'), createdAt = '2026-11-01T10:00:00Z';
+  chat.messages.push(
+    { id: 'u1', runId: 'run-1', role: 'user', text: 'First task', createdAt },
+    { id: 'a1', runId: 'run-1', role: 'assistant', provider: 'codex', text: 'First answer', createdAt },
+    { id: 'u2', runId: 'run-2', role: 'user', text: 'Second task', createdAt },
+    { id: 'act2', runId: 'run-2', role: 'activity', text: '$ npm test\n12 passed' },
+    { id: 'a2', runId: 'run-2', role: 'assistant', provider: 'codex', text: 'Working', status: 'streaming', createdAt }
+  );
+  await ui.window.relayUI.refresh();
+  const firstTurn = ui.$('message-u1').parentNode, firstAnswer = ui.$('message-a1'), prompt = ui.$('message-u2'), answer = ui.$('message-a2');
+  const step = () => ui.document.querySelectorAll('.activity-entry')[0];
+  const opened = step(); opened.querySelector('.activity-output-toggle').click();
+  assert(opened.classList.contains('open'));
+
+  // Nothing changed: the server's fresh copies of the same messages draw nothing.
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('message-a2'), answer, 'An unchanged reply keeps its element.');
+
+  chat.messages.at(-1).text = 'Working on the tests';
+  await ui.window.relayUI.refresh();
+  assert.notEqual(ui.$('message-a2'), answer, 'The reply that changed is drawn again.');
+  assert.match(ui.$('message-a2').textContent, /Working on the tests/);
+  assert.equal(ui.$('message-a1'), firstAnswer, 'An earlier turn keeps its elements.');
+  assert.equal(ui.$('message-u1').parentNode, firstTurn);
+  assert.equal(ui.$('message-u2'), prompt, 'So does the prompt of the turn that changed.');
+  assert.equal(step(), opened, 'So does a step that did not change.');
+  assert(opened.classList.contains('open'), 'A step you opened stays open.');
+
+  // A step that changed is drawn again, and stays open.
+  chat.messages.find(message => message.id === 'act2').text = '$ npm test\n13 passed';
+  await ui.window.relayUI.refresh();
+  assert.notEqual(step(), opened);
+  assert(step().classList.contains('open'), 'A changed step you opened stays open.');
+
+  // The status line and follow-up actions move to the turn that is now the latest, and the earlier one lets them go.
+  assert.equal(ui.$('transcript-footer').parentNode, prompt.parentNode);
+  chat.messages.push({ id: 'u3', runId: 'run-3', role: 'user', text: 'Third task', createdAt });
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('transcript-footer').parentNode, ui.$('message-u3').parentNode);
+  assert.equal(ui.$('message-u2'), prompt);
+  assert.equal(ui.$('messages').querySelectorAll('.turn').length, 3);
+});
+
+test('an update asks only for what changed and merges it, and asks for everything when it cannot', async () => {
+  const ui = await browser({ setup: true });
+  const chat = ui.canonical.get('project-one'), createdAt = '2026-11-01T10:00:00Z';
+  chat.messages.push({ id: 'u1', role: 'user', text: 'Task', createdAt }, { id: 'a1', role: 'assistant', provider: 'codex', text: 'Answer', createdAt });
+  chat.cursor = 5;
+  await ui.window.relayUI.refresh();
+  const prompt = ui.$('message-u1'), state = ui.state();
+  const kept = state.conversation.messages[0];
+  let asked = [], reply = null;
+  ui.setIntercept((request, next) => {
+    if (request.path !== '/api/conversation') return next();
+    asked.push(request.params.since);
+    return request.params.since === undefined || !reply ? next() : response({ ...clone(chat), ...reply });
+  });
+
+  reply = { cursor: 6, messageCount: 2, messages: [{ id: 'a1', role: 'assistant', provider: 'codex', text: 'A better answer', createdAt }] };
+  await ui.window.relayUI.refresh();
+  assert.deepEqual(asked, ['5'], 'It asks for what changed since the copy it has.');
+  assert.deepEqual(clone(ui.state().conversation.messages.map(message => message.text)), ['Task', 'A better answer']);
+  assert.equal(ui.state().conversation.messages[0], kept, 'A message that did not change keeps its object.');
+  assert.equal(ui.state().conversation.cursor, 6);
+  assert.equal(ui.$('message-u1'), prompt);
+  assert.match(ui.$('message-a1').textContent, /A better answer/);
+
+  // A new message joins the end.
+  asked = [];
+  reply = { cursor: 7, messageCount: 3, messages: [{ id: 'a2', role: 'assistant', provider: 'codex', text: 'One more', createdAt }] };
+  await ui.window.relayUI.refresh();
+  assert.deepEqual(asked, ['6']);
+  assert.deepEqual(clone(ui.state().conversation.messages.map(message => message.id)), ['u1', 'a1', 'a2']);
+
+  // A count that does not add up means this copy is out of step, so it asks for everything.
+  asked = []; chat.messages.push({ id: 'a3', role: 'assistant', provider: 'codex', text: 'Whole again', createdAt });
+  reply = { cursor: 8, messageCount: 99, messages: [] };
+  await ui.window.relayUI.refresh();
+  assert.deepEqual(asked, ['7', undefined]);
+  assert.deepEqual(clone(ui.state().conversation.messages.map(message => message.id)), ['u1', 'a1', 'a3']);
+});
+
+test('a resize drag holds its cursor with one element, not a rule on every element, and skips turns out of view', async () => {
+  const ui = await browser({ setup: true, layoutUI: true });
+  const handle = ui.$('bottom-panel').querySelector('.resize-handle');
+  assert(handle);
+  handle.dispatchEvent(new UIEvent('pointerdown'));
+  assert.equal(ui.document.querySelectorAll('.resize-shield').length, 1);
+  assert(ui.document.querySelector('.resize-shield').classList.contains('rows'));
+  handle.dispatchEvent(new UIEvent('pointerup'));
+  assert.equal(ui.document.querySelectorAll('.resize-shield').length, 0);
+  const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(css, /\.resizing[^{}]*\*/, 'A rule on every element makes the browser recheck the whole page at the start and end of a drag.');
+  assert.match(css, /\.turn \{[^}]*content-visibility: auto/);
+});
+
+test('jump to latest goes straight there from far away, and scrolls smoothly from nearby', async () => {
+  const ui = await browser({ setup: true });
+  const scroll = ui.$('messages-scroll'), smooth = [];
+  scroll.scrollTo = options => smooth.push(options);
+  scroll.clientHeight = 500; scroll.scrollHeight = 100000; scroll.scrollTop = 0;
+  ui.$('jump-latest').click();
+  assert.equal(scroll.scrollTop, 100000, 'Passing every turn on the way would draw them all and move the end further away.');
+  assert.equal(smooth.length, 0);
+  scroll.scrollHeight = 1000; scroll.scrollTop = 200;
+  ui.$('jump-latest').click();
+  assert.equal(smooth.length, 1);
+  assert.equal(scroll.scrollTop, 200);
+});
+
 test('user prompts read as bubbles distinct from labelled agent replies and stay pinned above the turn they started', async () => {
   const ui = await browser({ setup: true });
   const chat = ui.canonical.get('project-one');

@@ -303,6 +303,37 @@ if(message.method==='turn/start'){send({id:message.id,result:{turn:{id:'handler-
   assert.deepEqual(c.messages.filter(m => m.role === 'error').map(m => m.text.split('\n')[0]), ['Could not save the answer.']);
 });
 
+test('a view can hold only the messages changed after a record, unless an import may have moved them', t => {
+  const env = setup(t), broker = env.open(), c = conversation(broker);
+  broker.message(c, 'system', 'one', 'codex', 'm1');
+  broker.message(c, 'system', 'two', 'codex', 'm2');
+  const whole = broker.view(c);
+  assert.equal(whole.messageCount, undefined, 'A whole view does not need a count.');
+  assert.equal(whole.cursor, c.records);
+  assert.deepEqual(whole.messages.map(message => message.id), ['m1', 'm2']);
+
+  const nothing = broker.view(c, { since: whole.cursor });
+  assert.deepEqual(nothing.messages, []);
+  assert.equal(nothing.messageCount, 2);
+
+  broker.message(c, 'system', 'two and more', 'codex', 'm2');
+  broker.message(c, 'system', 'three', 'codex', 'm3');
+  const update = broker.view(c, { since: whole.cursor });
+  assert.deepEqual(update.messages.map(message => [message.id, message.text]), [['m2', 'two and more'], ['m3', 'three']]);
+  assert.equal(update.messageCount, 3);
+  assert.equal(update.cursor, c.records);
+  assert.equal('seq' in update.messages[0], false, 'Journal details stay out of the view.');
+
+  for (const since of [c.records + 1, NaN, -0.5, null]) assert.equal(broker.view(c, { since }).messageCount, undefined, `${since} is no usable position, so the view is whole.`);
+
+  const before = c.records;
+  broker.record(c, { type: 'import', importId: 'old', messages: [{ id: 'i1', role: 'user', text: 'Imported', importSource: 'old' }], after: { i1: null } });
+  assert.deepEqual(broker.view(c, { since: before }).messages.map(message => message.id), ['i1', 'm1', 'm2', 'm3'], 'An import can put messages anywhere, so a copy from before it gets them all.');
+  assert.equal(broker.view(c, { since: before }).messageCount, undefined);
+  assert.equal(broker.view(c, { since: c.records }).messageCount, 4, 'A copy from after it gets just the changes again.');
+  assert.equal(env.open().view(env.open().get(c.id), { since: before }).messageCount, undefined, 'That holds after a restart too.');
+});
+
 test('requires both a successful terminal event and a successful process exit', { skip: scriptCLIs }, async t => {
   const env = setup(t, {
     'Missing terminal event': { behavior: 'no-terminal' },

@@ -4,6 +4,10 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Fixed
+
+- **Long conversations stay responsive.** In a long conversation, dragging the side and bottom panels stuttered, and the whole window froze for up to a second when an approval arrived or a run finished. Codeshi now skips messages out of view, redraws only what changed, and fetches only the messages that changed. The terminal fits its new size once a drag settles.
+
 ## [0.24.0] - 2026-11-04
 
 ### Changed
