@@ -4,11 +4,26 @@ What Codeshi already does, what is coming next and the bigger ideas being explor
 
 A core goal is to get more work from existing agent allowances and available free or local options, so users can keep projects moving within their chosen budget without needing a higher subscription tier.
 
-Every planned item has an issue. Comment there to shape it or to pick it up, and open one first for anything new. Release-by-release details are in the [changelog](CHANGELOG.md); bugs are tracked under the [bug label](https://github.com/AhmedNavaz/codeshi/labels/bug).
+Planned items link to their GitHub issue. These are proposals until implemented and released. Comment on an existing issue to shape it or to pick it up, and open one before implementing new work. Release-by-release details are in the [changelog](CHANGELOG.md); bugs are tracked under the [bug label](https://github.com/AhmedNavaz/codeshi/labels/bug).
 
 ## Use it and tell us what breaks
 
 The fastest way to make Codeshi better is to use it on your real projects and tell us what you find: bugs, confusing screens, slow spots and rough edges in the design. A small UI or UX note is as welcome as a crash report. [Report a bug](https://github.com/AhmedNavaz/codeshi/issues/new?template=bug_report.yml) or [share design feedback](https://github.com/AhmedNavaz/codeshi/issues/new?template=ux_feedback.yml).
+
+## Core execution direction
+
+The next core milestone is **more verified work from the allowance users already have**. Codeshi already has local rule-based routing, bounded context, native-session continuation, quota handoff, queued prompts and test-triggered escalation. These are useful foundations; they do not yet prove a reduction in tokens or an improvement over a single agent on equivalent tasks.
+
+The proposed order is:
+
+1. **Establish the baseline.** Measure completed-task correctness, total reported usage, retries, elapsed time and interventions. Fix lifecycle and approval failures before expanding unattended work.
+2. **Reduce repeated work.** Select relevant code and history, retrieve reviewed project memory, load skills on demand and enforce one budget across a task's planning, implementation, reviews and retries.
+3. **Coordinate independent work.** Run folder-scoped tasks concurrently with durable ownership, isolated changes and checked integration. Start with a builder and independent reviewer; add frontend, backend and QA roles when the task benefits.
+4. **Use the same engine everywhere.** Expose workflows through desktop and CLI, with the same task history, provider handoff, skills, approvals and budgets.
+
+Specialist roles can include frontend, backend, database, design and QA, but a role is not another model subscription. Instantiate only the roles needed, agree on shared contracts before parallel work, and verify the combined result. Teams must demonstrate a quality or elapsed-time benefit worth their additional usage; more agents do not inherently save tokens.
+
+Codeshi cannot change subscription allowances or reset rules. Keep five-hour, weekly and model-specific windows distinct, label missing usage data, and count coordination overhead. Detailed scopes, dependencies, acceptance criteria, CLI examples and proposed updates to existing issues are in the [core execution plan](docs/core-roadmap.md).
 
 ## Shipped
 
@@ -78,6 +93,12 @@ The fastest way to make Codeshi better is to use it on your real projects and te
 
 | Feature | Status | Issue |
 | --- | --- | --- |
+| Reproducible task evaluations and a local ledger of verified outcomes, usage and coordination overhead | Foundation: establish a single-agent baseline before claiming efficiency gains | [#84](https://github.com/AhmedNavaz/codeshi/issues/84) |
+| Task-scoped context: relevant code, instructions and history, with source references and fresh handoff briefs | Follows measurement; extends existing bounded context and #69 | [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
+| Reviewed project memory and reusable learnings shared across agents | Promoted from Exploring; build on existing context fields, retrieve relevant entries and revalidate stale facts; [scope extension](https://github.com/AhmedNavaz/codeshi/issues/21#issuecomment-6627785636) | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
+| Portable skills and workflow packs loaded on demand, with visible provider compatibility | Start with a small opt-in set; depends on task-scoped context; no blanket hook/plugin import | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
+| One task budget across providers, child runs, retries, reviews and handoffs | Backend policy; extends #12/#17/#32 and keeps weekly and five-hour quota windows separate | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
+| Concurrent prompts for independent workspace folders, with separate output, approvals and Stop controls | Execution foundation; depends on task budgets, isolated edits and reliable ownership recovery | [#88](https://github.com/AhmedNavaz/codeshi/issues/88) |
 | Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.14.0) as **Routing**; stage 2's retry one step up after failed tests shipped in [0.18.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.18.0) as **Check with tests**; a free or local fallback and subtask coordination are next; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
 | Send selected terminal output to the conversation | Needs design | [#71](https://github.com/AhmedNavaz/codeshi/issues/71) |
 | Hands-free voice conversations: say "send", keep talking while the agent works, hear what it did | Needs design; follows voice mode | [#72](https://github.com/AhmedNavaz/codeshi/issues/72) |
@@ -119,7 +140,7 @@ Deliver in stages:
 
 1. **Route whole requests.** Supported agents and models, the three modes, explicit budget controls, visible decisions and manual overrides. Shipped in 0.14.0 as **Routing**, with local rules for classifying requests (no model call), subscription-only billing unless API billing is allowed, and the choice shown before sending.
 2. **Verify and recover.** Add bounded escalation based on task checks, quota handoff and reset queuing; validate at least one supported free or local integration before promising that fallback. Quota handoff ([#17](https://github.com/AhmedNavaz/codeshi/issues/17)) and reset queuing ([#32](https://github.com/AhmedNavaz/codeshi/issues/32)) shipped in 0.14.0. **Check with tests**, shipped in [0.18.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.18.0), runs the workspace's Test command after a routed run that changes files and, when the tests fail, retries once with the same agent one step up in model or effort, on its own in Balanced and Maximum quality and after asking in Cost saving. The run history records each routed run's tier, check and retry, which the panel summarises; a free or local fallback is still to come.
-3. **Coordinate subtasks.** Assign work across agents with shared project context, explicit ownership of edits, bounded review cycles and one consolidated result. Parallel execution must avoid conflicting workspace changes.
+3. **Coordinate subtasks.** Assign work across agents with shared project context, explicit ownership of edits, bounded review cycles and one consolidated result. Parallel execution must avoid conflicting workspace changes. The [concurrent task proposal](docs/core-roadmap.md#concurrent-folder-tasks) supplies isolation and recovery; [specialist workflows](docs/core-roadmap.md#specialist-team-workflows) add contracts, dependencies and verification under one shared task budget.
 
 Evaluate routing with representative coding tasks, tracking completion quality, allowance consumed, API charges where applicable, elapsed time and retry count. Compare against a manually chosen single agent before claiming savings or quality improvements.
 
@@ -138,11 +159,12 @@ Larger ideas for bringing project context, execution and collaboration into one 
 
 | Idea | Issue |
 | --- | --- |
+| **Specialist team workflows.** Frontend, backend, database, design and QA roles assigned only where needed; shared contracts, isolated edits, deterministic checks and bounded independent review. Build on #12/#15 after context, skills, task budgets and concurrency are ready. | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
+| **Codeshi CLI.** Run, inspect, stop and continue the same workflows from a terminal; coordinate providers and retain desktop continuity through one execution engine. Start with headless run/status/continue/stop; add team commands later. | [#90](https://github.com/AhmedNavaz/codeshi/issues/90) |
 | **Task board and schedules.** Capture tasks from meetings or anywhere on a board for each project, with priority and details, and let agents work through them while you review the results; run tasks on a schedule. [Plan below](#task-board-and-schedules). | Not opened yet |
 | **Live progress near the top of the screen.** A compact pill under the menu bar while a run works, alongside the alerts from [#13](https://github.com/AhmedNavaz/codeshi/issues/13). | [#75](https://github.com/AhmedNavaz/codeshi/issues/75) |
 | **Repeated tag-team cycles.** Build, then review shipped in [0.22.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.22.0) with one review per prompt. Sending the fixes back for another review automatically would need a clear stop condition and a usage limit. | [#15](https://github.com/AhmedNavaz/codeshi/issues/15) |
-| **Race mode.** Two agents take the same task in separate worktrees; keep the better result. | [#16](https://github.com/AhmedNavaz/codeshi/issues/16) |
-| **Project memory.** A living brief of goals, decisions and conventions that every agent reads. | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
+| **Race mode.** Two agents take the same task in separate worktrees; keep the better result. Reuse concurrent-task isolation and count both attempts in the task's budget. | [#16](https://github.com/AhmedNavaz/codeshi/issues/16) |
 | **Approve from your phone.** Extend desktop approval alerts to a paired phone, with run progress and iPhone Live Activities. | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
 | **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription. | [#24](https://github.com/AhmedNavaz/codeshi/issues/24) |
 
