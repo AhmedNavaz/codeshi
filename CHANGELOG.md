@@ -4,6 +4,8 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-04
+
 ### Added
 
 - **A run that reaches its limit continues on another agent** (#91). With **Hand off automatically** on, a task no longer stops when usage jumped between checks or an offer was missed. It continues on a subscription-billed agent with room, with the same access, and the conversation names both agents and when the limit resets. If every agent is out, the task waits for the first reset. It's off until you turn it on: the first time a run stops on a limit, **Always do this** beside **Continue with…** does that.
@@ -412,6 +414,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.25.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.0
 [0.24.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.24.0
 [0.23.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.23.0
 [0.22.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.22.0

@@ -79,12 +79,13 @@ Codeshi cannot change subscription allowances or reset rules. Keep five-hour, we
 | Undo and redo any run's changes, whichever agent made them, after a preview of every file and line ([#20](https://github.com/AhmedNavaz/codeshi/issues/20), stage 1) | [0.20.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.20.0) |
 | Terminal tabs and split panes: several shells per workspace, each in a folder you choose, side by side or stacked ([#70](https://github.com/AhmedNavaz/codeshi/issues/70)) | [0.21.2](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.21.2) |
 | Build, then review: one prompt's finished changes go to another agent for a read-only review once the build and its tests pass, and you choose which findings go back ([#15](https://github.com/AhmedNavaz/codeshi/issues/15)) | [0.22.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.22.0) |
+| Network commands such as `git push` work with Full auto-approval on Codex, and under every setting on Gemini ([#81](https://github.com/AhmedNavaz/codeshi/issues/81)) | [0.25.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.0) |
+| Continue on another agent when a run reaches a usage limit, or wait for the first reset if every agent is out; opt-in ([#91](https://github.com/AhmedNavaz/codeshi/issues/91)) | [0.25.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.0) |
 
 ## Now
 
 | Feature | Status | Issue |
 | --- | --- | --- |
-| Full auto-approval for Codex that approves actions outside its sandbox, such as `git push`, instead of leaving them to fail | Bug, fixing next; until then, use **Ask before changes** for runs that need the network | [#81](https://github.com/AhmedNavaz/codeshi/issues/81) |
 | More agents and models, including Google's supported coding-agent integration, free cloud tiers and local models, on your own accounts | First milestones shipped in 0.10.0: Gemini CLI over ACP and explicit Ollama local-model handoffs through Codex tools; Google personal-account support now uses Antigravity ACP with native sign-in and model discovery in 0.11.0; further provider adapters are next | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | Notarized macOS builds, so downloads open without a security prompt | Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
 | Install with Homebrew: `brew install --cask codeshi` | Depends on #1 | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
@@ -98,7 +99,6 @@ Codeshi cannot change subscription allowances or reset rules. Keep five-hour, we
 | Reviewed project memory and reusable learnings shared across agents | Promoted from Exploring; build on existing context fields, retrieve relevant entries and revalidate stale facts; [scope extension](https://github.com/AhmedNavaz/codeshi/issues/21#issuecomment-6627785636) | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
 | Portable skills and workflow packs loaded on demand, with visible provider compatibility | Start with a small opt-in set; depends on task-scoped context; no blanket hook/plugin import | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
 | One task budget across providers, child runs, retries, reviews and handoffs | Backend policy; extends #12/#17/#32 and keeps weekly and five-hour quota windows separate | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
-| Continue on another agent automatically when a run hits a usage limit, or wait for the first reset if every agent is out | Opt-in; extends handoff (#17) and waiting for resets (#32) | [#91](https://github.com/AhmedNavaz/codeshi/issues/91) |
 | Carry the task plan over when a task moves to another agent | Follows handoff (#17) | [#92](https://github.com/AhmedNavaz/codeshi/issues/92) |
 | Move queued prompts to the agent that takes over after a handoff | Follows handoff (#17) and queued prompts (#32) | [#93](https://github.com/AhmedNavaz/codeshi/issues/93) |
 | One result for a task that ran across several agents: total time and what each agent did | Follows handoff (#17) | [#94](https://github.com/AhmedNavaz/codeshi/issues/94) |
