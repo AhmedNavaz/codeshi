@@ -107,12 +107,13 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     saveSettings({ notifications: next }); onNotifications(next);
     return next;
   };
-  const handoffPreferences = () => ({ threshold: [0, 80, 90, 95].includes(config.handoff?.threshold) ? config.handoff.threshold : 90, automatic: config.handoff?.automatic === true });
+  // limitAsked: the first usage limit has offered to turn automatic handoff on, so it isn't offered again.
+  const handoffPreferences = () => ({ threshold: [0, 80, 90, 95].includes(config.handoff?.threshold) ? config.handoff.threshold : 90, automatic: config.handoff?.automatic === true, limitAsked: config.handoff?.limitAsked === true });
   registry.handoffPreferences = handoffPreferences;
   // Changed from the Agents panel or the desktop Agent menu; each tells the other.
   const setHandoffPreferences = patch => {
     const next = { ...handoffPreferences(), ...patch };
-    if (![0, 80, 90, 95].includes(next.threshold) || typeof next.automatic !== 'boolean') throw Object.assign(new Error('Offer a handoff at 80, 90 or 95 percent or never, and turn automatic handoff on or off.'), { status: 400 });
+    if (![0, 80, 90, 95].includes(next.threshold) || typeof next.automatic !== 'boolean' || typeof next.limitAsked !== 'boolean') throw Object.assign(new Error('Offer a handoff at 80, 90 or 95 percent or never, and turn automatic handoff on or off.'), { status: 400 });
     saveSettings({ handoff: next }); onHandoff(next);
     return next;
   };
@@ -235,7 +236,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       // Remembered approvals for the selected workspace: list, revoke one, or reset all.
       if (url.pathname === '/api/handoff-preferences') {
         if (req.method === 'GET') return json(res, 200, handoffPreferences());
-        if (req.method === 'POST') { const input = await body(req); return json(res, 200, setHandoffPreferences({ ...(input.threshold !== undefined ? { threshold: input.threshold } : {}), ...(input.automatic !== undefined ? { automatic: input.automatic } : {}) })); }
+        if (req.method === 'POST') { const input = await body(req); return json(res, 200, setHandoffPreferences({ ...(input.threshold !== undefined ? { threshold: input.threshold } : {}), ...(input.automatic !== undefined ? { automatic: input.automatic } : {}), ...(input.limitAsked !== undefined ? { limitAsked: input.limitAsked } : {}) })); }
       }
       if (url.pathname === '/api/permissions') {
         const broker = selectedBroker(url);

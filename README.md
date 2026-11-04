@@ -21,7 +21,7 @@ Codeshi was called Throughline until version 0.23. Your workspaces, conversation
 
 <img src="docs/features/limits.jpg" alt="Codex has used 92% of its 5-hour limit and offers to hand the running task to Claude, which has 69% left in the Agents panel; a queued prompt waits below">
 
-Codeshi keeps an eye on each agent's plan usage. Before one runs out mid-task, it offers to hand the task to an agent that still has room, and shows you who takes over and how it's billed before anything switches. If every agent is out, the task waits and carries on with whichever resets first, or you can continue it on a local model.
+Codeshi keeps an eye on each agent's plan usage. Before one runs out mid-task, it offers to hand the task to an agent that still has room, and shows you who takes over and how it's billed before anything switches. Turn on automatic handoff and it switches by itself, even if a run reaches its limit first. If every agent is out, the task waits and carries on with whichever resets first, or you can continue it on a local model.
 
 ### Point at what should change
 

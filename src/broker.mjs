@@ -212,6 +212,12 @@ export class Broker extends EventEmitter {
     return { added: false, queued: true, conversation: this.view(c) };
   }
   // Handing off before a usage limit stops the run (#17).
+  // What an agent said went wrong. A usage limit that may be handed off (#91) stays quiet until that's decided, so a
+  // handoff doesn't look like an error.
+  agentError(run, text) {
+    if (run.errorCategory === 'quota' && this.handoff.atLimit(run)) run.limitNotice ||= text;
+    else this.message(run.c, 'error', text, run.provider);
+  }
   acceptHandoff(c, input = {}) { return this.handoff.accept(c, { offerId: input.offerId, billingConfirmed: input.billingConfirmed === true }); }
   dismissHandoff(c, offerId) { this.handoff.dismiss(c, offerId); return this.view(c); }
   // A retry one step up after failed tests, offered instead of started (#12).
@@ -474,7 +480,7 @@ export class Broker extends EventEmitter {
 
   prompt(c, text, fresh = false) { return prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
 
-  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null } = {}) {
+  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
     if (local) { if (review || typeof verifyLocal !== 'function') throw Object.assign(new Error('Invalid local run.'), { status: 400 }); provider = 'codex'; model = local.model; transport = 'app-server'; effort = null; fresh = true; }
     checkSettings(provider, mode, approvalPolicy);
@@ -501,6 +507,8 @@ export class Broker extends EventEmitter {
     const bin = resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot });
     if (!bin) throw Object.assign(new Error(`${provider === 'gemini' ? 'Gemini' : provider === 'codex' ? 'Codex' : 'Claude'} CLI could not be found. Install it or set AI_RELAY_${provider.toUpperCase()}_BIN to its executable path, then retry.`), { status: 503, category: 'installation' });
     if (provider === 'gemini' && isAntigravityACP(bin) && mode === 'read') throw Object.assign(new Error(antigravityReadOnly), { status: 400, category: 'permission' });
+    // Gemini CLI takes its effort from the model, so a level saved under the Antigravity connection doesn't apply and can't stop a run.
+    if (provider === 'gemini' && !isAntigravityACP(bin)) effort = null;
     if (provider === 'gemini' && isAntigravityACP(bin) && this.workspaces.length > 1) throw Object.assign(new Error('This Antigravity connection currently supports one project folder. Choose a workspace with one folder.'), { status: 400 });
     if (provider === 'gemini' && isAgy(bin)) throw Object.assign(new Error(agyUnsupported), { status: 503, category: 'installation' });
     const actualTransport = transportFor(provider, transport, this.configuredBins[provider]);
@@ -522,7 +530,7 @@ export class Broker extends EventEmitter {
     try { if (review) verifyReview(); baseline = review ? { kind: 'review', git: true, digest: review.snapshot.digest, capturedAt: new Date().toISOString() } : workspaceBaseline(this.workspace, this.workspaceFolders); } catch (error) { lease.release(); throw error; }
     const runId = randomUUID();
     const run = { id: runId, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
-      stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
+      stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, limitChain, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
       model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview };
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
@@ -541,7 +549,7 @@ export class Broker extends EventEmitter {
     let finished = false;
     const complete = (code, signal, error) => {
       if (finished) return; finished = true; clearTimeout(run.killTimer);
-      let success = code === 0 && run.terminalSuccess && !run.failed && !run.stopped && !error;
+      let success = code === 0 && run.terminalSuccess && !run.failed && !run.stopped && !error, continuing = false;
       try {
         if (run.child?.pid) this.signal(run, 'SIGKILL');
         run.hadPendingInput = run.approvals.size > 0; run.approvals.clear();
@@ -550,8 +558,13 @@ export class Broker extends EventEmitter {
         if (!success) {
           const detail = run.stopped ? 'Stopped. Files already changed by this run remain in the workspace.' : error?.message || run.stderr.trim() || `The assistant ended without completing the turn (exit ${code ?? signal ?? 'unknown'}).`;
           run.errorCategory ||= run.stopped ? 'interrupted' : classifyError(error || detail);
-          // A handoff says itself why the run stopped, so it is not shown as an error.
-          if (!run.handoff) this.message(c, 'error', clip(detail) + (review ? '\nStart a new read-only review when ready.' : run.stopped ? '' : '\nYour conversation is saved. Select the other assistant and continue, or retry after resolving the error.'), provider);
+          const notice = clip(detail) + (review ? '\nStart a new read-only review when ready.' : run.stopped ? '' : '\nYour conversation is saved. Select the other assistant and continue, or retry after resolving the error.');
+          if (run.errorCategory === 'quota' && this.handoff.atLimit(run)) { run.limitNotice ||= notice; continuing = true; }
+          else {
+            if (run.limitNotice) this.message(c, 'error', run.limitNotice, provider);
+            // A handoff says itself why the run stopped, so it is not shown as an error.
+            if (!run.handoff) this.message(c, 'error', notice, provider);
+          }
         }
         for (const message of c.messages.filter(m => m.runId === runId && m.role === 'assistant')) this.record(c, { type: 'message_update', id: message.id, update: { status: success ? 'complete' : 'incomplete' } });
         this.record(c, { type: 'run_metadata', metadata: { elapsedMs: Date.now() - Date.parse(c.activeRun.startedAt), phase: success ? 'complete' : 'stopped', lastEventAt: c.activeRun.lastEventAt } });
@@ -562,23 +575,29 @@ export class Broker extends EventEmitter {
       } catch (persistError) { success = false; run.persistenceError = persistError.message; }
       finally { try { lease.release(); } catch (releaseError) { success = false; run.persistenceError ||= releaseError.message; } finally {
         this.handoff.unwatch(run);
+        if (continuing) c.limitSwitching = { provider };
         this.running = null; this.emit('update', { conversationId: c.id }); finish({ success, error: run.persistenceError });
-        // A run that continued after a reset may wait again if it reached another limit; otherwise say how the run ended.
-        let waiting = false;
-        try { waiting = this.resume.runEnded(c, run, run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete'); } catch (error) { console.error('Codeshi could not report a resumed run:', error.message); }
-        const agent = provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : run.local ? 'The local model' : 'Codex';
-        if (!review && !waiting && !run.stopped) this.emit('notify', success
-          ? { conversationId: c.id, kind: 'finished', title: 'Task finished', body: `${agent} finished${run.resume ? ' the work it continued while you were away' : ''}.` }
-          : { conversationId: c.id, kind: 'stopped', title: 'Task stopped', body: run.errorCategory === 'quota' ? `${agent} reached a usage limit.` : `${agent} stopped before finishing. Open the workspace to see why.` });
-        // A routed run that changed files is checked with the workspace's tests first (#12); the check then decides
-        // when queued prompts continue. Otherwise they carry on after a finished run, wait after a limit, and pause
-        // after anything else.
-        const ending = run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete';
-        let checking = false;
-        try { checking = this.checks.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not check the run:', error.message); }
-        const automatic = !checking && run.automaticReview;
-        if (automatic) try { this.automaticReviews.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not start automatic review:', error.message); }
-        if (!checking && !automatic) try { this.queue.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not continue the prompt queue:', error.message); }
+        const settle = () => {
+          // A run that continued after a reset may wait again if it reached another limit; otherwise say how the run ended.
+          let waiting = false;
+          try { waiting = this.resume.runEnded(c, run, run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete'); } catch (error) { console.error('Codeshi could not report a resumed run:', error.message); }
+          const agent = provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : run.local ? 'The local model' : 'Codex';
+          if (!review && !waiting && !run.stopped) this.emit('notify', success
+            ? { conversationId: c.id, kind: 'finished', title: 'Task finished', body: `${agent} finished${run.resume ? ' the work it continued while you were away' : ''}.` }
+            : { conversationId: c.id, kind: 'stopped', title: 'Task stopped', body: run.errorCategory === 'quota' ? `${agent} reached a usage limit.` : `${agent} stopped before finishing. Open the workspace to see why.` });
+          // A routed run that changed files is checked with the workspace's tests first (#12); the check then decides
+          // when queued prompts continue. Otherwise they carry on after a finished run, wait after a limit, and pause
+          // after anything else.
+          const ending = run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete';
+          let checking = false;
+          try { checking = this.checks.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not check the run:', error.message); }
+          const automatic = !checking && run.automaticReview;
+          if (automatic) try { this.automaticReviews.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not start automatic review:', error.message); }
+          if (!checking && !automatic) try { this.queue.runEnded(c, run, ending); } catch (error) { console.error('Codeshi could not continue the prompt queue:', error.message); }
+        };
+        // With automatic handoff allowed, a limit moves the task on (#91). Only if it can't does the run end as usual.
+        if (!continuing) settle();
+        else this.handoff.continueAfterLimit(c, run).then(handled => { if (!handled) { this.message(c, 'error', run.limitNotice, provider); settle(); } });
       } }
     };
     const launch = async () => {
@@ -696,7 +715,7 @@ export class Broker extends EventEmitter {
       if (event.type === 'error') this.message(c, 'activity', clip(`Codex diagnostic: ${event.message || JSON.stringify(event)}`), provider);
       if (event.type === 'turn.failed') {
         run.failed = true; run.errorCategory = classifyError(event.error || event.message);
-        this.message(c, 'error', clip(event.message || event.error?.message || JSON.stringify(event.error || event)), provider);
+        this.agentError(run, clip(event.message || event.error?.message || JSON.stringify(event.error || event)));
       }
       const item = event.item;
       if (!item || !['item.started', 'item.updated', 'item.completed'].includes(event.type)) return;
@@ -723,7 +742,8 @@ export class Broker extends EventEmitter {
         const info = event.rate_limit_info, period = { five_hour: '5-hour', seven_day: 'weekly', seven_day_opus: 'weekly Opus', seven_day_sonnet: 'weekly Sonnet', overage: 'extra usage' }[info.rateLimitType];
         const resets = Number.isFinite(info.resetsAt) ? new Date(info.resetsAt * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : null;
         run.failed = true; run.errorCategory = 'quota';
-        this.message(c, 'error', `Claude usage limit reached${period ? ` for the ${period} window` : ''}.${resets ? ` It resets ${resets}.` : ''} Switch to Codex or continue after the reset.`, provider);
+        if (Number.isFinite(info.resetsAt)) run.limitResetsAt = info.resetsAt * 1000;
+        this.agentError(run, `Claude usage limit reached${period ? ` for the ${period} window` : ''}.${resets ? ` It resets ${resets}.` : ''} Switch to Codex or continue after the reset.`);
       }
     }
     if (event.type === 'assistant' && event.error) { run.failed = true; run.errorCategory = classifyError(event.error + ' ' + JSON.stringify(event.message?.content || [])); }
@@ -759,8 +779,8 @@ export class Broker extends EventEmitter {
     if (event.type === 'result') {
       run.terminalSuccess = event.subtype === 'success' && !event.is_error;
       if (!run.terminalSuccess) {
-        run.failed = true; run.errorCategory = classifyError(event.result || event.errors?.join(' '));
-        this.message(c, 'error', clip(event.result || event.errors?.join('\n') || event.subtype || 'Claude could not complete this turn.'), provider);
+        run.failed = true; if (run.errorCategory !== 'quota') run.errorCategory = classifyError(event.result || event.errors?.join(' '));
+        this.agentError(run, clip(event.result || event.errors?.join('\n') || event.subtype || 'Claude could not complete this turn.'));
       } else if (event.result && !c.messages.some(m => m.runId === run.id && m.role === 'assistant')) {
         this.message(c, 'assistant', event.result, provider, `${run.id}:response`, 'complete');
       }

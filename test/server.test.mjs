@@ -465,17 +465,18 @@ test('the desktop app hears about each saved appearance, whichever request saved
 });
 
 test('handoff preferences default to offering at 90% without switching unasked, reject other values and persist',async t=>{
-  const f=await fixture(t);assert.deepEqual(f.app.getHandoffPreferences(),{threshold:90,automatic:false});
-  assert.deepEqual(f.app.registry.handoffPreferences(),{threshold:90,automatic:false},'Brokers read the same preferences.');
+  const f=await fixture(t);assert.deepEqual(f.app.getHandoffPreferences(),{threshold:90,automatic:false,limitAsked:false});
+  assert.deepEqual(f.app.registry.handoffPreferences(),{threshold:90,automatic:false,limitAsked:false},'Brokers read the same preferences.');
   f.app.setHandoffPreferences({threshold:80});f.app.setHandoffPreferences({automatic:true});
-  assert.deepEqual(f.app.registry.handoffPreferences(),{threshold:80,automatic:true},'A change applies to runs already working.');
-  for(const patch of [{threshold:85},{threshold:'90'},{automatic:'yes'}])assert.throws(()=>f.app.setHandoffPreferences(patch),/80, 90 or 95 percent or never/);
+  assert.deepEqual(f.app.registry.handoffPreferences(),{threshold:80,automatic:true,limitAsked:false},'A change applies to runs already working.');
+  for(const patch of [{threshold:85},{threshold:'90'},{automatic:'yes'},{limitAsked:'yes'}])assert.throws(()=>f.app.setHandoffPreferences(patch),/80, 90 or 95 percent or never/);
   f.app.setHandoffPreferences({threshold:0});
   // The Agents panel reads and changes the same preferences.
-  assert.deepEqual(await (await fetch(`${f.url}/api/handoff-preferences`)).json(),{threshold:0,automatic:true});
-  const changed=await post(`${f.url}/api/handoff-preferences`,{threshold:95});assert.deepEqual(await changed.json(),{threshold:95,automatic:true});
+  assert.deepEqual(await (await fetch(`${f.url}/api/handoff-preferences`)).json(),{threshold:0,automatic:true,limitAsked:false});
+  const changed=await post(`${f.url}/api/handoff-preferences`,{threshold:95});assert.deepEqual(await changed.json(),{threshold:95,automatic:true,limitAsked:false});
   const refused=await post(`${f.url}/api/handoff-preferences`,{threshold:50});assert.equal(refused.status,400);
-  await f.app.close();const next=await f.launch();assert.deepEqual(next.app.getHandoffPreferences(),{threshold:95,automatic:true});
+  await f.app.close();const next=await f.launch();assert.deepEqual(next.app.getHandoffPreferences(),{threshold:95,automatic:true,limitAsked:false});
+  const asked=await post(`${next.url}/api/handoff-preferences`,{limitAsked:true});assert.deepEqual(await asked.json(),{threshold:95,automatic:true,limitAsked:true},'The offer at a usage limit is made once.');
 });
 
 test('answering a handoff offer that is no longer current is refused with the current offer, and Not now is accepted',async t=>{

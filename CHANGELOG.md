@@ -4,10 +4,15 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Added
+
+- **A run that reaches its limit continues on another agent** (#91). With **Hand off automatically** on, a task no longer stops when usage jumped between checks or an offer was missed. It continues on a subscription-billed agent with room, with the same access, and the conversation names both agents and when the limit resets. If every agent is out, the task waits for the first reset. It's off until you turn it on: the first time a run stops on a limit, **Always do this** beside **Continue with…** does that.
+
 ### Fixed
 
 - **Restart to update restarts right away** (#82). A slow step, such as an account check, could hold Codeshi open for up to two minutes while "Codeshi is stopping." showed as an error. Quitting now has a time limit, the status bar says **Restarting…**, and if the installer ever gives up, the next launch says so and offers the update again.
 - **Pushes and other network commands work on every agent** (#81). With **Full auto-approval**, Codex couldn't ask for anything its sandbox blocked, so `git push`, `gh` and package installs failed. It now has the network, and what its sandbox still blocks is requested and approved automatically. Gemini through Google Antigravity failed the same commands under every permission setting, because Codeshi's connection to Google caught them too; they now go through.
+- **Handoff before a limit is more dependable.** Gemini through Google Antigravity is no longer passed over, or told it's out of usage, because a different model's allowance ran out, and **Continue when a limit resets** and routing retries read those limits correctly too. Usage is checked within seconds of a run starting and then about once a minute, so short runs get an offer and a jump in usage is less likely to reach the limit first. The button says **Handing off…** while it switches, and when you've scrolled up, **Jump to latest** says an offer is waiting below. An effort saved for Gemini no longer stops a run on Gemini CLI.
 - **Recovering from a crash can't let two processes in at once.** On Windows, if two processes picked up after a crash at the same moment, one could fail with an error and, rarely, both could change the same saved files. They now take turns on every platform, and a crash at any point during recovery is recovered from too.
 - Stopping a command in **Run** just as it exits no longer shows an error (macOS).
 - **Long conversations stay responsive.** In a long conversation, dragging the side and bottom panels stuttered, and the whole window froze for up to a second when an approval arrived or a run finished. Codeshi now skips messages out of view, redraws only what changed, and fetches only the messages that changed. The terminal fits its new size once a drag settles.

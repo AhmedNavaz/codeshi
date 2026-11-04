@@ -704,7 +704,8 @@
     row.append(actions);
     return row;
   }
-  function updateJump() { $("jump-latest").hidden = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 240; }
+  // The way back to the end also says when a handoff offer is waiting there, out of view.
+  function updateJump() { $("jump-latest").hidden = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 240; $("jump-latest-text").textContent = state.conversation?.handoffOffer && isRunning() ? "Handoff offer below" : "Jump to latest"; }
   // Turns out of view have only an estimated height, so the end can move once the last ones are drawn; this stays with it for a few frames.
   function scrollToLatest(frames = 8) {
     ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump();
@@ -1041,20 +1042,39 @@
       return row;
     }));
   }
+  // The first run stopped by a usage limit offers to handle the next ones without asking (#91). It's asked once: the
+  // offer stays for this stop, and Settings has the switch after that. It only shows where it would apply: automatic
+  // handoff goes to subscription-billed agents, and is off along with offers.
+  let limitChoice = { run: null, preferences: null, offered: false };
+  function renderLimitChoice(quotaStop, previous, target, disabled) {
+    const button = $("limit-always");
+    if (!quotaStop || !previous?.id) { button.hidden = true; return; }
+    if (limitChoice.run !== previous.id) {
+      const asking = limitChoice = { run: previous.id, preferences: null, offered: false };
+      api("/api/handoff-preferences").then(value => { if (limitChoice === asking) { asking.preferences = value; renderControls(); } }).catch(() => {});
+    }
+    const { preferences } = limitChoice, destination = connection(target);
+    const applies = Boolean(preferences) && preferences.threshold > 0 && !preferences.automatic && target !== previous.provider && !destination.blocked && destination.account?.billingSource === "subscription";
+    if (applies && !preferences.limitAsked && !limitChoice.offered) { limitChoice.offered = true; post("/api/handoff-preferences", { limitAsked: true }).catch(() => {}); }
+    button.hidden = !applies || !limitChoice.offered;
+    button.disabled = disabled;
+  }
   // An offer to hand the task to another agent before a usage limit stops the run (#17).
   function renderHandoff() {
     const offer = state.conversation?.handoffOffer, section = $("handoff-offer");
     section.hidden = !offer || !isRunning();
+    updateJump();
     if (section.hidden) return;
     const model = offer.to.model ? window.relayModelPicker?.modelName?.(offer.to.provider, offer.to.model) || offer.to.model : "";
     const billing = { subscription: "subscription", api: "API billing" }[offer.to.billingSource] || "unknown billing";
     $("handoff-title").textContent = `${label(offer.from.provider)} has used ${Math.round(offer.from.usedPercent)}% of its ${offer.from.window ? offer.from.window + " " : ""}limit.`;
-    $("handoff-detail").textContent = `Hand off to ${label(offer.to.provider)}${model ? ` · ${model}` : ""} (${billing}) to continue${offer.task ? ` “${offer.task.replace(/[.!?…]+$/, "")}”` : " this task"}. ${offer.to.mode === "read" ? "Read only" : "Can edit files"} · ${offer.to.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}.`;
+    $("handoff-detail").textContent = `Hand off to ${label(offer.to.provider)}${model ? ` · ${model}` : ""} (${billing}) to continue${offer.task ? ` “${offer.task.replace(/[.!?]+$/, "")}”` : " this task"}. ${offer.to.mode === "read" ? "Read only" : "Can edit files"} · ${offer.to.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}.`;
     const charges = offer.to.billingSource !== "subscription";
     $("handoff-billing").hidden = !charges;
     if (charges) $("handoff-billing-text").textContent = offer.to.billingSource === "api" ? `Accept charges: ${label(offer.to.provider)} bills your API account.` : `Accept possible charges: ${label(offer.to.provider)}'s billing could not be confirmed.`;
     if (section.dataset.offerId !== offer.id) { section.dataset.offerId = offer.id; $("handoff-billing-confirm").checked = false; }
     $("handoff-accept").disabled = Boolean(state.pending) || charges && !$("handoff-billing-confirm").checked;
+    $("handoff-accept").textContent = state.pending === "handoff" ? "Handing off…" : "Hand off";
     $("handoff-dismiss").disabled = Boolean(state.pending);
   }
   // A retry one step up after failed tests, when routing asks first (#12): Cost saving, or an agent near its limit.
@@ -1153,7 +1173,9 @@
     const lastMessage = state.conversation?.messages?.at(-1);
     const canContinue = !running && state.conversation?.lastRun?.purpose !== 'review' && (incomplete || lastMessage?.role === "error");
     const resume = state.conversation?.resume;
-    ui.continuation.hidden = !canContinue || Boolean(resume);
+    // While Codeshi works out where a task goes after a limit (#91), that's what shows, not the choices it may not need.
+    const switching = state.conversation?.limitSwitching;
+    ui.continuation.hidden = !canContinue || Boolean(resume) || Boolean(switching);
     const previous=state.conversation?.lastRun;
     const reason={quota:'Usage limit reached.',authentication:'Sign-in required.',permission:'A permission request was declined.',protocol:'The assistant connection stopped.',interrupted:'Run stopped.'}[previous?.errorCategory] || 'The previous run did not finish.';
     ui.continueText.textContent = reason;
@@ -1171,8 +1193,11 @@
     $("resume-button").hidden = !quotaStop || choosing;
     $("resume-choice").hidden = !choosing;
     for (const id of ["resume-button", "resume-ask", "resume-auto"]) $(id).disabled = busy || otherRunning || !resumeProviders().length;
-    $("resume-waiting").hidden = !resume;
+    renderLimitChoice(quotaStop && !switching, previous, continuationProvider, busy || otherRunning);
+    $("resume-waiting").hidden = !resume && !switching;
+    $("resume-cancel").hidden = Boolean(switching) && !resume;
     if (resume) $("resume-waiting-text").textContent = resumeText(resume);
+    else if (switching) $("resume-waiting-text").textContent = `${label(switching.provider)} reached its usage limit. Finding an agent with room…`;
     renderQueue(); renderHandoff(); renderRetry(); renderPlan(); renderRoute();
     const hasMessages = Boolean(state.conversation?.messages?.length);
     ui.title.textContent=state.loading&&state.projectId?'Opening workspace…':currentProject()?.name||'Codeshi';
@@ -1190,9 +1215,10 @@
     if (running && run?.purpose === 'review') status = 'Reviewing';
     if(incomplete && run?.provider===state.provider)status='Stopped';
     if(resume && !running)status='Waiting for reset';
+    if(switching && !running)status='Handing off…';
     if(state.pending==='stop')status='Stopping…';else if(state.pending==='send'||state.pending==='continue')status='Sending…';
     ui.state.lastElementChild.textContent=status;
-    ui.state.dataset.status=running?(approvals?'approval':'running'):resume?'waiting':incomplete?'stopped':!state.localSelections[state.projectId] && selectedConnection.blocked?'setup':'ready';
+    ui.state.dataset.status=running?(approvals?'approval':'running'):resume||switching?'waiting':incomplete?'stopped':!state.localSelections[state.projectId] && selectedConnection.blocked?'setup':'ready';
     renderConnectionNotice();
     window.relayAutomaticReview?.render();
     document.title = currentProject() ? currentProject().name + " · Codeshi" : "Codeshi · Your project workspaces";
@@ -1831,6 +1857,13 @@
   ui.mode.addEventListener("change", () => changeSettings(state.provider, ui.mode.value, state.approvalPolicy));
   ui.approval?.addEventListener("change", () => changeSettings(state.provider, state.mode, ui.approval.value));
   ui.stop.addEventListener("click", stop);
+  $("limit-always").addEventListener("click", async () => {
+    try { limitChoice.preferences = await post("/api/handoff-preferences", { automatic: true, limitAsked: true }); }
+    catch (error) { showNotice(error.message); return; }
+    window.dispatchEvent(new CustomEvent("relay-handoff-preferences"));
+    renderControls();
+    ui.continueButton.click();
+  });
   ui.continueButton.addEventListener("click", () => {const target=state.continuationProvider||state.provider;if(target!==state.provider)changeSettings(target,state.mode,state.approvalPolicy);run(true);});
   // Any agent and model can continue: choosing one in this menu selects it and continues at once.
   $("continue-choose").addEventListener("click", () => window.relayModelPicker?.openFor($("continue-choose"), { title: "Continue with…", excludeLocal: true, first: state.continuationProvider, onChoose: () => run(true) }));

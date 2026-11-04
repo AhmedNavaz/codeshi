@@ -88,10 +88,12 @@
       if (!keepAwake) bridge.getKeepAwake().then(state => { keepAwake = state; box.checked = state.enabled === true; box.disabled = false; }).catch(() => { if (box.isConnected) { error.textContent = 'Keep awake could not be loaded. Close Settings and try again.'; error.hidden = false; } });
     }
     const offer = kit.select(work, { label: 'Offer a handoff near a usage limit', description: 'When an agent is close to its limit, offer to continue the task with another connected agent.', keywords: 'handoff hand off limit quota switch agent', options: [['0', 'Never'], ['80', 'At 80%'], ['90', 'At 90%'], ['95', 'At 95%']], value: String(handoff?.threshold ?? 90), disabled: !handoff, onChange: value => saveHandoff({ threshold: Number(value) }) });
-    const automatic = kit.toggle(work, { label: 'Hand off automatically', description: 'Switch to an agent on a subscription without asking, and say so in the conversation.', keywords: 'handoff hand off automatic', checked: handoff?.automatic === true, disabled: !handoff || handoff.threshold === 0, onChange: value => saveHandoff({ automatic: value }) });
+    const automatic = kit.toggle(work, { label: 'Hand off automatically', description: 'Near a limit, or when a run reaches one, switch to an agent on a subscription without asking, and say so in the conversation. If every agent is out, the task waits for the first reset.', keywords: 'handoff hand off automatic', checked: handoff?.automatic === true, disabled: !handoff || handoff.threshold === 0, onChange: value => saveHandoff({ automatic: value }) });
     if (!handoff) api().api('/api/handoff-preferences').then(value => { handoff = value; offer.value = String(value.threshold); offer.disabled = false; automatic.checked = value.automatic === true; automatic.disabled = value.threshold === 0; }).catch(() => {});
     if (window.relayUpdater) { const updates = node('div', undefined, 'settings-section'); host.append(updates); window.relayUpdater.settings(updates, kit); }
   }
+  // Turned on from the offer at a usage limit.
+  window.addEventListener('relay-handoff-preferences', () => { handoff = null; });
   async function saveHandoff(patch) {
     await perform(async () => { handoff = await api().post('/api/handoff-preferences', patch); });
     if (sections.general) render('general');

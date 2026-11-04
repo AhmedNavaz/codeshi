@@ -1847,6 +1847,74 @@ test('a resize drag holds its cursor with one element, not a rule on every eleme
   assert.match(css, /\.turn \{[^}]*content-visibility: auto/);
 });
 
+test('while a handoff is switching the button says so, and scrolled up, the way back says an offer is waiting', async () => {
+  const ui = await browser(), conversation = ui.canonical.get('project-one');
+  let answer; const held = new Promise(resolve => { answer = resolve; });
+  ui.setIntercept((request, next) => request.path.endsWith('/handoff') ? held : next());
+  const scroll = ui.$('messages-scroll'); scroll.clientHeight = 500; scroll.scrollHeight = 5000; scroll.scrollTop = 0;
+  conversation.status = 'running'; conversation.activeRun = { id: 'run-one', provider: 'codex' };
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('jump-latest-text').textContent, 'Jump to latest');
+  conversation.handoffOffer = { id: 'first', runId: 'run-one', from: { provider: 'codex', usedPercent: 92, window: '5-hour' }, to: { provider: 'claude', model: null, mode: 'edit', approvalPolicy: 'ask', billingSource: 'subscription', usedPercent: 20 }, task: 'Add a promo code field to checkout, then run this exact command…' };
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('jump-latest').hidden, false);
+  assert.equal(ui.$('jump-latest-text').textContent, 'Handoff offer below');
+  assert.equal(ui.$('handoff-accept').textContent, 'Hand off');
+  assert.match(ui.$('handoff-detail').textContent, /run this exact command…”/, 'A cut task still shows that it was cut.');
+  ui.$('handoff-accept').click(); await flush();
+  assert.equal(ui.$('handoff-accept').textContent, 'Handing off…');
+  assert.equal(ui.$('handoff-accept').disabled, true);
+  assert.equal(ui.$('handoff-dismiss').disabled, true);
+  conversation.handoffOffer = null; answer(response({ runId: 'run-two' }, 202)); await flush(); await flush();
+  assert.equal(ui.$('handoff-offer').hidden, true);
+  assert.equal(ui.$('jump-latest-text').textContent, 'Jump to latest');
+});
+
+test('the first run stopped by a limit offers to handle the next ones without asking, once, and only where it would apply', async () => {
+  const stop = (conversation, id, provider = 'codex') => { conversation.status = 'incomplete'; conversation.provider = provider; conversation.lastRun = { id, provider, status: 'incomplete', errorCategory: 'quota' }; };
+  const ui = await browser(), conversation = ui.canonical.get('project-one'), saved = () => ui.requests.filter(request => request.path === '/api/handoff-preferences' && request.method === 'POST').map(request => request.body);
+  await ui.$('message-input'); stop(conversation, 'run-one'); await ui.window.relayUI.refresh(); await flush(); await flush();
+  assert.equal(ui.$('limit-always').hidden, false, 'Offered the first time.');
+  assert.equal(ui.$('continuation').hidden, false);
+  assert.deepEqual(saved(), [{ limitAsked: true }], 'Being offered is remembered.');
+  const sent = ui.requests.length;
+  ui.$('limit-always').click(); await flush(); await flush(); await flush();
+  assert.deepEqual(saved().at(-1), { automatic: true, limitAsked: true });
+  assert(ui.requests.slice(sent).some(request => /\/continue/.test(request.path)), 'It continues this time as well.');
+
+  // Offered once: a later stop doesn't ask again, whichever way it was answered.
+  const later = await browser(), again = later.canonical.get('project-one');
+  later.setIntercept((request, next) => request.path === '/api/handoff-preferences' ? response({ threshold: 90, automatic: false, limitAsked: true }) : next());
+  stop(again, 'run-two'); await later.window.relayUI.refresh(); await flush(); await flush();
+  assert.equal(later.$('limit-always').hidden, true);
+
+  // Not with automatic handoff on or offers off, and not when the agent it would go to isn't on a subscription.
+  for (const preferences of [{ threshold: 90, automatic: true, limitAsked: true }, { threshold: 0, automatic: false, limitAsked: false }]) {
+    const other = await browser(), row = other.canonical.get('project-one');
+    other.setIntercept((request, next) => request.path === '/api/handoff-preferences' ? response(preferences) : next());
+    stop(row, 'run-three'); await other.window.relayUI.refresh(); await flush(); await flush();
+    assert.equal(other.$('limit-always').hidden, true);
+  }
+  const api = await browser({ billingSource: 'api' }), row = api.canonical.get('project-one');
+  stop(row, 'run-four'); await api.window.relayUI.refresh(); await flush(); await flush();
+  assert.equal(api.$('limit-always').hidden, true);
+});
+
+test('while a limit is being handed off, the page says so instead of offering choices it may not need', async () => {
+  const ui = await browser(), conversation = ui.canonical.get('project-one');
+  conversation.status = 'incomplete'; conversation.lastRun = { id: 'run-one', provider: 'codex', status: 'incomplete', errorCategory: 'quota' }; conversation.limitSwitching = { provider: 'codex' };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('continuation').hidden, true);
+  assert.equal(ui.$('limit-always').hidden, true);
+  assert.equal(ui.$('resume-waiting').hidden, false);
+  assert.equal(ui.$('resume-waiting-text').textContent, 'Codex reached its usage limit. Finding an agent with room…');
+  assert.equal(ui.$('resume-cancel').hidden, true, 'There is nothing to cancel yet.');
+  conversation.limitSwitching = null; await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('resume-waiting').hidden, true);
+  assert.equal(ui.$('continuation').hidden, false, 'If nothing could take over, the usual choices come back.');
+  assert.equal(ui.$('resume-cancel').hidden, false);
+});
+
 test('jump to latest goes straight there from far away, and scrolls smoothly from nearby', async () => {
   const ui = await browser({ setup: true });
   const scroll = ui.$('messages-scroll'), smooth = [];

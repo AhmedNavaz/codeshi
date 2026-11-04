@@ -19,8 +19,15 @@ const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
 
 // Whether plan usage shows the agent limited for this model, and when every full window resets.
 // `limited` is null when the agent reports no usage, so its state is unknown.
+// Whether a usage window limits this model. A window can name one model (scope) or several (scopes, where an empty list
+// matches none); with neither it covers the whole account. An exhausted window for another model says nothing about this one.
+export function windowApplies(row, model) {
+  const name = String(model || '').toLowerCase();
+  return Array.isArray(row.scopes) ? row.scopes.some(scope => name.includes(String(scope).toLowerCase())) : !row.scope || name.includes(String(row.scope).toLowerCase());
+}
+
 export function limitState(usage, model = null) {
-  const windows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => !row.scope || String(model || '').toLowerCase().includes(String(row.scope).toLowerCase()));
+  const windows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => windowApplies(row, model));
   if (!windows.length) return { limited: null, resetsAt: null };
   const full = windows.filter(row => typeof row.usedPercent === 'number' && row.usedPercent >= 100);
   if (!full.length) return { limited: false, resetsAt: null };
@@ -47,14 +54,15 @@ export class ResumeScheduler {
     if (!waiting && this.timer) { clearInterval(this.timer); this.timer = null; }
   }
 
-  schedule(c, { providers, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', billingConfirmed = false } = {}) {
+  // limited: agents that also reached a limit during this task, which aren't taken as ready just for reporting no usage.
+  schedule(c, { providers, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', billingConfirmed = false, limited = [] } = {}) {
     if (c.lastRun?.errorCategory !== 'quota' || this.broker.running?.c.id === c.id) throw Object.assign(new Error('Waiting for a reset is available after a run stops on a usage limit.'), { status: 409 });
     const chosen = [...new Set(Array.isArray(providers) ? providers : [])].filter(provider => this.broker.availableProviders().includes(provider));
     if (!chosen.length) throw Object.assign(new Error('Choose at least one connected agent to continue with.'), { status: 400 });
     for (const provider of chosen) this.broker.checkRunSettings(provider, mode, approvalPolicy);
     if (c.resume) this.end(c, 'replaced');
     const at = this.now();
-    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0 };
+    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}) };
     this.broker.record(c, { type: 'resume', resume });
     this.status.delete(c.id);
     this.arm(); this.tick();
@@ -111,8 +119,8 @@ export class ResumeScheduler {
         try { usage = await this.usage(provider, this.broker.usageOptions(provider)); } catch {}
         state = { ...limitState(usage, model), checkedAt: new Date(now).toISOString() };
         // An agent that reports no usage is judged by the limit that stopped it, if it reported one.
-        if (state.limited === null && c.lastRun?.provider === provider) {
-          const reset = Number(c.lastRun.rateLimit?.resetsAt) * 1000;
+        if (state.limited === null && (c.lastRun?.provider === provider || resume.limited?.includes(provider))) {
+          const reset = c.lastRun?.provider === provider ? Number(c.lastRun.rateLimit?.resetsAt) * 1000 : NaN;
           state = Number.isFinite(reset) && reset > 0 ? { ...state, limited: now < reset, resetsAt: new Date(reset).toISOString() } : { ...state, limited: now < Date.parse(resume.createdAt) + this.checkMs };
         }
         status.agents.set(provider, state);

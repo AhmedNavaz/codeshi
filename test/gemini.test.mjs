@@ -114,6 +114,28 @@ test('Gemini JSON-RPC client rejects malformed output and clears pending request
   await assert.rejects(pending, /Invalid Gemini protocol/); assert(client.closed); assert.equal(client.pending.size, 0);
 });
 
+test('an effort saved under the Antigravity connection cannot stop a run on Gemini CLI, which takes its effort from the model', { skip: scriptCLIs }, async t => {
+  const root = folder(t), workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
+  const cli = path.join(root, 'gemini.mjs');
+  fs.writeFileSync(cli, `#!${process.execPath}
+import readline from 'node:readline';
+if(process.argv.includes('--version')){console.log('0.66.0');process.exit(0);}
+const emit=value=>console.log(JSON.stringify({jsonrpc:'2.0',...value}));
+for await(const line of readline.createInterface({input:process.stdin})){const m=JSON.parse(line);
+if(m.method==='initialize')emit({id:m.id,result:{protocolVersion:1}});
+if(m.method==='session/new')emit({id:m.id,result:{sessionId:'native-session',models:{currentModelId:'chosen-model'}}});
+if(m.method==='session/prompt'){emit({method:'session/update',params:{sessionId:'native-session',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Done.'}}}});emit({id:m.id,result:{stopReason:'end_turn'}});}
+}
+`, { mode: 0o700 });
+  const broker = new Broker({ workspace, bins: { gemini: cli }, dataDir: path.join(root, 'data') }); t.after(() => broker.close());
+  const c = broker.get(broker.create().id);
+  broker.settings(c, { provider: 'gemini', model: 'chosen-model', mode: 'edit', effort: 'high' });
+  assert.equal(c.efforts.gemini['chosen-model'], 'high');
+  broker.start(c, { text: 'Continue this project', provider: 'gemini', requestId: 'saved-effort' }); await broker.running.done;
+  assert.equal(c.status, 'complete');
+  assert.deepEqual(c.messages.filter(message => message.role === 'error'), []);
+});
+
 test('Gemini worker completes canonical handoffs, preserves other sessions and model choices, and releases the workspace after Stop', { skip: scriptCLIs }, async t => {
   const root = folder(t), workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
   const cli = path.join(root, 'gemini.mjs'), capture = path.join(root, 'capture.jsonl');

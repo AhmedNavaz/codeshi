@@ -115,6 +115,8 @@
   window.addEventListener('relay-commands', event => { if (event.detail?.projectId === api.getState().projectId) { testCommand = event.detail.commands?.find?.(command => command.test)?.command || null; render(); } });
   $('handoff-threshold').addEventListener('change', () => savePreferences({ threshold: Number($('handoff-threshold').value) }));
   $('handoff-automatic').addEventListener('change', () => savePreferences({ automatic: $('handoff-automatic').checked }));
+  // Turned on from the offer at a usage limit.
+  window.addEventListener('relay-handoff-preferences', () => { if (!panel.hidden) loadPreferences(); });
   // The overview in a new conversation links to the matching part of the panel.
   document.querySelectorAll('[data-agents]').forEach(link => link.addEventListener('click', () => setOpen(true, link.dataset.agents)));
   // On a docked layout, a workspace opens with the side panel last chosen, Agents at first.
