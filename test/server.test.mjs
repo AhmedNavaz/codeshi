@@ -130,6 +130,13 @@ test('serves the local interface and probes provider versions without inference'
   }
 });
 
+test('closing reports each step and its time, so a slow shutdown can be traced', async t => {
+  const f = await fixture(t), steps = [];
+  await f.app.close({ force: true, onStep: step => steps.push(step) });
+  assert.deepEqual(steps.map(step => step.name), ['reviews', 'commands', 'terminals', 'voice', 'workspaces', 'connections']);
+  assert(steps.every(step => Number.isFinite(step.ms) && !step.error));
+});
+
 test('a forced close drops requests still in flight instead of waiting for them', async t => {
   const f = await fixture(t);
   const socket = (await import('node:net')).connect(f.port, '127.0.0.1');
@@ -139,6 +146,7 @@ test('a forced close drops requests still in flight instead of waiting for them'
   const started = Date.now();
   await f.app.close({ force: true });
   assert.ok(Date.now() - started < 1000, 'Start fresh does not wait for launch-time requests to finish.');
+  assert.equal(await f.app.close({ force: true }), undefined, 'Closing twice is the same close.');
   await once(socket, 'close');
 });
 

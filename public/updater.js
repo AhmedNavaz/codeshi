@@ -138,10 +138,18 @@
   $('close-update').addEventListener('click', () => { close(); (anchor.hidden ? button : anchor).focus(); });
   popover.addEventListener('toggle', () => { if (!isOpen()) for (const control of [button, more].filter(Boolean)) control.setAttribute('aria-expanded', 'false'); });
   window.addEventListener('resize', position);
+  // Opening a workspace clears notices, so this one waits until that has happened.
+  let installFailed = false;
+  function explainFailedInstall() {
+    const { ready, projectsLoaded, projects } = api.getState();
+    if (!installFailed || !(ready || projectsLoaded && !projects.length)) return;
+    installFailed = false;
+    api.showNotice('The last update couldn’t be installed, so you’re still on this version. Codeshi will offer it again.');
+  }
   // Agents starting or finishing change what Restart promises.
-  window.addEventListener('relay-state', () => { if (isOpen()) render(); });
+  window.addEventListener('relay-state', () => { explainFailedInstall(); if (isOpen()) render(); });
   bridge.onUpdateState(next => { state = next; render(); });
-  bridge.getUpdateState().then(next => { state ||= next; render(); }).catch(() => {});
+  bridge.getUpdateState().then(next => { state ||= next; installFailed = Boolean(next.installFailed); render(); explainFailedInstall(); }).catch(() => {});
 
   window.relayUpdater = {
     // Check for Updates… in the app menu: checks now and shows the answer, including a skipped version.

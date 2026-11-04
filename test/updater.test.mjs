@@ -48,6 +48,19 @@ function setup(t, { json = release(), sums = `${sha(zipBytes)}  Codeshi-0.15.0-m
   return { root, calls, options, updater: createUpdater(options) };
 }
 
+test('an update that could not be installed is reported at the next launch, once', { skip: process.platform === 'win32' && 'The in-app updater replaces macOS app bundles' }, t => {
+  const { options } = setup(t), log = path.join(options.directory, 'install.log');
+  assert.equal(createUpdater(options).state().installFailed, false, 'With no log, there is nothing to report.');
+  fs.mkdirSync(options.directory, { recursive: true });
+  fs.writeFileSync(log, '2026-11-04T01:00:00 Installed the update.\n');
+  assert.equal(createUpdater(options).state().installFailed, false);
+  for (const line of ['Codeshi did not quit, so the update was not installed.', 'The installed app could not be moved aside.', 'The update could not be moved into place, so the previous version was restored.']) {
+    fs.appendFileSync(log, `2026-11-04T01:00:00 ${line}\n`);
+    assert.equal(createUpdater(options).state().installFailed, true, line);
+    assert.equal(createUpdater(options).state().installFailed, false, 'It is said once.');
+  }
+});
+
 test('updates come only from this repository’s releases, for this Mac', { skip: process.platform === 'win32' && 'The in-app updater replaces macOS app bundles' }, () => {
   assert.equal(updateBuild({ arch: 'arm64' }), 'apple-silicon');
   assert.equal(updateBuild({ arch: 'x64', translated: true }), 'apple-silicon', 'The Intel build running under Rosetta moves to the Apple Silicon build.');

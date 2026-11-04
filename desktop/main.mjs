@@ -19,6 +19,7 @@ import {menuTemplate,menuState} from './menu.mjs';
 import {statusSnapshot,statusTitle,statusMenu} from './status.mjs';
 import {alertPlan} from '../src/alerts.mjs';
 import {createOverlay} from './overlay.mjs';
+import {closeWithin,writeShutdownLog} from './shutdown.mjs';
 import {createPreview} from './preview.mjs';
 import {APP_ID,ensureStartMenuShortcut} from './windows.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -41,7 +42,7 @@ let relay,win,origin,keepAwake,updater,tray=null,overlay=null,preview=null,quitt
 if(!primary) app.quit();
 else {
   app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
-  app.on('before-quit',event=>{if(relay&&!quitting){event.preventDefault();quitting=true;keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();relay.close().finally(()=>app.quit());}});
+  app.on('before-quit',event=>{if(relay&&!quitting){event.preventDefault();quitting=true;if(win&&!win.isDestroyed())win.webContents.send('relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{app.quit();setTimeout(()=>app.exit(0),2000);});}});
   app.on('will-quit',()=>{keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{

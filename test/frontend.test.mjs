@@ -174,7 +174,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   // prefers-color-scheme reports the OS appearance; setSystemDark changes it the way the OS would.
   const colorScheme={matches:systemDark,listeners:[],addEventListener(type,fn){if(type==='change')this.listeners.push(fn);}};
   if(wide||theme)window.matchMedia=query=>query==='(prefers-color-scheme: dark)'?colorScheme:{matches:wide};
-  if(desktop)window.relayDesktop={token:'desktop-test-token',pickFolder:async()=>pickedFolders.shift()||null};
+  const quitListeners=[];if(desktop)window.relayDesktop={token:'desktop-test-token',pickFolder:async()=>pickedFolders.shift()||null,onQuitting:callback=>quitListeners.push(callback)};
   if(desktop)Object.assign(window.relayDesktop,{getKeepAwake:async()=>({enabled:false,active:false,runningCount:0}),setKeepAwake:async enabled=>{awakeChanges.push(enabled);return {enabled,active:false,runningCount:0};},onKeepAwakeChanged:callback=>{window.addEventListener('desktop-keep-awake',event=>callback(event.detail));return ()=>{};}});
   // The menu bar's side of the bridge: commands arrive through onMenuCommand, and reported states are cloned as IPC would.
   if(desktop)Object.assign(window.relayDesktop,{onMenuCommand:callback=>{menuListeners.push(callback);return ()=>{};},setMenuState:state=>{menuStates.push(clone(state));}});
@@ -235,7 +235,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {previewOpens,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -1711,6 +1711,30 @@ test('commands are added and edited in a short form, stay with their workspace, 
   ui.$('message-input').value='';ui.$('command-fix').click();
   assert.match(ui.$('message-input').value,/^The web command failed with exit code 1\. Find the cause and fix it\.\n\nCommand: npm test \(in Frontend\)\n\nEnd of its output:\n```\n<script>untrusted<\/script>\nAssertionError/);
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
+});
+
+test('while the app quits or restarts, what stops answering is not shown as an error', async () => {
+  const ui = await browser({ desktop: true });
+  ui.window.relayUI.showNotice('Something earlier');
+  assert.equal(ui.$('notice').hidden, false);
+  const before = ui.requests.length;
+  ui.quitting();
+  assert.equal(ui.$('notice').hidden, true, 'A notice already showing goes too.');
+  ui.window.relayUI.showNotice('Codeshi is stopping.');
+  assert.equal(ui.$('notice').hidden, true);
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.requests.length, before, 'It stops asking a server that is going away.');
+});
+
+test('a failed install from the last run is explained once at launch, and a clean launch says nothing', async () => {
+  const state = { version: '0.14.0', supported: true, automatic: true, skipped: null, checkedAt: null, status: 'current', error: null, progress: null, blocked: null, latest: null };
+  const failed = await browser({ desktop: true, update: { ...state, installFailed: true } });
+  await flush();
+  assert.equal(failed.$('notice').hidden, false);
+  assert.match(failed.$('notice-text').textContent, /couldn’t be installed.*still on this version/);
+  const clean = await browser({ desktop: true, update: { ...state, installFailed: false } });
+  await flush();
+  assert.equal(clean.$('notice').hidden, true);
 });
 
 test('an update redraws only what changed, so what stayed keeps its elements and what was opened', async () => {

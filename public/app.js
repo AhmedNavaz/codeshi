@@ -68,6 +68,7 @@
     ui.workspaceToggle.closest(".sidebar").classList.remove("workspaces-open");
   }
   function showNotice(message, retry = null, actionLabel = "Retry") {
+    if (state.stopping) return;
     ui.noticeText.textContent = message;
     state.noticeRetry = retry;
     ui.retry.hidden = !retry;
@@ -1245,6 +1246,7 @@
   }
 
   async function refresh() {
+    if (state.stopping) return;
     const projectId = state.projectId;
     const projectVersion = state.projectVersion;
     if (!projectId || !state.ready) return;
@@ -1598,6 +1600,8 @@
   ui.removeConfirm.addEventListener('click', removeWorkspace);
   ui.removeCancel.addEventListener('click', closeRemoveWorkspace);
   ui.removeDialog.addEventListener('cancel', event => { event.preventDefault(); closeRemoveWorkspace(); });
+  // The window is closing or restarting into an update, so what stops answering now is not an error to show.
+  window.relayDesktop?.onQuitting?.(() => { state.stopping = true; ui.notice.hidden = true; });
   function connectEvents() {
     if (state.events) return;
     state.events = new EventSource("/api/events" + (window.relayDesktop?.token ? "?token="+encodeURIComponent(window.relayDesktop.token) : ""));

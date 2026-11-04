@@ -6,6 +6,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ### Fixed
 
+- **Restart to update restarts right away** (#82). A slow step, such as an account check, could hold Codeshi open for up to two minutes while "Codeshi is stopping." showed as an error. Quitting now has a time limit, the status bar says **Restarting…**, and if the installer ever gives up, the next launch says so and offers the update again.
 - **Long conversations stay responsive.** In a long conversation, dragging the side and bottom panels stuttered, and the whole window froze for up to a second when an approval arrived or a run finished. Codeshi now skips messages out of view, redraws only what changed, and fetches only the messages that changed. The terminal fits its new size once a drag settles.
 
 ## [0.24.0] - 2026-11-04

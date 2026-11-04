@@ -92,11 +92,18 @@ export function createUpdater({
   catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
   const enabled = supported && platform === 'darwin' && Boolean(location?.bundle);
   let status = 'idle', latest = null, error = null, progress = null, staged = null, controller = null, timer = null, checking = null, lastProgress = 0;
+  // The installer runs after Codeshi has gone, so the next launch is the first chance to say it failed. It says so once.
+  const installLog = path.join(directory, 'install.log');
+  let installFailed = false;
+  if (enabled) try {
+    installFailed = /did not quit|could not be moved/.test(fs.readFileSync(installLog, 'utf8').trimEnd().split('\n').at(-1));
+    if (installFailed) fs.appendFileSync(installLog, `${new Date(now()).toISOString()} Told the person at launch.\n`);
+  } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
 
   const save = () => { fs.mkdirSync(directory, { recursive: true, mode: 0o700 }); atomicJSON(preferencesFile, { version: 1, ...preferences }); };
   const state = () => ({
     version, supported: enabled, automatic: preferences.automatic, skipped: preferences.skipped, checkedAt: preferences.checkedAt,
-    status, error, progress, blocked: location?.blocked || null,
+    status, error, progress, blocked: location?.blocked || null, installFailed,
     latest: latest && { version: latest.version, notesUrl: latest.notesUrl, publishedAt: latest.publishedAt },
   });
   const emit = () => onState(state());

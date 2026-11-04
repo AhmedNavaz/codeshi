@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('relayDesktop', Object.freeze({
   cancelUpdate: () => ipcRenderer.invoke('relay:update:cancel'),
   skipUpdate: version => ipcRenderer.invoke('relay:update:skip', version),
   setAutomaticUpdates: enabled => ipcRenderer.invoke('relay:update:automatic', enabled),
+  onQuitting: callback => ipcRenderer.once('relay:quitting', () => callback()),
   onUpdateState: callback => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('relay:update-state', listener);

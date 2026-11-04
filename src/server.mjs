@@ -289,18 +289,26 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   });
 
   let closePromise;
-  // force drops requests still in flight, such as launch-time account checks, for a restart where the page reloads anyway.
-  const close = ({ force = false } = {}) => closePromise ||= (async () => {
+  // force drops requests still in flight, such as account checks, for a desktop quit or restart, where the page goes away anyway.
+  // Each step gets its turn even if an earlier one fails, and reports its time through onStep, so a slow shutdown can be traced.
+  const close = ({ force = false, onStep = () => {} } = {}) => closePromise ||= (async () => {
     closing = true;
+    let failure = null;
+    const step = async (name, work) => {
+      const started = Date.now();
+      try { await work(); onStep({ name, ms: Date.now() - started }); }
+      catch (error) { failure ||= error; onStep({ name, ms: Date.now() - started, error: error.message }); }
+    };
     closeAccountConnections();
-    await reviewRoutes.close();
-    await commandRoutes.close();
-    await terminalRoutes.close();
-    await voiceRoutes.close();
-    await registry.close();
+    await step('reviews', () => reviewRoutes.close());
+    await step('commands', () => commandRoutes.close());
+    await step('terminals', () => terminalRoutes.close());
+    await step('voice', () => voiceRoutes.close());
+    await step('workspaces', () => registry.close());
     clearInterval(heartbeat);
     for (const res of listeners) res.end();
-    await new Promise(resolve => { server.close(resolve); if (force) server.closeAllConnections(); });
+    await step('connections', () => new Promise(resolve => { server.close(resolve); if (force) server.closeAllConnections(); }));
+    if (failure) throw failure;
   })();
   return { server, registry, collaboration, sharing, commands: commandRoutes.commands, terminals: terminalRoutes.sessions, close,
     getAppearancePreference: () => appearance(config),
