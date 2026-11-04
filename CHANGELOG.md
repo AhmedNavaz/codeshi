@@ -4,6 +4,14 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Changed
+
+- **Dividers you can drag now show it.** While the mouse moves, a small grip appears at the middle of each divider that can be resized, and it fades when the mouse stops.
+
+### Fixed
+
+- The divider above **Files** could only be grabbed a few pixels above its line. It now sits on the line.
+
 ## [0.25.0] - 2026-11-04
 
 ### Added

@@ -30,9 +30,11 @@
     if (value === null) delete sizes[name]; else sizes[name] = clamp(value, section.min, section.max);
     section.apply(sizes[name] || null);
   }
+  const bars = [];
   function handle(host, name, placement) {
     if (!host) return;
     const section = sections[name], bar = document.createElement('div');
+    bars.push(bar);
     bar.className = `resize-handle ${section.axis === 'x' ? 'columns' : 'rows'} ${placement}`;
     bar.setAttribute('role', 'separator'); bar.setAttribute('aria-orientation', section.axis === 'x' ? 'vertical' : 'horizontal');
     bar.setAttribute('aria-label', section.label); bar.tabIndex = 0; bar.title = `${section.label}. Double-click to reset.`;
@@ -60,6 +62,14 @@
   for (const panel of sidePanels()) handle(panel, 'inspector', 'edge-start');
   handle($('explorer'), 'workspaces', 'before');
   handle($('bottom-panel'), 'panel', 'edge-top');
+  // While the pointer moves, each divider shows a small grip, so it's clear which ones can be dragged. Only the dividers
+  // change, not the page, so moving the mouse stays cheap in a long conversation.
+  let hinting = false, hintTimer = null;
+  document.addEventListener('pointermove', () => {
+    if (!hinting) { hinting = true; for (const bar of bars) bar.classList.add('hinting'); }
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => { hinting = false; for (const bar of bars) bar.classList.remove('hinting'); }, 1200);
+  }, { passive: true });
   // Layout buttons at the top right, as in an editor: the sidebar and the side panel on the right. Each is filled
   // while its area shows. The side panel reopens on the tab last used (Agents at first).
   const SIDEBAR_KEY = 'throughline:sidebar', LAST_PANEL_KEY = 'throughline:side-panel-last', shell = $('app-shell');

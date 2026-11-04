@@ -1833,6 +1833,22 @@ test('an update asks only for what changed and merges it, and asks for everythin
   assert.deepEqual(clone(ui.state().conversation.messages.map(message => message.id)), ['u1', 'a1', 'a3']);
 });
 
+test('while the mouse moves, a small grip shows on each divider that can be dragged, and it fades when the mouse stops', async () => {
+  const ui = await browser({ layoutUI: true }), handles = ui.document.querySelectorAll('.resize-handle');
+  assert(handles.length > 0);
+  assert.equal(handles.some(handle => handle.classList.contains('hinting')), false, 'Nothing shows until the mouse moves.');
+  ui.document.dispatchEvent(new UIEvent('pointermove'));
+  assert.equal(handles.every(handle => handle.classList.contains('hinting')), true);
+  ui.document.dispatchEvent(new UIEvent('pointermove'));
+  assert.equal(handles.every(handle => handle.classList.contains('hinting')), true, 'It stays while the mouse keeps moving.');
+  ui.runTimers();
+  assert.equal(handles.some(handle => handle.classList.contains('hinting')), false, 'It goes once the mouse stops.');
+  const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.resize-handle\.columns::after \{[^}]*\bwidth: 1px/, 'The divider itself stays a thin line.');
+  assert.match(css, /\.resize-handle\.rows::after \{[^}]*\bheight: 1px/);
+  assert.match(css, /\.resize-handle\.columns::before \{[^}]*\bwidth: 3px; height: 16px/, 'The grip is very small.');
+});
+
 test('a resize drag holds its cursor with one element, not a rule on every element, and skips turns out of view', async () => {
   const ui = await browser({ setup: true, layoutUI: true });
   const handle = ui.$('bottom-panel').querySelector('.resize-handle');
