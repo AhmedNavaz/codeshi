@@ -11,7 +11,9 @@ Thanks for helping. Bug reports, fixes and focused improvements are all welcome.
 
 ## Set up
 
-You need Node.js 22.12 or later. Claude Code, Codex CLI or Gemini CLI are only needed to try real runs; the test suite uses mocks.
+You need Node.js 22.12 or later. Claude Code, the Codex CLI or the Google connection (**Settings › Install Google connection**) are only needed to try real runs; the tests use stand-ins, so they run with no agents installed.
+
+Codeshi is built and tested on macOS and Windows. It isn't tested on Linux yet, so expect rough edges there; [#5](https://github.com/AhmedNavaz/codeshi/issues/5) tracks that, and help is welcome.
 
 ```sh
 npm ci
@@ -38,7 +40,7 @@ Backend code lives in `src/`; Electron, browser UI and the separately deployable
 | `src/broker.mjs`, `src/context.mjs` | Conversation journal, runs, and the shared context handed to each agent |
 | `src/checkpoints.mjs` | Run checkpoints (#20): folders saved before and after each run, and undo and redo |
 | `src/agent-questions.mjs` | Questions an agent asks with options (Claude's AskUserQuestion, Codex's request_user_input): one shape, answer checks, and the answers in each agent's own format |
-| `src/gemini.mjs`, `src/providers.mjs`, `src/provider-worker.mjs` | Claude Agent SDK, Codex app-server and Gemini CLI ACP adapters, accounts and plan usage; runs happen in a worker process |
+| `src/gemini.mjs`, `src/providers.mjs`, `src/provider-worker.mjs` | Claude Agent SDK, Codex app-server and Gemini ACP adapters, accounts and plan usage; runs happen in a worker process |
 | `src/local-models.mjs` | Ollama local-model discovery, validation and scoped Codex tool-harness launch routes |
 | `src/resolve-binary.mjs` | Finds the installed `claude`, `codex` and `gemini` executables |
 | `src/conversation-routes.mjs`, `src/conversation-import.mjs`, `src/conversation-export.mjs` | Previous-chat discovery, reviewed imports and conversation files for other users |

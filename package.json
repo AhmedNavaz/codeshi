@@ -39,7 +39,7 @@
     "start:update-demo": "node desktop/launch.mjs --update-demo",
     "desktop": "node desktop/launch.mjs",
     "web": "node src/server.mjs",
-    "test": "node --test test/*.test.mjs sharing/test/*.test.mjs",
+    "test": "node --import ./test/isolate.mjs --test test/*.test.mjs sharing/test/*.test.mjs",
     "test:desktop": "node desktop/launch.mjs --smoke-test",
     "sharing": "node sharing/server.mjs",
     "package": "node desktop/package.mjs",

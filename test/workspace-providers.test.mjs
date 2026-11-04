@@ -24,7 +24,7 @@ function fixture(t) {
     const broker = new Broker({ workspace: primary, workspaces: folders, workspaceFolders: folders.map((directory, index) => ({ id: `folder-${index}`, name: path.basename(directory), path: directory })), bins, dataDir: path.join(root, 'history') });
     brokers.push(broker); return broker;
   };
-  const captures = () => fs.readFileSync(path.join(primary, '.mock-captures.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const captures = () => fs.readFileSync(path.join(primary, '.mock-captures.jsonl'), 'utf8').split('\n').slice(0, -1).map(JSON.parse);
   t.after(async () => { for (const broker of brokers) await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, primary, secondary, third, open, captures };
 }

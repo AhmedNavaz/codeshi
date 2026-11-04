@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fork } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import test from 'node:test';
 import { noSymlinks } from './platform.mjs';
@@ -40,20 +41,72 @@ test('a second crash while claiming a dead guard can also recover', async t => {
   withFileGuard(filename, () => {}); assert(!fs.existsSync(filename + '.guard'));
 });
 test('concurrent crash recovery serializes every subsequent filesystem transaction', async t => {
-  const { root, filename } = fixture(t), counter = path.join(root, 'counter'); fs.writeFileSync(counter, '0');
-  const child = await holder(t, filename), exited = once(child, 'exit'); child.kill('SIGKILL'); await exited;
-  const workers = Array.from({ length: 8 }, () => fork(new URL('./fixtures/guard-client.mjs', import.meta.url), [filename, 'increment', counter], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] }));
-  const results = await Promise.all(workers.map(async worker => { let error = ''; worker.stderr.on('data', chunk => { error += chunk; }); const [code] = await once(worker, 'exit'); assert.equal(code, 0, error); }));
-  assert.equal(results.length, 8); assert.equal(fs.readFileSync(counter, 'utf8'), '64'); assert(!fs.existsSync(filename + '.guard'));
-});
-test('a lost recovery claim retries macOS rename races without hiding other rename failures',async t=>{
-  for(const disappeared of [true,false]) {
-    const {filename}=fixture(t),child=await holder(t,filename),exited=once(child,'exit');child.kill('SIGKILL');await exited;
-    const rename=fs.renameSync;let injected=false;
-    fs.renameSync=(source,destination)=>{if(!injected&&String(source).includes(path.join(filename+'.guard','owner-'))){injected=true;if(disappeared){fs.unlinkSync(source);fs.rmdirSync(filename+'.guard');}throw Object.assign(new Error('Directory changed during rename'),{code:'EINVAL'});}return rename.call(fs,source,destination);};
-    try {if(disappeared)withFileGuard(filename,()=>{});else assert.throws(()=>withFileGuard(filename,()=>assert.fail()),{code:'EINVAL'});}finally{fs.renameSync=rename;}
-    assert(injected);if(!disappeared){assert(fs.existsSync(filename+'.guard'));withFileGuard(filename,()=>{});}assert(!fs.existsSync(filename+'.guard'));
+  // More than once, because recovering processes collide differently each time.
+  for (let round = 0; round < 3; round++) {
+    const { root, filename } = fixture(t), counter = path.join(root, 'counter'); fs.writeFileSync(counter, '0');
+    const child = await holder(t, filename), exited = once(child, 'exit'); child.kill('SIGKILL'); await exited;
+    const workers = Array.from({ length: 8 }, () => fork(new URL('./fixtures/guard-client.mjs', import.meta.url), [filename, 'increment', counter], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] }));
+    const results = await Promise.all(workers.map(async worker => { let error = ''; worker.stderr.on('data', chunk => { error += chunk; }); const [code] = await once(worker, 'exit'); assert.equal(code, 0, error); }));
+    assert.equal(results.length, 8); assert.equal(fs.readFileSync(counter, 'utf8'), '64'); assert(!fs.existsSync(filename + '.guard'));
+    assert.deepEqual(fs.readdirSync(root).filter(name => name.includes('.guard')), [], 'Nothing is left behind.');
   }
+});
+// Marker names for processes that are running (this one) and that have exited.
+const uuid = () => randomUUID();
+const liveMarker = () => `owner-${process.pid}-${processStart(process.pid) ? Buffer.from(processStart(process.pid)).toString('base64url') : 'none'}-${uuid()}.json`;
+const deadMarker = () => `owner-${spawnSync(process.execPath, ['-e', '']).pid}-none-${uuid()}.json`;
+test('a recovering process that finds another at work backs off, then recovers once it has gone', t => {
+  const { filename } = fixture(t), guard = filename + '.guard', dead = deadMarker(), other = liveMarker();
+  fs.mkdirSync(guard); fs.writeFileSync(path.join(guard, dead), '{}'); fs.writeFileSync(path.join(guard, other), '{}');
+  assert.throws(() => withFileGuard(filename, () => assert.fail('Another process is recovering this guard.')), { status: 409 });
+  assert.deepEqual(fs.readdirSync(guard).sort(), [dead, other].sort(), 'It takes its own claim back and touches nothing else.');
+  fs.unlinkSync(path.join(guard, other));
+  let calls = 0; withFileGuard(filename, () => { calls++; }); assert.equal(calls, 1); assert(!fs.existsSync(guard));
+});
+test('markers from several crashed processes do not block recovery, but anything unidentifiable among them does', t => {
+  const { filename } = fixture(t), guard = filename + '.guard', first = deadMarker(), second = deadMarker();
+  fs.mkdirSync(guard); fs.writeFileSync(path.join(guard, first), '{}'); fs.writeFileSync(path.join(guard, second), '{}');
+  fs.writeFileSync(path.join(guard, 'unknown'), 'preserve');
+  assert.throws(() => withFileGuard(filename, () => assert.fail()), { status: 409 });
+  assert.deepEqual(fs.readdirSync(guard).sort(), [first, second, 'unknown'].sort());
+  fs.unlinkSync(path.join(guard, 'unknown'));
+  const folder = deadMarker(); fs.mkdirSync(path.join(guard, folder));
+  assert.throws(() => withFileGuard(filename, () => assert.fail()), { status: 409 }, 'A folder is not a marker, whatever its name.');
+  fs.rmdirSync(path.join(guard, folder));
+  withFileGuard(filename, () => {}); assert(!fs.existsSync(guard));
+});
+test('a claim that cannot be written is tried again, and the guard stays protected until one can', t => {
+  // macOS answers EINVAL when the folder is being retired by another process at that moment.
+  const { filename } = fixture(t), guard = filename + '.guard', dead = deadMarker(), write = fs.writeFileSync;
+  fs.mkdirSync(guard); write(path.join(guard, dead), '{}');
+  let refusals = 0, always = true;
+  fs.writeFileSync = function (file, ...args) { if (String(file).includes(path.join(filename + '.guard', 'owner-')) && (always || refusals < 2)) { refusals++; throw Object.assign(new Error('Directory changed'), { code: 'EINVAL' }); } return write.call(fs, file, ...args); };
+  try {
+    assert.throws(() => withFileGuard(filename, () => assert.fail()), { status: 409 });
+    assert.deepEqual(fs.readdirSync(guard), [dead], 'Nothing was removed.');
+    always = false; refusals = 0;
+    let calls = 0; withFileGuard(filename, () => { calls++; }); assert.equal(calls, 1); assert.equal(refusals, 2);
+  } finally { fs.writeFileSync = write; }
+  assert(!fs.existsSync(guard));
+});
+test('releasing a guard outlasts a moment when it cannot be renamed, and survives what others left in it', t => {
+  const { root, filename } = fixture(t), guard = filename + '.guard', rename = fs.renameSync;
+  let refusals = 0;
+  fs.renameSync = (source, destination) => { if (source === guard && refusals < 2) { refusals++; throw Object.assign(new Error('In use'), { code: 'EPERM' }); } return rename.call(fs, source, destination); };
+  try { withFileGuard(filename, () => {}); } finally { fs.renameSync = rename; }
+  assert.equal(refusals, 2); assert(!fs.existsSync(guard));
+  withFileGuard(filename, () => fs.writeFileSync(path.join(guard, deadMarker()), '{}'));
+  assert.deepEqual(fs.readdirSync(root).filter(name => name.includes('.guard')), [], 'A file left by a process that backed off goes with the guard.');
+  withFileGuard(filename, () => fs.rmSync(guard, { recursive: true }));
+  assert(!fs.existsSync(guard), 'A guard removed by hand while held is simply released.');
+  const stale = filename + '.guard.retired-left-behind'; fs.mkdirSync(stale); const old = new Date(Date.now() - 120000); fs.utimesSync(stale, old, old);
+  withFileGuard(filename, () => {}); assert(!fs.existsSync(stale), 'A retired folder that could not be removed is swept once it is old.');
+});
+test('a guard that stays in use is reported rather than ignored', t => {
+  const { filename } = fixture(t), guard = filename + '.guard', rename = fs.renameSync;
+  fs.renameSync = (source, destination) => { if (source === guard) throw Object.assign(new Error('In use'), { code: 'EPERM' }); return rename.call(fs, source, destination); };
+  try { assert.throws(() => withFileGuard(filename, () => {}), { code: 'EPERM' }); } finally { fs.renameSync = rename; }
+  assert(fs.existsSync(guard)); fs.rmSync(guard, { recursive: true });
 });
 test('a guard never exists without its owner, and an empty one left by an earlier version is replaced at once', { skip: process.platform === 'win32' }, t => {
   const { filename } = fixture(t), guard = filename + '.guard'; fs.mkdirSync(guard);

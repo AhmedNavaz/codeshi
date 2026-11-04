@@ -208,7 +208,8 @@ export class ProjectCommands {
     if (process.platform === 'win32') {
       await new Promise((resolve, reject) => execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, error => error && ![128, 255].includes(error.code) ? reject(error) : resolve())); return;
     }
-    const signal = kind => { try { process.kill(-pid, kind); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
+    // On macOS, signalling a process group that's already exiting answers EPERM rather than ESRCH.
+    const signal = kind => { try { process.kill(-pid, kind); return true; } catch (error) { if (error.code === 'ESRCH' || error.code === 'EPERM') return false; throw error; } };
     if (!signal('SIGTERM')) return;
     await new Promise(resolve => setTimeout(resolve, this.stopGrace));
     signal('SIGKILL');

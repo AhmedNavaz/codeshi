@@ -26,9 +26,7 @@ const alive = (pid, start) => exists(pid) && !reused(pid, start);
 // A group ID is its leader's PID, and no new process gets it while the group exists. So a process using it with
 // another start time means the group has ended. A leader that exited alone has no start time, so its group still counts.
 function groupAlive(pid, start) { return process.platform !== 'win32' && pid ? exists(-pid) && !reused(pid, start) : false; }
-// Ownership lives in a unique filename so a recovery process can claim a dead
-// owner's marker with one atomic rename. A contender holding an old filename
-// can never remove a replacement guard created by another process.
+// Ownership lives in a unique filename, so a guard says who holds it and a marker can't be mistaken for another's.
 function guardOwner() {
   const start = processStart(process.pid);
   return `owner-${process.pid}-${start ? Buffer.from(start).toString('base64url') : 'none'}-${randomUUID()}.json`;
@@ -40,79 +38,97 @@ function savedGuardOwner(name) {
   if (start !== null && (!/^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(start) || Buffer.from(start).toString('base64url') !== match[2])) return null;
   return { pid: +match[1], start };
 }
-function discardGuard(guard, marker) {
-  // Retire the whole directory before deleting its marker. A crash during
+const busy = error => ['EPERM', 'EACCES', 'EBUSY'].includes(error.code);
+// The guard moved or is in use: nothing here can be done now, and it stays protected until a later try. On macOS a
+// folder being retired by another process can answer EINVAL instead of ENOENT.
+const outOfReach = error => ['ENOENT', 'ENOTDIR', 'EINVAL'].includes(error.code) || busy(error);
+const pauseFor = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const ownerRecord = () => JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) });
+// Windows refuses to rename a folder for the moment another process is reading in it, so this outlasts that.
+const RETIRE_WAIT_MS = 1000;
+function discardGuard(guard) {
+  // Retire the whole directory before deleting what's in it. A crash during
   // cleanup then leaves only a disposable retired directory, never an empty
   // guard blocking the next application launch.
   const retired = `${guard}.retired-${randomUUID()}`;
-  fs.renameSync(guard, retired);
-  try { fs.unlinkSync(path.join(retired, marker)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  fs.rmdirSync(retired);
+  for (const deadline = Date.now() + RETIRE_WAIT_MS; ;) {
+    try { fs.renameSync(guard, retired); break; }
+    catch (error) {
+      if (error.code === 'ENOENT') return;
+      if (!busy(error) || Date.now() >= deadline) throw error;
+      pauseFor(5);
+    }
+  }
+  // Anything else inside was left by a recovering process that backed off. The guard is already free, so a retired
+  // folder that can't be removed now is swept later.
+  try { fs.rmSync(retired, { recursive: true, force: true }); } catch { /* sweepLeftovers removes it once it is old. */ }
 }
 // Earlier versions created a guard empty and wrote its owner marker straight after, so a guard stayed empty for
 // microseconds. One that has been empty for longer was left by a process stopped in between (a force-quit, for
 // example), and nothing can still be using it. A rename replaces such a guard on macOS and Linux; on Windows it is
 // claimed here.
 export const ABANDONED_EMPTY_GUARD_MS = 5000;
+// Everything here belongs to a process that has gone. Unknown content has no verifiable owner, so it remains
+// fail-closed: age alone never grants permission to remove it.
+function abandoned(guard, names, claim) {
+  return names.every(name => {
+    if (name === claim) return true;
+    const owner = savedGuardOwner(name);
+    if (!owner || alive(owner.pid, owner.start)) return false;
+    try { return fs.lstatSync(path.join(guard, name)).isFile(); } catch { return false; }
+  });
+}
+// Taking over from a dead owner. Each recovering process writes its own marker into the guard, reads the folder back
+// and goes on only if everything else in it belongs to a process that has gone. Of any two at work, whichever writes
+// second sees the first, so at most one goes on, and the other backs off and tries again. A crash at any point leaves
+// only markers of dead processes, which the next one can claim. No step relies on a rename being exclusive: on Windows
+// two renames of one file can both succeed, each through a handle it opened beforehand.
+function claimGuard(guard, claim) {
+  const file = path.join(guard, claim);
+  try { fs.writeFileSync(file, ownerRecord(), { flag: 'wx', mode: 0o600 }); }
+  catch (error) {
+    if (outOfReach(error)) return false;
+    // Already there: this process's claim from a try that could not remove it.
+    if (error.code !== 'EEXIST') throw error;
+  }
+  let names;
+  try { names = fs.readdirSync(guard); }
+  catch (error) { if (outOfReach(error)) return false; throw error; }
+  if (!names.includes(claim) || !abandoned(guard, names, claim)) {
+    try { fs.unlinkSync(file); } catch { /* Gone with the guard, or removed on a later try. */ }
+    return false;
+  }
+  try { discardGuard(guard); return true; }
+  catch (error) { if (busy(error)) return false; throw error; }
+}
 function recoverGuard(guard, claim) {
   let names, directory;
   try {
     directory = fs.lstatSync(guard);
     if (!directory.isDirectory() || directory.isSymbolicLink()) return false;
     names = fs.readdirSync(guard);
-  } catch (error) { if (error.code === 'ENOENT') return true; if (['ENOTDIR', 'EACCES'].includes(error.code)) return false; throw error; }
-  if (names.length === 0) return claimAbandonedEmptyGuard(guard, claim, directory);
-  // Unknown content has no verifiable owner. It remains fail-closed; age alone never grants permission to remove it.
-  if (names.length !== 1) return false;
-  const owner = savedGuardOwner(names[0]);
-  if (!owner || alive(owner.pid, owner.start)) return false;
-  const source = path.join(guard, names[0]);
-  try {
-    const marker = fs.lstatSync(source);
-    if (!marker.isFile() || marker.isSymbolicLink()) return false;
-    fs.renameSync(source, path.join(guard, claim));
-  } catch (error) {
-    // On macOS, a parent directory retired by another recovery process can
-    // yield EINVAL instead of ENOENT. Retry only when the exact old marker is
-    // gone; an unexplained rename failure still leaves the guard protected.
-    if (error.code === 'ENOENT' || error.code === 'EINVAL' && !fs.existsSync(source)) return false;
-    throw error;
-  }
-  // The marker now names this live recovery process. Other recoverers wait;
-  // if this process crashes here, its successor can claim this marker instead.
-  discardGuard(guard, claim);
-  return true;
-}
-// An abandoned empty guard is claimed by writing this process's marker into it. It is only ours if the marker is then
-// the only thing in it; anything else (another claimant, a late owner) means backing off and leaving it alone.
-function claimAbandonedEmptyGuard(guard, claim, directory) {
-  if (Date.now() - directory.mtimeMs < ABANDONED_EMPTY_GUARD_MS) return false;
-  const file = path.join(guard, claim);
-  try { fs.writeFileSync(file, JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) }), { flag: 'wx', mode: 0o600 }); }
-  catch (error) { if (['ENOENT', 'EEXIST', 'ENOTDIR'].includes(error.code)) return false; throw error; }
-  let names;
-  try { names = fs.readdirSync(guard); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-  if (names.length !== 1 || names[0] !== claim) { try { fs.unlinkSync(file); } catch { /* Another claimant may have taken the guard. */ } return false; }
-  discardGuard(guard, claim);
-  return true;
+  } catch (error) { if (error.code === 'ENOENT') return true; if (outOfReach(error)) return false; throw error; }
+  if (names.length === 0 ? Date.now() - directory.mtimeMs < ABANDONED_EMPTY_GUARD_MS : !abandoned(guard, names, claim)) return false;
+  return claimGuard(guard, claim);
 }
 // A guard is built in a staging folder with its owner marker already inside, then renamed into place in one atomic
 // step, so it never exists without an owner, even if the process is stopped at any moment. A guard left empty by an
 // earlier version is replaced by that rename; one with an owner or other contents makes the rename fail and is handled
-// below. Staging folders left by a process stopped before its rename are removed once they are a minute old.
-const STAGING = '.new-';
+// below. Staging folders left by a process stopped before its rename, and retired guards a process could not finish
+// removing, are removed once they are a minute old.
+const STAGING = '.new-', RETIRED = '.retired-';
 function stage(guard, marker) {
   const staging = `${guard}${STAGING}${randomUUID()}`;
   fs.mkdirSync(staging, { mode: 0o700 });
-  try { fs.writeFileSync(path.join(staging, marker), JSON.stringify({ pid: process.pid, pidStart: processStart(process.pid) }), { flag: 'wx', mode: 0o600 }); }
+  try { fs.writeFileSync(path.join(staging, marker), ownerRecord(), { flag: 'wx', mode: 0o600 }); }
   catch (error) { fs.rmSync(staging, { recursive: true, force: true }); throw error; }
   return staging;
 }
 const isLink = target => { try { return fs.lstatSync(target).isSymbolicLink(); } catch { return false; } };
-function sweepStaging(guard) {
-  const directory = path.dirname(guard), prefix = path.basename(guard) + STAGING;
+function sweepLeftovers(guard) {
+  const directory = path.dirname(guard), prefixes = [STAGING, RETIRED].map(kind => path.basename(guard) + kind);
   let names = [];
-  try { names = fs.readdirSync(directory).filter(name => name.startsWith(prefix)); } catch { return; }
+  try { names = fs.readdirSync(directory).filter(name => prefixes.some(prefix => name.startsWith(prefix))); } catch { return; }
   for (const name of names) {
     const target = path.join(directory, name);
     try { if (Date.now() - fs.lstatSync(target).mtimeMs > 60000) fs.rmSync(target, { recursive: true, force: true }); } catch { /* Another process may be using or removing it. */ }
@@ -136,14 +152,15 @@ export function withFileGuard(filename, callback) {
       if(recoverGuard(guard, marker))continue;
       if(Date.now()>=deadline)throw fail(`Another operation is updating ${path.basename(filename)}. Retry. If the application crashed while holding this guard, inspect and remove ${guard} only after all Codeshi instances are stopped.`);
       // Guards protect short synchronous filesystem transactions. Another process
-      // may finish normally; don't mistake that brief contention for a crash.
-      Atomics.wait(pause,0,0,10);
+      // may finish normally; don't mistake that brief contention for a crash. The
+      // pause varies, so two recovering processes that backed off don't keep meeting.
+      Atomics.wait(pause,0,0,5+Math.random()*20);
     }
   }
   try {
-    sweepStaging(guard);
+    sweepLeftovers(guard);
     return callback();
-  } finally { discardGuard(guard, marker); }
+  } finally { discardGuard(guard); }
 }
 // Locks and leases are written under a temporary name and renamed into place, so a write that fails (on a full disk,
 // for example) or stops partway leaves no empty file behind to block later changes.
@@ -177,7 +194,7 @@ function overlaps(first, second) {
 export class MutationCoordinator {
   constructor(dataRoot) {
     // Workspace mutations must also exclude runs using another history/data root.
-    this.root = path.join(os.tmpdir(), `ai-relay-mutations-${process.getuid?.() ?? os.userInfo().username}`);
+    this.root = process.env.AI_RELAY_MUTATIONS_DIR || path.join(os.tmpdir(), `ai-relay-mutations-${process.getuid?.() ?? os.userInfo().username}`);
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
   }
   acquire(workspace, operation) {

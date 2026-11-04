@@ -123,7 +123,7 @@ emit({method:'turn/completed',params:{threadId:'fresh-local',turn:{status:'compl
     return { status: response.status, body: await response.json() };
   };
   t.after(async () => { await app.close(); await new Promise(resolve => ollama.close(resolve)); if (old === undefined) delete process.env.AI_RELAY_OLLAMA_URL; else process.env.AI_RELAY_OLLAMA_URL = old; fs.rmSync(root, { recursive: true, force: true }); });
-  return { app, broker, c, project, request, scenario: value => fs.writeFileSync(scenario, JSON.stringify(value)), changed: () => { tags = [{ ...row, digest: 'b'.repeat(64) }]; }, cloud: () => { modelInfo = { ...info, remote_host: 'https://ollama.com' }; }, captures: () => fs.existsSync(captures) ? fs.readFileSync(captures, 'utf8').trim().split('\n').map(JSON.parse) : [] };
+  return { app, broker, c, project, request, scenario: value => fs.writeFileSync(scenario, JSON.stringify(value)), changed: () => { tags = [{ ...row, digest: 'b'.repeat(64) }]; }, cloud: () => { modelInfo = { ...info, remote_host: 'https://ollama.com' }; }, captures: () => fs.existsSync(captures) ? fs.readFileSync(captures, 'utf8').split('\n').slice(0, -1).map(JSON.parse) : [] };
 }
 const selection = (metadata, requestId = 'local-request') => ({ model, digest, task: 'Continue the project locally.', context: metadata.context, requestId });
 

@@ -26,7 +26,7 @@ function setup(t, scenarios = {}) {
   return {
     dataDir, marker: path.join(dataDir, 'resume-pending'),
     open() { const broker = new Broker({ workspace, dataDir, bins }); brokers.push(broker); return broker; },
-    captures() { const file = path.join(workspace, '.mock-captures.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []; },
+    captures() { const file = path.join(workspace, '.mock-captures.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').slice(0, -1).map(JSON.parse) : []; },
   };
 }
 async function run(broker, c, text, provider) { broker.start(c, { text, provider, mode: 'edit' }); await broker.running.done; }

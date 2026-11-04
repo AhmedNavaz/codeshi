@@ -35,7 +35,7 @@ function setup(t, scenarios = {}) {
   });
   return { ...options, open, captures: () => {
     const filename = path.join(workspace, '.mock-captures.jsonl');
-    return fs.existsSync(filename) ? fs.readFileSync(filename, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+    return fs.existsSync(filename) ? fs.readFileSync(filename, 'utf8').split('\n').slice(0, -1).map(JSON.parse) : [];
   } };
 }
 

@@ -4,11 +4,12 @@ import { withFileGuard } from '../../src/mutation-lock.mjs';
 const [filename, mode, counter] = process.argv.slice(2);
 const pause = new Int32Array(new SharedArrayBuffer(4));
 if (mode === 'recover-and-crash') {
-  const rename = fs.renameSync;
-  fs.renameSync = (source, destination) => {
-    rename(source, destination);
-    if (String(source).includes(path.join(filename + '.guard', 'owner-'))) {
-      fs.writeFileSync(filename + '.claimed', 'yes');
+  // Stops the moment its claim is in the guard.
+  const write = fs.writeFileSync;
+  fs.writeFileSync = (file, ...args) => {
+    write(file, ...args);
+    if (String(file).includes(path.join(filename + '.guard', 'owner-'))) {
+      write(filename + '.claimed', 'yes');
       process.kill(process.pid, 'SIGKILL');
     }
   };

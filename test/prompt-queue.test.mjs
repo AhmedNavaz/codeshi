@@ -26,7 +26,7 @@ function setup(t, scenarios = {}) {
     workspace,
     open() { const broker = new Broker({ workspace, dataDir, bins }); brokers.push(broker); return broker; },
     release() { fs.writeFileSync(path.join(workspace, '.release'), ''); },
-    requests() { const file = path.join(workspace, '.mock-captures.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).map(entry => [entry.provider, entry.context.currentRequest]) : []; },
+    requests() { const file = path.join(workspace, '.mock-captures.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').slice(0, -1).map(JSON.parse).map(entry => [entry.provider, entry.context.currentRequest]) : []; },
   };
 }
 const add = (broker, c, text, options = {}) => broker.queueAction(c, { action: 'add', text, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', ...options });

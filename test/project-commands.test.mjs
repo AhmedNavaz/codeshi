@@ -148,6 +148,16 @@ test('command routes retain token, origin and local application header checks an
 });
 
 
+test('stopping a command just as it exits is not an error', { skip: process.platform === 'win32' && 'Windows stops commands with taskkill' }, async t => {
+  // On macOS, signalling a process group that's already exiting answers EPERM.
+  const f = fixture(t), command = `${quote(process.execPath)} -e "setInterval(()=>{},1000)"`, session = run(f, 'Run', f.config(command)), kill = process.kill;
+  t.after(() => { process.kill = kill; });
+  process.kill = function (pid, signal) { if (pid < 0 && signal !== 0) { process.kill = kill; kill.call(process, pid, 'SIGKILL'); throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' }); } return kill.call(process, pid, signal); };
+  await f.commands.stop(f.project.id, 'run', session.id);
+  assert.equal(process.kill, kill, 'The group was signalled.');
+  await waitFor(() => f.commands.state(f.project.id).sessions.run.status !== 'running');
+});
+
 test('separate workspace and action sessions survive stopping another command and persist their configuration', async t => {
   const f = fixture(t);
   const second = f.registry.add({ path: f.backend });

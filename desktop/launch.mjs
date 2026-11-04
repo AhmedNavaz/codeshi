@@ -35,7 +35,8 @@ export function launchDesktop({ args = [], env = process.env, spawnImpl = spawn 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const args = process.argv.slice(2);
   const temporary = args.includes('--smoke-test') ? fs.mkdtempSync(path.join(os.tmpdir(), 'ai-relay-desktop-smoke-')) : null;
-  const env = temporary ? { ...process.env, AI_RELAY_DESKTOP_DATA: path.join(temporary, 'profile'), AI_RELAY_LEGACY_DATA_DIR: path.join(temporary, 'no-legacy-data') } : process.env;
+  // The smoke test keeps to a temporary profile and starts none of the agents installed on this computer.
+  const env = temporary ? { ...process.env, AI_RELAY_DESKTOP_DATA: path.join(temporary, 'profile'), AI_RELAY_LEGACY_DATA_DIR: path.join(temporary, 'no-legacy-data'), ...Object.fromEntries(['CODEX', 'CLAUDE', 'GEMINI'].map(agent => [`AI_RELAY_${agent}_BIN`, path.join(temporary, `not-installed-${agent.toLowerCase()}`)])) } : process.env;
   if (args.includes('--fresh') || args.includes('--no-agents')) console.log('Starting fresh in a temporary profile. Setup and imported chats are discarded when this window closes.');
   if (args.includes('--no-agents')) console.log('New-user preview: no installed agents are detected in this session. Your installed agents and sign-ins are unchanged.');
   const child = launchDesktop({ args, env });
