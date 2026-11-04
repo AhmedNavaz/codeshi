@@ -86,7 +86,7 @@ Codeshi cannot change subscription allowances or reset rules. Keep five-hour, we
 
 | Feature | Status | Issue |
 | --- | --- | --- |
-| More agents and models, including Google's supported coding-agent integration, free cloud tiers and local models, on your own accounts | First milestones shipped in 0.10.0: Gemini CLI over ACP and explicit Ollama local-model handoffs through Codex tools; Google personal-account support now uses Antigravity ACP with native sign-in and model discovery in 0.11.0; further provider adapters are next | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
+| More agents and models, such as Grok, DeepSeek, Qwen and free cloud tiers, on your own accounts | Gemini through Google Antigravity and local models through Ollama have shipped; further agents are next | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | Notarized macOS builds, so downloads open without a security prompt | Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
 | Install with Homebrew: `brew install --cask codeshi` | Depends on #1 | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
 
@@ -111,6 +111,7 @@ Codeshi cannot change subscription allowances or reset rules. Keep five-hour, we
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/codeshi/issues/73) |
 | Status in the Windows notification area | Planned, help wanted; follows the macOS menu bar status | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
 | Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/codeshi/issues/5) |
+| Run the symbolic link checks on Windows | Planned, help wanted | [#104](https://github.com/AhmedNavaz/codeshi/issues/104) |
 | Rewind: undo any run's changes, whichever agent made them, then one timeline of checkpoints | Stage 1, undoing and redoing a run with a preview of every file, shipped in [0.20.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.20.0); a Timeline panel and restoring the workspace to any checkpoint follow | [#20](https://github.com/AhmedNavaz/codeshi/issues/20) |
 | Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/codeshi/issues/9) |
 | Everything in the thread: GitHub issues, pull requests and failing CI checks as context, then pull requests from the conversation | Planned in stages; failed command output from Run shipped in [0.19.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.19.0); [details below](#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |

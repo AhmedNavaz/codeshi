@@ -5,5 +5,5 @@
 export const scriptCLIs = process.platform === 'win32' && 'Windows cannot start a #! script standing in for an agent CLI';
 
 // Windows creates symbolic links only with Developer Mode on or administrator rights, so the checks that links never
-// lead outside a workspace have not been run there yet. Enabling them on Windows is follow-up work for #5.
+// lead outside a workspace have not been run there yet. Enabling them on Windows is follow-up work for #104.
 export const noSymlinks = process.platform === 'win32' && 'Symbolic link checks have not been run on Windows yet';
