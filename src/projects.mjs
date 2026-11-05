@@ -116,7 +116,7 @@ export class ProjectRegistry extends EventEmitter {
     const broker = this.brokers.get(entry.id)?.broker;
     const count = broker ? broker.conversations.size : this.journalIds(entry.id).length;
     const { folderAliases, removedAt, ...visible } = entry;
-    return { ...visible, previousConversationsDismissed: entry.previousConversationsDismissed === true, folders: entry.folders.map(folder => ({ ...folder, available: folderAvailable(folder.path) })), available: folderAvailable(entry.path), runningConversationId: broker?.running?.c.id || null, pendingApprovals: broker?.running?.approvals.size || 0, conversationCount: count ? 1 : 0, archivedConversationCount: Math.max(0, count - 1) };
+    return { ...visible, previousConversationsDismissed: entry.previousConversationsDismissed === true, folders: entry.folders.map(folder => ({ ...folder, available: folderAvailable(folder.path) })), available: folderAvailable(entry.path), runningConversationId: broker?.running?.c.id || (broker?.tasks?.running ? 'parallel-task' : null), pendingApprovals: (broker?.running?.approvals.size || 0) + (broker?.tasks?.openLanes().reduce((sum, lane) => sum + (lane.running?.approvals.size || 0), 0) || 0), conversationCount: count ? 1 : 0, archivedConversationCount: Math.max(0, count - 1) };
   }
   list() { this.reload(); return [...this.projects.values()].filter(entry => !entry.removedAt).map(entry => this.public(entry)); }
   get(id) { this.reload(); return this.public(this.entry(id)); }
@@ -157,7 +157,7 @@ export class ProjectRegistry extends EventEmitter {
     this.assertOpen(); this.reload(); const before = this.entry(id, true);
     if (before.removedAt) return { id, removed: true };
     if (this.hasRunningCommands?.(id)) throw fail('Stop the project commands before removing this workspace.', 409);
-    if (this.brokers.get(id)?.broker.running || this.brokers.get(id)?.broker.backgroundReview) throw fail('Stop the current run and background review before removing this workspace.', 409);
+    if (this.brokers.get(id)?.broker.running || this.brokers.get(id)?.broker.backgroundReview || this.brokers.get(id)?.broker.tasks?.busy) throw fail('Stop the current run and background review before removing this workspace.', 409);
     const signature = rootsSignature(before.folders);
     const lease = this.mutations.acquireMany(before.folders.map(folder => folder.path), 'workspace-removal');
     let held; let releaseHeld = false;
@@ -211,7 +211,7 @@ export class ProjectRegistry extends EventEmitter {
 
   retireBroker(id, keepLock = false, message = 'Workspace folders changed. Refresh the project before continuing.') {
     const existing = this.brokers.get(id); if (!existing) return null;
-    if (existing.broker.running || existing.broker.backgroundReview) throw fail('Stop the current run and background review before changing workspace folders.', 409);
+    if (existing.broker.running || existing.broker.backgroundReview || existing.broker.tasks?.busy) throw fail('Stop the current run, tasks and background review before changing workspace folders.', 409);
     existing.broker.close().catch(() => {}); existing.broker.off('update', existing.update); if (existing.notify) existing.broker.off('notify', existing.notify);
     existing.broker.record = () => { throw fail(message, 409); };
     existing.broker.start = () => { throw fail(message, 409); };
@@ -221,7 +221,7 @@ export class ProjectRegistry extends EventEmitter {
   changeFolders(id, folders, aliases) {
     this.assertOpen(); this.reload(); const before = this.entry(id); const signature = rootsSignature(before.folders);
     if (this.hasRunningCommands?.(id)) throw fail('Stop the project commands before changing workspace folders.', 409);
-    if (this.brokers.get(id)?.broker.running || this.brokers.get(id)?.broker.backgroundReview) throw fail('Stop the current run and background review before changing workspace folders.', 409);
+    if (this.brokers.get(id)?.broker.running || this.brokers.get(id)?.broker.backgroundReview || this.brokers.get(id)?.broker.tasks?.busy) throw fail('Stop the current run and background review before changing workspace folders.', 409);
     const lease = this.mutations.acquireMany([...new Set([...before.folders, ...folders].map(folder => folder.path))], 'workspace-membership');
     let held = null; let releaseHeld = false;
     let changed;
@@ -261,7 +261,7 @@ export class ProjectRegistry extends EventEmitter {
   openBroker(entry, unlock) {
     const paths = entry.folders.map(folder => folder.path);
     let broker;
-    try { broker = new Broker({ workspace: entry.path, workspaces: paths, workspaceFolders: entry.folders, dataDir: path.join(this.dataRoot, entry.id), googleRoot: path.join(this.dataRoot, 'google'), bins: this.bins, handoffPreferences: () => this.handoffPreferences(), tests: { saved: () => this.testCommand?.(entry.id) ?? null, run: () => this.runTest(entry.id) }, acquireMutation: operation => this.mutations.acquireMany(paths, operation) }); }
+    try { broker = new Broker({ workspace: entry.path, workspaces: paths, workspaceFolders: entry.folders, dataDir: path.join(this.dataRoot, entry.id), googleRoot: path.join(this.dataRoot, 'google'), bins: this.bins, handoffPreferences: () => this.handoffPreferences(), tests: { saved: () => this.testCommand?.(entry.id) ?? null, run: () => this.runTest(entry.id) }, acquireMutation: operation => this.mutations.acquireMany(paths, operation), acquireFolders: (folders, operation) => this.mutations.acquireMany(folders, operation), withFolders: (folders, operation, work) => this.mutations.withMutations(folders, operation, work) }); }
     catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw fail(`Project folder is unavailable: ${entry.path}. Restore it or update workspace folders.`, 404); if (['EACCES', 'EPERM'].includes(error.code)) throw fail(`Cannot access the project or saved conversation: ${entry.path}. Check permissions.`, 400); throw error; }
     broker.workspaces = paths; broker.workspaceFolders = entry.folders.map(folder => ({ ...folder }));
     const rawCreate = broker.create.bind(broker); const rawList = broker.list.bind(broker);

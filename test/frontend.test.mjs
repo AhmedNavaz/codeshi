@@ -198,7 +198,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(modelPickerUI)vm.runInContext(fs.readFileSync(new URL('../public/model-picker.js',import.meta.url),'utf8'),context,{filename:'public/model-picker.js'});
   if(layoutUI)vm.runInContext(fs.readFileSync(new URL('../public/layout.js',import.meta.url),'utf8'),context,{filename:'public/layout.js'});
   if(agentsUI)vm.runInContext(fs.readFileSync(new URL('../public/agents-panel.js',import.meta.url),'utf8'),context,{filename:'public/agents-panel.js'});
-  if(agentsUI)for(const name of ['brief-panel','memory','skills','tasks-panel'])vm.runInContext(fs.readFileSync(new URL(`../public/${name}.js`,import.meta.url),'utf8'),context,{filename:`public/${name}.js`});
+  if(agentsUI)for(const name of ['parallel-tasks','brief-panel','memory','skills','tasks-panel'])vm.runInContext(fs.readFileSync(new URL(`../public/${name}.js`,import.meta.url),'utf8'),context,{filename:`public/${name}.js`});
   if(historyUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-history.js',import.meta.url),'utf8'),context,{filename:'public/conversation-history.js'});
   if(desktopControls)vm.runInContext(fs.readFileSync(new URL('../public/desktop-controls.js',import.meta.url),'utf8'),context,{filename:'public/desktop-controls.js'});
   if(setup)vm.runInContext(fs.readFileSync(new URL('../public/setup.js',import.meta.url),'utf8'),context,{filename:'public/setup.js'});
@@ -726,7 +726,7 @@ test('a conversation file saved near the 2 MB limit opens again for import, and 
 
 test('a multi-folder workspace lists its folders and the Files view shows only the selected one',async()=>{
   const ui=await browser({filesUI:true,insights:true});const picks=ui.document.querySelectorAll('.workspace-folder-pick');
-  assert.deepEqual([...picks.map(pick=>pick.textContent)],['Frontend','Backend']);assert.equal(picks[0].getAttribute('aria-pressed'),'true');
+  assert.deepEqual([...picks.map(pick=>pick.textContent)],['Frontend','Backend']);assert.equal(picks[0].getAttribute('aria-pressed'),'false','At the workspace level no one folder is selected.');
   assert.deepEqual([...ui.document.querySelectorAll('.tree-root').map(root=>root.textContent)],['Frontend'],'Only the selected folder is browsed.');
   picks[1].click();await flush();assert.deepEqual([...ui.document.querySelectorAll('.tree-root').map(root=>root.textContent)],['Backend']);
   assert.equal(ui.storage.get('ai-relay:folder:project-one'),'backend');assert.equal(ui.document.querySelectorAll('.workspace-folder-pick')[1].getAttribute('aria-pressed'),'true');
@@ -1210,7 +1210,7 @@ test('a shortcut and its menu item run one command with the same checks, so a ke
 });
 
 test('menu items that stand in for a button do what the button does, and wait while a dialog covers the page',async()=>{
-  const ui=await browser({desktop:true,desktopControls:true,workbench:true,historyUI:true,filesUI:true,theme:true,setup:true}),opened=id=>Boolean(ui.$(id).open);
+  const ui=await browser({desktop:true,desktopControls:true,workbench:true,historyUI:true,filesUI:true,theme:true,setup:true,stored:{'ai-relay:sidebar-level:project-one':'folder'}}),opened=id=>Boolean(ui.$(id).open);
   const continues=()=>ui.requests.filter(request=>request.path.endsWith('/continue')).length,appearances=()=>ui.requests.filter(request=>request.path==='/api/appearance'&&request.method==='POST').map(request=>request.body.theme);
   ui.menu('settings');await flush();assert.equal(opened('settings'),true,'Settings… opens Settings, as the status bar button does.');
   for(const command of ['new-workspace','add-folder','previous-chats','files','keep-awake','workspace-settings','remove-workspace','setup-guide'])ui.menu(command);
@@ -1248,7 +1248,7 @@ test('Find in Conversation, Find Next and Find Previous do what ⌘F, Enter and 
 test('the menu bar follows the page: the workspace, a run, the agent, Continue, Files, Git activity and the first nine workspaces',async()=>{
   const web=await browser({desktopControls:true,insights:true,historyUI:true,filesUI:true});assert.equal(web.menuStates.length,0,'The browser has no menu bar.');
   const none=await browser({empty:true,existing:false,desktop:true,desktopControls:true,historyUI:true});assert.deepEqual(none.menuStates.at(-1),{workspace:false,running:false,agent:'codex',codex:false,claude:false,gemini:false,continue:null,files:true,git:false,terminal:false,imports:false,export:false,workspaces:[]});
-  const ui=await browser({desktop:true,desktopControls:true,moreProjects:true,insights:true,historyUI:true,filesUI:true}),shown=()=>ui.menuStates.at(-1);
+  const ui=await browser({desktop:true,desktopControls:true,moreProjects:true,insights:true,historyUI:true,filesUI:true,stored:{'ai-relay:sidebar-level:project-one':'folder'}}),shown=()=>ui.menuStates.at(-1);
   const workspaces=[{name:'Example workspace',current:true},{name:'Other workspace',current:false}];
   assert.deepEqual(shown(),{workspace:true,running:false,agent:'codex',codex:true,claude:true,gemini:false,continue:null,files:true,git:false,terminal:false,imports:true,export:false,workspaces});
   const reported=ui.menuStates.length;ui.window.dispatchEvent(new UIEvent('relay-state'));await flush();assert.equal(ui.menuStates.length,reported,'An unchanged state is not sent again.');
@@ -1949,6 +1949,172 @@ test('Remember on a message opens the dialog, and memory lists what is kept with
   assert.deepEqual(buttons(ui.$('memory-list').children[0]).map(item => item.textContent), ['Edit', 'Restore', 'Delete'], 'Deleting takes retiring first.');
   assert.equal(ui.$('memory-count').hidden, true);
 });
+
+test('tasks show as threads: each opens its own conversation, says how it runs, and a copy is merged only after review', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true }), conversation = ui.canonical.get('project-one'), asked = [], posted = [], label = [];
+  const running = { id: 'aaaaaaaa-0000-4000-8000-000000000001', title: 'Add promo codes', folderName: 'website', folderId: 'f', status: 'running', mode: 'direct', approvals: 2, conversationId: 'lane-a', hasWorktree: false };
+  const copy = { id: 'bbbbbbbb-0000-4000-8000-000000000002', title: 'Fix the tray', folderName: 'desktop', folderId: 'g', status: 'complete', mode: 'worktree', uncommitted: 2, approvals: 0, conversationId: 'lane-b', hasWorktree: true };
+  const waiting = { id: 'cccccccc-0000-4000-8000-000000000003', title: 'Update the docs', folderName: 'docs', folderId: 'h', status: 'waiting', held: true, reason: 'Codeshi restarted. Start it when you’re ready.', approvals: 0, hasWorktree: false };
+  conversation.parallelTasks = [running, copy, waiting];
+  let review = { digest: 'digest-one', conflicts: 0, folder: 'desktop', canCheck: true, testCommand: 'npm test', check: null, files: [{ path: 'tray.js', change: 'update', added: 2, removed: 1, status: 'merged', diff: '+x' }, { path: 'new.js', change: 'add', added: 1, removed: 0, status: 'clean' }] };
+  const lane = (id, task, text) => ({ ...conversation, id, status: task.status === 'running' ? 'running' : 'complete', activeRun: task.status === 'running' ? { id: 'run', provider: 'codex', startedAt: new Date().toISOString() } : null, messages: [{ id: id + '-m', role: 'user', text, seq: 1 }], cursor: 1, task, parallelTasks: conversation.parallelTasks, checkpoints: {} });
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/conversation' && request.params.task) { asked.push(request.params.task); return response(request.params.task === running.id ? lane('lane-a', running, 'Promo work') : lane('lane-b', copy, 'Tray work')); }
+    if (request.path === '/api/tasks/plan') { label.push(request.body); return response({ mode: 'worktree', reason: 'The main conversation is using this repository, so this task works in its own copy from the last commit.', uncommitted: 2 }); }
+    if (request.path === '/api/tasks') { posted.push(request.body); return response({ id: 'new' }, 202); }
+    const action = request.path.match(/^\/api\/tasks\/[\da-f-]+\/(\w+)$/)?.[1];
+    if (action) { posted.push({ action, ...request.body }); return response(action === 'review' ? review : action === 'merge' ? { merged: 2 } : action === 'keep' ? { branch: 'codeshi/fix-the-tray-bbbbbb' } : action === 'check' ? { status: 'failed', exitCode: 1, output: 'boom', command: 'npm test', digest: 'digest-one' } : {}); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  const row = ui.$('task-list'), tabs = () => row.children.map(item => item.children[0]);
+  assert.equal(ui.$('task-section').hidden, false);
+  assert.deepEqual(tabs().map(tab => tab.children.map(item => item.textContent).filter(Boolean).join(' / ')), ['Main conversation / Whole workspace', 'Add promo codes / 2', 'Fix the tray / Review', 'Update the docs / docs']);
+  assert.equal(ui.$('task-banner').hidden, true, 'Main needs no banner.');
+  tabs()[1].click(); await flush();
+  assert.equal(ui.state().taskId, running.id); assert.equal(asked.at(-1), running.id);
+  assert.equal(ui.state().conversation.id, 'lane-a'); assert.match(ui.$('messages').textContent, /Promo work/);
+  assert.equal(ui.window.relayUI.isRunning(), true, 'This task’s own run.');
+  assert.match(ui.$('task-banner').textContent, /website · Working.*directly in this folder/s);
+  const stops = ui.requests.length; ui.$('stop-button').click(); await flush();
+  assert(ui.requests.slice(stops).some(request => request.path === '/api/conversations/lane-a/stop'), 'Stop goes to this task.');
+  // A task that hasn't started shows its details, without leaving this conversation.
+  tabs()[3].click(); await flush();
+  assert.equal(ui.state().taskId, running.id); assert.match(ui.$('task-banner').textContent, /docs · Waiting.*restarted/s);
+  ui.$('task-banner').querySelectorAll('button').find(item => item.textContent === 'Start').click(); await flush();
+  assert.equal(posted.at(-1).action, 'start');
+  // A copy: reviewing shows every file, and merging sends what was reviewed.
+  tabs()[2].click(); await flush();
+  assert.equal(ui.state().conversation.id, 'lane-b'); assert.equal(ui.window.relayUI.isRunning(), false);
+  assert.match(ui.$('task-banner').textContent, /own copy from the last commit, without 2 uncommitted changes/);
+  ui.$('task-banner').querySelectorAll('button').find(item => item.textContent === 'Review and merge').click(); await flush();
+  assert.equal(ui.$('task-merge-dialog').open, true);
+  assert.match(ui.$('task-merge-title').textContent, /Merge “Fix the tray” into desktop/);
+  assert.match(ui.$('task-merge-summary').textContent, /2 files would change/);
+  assert.deepEqual(ui.$('task-merge-files').children.map(item => item.dataset.status), ['merged', 'clean']);
+  assert.equal(ui.$('task-merge-apply').disabled, false);
+  ui.$('task-merge-test').click(); await flush();
+  assert.match(ui.$('task-merge-check').textContent, /Tests failed on the combined result/); assert.equal(ui.$('task-merge-output').textContent, 'boom');
+  assert.equal(ui.$('task-merge-apply').disabled, true, 'Failing tests need a yes.');
+  ui.$('task-merge-accept').checked = true; ui.$('task-merge-accept').dispatchEvent(new UIEvent('change')); assert.equal(ui.$('task-merge-apply').disabled, false);
+  ui.$('task-merge-apply').click(); await flush();
+  assert.deepEqual([posted.at(-1).action, posted.at(-1).digest, posted.at(-1).acceptFailedCheck], ['merge', 'digest-one', true]);
+  assert.equal(ui.$('task-merge-dialog').open, false);
+  // A conflict can't be merged, and is said plainly.
+  review = { ...review, conflicts: 1, files: [{ path: 'tray.js', change: 'update', added: 1, removed: 1, status: 'conflict', reason: 'This file also changed here, in the same lines.' }] };
+  ui.$('task-banner').querySelectorAll('button').find(item => item.textContent === 'Review and merge').click(); await flush();
+  assert.equal(ui.$('task-merge-apply').disabled, true); assert.match(ui.$('task-merge-summary').textContent, /1 of 1 file conflicts.*both versions are safe/s);
+  assert.equal(ui.$('task-merge-test').hidden, true);
+  ui.$('task-merge-keep').click(); await flush(); assert.equal(posted.at(-1).action, 'keep');
+  // Back to Main.
+  tabs()[0].click(); await flush();
+  assert.equal(ui.state().taskId, null); assert.equal(ui.$('task-banner').hidden, true); assert.equal(ui.state().conversation.id, conversation.id);
+});
+
+test('with a folder selected, + opens a blank task with the real composer, and sending starts it and moves to it', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true, filesUI: true, modelPickerUI: true }), conversation = ui.canonical.get('project-one'), posted = [], plans = [], settings = [];
+  const [first, second] = ui.state().projects.find(project => project.id === 'project-one').folders;
+  const beside = { id: 'aaaaaaaa-0000-4000-8000-000000000001', title: 'Other work', folderName: 'Backend', folderId: second.id, status: 'running', mode: 'direct', approvals: 0, conversationId: 'lane-a', hasWorktree: false };
+  conversation.parallelTasks = [beside];
+  conversation.memory = undefined;
+  let answer = { mode: 'worktree', reason: 'It works in its own copy.', uncommitted: 2, running: 1, limit: 2, full: false };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/tasks/plan') { plans.push(request.body); return response(answer); }
+    if (request.path === '/api/memory') return response({ entries: [{ id: 'm1', status: 'active', folderId: null }, { id: 'm2', status: 'active', folderId: first.id }, { id: 'm3', status: 'active', folderId: second.id }, { id: 'm4', status: 'retired', folderId: null }], suggestions: [] });
+    if (request.path === '/api/skills') return response({ enabled: [{ name: 's', enabled: true }, { name: 'off', enabled: false }], available: [], dirs: [] });
+    if (request.path === '/api/tasks') { posted.push(request.body); const task = { id: 'cccccccc-0000-4000-8000-000000000003', title: request.body.text, folderName: 'Frontend', folderId: request.body.folderId, status: 'running', mode: 'worktree', approvals: 0, conversationId: 'lane-new', hasWorktree: true }; conversation.parallelTasks = [...conversation.parallelTasks, task]; return response(task, 202); }
+    if (request.path === '/api/conversation' && request.params.task) return response({ ...conversation, id: 'lane-new', status: 'running', activeRun: { id: 'r', provider: 'claude', startedAt: new Date().toISOString() }, messages: [{ id: 'n', role: 'user', text: 'Build the search page', seq: 1 }], cursor: 1, task: conversation.parallelTasks.at(-1), checkpoints: {} });
+    if (/\/provider$/.test(request.path)) { settings.push(request.body); return next(); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  // The workspace has no one folder to put a task in, so it offers no +.
+  assert.equal(ui.window.relayUI.sidebarLevel(), 'workspace'); assert.equal(ui.$('new-task').hidden, true);
+  const group = () => ui.document.querySelectorAll('.workspace-group').find(item => item.classList.contains('active')), rows = () => ui.$('task-list').children.map(item => item.querySelector('.task-row-title')?.textContent || item.textContent);
+  group().querySelectorAll('.workspace-folder-pick')[0].click(); await flush();
+  assert.equal(ui.$('new-task').hidden, false, 'A folder does.');
+  assert.equal(ui.state().taskDraft ?? null, null, 'Selecting a folder alone leaves the conversation where it is, so files can be browsed.');
+  ui.$('message-input').value = 'Half a thought for Main'; ui.fire('message-input', 'input');
+  ui.$('new-task').click(); await flush(); await flush();
+  // Nothing is asked: the folder is the one selected, and the real composer is right there.
+  assert.equal(ui.state().taskDraft.folderId, first.id); assert.equal(ui.$('task-draft').hidden, false); assert.equal(ui.$('empty-state').hidden, true);
+  assert.equal(ui.state().conversation.messages.length, 0); assert.equal(ui.$('message-input').value, '', 'Main’s draft stays with Main.');
+  assert.equal(ui.$('task-draft-title').textContent, 'New task in ' + (first.displayName || first.name));
+  assert.match(ui.$('task-draft-plan').textContent, /own copy.*2 uncommitted changes aren’t included/s); assert.equal(ui.$('task-draft-plan').dataset.mode, 'worktree');
+  assert.match(ui.$('task-draft-beside').textContent, /Backend: Other work/);
+  assert.equal(ui.$('task-draft-knows').textContent, 'Your project brief, 2 memories, 1 skill.', 'What applies to this folder and is on.');
+  assert.equal(ui.window.relayUI.isRunning(), false);
+  assert.equal(ui.$('send-button').hidden, false);
+  // The row titles itself as you type.
+  assert.deepEqual(rows(), ['New task']);
+  ui.$('message-input').value = 'Build the search page'; ui.fire('message-input', 'input');
+  assert.equal(ui.$('task-list').querySelector('.task-row-draft-title').textContent, 'Build the search page');
+  // Choosing another agent or access here says what changes, and doesn't touch the main conversation.
+  const before = plans.length;
+  answer = { ...answer, mode: 'wait', reason: 'It waits.', uncommitted: 0, full: true };
+  ui.$('provider-select')?.dispatchEvent?.(new UIEvent('change'));
+  await ui.window.relayUI.setConfiguration({ model: 'claude-opus', effort: 'high' }); await flush();
+  assert.deepEqual([ui.state().model, ui.state().effort], ['claude-opus', 'high']); assert.deepEqual(settings, [], 'The main conversation keeps its own settings.');
+  ui.state().approvalPolicy = 'auto'; ui.window.dispatchEvent(new UIEvent('relay-state')); await flush(); await flush();
+  assert(plans.length > before, 'How it runs is worked out again.'); assert.equal(plans.at(-1).approvalPolicy, 'auto'); assert.equal(ui.$('task-draft-plan').dataset.mode, 'wait'); assert.match(ui.$('task-draft-plan').textContent, /All 2 task slots are in use/);
+  // A refresh doesn't bring the main conversation's messages or settings back in.
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.state().conversation.messages.length, 0); assert.equal(ui.state().model, 'claude-opus');
+  // Sending starts it, with the composer's choices, and the conversation moves to it.
+  ui.$('task-draft-history').checked = true;
+  ui.$('send-button').click?.(); ui.$('composer').dispatchEvent(new UIEvent('submit', { cancelable: true })); await flush(); await flush();
+  assert.equal(posted.length, 1, 'Once.');
+  assert.deepEqual([posted[0].text, posted[0].folderId, posted[0].model, posted[0].effort, posted[0].approvalPolicy, posted[0].includeHistory, posted[0].dependsOn], ['Build the search page', first.id, 'claude-opus', 'high', 'auto', true, null]);
+  assert.equal(ui.state().taskDraft, null); assert.equal(ui.state().taskId, 'cccccccc-0000-4000-8000-000000000003'); assert.equal(ui.state().conversation.id, 'lane-new');
+  assert.equal(ui.$('task-draft').hidden, true); assert.equal(ui.$('message-input').value, '');
+  assert.equal(ui.requests.filter(request => /\/messages$/.test(request.path)).length, 0, 'Nothing went to the main conversation.');
+  // Going elsewhere puts a blank task away, and what was typed is still there when it comes back.
+  ui.$('new-task').click(); await flush(); await flush();
+  ui.$('message-input').value = 'Kept for later'; ui.fire('message-input', 'input');
+  group().querySelector('.workspace-item').click(); await flush(); await flush();
+  assert.equal(ui.state().taskDraft, null, 'The workspace puts it away.'); assert.equal(ui.$('task-draft').hidden, true); assert.equal(ui.$('message-input').value, 'Half a thought for Main', 'And Main’s draft comes back.');
+  group().querySelectorAll('.workspace-folder-pick')[0].click(); await flush(); ui.$('new-task').click(); await flush(); await flush();
+  assert.equal(ui.$('message-input').value, 'Kept for later');
+  // A task that has to wait has no conversation yet, so its details show.
+  ui.$('task-draft-cancel').click(); await flush(); await flush();
+  assert.equal(ui.state().taskDraft, null); assert.equal(ui.state().conversation.id, conversation.id);
+});
+
+test('the sidebar lists a workspace’s tasks and main conversation, a folder’s own tasks with its files, and one folder gets both', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true, filesUI: true }), conversation = ui.canonical.get('project-one'), state = () => ui.state();
+  const [first, second] = state().projects.find(project => project.id === 'project-one').folders;
+  const made = (id, title, folder) => ({ id, title, folderName: folder.displayName || folder.name, folderId: folder.id, status: 'running', mode: 'direct', approvals: 0, conversationId: 'lane-' + id, hasWorktree: false });
+  conversation.parallelTasks = [made('aaaaaaaa-0000-4000-8000-000000000001', 'In the first', first), made('bbbbbbbb-0000-4000-8000-000000000002', 'In the second', second)];
+  await ui.window.relayUI.refresh(); await flush();
+  const titles = () => ui.$('task-list').children.map(item => item.querySelector('.task-row-title')?.textContent || item.textContent), group = () => ui.document.querySelectorAll('.workspace-group').find(item => item.classList.contains('active'));
+  assert.equal(ui.window.relayUI.sidebarLevel(), 'workspace', 'A workspace with several folders opens at the workspace level.');
+  assert.deepEqual(titles(), ['Main conversation', 'In the first', 'In the second']);
+  assert.equal(ui.$('task-list').querySelector('.task-row-main').title.includes('every folder'), true, 'The main conversation reads differently.');
+  assert.equal(ui.$('explorer').hidden, true, 'No files at the workspace level.');
+  assert.deepEqual(group().querySelectorAll('.workspace-folder').filter(item => item.classList.contains('selected')), [], 'And no one folder is selected.');
+  const folders = () => group().querySelectorAll('.workspace-folder-pick');
+  folders()[1].click(); await flush();
+  assert.equal(ui.window.relayUI.sidebarLevel(), 'folder'); assert.deepEqual(titles(), ['In the second'], 'A folder lists only its own tasks.');
+  assert.equal(ui.$('explorer').hidden, false, 'With its files.');
+  assert.equal(group().querySelectorAll('.workspace-folder')[1].classList.contains('selected'), true);
+  assert.equal(ui.storage.get('ai-relay:sidebar-level:project-one'), 'folder', 'It is remembered.');
+  conversation.parallelTasks = conversation.parallelTasks.filter(task => task.folderId !== first.id);
+  await ui.window.relayUI.refresh(); folders()[0].click(); await flush();
+  assert.deepEqual(titles(), [ 'No tasks in ' + (first.displayName || first.name) + ' yet.' ]);
+  group().querySelector('.workspace-item').click(); await flush();
+  assert.equal(ui.window.relayUI.sidebarLevel(), 'workspace', 'Clicking the open workspace goes back to it.'); assert.equal(ui.$('explorer').hidden, true); assert.deepEqual(titles(), ['Main conversation', 'In the second']);
+  // The Files menu command doesn't do nothing while Files is hidden.
+  ui.$('toggle-explorer').click(); await flush();
+  assert.equal(ui.$('explorer').hidden, false); assert.equal(ui.window.relayUI.sidebarLevel(), 'folder');
+  assert.equal(ui.$('file-tree').hidden, false, 'And it shows Files rather than collapsing them.');
+  // One folder: nothing to choose between, so files and the main conversation are both there.
+  const project = state().projects.find(item => item.id === 'project-one');
+  project.folders = [first]; state().sidebarLevels = {};
+  ui.window.dispatchEvent(new UIEvent('relay-state')); await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.window.relayUI.sidebarLevel(), 'single');
+  assert.equal(ui.$('task-list').querySelector('.task-row-main') !== null, true);
+});
+
 
 test('skills show as a list with switches, and Add skills opens everything found with what is unavailable said up front', async () => {
   const ui = await browser({ insights: true, agentsUI: true, wide: true, desktop: true });

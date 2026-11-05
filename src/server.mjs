@@ -18,6 +18,7 @@ import { createReviewRoutes } from './agent-review-routes.mjs';
 import { createCheckpointRoutes } from './checkpoint-routes.mjs';
 import { alertPreferences, alertSound, mergeAlertPreferences } from './alerts.mjs';
 import { createLocalRoutes } from './local-models.mjs';
+import { createTaskRoutes } from './task-routes.mjs';
 import { atomicJSON } from './patches.mjs';
 import { appearance, appearances, preferencePatch, publicPreferences } from './preferences.mjs';
 
@@ -26,7 +27,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/brief-panel.js': ['brief-panel.js', 'text/javascript; charset=utf-8'], '/tasks-panel.js': ['tasks-panel.js', 'text/javascript; charset=utf-8'], '/skills.js': ['skills.js', 'text/javascript; charset=utf-8'], '/memory.js': ['memory.js', 'text/javascript; charset=utf-8'], '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
   '/bottom-panel.js': ['bottom-panel.js', 'text/javascript; charset=utf-8'], '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'],
   '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
-  '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'],
+  '/parallel-tasks.js': ['parallel-tasks.js', 'text/javascript; charset=utf-8'], '/parallel-tasks.css': ['parallel-tasks.css', 'text/css; charset=utf-8'], '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'],
   // The terminal renderer, served from the installed package so packaged builds work offline.
   '/vendor/xterm.js': ['../node_modules/@xterm/xterm/lib/xterm.js', 'text/javascript; charset=utf-8'], '/vendor/xterm.css': ['../node_modules/@xterm/xterm/css/xterm.css', 'text/css; charset=utf-8'], '/vendor/addon-fit.js': ['../node_modules/@xterm/addon-fit/lib/addon-fit.js', 'text/javascript; charset=utf-8'],
   '/updates.js': ['updates.js', 'text/javascript; charset=utf-8'], '/updater.js': ['updater.js', 'text/javascript; charset=utf-8'], '/updates.css': ['updates.css', 'text/css; charset=utf-8'],
@@ -88,6 +89,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const reviewRoutes = createReviewRoutes({ registry, body, json });
   const checkpointRoutes = createCheckpointRoutes({ registry, body, json });
   const localRoutes = createLocalRoutes({ registry, body, json });
+  const taskRoutes = createTaskRoutes({ registry, body, json });
   const commandRoutes = createCommandRoutes({ registry, body, json });
   const terminalRoutes = createTerminalRoutes({ registry, body, json });
   const voiceRoutes = createVoiceRoutes({ body, json, ...(voice ? { sessions: voice } : {}) });
@@ -220,6 +222,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);
         return json(res,200,url.pathname==='/api/ledger'?await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}):url.pathname==='/api/memory'?broker.memory(c):url.pathname==='/api/budget'?broker.budget.view(c):url.pathname==='/api/skills'?broker.skills.view(c):broker.briefPreview(c));
       }
+      if(req.method==='GET'&&url.pathname==='/api/conversation'&&url.searchParams.get('task')){const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);return json(res,200,broker.tasks.view(c,url.searchParams.get('task'),{since:url.searchParams.has('since')?Number(url.searchParams.get('since')):null}));}
       if(req.method==='GET'&&url.pathname==='/api/conversation')return json(res,200,registry.mainConversation(selectedProjectId(url),{since:url.searchParams.has('since')?Number(url.searchParams.get('since')):null}));
       if (await commandRoutes.route({ req, res, url })) return;
       if (await terminalRoutes.route({ req, res, url })) return;
@@ -229,6 +232,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (await reviewRoutes({ req, res, url })) return;
       if (await checkpointRoutes({ req, res, url })) return;
       if (await localRoutes({ req, res, url })) return;
+      if (await taskRoutes({ req, res, url })) return;
       if (await collaborationRoute({req,res,url,registry,collaboration,sharing,configureSharing,body,json})) return;
       if (req.method === 'GET' && url.pathname === '/api/status') {
         const broker = selectedBroker(url);
@@ -260,11 +264,16 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       }
       const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry))?$/);
       if (match) {
-        const broker = selectedBroker(url);
-        const c = broker.get(match[1]);
+        const workspaceBroker = selectedBroker(url);
+        // A conversation can belong to a task's lane (#88), which answers for its own run. Memory, skills, limits and the project
+        // brief belong to the workspace, whichever conversation is open.
+        const owner = workspaceBroker.conversations.has(match[1]) ? null : workspaceBroker.tasks?.owner(match[1]);
+        const shared = owner && ['context', 'memory', 'skills', 'budget'].includes(match[2]);
+        const broker = owner && !shared ? owner.broker : workspaceBroker;
+        const c = shared ? owner.home : owner ? owner.c : broker.get(match[1]);
         if (req.method === 'GET' && !match[2]) return json(res, 200, broker.view(c));
         if (req.method === 'POST') {
-          if(registry.mainConversation(selectedProjectId(url)).id!==c.id)return json(res,409,{error:'This project has one active chat. Open its project conversation to continue.'});
+          if(!owner&&registry.mainConversation(selectedProjectId(url)).id!==c.id)return json(res,409,{error:'This project has one active chat. Open its project conversation to continue.'});
           const input = await body(req);
           if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
           if (match[2] === 'context') return json(res, 200, await broker.updateContext(c, input));

@@ -58,6 +58,13 @@ export function statusSnapshot(registry) {
     else if (c.runs?.some(run => run.check?.status === 'running')) add('running', 'Running the tests', { action: 'Running the tests' });
     else if (c.resume) add('waiting', 'Waiting for a usage limit to reset');
     else if (c.queue?.length && c.queuePaused) add('paused', `Queue paused · ${c.queue.length} waiting`);
+    // Tasks beside the main conversation (#88). Their approvals are answered in the window, where the task says what it's asking.
+    for (const { broker: lane, c: own, task } of broker.tasks?.lanes.values() || []) {
+      const run = lane.running, asking = run && [...run.approvals.values()][0];
+      if (asking) add('approval', `${task.folderName}: ${asking.kind === 'question' ? 'has a question' : 'approval needed'}`);
+      else if (run && own?.activeRun) add('running', `${task.folderName} · ${agents[run.provider] || 'Agent'} · ${currentAction(own)}`, { agent: agents[run.provider], action: currentAction(own) });
+      else if (task.worktree && task.status === 'complete') add('offer', `${task.folderName}: ready to merge`);
+    }
   }
   const order = ['approval', 'failed', 'offer', 'running', 'waiting', 'paused'];
   rows.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || a.name.localeCompare(b.name));

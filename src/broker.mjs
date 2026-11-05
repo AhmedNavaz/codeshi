@@ -14,6 +14,7 @@ import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
 import { readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
+import { TaskCoordinator } from './task-coordinator.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
 import { applyBudgetRecord, TaskBudgets } from './task-budget.mjs';
 import { SkillCatalog } from './skills.mjs';
@@ -111,7 +112,7 @@ function importPlaces(existing, entries) {
 }
 
 export class Broker extends EventEmitter {
-  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), tests = null }) {
+  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), acquireFolders, withFolders, lane = false, contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), tests = null }) {
     super();
     this.workspace = savedWorkspace(workspace); this.contextPolicy = contextPolicy; this.budget = new TaskBudgets(this);
     this.workspaces = [...new Set([this.workspace, ...workspaces.map(savedWorkspace), ...workspaceFolders.map(folder => savedWorkspace(folder.path))])];
@@ -180,6 +181,8 @@ export class Broker extends EventEmitter {
     this.handoff = new HandoffMonitor(this, { preferences: handoffPreferences });
     this.checks = new RunChecks(this, { tests });
     this.checkpoints = new RunCheckpoints(this);
+    // A lane runs one task, so only the workspace's own broker coordinates others.
+    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); }
     this.checks.restore();
     // The first check of a wait saved before a restart runs once startup has finished.
     if (this.resume.waiting) setTimeout(() => this.resume.tick(), 0);
@@ -260,6 +263,9 @@ export class Broker extends EventEmitter {
     if (record.type === 'retry_offer_end' && c.retryOffer?.id === record.id) c.retryOffer = null;
     if (record.type === 'check') { const run = c.runs?.findLast(item => item.id === record.runId); if (run) run.check = record.check; if (c.lastRun?.id === record.runId) c.lastRun.check = record.check; }
     if (record.type === 'resume') c.resume = record.resume;
+    // Independent tasks (#88): saved before anything starts, so a crash can always find who owned what.
+    if (record.type === 'parallel_task') c.parallelTasks = [...(c.parallelTasks || []), record.task];
+    if (record.type === 'parallel_task_update') { const task = c.parallelTasks?.find(item => item.id === record.id); if (task) Object.assign(task, record.changes); }
     if (record.type === 'queue_add') c.queue = [...c.queue, record.item];
     if (record.type === 'queue_update') c.queue = c.queue.map(item => item.id === record.id ? { ...item, text: record.text } : item);
     if (record.type === 'queue_move') { const item = c.queue.find(entry => entry.id === record.id); if (item) { const rest = c.queue.filter(entry => entry !== item); rest.splice(record.index, 0, item); c.queue = rest; } }
@@ -377,7 +383,7 @@ export class Broker extends EventEmitter {
   }
 
   // The task ledger for a conversation (#84), worked out from its journal. Prompts and commands only when asked for.
-  ledger(c, options = {}) { return readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options); }
+  async ledger(c, options = {}) { const ledger = await readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options); return this.tasks ? { ...ledger, tasks: [...ledger.tasks, ...await this.tasks.ledgers(options)].sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt))) } : ledger; }
 
   // What a fresh agent would be told if this task moved now, without starting anything (#85).
   briefPreview(c) {
@@ -419,9 +425,9 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null } = {}) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, ...visible } = c;
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, parallelTasks, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
-    return { ...visible, cursor: records, ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
+    return { ...visible, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
 
   list() {
@@ -564,6 +570,8 @@ export class Broker extends EventEmitter {
     const accepted = c.requests[requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) throw Object.assign(new Error('This request ID was already used for another message.'), { status: 409 }); return { runId: accepted.runId, requestId, duplicate: true }; }
     if (this.running) throw Object.assign(new Error('An assistant is already working in this workspace. Stop it before starting another run.'), { status: 409 });
+    // Every task in a workspace shares one limit on how many work at once (#88).
+    if (!review) this.admit?.(c);
     // The one place every run starts from, so nothing gets past the task's limits (#87). A request already accepted returned above.
     const runId = randomUUID(), task = taskIdentity(c, { runId, text, retryOf, review });
     this.budget.assertCanStart(c, { task, provider, model, local: Boolean(local) });
@@ -901,6 +909,7 @@ export class Broker extends EventEmitter {
   async close() {
     if (this.automaticReviews) this.automaticReviews.closed = true;
     this.resume.close(); this.queue.close(); this.handoff.close(); this.checks.close();
+    await this.tasks?.close();
     if (this.running) {
       const run = this.running;
       this.stop(run.c.id);

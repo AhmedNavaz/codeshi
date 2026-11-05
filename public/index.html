@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="/editor-theme.css" />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/run-plan.css" />
+    <link rel="stylesheet" href="/parallel-tasks.css" />
     <link rel="stylesheet" href="/workbench.css" />
     <link rel="stylesheet" href="/settings.css" />
     <script src="/routing.js" defer></script>
@@ -27,6 +28,7 @@
     <link rel="stylesheet" href="/model-picker.css" />
     <script src="/model-picker.js" defer></script>
     <script src="/agents-panel.js" defer></script>
+    <script src="/parallel-tasks.js" defer></script>
     <script src="/brief-panel.js" defer></script>
     <script src="/memory.js" defer></script>
     <script src="/skills.js" defer></script>
@@ -78,6 +80,10 @@
         <div class="sidebar-heading"><span>Workspaces</span><span id="workspace-count" class="count-badge">0</span><button id="create-workspace" class="icon-button new-workspace" type="button" title="New workspace" aria-label="New workspace"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <button id="open-setup" class="setup-launch" type="button" hidden><span>Getting started</span><span id="setup-progress">Setup</span></button>
         <nav id="workspace-list" class="workspace-list" aria-label="Saved workspaces and folders"></nav>
+        <section id="task-section" class="task-section" aria-label="Tasks" hidden>
+          <div class="task-section-heading"><button id="toggle-tasks" type="button" aria-expanded="true" aria-controls="task-list"><span class="tree-chevron" aria-hidden="true"></span>Tasks<span id="task-count" class="count-badge" hidden></span></button><button id="new-task" class="icon-button" type="button" aria-label="New task" title="New task, running beside this one"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <ul id="task-list" class="task-list"></ul>
+        </section>
         <section class="explorer" id="explorer" aria-label="Workspace files">
           <div class="explorer-heading"><button id="toggle-explorer" type="button" aria-expanded="true" aria-controls="file-tree"><span class="tree-chevron" aria-hidden="true"></span>Files</button><button id="refresh-files" class="icon-button" type="button" aria-label="Refresh files" title="Refresh files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></div>
           <div id="file-tree" class="file-tree" role="region" aria-label="Folders and files"></div>
@@ -140,9 +146,23 @@
 
         <div id="conversation-search" class="conversation-search" role="search" aria-label="Find in conversation" hidden><label class="conversation-search-field"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span class="sr-only">Find in conversation</span><input id="conversation-search-input" type="search" placeholder="Find in conversation" autocomplete="off" spellcheck="false" /></label><span id="conversation-search-count" class="conversation-search-count" role="status"></span><button id="conversation-search-previous" class="icon-button" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button><button id="conversation-search-next" class="icon-button" type="button" aria-label="Next match" title="Next match (Enter)" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><button id="conversation-search-close" class="icon-button" type="button" aria-label="Close search" title="Close (Esc)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
 
+        <section id="task-banner" class="task-banner" aria-label="This task" hidden></section>
         <div id="messages-scroll" class="messages-scroll">
           <section id="project-empty-state" class="empty-state" aria-label="Create a workspace" hidden><span class="empty-mark" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10.5v5M9.5 13h5"/></svg></span><h2>Open your first project</h2><p>Choose your project folders to create a workspace. Once it opens, Codeshi can find previous Claude Code and Codex conversations for those folders.</p><div class="empty-actions"><button id="add-first-project" class="primary-button" type="button">Choose project folders</button></div></section>
           <section id="provider-empty-state" class="empty-state" aria-label="Connect an assistant" hidden><span class="empty-mark" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="M9 7V3M15 7V3M6 7h12v4a6 6 0 0 1-12 0zM12 17v4"/></svg></span><h2>Connect an assistant</h2><p>Install or connect Codex, Claude or Gemini in Settings to send messages. Your saved work remains available.</p><button id="connect-assistant" class="primary-button" type="button">Open settings</button></section>
+          <section id="task-draft" class="task-draft" aria-labelledby="task-draft-title" hidden>
+            <h2 id="task-draft-title" class="task-draft-title">New task</h2>
+            <p class="task-draft-lead">Say what you need below, and choose any agent and model. It runs beside your other work, with its own output, approvals and Stop.</p>
+            <dl class="task-draft-facts">
+              <div><dt>How it runs</dt><dd id="task-draft-plan" class="task-draft-plan" role="status">Checking…</dd></div>
+              <div><dt>Beside it</dt><dd id="task-draft-beside">Nothing else is running.</dd></div>
+              <div><dt>It will know</dt><dd id="task-draft-knows">Your project brief.</dd></div>
+              <div id="task-draft-after-row" hidden><dt><label for="task-draft-after">Start after</label></dt><dd><select id="task-draft-after"></select></dd></div>
+            </dl>
+            <label class="task-draft-check"><input id="task-draft-history" type="checkbox" /><span>Also bring this conversation's recent messages</span></label>
+            <div class="task-draft-starters"><button type="button" data-prompt="Explain how this folder works.">Explain this folder</button><button type="button" data-prompt="Find bugs in this folder and fix them.">Find and fix bugs</button><button type="button" data-prompt="Write the tests this folder is missing.">Write missing tests</button></div>
+            <button id="task-draft-cancel" class="text-link task-draft-cancel" type="button">Cancel</button>
+          </section>
           <section id="empty-state" class="empty-state" aria-label="Conversation"><span class="empty-mark" aria-hidden="true"><img src="/logo.svg" alt="" width="44" height="44" /></span><h2>Start a task</h2><p>Describe what you need, or import a conversation to pick up where you left off.</p><div class="starter-prompts"><button type="button" data-prompt="Explore this project and explain how it works."><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><strong>Explore the project</strong><small>Explain how it works</small></button><button type="button" data-prompt="Review the current changes and help me find any bugs."><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg><strong>Review my changes</strong><small>Find bugs in the current diff</small></button></div><ul class="capabilities" aria-label="What Codeshi does"><li><div class="capability"><span class="capability-icon agents" aria-hidden="true"></span><span class="capability-text"><strong>Shared conversation</strong><small>Codex, Claude and Gemini work in one conversation. Switch at any point.</small></span></div></li><li><button class="capability" type="button" data-agents="routing"><span class="capability-icon auto" aria-hidden="true"></span><span class="capability-text"><strong>Routing</strong><small>Picks the agent, model and effort for each message.</small></span></button></li><li><button class="capability" type="button" data-agents="handoff"><span class="capability-icon limit" aria-hidden="true"></span><span class="capability-text"><strong>Handoff</strong><small>Moves a task to another agent before a usage limit.</small></span></button></li><li><div class="capability"><span class="capability-icon steer" aria-hidden="true"></span><span class="capability-text"><strong>Queue and notes</strong><small>Queue follow-ups, or add a note to a running task with ⌘↵.</small></span></div></li></ul></section>
           <div id="messages" class="messages" role="log" aria-label="Conversation messages" aria-live="off"></div>
           <div id="transcript-footer" class="transcript-footer">
@@ -460,6 +480,18 @@
         <p id="settings-empty" class="settings-empty" hidden>No settings match. Try another word.</p>
       </div>
     </dialog>
+    <dialog id="task-merge-dialog" class="panel-dialog task-merge-dialog" aria-labelledby="task-merge-title">
+      <header class="panel-dialog-head"><div><h2 id="task-merge-title">Merge</h2><p id="task-merge-summary" class="panel-muted"></p></div><button id="task-merge-close" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
+      <div class="panel-dialog-body">
+        <ul id="task-merge-files" class="task-merge-files"></ul>
+        <div class="task-merge-checks"><span id="task-merge-check" class="task-merge-check" role="status"></span><button id="task-merge-test" class="secondary-button" type="button" hidden>Run the tests</button></div>
+        <pre id="task-merge-output" class="task-merge-output" hidden></pre>
+        <label id="task-merge-accept-row" class="task-merge-accept" hidden><input id="task-merge-accept" type="checkbox" /><span>Merge even though the tests didn't pass</span></label>
+        <p id="task-merge-error" class="project-error" role="alert" hidden></p>
+      </div>
+      <footer class="panel-dialog-foot"><button id="task-merge-keep" class="text-link" type="button">Keep as a branch</button><button id="task-merge-apply" class="primary-button" type="button">Merge</button></footer>
+    </dialog>
+
     <dialog id="brief-dialog" class="panel-dialog brief-dialog" aria-labelledby="brief-dialog-title">
       <header class="panel-dialog-head"><div><h2 id="brief-dialog-title">What the next agent is told</h2><p class="panel-muted">In the order it gets them, worked out just now from the saved conversation and the files as they are.</p></div><button id="brief-dialog-close" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
       <div id="brief-dialog-body" class="panel-dialog-body brief-dialog-body"></div>

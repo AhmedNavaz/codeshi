@@ -29,7 +29,7 @@
     const state = api.getState();
     if (armed && armed.projectId !== state.projectId) armed = null;
     if (dialog.open && scope !== state.projectId) { generation++; dialog.close(); }
-    const unsupported = !state.ready || !state.projectId || api.isRunning() || state.pending || state.projectSaving || state.settingsPending || state.mode !== 'edit' || state.conversation?.resume || Boolean(state.localSelections[state.projectId]);
+    const unsupported = !state.ready || !state.projectId || Boolean(state.taskDraft || state.taskId) || api.isRunning() || state.pending || state.projectSaving || state.settingsPending || state.mode !== 'edit' || state.conversation?.resume || Boolean(state.localSelections[state.projectId]);
     $('automatic-review-toggle').disabled = Boolean(unsupported);
     $('automatic-review-toggle').setAttribute('aria-pressed', String(Boolean(armed)));
     $('automatic-review-toggle').textContent = armed ? 'Review after · On' : 'Review after';

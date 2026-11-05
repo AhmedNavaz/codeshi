@@ -48,13 +48,14 @@
   }
   function activeProjectRead() { try { return localStorage.getItem("ai-relay:active-project"); } catch { return null; } }
   function activeProjectWrite(id) { try { localStorage.setItem("ai-relay:active-project", id); } catch { /* Browser storage is optional. */ } }
-  function draftKey(id = state.conversation?.id) { return `ai-relay:draft:${id || "new"}`; }
+  function draftKey(id = state.conversation?.id) { return state.taskDraft && id !== null ? `ai-relay:draft:task:${state.taskDraft.folderId}` : `ai-relay:draft:${id || "new"}`; }
   function saveDraft() { if (state.status && state.ready && !state.loading) storedWrite(draftKey(), ui.input.value); }
   function restoreDraft() { ui.input.value = storedRead(draftKey()) || ""; resizeInput(); }
   function label(provider) { return provider === "gemini" ? "Gemini" : provider === "claude" ? "Claude" : "Codex"; }
   function available(provider) { return Boolean(state.status?.providers?.[provider]?.available); }
-  function isRunning() { return state.conversation?.status === "running" || Boolean(state.conversation?.id && state.status?.runningConversationId === state.conversation.id); }
-  function isOtherRunning() { return Boolean(state.status?.runningConversationId && state.status.runningConversationId !== state.conversation?.id); }
+  // A task beside the main conversation (#88) answers only for itself; the main run doesn't hold it up.
+  function isRunning() { if (state.taskDraft) return false; return state.conversation?.status === "running" || Boolean(!state.taskId && state.conversation?.id && state.status?.runningConversationId === state.conversation.id); }
+  function isOtherRunning() { return Boolean(!state.taskDraft && !state.taskId && state.status?.runningConversationId && state.status.runningConversationId !== state.conversation?.id); }
   function endpoint(id, action = "") { return `/api/conversations/${encodeURIComponent(id)}${action ? `/${action}` : ""}`; }
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -88,7 +89,7 @@
   }
   async function api(path, options = {}, projectId = state.projectId) {
     const providerEndpoint = /^\/api\/providers(?:\/|$)/.test(path);
-    if (/^\/api\/(?:ledger|memory|budget|skills|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
+    if (/^\/api\/(?:tasks|ledger|memory|budget|skills|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
       if (!projectId) throw new Error("Choose a project first.");
       path += `${path.includes("?") ? "&" : "?"}projectId=${encodeURIComponent(projectId)}`;
     }
@@ -230,6 +231,19 @@
     if (id === undefined) { try { id = localStorage.getItem('ai-relay:folder:' + project.id); } catch { id = null; } }
     return folders.some(folder => folder.id === id) ? id : folders[0].id;
   }
+  // What the sidebar is showing in a workspace with several folders: the whole workspace, with all its tasks and no files,
+  // or one folder, with that folder's tasks and files. A workspace with one folder is both, so its files are always there.
+  function sidebarLevelFor(project = currentProject()) {
+    if (!project) return 'folder';
+    if (foldersFor(project).length < 2) return 'single';
+    state.sidebarLevels ||= {};
+    if (!state.sidebarLevels[project.id]) { let saved = null; try { saved = localStorage.getItem('ai-relay:sidebar-level:' + project.id); } catch { /* A convenience only. */ } state.sidebarLevels[project.id] = saved === 'folder' ? 'folder' : 'workspace'; }
+    return state.sidebarLevels[project.id];
+  }
+  function setSidebarLevel(projectId, level) {
+    state.sidebarLevels = { ...state.sidebarLevels, [projectId]: level };
+    try { localStorage.setItem('ai-relay:sidebar-level:' + projectId, level); } catch { /* A convenience only. */ }
+  }
   function selectFolder(folderId, projectId = state.projectId) {
     const project = state.projects.find(item => item.id === projectId); if (!foldersFor(project).some(folder => folder.id === folderId)) return;
     state.selectedFolders = { ...state.selectedFolders, [projectId]: folderId };
@@ -238,7 +252,9 @@
   }
   function filteredProjects() { return state.projects.filter(project => project.name.toLowerCase().includes(state.workspaceFilter.toLowerCase())); }
   function renderWorkspaceList() {
-    const signature = JSON.stringify([state.projects,state.projectId,projectBusy(),state.loading,state.status?.runningConversationId,state.workspaceFilter,selectedFolderId(),state.conversation?.pendingApprovals?.length]);
+    const level = sidebarLevelFor();
+    $("explorer").hidden = level === 'workspace';
+    const signature = JSON.stringify([state.projects,state.projectId,projectBusy(),state.loading,state.status?.runningConversationId,state.workspaceFilter,selectedFolderId(),state.conversation?.pendingApprovals?.length,level]);
     if (signature === state.listSignature) return;
     renderFolderSettings();
     state.listSignature = signature; ui.workspaceList.replaceChildren(); ui.workspaceCount.textContent = String(state.projects.length);
@@ -257,19 +273,20 @@
       const metaNode = element('span','workspace-item-meta' + (folders.length === 1 ? ' single' : '') + (project.runningConversationId ? ' running' : ''),meta);
       button.append(heading,metaNode);
       if (waiting) { const badge = element('span','workspace-approval-badge',String(waiting)); badge.title = `${waiting} approval${waiting === 1 ? '' : 's'} waiting`; badge.setAttribute('aria-hidden','true'); heading.append(badge); }
-      button.addEventListener('click',()=>selectProject(project.id)); const row = element('div','workspace-row');
+      button.addEventListener('click',()=>{ setSidebarLevel(project.id,'workspace'); selectProject(project.id); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); }); const row = element('div','workspace-row');
       const options = element('button','workspace-options'); options.type = 'button'; options.disabled = projectBusy(); options.dataset.projectId = project.id;
       options.setAttribute('aria-label','Workspace options for ' + project.name); options.title = 'Workspace settings'; options.addEventListener('click',()=>openWorkspaceOptions(project.id));
       row.append(button,options); group.append(row);
       // A multi-folder workspace lists its folders; the selected one drives the Files view and Git panel.
       if (active && folders.length > 1) {
-        const list = element('ul','workspace-folders'), current = selectedFolderId(project);
+        // At the workspace level no one folder is selected.
+        const list = element('ul','workspace-folders'), current = level === 'folder' ? selectedFolderId(project) : null;
         for (const folder of folders) {
           const repeated = folders.filter(entry=>(entry.displayName||entry.name)===(folder.displayName||folder.name)).length>1;
           const item = element('li','workspace-folder' + (folder.id === current ? ' selected' : '') + (folder.available === false ? ' unavailable' : ''));
           const pick = element('button','workspace-folder-pick'); pick.type = 'button'; pick.title = folder.path + (folder.available === false ? ' · folder not found' : ''); pick.setAttribute('aria-pressed',String(folder.id === current));
           const icon = element('span','workspace-folder-icon'); icon.setAttribute('aria-hidden','true');
-          pick.append(icon,element('span','workspace-folder-name',repeated?folder.name:folder.displayName||folder.name)); pick.addEventListener('click',()=>selectFolder(folder.id,project.id));
+          pick.append(icon,element('span','workspace-folder-name',repeated?folder.name:folder.displayName||folder.name)); pick.addEventListener('click',()=>{ setSidebarLevel(project.id,'folder'); selectFolder(folder.id,project.id); });
           item.append(pick); list.append(item);
         }
         group.append(list);
@@ -768,7 +785,7 @@
     const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
     const scope = JSON.stringify([state.projectId, c?.id, folders]);
     const noProvider=state.ready&&!messages.length&&!['codex','claude','gemini'].some(available);
-    ui.empty.hidden = messages.length > 0 || !state.ready || noProvider;
+    ui.empty.hidden = messages.length > 0 || !state.ready || noProvider || Boolean(state.taskDraft);
     if($('provider-empty-state'))$('provider-empty-state').hidden=!noProvider;
     if (scope === drawn.scope && base === drawn.base && messages.length === drawn.messages.length && messages.every((message, index) => message === drawn.messages[index])) return;
     if (scope !== drawn.scope) { drawn.turns = new Map(); drawn.steps = new WeakMap(); }
@@ -926,6 +943,8 @@
       if (last) footerHost = kids;
       turns.set(turnKey, { node: turnNode, extra, nodes, messages: messages.slice(segment.from, segment.to), kids });
     });
+    // With no turns, as in a blank task, nothing else brings the run line back, and it would leave the page with the last turn.
+    if (!segments.length && footer.firstElementChild !== progress) footer.prepend(progress);
     footerHost.push(footer);
     for (const entry of turns.values()) if (entry.node) syncChildren(entry.node, entry.kids);
     drawn.turns = turns;
@@ -1198,7 +1217,7 @@
     // While work runs or waits for a reset, a message joins the queue instead of starting now (#32).
     const queueing = Boolean(state.conversation) && (running || Boolean(state.conversation?.resume));
     const canAdd = running && state.conversation?.canAddToRun === true, modKey = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘" : "Ctrl+";
-    ui.input.placeholder = queueing ? (canAdd ? `Queue a follow-up, or ${modKey}↵ to add it to this run…` : "Add a message to the queue…") : "Describe the task or ask a question…";
+    ui.input.placeholder = queueing ? (canAdd ? `Queue a follow-up, or ${modKey}↵ to add it to this run…` : "Add a message to the queue…") : state.taskDraft ? "What should this task do?" : "Describe the task or ask a question…";
     $("steer-button").hidden = !canAdd;
     $("steer-button").disabled = !state.ready || busy || !ui.input.value.trim() || Boolean(window.relayFiles?.ids().length);
     $("steer-button").title = window.relayFiles?.ids().length ? "Attachments go with a queued message" : `Add this to the current run (${modKey}↵)`;
@@ -1293,8 +1312,11 @@
   }
   // A long conversation is many megabytes, so an update asks only for the messages changed since the copy it has.
   async function fetchConversation(projectId) {
+    // A blank task only needs the workspace's settings and its task list, not the main conversation's messages.
+    if (state.taskDraft) { const update = await api('/api/conversation' + (Number.isSafeInteger(state.draftCursor) ? `?since=${state.draftCursor}` : ''), {}, projectId); state.draftCursor = update.cursor; return update; }
     const known = state.conversation;
-    const update = await api('/api/conversation' + (Number.isSafeInteger(known?.cursor) ? '?since=' + known.cursor : ''), {}, projectId);
+    const task = state.taskId, base = '/api/conversation' + (task ? `?task=${encodeURIComponent(task)}` : '');
+    const update = await api(base + (Number.isSafeInteger(known?.cursor) ? `${task ? '&' : '?'}since=${known.cursor}` : ''), {}, projectId);
     if (update.messageCount === undefined) return update;
     let messages = null;
     if (known?.id === update.id) {
@@ -1302,9 +1324,37 @@
       messages = [...known.messages];
       for (const message of update.messages) { const index = at.get(message.id); if (index === undefined) messages.push(message); else messages[index] = message; }
     }
-    return messages?.length === update.messageCount ? { ...update, messages } : api('/api/conversation', {}, projectId);
+    return messages?.length === update.messageCount ? { ...update, messages } : api(base, {}, projectId);
+  }
+  // A task about to start: nothing in the middle but the composer, so it has the same agents, models and access as anywhere.
+  // Nothing is saved until it's sent, and choices made here stay here, so the main conversation's settings don't change.
+  const blankTaskView = conversation => ({ ...conversation, messages: [], messageCount: 0, status: 'idle', activeRun: null, lastRun: null, queue: [], queuePaused: null, runs: [], reviews: [], pendingApprovals: [], handoffOffer: null, retryOffer: null, resume: null, limitSwitching: null, checkpoints: {}, taskResult: null, canAddToRun: false, task: null });
+  async function openTaskDraft(folderId) {
+    saveDraft();
+    state.taskDraft = { folderId }; state.taskId = null; state.draftCursor = null;
+    const projectId = state.projectId, conversation = await fetchConversation(projectId);
+    if (projectId !== state.projectId || state.taskDraft?.folderId !== folderId) return;
+    state.conversation = null;
+    applyConversation(conversation, { adoptSettings: false });
+    restoreDraft(); hideNotice(); render(); ui.input.focus?.();
+  }
+  // Shows a task's own conversation, or the main one, in the same place (#88).
+  async function setTask(id) {
+    if (!state.taskDraft && (id || null) === (state.taskId || null)) return;
+    saveDraft();
+    state.taskDraft = null; state.draftCursor = null;
+    state.taskId = id || null;
+    const projectId = state.projectId;
+    if (state.conversation) state.conversation = { ...state.conversation, cursor: undefined };
+    const conversation = await fetchConversation(projectId);
+    if (projectId !== state.projectId || (id || null) !== (state.taskId || null)) return;
+    state.conversation = null;
+    applyConversation(conversation);
+    restoreDraft();
+    render();
   }
   function applyConversation(conversation, { adoptSettings = true } = {}) {
+    if (state.taskDraft) { conversation = blankTaskView(conversation); adoptSettings = false; }
     const previousStatus = state.conversation?.status;
     state.conversation = keepMessageObjects(state.conversation, conversation);
     if (adoptSettings && !state.settingsPending) {
@@ -1314,7 +1364,7 @@
       state.model = conversation.models?.[state.provider] || conversation.model || "";
       state.effort = conversation.effort ?? conversation.efforts?.[state.provider]?.[state.model || "default"] ?? null;
     }
-    if (conversation.status === "running" && state.status) state.status.runningConversationId = conversation.id;
+    if (conversation.status === "running" && state.status && !state.taskId) state.status.runningConversationId = conversation.id;
     if (previousStatus === "running" && conversation.status !== "running") announce(conversation.status === "complete" ? `${label(conversation.provider)} finished its response.` : "The assistant stopped. You can continue this conversation.");
   }
   async function ensureCanonicalConversation() {
@@ -1366,7 +1416,7 @@
     state.approvalPolicy = approvalPolicy;
     renderControls();
     window.dispatchEvent(new CustomEvent("relay-state"));
-    if (!state.conversation) return;
+    if (!state.conversation || state.taskDraft) return;
     const id = state.conversation.id;
     const projectId = state.projectId;
     const projectVersion = state.projectVersion;
@@ -1398,6 +1448,7 @@
     const approvalPolicy = state.approvalPolicy || 'ask';
     const originalDraft = ui.input.value;
     const localChoice = state.localSelections[state.projectId] || null;
+    if ((state.taskId || state.taskDraft) && localChoice) { showNotice("A task runs on your connected agents for now. Choose one, or send this from Main to use a local model."); return; }
     let automaticReview;
     try { automaticReview = window.relayAutomaticReview?.submission({ text, attachments, provider, model, mode, approvalPolicy }, { continuing }) || null; }
     catch (error) { showNotice(error.message); return; }
@@ -1411,6 +1462,17 @@
     hideNotice();
     try {
       await state.settingsPromise;
+      // A blank task: sending starts it, and the conversation moves to it.
+      if (state.taskDraft) {
+        if (automaticReview) throw Error('Build then review runs from the main conversation for now.');
+        const task = await window.relayTaskThreads.start({ text, attachments, provider, model: model || null, effort: effort || null, mode, approvalPolicy, routing, requestId, billingConfirmed: window.relayBillingConfirmed === true });
+        state.retrySubmission = null;
+        window.relayFiles?.accepted(projectId, attachments);
+        if (ui.input.value === originalDraft) { ui.input.value = ""; storedWrite(draftKey(), ""); resizeInput(); }
+        await window.relayTaskThreads.started(task);
+        announce(`The task in ${task.folderName} has started.`);
+        return;
+      }
       if (!state.conversation) await ensureCanonicalConversation();
       const id = state.conversation.id;
       state.retrySubmission.key = JSON.stringify([state.projectId,id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
@@ -1470,6 +1532,7 @@
     }
     if (id === state.projectId && state.ready) return;
     saveDraft();
+    state.taskId = null; state.taskDraft = null; state.draftCursor = null;
     closeWorkspaceMenu();
     hideNotice();
     const version = ++state.projectVersion;
@@ -1511,6 +1574,7 @@
     if (projectBusy()) return;
     if (state.projectId && !state.projects.some(project => project.id === state.projectId)) {
       saveDraft(); ++state.projectVersion; ++state.selectionVersion;
+      state.taskId = null; state.taskDraft = null; state.draftCursor = null;
       state.projectId = null; state.status = null; state.conversation = null;
       state.ready = false; state.loading = false; state.refreshAgain = false;
       ui.input.value = ''; activeProjectWrite('');
@@ -1723,6 +1787,7 @@
     { label: "Agents: routing and handoff", run: () => window.relayAgents?.open() },
     { label: "Brief: memory and skills every agent gets", run: () => window.relayBrief?.open() },
     { label: "Tasks: what each task used, and its limits", run: () => window.relayTasks?.open() },
+    { label: "New task beside this one", run: () => window.relayTaskThreads?.open() },
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", run: () => window.relayTerminal?.open() },
     { label: "Run: your dev servers, tests and scripts", run: () => window.relayPanel?.show("run") },
@@ -1955,7 +2020,7 @@
   window.addEventListener("beforeunload", saveDraft);
   window.relayUI = {
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
-    commands, isRunning, filteredProjects, setRouting, routeFor, showSidePanel,
+    commands, isRunning, filteredProjects, setRouting, routeFor, showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,
     selectLocalModel(model) {
       if (!state.projectId || !state.ready || state.pending || state.settingsPending || isRunning()) throw Error('Finish the current run before changing the model.');
@@ -1976,6 +2041,7 @@
     async setConfiguration({model = state.model, effort = null}) {
       if (!state.ready || state.pending || state.settingsPending || isRunning()) throw new Error('Finish the current run before changing the model or effort.');
       model = model?.trim() || null;
+      if (state.taskDraft) { state.model = model || ''; state.effort = effort; render(); window.dispatchEvent(new CustomEvent('relay-state')); return; }
       const projectId = state.projectId, version = state.projectVersion, conversationId = state.conversation?.id, provider = state.provider;
       const revision = ++state.settingsRevision;
       state.settingsPending++; render();

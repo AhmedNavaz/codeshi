@@ -175,7 +175,8 @@
     if (selected === snapshot && added?.length) { closePreview(); $('message-input').focus(); }
   });
   $('refresh-files').addEventListener('click',refreshTree);
-  $('toggle-explorer').addEventListener('click', () => { const hidden = !$('file-tree').hidden; $('file-tree').hidden = hidden; $('explorer').classList.toggle('collapsed',hidden); $('toggle-explorer').setAttribute('aria-expanded',String(!hidden)); });
+  // The Files menu command, while the workspace level has Files hidden, shows them at the folder level.
+  $('toggle-explorer').addEventListener('click', () => { if ($('explorer').hidden) { api.showFolderLevel?.(); if (!$('file-tree').hidden) return; } const hidden = !$('file-tree').hidden; $('file-tree').hidden = hidden; $('explorer').classList.toggle('collapsed',hidden); $('toggle-explorer').setAttribute('aria-expanded',String(!hidden)); });
   window.addEventListener('keydown',event => { if (event.key === 'Escape' && !event.isComposing && !$('file-preview').hidden) closePreview(); });
   window.addEventListener('relay-state',sync);
   window.relayFiles = {

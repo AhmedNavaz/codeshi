@@ -112,7 +112,7 @@ else {
     }
     await start();
     // Codeshi restarts to update only when no agent is working and no queued prompt is about to start.
-    const busy=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.running||broker.backgroundReview||[...broker.conversations.values()].some(c=>c.queue?.length&&!c.queuePaused));
+    const busy=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.running||broker.backgroundReview||broker.tasks?.busy||[...broker.conversations.values()].some(c=>c.queue?.length&&!c.queuePaused));
     const build=updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation}),demo=updateDemo?(await import('./update-demo.mjs')).updateDemo({version:app.getVersion(),build,relaunch:()=>{app.relaunch();app.quit();}}):null;
     updater=createUpdater({version:app.getVersion(),build,location:demo?.location||bundleLocation(process.execPath),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
     if(demo)updater.check();

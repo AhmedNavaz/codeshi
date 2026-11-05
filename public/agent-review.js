@@ -152,7 +152,7 @@
   }
   function renderStrip() {
     const state = api.getState(), latest = state.conversation?.reviews?.[0], known = latest && freshness.get(latest.id);
-    $('open-review').disabled = !state.ready || active(); $('open-review').title = `Review changes with ${name(reviewer())}`;
+    $('open-review').disabled = !state.ready || active() || Boolean(state.taskId); $('open-review').title = `Review changes with ${name(reviewer())}`;
     $('review-summary').hidden = !latest;
     if (latest) { $('review-summary').dataset.stale = String(Boolean(known?.stale)); $('review-summary-text').textContent = `${name(latest.provider)} review · ${known?.stale ? 'Outdated' : latest.status === 'running' ? 'In progress' : latest.status === 'complete' ? `${latest.findings.length} finding${latest.findings.length === 1 ? '' : 's'}` : 'Needs attention'}`; }
   }

@@ -16,7 +16,8 @@
     const state = api.getState(), run = state.conversation?.lastRun;
     const count = gitScope === state.projectId ? gitData?.totalChanges || 0 : 0;
     const blocked = ['incomplete','interrupted'].includes(run?.status);
-    $('next-actions').hidden = !state.projectId || api.isRunning() || (!blocked && (run?.status !== 'complete' || !count)) || run?.purpose === 'review' || !run || dismissedSteps.has(nextStepsKey());
+    // A task's changes come back through its own review, so the usual next steps aren't offered there.
+    $('next-actions').hidden = !state.projectId || Boolean(state.taskId) || api.isRunning() || (!blocked && (run?.status !== 'complete' || !count)) || run?.purpose === 'review' || !run || dismissedSteps.has(nextStepsKey());
     $('next-actions-text').textContent = blocked ? 'The run stopped' : `${count} changed file${count === 1 ? '' : 's'}`;
     $('next-review').hidden = !count;
   }

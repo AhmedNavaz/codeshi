@@ -7,7 +7,7 @@
   if (!api || !panel) return;
   const PANEL_KEY = 'throughline:side-panel', names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini', local: 'Local' };
   const AGENTS = [['claude', 'Claude'], ['codex', 'Codex'], ['gemini', 'Gemini'], ['local', 'Local models']];
-  const FIELDS = [['maxWorkingMinutes', 'Working minutes', 'No limit'], ['maxTokens', 'New tokens', 'No limit'], ['maxSpendUSD', 'API spend, USD', 'No limit'], ['maxHandoffs', 'Handoffs'], ['maxRetries', 'Retries'], ['maxReviews', 'Reviews'], ['maxRepeatedFailures', 'Same failure']];
+  const FIELDS = [['maxConcurrent', 'Tasks at once'], ['maxWorkingMinutes', 'Working minutes', 'No limit'], ['maxTokens', 'New tokens', 'No limit'], ['maxSpendUSD', 'API spend, USD', 'No limit'], ['maxHandoffs', 'Handoffs'], ['maxRetries', 'Retries'], ['maxReviews', 'Reviews'], ['maxRepeatedFailures', 'Same failure']];
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'text-link') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
   const plural = (count, word) => `${count.toLocaleString()} ${word}${count === 1 ? '' : 's'}`;
@@ -78,7 +78,7 @@
     section.hidden = !tasks.length;
     list.replaceChildren(...tasks.map(task => {
       const row = node('li', 'panel-row task-row'), title = node('div', 'panel-row-title');
-      title.append(node('span', 'task-row-prompt', task.prompt || 'Task'), node('span', 'panel-row-time', duration(task.workingMs)));
+      title.append(node('span', 'task-row-prompt', `${task.folder ? `${task.folder}: ` : ''}${task.prompt || 'Task'}`), node('span', 'panel-row-time', duration(task.workingMs)));
       const meta = node('div', 'panel-row-meta'), tests = TESTS[task.verification] || TESTS.unverified;
       meta.append(agents(task), node('span', '', plural(task.runs, 'run')), node('span', tests[0] === 'done' ? 'ok' : tests[0] === 'failed' ? 'bad' : '', tests[1]));
       row.append(title, meta, node('div', 'panel-row-meta', usageText(task.usage)));

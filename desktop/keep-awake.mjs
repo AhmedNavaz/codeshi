@@ -4,7 +4,7 @@ export function createKeepAwake({ registry, blocker, enabled = false, save = () 
   let preference = enabled === true, id = null, disposed = false, scheduled = false, last = '', state;
   function sync() {
     // Work waiting for a usage limit to reset counts too, so the Mac is awake when the limit resets.
-    const runningCount = [...registry.brokers.values()].reduce((count, entry) => count + (entry.broker.running ? 1 : 0) + (entry.broker.backgroundReview ? 1 : 0) + (entry.broker.waitingResumes ? 1 : 0), 0);
+    const runningCount = [...registry.brokers.values()].reduce((count, entry) => count + (entry.broker.running ? 1 : 0) + (entry.broker.backgroundReview ? 1 : 0) + (entry.broker.waitingResumes ? 1 : 0) + (entry.broker.tasks?.running || 0), 0);
     let error = null;
     try {
       if (preference && runningCount && !disposed) {
