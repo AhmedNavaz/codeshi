@@ -86,23 +86,23 @@ Local inference uses Ollama through Codex's tool harness, with the workspace's c
 
 Cloud selections and native sessions stay saved. Each local handoff starts a fresh ephemeral tool session, and its messages, results, activity and local-model attribution remain in Codeshi's permanent project conversation. **Stop** cancels the run. Continue with a cloud agent later through the normal composer; it receives the shared local work as context. The original composer draft is preserved when you start a local task. Conversation exports retain local-model attribution.
 
-## Phone access away from home
+## Remote access away from home
 
-Choose **Connect phone → Connection → Away from home → Enable remote access**. Scan the QR, which opens `remote.codeshi.dev`, compare the six-digit number on both screens, then choose **Allow** on the computer. The phone uses the same minimal interface over mobile data or another Wi-Fi network; no account, mobile app or certificate installation is needed on the phone.
+Choose **Remote access → Connection → Away from home → Enable remote access**. Scan the QR, which opens `remote.codeshi.dev`, compare the six-digit number on both screens, then choose **Allow** on the computer. The phone uses the same minimal interface over mobile data or another Wi-Fi network; no account, mobile app or certificate installation is needed on the phone.
 
 The computer must stay awake and online with Codeshi running. Prompt text, replies and approval details are encrypted on the devices before passing through Firebase. Remote control uses the existing access, billing, task and approval checks, and a phone cannot change its own grant. **Remove device** revokes access; restarting Codeshi turns it off. Access lasts up to 12 hours and new browsers always require approval. The phone closes its live connection while hidden and reconnects on return; lock-screen notifications are not included.
 
-Remote access runs on a free service with a limit on simultaneous connections, shared by everyone using it. If it's busy or unavailable, the phone and **Connect phone** say so and keep retrying, and a same-Wi-Fi connection still works.
+Remote access runs on a free service with a limit on simultaneous connections, shared by everyone using it. If it's busy or unavailable, the phone and **Remote access** say so and keep retrying, and a same-Wi-Fi connection still works.
 
 Same-Wi-Fi pairing has its own on/off control and continues working without Firebase or internet access. The remote pilot shares Firebase Spark quotas across all users, and large photos or responses may exceed its 1 MiB packet limit. Maintainer setup, retention details and local tests are in [remote/README.md](../remote/README.md).
 
-## Phone access on the same network
+## Remote access on the same network
 
 Any Codeshi user can connect a phone or tablet browser to their running computer; no mobile app or Apple Developer account is needed. Both devices need to be on the same private Wi-Fi or local network, and the computer must stay awake with Codeshi open.
 
-1. On the computer, click **Connect phone** in the bottom bar, or open **Settings › General › Phone access**, and choose **Enable phone access**. If several network addresses are available, choose the one on your phone's network first.
+1. On the computer, click **Remote access** in the bottom bar, or open **Settings › General › Remote access**, and choose **Enable same-Wi-Fi access**. If several network addresses are available, choose the one on your phone's network first.
 2. Scan the QR code with your phone camera and open the link. The QR is generated locally and works once, for five minutes. **Can’t scan? Use a code or link** offers the address, an eight-digit code and a link you can copy instead. **New QR code** replaces the previous code and link.
-3. The phone shows a six-digit number. Check that the computer shows the same one, then choose **Allow** in the computer's Phone access settings. The phone opens by itself. If you typed the address and code instead of scanning, name the browser and choose **Connect** first.
+3. The phone shows a six-digit number. Check that the computer shows the same one, then choose **Allow** in the computer's Remote access settings. The phone opens by itself. If you typed the address and code instead of scanning, name the browser and choose **Connect** first.
 
 The phone has its own page, made for one hand, on the same saved workspaces and conversations as the computer. Work and agent sign-ins stay on the computer.
 

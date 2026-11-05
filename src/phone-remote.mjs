@@ -156,7 +156,7 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
   }
   async function action(input) {
     if (input.action === 'stop') return stop();
-    if (!settings) fail(setupError || 'Remote phone access is not configured in this build.', 409);
+    if (!settings) fail(setupError || 'Remote access is not configured in this build.', 409);
     if (input.action === 'start') {
       if (enabled) return status();
       client = clientFactory ? clientFactory(settings) : new FirebasePhoneClient(settings, { load, save });

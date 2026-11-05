@@ -7,7 +7,7 @@ Hand off at the limit, run tasks side by side, and send prompts or approve from 
 
 <p align="center"><a href="https://github.com/AhmedNavaz/codeshi/releases/latest"><img src="https://img.shields.io/github/v/release/AhmedNavaz/codeshi?label=release" alt="Latest release"></a> <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Runs on macOS and Windows"> <a href="https://github.com/AhmedNavaz/codeshi/actions/workflows/ci.yml"><img src="https://github.com/AhmedNavaz/codeshi/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a> <a href="https://www.patreon.com/17048317/join"><img src="https://img.shields.io/badge/Support-Patreon-FF424D?logo=patreon&amp;logoColor=white" alt="Support Codeshi on Patreon"></a></p>
 
-<p align="center"><a href="https://codeshi.dev"><img src="docs/hero.jpg" width="900" alt="Codeshi's website demo: a paired phone beside the desktop window, showing Claude's request to install zod and buttons to approve or deny it over mobile data"></a><br><a href="https://codeshi.dev">Watch phone access, task queues and agent handoff in the live demo →</a></p>
+<p align="center"><a href="https://codeshi.dev"><img src="docs/hero.jpg" width="900" alt="Codeshi's demo: Codex finishes Claude's checkout task in the same conversation, with a separate task in the sidebar"></a><br><a href="https://codeshi.dev">Watch remote access, task queues and agent handoff in the live demo →</a></p>
 
 Every coding agent runs out of usage at some point, and moving to another one usually means explaining your project all over again. Codeshi gives each project one permanent conversation that all your agents share. Claude can start a task, Codex can finish it, and a model on your own machine can take over when both are out, each picking up from everything said and done so far.
 
@@ -23,11 +23,13 @@ Codeshi was called Throughline until version 0.23. Your workspaces, conversation
 
 Codeshi keeps an eye on each agent's plan usage. Before one runs out mid-task, it offers to hand the task to an agent that still has room, and shows you who takes over and how it's billed before anything switches. Turn on automatic handoff and it switches by itself, even if a run reaches its limit first. If every agent is out, the task waits and carries on with whichever resets first, or you can continue it on a local model.
 
-### Run it from your phone
+### Remote access
+
+<img src="docs/features/remote-access.jpg" alt="Codeshi's remote-access demo: the desktop conversation beside a paired phone at remote.codeshi.dev over 5G, with the same checkout request and Claude's npm install zod approval ready to answer on the phone">
 
 Scan a QR code, match the number and allow it on your computer. From your phone's browser you can follow a run, send prompts, answer approvals and questions, accept a handoff or press Stop, on the same Wi-Fi or over mobile data. There's no app or account to set up. Your computer keeps running the agents and holding your files, so it has to stay awake and online. Away from home, messages are encrypted on your devices before they reach the relay.
 
-Choose **Connect phone** in the desktop's bottom bar to pair. The phone has its own page for the conversation, workspace and task selection, and agent controls. Supported browsers also offer a microphone on the remote HTTPS connection: dictate into the message box, then press Send. Same-Wi-Fi pairing uses unencrypted HTTP for trusted networks; lock-screen notifications are still planned.
+Choose **Remote access** in the desktop's bottom bar to pair. The phone has its own page for the conversation, workspace and task selection, and agent controls. Supported browsers also offer a microphone on the remote HTTPS connection: dictate into the message box, then press Send. Same-Wi-Fi pairing uses unencrypted HTTP for trusted networks; lock-screen notifications are still planned.
 
 ### Run tasks side by side
 

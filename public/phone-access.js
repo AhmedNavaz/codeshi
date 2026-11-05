@@ -11,10 +11,10 @@
     if (state.remote?.devices.some(item => item.state === 'pending')) connection = 'remote';
     const devices = [...state.devices, ...(state.remote?.devices || [])];
     const pending = devices.filter(item => item.state === 'pending').length, active = devices.filter(item => item.state === 'active').length;
-    document.getElementById('connect-phone-label').textContent = active ? 'Phone connected' : state.enabled || state.remote?.enabled ? 'Phone access on' : 'Connect phone';
+    document.getElementById('connect-phone-label').textContent = state.enabled || state.remote?.enabled ? 'Remote access on' : 'Remote access';
     const count = document.getElementById('connect-phone-count'); count.hidden = !pending; count.textContent = String(pending);
     entry.dataset.connected = String(active > 0);
-    entry.title = pending ? `${pending} phone request${pending === 1 ? '' : 's'} waiting for approval` : 'Connect a phone nearby or away from home';
+    entry.title = pending ? `${pending} pairing request${pending === 1 ? '' : 's'} waiting for approval` : active ? `${active} paired browser${active === 1 ? '' : 's'} connected` : 'Remote access from your phone or tablet, on the same Wi-Fi or away from home';
   }
   function revealPhone() { if (focusPhone) { focusPhone = false; requestAnimationFrame(() => target?.isConnected && target.scrollIntoView({ block: 'start' })); } }
   function revealQR(qr, requested) {
@@ -30,7 +30,7 @@
     checking = true;
     const request = revision;
     try { const state = await window.relayUI.api('/api/phone'); if (request !== revision) return; updateEntry(state); const next = JSON.stringify(state); if (target?.isConnected && document.getElementById('settings')?.open && (force || next !== signature)) { signature = next; draw(state); } }
-    catch (error) { if (!signature && target?.isConnected) { target.replaceChildren(); kit.note(target, error.message || 'Phone access could not be loaded.'); } }
+    catch (error) { if (!signature && target?.isConnected) { target.replaceChildren(); kit.note(target, error.message || 'Remote access could not be loaded.'); } }
     finally { checking = false; }
   }
   async function action(input) {
@@ -42,11 +42,11 @@
     if (!target?.isConnected) return;
     if (!state.interfaces.some(item => item.address === selectedAddress)) selectedAddress = state.interfaces[0]?.address || '';
     target.replaceChildren();
-    const choice = kit.group(target, 'Phone access', 'See progress, send prompts and answer approvals in your phone browser. Keep the computer awake with Codeshi open.');
+    const choice = kit.group(target, 'Remote access', 'See progress, send prompts and answer approvals in your phone browser. Keep the computer awake with Codeshi open.');
     kit.select(choice, { label: 'Connection', options: [['local', 'Same Wi-Fi'], ['remote', 'Away from home']], value: connection, onChange: value => { connection = value; draw(state); } });
     if (connection === 'remote') { drawRemote(state.remote, choice, revealInvite); revealPhone(); return; }
     const rows = choice;
-    kit.row(rows, { label: state.enabled ? 'Same-Wi-Fi access is on' : 'Same-Wi-Fi access is off', description: state.enabled ? 'Only paired browsers you approve can access Codeshi. Turning this off disconnects phones using this local connection.' : 'Off by default and after every restart. Use a trusted network: this connection uses unencrypted HTTP.', keywords: 'phone mobile wifi wi-fi local network pairing approval', control: kit.button(state.enabled ? 'Turn off' : 'Enable phone access', () => action(state.enabled ? { action: 'stop' } : { action: 'start', address: selectedAddress || state.interfaces[0]?.address }), state.enabled ? '' : 'primary') });
+    kit.row(rows, { label: state.enabled ? 'Same-Wi-Fi access is on' : 'Same-Wi-Fi access is off', description: state.enabled ? 'Only paired browsers you approve can access Codeshi. Turning this off disconnects phones using this local connection.' : 'Off by default and after every restart. Use a trusted network: this connection uses unencrypted HTTP.', keywords: 'remote access phone mobile wifi wi-fi local network pairing approval', control: kit.button(state.enabled ? 'Turn off' : 'Enable same-Wi-Fi access', () => action(state.enabled ? { action: 'stop' } : { action: 'start', address: selectedAddress || state.interfaces[0]?.address }), state.enabled ? '' : 'primary') });
     if (!state.enabled) {
       if (state.interfaces.length) {
         kit.select(rows, { label: 'Network', description: 'Choose the address reachable from your phone.', options: state.interfaces.map(item => [item.address, `${item.name} · ${item.address}`]), value: selectedAddress || state.interfaces[0].address, onChange: value => { selectedAddress = value; } });
@@ -95,7 +95,7 @@
   }
   window.relayPhone = { settings(host, settingsKit) {
     target = node('div', undefined, 'settings-section'); host.append(target); kit = settingsKit; signature = '';
-    kit.note(target, 'Loading phone access…'); Promise.resolve().then(() => load(true));
+    kit.note(target, 'Loading remote access…'); Promise.resolve().then(() => load(true));
   } };
   setInterval(() => load(), 2000); Promise.resolve().then(() => load());
 })();

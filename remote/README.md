@@ -1,6 +1,6 @@
-# Remote phone access
+# Remote access
 
-This is the Firebase Spark pilot for Codeshi's **Connect phone → Away from home** connection. Users do not need
+This is the Firebase Spark pilot for Codeshi's **Remote access → Away from home** connection. Users do not need
 a Firebase account, VPN, mobile app, certificate installation or router configuration. Their computer and phone
 both make outbound connections. Agents and project files remain on the computer.
 

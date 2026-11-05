@@ -51,7 +51,7 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
     for (const [key, value] of Object.entries({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" })) res.setHeader(key, value);
     try {
       expire();
-      if (!base()) fail('Phone access is off.', 503);
+      if (!base()) fail('Remote access is off.', 503);
       if (req.headers.host !== `${address}:${server.address().port}`) fail('Use the phone address shown in Codeshi.', 403);
       const peer = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
       if (!privateIP(peer) && peer !== '127.0.0.1') fail('Only local-network connections are allowed.', 403);
@@ -60,7 +60,7 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
       if (!req.url.startsWith('/') || req.url.startsWith('//')) fail('Use a local path.', 403);
       const url = new URL(req.url, base());
       if (req.method === 'POST' && (req.headers.origin !== base() || req.headers['x-ai-relay'] !== '1')) fail('Send from the paired Codeshi page.', 403);
-      if (url.pathname === '/api/phone' || url.pathname.startsWith('/api/phone/')) fail('Manage phone access on the computer.', 403);
+      if (url.pathname === '/api/phone' || url.pathname.startsWith('/api/phone/')) fail('Manage remote access on the computer.', 403);
       if (req.method === 'GET' && ['/phone-pair.js', '/phone.css', '/editor-theme.css', '/phone-theme.js', '/mark.svg'].includes(url.pathname)) {
         res.writeHead(200, { 'Content-Type': url.pathname.endsWith('.js') ? 'text/javascript; charset=utf-8' : url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'image/svg+xml' });
         return res.end(fs.readFileSync(new URL(url.pathname.slice(1), publicDir)));
@@ -142,7 +142,7 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
       catch { await stop(); fail('Could not open this network address. Check your connection and firewall.', 503); }
       return newInvite();
     }
-    if (!base()) fail('Turn on phone access first.', 409);
+    if (!base()) fail('Turn on remote access first.', 409);
     if (input.action === 'invite') {
       return newInvite();
     }

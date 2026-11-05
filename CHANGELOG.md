@@ -4,12 +4,19 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-11-06
+
+### Changed
+
+- **Remote access** is the name throughout the app, website and documentation, covering both same-Wi-Fi and away-from-home connections.
+- **The README shows remote access on a phone.** A dedicated approval image accompanies the feature, and the hero and task images use the same framing as the other feature screenshots.
+
 ## [0.27.0] - 2026-11-06
 
 ### Added
 
-- **Remote phone access** (#23). **Away from home** under **Connect phone** keeps QR pairing and computer approval while allowing the same minimal phone page, at `remote.codeshi.dev`, to work over mobile data or another network. Prompts, progress and approval details are encrypted before reaching Firebase, which carries them. Remote access is optional, can be revoked and turns off on restart. If the service is busy or unavailable, the phone and desktop say so and keep retrying. The local-network connection remains independent.
-- **Phone access on your local network** (#23, first milestone). **Connect phone** in the bottom bar opens setup with a locally generated, one-use QR code and confirmation on the computer. Scanning connects by itself, and the computer still has to allow it. The phone gets its own one-handed page, not the desktop one: the conversation, a live line saying what the agent is doing, a message box that stays right above the keyboard, and approvals, questions and handoffs one at a time in reach of a thumb. Workspaces, tasks, the agent, model, effort and access open as sheets from the bottom, which keep the keyboard away. It has its own System, Light or Dark appearance, separate from the computer's. It loads the latest messages instead of the whole conversation, and reconnects by itself. Uses unencrypted HTTP, for trusted networks.
+- **Remote access** (#23). **Away from home** under **Remote access** keeps QR pairing and computer approval while allowing the same minimal phone page, at `remote.codeshi.dev`, to work over mobile data or another network. Prompts, progress and approval details are encrypted before reaching Firebase, which carries them. Remote access is optional, can be revoked and turns off on restart. If the service is busy or unavailable, the phone and desktop say so and keep retrying. The local-network connection remains independent.
+- **Remote access on your local network** (#23, first milestone). **Remote access** in the bottom bar opens setup with a locally generated, one-use QR code and confirmation on the computer. Scanning connects by itself, and the computer still has to allow it. The phone gets its own one-handed page, not the desktop one: the conversation, a live line saying what the agent is doing, a message box that stays right above the keyboard, and approvals, questions and handoffs one at a time in reach of a thumb. Workspaces, tasks, the agent, model, effort and access open as sheets from the bottom, which keep the keyboard away. It has its own System, Light or Dark appearance, separate from the computer's. It loads the latest messages instead of the whole conversation, and reconnects by itself. Uses unencrypted HTTP, for trusted networks.
 
 - **Voice on the phone.** A microphone beside Send on the phone page turns speech into text as you speak, using the phone's own browser; on an iPhone or Android phone that sends the audio to Apple or Google, which the first use says. Words land in the message box and nothing is sent until you press Send, which also turns the microphone off. It's available away from home, because browsers block the microphone on the same-Wi-Fi connection's plain HTTP.
 - **A queued prompt can run as a task** (#108). **Run as a task** on a row under **Up next** moves it out of the queue and starts it beside the current run, in the selected folder, with the agent, model and access it was queued with. In a workspace with several folders and none selected, the row asks which one.
@@ -17,7 +24,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 ### Changed
 
 - **Files opens in its own browser.** A Files button beside Workspaces opens a compact browser; choosing a folder no longer opens Files automatically. Tasks stay directly below workspaces, and the workspace-wide conversation is named **Workspace chat**, with a subtle working animation on its leading icon.
-- **Remote phone access uses less data.** Streaming replies send only new text when the phone confirms its previous snapshot, with full-text recovery after a reconnect or changed conversation. Progress no longer reloads workspace metadata on every update, hidden pages cancel queued refreshes, and Firebase writes no longer echo encrypted packets back to the sender. Added a repeatable local/live traffic measurement command.
+- **Remote access uses less data.** Streaming replies send only new text when the phone confirms its previous snapshot, with full-text recovery after a reconnect or changed conversation. Progress no longer reloads workspace metadata on every update, hidden pages cancel queued refreshes, and Firebase writes no longer echo encrypted packets back to the sender. Added a repeatable local/live traffic measurement command.
 - **The layout buttons sit beside the search bar.** The buttons that show or hide the sidebar and the side panel are at the right of the search bar, after a divider, so a side panel's tabs have the whole of its top. The bottom panel's button is gone: **Terminal** and **Run** in the status bar and ⌘J open and close it.
 
 ### Fixed
@@ -473,6 +480,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.27.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.27.1
 [0.27.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.27.0
 [0.26.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.26.0
 [0.25.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.1

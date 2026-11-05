@@ -130,7 +130,7 @@ async function start() {
   history.replaceState(null, '', location.pathname);
   const saved = read(sessionKey), match = fragment?.match(/^([a-f0-9]{64})\.([a-f0-9]{64})$/);
   const session = match ? { room: match[1], secret: match[2] } : saved;
-  if (!session) { note.textContent = 'On your computer, choose Connect phone → Away from home and scan the QR code. Keep the computer awake with Codeshi open.'; return; }
+  if (!session) { note.textContent = 'On your computer, choose Remote access → Away from home and scan the QR code. Keep the computer awake with Codeshi open.'; return; }
   if (!/^[a-f0-9]{64}$/.test(session.room || '')) throw Error('Scan a new QR code on your computer.');
   room = session.room; key = await roomKey(session.secret);
   const authKey = `codeshi:remote-auth:${config.projectId}`;

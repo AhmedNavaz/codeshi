@@ -4074,7 +4074,7 @@ test('General Settings saves handoff and keep-awake controls and reports a save 
   assert.equal(ui.$('settings-error').hidden, false); assert.match(ui.$('settings-error').textContent, /Cannot save/); assert.equal(threshold().value, '80');
 });
 
-for (const connection of ['local', 'remote']) test(`Phone settings reveal a new ${connection} QR once without scrolling on status refreshes`, async () => {
+for (const connection of ['local', 'remote']) test(`Remote access settings reveal a new ${connection} QR once without scrolling on status refreshes`, async () => {
   const ui = await browser({ workbench: true }), frames = [], polls = [], scrolls = [];
   const state = { enabled: false, interfaces: [{ name: 'Wi-Fi', address: '192.168.1.10' }], devices: [], remote: { configured: true, enabled: false, devices: [] } };
   let generation = 0;
@@ -4102,7 +4102,7 @@ for (const connection of ['local', 'remote']) test(`Phone settings reveal a new 
   await ui.window.relaySettings.open('general'); await flush();
   const select = ui.labelledInput('Connection'); select.value = connection; select.dispatchEvent(new UIEvent('change')); await flush();
   const button = text => ui.document.querySelectorAll('button').find(item => item.textContent === text);
-  button(connection === 'remote' ? 'Enable remote access' : 'Enable phone access').click(); await flush();
+  button(connection === 'remote' ? 'Enable remote access' : 'Enable same-Wi-Fi access').click(); await flush();
   assert.equal(scrolls.length, 0, 'Wait for the next layout frame before scrolling.');
   while (frames.length) frames.shift()();
   assert.equal(scrolls.length, 1);

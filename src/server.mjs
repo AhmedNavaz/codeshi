@@ -197,10 +197,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         }
       }
       if (url.pathname === '/api/phone') {
-        if (req.phoneClient) return json(res, 403, { error: 'Manage phone access on the computer.' });
+        if (req.phoneClient) return json(res, 403, { error: 'Manage remote access on the computer.' });
         if (req.method === 'GET') return json(res, 200, phoneAccess.status());
         if (req.method === 'POST') return json(res, 200, await phoneAccess.manage(await body(req, 4096)));
-        return json(res, 405, { error: 'Use GET or POST for phone access.' });
+        return json(res, 405, { error: 'Use GET or POST for remote access.' });
       }
       if (url.pathname === '/api/preferences') {
         if (req.method === 'POST') saveSettings(preferencePatch(await body(req), config));
@@ -339,7 +339,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       catch (error) { failure ||= error; onStep({ name, ms: Date.now() - started, error: error.message }); }
     };
     closeAccountConnections();
-    await step('phone access', () => phoneAccess.close());
+    await step('remote access', () => phoneAccess.close());
     await step('reviews', () => reviewRoutes.close());
     await step('commands', () => commandRoutes.close());
     await step('terminals', () => terminalRoutes.close());

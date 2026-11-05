@@ -16,7 +16,7 @@ export async function roomKey(secret) {
 }
 export async function seal(key, room, direction, value) {
   const bytes = encoder.encode(JSON.stringify(value));
-  if (bytes.length > MAX_PACKET) throw Error('This request is too large for remote phone access. Try a smaller photo or fewer messages.');
+  if (bytes.length > MAX_PACKET) throw Error('This request is too large for remote access. Try a smaller photo or fewer messages.');
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: encoder.encode(`codeshi-phone-v1:${room}:${direction}`) }, key, bytes);
   return { iv: base64(iv), data: base64(new Uint8Array(encrypted)) };
@@ -28,7 +28,7 @@ export async function open(key, room, direction, box) {
 }
 
 export function firebaseConfig(input) {
-  if (!input || typeof input !== 'object' || !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(input.projectId || '') || !/^[A-Za-z0-9_-]{20,200}$/.test(input.apiKey || '')) throw Error('Remote phone access has not been configured in this Codeshi build.');
+  if (!input || typeof input !== 'object' || !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(input.projectId || '') || !/^[A-Za-z0-9_-]{20,200}$/.test(input.apiKey || '')) throw Error('Remote access has not been configured in this Codeshi build.');
   const database = new URL(input.databaseURL), phone = new URL(input.phoneURL);
   if (database.protocol !== 'https:' || database.username || database.password || database.port || database.search || database.hash || database.pathname !== '/' || !/^[a-z0-9-]+(?:\.[a-z0-9-]+)?\.(?:firebaseio\.com|firebasedatabase\.app)$/.test(database.hostname)) throw Error('Choose a Firebase Realtime Database HTTPS address.');
   if (phone.protocol !== 'https:' || phone.username || phone.password || phone.port || phone.search || phone.hash || phone.pathname !== '/') throw Error('Choose the hosted phone page’s HTTPS address.');
@@ -54,7 +54,7 @@ export class FirebasePhoneClient {
       const url = refreshed ? `${this.endpoints.refresh}?key=${this.config.apiKey}` : `${this.endpoints.auth}/accounts:signUp?key=${this.config.apiKey}`;
       const response = await this.fetch(url, { method: 'POST', headers: { 'Content-Type': refreshed ? 'application/x-www-form-urlencoded' : 'application/json' }, body: refreshed ? new URLSearchParams({ grant_type: 'refresh_token', refresh_token: saved.refreshToken }).toString() : JSON.stringify({ returnSecureToken: true }), signal: AbortSignal.timeout(15000) });
       const data = await response.json();
-      if (!response.ok) throw Error('Could not sign in to phone access. Check the connection and Firebase Authentication setup.');
+      if (!response.ok) throw Error('Could not sign in to remote access. Check the connection and Firebase Authentication setup.');
       const auth = { uid: data.localId || data.user_id, idToken: data.idToken || data.id_token, refreshToken: data.refreshToken || data.refresh_token, until: Date.now() + Math.max(60, Number(data.expiresIn || data.expires_in || 3600) - 120) * 1000 };
       if (!auth.uid || !auth.idToken || !auth.refreshToken) throw Error('Firebase returned an incomplete phone session.');
       this.auth = auth; this.save({ uid: auth.uid, refreshToken: auth.refreshToken }); return auth;
