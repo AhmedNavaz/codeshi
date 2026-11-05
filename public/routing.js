@@ -126,5 +126,15 @@
     return { ...choice, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
 
-  root.relayRouting = { MODES, modeNames, classify, modelTier, route, escalate };
+  // The same choice when the agent is already decided: a queued prompt that moved at a handoff is routed again for the
+  // agent that took over (#93). Null when that agent lists no models, so the caller keeps its own choice.
+  function routeTo(provider, rows, { text, attachments = 0, mode = 'balanced' }) {
+    if (!MODES.includes(mode)) mode = 'balanced';
+    const task = classify(text, { attachments }), [tier, wantedEffort] = plan[mode][task.tier], model = pickModel(rows, tier);
+    if (!model) return null;
+    const choice = { provider, model: modelId(model), modelName: model.displayName || model.name || modelId(model), effort: pickEffort(effortsOf(model), wantedEffort), tier: task.tier, mode, reason: task.reason[0].toUpperCase() + task.reason.slice(1) };
+    return { ...choice, escalation: escalate(provider, rows, choice) };
+  }
+
+  root.relayRouting = { MODES, modeNames, classify, modelTier, route, routeTo, escalate };
 })(typeof window === 'undefined' ? globalThis : window);

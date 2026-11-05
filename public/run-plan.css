@@ -9,6 +9,10 @@
 .run-plan-label { flex: none; color: var(--text-strong); font-weight: 600; }
 .run-plan-count { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 .run-plan-current { flex: 1; min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.run-plan-from { flex: none; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+.run-plan-from[hidden] { display: none; }
+/* Not working right now: the step that was in progress holds still. */
+.run-plan[data-held="true"] .run-plan-step.active .run-plan-mark { border-right-color: var(--link); animation: none; }
 .run-plan-count + .run-plan-current::before { content: "·"; margin-right: 8px; color: var(--faint); }
 .run-plan-chevron { flex: none; width: 14px; height: 14px; color: var(--faint); transition: transform .15s; }
 .run-plan-summary[aria-expanded="true"] .run-plan-chevron { transform: rotate(180deg); }

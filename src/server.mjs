@@ -19,7 +19,6 @@ import { createCheckpointRoutes } from './checkpoint-routes.mjs';
 import { alertPreferences, alertSound, mergeAlertPreferences } from './alerts.mjs';
 import { createLocalRoutes } from './local-models.mjs';
 import { atomicJSON } from './patches.mjs';
-import { continuationRequest } from './context.mjs';
 import { appearance, appearances, preferencePatch, publicPreferences } from './preferences.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -283,9 +282,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (match[2] === 'retry') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissRetry(c, input.offerId) : broker.acceptRetry(c, input));
           if (match[2] === 'handoff') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissHandoff(c, input.offerId) : await broker.acceptHandoff(c, input));
           if (match[2] === 'messages') return json(res, 202, await broker.start(c, input));
-          if (match[2] === 'continue') return json(res, 202, await broker.start(c, { ...input,
-            fresh: true,
-            text: continuationRequest }));
+          if (match[2] === 'continue') return json(res, 202, await broker.continueTask(c, input));
         }
       }
       return json(res, 404, { error: 'Not found.' });

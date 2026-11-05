@@ -87,6 +87,12 @@
   });
   $('effort-select').addEventListener('change', async () => { try { await api.setConfiguration({ effort: $('effort-select').value || null }); } catch (error) { showSaved(); api.showNotice(error.message); } finally { modelControls(); } });
 
+  // A task that crossed agents ends on one line: its total working time and what each agent did (#94).
+  function taskLine(result) {
+    const files = count => count === null ? '' : count === 0 ? ' no files' : ` ${count} file${count === 1 ? '' : 's'}`;
+    const agents = result.agents.map(agent => `${agent.local ? 'Local' : name(agent.provider)}${files(agent.files)}`).join(' · ');
+    return `Completed in ${duration(result.workingMs)} · ${agents}, ${result.tests === 'passed' ? 'tests passed' : result.tests === 'failed' ? 'tests failed' : 'no tests recorded'}`;
+  }
   function progress() {
     const state = api.getState(), c = state.conversation, running = c?.status === 'running', run = running ? c.activeRun : c?.lastRun;
     $('run-progress').hidden = !run;
@@ -113,7 +119,7 @@
       else if (c.pendingApprovals?.length) actionText = asking ? 'Waiting for your answer' : 'Waiting for your approval';
       else if (quiet) actionText = `Waiting for ${agent}`;
       else actionText = { starting: `Starting ${agent}`, reasoning: 'Thinking', responding: 'Writing', compacting: 'Organizing context' }[phase] || 'Working';
-    } else if (run.status === 'complete') actionText = `Completed in ${Number.isFinite(elapsed) ? duration(elapsed) : 'recorded duration'}`;
+    } else if (run.status === 'complete') actionText = c.taskResult ? taskLine(c.taskResult) : `Completed in ${Number.isFinite(elapsed) ? duration(elapsed) : 'recorded duration'}`;
     else actionText = run.errorCategory === 'quota' ? 'Usage limit reached' : 'Run stopped';
     $('run-action').textContent = actionText;
     // Opening the line explains a pause; otherwise it holds the token and context counts.

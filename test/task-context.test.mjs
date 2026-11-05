@@ -69,7 +69,8 @@ test('a task and its instructions survive a handoff, ahead of a long history of 
   assert.match(primary.text, /THE TASK/);
   for (const marker of ['LATER-INSTRUCTION', 'PROGRESS so far', 'PROMO-FAILURE']) assert.equal(prepared.prompt.includes(marker), true, marker);
   assert.equal(prepared.prompt.includes('OLD-LOG'), false, 'Steps from another task are left out once this one has its own.');
-  assert.deepEqual(value.brief.unfinishedPlan, [{ text: 'REMAINING-STEP', status: 'pending' }]);
+  assert.deepEqual(value.brief.unfinishedPlan, [{ text: 'Write it', status: 'done' }, { text: 'REMAINING-STEP', status: 'pending' }], 'Each step with its status, so the next agent knows what is done.');
+  assert.match(value.brief.unfinishedPlanNote, /Check it against the files/, 'It is history to check, not an instruction.');
   assert.equal(value.brief.failedAttempts[0].what, 'npm test');
   const grepped = conversation([{ role: 'user', runId: 'r', text: 'Task' }, { role: 'activity', runId: 'r', text: '$ grep -n "error|failed" src/app.js\nsrc/app.js:12: // retries the upload' }, { role: 'activity', runId: 'r', text: '$ ls\n' }, { role: 'user', runId: 'n', text: continuationRequest }]);
   assert.equal(envelope(build(grepped, continuationRequest, [desktop])).brief.failedAttempts, undefined, 'A command that only mentions errors, or printed nothing, is not a failure.');

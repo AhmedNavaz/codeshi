@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { continuationRequest } from './context.mjs';
 import { resolveBinary } from './resolve-binary.mjs';
 
 const fail = (message, status = 400) => Object.assign(new Error(message), { status, category: 'installation' });
@@ -71,7 +72,7 @@ export function createLocalRoutes({ registry, body, json, catalog = localCatalog
     const input = await body(req), broker = registry.broker(projectId), conversation = broker.get(registry.mainConversation(projectId).id);
     if (input.context?.conversationId !== conversation.id || input.context?.workspaceSignature !== broker.workspaceSignature || input.context?.mode !== conversation.mode) throw fail('The workspace or access mode changed. Reopen Continue locally before starting.', 409);
     const local = validateLocalSelection(input.model, input.digest);
-    json(res, 202, broker.start(conversation, { text: input.task, attachments: input.attachments || [], requestId: input.requestId }, { local, verifyLocal: () => verify(local.model, local.digest) }));
+    json(res, 202, broker.start(conversation, { text: input.continuing === true ? continuationRequest : input.task, attachments: input.attachments || [], requestId: input.requestId }, { local, verifyLocal: () => verify(local.model, local.digest) }));
     return true;
   };
 }

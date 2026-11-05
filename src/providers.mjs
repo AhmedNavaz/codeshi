@@ -198,6 +198,8 @@ export async function runClaude(config, { event, approval, question = null, meta
     if (!config.reviewSnapshot) steerable(async text => { if (!open || cancelled()) throw new Error('This turn has finished.'); deliver({ type: 'user', parent_tool_use_id: null, priority: 'next', message: { role: 'user', content: text } }); });
     const stream = query({ prompt: input(), options: {
       cwd: config.workspace, pathToClaudeCodeExecutable: config.bin, permissionMode: config.mode === 'read' ? 'plan' : 'default',
+      // Current versions of Claude Code replace TodoWrite with task tools unless told otherwise, and Claude's plan comes from TodoWrite.
+      env: { ...process.env, CLAUDE_CODE_ENABLE_TASKS: 'false' },
       additionalDirectories: [...new Set(config.workspaces || [])].filter(directory => directory !== config.workspace),
       settingSources: [], settings: { disableAllHooks: true }, mcpServers: {}, strictMcpConfig: true, disallowedTools: ['mcp__*'],
       // Claude enforces a spending limit itself when it is billed per use; on a subscription this isn't set (#87).

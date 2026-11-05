@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { planForBrief } from './task-plan.mjs';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -211,7 +212,8 @@ export function taskBrief(c, { source, scope, folders, primary, text, taskMessag
   }
   for (const file of changes.files) if (file.sha256) hashes[file.folderId + '\0' + file.path] = file.sha256;
   const taskId = text && c.lastRun?.taskId, runs = taskId ? (c.runs || []).filter(run => run.taskId === taskId) : [];
-  const plan = c.lastRun?.plan?.steps?.filter(step => step.status !== 'done') || [];
+  // While a run works, as when the Brief panel asks, the plan is on that run.
+  const plan = text ? planForBrief(c.activeRun?.plan ? c.activeRun : c.lastRun) : null;
   const brief = {
     note: BRIEF_NOTE,
     scope: { folders: scoped.map(folderName), reason: scope.reason, ...(scoped.length < folders.length ? { otherFolders: folders.filter(folder => !scoped.includes(folder)).map(folderName), otherFoldersNote: 'History from other folders was left out. They are still available if this task needs them.' } : {}) },
@@ -225,7 +227,7 @@ export function taskBrief(c, { source, scope, folders, primary, text, taskMessag
   const kept = Object.values((taskId && c.taskBudgets?.[taskId]?.failures) || {}).filter(item => item.kind !== 'edit').sort((a, b) => b.count - a.count).slice(0, FAILED_LIMIT);
   const failed = [...kept.map(item => ({ agents: item.agents, what: item.what, how: item.how, times: item.count, source: 'task-record' })), ...failedAttempts(taskMessages, runs).filter(attempt => !kept.some(item => item.what === attempt.what))].slice(0, FAILED_LIMIT);
   if (failed.length) brief.failedAttempts = failed;
-  if (plan.length && text) brief.unfinishedPlan = plan.map(step => ({ text: step.text, status: step.status }));
+  if (plan) { brief.unfinishedPlan = plan.steps; brief.unfinishedPlanNote = `The plan${plan.reportedBy ? ` ${plan.reportedBy} last reported` : ' last reported'} for this task, with each step's status. Check it against the files. If you report a plan of your own it replaces this one, and steps already done stay done unless you list them again.${plan.stepsLeftOut ? ` ${plan.stepsLeftOut} older done steps were left out.` : ''}`; }
   if (journal && source.length) brief.originals = { journal, note: 'Each line of this JSON Lines file is one record; a message left out or shortened here can be found there by its id.' };
   return { brief, instructions, hashes };
 }

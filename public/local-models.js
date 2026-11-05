@@ -49,7 +49,7 @@
     if (request?.key !== key) request = { key, id: crypto.randomUUID() };
     busy = true; error(); controls();
     try {
-      await api.post('/api/local-models/start', { model: model.id, digest: model.digest, task, requestId: request.id, context: catalog.context }, projectId);
+      await api.post('/api/local-models/start', { model: model.id, digest: model.digest, task, ...(task === defaultTask ? { continuing: true } : {}), requestId: request.id, context: catalog.context }, projectId);
       drafts.set(projectId, task); request = null;
       if (projectId === api.getState().projectId) { await api.refresh(); dialog.close(); api.announce('The local model is working.'); }
       await api.refreshProjects();

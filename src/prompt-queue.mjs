@@ -1,18 +1,35 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { routingNote } from './broker.mjs';
+import { isAntigravityACP } from './antigravity.mjs';
+import { resolveBinary } from './resolve-binary.mjs';
 
 // Prompts queued for a workspace (#32). They run one after another: each with the agent, model, effort, access and
 // permission setting chosen when it was queued, never more. A run that reaches a usage limit waits for a reset and
 // the queue carries on; any other stop pauses the queue, as does a restart, so queued work never continues blindly.
 // The queue lives in the conversation journal, so it survives restarts and runs while the window is closed.
+//
+// A handoff moves the prompts queued for the agent that ran out to the agent that took over (#93). A moved prompt keeps
+// its access and permission setting and takes the new agent's model and effort. Only what the person was shown moves: each
+// prompt is matched by a digest of what it was when the offer was made, so one that changed since stays where it is.
 export const QUEUE_LIMIT = 20;
+const queueDigest = item => createHash('sha256').update(JSON.stringify([item.id, item.text, item.provider, item.model, item.effort, item.mode, item.approvalPolicy, item.attachments, item.billingConfirmed, item.routing || null])).digest('hex').slice(0, 24);
 
 export class PromptQueue {
-  constructor(broker) { this.broker = broker; this.closed = false; }
+  constructor(broker) { this.broker = broker; this.closed = false; this.held = new Set(); }
 
   // Work queued when the app last closed waits for the person to resume it.
   restore() {
-    for (const c of this.broker.conversations.values()) if (c.queue.length && !c.queuePaused) this.pause(c, 'Codeshi restarted while prompts were queued.');
+    for (const c of this.broker.conversations.values()) {
+      // A prompt whose run was saved before the restart may have reached its agent, and nobody can say. It is never sent
+      // again by itself, and saying so leaves the choice with the person (#93).
+      for (const item of [...c.queue]) {
+        const sent = c.requests[`queue-${item.id}`];
+        if (!sent) continue;
+        this.broker.record(c, { type: 'queue_started', id: item.id, runId: sent.runId, uncertain: true });
+        this.broker.message(c, 'system', `A queued prompt was being sent when Codeshi stopped, so it wasn't sent again: “${item.text.slice(0, 80)}”. Check its run before sending it yourself.`, item.provider);
+      }
+      if (c.queue.length && !c.queuePaused) this.pause(c, 'Codeshi restarted while prompts were queued.');
+    }
   }
 
   pause(c, reason) {
@@ -57,6 +74,8 @@ export class PromptQueue {
     } else if (action === 'resume') {
       if (c.queuePaused) broker.record(c, { type: 'queue_resume' });
     } else throw Object.assign(new Error('Choose add, update, move, remove, pause or resume.'), { status: 400 });
+    // An open handoff offer keeps saying what would really move.
+    if (c.handoffOffer) c.handoffOffer.queue = this.cover(c, c.handoffOffer.from.provider, c.handoffOffer.to);
     broker.emit('update', { conversationId: c.id });
     this.tick(c);
     return broker.view(c);
@@ -65,7 +84,7 @@ export class PromptQueue {
   // Starts the next prompt when the workspace is free: nothing running, no wait for a reset, and the queue not paused.
   tick(c) {
     const broker = this.broker;
-    if (this.closed || !c.queue.length || c.queuePaused || broker.running || c.resume || c.runs.some(run => ['building', 'reviewing'].includes(run.automaticReview?.status))) return;
+    if (this.closed || !c.queue.length || c.queuePaused || broker.running || c.resume || this.held.has(c.id) || c.runs.some(run => ['building', 'reviewing'].includes(run.automaticReview?.status))) return;
     const item = c.queue[0];
     try {
       const { runId } = broker.start(c, { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, requestId: `queue-${item.id}` }, { queued: item.id });
@@ -91,6 +110,55 @@ export class PromptQueue {
       return;
     }
     this.pause(c, run.budgetStop ? run.budgetStop.message : run.stopped ? 'You stopped the run.' : 'The last run did not finish.');
+  }
+
+  // Which prompts a handoff from one agent to another would move, for the offer to name. Prompts for other agents aren't
+  // part of it, and neither is one the destination can't run with its access unchanged, which stays and is counted.
+  cover(c, from, to) {
+    const items = [];
+    let stays = 0;
+    for (const item of c.queue) {
+      if (item.provider !== from) continue;
+      if (this.canRun(to.provider, item)) items.push({ id: item.id, digest: queueDigest(item) });
+      else stays++;
+    }
+    if (!items.length && !stays) return null;
+    return { count: items.length, stays, items, billingRequired: to.billingSource !== 'subscription' && items.length > 0, digest: createHash('sha256').update(JSON.stringify(items)).digest('hex').slice(0, 24) };
+  }
+  canRun(provider, item) {
+    try { this.broker.checkRunSettings(provider, item.mode, item.approvalPolicy); } catch { return false; }
+    if (provider !== 'gemini' || item.mode !== 'read') return true;
+    return !isAntigravityACP(resolveBinary('gemini', { override: this.broker.configuredBins.gemini, googleRoot: this.broker.googleRoot }));
+  }
+
+  // Moves prompts to the agent that took over, in one record. `covered` is what the person accepted; without it (a handoff
+  // already allowed in advance) it is everything queued for that agent right now. An earlier confirmation of charges was
+  // for the old agent, so it never carries over: a destination billed per use needs the person's own yes for these prompts.
+  // `choose` picks a routed prompt's model again for the new agent.
+  async move(c, { from, to, covered = null, billingConfirmed = false, choose = null }) {
+    const charged = to.billingSource !== 'subscription';
+    this.held.add(c.id);
+    try {
+      const wanted = (covered || this.cover(c, from, to)?.items || []);
+      const routed = new Map();
+      if (choose && !(charged && !billingConfirmed)) for (const entry of wanted) {
+        const item = c.queue.find(row => row.id === entry.id);
+        if (item?.routing) routed.set(item.id, await choose(item));
+      }
+      // Nothing is awaited from here until the move is saved, so what's checked is what moves.
+      const moves = [], changed = [], stayed = [];
+      for (const entry of wanted) {
+        const item = c.queue.find(row => row.id === entry.id);
+        if (!item) continue;
+        if (item.provider !== from || queueDigest(item) !== entry.digest || !this.canRun(to.provider, item)) { changed.push(item.id); continue; }
+        if (charged && !billingConfirmed) { stayed.push(item.id); continue; }
+        const choice = routed.get(item.id);
+        moves.push({ id: item.id, provider: to.provider, model: choice ? choice.model : to.model ?? null, effort: choice ? choice.effort : c.efforts[to.provider]?.[to.model || 'default'] ?? null, billingConfirmed: charged, movedFrom: from,
+          ...(item.routing ? { routing: (({ escalation, ...note }) => ({ ...note, ...(choice ? { tier: choice.tier || note.tier, reason: `Moved at a handoff · ${choice.reason || note.reason}`.slice(0, 300), ...(choice.escalation ? { escalation: choice.escalation } : {}) } : { reason: 'Moved at a handoff' }) }))(item.routing) } : {}) });
+      }
+      if (moves.length) this.broker.record(c, { type: 'queue_moved', from, to: to.provider, moves });
+      return { moved: moves.length, changed: changed.length, stayed: stayed.length };
+    } finally { this.held.delete(c.id); }
   }
 
   close() { this.closed = true; }

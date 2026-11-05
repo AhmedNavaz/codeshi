@@ -1365,6 +1365,58 @@ test('a draft typed while review fixes are being prepared stays, with the fix re
   assert.equal(ui.$('message-input').value, 'A newly typed draft\n\nReplace the draft', 'Text typed while it was being prepared stays too.'); assert.equal(ui.$('review-error').hidden, true);
 });
 
+test('the task plan stays through a switch of agent, says where it came from, and a new prompt starts without it', async () => {
+  const ui = await browser(), conversation = ui.canonical.get('project-one');
+  const steps = [{ text: 'Read the code', status: 'done' }, { text: 'Write the tests', status: 'active' }, { text: 'Run them', status: 'pending' }];
+  Object.assign(conversation, { status: 'running', activeRun: { id: 'run-one', provider: 'codex', startedAt: new Date().toISOString(), plan: { steps } } });
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-plan').hidden, false); assert.equal(ui.$('run-plan-from').hidden, true); assert.equal(ui.$('run-plan').dataset.held, 'false');
+  ui.$('run-plan-toggle').click(); assert.equal(ui.$('run-plan-list').hidden, false);
+  // Stopped for the switch, with no run working: the row stays, and the step in progress holds still.
+  Object.assign(conversation, { status: 'interrupted', activeRun: null, lastRun: { id: 'run-one', provider: 'codex', status: 'interrupted', errorCategory: 'interrupted', plan: { steps } } });
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-plan').hidden, false, 'The plan stays visible between the two runs.'); assert.equal(ui.$('run-plan').dataset.held, 'true'); assert.equal(ui.$('run-plan-count').textContent, '1 of 3 done');
+  // The next agent has it, saying where from, and the open list stays open.
+  Object.assign(conversation, { status: 'running', lastRun: conversation.lastRun, activeRun: { id: 'run-two', provider: 'claude', startedAt: new Date().toISOString(), plan: { steps, carriedFrom: { runId: 'run-one', provider: 'codex' } } } });
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('run-plan').hidden, false); assert.equal(ui.$('run-plan-from').textContent, 'From Codex'); assert.equal(ui.$('run-plan-list').hidden, false, 'A switch of agent is not a new plan.');
+  // Finished, or a new prompt with no plan: nothing left to show.
+  Object.assign(conversation, { status: 'complete', activeRun: null, lastRun: { id: 'run-two', provider: 'claude', status: 'complete', plan: { steps } } });
+  await ui.window.relayUI.refresh(); assert.equal(ui.$('run-plan').hidden, true);
+  Object.assign(conversation, { status: 'running', activeRun: { id: 'run-three', provider: 'claude', startedAt: new Date().toISOString() }, lastRun: { id: 'run-two', provider: 'codex', status: 'interrupted', plan: { steps } } });
+  await ui.window.relayUI.refresh(); assert.equal(ui.$('run-plan').hidden, true, 'A new prompt does not inherit the old plan.');
+});
+
+test('the handoff offer says how many queued prompts move, charges for them are a separate yes, and Up next shows the move', async () => {
+  const ui = await browser(), conversation = ui.canonical.get('project-one'), answers = [];
+  const offer = (queue, billingSource = 'subscription') => ({ id: 'offer-' + JSON.stringify(queue).length, runId: 'run-one', from: { provider: 'codex', usedPercent: 92, window: '5-hour' }, to: { provider: 'claude', model: null, mode: 'edit', approvalPolicy: 'ask', billingSource }, task: 'Build it', queue });
+  ui.setIntercept((request, next) => { if (!request.path.endsWith('/handoff')) return next(); answers.push(request.body); return response({}); });
+  Object.assign(conversation, { status: 'running', activeRun: { id: 'run-one', provider: 'codex', startedAt: new Date().toISOString() }, handoffOffer: offer({ count: 2, stays: 1, items: [], billingRequired: false, digest: 'abc' }), queue: [{ id: 'q1', text: 'Next', provider: 'claude', movedFrom: 'codex', mode: 'read', approvalPolicy: 'ask', attachments: [] }] });
+  await ui.window.relayUI.refresh();
+  assert.match(ui.$('handoff-detail').textContent, /2 queued prompts move with it, with the same access\./);
+  assert.match(ui.$('handoff-detail').textContent, /1 queued prompt stays with Codex/);
+  assert.equal(ui.$('handoff-queue-billing').hidden, true);
+  assert.match(ui.$('prompt-queue-list').textContent, /Claude.*Read only.*Moved from Codex/, 'Up next shows the new agent, and the access it kept.');
+  ui.$('handoff-accept').click(); await flush();
+  assert.deepEqual([answers[0].queueDigest, answers[0].queueBillingConfirmed], ['abc', false], 'The answer says which prompts the person saw.');
+  conversation.handoffOffer = offer({ count: 1, stays: 0, items: [], billingRequired: true, digest: 'def' }, 'api');
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('handoff-queue-billing').hidden, false); assert.match(ui.$('handoff-queue-text').textContent, /Also accept charges for 1 queued prompt\. Without this, it stays with Codex\./);
+  ui.$('handoff-billing-confirm').checked = true; ui.$('handoff-billing-confirm').dispatchEvent(new UIEvent('change')); assert.equal(ui.$('handoff-accept').disabled, false, 'The handoff can go ahead without the queue going along.');
+  ui.$('handoff-accept').click(); await flush(); assert.equal(answers.at(-1).queueBillingConfirmed, false);
+  ui.$('handoff-queue-confirm').checked = true; ui.$('handoff-accept').click(); await flush(); assert.deepEqual([answers.at(-1).billingConfirmed, answers.at(-1).queueBillingConfirmed], [true, true]);
+});
+
+test('a task that crossed agents ends on one line, and a single run reads as it always has', async () => {
+  const ui = await browser({ insights: true }), conversation = ui.canonical.get('project-one'), at = '2026-11-05T10:00:00.000Z', end = '2026-11-05T10:02:00.000Z';
+  Object.assign(conversation, { status: 'complete', activeRun: null, lastRun: { id: 'two', provider: 'codex', status: 'complete', startedAt: at, endedAt: end, elapsedMs: 120000 } });
+  await ui.window.relayUI.refresh(); assert.equal(ui.$('run-action').textContent, 'Completed in 2m 0s');
+  conversation.taskResult = { runs: 2, workingMs: 100000, tests: 'passed', agents: [{ provider: 'claude', files: 2 }, { provider: 'codex', files: 1 }] };
+  await ui.window.relayUI.refresh(); assert.equal(ui.$('run-action').textContent, 'Completed in 1m 40s · Claude 2 files · Codex 1 file, tests passed');
+  conversation.taskResult = { runs: 2, workingMs: 100000, tests: null, agents: [{ provider: 'claude', files: 0 }, { provider: 'codex', files: null }, { provider: 'codex', local: true, files: 1 }] };
+  await ui.window.relayUI.refresh(); assert.match(ui.$('run-action').textContent, /Claude no files · Codex · Local 1 file, no tests recorded$/, 'An unknown count is left out, never shown as zero, and a missing check is said.');
+});
+
 test('the moment an agent reaches its limit stands out, and other errors and handoffs stay plain', async () => {
   const ui = await browser(), conversation = ui.canonical.get('project-one'), row = id => ui.$('message-' + id);
   conversation.runs = [{ id: 'limited', provider: 'codex', errorCategory: 'quota' }, { id: 'broken', provider: 'codex', errorCategory: 'protocol' }];
@@ -1846,7 +1898,7 @@ test('the Brief panel says what the next agent gets, opens the full brief, and k
   ui.$('brief-view').click(); await flush();
   assert.equal(ui.$('brief-dialog').open, true);
   const titles = ui.$('brief-dialog-body').querySelectorAll('.brief-block-title').map(item => item.textContent);
-  assert.deepEqual(titles, ['Folders in scope', 'Repository instructions', 'Memory', 'Skills', 'Changed so far', 'Went wrong before', 'Steps left']);
+  assert.deepEqual(titles, ['Folders in scope', 'Repository instructions', 'Memory', 'Skills', 'Changed so far', 'Went wrong before', 'The plan so far']);
   assert.match(ui.$('brief-dialog-body').textContent, /npm test.*exit 1 · 2×/);
   ui.$('brief-dialog-close').click();
   assert.equal(ui.$('memory-empty').hidden, true);
@@ -2538,18 +2590,18 @@ test('a handoff offer names the destination, its billing and the task, needs cha
   assert.match(ui.$('handoff-detail').textContent,/Hand off to Claude \(subscription\) to continue “Build the feature”\. Can edit files · asks before changes\./);
   assert.equal(ui.$('handoff-billing').hidden,true,'A subscription destination has no charges to confirm.');
   ui.$('handoff-accept').click();await flush();await flush();
-  assert.deepEqual(answers[0],{offerId:'first',accept:true,billingConfirmed:false});
+  assert.deepEqual(answers[0],{offerId:'first',accept:true,billingConfirmed:false,queueBillingConfirmed:false,queueDigest:null});
   assert.equal(ui.$('notice').hidden,false,'A stale offer says why it was refused.');
   assert.match(ui.$('handoff-detail').textContent,/API billing/,'The fresh offer replaces the stale one.');
   assert.equal(ui.$('handoff-billing').hidden,false);assert.match(ui.$('handoff-billing-text').textContent,/Accept charges: Claude bills your API account/);
   assert.equal(ui.$('handoff-accept').disabled,true,'API billing needs its own confirmation first.');
   ui.$('handoff-billing-confirm').checked=true;ui.fire('handoff-billing-confirm','change');assert.equal(ui.$('handoff-accept').disabled,false);
   ui.$('handoff-accept').click();await flush();await flush();
-  assert.deepEqual(answers[1],{offerId:'second',accept:true,billingConfirmed:true});
+  assert.deepEqual(answers[1],{offerId:'second',accept:true,billingConfirmed:true,queueBillingConfirmed:false,queueDigest:null});
   assert.equal(ui.$('handoff-offer').hidden,true);
   conversation.handoffOffer=offer('third');await ui.window.relayUI.refresh();
   ui.$('handoff-dismiss').click();await flush();
-  assert.deepEqual(answers[2],{offerId:'third',accept:false,billingConfirmed:false});
+  assert.deepEqual(answers[2],{offerId:'third',accept:false,billingConfirmed:false,queueBillingConfirmed:false,queueDigest:null});
   conversation.status='idle';conversation.activeRun=null;conversation.handoffOffer=offer('fourth');await ui.window.relayUI.refresh();
   assert.equal(ui.$('handoff-offer').hidden,true,'An offer shows only while its run works.');
 });

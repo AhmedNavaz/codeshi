@@ -136,6 +136,23 @@ test('composer local runs include text snapshots and reject images before accept
   assert.equal((await f.request('/start',{...selection(metadata,'with-image'),attachments:[image.id]})).status,400); assert.equal(f.c.messages.length,before);
 });
 
+test('continuing locally is the same task: the plan and the task go with it, and a new local prompt starts without them', { skip: scriptCLIs }, async t => {
+  const f = await fixture(t), metadata = (await f.request()).body;
+  const steps = [{ text: 'Read the code', status: 'done' }, { text: 'Write the tests', status: 'active' }];
+  f.broker.record(f.c, { type: 'submission', id: 'cloud-run', task: { id: 'cloud-run', parentRunId: null, relation: null }, requestId: 'cloud', fingerprint: 'cloud', provider: 'codex', mode: f.c.mode, approvalPolicy: 'ask', model: null, transport: 'auto', context: {}, workspaceSignature: f.broker.workspaceSignature, message: { id: 'cloud-message', role: 'user', text: 'Build it', provider: 'codex', runId: 'cloud-run' } });
+  f.broker.record(f.c, { type: 'run_metadata', metadata: { plan: { steps } } });
+  f.broker.record(f.c, { type: 'run_end', status: 'incomplete', errorCategory: 'quota' });
+  assert.equal((await f.request('/start', { ...selection(metadata, 'continue-locally'), continuing: true })).status, 202);
+  assert.deepEqual([f.c.activeRun.relation, f.c.activeRun.taskId, f.c.activeRun.plan.carriedFrom.runId], ['continuation', 'cloud-run', 'cloud-run']);
+  assert.deepEqual(f.c.activeRun.plan.steps, steps);
+  await f.broker.running.done;
+  const turn = f.captures().filter(item => item.method === 'turn/start').at(-1);
+  assert.match(turn.params.input[0].text, /"unfinishedPlan":\[\{"text":"Read the code","status":"done"\},\{"text":"Write the tests","status":"active"\}\]/, 'The local model is told each step.');
+  assert.equal((await f.request('/start', { ...selection(metadata, 'a-new-prompt'), task: 'Something new' })).status, 202);
+  assert.equal(f.c.activeRun.plan, undefined); assert.equal(f.c.activeRun.relation, null);
+  await f.broker.running.done;
+});
+
 test('a local handoff uses the journal and leaves cloud settings, effort and native sessions intact across restart/export', { skip: scriptCLIs }, async t => {
   const f = await fixture(t), metadata = (await f.request()).body, before = { provider: f.c.provider, model: f.c.model, effort: f.c.effort, sessions: structuredClone(f.c.sessions), models: structuredClone(f.c.models) };
   const response = await f.request('/start', selection(metadata)); assert.equal(response.status, 202); await f.broker.running.done;

@@ -23,7 +23,7 @@
       ['file', 'Instructions', instructions.length ? instructions.join(', ') : 'None found'],
       ['pencil', 'Changed files', brief.changedFiles?.length ? String(brief.changedFiles.length) : 'None'],
       ['alert', 'Went wrong', brief.failedAttempts?.length ? plural(brief.failedAttempts.length, 'attempt') : 'Nothing'],
-      ['check', 'Steps left', brief.unfinishedPlan?.length ? String(brief.unfinishedPlan.length) : 'No plan'],
+      ['check', 'Steps left', brief.unfinishedPlan?.length ? String(brief.unfinishedPlan.filter(step => step.status !== 'done').length) : 'No plan'],
     ];
     if (brief.scope?.otherFolders?.length) rows.unshift(['folder', 'Folders', `${brief.scope.folders.join(', ')} (not ${brief.scope.otherFolders.join(', ')})`]);
     host.replaceChildren(...rows.flatMap(([icon, name, value]) => { const mark = node('span', 'brief-item-icon'); mark.dataset.icon = icon; mark.setAttribute('aria-hidden', 'true'); return [mark, node('span', 'brief-item-name', name), node('span', 'brief-item-value', value)]; }));
@@ -62,7 +62,7 @@
       section('Skills', [...(brief.skills?.active || []).map(item => ({ main: item.name, aside: `in use: ${item.reason}` })), ...(brief.skills?.available || []).map(item => ({ main: item.name, aside: 'available' }))], 'No skills enabled'),
       section('Changed so far', (brief.changedFiles || []).map(item => ({ main: `${item.folder}/${item.path}`, aside: item.missing ? 'missing' : item.status || '' })), 'No files changed in this task'),
       section('Went wrong before', (brief.failedAttempts || []).map(item => ({ main: item.what, aside: `${item.how}${item.times ? ` · ${item.times}×` : ''}` })), 'Nothing recorded', true),
-      section('Steps left', (brief.unfinishedPlan || []).map(item => ({ main: item.text, aside: item.status })), 'No plan carried over'),
+      section('The plan so far', (brief.unfinishedPlan || []).map(item => ({ main: item.text, aside: { done: 'Done', active: 'In progress', pending: 'To do' }[item.status] || item.status })), 'No plan carried over'),
     );
     const note = node('p', 'panel-muted brief-dialog-note', `${$('brief-size').textContent ? $('brief-size').textContent + '. ' : ''}${brief.note ? 'Everything here is marked as evidence for the agent to check; your requests take priority over all of it.' : ''}`.trim());
     body.append(note);

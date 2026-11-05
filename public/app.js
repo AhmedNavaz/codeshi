@@ -1019,17 +1019,21 @@
   // The agent's plan above the message box: one line with how many steps are done and the current one, which opens
   // into the checklist. The list stays as the reader left it while the run goes on, and starts closed for a new run.
   function renderPlan() {
-    const run = isRunning() ? state.conversation?.activeRun : null, steps = run?.plan?.steps || [], section = $("run-plan");
+    // The plan belongs to the task, so it stays while the task can still go on: through a handoff, a wait for a reset, or a stop.
+    const c = state.conversation, last = c?.lastRun, running = isRunning(), held = !running && last && last.status !== "complete" && last.plan?.steps?.some(step => step.status !== "done");
+    const run = running ? c?.activeRun : held ? last : null, steps = run?.plan?.steps || [], section = $("run-plan");
     section.hidden = !steps.length;
     if (!steps.length) { state.planSignature = state.planScope = null; return; }
     const scope = JSON.stringify([state.projectId, state.conversation.id, run.id]);
-    const signature = JSON.stringify([scope, steps]);
+    const signature = JSON.stringify([scope, steps, Boolean(held), run.plan.carriedFrom]);
     if (signature === state.planSignature) return;
-    const newRun = scope !== state.planScope;
+    const newRun = scope !== state.planScope && !run.plan.carriedFrom;
     state.planSignature = signature; state.planScope = scope;
     const done = steps.filter(step => step.status === "done").length, current = steps.find(step => step.status === "active") || steps.find(step => step.status === "pending");
-    const complete = done === steps.length, status = complete ? "Complete" : current?.status === "active" ? "In progress" : "Up next";
-    section.dataset.complete = String(complete);
+    const complete = done === steps.length, status = complete ? "Complete" : held ? "Stopped at" : current?.status === "active" ? "In progress" : "Up next";
+    section.dataset.complete = String(complete); section.dataset.held = String(Boolean(held));
+    const from = run.plan.carriedFrom;
+    $("run-plan-from").hidden = !from; $("run-plan-from").textContent = from ? `From ${from.local ? "the local model" : label(from.provider)}` : "";
     $("run-plan-ring").style.setProperty("--progress", String(done / steps.length));
     $("run-plan-count").textContent = `${done} of ${steps.length} done`;
     $("run-plan-current").textContent = complete ? "All steps done" : current?.text || "";
@@ -1060,7 +1064,7 @@
     $("prompt-queue-list").replaceChildren(...queue.map((item, index) => {
       const row = element("li", "prompt-queue-item"), body = element("div", "prompt-queue-body");
       const model = item.model ? window.relayModelPicker?.modelName?.(item.provider, item.model) || item.model : "";
-      const meta = `${label(item.provider)}${model ? ` · ${model}` : ""} · ${item.mode === "read" ? "Read only" : "Can edit files"} · ${item.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}${item.attachments?.length ? ` · ${item.attachments.length} attachment${item.attachments.length === 1 ? "" : "s"}` : ""}`;
+      const meta = `${label(item.provider)}${model ? ` · ${model}` : ""} · ${item.mode === "read" ? "Read only" : "Can edit files"} · ${item.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}${item.attachments?.length ? ` · ${item.attachments.length} attachment${item.attachments.length === 1 ? "" : "s"}` : ""}${item.movedFrom ? ` · Moved from ${label(item.movedFrom)}` : ""}`;
       if (state.queueEditing === item.id) {
         const editor = element("textarea", "prompt-queue-editor"); editor.value = item.text; editor.rows = 3; editor.setAttribute("aria-label", "Edit queued message");
         const save = element("button", "pill-button", "Save"), cancel = element("button", "pill-button", "Cancel"); save.type = cancel.type = "button";
@@ -1109,7 +1113,13 @@
     const charges = offer.to.billingSource !== "subscription";
     $("handoff-billing").hidden = !charges;
     if (charges) $("handoff-billing-text").textContent = offer.to.billingSource === "api" ? `Accept charges: ${label(offer.to.provider)} bills your API account.` : `Accept possible charges: ${label(offer.to.provider)}'s billing could not be confirmed.`;
-    if (section.dataset.offerId !== offer.id) { section.dataset.offerId = offer.id; $("handoff-billing-confirm").checked = false; }
+    // Queued prompts for this agent go along, and the offer says so (#93). Charges for them are their own yes.
+    const queued = offer.queue, moving = queued?.count || 0, plural = count => `${count} queued prompt${count === 1 ? "" : "s"}`;
+    if (moving) $("handoff-detail").textContent += ` ${plural(moving)} ${moving === 1 ? "moves" : "move"} with it, with the same access.`;
+    if (queued?.stays) $("handoff-detail").textContent += ` ${plural(queued.stays)} ${queued.stays === 1 ? "stays" : "stay"} with ${label(offer.from.provider)}, as ${label(offer.to.provider)} can't run ${queued.stays === 1 ? "it" : "them"} with the same access.`;
+    $("handoff-queue-billing").hidden = !queued?.billingRequired;
+    if (queued?.billingRequired) $("handoff-queue-text").textContent = `Also accept charges for ${plural(moving)}. Without this, ${moving === 1 ? "it stays" : "they stay"} with ${label(offer.from.provider)}.`;
+    if (section.dataset.offerId !== offer.id) { section.dataset.offerId = offer.id; $("handoff-billing-confirm").checked = false; $("handoff-queue-confirm").checked = false; }
     $("handoff-accept").disabled = Boolean(state.pending) || charges && !$("handoff-billing-confirm").checked;
     $("handoff-accept").textContent = state.pending === "handoff" ? "Handing off…" : "Hand off";
     $("handoff-dismiss").disabled = Boolean(state.pending);
@@ -1138,7 +1148,7 @@
     const offer = state.conversation?.handoffOffer, id = state.conversation?.id, projectId = state.projectId;
     if (!offer || !id || state.pending) return;
     state.pending = accept ? "handoff" : "dismiss"; renderControls();
-    try { await post(endpoint(id, "handoff"), { offerId: offer.id, accept, billingConfirmed: accept && $("handoff-billing-confirm").checked }, projectId); }
+    try { await post(endpoint(id, "handoff"), { offerId: offer.id, accept, billingConfirmed: accept && $("handoff-billing-confirm").checked, queueBillingConfirmed: accept && $("handoff-queue-confirm").checked, queueDigest: offer.queue?.digest ?? null }, projectId); }
     catch (error) { showNotice(error.message); }
     finally { state.pending = null; await refresh(); }
   }
@@ -1222,6 +1232,9 @@
     // The suggestion names its model too; the menu beside it continues with any agent and model.
     const continuationModel = continuationProvider === state.provider ? state.model : state.conversation?.models?.[continuationProvider];
     const modelLabel = continuationModel ? window.relayModelPicker?.modelName?.(continuationProvider, continuationModel) || continuationModel : "";
+    // Continuing on another agent after a limit is a handoff, so queued prompts for the limited agent go along if they can (#93).
+    const followers = previous?.errorCategory === "quota" && continuationProvider !== previous.provider ? (state.conversation?.queue || []).filter(item => item.provider === previous.provider).length : 0;
+    if (followers) ui.continueText.textContent = `${reason} ${followers} queued prompt${followers === 1 ? "" : "s"} ${connection(continuationProvider).account?.billingSource === "subscription" ? `${followers === 1 ? "moves" : "move"} too` : `${followers === 1 ? "stays" : "stay"} with ${label(previous.provider)}`}.`;
     ui.continueButton.replaceChildren(document.createTextNode(state.pending === "continue" ? "Continuing…" : `Continue with ${label(continuationProvider)}${modelLabel ? ` · ${modelLabel}` : ""} `), element("span", "", "→"));
     $("continue-choose").disabled = busy || otherRunning;
     ui.continueButton.disabled = busy || otherRunning || connection(continuationProvider).blocked;
@@ -1408,7 +1421,7 @@
           if (!catalog.models.some(row => row.id === localChoice.model && row.digest === localChoice.digest)) throw Error('This local model changed or was removed. Choose it again from the model picker.');
           state.retrySubmission.localContext = catalog.context;
         }
-        await post('/api/local-models/start', { model:localChoice.model, digest:localChoice.digest, task:continuing ? 'Continue the unfinished task from the saved conversation. Inspect current files first.' : text, attachments, requestId, context:state.retrySubmission.localContext }, projectId);
+        await post('/api/local-models/start', { model:localChoice.model, digest:localChoice.digest, task:continuing ? 'Continue the unfinished task from the saved conversation. Inspect current files first.' : text, ...(continuing ? { continuing:true } : {}), attachments, requestId, context:state.retrySubmission.localContext }, projectId);
       } else await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
       state.retrySubmission = null;
       window.relayAutomaticReview?.accepted(projectId, automaticReview);

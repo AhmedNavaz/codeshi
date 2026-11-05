@@ -120,7 +120,7 @@ test('accepting stops the run and the destination continues the task from the sh
   assert(!env.c.messages.some(message => message.role === 'error'), 'A handoff is not shown as an error.');
   for (let i = 0; i < 500 && (env.c.queue.length || env.broker.running); i++) { if (env.broker.running) await env.broker.running.done; else await new Promise(resolve => setTimeout(resolve, 10)); }
   assert.equal(env.c.queuePaused, null, 'A handoff is not a stop that pauses the queue.');
-  assert.deepEqual(env.requests().at(-1), ['codex', 'Then write the release notes']);
+  assert.deepEqual(env.requests().at(-1), ['claude', 'Then write the release notes'], 'A prompt for the agent that ran out goes to the one that took over.');
 });
 
 test('a stale offer is refused before anything starts on the destination, and a fresh offer replaces it', { skip: scriptCLIs }, async t => {
@@ -393,4 +393,290 @@ test('an unknown destination can still be offered, but not presented as having r
   await env.broker.handoff.check(run);
   assert.equal(env.c.handoffOffer.to.quota, 'unknown');
   env.release(); await run.done;
+});
+
+// Queued prompts moving with a handoff (#93).
+const queue = (env, text, extra = {}) => env.broker.queueAction(env.c, { action: 'add', text, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', ...extra });
+const named = (env, text) => env.c.queue.find(item => item.text === text);
+
+test('the offer says how many prompts would move and only those for the limited agent do, with their access and the new agent’s model', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  env.c.models.claude = 'claude-sonnet'; env.c.efforts.claude = { 'claude-sonnet': 'high' };
+  queue(env, 'For Codex', { model: 'gpt-old', effort: 'low' }); queue(env, 'Read only', { mode: 'read' }); queue(env, 'For Gemini', { provider: 'gemini', model: 'gemini-one' });
+  await env.broker.handoff.check(run);
+  assert.equal(env.c.handoffOffer.queue.count, 2, 'Only the prompts for the limited agent.');
+  queue(env, 'Added after the offer');
+  assert.equal(env.c.handoffOffer.queue.count, 3, 'An open offer keeps saying what would really move.');
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id, queueDigest: env.c.handoffOffer.queue.digest });
+  const moved = named(env, 'For Codex');
+  assert.deepEqual([moved.provider, moved.model, moved.effort, moved.mode, moved.approvalPolicy, moved.movedFrom], ['claude', 'claude-sonnet', 'high', 'edit', 'ask', 'codex']);
+  assert.deepEqual([named(env, 'Read only').provider, named(env, 'Read only').mode], ['claude', 'read'], 'Read-only stays read-only.');
+  assert.deepEqual([named(env, 'For Gemini').provider, named(env, 'For Gemini').model, named(env, 'For Gemini').movedFrom], ['gemini', 'gemini-one', undefined], 'A prompt for another agent is left alone.');
+  assert.match(notes(env.c).at(-1), /3 queued prompts moved to Claude\.$/);
+  await env.broker.running.done;
+});
+
+test('a moved prompt keeps its place, can be reordered before and after, and the move survives a restart', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  queue(env, 'First'); queue(env, 'Second'); queue(env, 'Third');
+  env.broker.queueAction(env.c, { action: 'move', id: named(env, 'Third').id, index: 0 });
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.handoff.check(run);
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
+  assert.deepEqual(env.c.queue.map(item => item.text), ['Third', 'First', 'Second']);
+  env.broker.queueAction(env.c, { action: 'move', id: named(env, 'Second').id, index: 0 });
+  assert.deepEqual(env.c.queue.map(item => [item.text, item.provider]), [['Second', 'claude'], ['Third', 'claude'], ['First', 'claude']]);
+  await env.broker.running.done;
+  await env.broker.close();
+  const reopened = new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins });
+  t.after(() => reopened.close());
+  const c = reopened.get(env.c.id);
+  assert.deepEqual(c.queue.map(item => [item.text, item.provider, item.movedFrom]), [['Second', 'claude', 'codex'], ['Third', 'claude', 'codex'], ['First', 'claude', 'codex']]);
+});
+
+test('an agent billed per use needs its own yes for the queued prompts, and an earlier yes for the old agent never carries over', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  env.billing.claude = 'api';
+  queue(env, 'Approved for Codex', { billingConfirmed: true });
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.handoff.check(run);
+  assert.equal(env.c.handoffOffer.queue.billingRequired, true);
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id, billingConfirmed: true });
+  assert.deepEqual([named(env, 'Approved for Codex').provider, named(env, 'Approved for Codex').billingConfirmed], ['codex', true], 'Accepting the handoff’s charges does not cover the prompts.');
+  assert.match(notes(env.c).at(-1), /1 queued prompt stays with Codex, because Claude's charges weren't accepted for it\.$/);
+  await env.broker.running.done;
+
+  const second = setup(t), secondRun = await second.start();
+  second.billing.claude = 'api';
+  queue(second, 'Later', { billingConfirmed: false });
+  second.broker.queueAction(second.c, { action: 'pause' });
+  await second.broker.handoff.check(secondRun);
+  await second.broker.acceptHandoff(second.c, { offerId: second.c.handoffOffer.id, billingConfirmed: true, queueBillingConfirmed: true });
+  assert.deepEqual([named(second, 'Later').provider, named(second, 'Later').billingConfirmed], ['claude', true], 'With its own yes, it moves.');
+  await second.broker.running.done;
+
+  // Moving to a subscription: a yes given for the old agent's charges is not kept for anything later.
+  const third = setup(t), thirdRun = await third.start();
+  queue(third, 'Charged before', { billingConfirmed: true });
+  third.broker.queueAction(third.c, { action: 'pause' });
+  await third.broker.handoff.check(thirdRun);
+  await third.broker.acceptHandoff(third.c, { offerId: third.c.handoffOffer.id });
+  assert.deepEqual([named(third, 'Charged before').provider, named(third, 'Charged before').billingConfirmed], ['claude', false]);
+  await third.broker.running.done;
+});
+
+test('a prompt that changed after the offer was accepted is not covered by it, and a stale answer is refused', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  queue(env, 'Shown'); queue(env, 'Will be edited'); queue(env, 'Will gain access', { approvalPolicy: 'ask' });
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.handoff.check(run);
+  const seen = env.c.handoffOffer.queue.digest;
+  queue(env, 'Added while deciding');
+  await assert.rejects(env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id, queueDigest: seen }), /queued prompts changed/, 'The person agreed to the prompts they saw.');
+  assert.equal(env.broker.running, run, 'The agent keeps working.');
+  const offer = env.c.handoffOffer;
+  assert.equal(offer.queue.count, 4);
+  // Accepted, then changed while the old run is stopping.
+  const stop = env.broker.stop.bind(env.broker);
+  env.broker.stop = id => { env.broker.queueAction(env.c, { action: 'update', id: named(env, 'Will be edited').id, text: 'Edited after accepting' }); env.broker.stop = stop; return stop(id); };
+  await env.broker.acceptHandoff(env.c, { offerId: offer.id, queueDigest: offer.queue.digest });
+  assert.equal(named(env, 'Edited after accepting').provider, 'codex', 'What changed stays where it was.');
+  assert.equal(named(env, 'Shown').provider, 'claude');
+  assert.match(notes(env.c).at(-1), /3 queued prompts moved to Claude\. 1 queued prompt changed after the offer, so it stays with Codex\.$/);
+  await env.broker.running.done;
+});
+
+test('routed prompts are routed again for the new agent, and a list that can’t be read falls back to its model', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  env.broker.handoff.models = async () => ({ models: [{ id: 'claude-haiku', supportedEffortLevels: ['low', 'medium'] }, { id: 'claude-opus', supportedEffortLevels: ['low', 'high'] }] });
+  queue(env, 'Fix a typo in the readme', { model: 'gpt-mini', effort: 'low', routing: { mode: 'balanced', reason: 'Light', tier: 'light' } });
+  queue(env, 'Refactor the payment module', { model: 'gpt-max', effort: 'high', routing: { mode: 'balanced', reason: 'Deep', tier: 'deep', escalation: { provider: 'codex', model: 'gpt-max', modelName: 'Max', effort: 'xhigh' } } });
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.handoff.check(run);
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
+  const light = named(env, 'Fix a typo in the readme'), deep = named(env, 'Refactor the payment module');
+  assert.deepEqual([light.provider, light.model, light.effort, light.routing.mode], ['claude', 'claude-haiku', 'low', 'balanced']);
+  assert.deepEqual([deep.provider, deep.model, deep.effort, deep.routing.tier], ['claude', 'claude-opus', 'high', 'deep']);
+  assert.notEqual(deep.routing.escalation?.provider, 'codex', 'Its step up belongs to the new agent too.');
+  assert.match(light.routing.reason, /^Moved at a handoff/);
+  await env.broker.running.done;
+
+  const second = setup(t), run2 = await second.start();
+  second.broker.handoff.models = async () => { throw new Error('offline'); };
+  queue(second, 'Fix a typo', { routing: { mode: 'saving', reason: 'Light', tier: 'light' } });
+  second.broker.queueAction(second.c, { action: 'pause' });
+  await second.broker.handoff.check(run2);
+  await second.broker.acceptHandoff(second.c, { offerId: second.c.handoffOffer.id });
+  assert.deepEqual([named(second, 'Fix a typo').provider, named(second, 'Fix a typo').model], ['claude', null]);
+  await second.broker.running.done;
+});
+
+test('automatic handoff follows the same rules and says so in the conversation', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { preferences: allowed }), run = await env.start();
+  queue(env, 'Next up'); queue(env, 'For Gemini', { provider: 'gemini' });
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.handoff.check(run);
+  await until(() => env.broker.running && env.broker.running !== run, 'the handoff');
+  assert.deepEqual([named(env, 'Next up').provider, named(env, 'For Gemini').provider], ['claude', 'gemini']);
+  assert.match(notes(env.c).at(-1), /so Codeshi handed the task to Claude\. 1 queued prompt moved to Claude\.$/);
+  await env.broker.running.done;
+
+  // At the limit itself, too.
+  const limit = setup(t, { preferences: allowed });
+  limit.usage.codex = 100;
+  const limited = await limit.start();
+  queue(limit, 'After the limit'); limit.broker.queueAction(limit.c, { action: 'pause' });
+  limit.broker.event(limited, { type: 'turn.failed', error: { message: 'You have hit your usage limit.' } });
+  limit.release();
+  await continued(limit, 'claude'); await done(limit);
+  assert.equal(named(limit, 'After the limit').provider, 'claude');
+  assert.match(notes(limit.c).at(-1), /handed the task to Claude\. 1 queued prompt moved to Claude\.$/);
+});
+
+test('continuing with another agent after a limit takes the queued prompts along, if that agent needs no charges accepted', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.usage.codex = 100;
+  const run = await env.start();
+  queue(env, 'Waiting'); env.broker.queueAction(env.c, { action: 'pause' });
+  env.broker.event(run, { type: 'turn.failed', error: { message: 'You have hit your usage limit.' } });
+  env.release(); await done(env);
+  assert.equal(env.c.lastRun.errorCategory, 'quota');
+  await env.broker.continueTask(env.c, { provider: 'claude', mode: 'edit', approvalPolicy: 'ask' });
+  await until(() => named(env, 'Waiting')?.provider === 'claude', 'the prompt to move');
+  assert.match(notes(env.c).at(-1), /1 queued prompt moved to Claude\.$/);
+  await env.broker.running?.done;
+});
+
+test('after a stop between the move and the next prompt, each prompt has one owner and nothing is sent twice', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  queue(env, 'Moved, not sent'); queue(env, 'Sent, outcome unknown');
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.handoff.check(run);
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
+  await env.broker.running.done;
+  // The next prompt's run was saved, and then Codeshi stopped before noting it had started.
+  const sent = named(env, 'Sent, outcome unknown');
+  env.broker.record(env.c, { type: 'submission', id: 'unknown-run', task: { id: 'unknown-run', parentRunId: null, relation: null }, requestId: 'queue-' + sent.id, fingerprint: 'saved', provider: 'claude', mode: 'edit', approvalPolicy: 'ask', model: null, transport: 'auto', context: {}, workspaceSignature: env.broker.workspaceSignature, message: { id: 'unknown-message', role: 'user', text: sent.text, provider: 'claude', runId: 'unknown-run' } });
+  await env.broker.close();
+  const count = () => fs.existsSync(path.join(env.workspace, '.mock-captures.jsonl')) ? captures(env).filter(entry => entry.context.currentRequest === sent.text).length : 0, before = count();
+  const reopened = new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins });
+  t.after(() => reopened.close());
+  const c = reopened.get(env.c.id);
+  assert.deepEqual(c.queue.map(item => [item.text, item.provider]), [['Moved, not sent', 'claude']], 'One owner: the moved prompt waits for the new agent, and the uncertain one has left the queue.');
+  assert(c.messages.some(message => message.role === 'system' && /was being sent when Codeshi stopped, so it wasn't sent again: “Sent, outcome unknown”/.test(message.text)));
+  assert(c.queuePaused, 'After a restart the queue waits for the person.');
+  reopened.queueAction(c, { action: 'resume' });
+  await until(() => !reopened.running && !c.queue.length, 'the queue to finish');
+  assert.equal(count(), before, 'The uncertain prompt is never sent again.');
+});
+
+test('a destination that turned out not to be a subscription refuses a moved prompt, and pauses the queue instead of charging', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  queue(env, 'Moved on a subscription');
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.handoff.check(run);
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
+  assert.equal(named(env, 'Moved on a subscription').billingConfirmed, false, 'The prompt carries no yes to charges, so a run that would be billed can’t start without one.');
+  await env.broker.running.done;
+});
+
+// The task plan across agents (#92).
+const planned = [{ text: 'Read the code', status: 'done' }, { text: 'Write the tests', status: 'active' }, { text: 'Run them', status: 'pending' }];
+const report = (env, run, steps = planned) => env.broker.event(run, { type: 'relay.plan', steps });
+const lastBrief = env => captures(env).at(-1).context.brief;
+
+test('a plan goes with the task at a handoff, with each step’s status and the run it came from', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  report(env, run);
+  assert.deepEqual(env.broker.briefPreview(env.c).brief.unfinishedPlan, planned, 'While the run works, the Brief panel shows its plan.');
+  await env.broker.handoff.check(run);
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
+  const next = env.broker.running;
+  assert.deepEqual(env.c.activeRun.plan.steps, planned);
+  assert.deepEqual(env.c.activeRun.plan.carriedFrom, { runId: run.id, provider: 'codex' });
+  await continued(env, 'claude');
+  assert.deepEqual(lastBrief(env).unfinishedPlan, planned, 'The next agent knows what is done, in progress and left.');
+  assert.match(lastBrief(env).unfinishedPlanNote, /codex last reported.*Check it against the files/s, 'As history to check, not as instructions.');
+  await next.done;
+  assert.deepEqual(env.c.lastRun.plan.steps, planned, 'An agent that reports no plan leaves it as it was.');
+  await env.broker.close();
+  const reopened = new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins });
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.get(env.c.id).lastRun.plan.steps, planned, 'It survives a restart.');
+  assert.deepEqual(reopened.get(env.c.id).lastRun.plan.carriedFrom.provider, 'codex');
+});
+
+test('the next agent’s plan replaces the carried one, and done steps stay done unless it says otherwise', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  report(env, run);
+  await env.broker.handoff.check(run);
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
+  const next = env.broker.running;
+  report(env, next, [{ text: 'Write the tests', status: 'done' }, { text: 'Fix what they find', status: 'active' }]);
+  assert.deepEqual(env.c.activeRun.plan.steps.map(step => [step.text, step.status]), [['Read the code', 'done'], ['Write the tests', 'done'], ['Fix what they find', 'active']], 'A step it left out that was done stays; one that was not done is replaced.');
+  report(env, next, [{ text: 'read the code', status: 'pending' }, { text: 'Fix what they find', status: 'active' }]);
+  assert.deepEqual(env.c.activeRun.plan.steps.map(step => [step.text, step.status]), [['Write the tests', 'done'], ['read the code', 'pending'], ['Fix what they find', 'active']], 'Listing a done step again is reporting otherwise.');
+  await next.done;
+});
+
+test('a plan carries through Continue with another agent and a wait for a reset, but not to a new prompt or once finished', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.usage.codex = 100;
+  const run = await env.start();
+  report(env, run);
+  env.broker.event(run, { type: 'turn.failed', error: { message: 'You have hit your usage limit.' } });
+  env.release(); await done(env);
+  await env.broker.continueTask(env.c, { provider: 'claude', mode: 'edit', approvalPolicy: 'ask' });
+  assert.deepEqual(env.c.activeRun.plan.steps, planned, 'Continue with another agent.');
+  await done(env);
+
+  env.broker.start(env.c, { text: 'Something new', provider: 'claude', mode: 'edit', approvalPolicy: 'ask' });
+  assert.equal(env.c.activeRun.plan, undefined, 'A new prompt does not inherit the old plan.');
+  await env.broker.running.done;
+  assert.equal(captures(env).at(-1).context.brief?.unfinishedPlan, undefined);
+
+  // Continuing after a reset.
+  const waiting = setup(t);
+  waiting.usage.codex = 100;
+  const first = await waiting.start();
+  report(waiting, first);
+  waiting.broker.event(first, { type: 'turn.failed', error: { message: 'You have hit your usage limit.' } });
+  waiting.release(); await done(waiting);
+  waiting.broker.scheduleResume(waiting.c, { providers: ['claude'] });
+  await until(() => waiting.broker.running || !waiting.c.resume, 'the wait to end');
+  assert.deepEqual(waiting.c.activeRun?.plan?.steps, planned, 'Continuing after a reset.');
+  await done(waiting);
+
+  // Nothing left to carry.
+  const finished = setup(t), last = await finished.start();
+  report(finished, last, [{ text: 'All of it', status: 'done' }]);
+  finished.release(); await done(finished);
+  assert.equal(finished.c.lastRun.status, 'complete');
+  await finished.broker.continueTask(finished.c, { provider: 'claude', mode: 'edit', approvalPolicy: 'ask' });
+  assert.equal(finished.c.activeRun.plan, undefined);
+  await done(finished);
+});
+
+test('a plan reported over Gemini’s protocol is carried like any other', { skip: scriptCLIs }, async t => {
+  const gemini = `#!${process.execPath}
+import readline from 'node:readline';
+if(process.argv.includes('--version')){console.log('0.66.0');process.exit(0);}
+const emit=value=>console.log(JSON.stringify({jsonrpc:'2.0',...value}));
+for await(const line of readline.createInterface({input:process.stdin})){const m=JSON.parse(line);
+if(m.method==='initialize')emit({id:m.id,result:{protocolVersion:1}});
+if(m.method==='session/new')emit({id:m.id,result:{sessionId:'native-session'}});
+if(m.method==='session/prompt'){emit({method:'session/update',params:{sessionId:'native-session',update:{sessionUpdate:'plan',entries:[{content:'Gemini step done',status:'completed'},{content:'Gemini step now',status:'in_progress'},{content:'Gemini step later',status:'pending'}]}}});emit({id:m.id,error:{code:429,message:'Quota exceeded for this account.'}});}
+}
+`;
+  const env = setup(t, { preferences: allowed, gemini });
+  env.usage.gemini = 100;
+  reached(env, 'Fix the checkout', 'gemini');
+  await continued(env, 'claude');
+  const wanted = [{ text: 'Gemini step done', status: 'done' }, { text: 'Gemini step now', status: 'active' }, { text: 'Gemini step later', status: 'pending' }];
+  await until(() => captures(env).at(-1).context.brief?.unfinishedPlan, 'the brief');
+  assert.deepEqual(captures(env).at(-1).context.brief.unfinishedPlan, wanted);
+  await done(env);
+  assert.deepEqual(env.c.lastRun.plan.steps, wanted);
+  assert.equal(env.c.lastRun.plan.carriedFrom.provider, 'gemini');
 });

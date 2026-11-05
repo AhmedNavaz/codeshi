@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { continuationRequest } from './context.mjs';
+import { runSteps } from './recap.mjs';
 
 // The task-efficiency ledger (#84): what each task cost and how it ended, worked out from the conversation's journal, so
 // there is no second store to keep in step. It holds counts, times and identities. Prompts and check commands only appear
@@ -169,6 +170,31 @@ export function summarizeTasks(runs) {
       verification: latest?.status === 'passed' ? 'passed' : latest?.status === 'failed' ? 'failed' : 'unverified', latestCheck: latest,
     };
   });
+}
+
+// One result for a task that ran across agents (#94), from what was recorded and with no model call. It only exists once a
+// task has crossed a handoff or a continuation, so a single run reads as it always has. Waiting for a limit to reset falls
+// between runs, so it isn't working time, and tests are the latest result rather than a sum of repeated runs.
+export function taskResult(c) {
+  const taskId = c.lastRun?.taskId;
+  if (!taskId || c.lastRun.status !== 'complete') return null;
+  const runs = (c.runs || []).filter(run => run.taskId === taskId);
+  if (runs.length < 2 || !runs.some(run => run.relation === 'continuation')) return null;
+  const agents = new Map();
+  for (const run of runs) {
+    const key = run.local ? 'local' : run.provider, agent = agents.get(key) || { provider: run.provider, ...(run.local ? { local: true } : {}), runs: [] };
+    agent.runs.push(run); agents.set(key, agent);
+  }
+  const elapsed = run => typeof run.elapsedMs === 'number' ? run.elapsedMs : Math.max(0, Date.parse(run.endedAt) - Date.parse(run.startedAt)) || 0;
+  const checks = runs.map(run => run.check).filter(check => check && ['passed', 'failed'].includes(check.status));
+  return {
+    runs: runs.length, workingMs: runs.reduce((sum, run) => sum + elapsed(run), 0), tests: checks.at(-1)?.status || null,
+    agents: [...agents.values()].map(({ runs: own, ...agent }) => {
+      // A file two runs changed counts once where the steps name it; a snapshot also sees what a command changed.
+      const ids = new Set(own.map(run => run.id)), named = runSteps((c.messages || []).filter(message => ids.has(message.runId))).files.length, seen = own.map(run => run.files).filter(count => typeof count === 'number');
+      return { ...agent, files: seen.length || named ? Math.max(named, ...seen) : null };
+    }),
+  };
 }
 
 // Reads a conversation's journal for the ledger. Streaming text makes up most of a long journal and adds nothing here, so

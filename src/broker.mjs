@@ -12,7 +12,8 @@ import { prepareContext, emptyContext, validateContext, continuationRequest } fr
 import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
-import { readLedger, taskIdentity } from './task-ledger.mjs';
+import { readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
+import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
 import { applyBudgetRecord, TaskBudgets } from './task-budget.mjs';
 import { SkillCatalog } from './skills.mjs';
@@ -223,7 +224,13 @@ export class Broker extends EventEmitter {
     if (run.errorCategory === 'quota' && this.handoff.atLimit(run)) run.limitNotice ||= text;
     else this.message(run.c, 'error', text, run.provider);
   }
-  acceptHandoff(c, input = {}) { return this.handoff.accept(c, { offerId: input.offerId, billingConfirmed: input.billingConfirmed === true }); }
+  acceptHandoff(c, input = {}) { return this.handoff.accept(c, { offerId: input.offerId, billingConfirmed: input.billingConfirmed === true, queueBillingConfirmed: input.queueBillingConfirmed === true, queueDigest: input.queueDigest }); }
+  // Continue with another agent after a limit: the person's own handoff, so queued prompts for the limited agent follow it (#93).
+  async continueTask(c, input = {}) {
+    const previous = c.lastRun, result = this.start(c, { ...input, fresh: true, text: continuationRequest });
+    if (!result.duplicate && previous?.errorCategory === 'quota' && this.running?.provider !== previous.provider) await this.handoff.followContinue(c, previous.provider, this.running).catch(error => console.error('Codeshi could not move the queued prompts:', error.message));
+    return result;
+  }
   dismissHandoff(c, offerId) { this.handoff.dismiss(c, offerId); return this.view(c); }
   // A retry one step up after failed tests, offered instead of started (#12).
   acceptRetry(c, input = {}) { return this.checks.accept(c, input.offerId); }
@@ -257,6 +264,8 @@ export class Broker extends EventEmitter {
     if (record.type === 'queue_update') c.queue = c.queue.map(item => item.id === record.id ? { ...item, text: record.text } : item);
     if (record.type === 'queue_move') { const item = c.queue.find(entry => entry.id === record.id); if (item) { const rest = c.queue.filter(entry => entry !== item); rest.splice(record.index, 0, item); c.queue = rest; } }
     if (record.type === 'queue_remove' || record.type === 'queue_started') c.queue = c.queue.filter(item => item.id !== record.id);
+    // One record, so a restart finds each prompt with one owner: moved or not, never both (#93).
+    if (record.type === 'queue_moved') { const moves = new Map(record.moves.map(move => [move.id, move])); c.queue = c.queue.map(item => { const move = moves.get(item.id); if (!move) return item; const { routing, ...rest } = item; const { id, ...fields } = move; return { ...rest, ...(routing && !('routing' in fields) ? { routing } : {}), ...fields }; }); }
     if (record.type === 'queue_pause') c.queuePaused = { reason: record.reason, at: record.at };
     if (record.type === 'queue_resume') c.queuePaused = null;
     if (record.type === 'resume_end' && c.resume?.id === record.id) { c.resume = null; c.resumeEnded = { id: record.id, outcome: record.outcome, provider: record.provider || null, at: record.at }; }
@@ -291,13 +300,14 @@ export class Broker extends EventEmitter {
       c.requests[record.requestId] = { runId: record.id, requestId: record.requestId, fingerprint: record.fingerprint };
       c.activeRun = { id: record.id, provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.effectiveTransport || record.transport, baseline: record.baseline, context: record.context, ...(record.local ? { connection: 'local', local: record.local } : {}), ...(record.review ? { purpose: 'review', reviewId: record.id } : {}), ...(record.routing ? { routing: record.routing } : {}), ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building' } } : {}), effort: record.effort ?? null, phase: 'starting', lastEventAt: record.at, toolCount: 0, startedAt: record.at }; c.status = 'running';
       if (record.task) Object.assign(c.activeRun, { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation });
+      if (record.plan) c.activeRun.plan = record.plan;
     }
     if (record.type === 'background_review') { c.reviews = [record.review, ...c.reviews].slice(0, 10); c.reviewRequests[record.review.requestId] = { reviewId: record.review.id, requestId: record.review.requestId, fingerprint: record.review.fingerprint }; }
     if (record.type === 'review_process') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, { pid: record.pid, pidStart: record.pidStart }); }
     if (record.type === 'review_result') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, record.result, { endedAt: record.at }); }
     if (record.type === 'title') c.title = record.title;
     // Checkpoints (#20): a run's folders saved before and after it, and the undos made from them.
-    if (record.type === 'run_snapshot') { c.snapshots ||= {}; const saved = c.snapshots[record.runId] ||= {}; saved[record.phase] = { folders: record.folders, at: record.at }; if (record.phase === 'after') saved.files = record.files || 0; }
+    if (record.type === 'run_snapshot') { c.snapshots ||= {}; const saved = c.snapshots[record.runId] ||= {}; saved[record.phase] = { folders: record.folders, at: record.at }; if (record.phase === 'after') { saved.files = record.files || 0; const run = c.runs?.findLast(item => item.id === record.runId); if (run) run.files = saved.files; } }
     if (record.type === 'rewind') c.rewinds = [...(c.rewinds || []), { id: record.id, target: record.target, runId: record.runId, folders: record.folders, counts: record.counts, left: record.left || [], at: record.at }];
     if (record.type === 'snapshot_expired') { for (const id of record.runIds || []) delete c.snapshots?.[id]; const gone = new Set(record.rewindIds || []); c.rewinds = (c.rewinds || []).filter(item => !gone.has(item.id)); }
     if (record.type === 'message') c.messages.push({ ...record.message, seq: record.seq });
@@ -325,7 +335,7 @@ export class Broker extends EventEmitter {
     }
     if (record.type === 'run_end') {
       const run = c.runs?.findLast(item => item.id === c.lastRun?.id && !item.endedAt);
-      if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at });
+      if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at, ...(typeof c.lastRun?.elapsedMs === 'number' ? { elapsedMs: c.lastRun.elapsedMs } : {}) });
     }
     if (record.type === 'automatic_review_phase') {
       for (const run of [c.activeRun, c.lastRun, ...c.runs]) if (run?.id === record.runId && run.automaticReview) Object.assign(run.automaticReview, record.phase);
@@ -411,7 +421,7 @@ export class Broker extends EventEmitter {
   view(c, { since = null } = {}) {
     const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
-    return { ...visible, cursor: records, ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
+    return { ...visible, cursor: records, ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
 
   list() {
@@ -557,6 +567,8 @@ export class Broker extends EventEmitter {
     // The one place every run starts from, so nothing gets past the task's limits (#87). A request already accepted returned above.
     const runId = randomUUID(), task = taskIdentity(c, { runId, text, retryOf, review });
     this.budget.assertCanStart(c, { task, provider, model, local: Boolean(local) });
+    // A task that continues keeps its plan (#92), and a new prompt starts without one.
+    const plan = task.relation === 'continuation' ? carriedPlan(c.lastRun) : null;
     if (automaticReview !== null) {
       if (review || local || resume || queued || retryOf || !this.automaticReviews || this.automaticReviews.closed || this.backgroundReview) throw Object.assign(new Error('Preview automatic review for a new coding prompt after the current review finishes.'), { status: 409 });
       automaticReview = validateAutomaticReview(this, c, automaticReview, { text, provider, model, mode, approvalPolicy, attachments: attachmentIds });
@@ -596,7 +608,7 @@ export class Broker extends EventEmitter {
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
-      this.record(c, { type: 'submission', id: runId, task, previousProvider: c.lastRun?.provider || null, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
+      this.record(c, { type: 'submission', id: runId, task, ...(plan ? { plan } : {}), previousProvider: c.lastRun?.provider || null, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
         ...(local ? { local } : {}), ...(review ? { review } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
         ...(automaticReview ? { automaticReview } : {}),
@@ -770,7 +782,7 @@ export class Broker extends EventEmitter {
     if (event.type === 'relay.plan') {
       const steps = (Array.isArray(event.steps) ? event.steps : []).filter(step => typeof step?.text === 'string' && step.text.trim()).slice(0, 50)
         .map(step => ({ text: step.text.trim().slice(0, 300), status: ['done', 'active'].includes(step.status) ? step.status : 'pending' }));
-      this.record(c, { type: 'run_metadata', metadata: { plan: { steps, explanation: typeof event.explanation === 'string' ? event.explanation.slice(0, 500) : null, updatedAt: new Date().toISOString() } } });
+      this.record(c, { type: 'run_metadata', metadata: { plan: { steps: reportedPlan(c.activeRun?.plan, steps), explanation: typeof event.explanation === 'string' ? event.explanation.slice(0, 500) : null, updatedAt: new Date().toISOString(), ...(c.activeRun?.plan?.carriedFrom ? { carriedFrom: c.activeRun.plan.carriedFrom } : {}) } } });
       return;
     }
     if (event.type === 'relay.delta') { const id = `${run.id}:${event.id}`; const existing = c.messages.find(m => m.id === id); this.message(c, 'assistant', (existing?.text || '') + event.text, provider, id, 'streaming'); return; }
