@@ -94,6 +94,16 @@
 
   const remember = value => { try { localStorage.setItem(PANEL_KEY, value); } catch { /* The panel choice is a convenience. */ } };
   const preferred = () => { try { return localStorage.getItem(PANEL_KEY) || 'agents'; } catch { return 'agents'; } };
+  // Plan usage lists Ollama when it has models downloaded (#99). This only reads what's installed: nothing is downloaded and
+  // no model runs. With no Ollama there's simply no row.
+  let localRequest = 0;
+  async function loadLocalRow() {
+    const row = $('ollama-status'), projectId = api.getState().projectId, request = ++localRequest;
+    if (!row) return;
+    if (!projectId) { row.hidden = true; return; }
+    try { const result = await api.api('/api/local-models', {}, projectId); if (request === localRequest) row.hidden = !(result.models?.length || result.excluded); }
+    catch { if (request === localRequest) row.hidden = true; }
+  }
   // Opening the panel; it shares the right-hand side with Git activity and reviews.
   function setOpen(open, section = null, keep = true) {
     panel.hidden = !open; button.setAttribute('aria-expanded', String(open));
@@ -104,6 +114,7 @@
       window.relayReviews?.closePanel?.();
       window.relayBrief?.close(); window.relayTasks?.close();
       loadPreferences();
+      loadLocalRow();
       loadTestCommand();
       render();
       if (section) { const target = $(`agents-${section}`); target?.scrollIntoView?.({ block: 'start' }); target?.classList.add('flash'); setTimeout(() => target?.classList.remove('flash'), 1200); }

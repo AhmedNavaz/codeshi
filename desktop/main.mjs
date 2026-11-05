@@ -16,7 +16,7 @@ import os from 'node:os';
 import http from 'node:http';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
-import {statusSnapshot,statusTitle,statusMenu} from './status.mjs';
+import {runningEdit,statusSnapshot,statusTitle,statusMenu} from './status.mjs';
 import {alertPlan} from '../src/alerts.mjs';
 import {createOverlay} from './overlay.mjs';
 import {closeWithin,writeShutdownLog} from './shutdown.mjs';
@@ -148,6 +148,8 @@ else {
     preview=createPreview({BaseWindow,WebContentsView,session,ipcMain,shell,root,background:()=>appearance.background(),
       folders:id=>{try{return id?relay.registry.get(id).folders.map(folder=>({name:folder.displayName||folder.name,path:folder.path})):[];}catch{return [];}},
       onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image});}});
+    // The preview's toolbar follows the edits in the workspace it shows (#102).
+    relay.registry.on('update',({projectId})=>{if(preview?.projectId&&preview.projectId===projectId)preview.showEdit(runningEdit(relay.registry,projectId));});
     ipcMain.handle('relay:preview:open',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const project=relay.registry.get(String(input?.projectId||''));return preview.open({projectId:project.id,url:input?.url,workspace:project.name});});
     // Several folders can be chosen at once; the page adds every one of them.
     ipcMain.handle('relay:pick-folder',async event=>{if(!trusted(event))throw Error('Untrusted renderer');const choice=await dialog.showOpenDialog(win,{properties:['openDirectory','multiSelections'],message:'Choose one or more project folders. Hold ⌘ to select several.'});return choice.canceled||!choice.filePaths.length?null:choice.filePaths;});

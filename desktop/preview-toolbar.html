@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-BFKtYDs6kPwhjUtACTEBF9MKURJM1KGf8EhgR3jlarc='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-LVKpDSsa+AXbwnjgSZQ9Wka5zMqw+eZ4obtZrc5rPPk='">
 <title>Preview toolbar</title>
 <style>
   /* Codeshi's Paper and Ink colours, as in public/editor-theme.css. */
@@ -22,6 +22,11 @@
   #pick { flex: none; padding: 0 12px; border-radius: 14px; background: var(--accent); color: var(--on-accent); font-weight: 500; }
   #pick:hover:enabled { background: var(--accent-strong); color: var(--on-accent); }
   #pick[aria-pressed="true"] { background: var(--hover); color: var(--text); box-shadow: inset 0 0 0 1.5px var(--accent); }
+  #edit { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  #edit:empty { display: none; }
+  #edit bdi { direction: ltr; }
+  #edit .added { color: var(--success); }
+  #edit .removed { color: var(--danger); }
   #status { display: flex; align-items: center; gap: 6px; flex: none; max-width: 340px; overflow: hidden; color: var(--muted); white-space: nowrap; }
   #status:empty { display: none; }
   #status[data-kind="error"] { color: var(--danger); white-space: normal; max-width: 420px; line-height: 1.25; font-size: 11.5px; }
@@ -35,6 +40,7 @@
   <button id="reload" class="icon" type="button" aria-label="Reload" title="Reload"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
   <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Local address" />
   <span id="workspace" title="Picks go to this workspace's message"></span>
+  <span id="edit" role="status" aria-live="off"></span>
   <span id="status" role="status" aria-live="polite"></span>
   <button id="pick" type="button" aria-pressed="false" title="Pick an element to change (Esc stops)"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg><span id="pick-label">Pick element</span></button>
   <button id="open-external" class="icon" type="button" aria-label="Open in browser" title="Open in your browser"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M18 14v4a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18V7.5A1.5 1.5 0 0 1 5.5 6H10"/></svg></button>
@@ -59,6 +65,17 @@
   });
   bridge.onPicked(() => status('picked', 'Added to your message', true));
   bridge.onError(message => status('error', message));
+  // The latest edit stays a few seconds after the run ends, so the last change can be seen landing.
+  let editTimer = null;
+  bridge.onEdit(edit => {
+    clearTimeout(editTimer);
+    if (!edit) { editTimer = setTimeout(() => $('edit').replaceChildren(), 6000); return; }
+    const row = document.createElement('bdi'), part = (text, cls) => { const value = document.createElement('span'); value.textContent = text; if (cls) value.className = cls; return value; };
+    row.append(part('Edit ' + edit.path));
+    if (edit.added) row.append(part(' +' + edit.added, 'added'));
+    if (edit.removed) row.append(part(' −' + edit.removed, 'removed'));
+    $('edit').replaceChildren(row);
+  });
   for (const action of ['back', 'forward', 'reload', 'pick']) $(action).addEventListener('click', () => bridge.act(action));
   $('open-external').addEventListener('click', () => bridge.act('open-external'));
   $('address').addEventListener('focus', () => { editing = true; $('address').select(); });

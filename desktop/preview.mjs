@@ -159,7 +159,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     contents.on('did-navigate', () => { picking = false; });
     contents.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame && code !== -3) toToolbar('preview:error', `${url} could not load (${description}). Is the dev server running?`); });
     win.on('resize', layout); layout();
-    win.on('closed', () => { win = toolbar = page = null; picking = false; });
+    win.on('closed', () => { win = toolbar = page = null; picking = false; lastEdit = null; });
   }
   async function open({ projectId: id = null, url, workspace: name = '' }) {
     const href = previewURL(url);
@@ -216,7 +216,16 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   const onCancelled = event => { if (own(event, page)) { picking = false; sync(); } };
   ipcMain.on('preview:toolbar', onToolbar); ipcMain.on('preview:picked', onPicked); ipcMain.on('preview:pick-cancelled', onCancelled);
 
+  // Shows the latest edit in the previewed workspace in the trusted toolbar, never in the page: a file name and line counts only.
+  let lastEdit = null;
+  function showEdit(value) {
+    const clean = value?.path ? { path: String(value.path).slice(-200), added: Math.max(0, Number(value.added) || 0), removed: Math.max(0, Number(value.removed) || 0) } : null;
+    if (JSON.stringify(clean) === JSON.stringify(lastEdit)) return;
+    lastEdit = clean; toToolbar('preview:edit', clean);
+  }
+
   return {
+    showEdit, get projectId() { return alive(toolbar) ? projectId : null; },
     open, setPicking, close: () => { if (win && !win.isDestroyed()) win.close(); },
     dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); if (win && !win.isDestroyed()) win.destroy(); win = null; },
     get page() { return page; }, get picking() { return picking; },

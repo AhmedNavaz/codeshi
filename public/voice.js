@@ -22,6 +22,8 @@
   function show(text, actions = [], state = '') {
     status.hidden = !text; status.dataset.state = state;
     $('voice-status-text').textContent = text || '';
+    // Where speech goes matters most while the microphone is on. It sits inside the status, so a screen reader hears it too.
+    if ($('voice-status-where')) $('voice-status-where').hidden = state !== 'listening';
     $('voice-status-actions').replaceChildren(...actions.map(([label, handler]) => { const action = node('button', label, 'text-link'); action.type = 'button'; action.addEventListener('click', handler); return action; }));
   }
   function render() {
@@ -149,18 +151,28 @@
   }
 
   const synth = () => window.speechSynthesis && typeof window.SpeechSynthesisUtterance === 'function' ? window.speechSynthesis : null;
-  function speak(text, label = 'Reading the summary aloud') {
-    const speech = synth(); if (!speech || !text) return;
+  // Speaks one text, or several in turn. With several, onPart says which is being read, so the page can follow along, and
+  // gets null when reading ends or is stopped (#103). Stopping cancels the rest, whose ends then mean nothing.
+  let reading = 0, finishReading = null;
+  function speak(text, label = 'Reading the summary aloud', { onPart = null } = {}) {
+    const speech = synth(), parts = (Array.isArray(text) ? text : [text]).filter(Boolean); if (!speech || !parts.length) return;
+    finishReading?.();
     speech.cancel();
-    const utterance = new window.SpeechSynthesisUtterance(text);
-    const voice = speech.getVoices?.().find(item => item.voiceURI === prefs.voice);
-    if (voice) utterance.voice = voice;
-    utterance.rate = Number(prefs.rate) || 1;
-    utterance.onend = utterance.onerror = () => { speaking = false; if (status.dataset.state === 'speaking') show(''); };
+    const turn = ++reading, voice = speech.getVoices?.().find(item => item.voiceURI === prefs.voice);
+    const finish = () => { if (finishReading !== finish) return; finishReading = null; speaking = false; if (status.dataset.state === 'speaking') show(''); onPart?.(null); };
+    finishReading = finish;
     speaking = true; show(label, [['Stop', stopSpeaking]], 'speaking');
-    speech.speak(utterance);
+    parts.forEach((part, index) => {
+      const utterance = new window.SpeechSynthesisUtterance(part);
+      if (voice) utterance.voice = voice;
+      utterance.rate = Number(prefs.rate) || 1;
+      utterance.onstart = () => { if (turn === reading) onPart?.(index); };
+      utterance.onend = () => { if (turn === reading && index === parts.length - 1) finish(); };
+      utterance.onerror = () => { if (turn === reading) finish(); };
+      speech.speak(utterance);
+    });
   }
-  function stopSpeaking() { if (!speaking) return; speaking = false; synth()?.cancel(); if (status.dataset.state === 'speaking') show(''); }
+  function stopSpeaking() { if (!speaking) return; finishReading?.(); reading++; synth()?.cancel(); }
 
   // A message sent from a voice draft marks the run it starts; that run's summary is read aloud when it finishes.
   $('composer')?.addEventListener('submit', () => { if (voiceDraft && input.value.trim()) awaitingRun = true; voiceDraft = false; cancelCountdown(); if (status.dataset.state === 'countdown') show(''); }, true);

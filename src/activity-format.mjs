@@ -57,6 +57,24 @@ export function diffCounts(diff, kind) {
   return { added, removed };
 }
 // Codex reports a kind as "add", "delete" or "update", or as { type, move_path } with the file's diff. Each change is
+// The latest file a run's steps edited, for the preview's toolbar (#102): the file and its line counts, never its contents.
+export function latestEdit(messages = [], folders = []) {
+  const relative = file => { for (const folder of folders) if (folder && file.startsWith(`${folder}/`)) return file.slice(folder.length + 1); return file.startsWith('/') ? file.split('/').pop() : file; };
+  const found = (file, counts) => ({ path: relative(String(file)), added: counts?.added || 0, removed: counts?.removed || 0 });
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role !== 'activity') continue;
+    const text = String(message.text || '');
+    if (text.startsWith('File changes:')) {
+      try { const changes = JSON.parse(text.slice('File changes:'.length)), last = changes.findLast?.(change => change?.path || change?.file); if (last) return found(last.path || last.file, last); } catch { /* A step that can't be read says nothing. */ }
+      continue;
+    }
+    const tool = text.match(/^([A-Za-z_][\w-]*)\n(\{.*\})/);
+    if (!tool || !['Edit', 'MultiEdit', 'Write', 'edit_file', 'write_file'].includes(tool[1])) continue;
+    try { const input = JSON.parse(tool[2]), file = input.file_path || input.path; if (file) return found(file, input.lineCounts || toolCounts(tool[1], input)); } catch { /* As above. */ }
+  }
+  return null;
+}
 // kept as its path, what happened to it, where it moved and its line counts, without the diff itself.
 export function fileChanges(changes) {
   return (Array.isArray(changes) ? changes : []).slice(0, 200).map(change => {

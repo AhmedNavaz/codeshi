@@ -16,5 +16,8 @@
 .recap-workspace li[data-kind="done"]::before { background: var(--success); }
 .recap-workspace li[data-kind="stopped"]::before, .recap-workspace li[data-kind="approval"]::before { background: var(--warning); }
 .recap-workspace li[data-kind="working"]::before { background: var(--link); }
+.recap-workspace li { border-radius: 4px; transition: background .15s; }
+/* The row being read aloud. */
+.recap-workspace li.reading { background: var(--hover); box-shadow: -3px 0 0 var(--bg), 3px 0 0 var(--bg), inset 2px 0 0 var(--link); }
 .recap-text { color: var(--text); overflow-wrap: anywhere; }
 .recap-detail { color: var(--faint); font-size: 11.5px; }

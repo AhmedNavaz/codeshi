@@ -223,7 +223,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   // A stand-in for the system's speech synthesis: it records what would be spoken.
   if(voiceUI){
     window.SpeechSynthesisUtterance=class{constructor(text){this.text=text;}};
-    window.speechSynthesis={speak:utterance=>spoken.push(utterance.text),cancel(){},getVoices:()=>[]};
+    window.speechSynthesis={utterances:[],speak(utterance){spoken.push(utterance.text);this.utterances.push(utterance);},cancel(){},getVoices:()=>[]};
     vm.runInContext(fs.readFileSync(new URL('../public/voice.js',import.meta.url),'utf8'),context,{filename:'public/voice.js'});
   }
   // A test can move the page's clock, for behaviour that depends on how long you were away.
@@ -1363,6 +1363,50 @@ test('a draft typed while review fixes are being prepared stays, with the fix re
   const gate = deferred(); ui.setIntercept((request, next) => request.path.endsWith('/prepare-fix') ? gate.promise : next());
   ui.$('prepare-review-fix').click(); ui.$('message-input').value = 'A newly typed draft'; gate.resolve(response({ provider: 'codex', text: 'Replace the draft' })); await flush();
   assert.equal(ui.$('message-input').value, 'A newly typed draft\n\nReplace the draft', 'Text typed while it was being prepared stays too.'); assert.equal(ui.$('review-error').hidden, true);
+});
+
+test('the moment an agent reaches its limit stands out, and other errors and handoffs stay plain', async () => {
+  const ui = await browser(), conversation = ui.canonical.get('project-one'), row = id => ui.$('message-' + id);
+  conversation.runs = [{ id: 'limited', provider: 'codex', errorCategory: 'quota' }, { id: 'broken', provider: 'codex', errorCategory: 'protocol' }];
+  conversation.messages.push(
+    { id: 'handed', role: 'system', text: 'Codex reached its usage limit, which resets Thu 3:00 PM, so Codeshi handed the task to Claude.', createdAt: '2020-01-01T00:00:00.000Z' },
+    { id: 'quota', role: 'error', runId: 'limited', text: 'You have hit your usage limit.', createdAt: new Date().toISOString() },
+    { id: 'plain', role: 'system', text: 'Gemini reached its usage limit, so Codeshi handed the task to Claude.' },
+    { id: 'wait', role: 'system', text: 'Claude reached its usage limit, and no other agent has room, so the task continues at the first reset.' },
+    { id: 'quota-again', role: 'error', runId: 'limited', text: 'You have hit your usage limit. Your conversation is saved.' },
+    { id: 'other', role: 'error', runId: 'broken', text: 'The connection dropped.' },
+    { id: 'close', role: 'system', text: 'Codex was close to its usage limit, so you handed the task to Claude.' });
+  await ui.window.relayUI.refresh();
+  assert.equal(row('handed').className, 'limit-moment', 'An old one is shown settled, with no animation.');
+  assert.equal(row('handed').querySelector('.limit-moment-text').textContent, 'Codex reached its usage limit');
+  assert.equal(row('handed').querySelector('.limit-moment-next').textContent, 'Resets Thu 3:00 PM, so Codeshi handed the task to Claude.');
+  assert.equal(row('quota').classList.contains('stamping'), true, 'A new one plays.');
+  assert.equal(row('quota').querySelector('.limit-moment-next').textContent, 'You have hit your usage limit.');
+  assert.equal(row('plain').querySelector('.limit-moment-next').textContent, 'Codeshi handed the task to Claude.');
+  assert.equal(row('wait').querySelector('.limit-moment-next').textContent, 'No other agent has room, so the task continues at the first reset.');
+  assert.equal(row('quota-again').className, 'message-error', 'Real agents say it twice, and it is one moment.');
+  assert.equal(row('other').className, 'message-error'); assert.equal(row('close').className, 'message-system', 'Handing off before the limit is not this moment.');
+});
+
+test('Plan usage marks the agent that is working, not the one selected, and lists Ollama only when it has models', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true }), conversation = ui.canonical.get('project-one'), working = () => ['codex', 'claude', 'gemini', 'ollama'].filter(name => !ui.$(name + '-working').hidden);
+  let catalog = { models: [{ id: 'llama3' }], excluded: 0 }; const asked = [];
+  ui.setIntercept((request, next) => { if (request.path === '/api/local-models') { asked.push(request.method); if (catalog) return response(catalog); return response({ error: 'Ollama is not running.' }, 502); } return next(); });
+  await ui.window.relayUI.refresh(); assert.deepEqual(working(), [], 'With nothing running, no row says Working.');
+  Object.assign(conversation, { status: 'running', provider: 'claude', activeRun: { id: 'one', provider: 'codex', startedAt: new Date().toISOString() } });
+  await ui.window.relayUI.refresh(); assert.deepEqual(working(), ['codex'], 'Even with another agent selected.');
+  Object.assign(conversation, { activeRun: { id: 'two', provider: 'claude', startedAt: new Date().toISOString() } });
+  await ui.window.relayUI.refresh(); assert.deepEqual(working(), ['claude'], 'The mark moves at a handoff.');
+  Object.assign(conversation, { activeRun: { id: 'three', provider: 'codex', connection: 'local', startedAt: new Date().toISOString() } });
+  await ui.window.relayUI.refresh(); assert.deepEqual(working(), ['ollama'], 'A local run is not Codex working.');
+  Object.assign(conversation, { status: 'complete', activeRun: null }); await ui.window.relayUI.refresh(); assert.deepEqual(working(), []);
+  ui.window.relayAgents.close(); ui.window.relayAgents.open(); await flush();
+  assert.equal(ui.$('ollama-status').hidden, false);
+  const row = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').match(/<div id="ollama-status"[\s\S]*?<\/div>/)[0];
+  assert.match(row, /Ollama/); assert.match(row, /Local models · no limit/); assert.doesNotMatch(row, /usage-meter|usage-bar/, 'No usage bar.');
+  assert(asked.length && asked.every(method => method === 'GET'), 'Only reads what is installed: nothing starts or downloads.');
+  catalog = null; ui.window.relayAgents.close(); ui.window.relayAgents.open(); await flush(); assert.equal(ui.$('ollama-status').hidden, true, 'Without Ollama there is no row.'); assert.equal(ui.$('notice').hidden, true, 'And no error.');
+  catalog = { models: [], excluded: 0 }; ui.window.relayAgents.close(); ui.window.relayAgents.open(); await flush(); assert.equal(ui.$('ollama-status').hidden, true, 'Or with nothing downloaded.');
 });
 
 test('attachments stay with their workspace and accepted-send retry preserves attachment identity',async()=>{
@@ -3094,6 +3138,8 @@ test('voice input fills the message box as you speak, Esc cancels it, and a run 
   send(stream(), 'ready');
   assert.equal(mic.getAttribute('aria-pressed'), 'true');
   assert.match(ui.$('voice-status-text').textContent, /Listening/);
+  assert.equal(ui.$('voice-status-where').hidden, false);
+  assert.match(fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8'), /<div id="voice-status"[^>]*role="status"[^>]*>(?:(?!<\/div>).)*<span id="voice-status-where"[^>]*>On this Mac<\/span>/, 'Inside the status, so a screen reader hears it.');
   send(stream(), 'partial', { text: 'the header' });
   assert.equal(input.value, 'Fix the header');
   mic.click(); await flush();
@@ -3151,8 +3197,18 @@ test('coming back after two minutes or more shows what ran, changed and is waiti
     ['waiting', 'Waiting for a usage limit to reset; it continues with Claude and Codex'],
     ['git', '3 uncommitted changes in Git'],
   ]);
+  const spokenBefore = ui.spoken.length;
   ui.findButton('Read aloud').click();
-  assert.equal(ui.spoken.at(-1), 'While you were away. In Other workspace: Claude finished “Add promo codes to checkout”, 3 min, changed checkout.js and promo.js, ran the tests. Codex stopped at a usage limit on “Refactor the payment module”, 14 min. 1 approval waiting for you. Waiting for a usage limit to reset; it continues with Claude and Codex.');
+  const utterances = ui.window.speechSynthesis.utterances.slice(spokenBefore), rows = panel.querySelectorAll('li'), reading = () => rows.map((row, index) => row.classList.contains('reading') ? index : -1).filter(index => index >= 0);
+  utterances[1].onstart(); assert.deepEqual(reading(), [0], 'The row being read is highlighted.');
+  utterances[0].onend(); assert.equal(ui.$('voice-status').dataset.state, 'speaking');
+  utterances[2].onstart(); assert.deepEqual(reading(), [1], 'The highlight moves as reading continues.');
+  utterances.at(-1).onstart(); utterances.at(-1).onend(); assert.deepEqual(reading(), [], 'It clears when reading ends.'); assert.equal(ui.$('voice-status').dataset.state, '');
+  ui.findButton('Read aloud').click(); const again = ui.window.speechSynthesis.utterances.slice(-utterances.length);
+  again[1].onstart(); assert.deepEqual(reading(), [0]);
+  ui.$('voice-status-actions').children[0].click(); assert.deepEqual(reading(), [], 'It clears when reading is stopped.');
+  again[2].onstart(); assert.deepEqual(reading(), [], 'What was cancelled can not bring it back.');
+  assert.equal(ui.spoken.slice(spokenBefore, spokenBefore + utterances.length).join(' '), 'While you were away. In Other workspace: Claude finished “Add promo codes to checkout”, 3 min, changed checkout.js and promo.js, ran the tests. Codex stopped at a usage limit on “Refactor the payment module”, 14 min. 1 approval waiting for you. Waiting for a usage limit to reset; it continues with Claude and Codex.');
   panel.querySelector('.recap-name').click(); await flush();
   assert.equal(panel.hidden, true);
   assert.equal(ui.state().projectId, 'project-two', 'A workspace in the recap opens with one click.');

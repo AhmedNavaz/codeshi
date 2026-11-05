@@ -542,6 +542,29 @@
 
   // Each kind of step has its colour: reading and searching, running, changing, adding and removing files, the web,
   // and other agents. Approvals, errors and tests keep their own.
+  // The moment an agent reaches its usage limit reads as one (#96): what happened, large and struck through under the seal,
+  // then what happens next. It only plays once; a redraw or a restart shows it settled.
+  const stampedLimits = new Set();
+  function limitMoment(message) {
+    if (!["error", "system"].includes(message.role)) return null;
+    const system = message.role === "system" ? message.text?.match(/^(Codex|Claude|Gemini) reached its usage limit(.*)$/s) : null;
+    const run = message.role === "error" && message.runId ? state.conversation?.runs?.find(item => item.id === message.runId) : null;
+    if (!system && run?.errorCategory !== "quota") return null;
+    // An agent can say it more than once in a run; the moment is the first, and the rest read as ordinary errors.
+    if (!system && state.conversation.messages.find(item => item.role === "error" && item.runId === message.runId)?.id !== message.id) return null;
+    const who = system ? system[1] : label(run.provider), rest = system ? system[2].replace(/^,\s*/, "").replace(/^which resets/, "resets").replace(/^(?:so|and)\s+/, "").replace(/^(.)/, first => first.toUpperCase()) : message.text || "";
+    const node = element("div", "limit-moment"), line = element("p", "limit-moment-line");
+    line.append(element("span", "limit-moment-text", `${who} reached its usage limit`));
+    const seal = element("span", "limit-moment-seal"); seal.setAttribute("aria-hidden", "true"); line.append(seal);
+    node.append(line); if (rest) node.append(element("p", "limit-moment-next", rest));
+    node.setAttribute("role", "note");
+    if (message.id) node.id = "message-" + message.id;
+    const fresh = Date.now() - Date.parse(message.createdAt || 0) < 8000;
+    if (fresh && !stampedLimits.has(message.id)) node.classList.add("stamping");
+    stampedLimits.add(message.id);
+    return node;
+  }
+
   const STEP_TONES = { read: "read", search: "read", command: "run", edit: "edit", create: "add", delete: "delete", web: "web", agent: "agent" };
   const CHANGES = { add: "Added", delete: "Deleted", update: "Changed" };
   // The files a step changed, one per line: the folder, the file's name, then its added and removed lines when known.
@@ -616,6 +639,8 @@
   }
 
   function renderMessage(message) {
+    const moment = limitMoment(message);
+    if (moment) return moment;
     if (message.role === "error") {
       const error = element("div", "message-error");
       error.append(element("span", "message-error-text", message.text || "The assistant stopped before finishing."));

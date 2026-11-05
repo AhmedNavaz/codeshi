@@ -364,8 +364,12 @@
   }
   function renderUsage() {
     const state = api.getState();
+    // The agent that's really working, which can differ from the one selected for the next message (#98).
+    const active = state.conversation?.status === 'running' ? state.conversation.activeRun : null, workingOn = active ? active.connection === 'local' ? 'local' : active.provider : null;
+    if ($('ollama-working')) $('ollama-working').hidden = workingOn !== 'local';
     for (const provider of ['codex', 'claude', 'gemini']) {
       const meter = $(`${provider}-usage`), rows = usageWindows(provider);
+      if ($(`${provider}-working`)) $(`${provider}-working`).hidden = workingOn !== provider;
       meter.closest('.provider-status')?.classList.toggle('selected', state.provider === provider);
       const tightest = rows.reduce((low, row) => !low || remaining(row) < remaining(low) ? row : low, null);
       meter.hidden = !tightest; meter.replaceChildren();

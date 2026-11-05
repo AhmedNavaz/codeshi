@@ -1,4 +1,5 @@
 import { alertDefaults } from '../src/alerts.mjs';
+import { latestEdit } from '../src/activity-format.mjs';
 import { runSteps, TESTS } from '../src/recap.mjs';
 
 // Live status outside the window on macOS (#13): a status item in the menu bar and, when turned on, alerts near the
@@ -10,6 +11,14 @@ import { runSteps, TESTS } from '../src/recap.mjs';
 const agents = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
 const clip = (text, max) => { const value = String(text || '').replace(/\s+/g, ' ').trim(); return value.length > max ? `${value.slice(0, max - 1).trimEnd()}…` : value; };
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+// The latest edit in a workspace's running task, for the preview's toolbar (#102). Null when nothing is running there.
+export function runningEdit(registry, projectId) {
+  let entry = null; try { entry = registry.brokers.get(projectId); } catch { return null; }
+  const broker = entry?.broker, c = broker?.running?.c, run = c?.activeRun;
+  if (!run) return null;
+  return latestEdit(c.messages.filter(message => message.runId === run.id).slice(-200), (broker.workspaces || []).map(String));
+}
 
 // What a run is doing, from its latest step, in general words: "Editing · 3 files changed", "Running tests".
 export function currentAction(c) {

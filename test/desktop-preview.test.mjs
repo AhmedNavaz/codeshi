@@ -65,6 +65,39 @@ test('the page’s framework is asked once, about the marked element only, and t
   assert.doesNotMatch(picker, /contextBridge|exposeInMainWorld/, 'The picker gives the page nothing.');
 });
 
+test('the toolbar shows the agent’s edit from its own trusted script, and nothing reaches the page', async () => {
+  const sent = [], pageSent = [];
+  const contents = log => ({ url: '', isDestroyed: () => false, setWindowOpenHandler() {}, on() {}, once() {}, loadFile() {}, send: (channel, value) => log.push([channel, value]), focus() {}, isLoading: () => false, navigationHistory: { canGoBack: () => false, canGoForward: () => false }, async loadURL(url) { this.url = url; }, getURL() { return this.url; }, getTitle: () => '', executeJavaScript: async () => { throw new Error('Nothing may run in the page.'); } });
+  let views = 0;
+  class View { constructor() { this.webContents = contents(views++ === 0 ? sent : pageSent); } setBounds() {} }
+  class Window { constructor() { this.contentView = { addChildView() {} }; } getContentBounds() { return { width: 1000, height: 700 }; } on() {} show() {} focus() {} setTitle() {} close() {} destroy() {} isDestroyed() { return false; } }
+  const session = { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} }) };
+  const preview = createPreview({ BaseWindow: Window, WebContentsView: View, session, ipcMain: { on() {}, off() {} }, shell: { openExternal() {} }, root: '/app' });
+  assert.equal(preview.projectId, null, 'Before it opens it follows nothing.');
+  await preview.open({ projectId: 'p', url: 'http://localhost:5173/' });
+  assert.equal(preview.projectId, 'p');
+  sent.length = 0;
+  preview.showEdit({ path: 'src/BuyBox.tsx', added: 4, removed: 2, contents: 'SECRET' });
+  preview.showEdit({ path: 'src/BuyBox.tsx', added: 4, removed: 2 });
+  preview.showEdit(null);
+  assert.deepEqual(sent.filter(([channel]) => channel === 'preview:edit'), [['preview:edit', { path: 'src/BuyBox.tsx', added: 4, removed: 2 }], ['preview:edit', null]], 'Only a file and counts, and only when it changes.');
+  assert.deepEqual(pageSent.filter(([channel]) => channel === 'preview:edit'), [], 'Nothing goes to the page.');
+  preview.dispose();
+  const page = fs.readFileSync(new URL('../desktop/preview-toolbar.html', import.meta.url), 'utf8'), script = page.match(/<script>([\s\S]*?)<\/script>/)[1];
+  assert.match(script, /bridge\.onEdit/); assert.match(page, /id="edit"/);
+  assert.doesNotMatch(script, /innerHTML/, 'Built as text, so a file name can’t become markup.');
+  // The toolbar's own script against a stand-in, as the page would run it.
+  const nodes = new Map(), node = id => { if (!nodes.has(id)) nodes.set(id, { id, children: [], dataset: {}, classList: { add() {} }, value: '', textContent: '', setAttribute() {}, addEventListener() {}, append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; }, select() {}, blur() {} }); return nodes.get(id); };
+  const text = value => [value.textContent, ...(value.children || []).map(text)].join('');
+  let onEdit; const timers = [];
+  const run = new Function('document', 'window', 'setTimeout', 'clearTimeout', script);
+  run({ getElementById: node, createElement: () => ({ children: [], append(...items) { this.children.push(...items); }, textContent: '', className: '' }), createTextNode: value => ({ textContent: value }) }, { relayPreview: { act() {}, onState() {}, onPicked() {}, onError() {}, onEdit: callback => { onEdit = callback; } } }, callback => { timers.push(callback); return timers.length; }, () => {});
+  onEdit({ path: 'src/BuyBox.tsx', added: 4, removed: 2 });
+  assert.equal(text(node('edit')), 'Edit src/BuyBox.tsx +4 −2');
+  onEdit(null); assert.equal(text(node('edit')), 'Edit src/BuyBox.tsx +4 −2', 'It stays a moment after the run ends.');
+  timers.at(-1)(); assert.equal(text(node('edit')), '');
+});
+
 test('a pick always arrives: a blank screenshot is taken once more, and a capture that hangs is left out', async () => {
   // Electron stand-ins: a window holding the toolbar and the page, each with its own web contents.
   async function pickWith(captures) {

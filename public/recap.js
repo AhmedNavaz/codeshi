@@ -46,9 +46,29 @@
     return rows;
   }
   // The same recap, as it would be said.
+  // One part per row, so the row being read can be shown. Each part knows where its row sits in the recap.
   function spoken(recap) {
-    if (!recap.workspaces.length) return 'Nothing ran while you were away.';
-    return 'While you were away. ' + recap.workspaces.map(workspace => `In ${workspace.name}: ${lines(workspace).filter(row => row.kind !== 'git').map(row => `${row.text}${row.detail ? `, ${row.detail.replaceAll(' · ', ', ')}` : ''}.`).join(' ')}`).join(' ');
+    if (!recap.workspaces.length) return [{ text: 'Nothing ran while you were away.' }];
+    const parts = [{ text: 'While you were away.' }];
+    recap.workspaces.forEach((workspace, section) => {
+      let first = true;
+      lines(workspace).forEach((row, index) => {
+        if (row.kind === 'git') return;
+        parts.push({ text: `${first ? `In ${workspace.name}: ` : ''}${row.text}${row.detail ? `, ${row.detail.replaceAll(' · ', ', ')}` : ''}.`, section, index });
+        first = false;
+      });
+    });
+    return parts;
+  }
+  // Reads the recap, moving the highlight to each row as it goes; finishing or stopping clears it.
+  function readAloud(recap) {
+    const parts = spoken(recap), highlight = part => {
+      for (const row of panel.querySelectorAll('.reading')) row.classList.remove('reading');
+      if (part?.section === undefined) return;
+      const row = panel.querySelectorAll('.recap-workspace')[part.section]?.querySelectorAll('li')[part.index];
+      row?.classList.add('reading'); row?.scrollIntoView?.({ block: 'nearest' });
+    };
+    window.relayVoice.speak(parts.map(part => part.text), 'Reading the recap aloud', { onPart: index => highlight(index === null ? null : parts[index]) });
   }
 
   function render(recap) {
@@ -56,7 +76,7 @@
     const header = node('header', undefined, 'recap-heading'), title = node('h2', 'While you were away');
     title.id = 'recap-title';
     header.append(title, node('span', span(Date.parse(recap.until) - Date.parse(recap.since)), 'recap-span'));
-    if (window.relayVoice?.speak) { const read = node('button', 'Read aloud', 'text-link'); read.type = 'button'; read.addEventListener('click', () => window.relayVoice.speak(spoken(recap), 'Reading the recap aloud')); header.append(read); }
+    if (window.relayVoice?.speak) { const read = node('button', 'Read aloud', 'text-link'); read.type = 'button'; read.addEventListener('click', () => readAloud(recap)); header.append(read); }
     const close = node('button', undefined, 'icon-button recap-close'); close.type = 'button'; close.setAttribute('aria-label', 'Close the recap'); close.addEventListener('click', hide);
     header.append(close);
     const body = node('div', undefined, 'recap-body');
@@ -78,7 +98,7 @@
     catch (error) { if (!automatic) api.showNotice?.(error.message); return; }
     if (automatic && !recap.workspaces.length) return;
     render(recap); panel.hidden = false;
-    if (automatic && prefs.speak) window.relayVoice?.speak?.(spoken(recap), 'Reading the recap aloud');
+    if (automatic && prefs.speak && window.relayVoice?.speak) readAloud(recap);
   }
 
   // Away: the window is in the background or hidden. Back after two minutes or more: the recap, if anything happened.
