@@ -44,7 +44,7 @@ summary::-webkit-details-marker { display: none; }
   display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) var(--statusbar-height); height: 100dvh; min-height: 480px;
 }
-.app-shell:has(.side-panel:not([hidden])) { grid-template-columns: var(--sidebar-width) minmax(380px, 1fr) var(--inspector-width, 300px); }
+.app-shell:has(.side-panel:not([hidden])) { grid-template-columns: var(--sidebar-width) minmax(380px, 1fr) var(--inspector-width, var(--inspector-width-default)); }
 
 /* Sidebar */
 .sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--border); }
@@ -897,7 +897,7 @@ button.commit-hash:hover { text-decoration: underline; }
 /* Responsive */
 @media (max-width: 1100px) {
   .app-shell:has(.side-panel:not([hidden])) { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
-  .side-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: var(--statusbar-height); width: min(var(--inspector-width, 320px), 80vw); box-shadow: var(--shadow-lg); }
+  .side-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: var(--statusbar-height); width: min(var(--inspector-width, var(--inspector-width-default)), 80vw); box-shadow: var(--shadow-lg); }
   .header-actions .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .toolbar-button { padding: 0 6px; }
 }
@@ -1342,8 +1342,8 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 .app-shell { --left-reserve: calc(var(--sidebar-width) + 16px); --right-reserve: 92px; }
 .app-shell.sidebar-collapsed { --left-reserve: 268px; }
 .mac-titlebar .app-shell.sidebar-collapsed { --left-reserve: 350px; }
-.app-shell:has(.side-panel:not([hidden])) { --right-reserve: calc(var(--inspector-width, 320px) + 16px); }
-.app-shell:has(#review-panel:not([hidden])) { --right-reserve: calc(var(--inspector-width, 320px) + 16px); }
+.app-shell:has(.side-panel:not([hidden])) { --right-reserve: calc(var(--inspector-width, var(--inspector-width-default)) + 16px); }
+.app-shell:has(#review-panel:not([hidden])) { --right-reserve: calc(var(--inspector-width, var(--inspector-width-default)) + 16px); }
 .command-bar { position: fixed; z-index: 25; top: calc((var(--titlebar-height) - 28px) / 2); left: 50%; transform: translateX(-50%); display: flex; align-items: center; width: clamp(180px, calc(100vw - 2 * max(var(--left-reserve), var(--right-reserve))), 520px); }
 .command-bar > .icon { position: absolute; left: 10px; width: 14px; height: 14px; color: var(--faint); pointer-events: none; }
 .command-bar input { width: 100%; height: 28px; padding: 0 12px 0 30px; border: 1px solid var(--border); border-radius: 8px; background: var(--chip-bg); color: var(--text); font: inherit; font-size: 12.5px; text-align: center; transition: background .12s, border-color .12s; }

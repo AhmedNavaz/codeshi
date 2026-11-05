@@ -9,7 +9,8 @@
   --radius-lg: 10px;
   --titlebar-height: 40px;
   --statusbar-height: 24px;
-  --sidebar-width: 248px;
+  --sidebar-width: 300px;
+  --inspector-width-default: 380px;
   --content-width: 780px;
 
   /* Mask icons for script-rendered elements (drawn with currentColor). */

@@ -20,8 +20,8 @@
 
   // name: [how to measure the current size, how to apply a size, min, max, axis, sign, label]
   const sections = {
-    sidebar: { measure: () => document.querySelector('.sidebar')?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--sidebar-width', value + 'px') : root.style.removeProperty('--sidebar-width'), min: 200, max: 440, axis: 'x', sign: 1, label: 'Resize the sidebar' },
-    inspector: { measure: () => sidePanels().find(panel => !panel.hidden)?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--inspector-width', value + 'px') : root.style.removeProperty('--inspector-width'), min: 260, max: 600, axis: 'x', sign: -1, label: 'Resize the side panel' },
+    sidebar: { measure: () => document.querySelector('.sidebar')?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--sidebar-width', value + 'px') : root.style.removeProperty('--sidebar-width'), min: 260, max: 520, axis: 'x', sign: 1, label: 'Resize the sidebar' },
+    inspector: { measure: () => sidePanels().find(panel => !panel.hidden)?.getBoundingClientRect().width, apply: value => value ? root.style.setProperty('--inspector-width', value + 'px') : root.style.removeProperty('--inspector-width'), min: 360, max: 720, axis: 'x', sign: -1, label: 'Resize the side panel' },
     workspaces: { measure: () => $('workspace-list')?.getBoundingClientRect().height, apply: value => { const list = $('workspace-list'); if (list) list.style.flexBasis = value ? value + 'px' : ''; document.querySelector('.sidebar')?.classList.toggle('sized', Boolean(value)); }, min: 60, max: 640, axis: 'y', sign: 1, label: 'Resize workspaces and files' },
     panel: { measure: () => $('bottom-panel')?.getBoundingClientRect().height, apply: value => { const panel = $('bottom-panel'); if (panel) panel.style.height = value ? value + 'px' : ''; }, min: 140, max: 720, axis: 'y', sign: -1, label: 'Resize the terminal and Run panel' },
   };

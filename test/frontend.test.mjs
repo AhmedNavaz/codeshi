@@ -2947,14 +2947,14 @@ test('the sidebar, side panel, workspaces and the terminal and Run panel resize 
   const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300})}});
   const root=ui.document.documentElement,handles=ui.document.querySelectorAll('.resize-handle');
   assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel','Resize workspaces and files']);
-  assert.equal(root.style['--inspector-width'],'600px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel').style.height,'300px','The Run panel’s height carries over to the shared panel.');
+  assert.equal(root.style['--inspector-width'],'720px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel').style.height,'300px','The Run panel’s height carries over to the shared panel.');
   assert.deepEqual(Object.keys(JSON.parse(ui.storage.get('throughline:layout')||'{}')).filter(key=>['terminal','commands'].includes(key)),[]);
   const sidebar=handles.find(handle=>handle.getAttribute('aria-label')==='Resize the sidebar');assert.equal(sidebar.getAttribute('role'),'separator');assert.equal(sidebar.tabIndex,0);
   sidebar.dispatchEvent(new UIEvent('keydown',{key:'ArrowRight',preventDefault(){}}));
-  assert.equal(root.style['--sidebar-width'],'216px');
+  assert.equal(root.style['--sidebar-width'],'260px','Never narrower than the sidebar can show its contents.');
   sidebar.dispatchEvent(new UIEvent('keydown',{key:'ArrowRight',shiftKey:true,preventDefault(){}}));
-  assert.equal(root.style['--sidebar-width'],'264px');
-  assert.equal(JSON.parse(ui.storage.get('throughline:layout')).sidebar,264,'The size is remembered.');
+  assert.equal(root.style['--sidebar-width'],'308px');
+  assert.equal(JSON.parse(ui.storage.get('throughline:layout')).sidebar,308,'The size is remembered.');
   sidebar.dispatchEvent(new UIEvent('dblclick'));
   assert.equal(root.style['--sidebar-width'],undefined,'Double-click returns to the default.');
   assert.equal(JSON.parse(ui.storage.get('throughline:layout')).sidebar,undefined);
