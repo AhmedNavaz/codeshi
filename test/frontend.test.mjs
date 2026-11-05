@@ -2115,7 +2115,6 @@ test('the sidebar lists a workspace’s tasks and main conversation, a folder’
   assert.equal(ui.$('task-list').querySelector('.task-row-main') !== null, true);
 });
 
-
 test('skills show as a list with switches, and Add skills opens everything found with what is unavailable said up front', async () => {
   const ui = await browser({ insights: true, agentsUI: true, wide: true, desktop: true });
   const compatibility = unavailable => ({ route: 'instructions', adapters: {}, unavailable, blocking: unavailable.some(item => item.blocking) });

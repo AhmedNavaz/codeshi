@@ -45,6 +45,8 @@ Backend code lives in `src/`; Electron, browser UI and the separately deployable
 | `src/resolve-binary.mjs` | Finds the installed `claude`, `codex` and `gemini` executables |
 | `src/conversation-routes.mjs`, `src/conversation-import.mjs`, `src/conversation-export.mjs` | Previous-chat discovery, reviewed imports and conversation files for other users |
 | `src/task-context.mjs` | The brief a fresh agent gets for a task: its folders, instructions, changed files and what went wrong |
+| `src/task-coordinator.mjs`, `src/task-isolation.mjs` | Tasks side by side: each in a lane with its own broker, how each may run, and merging a worktree back |
+| `src/task-plan.mjs` | A task's plan across its agents: what is carried, how the next agent's report replaces it, and what the brief says |
 | `src/project-memory.mjs` | What is kept for every agent in a workspace: entries, what is relevant to a task, and rule-based suggestions |
 | `src/skills.mjs`, `starter-skills/` | The skill catalog: finding, checking, private copies and what a task is told, plus the optional starters |
 | `src/task-budget.mjs` | Limits for a whole task, checked before every run and worked out from the journal |
@@ -78,6 +80,6 @@ Use the [bug report](https://github.com/AhmedNavaz/codeshi/issues/new?template=b
 
 ## Releasing
 
-Maintainers: bump `version` in `package.json`, add a section to [CHANGELOG.md](CHANGELOG.md) and push a matching tag such as `v0.4.1`. GitHub Actions tests and builds both macOS apps and the Windows app, publishes the private-link service image and creates the release.
+Maintainers: `npm run stats` shows downloads by release and platform and repository traffic, from what GitHub already records; the app reports nothing. To release, bump `version` in `package.json`, add a section to [CHANGELOG.md](CHANGELOG.md) and push a matching tag such as `v0.4.1`. GitHub Actions tests and builds both macOS apps and the Windows app, publishes the private-link service image and creates the release.
 
 The in-app **What’s New** panel reads versioned entries from the bundled changelog. Move completed **Unreleased** entries into the matching release section before packaging; unreleased and newer-version entries are excluded from the panel.

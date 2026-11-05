@@ -1,6 +1,6 @@
 # Core execution roadmap
 
-Status: design proposals tracked in GitHub issues #84–#90, with scope extensions posted to #12, #21 and #15. The first milestones of #84, #85, #86, #87 and #21 are built, each noted under its section; everything else here is still a proposal. Existing behavior is described separately from proposals. No runtime feature is implemented by this document.
+Status: design proposals tracked in GitHub issues #84–#90, with scope extensions posted to #12, #21 and #15. The first milestones of #84, #85, #86, #87, #88 and #21 shipped in 0.26.0, each noted under its section; everything else here is still a proposal. Existing behavior is described separately from proposals. No runtime feature is implemented by this document.
 
 ## Product outcome
 
@@ -156,7 +156,7 @@ A provider-aware skill catalog based on SKILL.md, with on-demand loading, visibl
 
 **Issue title:** Enforce shared task budgets across agents, retries, reviews and quota fallback
 
-**Tracking:** [#87](https://github.com/AhmedNavaz/codeshi/issues/87) — the first milestone is built in `src/task-budget.mjs`. Concurrent limits only matter for background reviews until #88.
+**Tracking:** [#87](https://github.com/AhmedNavaz/codeshi/issues/87) — the first milestone is built in `src/task-budget.mjs`. Concurrent limits now cover the tasks of #88 and the main conversation together.
 
 #### Problem
 
@@ -190,7 +190,7 @@ A backend policy shared by the desktop, future CLI and team runner. It bounds to
 
 **Issue title:** Run independent folder tasks concurrently with isolated edits and recovery
 
-**Tracking:** [#88](https://github.com/AhmedNavaz/codeshi/issues/88) — proposed, not implemented.
+**Tracking:** [#88](https://github.com/AhmedNavaz/codeshi/issues/88) — the first milestone is built in `src/task-coordinator.mjs` and `src/task-isolation.mjs`. Each task is a lane with its own broker and journal.
 
 #### Problem
 

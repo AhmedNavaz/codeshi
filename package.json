@@ -1,6 +1,6 @@
 {
   "name": "codeshi",
-  "version": "0.25.1",
+  "version": "0.26.0",
   "description": "Claude Code, Codex, Gemini and local models in one conversation. Switch agents mid-task, keep going when one hits its limit, and use the plans you already pay for.",
   "keywords": [
     "claude-code",
@@ -43,6 +43,7 @@
     "test:desktop": "node desktop/launch.mjs --smoke-test",
     "sharing": "node sharing/server.mjs",
     "eval": "node evals/cli.mjs",
+    "stats": "node scripts/stats.mjs",
     "package": "node desktop/package.mjs",
     "icons": "electron desktop/icons.mjs"
   },

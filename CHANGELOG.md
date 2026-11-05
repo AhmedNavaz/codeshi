@@ -4,6 +4,8 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-05
+
 ### Added
 
 - **A side panel with four tabs.** Agents, Brief, Tasks and Git. **Agents** keeps plan usage, routing and handoff. **Brief** shows what every agent is told when it starts on a task, with the memory and skills you add to it. **Tasks** shows what each task used, and its limits.
@@ -11,11 +13,23 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 - **Project memory** (#21). **Remember** on any message or step keeps it for every agent in this workspace, and **Memory** in the Brief panel lists what's kept, to edit, retire, delete or export. Local rules suggest things you wrote as lasting rules and approaches that failed before the tests passed, and nothing is kept unless you choose it. An agent is told only what's relevant to its task, and an entry whose files have changed is marked for a recheck. Memory stays out of your repository and doesn't cross workspaces.
 - **Skills** (#86). Reusable procedures in the Agent Skills format, used by Claude, Codex and Gemini alike, and kept when a task moves to another agent. **Skills** in the Brief panel finds your repository's skills and any folder you add, and has six optional starters: frontend implementation, API contracts, database migration planning, accessibility, test authoring and independent review. Type `/name` in a prompt to use one. Agents only get names and descriptions until a task needs the instructions. Nothing is on until you enable it, nothing in a skill is ever run by Codeshi, and enabling keeps a private copy at that version until you accept an update. A skill reaches agents as instructions, so anything that relies on one agent's own skill system is listed as unavailable. A memory can become a skill after you review it.
 - **Task limits** (#87). One set of limits for a whole task, across its agents, retries and reviews: working time, tokens, API spend, and how many handoffs, retries and reviews. A new prompt starts a new task. The same failure repeated is counted across restarts and changes of agent, and the next agent is told about it. By default only those counts have limits, and they're generous; time, tokens and spend have no limit until you set one. Reaching a limit stops the run, saves its work and says why, and **Allow more** raises it for that task. You can also choose which agents a workspace may use.
+- **Tasks side by side** (#88). **Tasks** in the sidebar lists tasks that run in one folder beside the main conversation, each with its own output, approvals, queue and Stop. With a folder selected, **+** opens a blank task using the usual message box, so any agent and model can be chosen, and it says how it would run before you send it. Separate folders run directly. Work in a repository already in use gets its own Git worktree, and its changes come back through a review that shows every file, can run your tests on the combined result, and refuses to overwrite either side on a conflict. Outside Git, a task waits its turn. Tasks can wait for one another, share one limit on how many run at once, and recover safely from a restart or a folder being removed.
+- **The task plan goes with the task** (#92). Through a handoff, **Continue with**, a wait for a reset and continuing locally, the checklist stays, says which agent it came from, and the next agent is told each step's status. A plan that agent reports replaces it, and steps already done stay done unless it lists them again. A new prompt starts without one.
+- **Queued prompts follow a handoff** (#93). The offer says how many would move. They keep their access and permission setting and take the new agent's model and effort, and routed prompts are routed again. An agent that bills per use needs its own yes for them, and one that changed after you accepted stays where it was. If Codeshi stops while a prompt is being sent, it isn't sent again by itself.
+- **One result for a task across agents** (#94). When a task that crossed agents finishes, one line gives its total working time, without waits for a reset, the files each agent changed and the latest test result.
+- **Smaller details** (#96, #98, #99, #100, #102, #103). Plan usage marks the agent that's working and lists Ollama. The preview's toolbar shows the agent's latest edit, as a file name and line counts. Read aloud highlights the recap row being read. Voice says **On this Mac** while it listens. The moment an agent reaches its limit now stands out, stamped with the seal.
 - **Evaluations** (#84). `npm run eval` runs nine small tasks with hidden checks and compares settings on the same pinned code. Recorded runs need no account. Live runs use your own agents, only when you pass `--live` with a budget.
 
 ### Changed
 
+- **Wider side panels.** Both side panels start wider and can't be dragged narrower than they can show their contents, and the right panel always shows its tab names. You can still resize or hide them.
+- **Drafting review fixes keeps your message** (#95). The fix request is added after whatever is in the message box, whose text and attachments stay, instead of being refused.
 - **A new agent gets a task-focused brief** (#85). When an agent starts fresh, such as after a handoff, it's told the current task first, along with the folders it concerns, each folder's instruction files, the files changed so far, what already went wrong and the steps left, all worked out locally with no model. Work from other folders and repeated steps are left out, and the full history stays saved. Claude now gets each folder's `AGENTS.md` and `CLAUDE.md`, which it wasn't reading here. The **Brief** panel shows this, with **See the full brief** for all of it, and you can add a note to it.
+
+### Fixed
+
+- **Claude's task plan shows again.** Current versions of Claude Code replace the to-do tool Codeshi reads the plan from, so Claude's plan had stopped appearing.
+- **Continue locally is the same task.** It used to count as a new one, so it lost what the task had done so far.
 
 ## [0.25.1] - 2026-11-04
 
