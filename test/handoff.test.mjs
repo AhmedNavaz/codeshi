@@ -364,3 +364,33 @@ test('queued prompts wait for the agent that takes over, then carry on', { skip:
   assert.equal(env.c.queuePaused ?? null, null);
   await done(env);
 });
+
+test('a move the task limits would refuse is never offered, and the running agent is left working', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  env.broker.budget.setPolicy(env.c, { maxHandoffs: 0 });
+  await env.broker.handoff.check(run);
+  assert.equal(env.c.handoffOffer ?? null, null);
+  assert.equal(env.broker.running, run);
+  env.broker.budget.setPolicy(env.c, { maxHandoffs: 1, allowedProviders: ['codex'] });
+  await env.broker.handoff.check(run);
+  assert.equal(env.c.handoffOffer ?? null, null, 'An agent the policy leaves out is not a destination.');
+  env.broker.budget.setPolicy(env.c, { allowedProviders: null });
+  await env.broker.handoff.check(run);
+  assert.equal(env.c.handoffOffer.to.provider, 'claude');
+  // The limits change after the offer was made: accepting is refused before anything stops.
+  const { id } = env.c.handoffOffer;
+  env.broker.budget.setPolicy(env.c, { maxHandoffs: 0 });
+  await assert.rejects(env.broker.acceptHandoff(env.c, { offerId: id }), /no longer available/);
+  assert.equal(env.broker.running, run, 'The agent working on the task keeps working.');
+  assert.equal(run.stopped, false);
+  env.release(); await run.done;
+});
+
+test('an unknown destination can still be offered, but not presented as having room', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  const real = env.broker.handoff.usage;
+  env.broker.handoff.usage = async provider => provider === 'claude' ? { available: false, reason: 'Not reported' } : real(provider);
+  await env.broker.handoff.check(run);
+  assert.equal(env.c.handoffOffer.to.quota, 'unknown');
+  env.release(); await run.done;
+});

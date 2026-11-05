@@ -200,6 +200,8 @@ export async function runClaude(config, { event, approval, question = null, meta
       cwd: config.workspace, pathToClaudeCodeExecutable: config.bin, permissionMode: config.mode === 'read' ? 'plan' : 'default',
       additionalDirectories: [...new Set(config.workspaces || [])].filter(directory => directory !== config.workspace),
       settingSources: [], settings: { disableAllHooks: true }, mcpServers: {}, strictMcpConfig: true, disallowedTools: ['mcp__*'],
+      // Claude enforces a spending limit itself when it is billed per use; on a subscription this isn't set (#87).
+      ...(typeof config.maxBudgetUsd === 'number' ? { maxBudgetUsd: config.maxBudgetUsd } : {}),
       // TodoWrite only keeps Claude's own to-do list, shown as the run's plan; it reads and changes nothing. With
       // AskUserQuestion Claude can ask you to choose between options; asking changes nothing either, so read-only runs
       // keep it, and only a background review, which nobody answers, goes without.

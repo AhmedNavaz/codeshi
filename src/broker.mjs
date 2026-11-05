@@ -14,6 +14,7 @@ import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
 import { readLedger, taskIdentity } from './task-ledger.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
+import { applyBudgetRecord, TaskBudgets } from './task-budget.mjs';
 import { SkillCatalog } from './skills.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
@@ -111,7 +112,7 @@ function importPlaces(existing, entries) {
 export class Broker extends EventEmitter {
   constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), tests = null }) {
     super();
-    this.workspace = savedWorkspace(workspace); this.contextPolicy = contextPolicy;
+    this.workspace = savedWorkspace(workspace); this.contextPolicy = contextPolicy; this.budget = new TaskBudgets(this);
     this.workspaces = [...new Set([this.workspace, ...workspaces.map(savedWorkspace), ...workspaceFolders.map(folder => savedWorkspace(folder.path))])];
     this.workspaceFolders = this.workspaces.map(directory => {
       const configured = workspaceFolders.find(folder => savedWorkspace(folder.path) === directory);
@@ -246,6 +247,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'memory_dismiss') c.memoryDismissed = [...(c.memoryDismissed || []), record.key];
     if (record.type === 'skills') { c.skills = record.skills; c.skillDirs = record.dirs; }
     if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: record.observedAt || record.at }; }
+    applyBudgetRecord(c, record);
     if (record.type === 'routing') c.routing = record.routing;
     if (record.type === 'retry_offer') c.retryOffer = record.offer;
     if (record.type === 'retry_offer_end' && c.retryOffer?.id === record.id) c.retryOffer = null;
@@ -395,6 +397,7 @@ export class Broker extends EventEmitter {
     else if (existing) return id;
     else this.record(c, { type: 'message', message: { id, role, text, provider, status,
       createdAt: new Date().toISOString(), runId: c.activeRun?.id, ...(c.activeRun?.connection === 'local' ? { connection: 'local' } : {}), ...(c.activeRun?.reviewId ? { reviewId: c.activeRun.reviewId } : {}), model: c.activeRun?.effectiveModel || c.activeRun?.model || null, effort: c.activeRun?.effectiveEffort || c.activeRun?.effort || null } });
+    if (role === 'activity' && c.activeRun?.id) { try { this.budget.observeStep(c, { id, role, text, runId: c.activeRun.id }); } catch (error) { console.error('Codeshi could not count a step:', error.message); } }
     return id;
   }
 
@@ -406,7 +409,7 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null } = {}) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, quotaReadings, ...visible } = c;
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     return { ...visible, cursor: records, ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
@@ -551,7 +554,9 @@ export class Broker extends EventEmitter {
     const accepted = c.requests[requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) throw Object.assign(new Error('This request ID was already used for another message.'), { status: 409 }); return { runId: accepted.runId, requestId, duplicate: true }; }
     if (this.running) throw Object.assign(new Error('An assistant is already working in this workspace. Stop it before starting another run.'), { status: 409 });
+    // The one place every run starts from, so nothing gets past the task's limits (#87). A request already accepted returned above.
     const runId = randomUUID(), task = taskIdentity(c, { runId, text, retryOf, review });
+    this.budget.assertCanStart(c, { task, provider, model, local: Boolean(local) });
     if (automaticReview !== null) {
       if (review || local || resume || queued || retryOf || !this.automaticReviews || this.automaticReviews.closed || this.backgroundReview) throw Object.assign(new Error('Preview automatic review for a new coding prompt after the current review finishes.'), { status: 409 });
       automaticReview = validateAutomaticReview(this, c, automaticReview, { text, provider, model, mode, approvalPolicy, attachments: attachmentIds });
@@ -591,7 +596,7 @@ export class Broker extends EventEmitter {
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
-      this.record(c, { type: 'submission', id: runId, task, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
+      this.record(c, { type: 'submission', id: runId, task, previousProvider: c.lastRun?.provider || null, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
         ...(local ? { local } : {}), ...(review ? { review } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
         ...(automaticReview ? { automaticReview } : {}),
@@ -613,7 +618,7 @@ export class Broker extends EventEmitter {
         for (const resolve of run.steers.values()) resolve({ ok: false, error: 'The run ended.' });
         run.steers.clear();
         if (!success) {
-          const detail = run.stopped ? 'Stopped. Files already changed by this run remain in the workspace.' : error?.message || run.stderr.trim() || `The assistant ended without completing the turn (exit ${code ?? signal ?? 'unknown'}).`;
+          const detail = run.budgetStop ? `Stopped: ${run.budgetStop.message} Files already changed by this run remain in the workspace.` : run.stopped ? 'Stopped. Files already changed by this run remain in the workspace.' : error?.message || run.stderr.trim() || `The assistant ended without completing the turn (exit ${code ?? signal ?? 'unknown'}).`;
           run.errorCategory ||= run.stopped ? 'interrupted' : classifyError(error || detail);
           const notice = clip(detail) + (review ? '\nStart a new read-only review when ready.' : run.stopped ? '' : '\nYour conversation is saved. Select the other assistant and continue, or retry after resolving the error.');
           if (run.errorCategory === 'quota' && this.handoff.atLimit(run)) { run.limitNotice ||= notice; continuing = true; }
@@ -631,7 +636,7 @@ export class Broker extends EventEmitter {
         if (success && !review && !local && c.sessions[provider]) this.record(c, { type: 'checkpoint', provider });
       } catch (persistError) { success = false; run.persistenceError = persistError.message; }
       finally { try { lease.release(); } catch (releaseError) { success = false; run.persistenceError ||= releaseError.message; } finally {
-        this.handoff.unwatch(run);
+        this.handoff.unwatch(run); this.budget.unwatch(run);
         if (continuing) c.limitSwitching = { provider };
         this.running = null; this.emit('update', { conversationId: c.id }); finish({ success, error: run.persistenceError });
         const settle = () => {
@@ -666,6 +671,7 @@ export class Broker extends EventEmitter {
           const account = await accountStatus(provider, { bin, workspace: this.workspace, googleRoot: this.googleRoot });
           this.record(c, { type: 'run_metadata', metadata: { account: { authenticated: account.authenticated, authMode: account.authMode, billingSource: account.billingSource } } });
           if (account.authenticated === false) throw Object.assign(new Error('Sign in through the provider’s supported authentication flow before running.'), { category: 'authentication' });
+          run.billingSource = account.billingSource;
           if (account.billingSource !== 'subscription' && !billingConfirmed) throw Object.assign(new Error(`Billing source is ${account.billingSource}. Explicitly confirm this provider run before it may consume usage.`), { category: 'permission' });
         }
         if (!review) await this.checkpoints.before(c, run);
@@ -699,7 +705,7 @@ export class Broker extends EventEmitter {
         run.child.on('message', message => {
           try {
             if (message.type === 'event') this.event(run, message.event);
-            if (message.type === 'metadata') this.record(c, { type: 'run_metadata', metadata: message.metadata });
+            if (message.type === 'metadata') { this.record(c, { type: 'run_metadata', metadata: message.metadata }); if (message.metadata?.usage || typeof message.metadata?.costUSD === 'number') this.budget.check(run); }
             if (message.type === 'steer-result') { run.steers.get(message.id)?.(message); run.steers.delete(message.id); }
             if (message.type === 'failure') { run.failed = true; run.errorCategory = message.category; run.stderr = clip(run.stderr + '\n' + message.message); }
             if (message.type === 'approval') {
@@ -741,11 +747,11 @@ export class Broker extends EventEmitter {
         const pidStart = processStart(run.child.pid);
         this.record(c, { type: 'run_process', pid: run.child.pid, pidStart });
         lease.setProcess(run.child.pid, pidStart);
-        run.child.send({ type: 'start', config: { bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
+        run.child.send({ type: 'start', config: { ...(run.billingSource === 'api' && this.budget.remainingSpend(c, run.taskId) !== null ? { maxBudgetUsd: this.budget.remainingSpend(c, run.taskId) } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
       } catch (error) { run.errorCategory = error.category || classifyError(error); complete(null, null, error); }
     };
     launch();
-    this.handoff.watch(run);
+    this.handoff.watch(run); this.budget.watch(run);
     return { runId, requestId };
   }
 

@@ -24,6 +24,7 @@ export class ReviewJobs {
     if (accepted) { if (accepted.fingerprint !== fingerprint) fail('This request ID was used for another review.'); return { ...accepted, duplicate: true }; }
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId)) fail('Invalid review request ID.', 400);
     const taskId = c.lastRun?.taskId || c.lastRun?.id || null;
+    main.budget.assertCanStart(c, { task: taskId ? { id: taskId, relation: 'review' } : null, provider: review.provider, model: review.model });
     if (this.jobs.has(project.id)) fail('A background review is already running in this workspace.');
     if (this.jobs.size >= 4) fail('Four background reviews are running. Wait for one to finish.');
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-review-'));

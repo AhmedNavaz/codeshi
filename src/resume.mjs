@@ -115,6 +115,7 @@ export class ResumeScheduler {
       let state = known;
       if (!known || now >= due) {
         const model = provider === c.provider ? c.model : c.models[provider] || null;
+        if (!this.broker.budget.allows(c, provider, model).allowed) continue;
         let usage = null;
         try { usage = await this.usage(provider, this.broker.usageOptions(provider)); } catch {}
         state = { ...limitState(usage, model), checkedAt: new Date(now).toISOString() };

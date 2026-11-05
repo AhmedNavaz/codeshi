@@ -90,7 +90,7 @@ export class PromptQueue {
       }
       return;
     }
-    this.pause(c, run.stopped ? 'You stopped the run.' : 'The last run did not finish.');
+    this.pause(c, run.budgetStop ? run.budgetStop.message : run.stopped ? 'You stopped the run.' : 'The last run did not finish.');
   }
 
   close() { this.closed = true; }

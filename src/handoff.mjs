@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { assessQuota } from './task-budget.mjs';
 import { continuationRequest } from './context.mjs';
 import { accountStatus, providerUsage } from './providers.mjs';
 import { limitState, windowApplies } from './resume.mjs';
@@ -57,6 +58,8 @@ export class HandoffMonitor {
     let best = null;
     for (const provider of this.broker.availableProviders().filter(value => value !== run.provider && !exclude.includes(value))) {
       const model = c.models[provider] || null, options = this.broker.usageOptions(provider);
+      // Never offer a move the task's limits would refuse: the old agent is stopped before the new one starts (#87).
+      if (this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider })) continue;
       let usage = null; try { usage = await this.usage(provider, options); } catch {}
       this.observe(c, provider, usage);
       if (limitState(usage, model).limited === true) continue;
@@ -64,7 +67,7 @@ export class HandoffMonitor {
       if (top && top.usedPercent >= threshold) continue;
       let account = null; try { account = await this.account(provider, { bin: options.bin, workspace: this.broker.workspace, googleRoot: this.broker.googleRoot }); } catch {}
       if (!account?.installed || account.authenticated === false) continue;
-      const candidate = { provider, model, mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: top?.usedPercent ?? null };
+      const candidate = { provider, model, mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: top?.usedPercent ?? null, quota: assessQuota(usage, model, { threshold }).state };
       // Prefer subscription allowance, then the agent with the most room left.
       const rank = value => (value.billingSource === 'subscription' ? 0 : 1000) + (value.usedPercent ?? 50);
       if (!best || rank(candidate) < rank(best)) best = candidate;
