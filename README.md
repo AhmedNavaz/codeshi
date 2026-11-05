@@ -1,13 +1,13 @@
 <h1 align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/icon-dark.svg"><img src="assets/icon.svg" width="96" align="top" alt=""></picture><br>Codeshi</h1>
 
 <p align="center"><b>Claude Code, Codex, Gemini and local models in one conversation.</b><br>
-Switch agents mid-task, keep going when one hits its limit, and use the plans you already pay for.</p>
+Hand off at the limit, run tasks side by side, and send prompts or approve from your phone — on the plans you already pay for.</p>
 
-<p align="center"><a href="#install"><b>Install</b></a> &nbsp;·&nbsp; <a href="docs/guide.md"><b>Guide</b></a> &nbsp;·&nbsp; <a href="ROADMAP.md"><b>Roadmap</b></a> &nbsp;·&nbsp; <a href="CONTRIBUTING.md"><b>Contribute</b></a></p>
+<p align="center"><a href="#install"><b>Install</b></a> &nbsp;·&nbsp; <a href="https://codeshi.dev"><b>Live demos</b></a> &nbsp;·&nbsp; <a href="docs/guide.md"><b>Guide</b></a> &nbsp;·&nbsp; <a href="ROADMAP.md"><b>Roadmap</b></a> &nbsp;·&nbsp; <a href="CONTRIBUTING.md"><b>Contribute</b></a></p>
 
 <p align="center"><a href="https://github.com/AhmedNavaz/codeshi/releases/latest"><img src="https://img.shields.io/github/v/release/AhmedNavaz/codeshi?label=release" alt="Latest release"></a> <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Runs on macOS and Windows"> <a href="https://github.com/AhmedNavaz/codeshi/actions/workflows/ci.yml"><img src="https://github.com/AhmedNavaz/codeshi/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a> <a href="https://www.patreon.com/17048317/join"><img src="https://img.shields.io/badge/Support-Patreon-FF424D?logo=patreon&amp;logoColor=white" alt="Support Codeshi on Patreon"></a></p>
 
-<p align="center"><img src="docs/hero.jpg" width="900" alt="Codeshi with the acme-shop project open: Claude adds a promo code field to checkout, then Codex finishes the API side and runs its tests in the same conversation"></p>
+<p align="center"><a href="https://codeshi.dev"><img src="docs/hero.jpg" width="900" alt="Codeshi's website demo: a paired phone beside the desktop window, showing Claude's request to install zod and buttons to approve or deny it over mobile data"></a><br><a href="https://codeshi.dev">Watch phone access, task queues and agent handoff in the live demo →</a></p>
 
 Every coding agent runs out of usage at some point, and moving to another one usually means explaining your project all over again. Codeshi gives each project one permanent conversation that all your agents share. Claude can start a task, Codex can finish it, and a model on your own machine can take over when both are out, each picking up from everything said and done so far.
 
@@ -27,6 +27,16 @@ Codeshi keeps an eye on each agent's plan usage. Before one runs out mid-task, i
 
 Scan a QR code, match the number and allow it on your computer. From your phone's browser you can follow a run, send prompts, answer approvals and questions, accept a handoff or press Stop, on the same Wi-Fi or over mobile data. There's no app or account to set up. Your computer keeps running the agents and holding your files, so it has to stay awake and online. Away from home, messages are encrypted on your devices before they reach the relay.
 
+Choose **Connect phone** in the desktop's bottom bar to pair. The phone has its own page for the conversation, workspace and task selection, and agent controls. Supported browsers also offer a microphone on the remote HTTPS connection: dictate into the message box, then press Send. Same-Wi-Fi pairing uses unencrypted HTTP for trusted networks; lock-screen notifications are still planned.
+
+### Run tasks side by side
+
+<img src="docs/features/tasks.jpg" alt="Codeshi's website demo with Workspace chat and a separate running task in the sidebar, a queued prompt below the message box, and Codex continuing Claude's checkout work">
+
+Keep the Workspace chat going while another task works in one of the project's folders. Each task has its own conversation, output, approvals, queue and Stop. Start one with **+** beside **Tasks**, or choose **Run as a task** on a queued prompt to start it immediately with the agent, model and access it was queued with.
+
+Separate folders run directly. Tasks that share a busy Git repository get separate worktrees; bringing changes back opens a review of every file and checks for conflicts before applying them. Parallel tasks support Claude, Codex and Gemini.
+
 ### Point at what should change
 
 <img src="docs/features/point-and-tell.jpg" alt="A store's product page open in Codeshi's preview while picking, with its Add to bag button outlined under the pointer, and Codeshi's message box holding the button's screenshot and a sentence naming the button and where its code is, followed by the change asked for">
@@ -38,6 +48,8 @@ Open your running app in a preview, click the button or section you mean, and sa
 <img src="docs/features/review.jpg" alt="Codex's read-only review of Claude's changes in a side panel, with a high-severity finding linked to routes/promo.js line 4, while the next prompt is written in the message box">
 
 When a task is done, ask the other agent for a second opinion. It reviews a snapshot of the changes, read-only, in a side panel while you carry on with your next prompt. Each finding links to its line, goes out of date if that file changes, and you choose which ones go back to be fixed.
+
+Or choose **Review after** before sending a coding prompt: one agent builds, then the other reviews the result. Findings prepare an editable fix request for you to send.
 
 ### Know when your agents need you
 
@@ -68,20 +80,20 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/voice.jpg" alt="Voice input listening, with the spoken request appearing in the message box">
-<h3>Voice</h3>
-<p>Say what you want instead of typing it. Speech is recognized on your Mac and never leaves it.</p>
+<h3>Voice on Mac and phone</h3>
+<p>Say what you want instead of typing it. On your Mac, speech recognition stays on the device. On the remote phone page, supported browsers turn speech into a draft; first use explains that the browser may send audio to Apple or Google. Phone dictation stays in the message box until you press Send.</p>
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 <img src="docs/features/approvals.jpg" alt="Codex asks to run npm install, with options to allow it for this run or always in this workspace">
 <h3>Approvals your way</h3>
-<p>Agents read your project freely and ask before changing it. Allow an exact action once, for the whole task, or always in that project.</p>
+<p>By default, agents read your project freely and ask before changing it. Allow an exact action once, for the whole task, or always in that project, or choose Full auto-approval.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/plan.jpg" alt="A note added to a running task, a queued prompt, and the agent's plan with two of four steps done">
 <h3>Queue and steer</h3>
-<p>Line up your next prompts, add a note to a running task without stopping it, and follow the agent's plan as a live checklist.</p>
+<p>Line up and reorder your next prompts, start a queued prompt as a separate task, or add a note to a running task without stopping it. Follow the agent's plan as a live checklist across handoffs.</p>
 </td>
 </tr>
 <tr>
@@ -100,8 +112,12 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 
 Also included:
 
+- **Project memory**, for decisions and rules you choose to keep across agents and runs, with entries available to review and edit in the Brief panel
+- **Shared skills**, including six optional starters and your own reusable procedures for Claude, Codex and Gemini, carried across handoffs
+- **A task-focused brief**, showing the next agent its task, relevant folders, instructions, changed files and unfinished work; see what it receives in the Brief panel
+- **Task usage and limits**, for working time, reported tokens, API spend and retries across agents, handoffs and reviews; missing usage stays marked as not reported
 - **Undo and redo** for any run, after a preview of every line that changes
-- **Terminal, Run and Git** for each workspace: shells in tabs or side by side, and each project's dev server and tests one click away
+- **Files, Terminal, Run and Git** for each workspace: a separate Files browser, shells in tabs or side by side, and each project's dev server, tests and changes in reach
 - **Chat import** from your earlier Claude Code and Codex sessions
 - **Ask a Friend**, for help from another developer with a patch you review
 - **Light, dark and system themes**, native menus and shortcuts, and updates from inside the app on macOS
@@ -160,8 +176,8 @@ npm start
 
 ## How it works
 
-1. **Add a project.** Create a workspace and add its folders, such as `web` and `api`. The workspace keeps one conversation for good.
-2. **Send a task to any agent.** Pick Claude, Codex or Gemini, or let Routing choose. Switch whenever you like; the next agent reads the shared conversation first.
+1. **Add a project.** Create a workspace and add its folders, such as `web` and `api`. Its permanent conversation is the **Workspace chat**, with separate tasks alongside it when you need them.
+2. **Send a task to any agent.** Pick Claude, Codex or Gemini, or let Routing choose. Switch whenever you like; the next agent receives the shared conversation and task brief, with the memory and skills you enabled.
 3. **Stay in charge.** Agents ask before changing your project, you review the diffs, and you decide what gets committed.
 
 Codeshi runs the agents you have installed, on your own accounts. It ships no API keys, adds no model service of its own and stores your conversations on your computer. The [guide](docs/guide.md) covers each feature in detail, including what is stored where.

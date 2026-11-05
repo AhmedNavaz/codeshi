@@ -82,4 +82,6 @@ Use the [bug report](https://github.com/AhmedNavaz/codeshi/issues/new?template=b
 
 Maintainers: `npm run stats` shows downloads by release and platform and repository traffic, from what GitHub already records; the app reports nothing. To release, bump `version` in `package.json`, add a section to [CHANGELOG.md](CHANGELOG.md) and push a matching tag such as `v0.4.1`. GitHub Actions tests and builds both macOS apps and the Windows app, publishes the private-link service image and creates the release.
 
+Before tagging, compare the README and website with the release's user-facing features. Update their descriptions and refresh images when the interface changes; move shipped features out of their planned lists while keeping unfinished work clearly marked. The README should explain the current release without requiring a visit to the website.
+
 The in-app **What’s New** panel reads versioned entries from the bundled changelog. Move completed **Unreleased** entries into the matching release section before packaging; unreleased and newer-version entries are excluded from the panel.
