@@ -1,4 +1,5 @@
-import { looksFailed, outOfScope, runFolders, selectFolders, taskBrief } from './task-context.mjs';
+import { memoryForTask } from './project-memory.mjs';
+import { BRIEF_NOTE, looksFailed, outOfScope, runFolders, selectFolders, taskBrief } from './task-context.mjs';
 
 const fail = message => Object.assign(new Error(message), { status: 400 });
 export const emptyContext = () => ({ summary: '', goal: '', decisions: [], tasks: [] });
@@ -59,7 +60,8 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   const runs = scope ? runFolders(c.messages, taskFolders) : new Map();
   const hidden = message => Boolean(scope) && outOfScope(message, scope.folders, runs, taskFolders);
   const compiled = scope ? taskBrief(c, { source, scope, folders: taskFolders, primary: workspace, text: continuing ? text : null, taskMessages, words, fresh, provider, journal }) : null;
-  const brief = compiled?.brief;
+  const remembered = scope ? memoryForTask(c, { words: words + '\n' + (c.context?.goal || ''), scope: scope.folders, folders: taskFolders, fresh, provider }) : null;
+  const brief = remembered?.entries.length ? { ...(compiled?.brief || { note: BRIEF_NOTE }), memory: remembered.entries, ...(remembered.left ? { memoryLeftOut: remembered.left } : {}) } : compiled?.brief;
   const envelope = { workspace, workspaceFolders: folders, mode, ...structured, ...(brief ? { brief } : {}), context: [], omittedMessages: 0, shortenedMessages: 0, compactedActivityMessages: 0, historyPreserved: true,
     continuation: { sessionMode: fresh ? 'fresh' : 'resumed', ...session, previousProvider: c.lastRun?.provider || null, previousStatus: c.lastRun?.status || null, previousErrorCategory: c.lastRun?.errorCategory || null, note: 'The shared journal is authoritative. User requests and saved context take priority over tool logs. Previous status is recorded evidence, not a verified statement about current files. Inspect the workspace before repeating unfinished work.' },
     currentRequest: text + attachmentText(attachments), ...(attachments.length ? { attachments } : {}) };
@@ -156,5 +158,5 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   const includedActivityMessages = ordered.filter(([index]) => source[index].role === 'activity').length;
   return { prompt: prefix + JSON.stringify(envelope), images, metadata: { selection: 'intent-first', includedMessages: selected.size, omittedMessages: envelope.omittedMessages, shortenedMessages: shortened.size, compactedActivityMessages: envelope.compactedActivityMessages, omittedActivityMessages: source.filter(item => item.role === 'activity').length - includedActivityMessages, includedUserMessages: ordered.filter(([index]) => source[index].role === 'user').length, protectedUserMessages: protectedUsers.length, bytes: size(), size: contextSize(size()), fresh, sessionMode: fresh ? 'fresh' : 'resumed', policy, ...session,
     ...(scope ? { scope: scope.folders, scopeReason: scope.reason, leftOutOfScope, repeatedSteps } : {}),
-    ...(compiled ? { instructions: compiled.instructions.map(item => ({ folder: item.folderId, path: item.path, sha256: item.sha256 })), fileHashes: compiled.hashes } : {}) } };
+    ...(compiled ? { instructions: compiled.instructions.map(item => ({ folder: item.folderId, path: item.path, sha256: item.sha256 })), fileHashes: compiled.hashes, memory: remembered.ids } : {}) } };
 }

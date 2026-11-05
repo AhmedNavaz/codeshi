@@ -13,6 +13,7 @@ import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
 import { readLedger, taskIdentity } from './task-ledger.mjs';
+import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
@@ -236,6 +237,11 @@ export class Broker extends EventEmitter {
     if (record.type === 'created') Object.assign(c, { createdAt: record.at, title: record.title });
     if (record.type === 'settings') { Object.assign(c, { provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model ?? null, transport: record.transport || c.transport, settingsRevision: record.seq }); c.models[record.provider] = record.model ?? null; c.transports[record.provider] = record.transport || c.transport; }
     if (record.type === 'context') c.context = record.context;
+    // Project memory (#21). Removing an entry stops it being used; the conversation it came from stays saved.
+    if (record.type === 'memory_add') c.memory = [...(c.memory || []), record.entry];
+    if (record.type === 'memory_update') c.memory = (c.memory || []).map(entry => entry.id === record.id ? { ...entry, ...record.changes, updatedAt: record.at } : entry);
+    if (record.type === 'memory_remove') c.memory = (c.memory || []).filter(entry => entry.id !== record.id);
+    if (record.type === 'memory_dismiss') c.memoryDismissed = [...(c.memoryDismissed || []), record.key];
     if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: record.observedAt || record.at }; }
     if (record.type === 'routing') c.routing = record.routing;
     if (record.type === 'retry_offer') c.retryOffer = record.offer;
@@ -333,6 +339,28 @@ export class Broker extends EventEmitter {
     this.record(c, { type: 'quota_observation', provider, observedAt: usage.fetchedAt ? new Date(usage.fetchedAt).toISOString() : undefined, plan: usage.plan || null, windows });
   }
 
+  // Project memory (#21): every change comes from the person, through here.
+  memory(c) { return memoryView(c, this.workspaceFolders); }
+  changeMemory(c, input = {}) {
+    const found = () => { const entry = (c.memory || []).find(item => item.id === input.id); if (!entry) throw Object.assign(new Error('That memory is no longer here.'), { status: 404 }); return entry; };
+    if (input.action === 'add') {
+      if ((c.memory || []).filter(entry => entry.status === 'active').length >= memoryLimit) throw Object.assign(new Error(`Memory holds up to ${memoryLimit} entries. Retire some first.`), { status: 409 });
+      this.record(c, { type: 'memory_add', entry: newEntry(input, this.workspaceFolders) });
+    } else if (input.action === 'edit') {
+      found();
+      const clean = cleanEntryInput(input, this.workspaceFolders);
+      this.record(c, { type: 'memory_update', id: input.id, changes: { ...clean, files: attachedFiles(clean.text, this.workspaceFolders, clean.folderId) } });
+    } else if (input.action === 'retire' || input.action === 'restore') {
+      found();
+      this.record(c, { type: 'memory_update', id: input.id, changes: { status: input.action === 'retire' ? 'retired' : 'active' } });
+    } else if (input.action === 'remove') { found(); this.record(c, { type: 'memory_remove', id: input.id }); }
+    else if (input.action === 'dismiss') {
+      if (typeof input.key !== 'string' || !/^[\da-f]{16}$/.test(input.key)) throw Object.assign(new Error('Choose a suggestion to dismiss.'), { status: 400 });
+      this.record(c, { type: 'memory_dismiss', key: input.key });
+    } else throw Object.assign(new Error('Unknown memory action.'), { status: 400 });
+    return this.memory(c);
+  }
+
   // The task ledger for a conversation (#84), worked out from its journal. Prompts and commands only when asked for.
   ledger(c, options = {}) { return readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options); }
 
@@ -375,7 +403,7 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null } = {}) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, quotaReadings, ...visible } = c;
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, quotaReadings, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     return { ...visible, cursor: records, ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
