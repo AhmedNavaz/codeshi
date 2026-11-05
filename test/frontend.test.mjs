@@ -724,11 +724,16 @@ test('a conversation file saved near the 2 MB limit opens again for import, and 
   assert.equal(ui.$('import-error').textContent,'This conversation file is larger than 2 MB.');assert.equal(previews().length,1);
 });
 
-test('a multi-folder workspace lists its folders and the Files view shows only the selected one',async()=>{
+test('selecting a folder does not open Files; its explicit browser keeps the workspace and folder scopes',async()=>{
   const ui=await browser({filesUI:true,insights:true});const picks=ui.document.querySelectorAll('.workspace-folder-pick');
   assert.deepEqual([...picks.map(pick=>pick.textContent)],['Frontend','Backend']);assert.equal(picks[0].getAttribute('aria-pressed'),'false','At the workspace level no one folder is selected.');
-  assert.deepEqual([...ui.document.querySelectorAll('.tree-root').map(root=>root.textContent)],['Frontend'],'Only the selected folder is browsed.');
-  picks[1].click();await flush();assert.deepEqual([...ui.document.querySelectorAll('.tree-root').map(root=>root.textContent)],['Backend']);
+  assert.equal(ui.requests.some(request=>request.path==='/api/files'),false,'No directories are loaded just by selecting a workspace.');
+  ui.$('toggle-explorer').click();await flush();
+  assert.deepEqual([...ui.document.querySelectorAll('.tree-root').map(root=>root.textContent)],['Frontend','Backend'],'Workspace browsing shows all roots.');
+  ui.$('close-files').click();
+  picks[1].click();await flush();
+  assert.equal(ui.$('files-dialog').open,false,'Selecting a folder leaves navigation in place.');
+  ui.$('toggle-explorer').click();await flush();assert.deepEqual([...ui.document.querySelectorAll('.tree-root').map(root=>root.textContent)],['Backend']);
   assert.equal(ui.storage.get('ai-relay:folder:project-one'),'backend');assert.equal(ui.document.querySelectorAll('.workspace-folder-pick')[1].getAttribute('aria-pressed'),'true');
   assert.equal(ui.document.querySelectorAll('.workspace-folder-disclosure').length,0,'Folder management lives in Workspace settings.');assert(ui.$('workspace-folder-settings').textContent.includes('Add folder'));
 });
@@ -1221,7 +1226,7 @@ test('menu items that stand in for a button do what the button does, and wait wh
   ui.menu('add-folder');assert.equal(ui.$('folder-panel').hidden,false);ui.$('close-folder').click();
   ui.menu('previous-chats');await flush();assert.equal(opened('import-dialog'),true);ui.$('import-dialog').close();
   ui.menu('export');await flush();assert.equal(opened('export-dialog'),false,'Export waits for a conversation to export, as its button does.');assert.equal(ui.window.relayUI.commands.export(),false,'A command reports that it did not act.');
-  ui.menu('files');assert.equal(ui.$('file-tree').hidden,true);ui.menu('files');assert.equal(ui.$('file-tree').hidden,false);
+  ui.menu('files');assert.equal(opened('files-dialog'),true);ui.menu('files');assert.equal(opened('files-dialog'),false);
   ui.menu('agent','claude');await flush();assert.equal(ui.$('select-claude').getAttribute('aria-pressed'),'true');ui.menu('agent','gemini');await flush();assert.equal(ui.state().provider,'claude');
   ui.menu('continue');await flush();assert.equal(continues(),0,'Continue waits until the page offers it.');
   ui.menu('keep-awake');await flush();assert.deepEqual(ui.awakeChanges,[true]);
@@ -1247,13 +1252,14 @@ test('Find in Conversation, Find Next and Find Previous do what ⌘F, Enter and 
 
 test('the menu bar follows the page: the workspace, a run, the agent, Continue, Files, Git activity and the first nine workspaces',async()=>{
   const web=await browser({desktopControls:true,insights:true,historyUI:true,filesUI:true});assert.equal(web.menuStates.length,0,'The browser has no menu bar.');
-  const none=await browser({empty:true,existing:false,desktop:true,desktopControls:true,historyUI:true});assert.deepEqual(none.menuStates.at(-1),{workspace:false,running:false,agent:'codex',codex:false,claude:false,gemini:false,continue:null,files:true,git:false,terminal:false,imports:false,export:false,workspaces:[]});
+  const none=await browser({empty:true,existing:false,desktop:true,desktopControls:true,historyUI:true});assert.deepEqual(none.menuStates.at(-1),{workspace:false,running:false,agent:'codex',codex:false,claude:false,gemini:false,continue:null,files:false,git:false,terminal:false,imports:false,export:false,workspaces:[]});
   const ui=await browser({desktop:true,desktopControls:true,moreProjects:true,insights:true,historyUI:true,filesUI:true,stored:{'ai-relay:sidebar-level:project-one':'folder'}}),shown=()=>ui.menuStates.at(-1);
   const workspaces=[{name:'Example workspace',current:true},{name:'Other workspace',current:false}];
-  assert.deepEqual(shown(),{workspace:true,running:false,agent:'codex',codex:true,claude:true,gemini:false,continue:null,files:true,git:false,terminal:false,imports:true,export:false,workspaces});
+  assert.deepEqual(shown(),{workspace:true,running:false,agent:'codex',codex:true,claude:true,gemini:false,continue:null,files:false,git:false,terminal:false,imports:true,export:false,workspaces});
   const reported=ui.menuStates.length;ui.window.dispatchEvent(new UIEvent('relay-state'));await flush();assert.equal(ui.menuStates.length,reported,'An unchanged state is not sent again.');
   ui.$('select-claude').click();await flush();assert.equal(shown().agent,'claude');
-  ui.$('toggle-explorer').click();await flush();assert.equal(shown().files,false);
+  ui.$('toggle-explorer').click();await flush();assert.equal(shown().files,true);
+  ui.$('close-files').click();await flush();assert.equal(shown().files,false);
   ui.$('open-git').click();await flush();assert.equal(shown().git,true);ui.$('open-git').click();await flush();assert.equal(shown().git,false);
   ui.$('workspace-search').value='other';ui.fire('workspace-search','input');await flush();assert.deepEqual(shown().workspaces,workspaces,'Searching does not filter the workspace list.');
   const chat=ui.canonical.get('project-one');chat.status='running';await ui.window.relayUI.refresh();await flush();
@@ -1969,7 +1975,7 @@ test('tasks show as threads: each opens its own conversation, says how it runs, 
   await ui.window.relayUI.refresh(); await flush();
   const row = ui.$('task-list'), tabs = () => row.children.map(item => item.children[0]);
   assert.equal(ui.$('task-section').hidden, false);
-  assert.deepEqual(tabs().map(tab => tab.children.map(item => item.textContent).filter(Boolean).join(' / ')), ['Main conversation / Whole workspace', 'Add promo codes / 2', 'Fix the tray / Review', 'Update the docs / docs']);
+  assert.deepEqual(tabs().map(tab => tab.children.map(item => item.textContent).filter(Boolean).join(' / ')), ['Workspace chat / Whole workspace', 'Add promo codes / 2', 'Fix the tray / Review', 'Update the docs / docs']);
   assert.equal(ui.$('task-banner').hidden, true, 'Main needs no banner.');
   tabs()[1].click(); await flush();
   assert.equal(ui.state().taskId, running.id); assert.equal(asked.at(-1), running.id);
@@ -2080,7 +2086,7 @@ test('with a folder selected, + opens a blank task with the real composer, and s
   assert.equal(ui.state().taskDraft, null); assert.equal(ui.state().conversation.id, conversation.id);
 });
 
-test('the sidebar lists a workspace’s tasks and main conversation, a folder’s own tasks with its files, and one folder gets both', async () => {
+test('the sidebar keeps workspace chat and scoped tasks independent from opening or closing Files', async () => {
   const ui = await browser({ insights: true, agentsUI: true, wide: true, filesUI: true }), conversation = ui.canonical.get('project-one'), state = () => ui.state();
   const [first, second] = state().projects.find(project => project.id === 'project-one').folders;
   const made = (id, title, folder) => ({ id, title, folderName: folder.displayName || folder.name, folderId: folder.id, status: 'running', mode: 'direct', approvals: 0, conversationId: 'lane-' + id, hasWorktree: false });
@@ -2088,24 +2094,27 @@ test('the sidebar lists a workspace’s tasks and main conversation, a folder’
   await ui.window.relayUI.refresh(); await flush();
   const titles = () => ui.$('task-list').children.map(item => item.querySelector('.task-row-title')?.textContent || item.textContent), group = () => ui.document.querySelectorAll('.workspace-group').find(item => item.classList.contains('active'));
   assert.equal(ui.window.relayUI.sidebarLevel(), 'workspace', 'A workspace with several folders opens at the workspace level.');
-  assert.deepEqual(titles(), ['Main conversation', 'In the first', 'In the second']);
+  assert.deepEqual(titles(), ['Workspace chat', 'In the first', 'In the second']);
   assert.equal(ui.$('task-list').querySelector('.task-row-main').title.includes('every folder'), true, 'The main conversation reads differently.');
   assert.equal(ui.$('explorer').hidden, true, 'No files at the workspace level.');
   assert.deepEqual(group().querySelectorAll('.workspace-folder').filter(item => item.classList.contains('selected')), [], 'And no one folder is selected.');
   const folders = () => group().querySelectorAll('.workspace-folder-pick');
   folders()[1].click(); await flush();
   assert.equal(ui.window.relayUI.sidebarLevel(), 'folder'); assert.deepEqual(titles(), ['In the second'], 'A folder lists only its own tasks.');
-  assert.equal(ui.$('explorer').hidden, false, 'With its files.');
+  assert.equal(ui.$('explorer').hidden, true, 'Folder selection does not open Files.');
   assert.equal(group().querySelectorAll('.workspace-folder')[1].classList.contains('selected'), true);
   assert.equal(ui.storage.get('ai-relay:sidebar-level:project-one'), 'folder', 'It is remembered.');
   conversation.parallelTasks = conversation.parallelTasks.filter(task => task.folderId !== first.id);
   await ui.window.relayUI.refresh(); folders()[0].click(); await flush();
   assert.deepEqual(titles(), [ 'No tasks in ' + (first.displayName || first.name) + ' yet.' ]);
   group().querySelector('.workspace-item').click(); await flush();
-  assert.equal(ui.window.relayUI.sidebarLevel(), 'workspace', 'Clicking the open workspace goes back to it.'); assert.equal(ui.$('explorer').hidden, true); assert.deepEqual(titles(), ['Main conversation', 'In the second']);
+  assert.equal(ui.window.relayUI.sidebarLevel(), 'workspace', 'Clicking the open workspace goes back to it.'); assert.equal(ui.$('explorer').hidden, true); assert.deepEqual(titles(), ['Workspace chat', 'In the second']);
   // The Files menu command doesn't do nothing while Files is hidden.
   ui.$('toggle-explorer').click(); await flush();
-  assert.equal(ui.$('explorer').hidden, false); assert.equal(ui.window.relayUI.sidebarLevel(), 'folder');
+  assert.equal(ui.$('explorer').hidden, false); assert.equal(ui.window.relayUI.sidebarLevel(), 'workspace');
+  assert.deepEqual(titles(), ['Workspace chat', 'In the second']);
+  ui.$('close-files').click(); await flush();
+  assert.deepEqual(titles(), ['Workspace chat', 'In the second'], 'Closing Files leaves the task scope and rows alone.');
   assert.equal(ui.$('file-tree').hidden, false, 'And it shows Files rather than collapsing them.');
   // One folder: nothing to choose between, so files and the main conversation are both there.
   const project = state().projects.find(item => item.id === 'project-one');
@@ -2346,6 +2355,56 @@ test('a resize drag holds its cursor with one element, not a rule on every eleme
   const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
   assert.doesNotMatch(css, /\.resizing[^{}]*\*/, 'A rule on every element makes the browser recheck the whole page at the start and end of a drag.');
   assert.match(css, /\.turn \{[^}]*content-visibility: auto/);
+});
+
+test('resize overlays always release after lost capture, outside release, blur, Escape, hidden pages and a missed pointerup', async () => {
+  const ui = await browser({ layoutUI: true }), handle = ui.document.querySelectorAll('.resize-handle').find(bar => bar.getAttribute('aria-label') === 'Resize the sidebar');
+  const down = () => handle.dispatchEvent(new UIEvent('pointerdown', { pointerId: 7, button: 0, clientX: 100 }));
+  const clear = () => { assert.equal(ui.document.querySelectorAll('.resize-shield').length, 0); assert.equal(handle.classList.contains('dragging'), false); };
+  handle.setPointerCapture = () => { throw Error('Capture is unavailable.'); };
+  down(); ui.window.dispatchEvent(new UIEvent('pointermove', { pointerId: 7, buttons: 1, clientX: 200 }));
+  assert.equal(ui.document.documentElement.style['--sidebar-width'], '300px', 'A drag works through window events when capture fails.');
+  ui.window.dispatchEvent(new UIEvent('pointerup', { pointerId: 7 })); clear();
+  const exits = [
+    () => handle.dispatchEvent(new UIEvent('lostpointercapture', { pointerId: 7 })),
+    () => ui.window.dispatchEvent(new UIEvent('pointercancel', { pointerId: 7 })),
+    () => ui.window.dispatchEvent(new UIEvent('blur')),
+    () => ui.window.dispatchEvent(new UIEvent('pagehide')),
+    () => ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })),
+    () => { ui.document.hidden = true; ui.document.dispatchEvent(new UIEvent('visibilitychange')); ui.document.hidden = false; },
+    () => ui.window.dispatchEvent(new UIEvent('pointermove', { pointerId: 7, buttons: 0, clientX: 200 })),
+    () => ui.window.relayLayout.toggleSidebar(),
+  ];
+  for (const exit of exits) { down(); assert.equal(ui.document.querySelectorAll('.resize-shield').length, 1); exit(); clear(); }
+  handle.dispatchEvent(new UIEvent('pointerdown', { pointerId: 9, button: 2 })); clear();
+});
+
+test('Files opens explicitly, previews the selected file and reports failures inside its browser', async () => {
+  const ui = await browser({ filesUI: true, agentsUI: true, layoutUI: true }), chat = ui.canonical.get('project-one');
+  chat.status = 'running'; chat.activeRun = { id: 'working', provider: 'codex' };
+  let fail = true;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/files') return response({ entries: [{ kind: 'file', name: 'app.js', path: 'app.js' }], nextOffset: null });
+    if (request.path === '/api/files/preview') return fail ? response({ error: 'The file could not be read.' }, 400) : response({ name: 'app.js', kind: 'text', mime: 'text/plain', bytes: 12, text: 'const x = 1;' });
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  const main = () => ui.$('task-list').querySelector('.task-row-main');
+  assert.equal(main().querySelector('.task-row-title').textContent, 'Workspace chat');
+  assert.equal(main().dataset.status, 'running');
+  assert(main().querySelector('.task-row-main-icon'));
+  ui.$('toggle-explorer').click(); await flush();
+  assert.equal(ui.$('files-dialog').open, true);
+  ui.document.querySelectorAll('.tree-file')[0].click(); await flush();
+  assert.equal(ui.$('files-dialog').open, true); assert.equal(ui.$('files-error').hidden, false);
+  assert.equal(ui.$('files-error').textContent, 'The file could not be read.');
+  fail = false; ui.document.querySelectorAll('.tree-file')[0].click(); await flush();
+  assert.equal(ui.$('files-dialog').open, false); assert.equal(ui.$('file-preview').hidden, false);
+  assert.match(ui.$('file-preview-content').textContent, /const x = 1/);
+  assert.equal(main().dataset.status, 'running');
+  ui.$('close-file-preview').click(); assert.equal(ui.$('file-preview').hidden, true);
+  assert.equal(ui.$('toggle-explorer').getAttribute('aria-expanded'), 'false');
+  assert.equal(ui.document.querySelectorAll('.resize-shield').length, 0);
 });
 
 test('while a handoff is switching the button says so, and scrolled up, the way back says an offer is waiting', async () => {
@@ -2942,10 +3001,11 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
   assert.equal(ui.$('agents-panel').hidden,true,'Git and Agents share the side panel.');
 });
 
-test('the sidebar, side panel, workspaces and the terminal and Run panel resize from handles that work with the keyboard, are remembered and reset on double-click',async()=>{
-  const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300})}});
+test('the sidebar, side panel and bottom panel resize with keyboard handles; the old Files divider and its saved height are removed',async()=>{
+  const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300,workspaces:500})}});
   const root=ui.document.documentElement,handles=ui.document.querySelectorAll('.resize-handle');
-  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel','Resize workspaces and files']);
+  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel']);
+  assert.equal(JSON.parse(ui.storage.get('throughline:layout')).workspaces,undefined,'An old divider height cannot push tasks down.');
   assert.equal(root.style['--inspector-width'],'720px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel').style.height,'300px','The Run panel’s height carries over to the shared panel.');
   assert.deepEqual(Object.keys(JSON.parse(ui.storage.get('throughline:layout')||'{}')).filter(key=>['terminal','commands'].includes(key)),[]);
   const sidebar=handles.find(handle=>handle.getAttribute('aria-label')==='Resize the sidebar');assert.equal(sidebar.getAttribute('role'),'separator');assert.equal(sidebar.tabIndex,0);
@@ -3229,7 +3289,7 @@ test('the terminal opens shells as tabs named after their folders, splits a tab 
   // A workspace with several folders asks which one the shell starts in. Terminal is in the status bar.
   ui.$('status-terminal').click(); await flush();
   assert.equal(ui.$('terminal-panel').hidden, false); assert.equal(ui.$('bottom-panel').hidden, false);
-  assert.equal(ui.$('toggle-terminal').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('status-terminal').getAttribute('aria-pressed'), 'true');
+  assert.equal(ui.$('status-terminal').getAttribute('aria-pressed'), 'true');
   assert.equal(ui.$('bottom-tab-terminal').getAttribute('aria-selected'), 'true');
   assert.equal(ui.$('terminal-start').hidden, false);
   const folders = ui.$('terminal-folders').querySelectorAll('button');
@@ -3727,6 +3787,32 @@ async function askedUI(question = agentQuestion()) {
   return { ui, card, answers, choice, own, button, key };
 }
 
+test('a Codex async question preserves selections when work finishes and adds its answer beside an existing draft', async () => {
+  const question = { ...agentQuestion(), provider: 'codex', blocking: false };
+  question.questions = [question.questions[0]];
+  const { ui, card, choice, button, key } = await askedUI(question);
+  key(choice(0, 'Luxon'), '2');
+  const c = ui.canonical.get('project-one');
+  c.status = 'complete'; c.activeRun = null;
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('pending-approvals').querySelector('article'), card, 'Completion must not replace a half-answered question.');
+  assert.equal(choice(0, 'Luxon').checked, true);
+  assert.match(card.textContent, /can keep working while you answer/);
+  ui.$('message-input').value = 'My existing draft';
+  ui.setIntercept((request, next) => {
+    if (!request.path.endsWith('/answer')) return next();
+    assert.deepEqual(request.body.answers, [['Luxon']]);
+    c.pendingApprovals = [];
+    return response({ resolved: true, draft: 'Answered:\nWhich library should we use for dates? → Luxon' });
+  });
+  const before = ui.requests.filter(request => request.path.endsWith('/messages')).length;
+  button('Send answer').click(); await flush(); await flush();
+  assert.equal(ui.$('message-input').value, 'My existing draft\n\nAnswered:\nWhich library should we use for dates? → Luxon');
+  assert.ok([...ui.storage.entries()].some(([key, value]) => key.endsWith(`draft:${c.id}`) && value === ui.$('message-input').value));
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/messages')).length, before, 'A prepared answer is not an automatic new run.');
+  assert.equal(ui.$('pending-approvals').children.length, 0);
+});
+
 test('an agent’s questions show one at a time with their choices, the suggested one marked, and your own answer', async () => {
   const { ui, card, answers, choice, own, button, key } = await askedUI();
   const shown = () => card.querySelectorAll('.question').map(field => !field.hidden), tabs = () => card.querySelectorAll('.question-tab');
@@ -3986,6 +4072,55 @@ test('General Settings saves handoff and keep-awake controls and reports a save 
   ui.setIntercept((request, next) => request.path === '/api/handoff-preferences' && request.method === 'POST' ? response({ error: 'Cannot save handoff settings.' }, 503) : next());
   threshold().value = '95'; threshold().dispatchEvent(new UIEvent('change')); await flush();
   assert.equal(ui.$('settings-error').hidden, false); assert.match(ui.$('settings-error').textContent, /Cannot save/); assert.equal(threshold().value, '80');
+});
+
+for (const connection of ['local', 'remote']) test(`Phone settings reveal a new ${connection} QR once without scrolling on status refreshes`, async () => {
+  const ui = await browser({ workbench: true }), frames = [], polls = [], scrolls = [];
+  const state = { enabled: false, interfaces: [{ name: 'Wi-Fi', address: '192.168.1.10' }], devices: [], remote: { configured: true, enabled: false, devices: [] } };
+  let generation = 0;
+  ui.window.matchMedia = () => ({ matches: connection === 'local' });
+  const create = ui.document.createElement;
+  ui.document.createElement = tag => {
+    const element = create(tag);
+    element.scrollIntoView = options => scrolls.push({ element, options: clone(options) });
+    return element;
+  };
+  ui.setIntercept((request, next) => {
+    if (request.path !== '/api/phone') return next();
+    if (request.method === 'POST') {
+      const selected = request.body.connection === 'remote' ? state.remote : state;
+      if (['start', 'invite'].includes(request.body.action)) {
+        selected.enabled = true;
+        selected.invite = { qr: `data:image/png;base64,qr-${++generation}`, url: 'https://phone.example/#one-use', code: '12345678' };
+      }
+    }
+    return response(state);
+  });
+  vm.runInNewContext(fs.readFileSync(new URL('../public/phone-access.js', import.meta.url), 'utf8'), {
+    window: ui.window, document: ui.document, requestAnimationFrame: fn => frames.push(fn), setInterval: fn => polls.push(fn),
+  });
+  await ui.window.relaySettings.open('general'); await flush();
+  const select = ui.labelledInput('Connection'); select.value = connection; select.dispatchEvent(new UIEvent('change')); await flush();
+  const button = text => ui.document.querySelectorAll('button').find(item => item.textContent === text);
+  button(connection === 'remote' ? 'Enable remote access' : 'Enable phone access').click(); await flush();
+  assert.equal(scrolls.length, 0, 'Wait for the next layout frame before scrolling.');
+  while (frames.length) frames.shift()();
+  assert.equal(scrolls.length, 1);
+  assert.equal(scrolls[0].element.tagName, 'IMG'); assert.equal(scrolls[0].element.isConnected, true);
+  assert.equal(scrolls[0].options.block, 'center');
+  assert.equal(scrolls[0].options.behavior, connection === 'local' ? 'instant' : 'smooth');
+  const selected = connection === 'remote' ? state.remote : state;
+  selected.devices.push({ id: 'pending-phone', name: 'Phone', code: '123456', state: 'pending' });
+  polls[0](); await flush();
+  while (frames.length) frames.shift()();
+  for (const image of ui.document.querySelectorAll('img')) image.dispatchEvent(new UIEvent('load'));
+  assert.equal(scrolls.length, 1, 'Status redraws and image loads must not pull the user back to the QR.');
+  button('New QR code').click(); await flush();
+  while (frames.length) frames.shift()();
+  assert.equal(scrolls.length, 2, 'Explicitly requesting another QR reveals it again.');
+  button('New QR code').click(); await flush(); ui.$('settings').close();
+  while (frames.length) frames.shift()();
+  assert.equal(scrolls.length, 2, 'A closed Settings dialog must not scroll the page.');
 });
 
 test('Accounts connects through the provider flow, preserves a draft and shows failed actions', async () => {

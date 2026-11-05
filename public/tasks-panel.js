@@ -11,7 +11,8 @@
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'text-link') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
   const plural = (count, word) => `${count.toLocaleString()} ${word}${count === 1 ? '' : 's'}`;
-  const duration = ms => ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))}s` : ms < 3600000 ? `${Math.floor(ms / 60000)}m ${Math.round(ms % 60000 / 1000)}s` : `${Math.floor(ms / 3600000)}h ${Math.round(ms % 3600000 / 60000)}m`;
+  // Whole seconds first, so a time never reads as 36m 60s.
+  const duration = ms => { const seconds = Math.max(1, Math.round(ms / 1000)); if (seconds < 3600) return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`; const minutes = Math.round(seconds / 60); return `${Math.floor(minutes / 60)}h ${minutes % 60}m`; };
   const compact = value => value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e4 || (value >= 1e3 && value % 1000 === 0) ? `${Math.round(value / 1e3)}k` : value >= 1e3 ? `${(value / 1e3).toFixed(1)}k` : String(value);
   const read = () => { try { return localStorage.getItem(PANEL_KEY) || 'agents'; } catch { return 'agents'; } };
   const remember = value => { try { localStorage.setItem(PANEL_KEY, value); } catch { /* A convenience only. */ } };
@@ -77,8 +78,11 @@
     const tasks = (ledger?.tasks || []).slice(0, -1).slice(-8).reverse(), section = $('tasks-recent'), list = $('tasks-list');
     section.hidden = !tasks.length;
     list.replaceChildren(...tasks.map(task => {
-      const row = node('li', 'panel-row task-row'), title = node('div', 'panel-row-title');
-      title.append(node('span', 'task-row-prompt', `${task.folder ? `${task.folder}: ` : ''}${task.prompt || 'Task'}`), node('span', 'panel-row-time', duration(task.workingMs)));
+      // Not `task-row`: that's the sidebar's one-line task row, and these rows wrap over three lines.
+      const row = node('li', 'panel-row ledger-row'), title = node('div', 'panel-row-title');
+      const prompt = node('span', 'task-row-prompt', `${task.folder ? `${task.folder}: ` : ''}${task.prompt || 'Task'}`);
+      prompt.title = prompt.textContent;
+      title.append(prompt, node('span', 'panel-row-time', duration(task.workingMs)));
       const meta = node('div', 'panel-row-meta'), tests = TESTS[task.verification] || TESTS.unverified;
       meta.append(agents(task), node('span', '', plural(task.runs, 'run')), node('span', tests[0] === 'done' ? 'ok' : tests[0] === 'failed' ? 'bad' : '', tests[1]));
       row.append(title, meta, node('div', 'panel-row-meta', usageText(task.usage)));

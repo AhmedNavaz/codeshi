@@ -321,6 +321,18 @@ Keep this as the routing issue rather than opening a duplicate. Stages 1 and 2 a
 - Prefer one agent until a measured quality or elapsed-time benefit justifies a team.
 - Compare against a manually chosen single agent on equivalent tasks, reporting correctness, total measured usage, retries, interventions and wall time.
 
+#### Routing and handoff trust requirements
+
+These are planned acceptance criteria for #12 and #17, not claims about the shipped name-based model tiers. Flow mode (#107) presents the same policy and decision records; improving presentation does not replace verifying the selection logic.
+
+- [ ] Model capabilities have a source and verification date, cover the tools, inputs, context and skill support exposed by Codeshi, and distinguish provider claims from observed task outcomes. An unknown model is not ranked by its name alone.
+- [ ] Required capabilities are checked before ranking suitable models by task fit, allowance, continuity and budget. More unused allowance cannot make an incompatible model eligible.
+- [ ] Initial dispatch and every handoff refresh or explicitly identify unavailable/stale quota, check the selected model's applicable five-hour, weekly and model-specific windows, and account for concurrent tasks sharing allowance. Recheck after waiting or changing a destination.
+- [ ] Usage forecasts expose their uncertainty and include transfer, retries and reviews. Do not convert subscription percentages into invented prompt/token capacity or promise a task will fit when the provider cannot establish that.
+- [ ] One policy selects initial models and handoff destinations using the remaining task, current progress and required capabilities. A handoff preserves edits and unfinished work, avoids repeated switching, and prefers a safe boundary where available. With no suitable destination, offer waiting or manual selection within the existing billing rules.
+- [ ] Before execution, explain task fit, constraining quota windows and their freshness, the cost of switching, and the tradeoff against staying or an alternative. A manual override remains available. Save the decision and outcome for the normal UI, Flow mode and future CLI without making extra model calls for presentation.
+- [ ] Repeatable evaluations cover misleading/new model names, unsupported tools, missing capability data, stale quota, weekly exhaustion despite short-window room, concurrent usage and mid-task handoffs. Compare correctness, total reported usage, repeated work, retries and interventions with a manually chosen single agent, including coordination overhead. Define and meet acceptance thresholds before expanding automatic selection; show missing measurements rather than claiming savings.
+
 This extends routing; measurement, context, task budgets, skills and team isolation are separate implementation workstreams.
 
 Implementation proposals: #84 (measurement), #85 (context), #87 (shared budgets), #89 (specialist workflows).

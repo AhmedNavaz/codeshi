@@ -23,6 +23,10 @@ Codeshi was called Throughline until version 0.23. Your workspaces, conversation
 
 Codeshi keeps an eye on each agent's plan usage. Before one runs out mid-task, it offers to hand the task to an agent that still has room, and shows you who takes over and how it's billed before anything switches. Turn on automatic handoff and it switches by itself, even if a run reaches its limit first. If every agent is out, the task waits and carries on with whichever resets first, or you can continue it on a local model.
 
+### Run it from your phone
+
+Scan a QR code, match the number and allow it on your computer. From your phone's browser you can follow a run, send prompts, answer approvals and questions, accept a handoff or press Stop, on the same Wi-Fi or over mobile data. There's no app or account to set up. Your computer keeps running the agents and holding your files, so it has to stay awake and online. Away from home, messages are encrypted on your devices before they reach the relay.
+
 ### Point at what should change
 
 <img src="docs/features/point-and-tell.jpg" alt="A store's product page open in Codeshi's preview while picking, with its Add to bag button outlined under the pointer, and Codeshi's message box holding the button's screenshot and a sentence naming the button and where its code is, followed by the change asked for">
@@ -113,7 +117,7 @@ The [guide](docs/guide.md) describes every feature and its limits.
 | **More agents** | Grok, DeepSeek, Qwen and more, each on your own account | In progress ([#4](https://github.com/AhmedNavaz/codeshi/issues/4)) |
 | **Linux builds** | Codeshi on Linux, alongside macOS and Windows | Help wanted ([#5](https://github.com/AhmedNavaz/codeshi/issues/5)) |
 | **Hands-free voice** | Say "send", and keep talking while the agent works | Needs design ([#72](https://github.com/AhmedNavaz/codeshi/issues/72)) |
-| **Approve from your phone** | Answer an approval when you're away from your desk | Exploring ([#23](https://github.com/AhmedNavaz/codeshi/issues/23)) |
+| **Phone notifications** | Lock-screen alerts when an approval is waiting or a run finishes | Exploring ([#23](https://github.com/AhmedNavaz/codeshi/issues/23)) |
 | **Signed macOS builds** | Downloads that open without a security prompt, and Homebrew | Waiting on an Apple Developer account ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)) |
 
 The [roadmap](ROADMAP.md) has everything that has shipped and the full plan.

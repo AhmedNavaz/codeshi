@@ -68,12 +68,14 @@
   }
 
   function card(item, conversationId) {
+    const projectId = api().getState().projectId;
     const article = node('article', undefined, 'approval-card question-card'), head = node('header'), mark = node('span', undefined, 'approval-icon question-icon');
     mark.setAttribute('aria-hidden', 'true');
     article.dataset.approvalId = item.id; article.tabIndex = -1;
     const agent = names[item.provider] || 'The agent', count = item.questions.length;
     head.append(mark, node('h3', count === 1 ? `${agent} has a question` : `${agent} has ${count} questions`));
     article.append(head);
+    if (item.blocking === false) article.append(node('p', `${agent} can keep working while you answer. After the run finishes, your answer goes into your draft for you to send.`, 'question-hint'));
     const skip = button('Skip', 'question-skip'), primary = button('Submit', 'primary question-submit');
     skip.title = `${agent} continues with its own judgement`;
     let sending = false, current = 0;
@@ -105,7 +107,7 @@
     function advance() { const next = unanswered(); if (next >= 0) show(next, true); }
     function changed() {
       const done = answered();
-      primary.textContent = done || !tabs ? 'Submit' : 'Next';
+      primary.textContent = done || !tabs ? item.blocking === false ? 'Send answer' : 'Submit' : 'Next';
       primary.disabled = sending || (done ? false : !tabs || !groups[current].values().length);
       if (tabs) [...tabs.children].forEach((tab, index) => {
         tab.setAttribute('aria-selected', String(index === current));
@@ -116,7 +118,10 @@
       if (sending) return;
       sending = true; skip.disabled = true; changed();
       const body = { runId: item.runId, questionId: item.id, ...(answers ? { answers } : { skip: true }) };
-      try { await api().post(`/api/conversations/${conversationId}/answer`, body); }
+      try {
+        const result = await api().post(`/api/conversations/${conversationId}/answer`, body);
+        if (result.draft) api().prepareQuestionAnswer(conversationId, result.draft, projectId);
+      }
       catch (error) { api().showNotice(error.message || 'Your answer could not be sent. Please try again.'); }
       finally { sending = false; skip.disabled = false; changed(); await api().refresh(); }
     }

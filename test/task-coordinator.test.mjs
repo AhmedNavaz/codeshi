@@ -207,6 +207,27 @@ test('a task beside a running main conversation takes its own copy, and is merge
   const ended = env.lane(task.id); assert.throws(() => ended.broker.start(ended.c, { text: 'More', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }), /has ended/);
 });
 
+test('a queued prompt can start as a task beside the main run, keeping its settings, and stays queued when the task can’t start', { skip: scriptCLIs }, async t => {
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a')) }));
+  env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
+  const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(env.folders.a)).length, 'the main run');
+  env.broker.queueAction(env.c, { action: 'add', text: 'First queued', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
+  env.broker.queueAction(env.c, { action: 'add', text: 'Hold A', provider: 'claude', mode: 'read', approvalPolicy: 'ask', routing: { mode: 'balanced', reason: 'A light task', tier: 'light' } });
+  const [first, second] = env.c.queue;
+  assert.throws(() => env.broker.tasks.fromQueue(env.c, { id: second.id, folderId: 'missing' }), /Choose a folder/);
+  assert.deepEqual(env.c.queue.map(item => item.text), ['First queued', 'Hold A'], 'A task that can’t start leaves the prompt queued.');
+  const task = env.broker.tasks.fromQueue(env.c, { id: second.id, folderId: 'a' });
+  assert.deepEqual(env.c.queue.map(item => item.id), [first.id], 'The prompt has left the queue.');
+  assert.deepEqual([task.title, task.provider, task.accessMode, task.approvalPolicy, task.routing?.reason], ['Hold A', 'claude', 'read', 'ask', 'A light task'], 'The task keeps what the prompt was queued with.');
+  assert.equal(env.broker.tasks.fromQueue(env.c, { id: second.id, folderId: 'a' }).id, task.id, 'Asking again gets the same task.');
+  assert.throws(() => env.broker.tasks.fromQueue(env.c, { id: 'not-queued', folderId: 'a' }), /already started or been removed/);
+  await working(env, task);
+  assert.equal(env.task(task.id).mode, 'worktree', 'Beside the main run, it takes its own copy.');
+  env.release(env.task(task.id).scopePath); await finished(env, task);
+  env.release(fs.realpathSync(env.folders.a)); await main.done;
+});
+
 test('changes on both sides merge when they don’t touch, and a conflict overwrites nothing and can be kept as a branch', { skip: scriptCLIs }, async t => {
   const text = 'one\n2\n3\n4\n5\n6\nseven\n';
   const env = setup(t, root => ({ a: repository(path.join(root, 'a'), { 'merge.txt': text, 'clash.txt': 'same\n', 'both.txt': 'x\n', 'bin.dat': 'y\n' }) }), { policy: { maxConcurrent: 5 } });

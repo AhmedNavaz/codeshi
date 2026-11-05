@@ -101,6 +101,17 @@ export class TaskCoordinator {
     this.main.emit('update', { conversationId: c.id });
     return this.public(saved);
   }
+  // A queued prompt started now as a task beside the main conversation (#108, first stage). It keeps the agent, model, effort,
+  // access and permission setting it was queued with, and leaves the queue only once the task is recorded, so a task that can't
+  // start leaves the prompt where it was. Asking twice for the same prompt gets the same task.
+  fromQueue(c, input = {}) {
+    const requestId = `queue-${input.id}`, accepted = (c.parallelTasks || []).find(task => task.requestId === requestId);
+    if (accepted) return this.public(accepted);
+    const item = this.main.queue.item(c, input.id);
+    const task = this.start(c, { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, ...(item.routing ? { routing: item.routing } : {}), folderId: input.folderId, requestId });
+    this.main.queue.act(c, { action: 'remove', id: item.id });
+    return task;
+  }
   tickAll() { for (const c of this.main.conversations.values()) if (c.parallelTasks?.some(task => task.status === 'waiting')) this.tick(c); }
   tick(c) {
     if (this.closed || this.ticking) return;
@@ -183,7 +194,7 @@ export class TaskCoordinator {
 
   public(task) {
     const lane = this.lanes.get(task.id), { text, attachments, requestId, folderPath, commonDir, repoRoot, ...shown } = task;
-    return { ...shown, approvals: lane?.broker.running?.approvals.size || 0, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status) };
+    return { ...shown, approvals: lane?.broker.pendingCount() || 0, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status) };
   }
   list(c) { return (c.parallelTasks || []).filter(task => !task.closed).map(task => this.public(task)); }
   // One task's conversation, as the page shows it. Undo works on the real folders from the main conversation, so a lane doesn't offer it.

@@ -24,7 +24,6 @@
       const tools = $(`${tool}-tools`); if (tools) tools.hidden = tool !== active;
       $(`status-${tool}`)?.setAttribute('aria-pressed', String(open && tool === active));
     }
-    $('toggle-terminal')?.setAttribute('aria-pressed', String(open));
   }
   function announce() { window.dispatchEvent(new CustomEvent('relay-panel', { detail: { open: !panel.hidden, tool: active } })); }
   function show(tool = active) {
@@ -47,7 +46,6 @@
     $(`status-${tool}`)?.addEventListener('click', () => toggle(tool));
   }
   $('bottom-hide')?.addEventListener('click', hide);
-  $('toggle-terminal')?.addEventListener('click', () => toggle());
   // The tab strip moves with the arrow keys, as tabs do.
   panel.querySelector('.bottom-tabs')?.addEventListener('keydown', event => {
     if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;

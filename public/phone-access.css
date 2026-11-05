@@ -1,0 +1,11 @@
+.phone-network-address, .phone-pair-code { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.phone-pair-code { font-size: 22px; letter-spacing: .1em; color: var(--text-strong); }
+.phone-pair-link { max-width: 240px; width: 100%; min-height: 36px; padding: 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-input); color: var(--text); font: 12px var(--font); }
+
+/* The desktop entry stays visible; a pending device is a request to review, never an automatic grant. */
+#connect-phone[data-connected="true"] { color: var(--success); }
+.phone-pending-count { min-width: 15px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 10px; }
+.phone-pair-qr { display: block; flex: none; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; background: #fff; image-rendering: pixelated; }
+.phone-qr-row .settings-row-text { align-self: flex-start; }
+.phone-qr-row .settings-control { flex: none; }
+@media (max-width: 760px) { .phone-qr-row { flex-direction: column; align-items: flex-start; } }

@@ -25,7 +25,7 @@ import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mj
 import { validateAutomaticReview } from './automatic-review.mjs';
 import { ResumeScheduler } from './resume.mjs';
 import { readOnlyRequest, approvalScope, requestSummary, blockedBySandbox } from './approval-rules.mjs';
-import { cleanQuestions, checkAnswers, answerSummary } from './agent-questions.mjs';
+import { cleanQuestions, checkAnswers, answerSummary, codexAsyncQuestions } from './agent-questions.mjs';
 import { PermissionRules } from './permission-rules.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
 import { HandoffMonitor } from './handoff.mjs';
@@ -250,6 +250,10 @@ export class Broker extends EventEmitter {
     if (record.type === 'created') Object.assign(c, { createdAt: record.at, title: record.title });
     if (record.type === 'settings') { Object.assign(c, { provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model ?? null, transport: record.transport || c.transport, settingsRevision: record.seq }); c.models[record.provider] = record.model ?? null; c.transports[record.provider] = record.transport || c.transport; }
     if (record.type === 'context') c.context = record.context;
+    if (record.type === 'async_question') c.asyncQuestions = [...(c.asyncQuestions || []), record.question];
+    if (record.type === 'async_question_end') c.asyncQuestions = (c.asyncQuestions || []).filter(item => item.id !== record.id);
+    // A new prompt supersedes optional questions from earlier work. Background reviews do not.
+    if (record.type === 'submission' && !record.review) c.asyncQuestions = [];
     // Project memory (#21). Removing an entry stops it being used; the conversation it came from stays saved.
     if (record.type === 'memory_add') c.memory = [...(c.memory || []), record.entry];
     if (record.type === 'memory_update') c.memory = (c.memory || []).map(entry => entry.id === record.id ? { ...entry, ...record.changes, updatedAt: record.at } : entry);
@@ -425,10 +429,16 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null } = {}) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, parallelTasks, ...visible } = c;
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, parallelTasks, asyncQuestions, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
-    return { ...visible, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
+    return { ...visible, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
+
+  pendingApprovals(c) {
+    return [...(this.running?.c === c ? this.running.approvals.values() : []), ...(c.asyncQuestions || [])];
+  }
+
+  pendingCount() { return [...this.conversations.values()].reduce((sum, c) => sum + this.pendingApprovals(c).length, 0); }
 
   list() {
     return [...this.conversations.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -517,14 +527,36 @@ export class Broker extends EventEmitter {
 
   // Answers to an agent's questions: one list per question, each an option's label or the person's own words, or
   // null to skip them. The conversation keeps what was asked and answered, for the agents that read it later.
-  answer(runId, questionId, answers) {
+  answer(runId, questionId, answers, conversation = null) {
+    const c = conversation || [...this.conversations.values()].find(c => c.asyncQuestions?.some(item => item.runId === runId && item.id === questionId));
+    const optional = c?.asyncQuestions?.find(item => item.runId === runId && item.id === questionId);
+    if (optional) return this.answerAsync(c, optional, answers);
     const run = this.running, item = run && run.id === runId ? run.approvals.get(questionId) : null;
-    if (!item || item.kind !== 'question') throw Object.assign(new Error('This question is no longer waiting for an answer.'), { status: 409 });
+    if (!item || item.kind !== 'question' || conversation && run.c !== conversation) throw Object.assign(new Error('This question is no longer waiting for an answer.'), { status: 409 });
     const checked = checkAnswers(item.questions, answers);
     run.approvals.delete(questionId);
     run.child?.send({ type: 'question-result', id: questionId, answers: checked });
     this.message(run.c, 'activity', answerSummary(item.questions, checked), run.provider);
     return { resolved: true };
+  }
+
+  async answerAsync(c, item, answers) {
+    const checked = checkAnswers(item.questions, answers), text = answerSummary(item.questions, checked);
+    this.answeringQuestions ||= new Set();
+    if (this.answeringQuestions.has(item.id)) throw Object.assign(new Error('This answer is already being sent.'), { status: 409 });
+    this.answeringQuestions.add(item.id);
+    try {
+      let result = {};
+      if (checked) {
+        const run = this.running;
+        // An async question never pauses Codex. While it works, send the answer as input to the same turn. Once
+        // finished, prepare a normal prompt so the person can review it and use the usual Send/billing controls.
+        if (run?.c === c && run.steerable && !run.ending) result = await this.addToRun(c, { text });
+        else result = { draft: text };
+      } else this.message(c, 'activity', text, item.provider);
+      this.record(c, { type: 'async_question_end', id: item.id });
+      return { resolved: true, ...result };
+    } finally { this.answeringQuestions.delete(item.id); }
   }
 
   async status() {
@@ -550,7 +582,7 @@ export class Broker extends EventEmitter {
       // Only the first check waits. Later ones refresh in the background, so a slow CLI never delays the conversation.
       if (!this.providerStatus) await this.providerStatusPending;
     }
-    return { workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, providers: this.providerStatus, runningConversationId: this.running?.c.id || null, pendingApprovals: this.running ? [...this.running.approvals.values()] : [] };
+    return { workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, providers: this.providerStatus, runningConversationId: this.running?.c.id || null, pendingApprovals: [...this.conversations.values()].flatMap(c => this.pendingApprovals(c)) };
   }
 
   prompt(c, text, fresh = false) { return prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
@@ -781,10 +813,10 @@ export class Broker extends EventEmitter {
     run.seenTools ||= new Set();
     for (const id of toolIds) if (!run.seenTools.has(id)) { run.seenTools.add(id); if (run.c.activeRun) run.c.activeRun.toolCount = run.seenTools.size; }
     this.touch(run, phase);
+    const { c, provider } = run;
     // The agent shortened its own context, which Codeshi can't see into, so it is only counted (#85).
     if (event.type === 'relay.progress' && event.phase === 'compacting' && run.lastProgress !== 'compacting') { run.compactions = (run.compactions || 0) + 1; this.record(c, { type: 'run_metadata', metadata: { compactions: run.compactions } }); }
     if (event.type === 'relay.progress') { run.lastProgress = event.phase; return; }
-    const { c, provider } = run;
     if (!event || typeof event !== 'object') throw new Error('Invalid provider protocol event.');
     // The agent's own plan for the run, shown as a to-do list.
     if (event.type === 'relay.plan') {
@@ -807,6 +839,12 @@ export class Broker extends EventEmitter {
       const id = `${run.id}:${item.id || randomUUID()}`;
       if (item.type === 'agent_message' && typeof item.text === 'string') {
         this.message(c, 'assistant', item.text, provider, id, event.type === 'item.completed' ? 'complete' : 'streaming');
+        const questions = provider === 'codex' && !run.review && event.type === 'item.completed' ? codexAsyncQuestions(item.questions) : [];
+        if (questions.length && !(run.asyncQuestionIds ||= new Set()).has(id)) {
+          run.asyncQuestionIds.add(id);
+          this.record(c, { type: 'async_question', question: { id, kind: 'question', runId: run.id, provider, questions, blocking: false } });
+          this.emit('notify', { conversationId: c.id, kind: 'approval', approvalId: id, title: questions.length === 1 ? 'Codex has a question' : `Codex has ${questions.length} questions`, body: questions[0].question });
+        }
       }
       if (item.type === 'command_execution') {
         this.message(c, 'activity', clip(`$ ${item.command}\n${item.aggregated_output || ''}`), provider, id);

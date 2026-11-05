@@ -21,6 +21,9 @@ import { createLocalRoutes } from './local-models.mjs';
 import { createTaskRoutes } from './task-routes.mjs';
 import { atomicJSON } from './patches.mjs';
 import { appearance, appearances, preferencePatch, publicPreferences } from './preferences.mjs';
+import { createPhoneAccess } from './phone-access.mjs';
+import { createRemotePhoneAccess } from './phone-remote.mjs';
+import { phoneConversation } from './phone-conversation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
@@ -40,6 +43,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/settings.js': ['settings.js', 'text/javascript; charset=utf-8'], '/settings.css': ['settings.css', 'text/css; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/logo.svg': ['logo.svg', 'image/svg+xml'], '/mark.svg': ['mark.svg', 'image/svg+xml'],
   '/icon-16.png': ['icon-16.png', 'image/png'], '/icon-32.png': ['icon-32.png', 'image/png'], '/icon-180.png': ['icon-180.png', 'image/png'], '/icon-512.png': ['icon-512.png', 'image/png'] };
+for (const [name, type] of [['phone-access.js', 'text/javascript'], ['phone-access.css', 'text/css'], ['phone.js', 'text/javascript'], ['phone-logic.js', 'text/javascript'], ['phone-theme.js', 'text/javascript'], ['phone.css', 'text/css']]) assets[`/${name}`] = [name, `${type}; charset=utf-8`];
 const json = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
@@ -65,7 +69,7 @@ async function body(req, limit = 3 * 1024 * 1024) {
   } catch { throw Object.assign(new Error('Invalid JSON request.'), { status: 400 }); }
 }
 
-export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, voice } = {}) {
+export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, voice, phoneOptions } = {}) {
   const registry = new ProjectRegistry({ dataRoot: dataRoot || dataDir || path.join(root, '.data'), bins, lock });
   for (const folder of [...(workspace ? [workspace] : []), ...workspaces]) registry.add({ path: folder });
   const collaboration = new CollaborationService({ registry, dataRoot: registry.dataRoot });
@@ -154,6 +158,11 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         return json(res, 403, { error: 'Cross-origin requests are not allowed.' });
       }
       const url = new URL(req.url, `http://${req.headers.host}`);
+      // A paired phone gets its own page, not the desktop one.
+      if (req.method === 'GET' && url.pathname === '/' && req.phoneClient) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(fs.readFileSync(path.join(root, 'public', 'phone.html')));
+      }
       if (req.method === 'GET' && assets[url.pathname]) {
         const [filename, type] = assets[url.pathname];
         let contents = fs.readFileSync(path.join(root, 'public', filename));
@@ -186,6 +195,12 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
           return json(res, 201, registry.add(input));
         }
+      }
+      if (url.pathname === '/api/phone') {
+        if (req.phoneClient) return json(res, 403, { error: 'Manage phone access on the computer.' });
+        if (req.method === 'GET') return json(res, 200, phoneAccess.status());
+        if (req.method === 'POST') return json(res, 200, await phoneAccess.manage(await body(req, 4096)));
+        return json(res, 405, { error: 'Use GET or POST for phone access.' });
       }
       if (url.pathname === '/api/preferences') {
         if (req.method === 'POST') saveSettings(preferencePatch(await body(req), config));
@@ -222,8 +237,12 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);
         return json(res,200,url.pathname==='/api/ledger'?await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}):url.pathname==='/api/memory'?broker.memory(c):url.pathname==='/api/budget'?broker.budget.view(c):url.pathname==='/api/skills'?broker.skills.view(c):broker.briefPreview(c));
       }
-      if(req.method==='GET'&&url.pathname==='/api/conversation'&&url.searchParams.get('task')){const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);return json(res,200,broker.tasks.view(c,url.searchParams.get('task'),{since:url.searchParams.has('since')?Number(url.searchParams.get('since')):null}));}
-      if(req.method==='GET'&&url.pathname==='/api/conversation')return json(res,200,registry.mainConversation(selectedProjectId(url),{since:url.searchParams.has('since')?Number(url.searchParams.get('since')):null}));
+      if(req.method==='GET'&&url.pathname==='/api/conversation'){
+        // ?tail=N is the short form for a phone: the latest messages and only what its page reads.
+        const shape=view=>url.searchParams.has('tail')?phoneConversation(view,Number(url.searchParams.get('tail'))):view,since=url.searchParams.has('since')?Number(url.searchParams.get('since')):null;
+        if(url.searchParams.get('task')){const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);return json(res,200,shape(broker.tasks.view(c,url.searchParams.get('task'),{since})));}
+        return json(res,200,shape(registry.mainConversation(selectedProjectId(url),{since})));
+      }
       if (await commandRoutes.route({ req, res, url })) return;
       if (await terminalRoutes.route({ req, res, url })) return;
       if (await voiceRoutes.route({ req, res, url })) return;
@@ -281,7 +300,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (match[2] === 'skills') return json(res, 200, broker.skills.change(c, input));
           if (match[2] === 'budget') return json(res, 200, input.action === 'extend' ? broker.budget.extend(c, input) : broker.budget.setPolicy(c, input.policy || {}));
           if (match[2] === 'approval') return json(res, 200, await broker.approve(input.runId, input.approvalId, input.allow === true, input.remember ?? null));
-          if (match[2] === 'answer') return json(res, 200, await broker.answer(input.runId, input.questionId, input.skip === true ? null : input.answers));
+          if (match[2] === 'answer') return json(res, 200, await broker.answer(input.runId, input.questionId, input.skip === true ? null : input.answers, c));
           if (match[2] === 'provider') return json(res, 200, await broker.settings(c, input));
           if (match[2] === 'stop') return json(res, 200, broker.stop(c.id));
           if (match[2] === 'resume') return json(res, 200, input.cancel === true ? broker.cancelResume(c) : broker.scheduleResume(c, input));
@@ -302,6 +321,12 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     }
   });
 
+  const phoneBridge = { handle: (req, res) => server.emit('request', req, res), local: () => ({ port: server.address()?.port, accessToken }) };
+  let remotePhoneConfig = phoneOptions?.remoteConfig;
+  if (!remotePhoneConfig) { try { remotePhoneConfig = JSON.parse(fs.readFileSync(path.join(root, 'remote', 'firebase-public.json'), 'utf8')); } catch { /* Local Wi-Fi pairing works without a remote service. */ } }
+  const remotePhone = createRemotePhoneAccess({ config: remotePhoneConfig, storeFile: path.join(registry.dataRoot, 'phone-firebase-auth.json'), ...phoneBridge, ...(phoneOptions?.remoteClientFactory ? { clientFactory: phoneOptions.remoteClientFactory } : {}) });
+  registry.on('update', () => remotePhone.notify()); registry.on('projects', () => remotePhone.notify('projects'));
+  const phoneAccess = createPhoneAccess({ ...phoneOptions, ...phoneBridge, remote: remotePhone });
   let closePromise;
   // force drops requests still in flight, such as account checks, for a desktop quit or restart, where the page goes away anyway.
   // Each step gets its turn even if an earlier one fails, and reports its time through onStep, so a slow shutdown can be traced.
@@ -314,6 +339,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       catch (error) { failure ||= error; onStep({ name, ms: Date.now() - started, error: error.message }); }
     };
     closeAccountConnections();
+    await step('phone access', () => phoneAccess.close());
     await step('reviews', () => reviewRoutes.close());
     await step('commands', () => commandRoutes.close());
     await step('terminals', () => terminalRoutes.close());

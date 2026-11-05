@@ -133,7 +133,7 @@ test('serves the local interface and probes provider versions without inference'
 test('closing reports each step and its time, so a slow shutdown can be traced', async t => {
   const f = await fixture(t), steps = [];
   await f.app.close({ force: true, onStep: step => steps.push(step) });
-  assert.deepEqual(steps.map(step => step.name), ['reviews', 'commands', 'terminals', 'voice', 'workspaces', 'connections']);
+  assert.deepEqual(steps.map(step => step.name), ['phone access', 'reviews', 'commands', 'terminals', 'voice', 'workspaces', 'connections']);
   assert(steps.every(step => Number.isFinite(step.ms) && !step.error));
 });
 

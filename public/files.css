@@ -7,16 +7,26 @@ select, #setup-content select, #workbench select, .git-toolbar select, .import-d
 /* Composer pickers are compact toolbar controls; a tighter chevron keeps the toolbar on one line. */
 .picker select { padding-right: 24px !important; background-position: right 7px center; }
 
-/* File browser: a second, collapsible section in the workspace rail. */
-.sidebar .workspace-list { flex: 0 1 auto; max-height: 38%; min-height: 80px; }
-.explorer { display: flex; flex-direction: column; flex: 1; min-height: 100px; border-top: 1px solid var(--border); margin-top: 4px; overflow: hidden; }
-.explorer.collapsed { flex: none; min-height: 0; }
-.sidebar:has(.explorer.collapsed) .workspace-list { flex: 1; max-height: none; }
-.explorer-heading { display: flex; align-items: center; gap: 8px; padding: 9px 12px 8px 10px; }
-.explorer-heading > button:first-child { display: flex; align-items: center; gap: 7px; flex: 1; background: none; border: 0; padding: 0; color: var(--text); font-size: 11px; font-weight: 600; text-align: left; }
+/* Files opens independently: the workspace/task stack never changes size when browsing closes. */
+.sidebar .workspace-list { flex: 0 1 auto; max-height: 45%; min-height: 0; padding-bottom: 8px; }
+.sidebar-files-button { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 24px; margin-left: auto; padding: 0 5px; border: 0; border-radius: 4px; background: none; color: var(--muted); font-size: 11px; letter-spacing: 0; text-transform: none; }
+.sidebar-files-button .icon { width: 13px; height: 13px; }
+.sidebar-files-button:hover, .sidebar-files-button[aria-expanded="true"] { color: var(--text-strong); background: var(--hover); }
+.sidebar-heading .new-workspace { margin-left: 0; }
+.files-dialog { width: min(480px, calc(100vw - 32px)); height: min(600px, calc(100dvh - 64px)); max-width: none; max-height: none; padding: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--sidebar); color: var(--text); box-shadow: var(--shadow-lg); }
+.files-dialog[open] { display: flex; }
+.files-dialog::backdrop { background: var(--backdrop); }
+.explorer { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.explorer[hidden] { display: none !important; }
+.explorer-heading { display: flex; align-items: center; flex: none; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.explorer-heading > div { flex: 1; min-width: 0; }
+.explorer-heading h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.explorer-heading p { margin: 3px 0 0; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-heading .icon-button { width: 24px; height: 24px; }
 .explorer-heading .icon-button .icon { width: 14px; height: 14px; }
-.file-tree { overflow: auto; flex: 1; padding: 0 6px 12px; min-height: 0; }
+.files-error { flex: none; margin: 10px 16px 0; color: var(--danger); font-size: 12px; }
+.files-error[hidden] { display: none; }
+.file-tree { overflow: auto; flex: 1; padding: 10px 12px 16px; min-height: 0; }
 .tree-row { width: 100%; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 7px; border: 0; background: transparent; color: var(--text); border-radius: 4px; text-align: left; font: 12px var(--font); }
 .tree-row:hover { background: var(--hover); }
 .tree-row.selected { background: var(--list-active); color: var(--text-strong); }
@@ -32,7 +42,6 @@ select, #setup-content select, #workbench select, .git-toolbar select, .import-d
 .file-glyph.folder { background: var(--warning); mask: var(--icon-folder) center / contain no-repeat; -webkit-mask: var(--icon-folder) center / contain no-repeat; }
 .file-glyph.script { color: var(--link); }.file-glyph.image { color: var(--claude); font-size: 17px; }.file-glyph.code { color: var(--codex); font-size: 16px; }
 .explorer-footnote { margin: 0; padding: 10px 15px; font-size: 10px; line-height: 1.5; color: var(--faint); border-top: 1px solid var(--border); }
-.explorer.collapsed .explorer-footnote { display: none; }
 .file-preview-open #messages-scroll { display: none; }
 .file-preview { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--bg); }
 .file-preview > header { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
@@ -65,8 +74,6 @@ select, #setup-content select, #workbench select, .git-toolbar select, .import-d
 
 @media (max-width: 700px) {
   .sidebar .workspace-list { max-height: 60dvh; min-height: 0; }
-  .explorer { position: fixed; top: 44px; bottom: 24px; left: 0; width: 260px; background: var(--sidebar); z-index: 35; box-shadow: var(--shadow-lg); display: none; }
-  .sidebar.workspaces-open .explorer { display: flex; top: 40dvh; }
   .file-preview > header { padding: 10px; }.file-preview .secondary-button { max-width: 115px; }.attach-files > span { display: none; }
 }
 

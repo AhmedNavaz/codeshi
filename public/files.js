@@ -5,6 +5,7 @@
   const button = (text, cls, fn) => { const node = el('button', cls, text); node.type = 'button'; node.addEventListener('click', fn); return node; };
   const size = bytes => bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.ceil(bytes / 1024)) + ' KB';
   const drafts = new Map(), uploads = new Map(), thumbnails = new Map();
+  const browser = $('files-dialog'), opener = $('toggle-explorer');
   let project = '', signature = '', treeVersion = 0, previewVersion = 0, selected = null, dragDepth = 0;
   const key = id => 'relay-attachments:' + id;
   function files(id = api.getState().projectId) {
@@ -104,12 +105,20 @@
   }
   async function openFile(folder, entry, id) {
     const version = ++previewVersion;
+    $('files-error').hidden = true;
     try {
       const file = await api.api('/api/files/preview?folderId=' + encodeURIComponent(folder.id) + '&path=' + encodeURIComponent(entry.path), {}, id);
       if (version !== previewVersion || id !== api.getState().projectId) return;
       showPreview(file, (folder.displayName || folder.name) + ' / ' + entry.path, id);
+      browser.close();
+      $('close-file-preview').focus();
       return true;
-    } catch (error) { if (version === previewVersion) api.showNotice(error.message); }
+    } catch (error) {
+      if (version === previewVersion) {
+        if (browser.open) { $('files-error').textContent = error.message; $('files-error').hidden = false; }
+        else api.showNotice(error.message);
+      }
+    }
   }
   function directory(folder, relative, name, host, id, version, root = false) {
     const branch = el('div', 'tree-branch'), row = button('', 'tree-row tree-directory' + (root ? ' tree-root' : ''), toggle), children = el('div', 'tree-children');
@@ -144,14 +153,21 @@
   function refreshTree() {
     const state = api.getState(), current = state.projects.find(p => p.id === state.projectId), tree = $('file-tree'), version = ++treeVersion;
     tree.replaceChildren();
+    $('files-error').hidden = true;
     if (!current) { tree.append(el('p','tree-note','Add a workspace to browse its files.')); return; }
     // Only the folder selected in the sidebar is shown, so multi-folder workspaces stay readable.
-    const folderId = api.selectedFolderId?.();
+    const folderId = api.sidebarLevel?.() === 'workspace' ? null : api.selectedFolderId?.();
+    $('files-location').textContent = current.name;
     for (const folder of (current.folders || []).filter(folder => !folderId || folder.id === folderId)) directory(folder,'',folder.displayName || folder.name,tree,state.projectId,version,true);
   }
   function sync() {
-    const state = api.getState(), current = state.projects.find(p => p.id === state.projectId), next = JSON.stringify([state.projectId,current?.folders,api.selectedFolderId?.()]);
-    if (signature !== next) { signature = next; closePreview(); refreshTree(); }
+    const state = api.getState(), current = state.projects.find(p => p.id === state.projectId), next = JSON.stringify([state.projectId,current?.folders,api.selectedFolderId?.(),api.sidebarLevel?.()]);
+    opener.disabled = !state.projectId;
+    if (signature !== next) {
+      signature = next; closePreview(); treeVersion++;
+      if (browser.open) refreshTree(); else $('file-tree').replaceChildren();
+    }
+    if (!state.projectId && browser.open) browser.close();
     if (project !== state.projectId) { project = state.projectId; status(); }
     update();
   }
@@ -175,9 +191,20 @@
     if (selected === snapshot && added?.length) { closePreview(); $('message-input').focus(); }
   });
   $('refresh-files').addEventListener('click',refreshTree);
-  // The Files menu command, while the workspace level has Files hidden, shows them at the folder level.
-  $('toggle-explorer').addEventListener('click', () => { if ($('explorer').hidden) { api.showFolderLevel?.(); if (!$('file-tree').hidden) return; } const hidden = !$('file-tree').hidden; $('file-tree').hidden = hidden; $('explorer').classList.toggle('collapsed',hidden); $('toggle-explorer').setAttribute('aria-expanded',String(!hidden)); });
-  window.addEventListener('keydown',event => { if (event.key === 'Escape' && !event.isComposing && !$('file-preview').hidden) closePreview(); });
+  // Browsing is an explicit action and never changes the workspace/folder task scope or the sidebar's geometry.
+  opener.addEventListener('click', () => {
+    if (browser.open) { browser.close(); return; }
+    if (!api.getState().projectId) return;
+    $('explorer').hidden = false; opener.setAttribute('aria-expanded', 'true'); browser.showModal(); refreshTree();
+    window.dispatchEvent(new Event('relay-files'));
+  });
+  $('close-files').addEventListener('click', () => browser.close());
+  browser.addEventListener('close', () => {
+    $('explorer').hidden = true; opener.setAttribute('aria-expanded', 'false');
+    window.dispatchEvent(new Event('relay-files'));
+    ($('file-preview').hidden ? opener : $('close-file-preview')).focus();
+  });
+  window.addEventListener('keydown',event => { if (event.key === 'Escape' && !event.isComposing && !document.querySelector('dialog[open]') && !$('file-preview').hidden) closePreview(); });
   window.addEventListener('relay-state',sync);
   window.relayFiles = {
     async openAt(folderId, relative, line) {

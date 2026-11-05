@@ -15,6 +15,7 @@ export function createTaskRoutes({ registry, body, json }) {
     if (req.method !== 'POST') fail('Use POST.', 405);
     const input = await body(req);
     if (url.pathname === '/api/tasks/plan') { json(res, 200, tasks.preview(c, input)); return true; }
+    if (url.pathname === '/api/tasks/from-queue') { json(res, 202, tasks.fromQueue(c, input)); return true; }
     const match = url.pathname.match(/^\/api\/tasks\/([\da-f-]{36})\/(review|check|merge|keep|discard|start|close)$/);
     if (!match) fail('Not found.', 404);
     const [, id, action] = match;

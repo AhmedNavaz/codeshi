@@ -28,6 +28,7 @@
   for (const [id, type] of [['toggle-explorer', 'click'], ['open-git', 'click'], ['toggle-side-panel', 'click'], ['workspace-search', 'input'], ['workspace-search', 'keydown']]) $(id)?.addEventListener(type, schedule);
   // The bottom panel says when it shows or hides, or changes tab, however that happened.
   window.addEventListener('relay-panel', schedule);
+  window.addEventListener('relay-files', schedule);
   const unsubscribe = bridge.onMenuCommand((name, value) => { if (Object.hasOwn(api.commands, name)) api.commands[name](value); });
   window.addEventListener('beforeunload', () => unsubscribe?.());
   report();

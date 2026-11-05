@@ -349,6 +349,46 @@ if(message.id===78&&message.result){const chosen=message.result.answers.storage?
   assert.deepEqual(messages.find(message => message.id === 78).result, { answers: { storage: { answers: ['Database'] } } });
 });
 
+test('a Codex async question crosses the worker and its answer steers the same live turn', { skip: scriptCLIs }, async t => {
+  const f = setup(t), log = path.join(f.root, 'async-question-rpc.jsonl');
+  fs.writeFileSync(f.bins.codex, `#!${process.execPath}
+import fs from 'node:fs';import readline from 'node:readline';
+if(process.argv.includes('--version')){console.log('async-question-fixture 1');process.exit(0);}
+const send=value=>console.log(JSON.stringify(value));
+readline.createInterface({input:process.stdin}).on('line',line=>{const message=JSON.parse(line);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(message)+'\\n');
+if(message.method==='initialize')send({id:message.id,result:{}});
+if(message.method==='model/list')send({id:message.id,result:{data:[]}});
+if(message.method==='thread/start')send({id:message.id,result:{thread:{id:'async-thread'},model:'actual-model'}});
+if(message.method==='turn/start'){send({id:message.id,result:{turn:{id:'async-turn'}}});send({method:'item/completed',params:{threadId:'async-thread',item:{id:'ask',type:'agentMessage',text:'Do you have a Firebase project?',questions:[{title:'Do you have a Firebase project?',options:['No project yet','Yes']}]}}});send({method:'item/completed',params:{threadId:'async-thread',item:{id:'working',type:'agentMessage',text:'Continuing to inspect the code.'}}});}
+if(message.method==='turn/steer'){send({id:message.id,result:{turnId:'async-turn'}});setTimeout(()=>{send({method:'item/completed',params:{threadId:'async-thread',item:{id:'answer',type:'agentMessage',text:'Received your project answer.'}}});send({method:'turn/completed',params:{threadId:'async-thread',turn:{id:'async-turn',status:'completed'}}});},50);}
+});
+`);
+  const broker = f.broker(), c = broker.get(broker.create().id);
+  const { runId } = broker.start(c, { text: 'Connect remotely', provider: 'codex', transport: 'app-server', requestId: 'async-question' });
+  const active = broker.running;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { clearInterval(poll); reject(new Error('Async question did not arrive.')); }, 5000);
+    const poll = setInterval(() => {
+      if (!broker.view(c).pendingApprovals.length || !broker.view(c).canAddToRun) return;
+      clearTimeout(timer); clearInterval(poll); resolve();
+    }, 10);
+  });
+  const pending = broker.view(c).pendingApprovals[0];
+  assert.equal(pending.blocking, false);
+  assert.ok(c.messages.some(message => message.text === 'Continuing to inspect the code.'), 'Codex kept working without an answer.');
+  const result = await broker.answer(runId, pending.id, [['No project yet']], c);
+  assert.equal(result.added, true); assert.equal(broker.view(c).pendingApprovals.length, 0);
+  await active.done;
+  assert.equal(c.status, 'complete');
+  assert.ok(c.messages.some(message => message.role === 'user' && message.steer && /→ No project yet/.test(message.text)));
+  const requests = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const steered = requests.find(request => request.method === 'turn/steer');
+  assert.equal(steered.params.threadId, 'async-thread');
+  assert.equal(steered.params.expectedTurnId, 'async-turn');
+  assert.match(steered.params.input[0].text, /→ No project yet/);
+  assert.equal(requests.filter(request => request.method === 'turn/start').length, 1);
+});
+
 test('a long final Codex answer reaches the broker before its worker exits', { skip: scriptCLIs }, async t => {
   const f = setup(t);
   // The final item is far larger than a pipe buffer, so its IPC write is still pending when the turn ends.

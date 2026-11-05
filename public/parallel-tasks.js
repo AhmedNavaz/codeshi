@@ -26,10 +26,10 @@
   function mainRow(state) {
     const selected = !state.taskDraft && !state.taskId && !focused, row = node('li', 'task-row-holder'), item = node('button', `task-row task-row-main${selected ? ' active' : ''}`); item.type = 'button';
     if (selected) item.setAttribute('aria-current', 'true');
-    item.title = 'The main conversation, across every folder in this workspace';
+    item.title = 'Workspace chat, across every folder in this workspace';
     const elsewhere = state.taskId || state.taskDraft, running = elsewhere ? Boolean(state.status?.runningConversationId) : api.isRunning(), waiting = elsewhere ? 0 : state.conversation?.pendingApprovals?.length || 0, mark = node('span', 'task-row-main-icon'); mark.setAttribute('aria-hidden', 'true');
     item.dataset.status = running ? 'running' : 'idle';
-    item.append(mark, node('span', 'task-row-title', 'Main conversation'));
+    item.append(mark, node('span', 'task-row-title', 'Workspace chat'));
     if (waiting) item.append(node('span', 'task-row-badge', String(waiting)));
     else item.append(node('span', 'task-row-side', running ? 'Working' : 'Whole workspace'));
     item.addEventListener('click', () => attempt(() => selectThread(null)));
@@ -40,7 +40,7 @@
     const selected = !state.taskDraft && (focused || state.taskId) === task.id, row = node('li', 'task-row-holder'), item = node('button', `task-row${selected ? ' active' : ''}`); item.type = 'button'; item.dataset.status = task.status;
     if (selected) item.setAttribute('aria-current', 'true');
     item.title = `${task.title} · ${task.folderName} · ${LABEL[task.status] || task.status}`;
-    const dot = node('span', 'task-row-dot'); dot.setAttribute('aria-hidden', 'true');
+    const dot = node('span', 'task-row-icon'); dot.setAttribute('aria-hidden', 'true');
     item.append(dot, node('span', 'task-row-title', task.title));
     if (task.approvals) item.append(node('span', 'task-row-badge', String(task.approvals)));
     else if (canMerge(task)) item.append(node('span', 'task-row-review', 'Review'));
@@ -137,7 +137,7 @@
     const name = folderName(draftFolder());
     $('task-draft-title').textContent = `New task in ${name}`;
     const list = tasks(), beside = list.filter(task => task.status === 'running').map(task => `${task.folderName}: ${task.title}`);
-    if (state.status?.runningConversationId) beside.unshift('The main conversation');
+    if (state.status?.runningConversationId) beside.unshift('Workspace chat');
     $('task-draft-beside').textContent = beside.length ? beside.join(' · ') : 'Nothing else is running.';
     const waitable = list.filter(task => !['discarded', 'cancelled', 'lost', 'detached'].includes(task.status)), chosen = $('task-draft-after').value;
     $('task-draft-after-row').hidden = !waitable.length;

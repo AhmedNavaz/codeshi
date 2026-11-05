@@ -36,6 +36,15 @@ export function claudeAnswers(input, answers) {
 export function codexQuestions(params) {
   return cleanQuestions((Array.isArray(params?.questions) ? params.questions : []).map(question => ({ id: question?.id, header: question?.header, question: question?.question, options: question?.options || [], other: question?.isOther === true, secret: question?.isSecret === true })));
 }
+
+// Newer Codex versions attach optional, non-blocking questions to an agentMessage instead of sending an RPC
+// request. They have titles and string options, and always allow an answer in the person's own words.
+export function codexAsyncQuestions(questions) {
+  return cleanQuestions((Array.isArray(questions) ? questions : []).map((question, index) => ({
+    id: `q${index + 1}`, question: question?.title, other: true,
+    options: Array.isArray(question?.options) ? question.options.map(label => ({ label })) : [],
+  })));
+}
 // Skipped questions go back unanswered, so Codex carries on with its own judgement.
 export function codexAnswers(params, answers) {
   if (!answers) return { answers: {} };

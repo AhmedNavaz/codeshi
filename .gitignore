@@ -11,3 +11,7 @@ sharing/.data/
 skills/
 native/bin/
 evals/results/
+remote/dist/
+remote/.firebase/
+firebase-debug.log
+database-debug.log

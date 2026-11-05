@@ -4,6 +4,33 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-06
+
+### Added
+
+- **Remote phone access** (#23). **Away from home** under **Connect phone** keeps QR pairing and computer approval while allowing the same minimal phone page, at `remote.codeshi.dev`, to work over mobile data or another network. Prompts, progress and approval details are encrypted before reaching Firebase, which carries them. Remote access is optional, can be revoked and turns off on restart. If the service is busy or unavailable, the phone and desktop say so and keep retrying. The local-network connection remains independent.
+- **Phone access on your local network** (#23, first milestone). **Connect phone** in the bottom bar opens setup with a locally generated, one-use QR code and confirmation on the computer. Scanning connects by itself, and the computer still has to allow it. The phone gets its own one-handed page, not the desktop one: the conversation, a live line saying what the agent is doing, a message box that stays right above the keyboard, and approvals, questions and handoffs one at a time in reach of a thumb. Workspaces, tasks, the agent, model, effort and access open as sheets from the bottom, which keep the keyboard away. It has its own System, Light or Dark appearance, separate from the computer's. It loads the latest messages instead of the whole conversation, and reconnects by itself. Uses unencrypted HTTP, for trusted networks.
+
+- **Voice on the phone.** A microphone beside Send on the phone page turns speech into text as you speak, using the phone's own browser; on an iPhone or Android phone that sends the audio to Apple or Google, which the first use says. Words land in the message box and nothing is sent until you press Send, which also turns the microphone off. It's available away from home, because browsers block the microphone on the same-Wi-Fi connection's plain HTTP.
+- **A queued prompt can run as a task** (#108). **Run as a task** on a row under **Up next** moves it out of the queue and starts it beside the current run, in the selected folder, with the agent, model and access it was queued with. In a workspace with several folders and none selected, the row asks which one.
+
+### Changed
+
+- **Files opens in its own browser.** A Files button beside Workspaces opens a compact browser; choosing a folder no longer opens Files automatically. Tasks stay directly below workspaces, and the workspace-wide conversation is named **Workspace chat**, with a subtle working animation on its leading icon.
+- **Remote phone access uses less data.** Streaming replies send only new text when the phone confirms its previous snapshot, with full-text recovery after a reconnect or changed conversation. Progress no longer reloads workspace metadata on every update, hidden pages cancel queued refreshes, and Firebase writes no longer echo encrypted packets back to the sender. Added a repeatable local/live traffic measurement command.
+- **The layout buttons sit beside the search bar.** The buttons that show or hide the sidebar and the side panel are at the right of the search bar, after a divider, so a side panel's tabs have the whole of its top. The bottom panel's button is gone: **Terminal** and **Run** in the status bar and ⌘J open and close it.
+
+### Fixed
+
+- **Runs no longer stop when an agent compacts its context.** From 0.26.0, a Codex or Claude run that shortened its context stopped with `Cannot access 'c' before initialization`, and retrying kept failing while the conversation stayed near its context limit.
+- **Resizing no longer leaves an input-blocking overlay behind.** Drags end on lost pointer capture, release outside the handle, window blur, Escape and page hiding. The vertical workspace/Files divider is removed, and its saved height is discarded so closing Files cannot push Tasks downward.
+- **Remote pairing waits for the computer before listening.** Scanning a QR no longer opens the phone's response connection before Firebase grants it access, and a recovered connection restores the approval instructions instead of leaving a stale error above the pairing number.
+- **Settings dropdowns show their chevrons.** Phone pairing scrolls a newly generated QR code into view for local and remote connections, without pulling the page back during status refreshes.
+- **Remote phone pairing works with browser networking.** The Firebase client keeps the browser's required `fetch` receiver for sign-in, requests and live updates instead of failing with a Window instance error after scanning a QR code.
+- **Codex's optional questions have answer controls.** Questions sent while Codex continues working now show choices, a free-text answer and Skip on desktop and phone. An answer joins the current run; after it finishes, the answer is added to the message draft for review and sending. Unanswered questions survive a restart.
+- **Earlier tasks fit the Tasks panel.** The rows under **Earlier** ran past the panel's edge; each prompt now ends with an ellipsis and its usage wraps.
+- A working time of a whole number of minutes read as `36m 60s`.
+
 ## [0.26.0] - 2026-11-05
 
 ### Added
@@ -446,6 +473,8 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.27.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.27.0
+[0.26.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.26.0
 [0.25.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.25.1
 [0.24.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.24.0
 [0.23.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.23.0

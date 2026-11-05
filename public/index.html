@@ -24,6 +24,8 @@
     <script src="/questions.js" defer></script>
     <script src="/workbench.js" defer></script>
     <script src="/settings.js" defer></script>
+    <script src="/phone-access.js" defer></script>
+    <link rel="stylesheet" href="/phone-access.css" />
     <script src="/insights.js" defer></script>
     <link rel="stylesheet" href="/model-picker.css" />
     <script src="/model-picker.js" defer></script>
@@ -77,17 +79,12 @@
           <a class="brand" href="/" aria-label="Codeshi home"><img class="brand-mark" src="/mark.svg" alt="" width="18" height="18" /><span class="brand-name">Codeshi</span><span id="build-channel" class="build-channel" title="Running from source, separate from the installed app" hidden>Dev</span></a>
           <button id="workspace-toggle" class="workspace-toggle" type="button" aria-expanded="false" aria-controls="workspace-list">Workspaces <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
         </div>
-        <div class="sidebar-heading"><span>Workspaces</span><span id="workspace-count" class="count-badge">0</span><button id="create-workspace" class="icon-button new-workspace" type="button" title="New workspace" aria-label="New workspace"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <div class="sidebar-heading"><span>Workspaces</span><span id="workspace-count" class="count-badge">0</span><button id="toggle-explorer" class="sidebar-files-button" type="button" aria-expanded="false" aria-controls="files-dialog" title="Browse workspace files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 2h8v14H4zM8 10h8M8 14h5"/></svg>Files</button><button id="create-workspace" class="icon-button new-workspace" type="button" title="New workspace" aria-label="New workspace"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <button id="open-setup" class="setup-launch" type="button" hidden><span>Getting started</span><span id="setup-progress">Setup</span></button>
         <nav id="workspace-list" class="workspace-list" aria-label="Saved workspaces and folders"></nav>
         <section id="task-section" class="task-section" aria-label="Tasks" hidden>
           <div class="task-section-heading"><button id="toggle-tasks" type="button" aria-expanded="true" aria-controls="task-list"><span class="tree-chevron" aria-hidden="true"></span>Tasks<span id="task-count" class="count-badge" hidden></span></button><button id="new-task" class="icon-button" type="button" aria-label="New task" title="New task, running beside this one"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
           <ul id="task-list" class="task-list"></ul>
-        </section>
-        <section class="explorer" id="explorer" aria-label="Workspace files">
-          <div class="explorer-heading"><button id="toggle-explorer" type="button" aria-expanded="true" aria-controls="file-tree"><span class="tree-chevron" aria-hidden="true"></span>Files</button><button id="refresh-files" class="icon-button" type="button" aria-label="Refresh files" title="Refresh files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button></div>
-          <div id="file-tree" class="file-tree" role="region" aria-label="Folders and files"></div>
-          <p class="explorer-footnote">Select a file to preview or attach</p>
         </section>
         <span id="workspace-name" class="sr-only">No workspace selected</span>
       </aside>
@@ -109,6 +106,10 @@
             <button id="open-git" class="panel-toggle" type="button" aria-expanded="false" aria-controls="git-panel" title="Git activity"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><circle cx="6" cy="18.5" r="2.2"/><circle cx="18" cy="7" r="2.2"/><path d="M6 7.7v8.6M18 9.2v.6a4.5 4.5 0 0 1-4.5 4.5H8.5a2.5 2.5 0 0 0-2.5 2"/></svg><span class="button-label">Git</span></button>
             </span>
             <button id="header-more" class="toolbar-button header-more" hidden type="button" popovertarget="header-menu" aria-haspopup="menu" aria-label="More actions" title="More actions"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>
+            <div id="layout-toggles" class="layout-toggles" role="group" aria-label="Layout">
+              <button id="toggle-sidebar" class="layout-toggle" type="button" aria-pressed="true" aria-label="Sidebar" title="Toggle sidebar"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><rect class="layout-fill" x="5" y="6" width="3" height="12" rx="1"/></svg></button>
+              <button id="toggle-side-panel" class="layout-toggle" type="button" aria-pressed="false" aria-label="Side panel" title="Toggle side panel"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/><rect class="layout-fill" x="16" y="6" width="3" height="12" rx="1"/></svg></button>
+            </div>
           </div>
           <div id="header-menu" class="header-menu" popover="auto" role="menu" aria-label="More actions">
             <button id="open-review" class="header-menu-item" role="menuitem" type="button" title="Review changes with another agent" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l7.5 3v5.3c0 4.6-3.2 8-7.5 9.3-4.3-1.3-7.5-4.7-7.5-9.3V6.2z"/><path d="m8.8 12.1 2.3 2.3 4.2-4.6"/></svg><span class="button-label">Review changes…</span></button>
@@ -340,16 +341,12 @@
       </aside>
       <aside id="review-panel" class="review-panel" aria-labelledby="review-panel-title" hidden><div class="inspector-heading"><h2 id="review-panel-title">Code review</h2></div><p id="review-panel-hint" class="review-panel-hint">Reviewing a saved snapshot. You can send your next prompt.</p><p id="review-panel-error" class="review-error" role="alert" hidden></p><div id="review-panel-body" class="review-panel-body"></div></aside>
 
-      <div id="layout-toggles" class="layout-toggles" role="group" aria-label="Layout">
-        <button id="toggle-sidebar" class="layout-toggle" type="button" aria-pressed="true" aria-label="Sidebar" title="Toggle sidebar"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><rect class="layout-fill" x="5" y="6" width="3" height="12" rx="1"/></svg></button>
-        <button id="toggle-terminal" class="layout-toggle" type="button" aria-pressed="false" aria-controls="bottom-panel" aria-label="Panel" title="Toggle panel (⌘J)"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M3.5 13.5h17"/><rect class="layout-fill" x="5" y="15" width="14" height="3" rx="1"/></svg></button>
-        <button id="toggle-side-panel" class="layout-toggle" type="button" aria-pressed="false" aria-label="Side panel" title="Toggle side panel"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/><rect class="layout-fill" x="16" y="6" width="3" height="12" rx="1"/></svg></button>
-      </div>
 
       <footer class="status-bar" aria-label="Status">
         <div class="status-group">
           <button id="status-terminal" class="status-button status-tool" type="button" aria-pressed="false" aria-controls="bottom-panel" title="Terminal (⌃`)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="m7 9.5 3 2.5-3 2.5M12.5 15h4"/></svg>Terminal</button>
           <button id="status-run" class="status-button status-tool" type="button" aria-pressed="false" aria-controls="bottom-panel" title="Run your dev servers, tests and scripts"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>Run<span id="status-run-state" class="status-run-state" hidden></span></button>
+          <button id="connect-phone" class="status-button" type="button" title="Connect a phone on the same Wi-Fi"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10 5h4M11 18.5h2"/></svg><span id="connect-phone-label">Connect phone</span><span id="connect-phone-count" class="phone-pending-count" hidden></span></button>
         </div>
         <div class="status-group">
           <button id="update-status" class="status-button update-status" type="button" aria-expanded="false" aria-controls="update-popover" hidden><svg class="icon update-glyph update-glyph-download" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/></svg><svg class="icon update-glyph update-glyph-restart" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6l2.5 2.5"/><path d="M20.5 3.5v5h-5"/></svg><svg class="icon update-glyph update-glyph-wait" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><svg class="icon update-glyph update-glyph-alert" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 8v4.5M12 16h.01"/></svg><svg class="icon update-glyph update-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="update-ring-track" cx="12" cy="12" r="8"/><circle class="update-ring-value" cx="12" cy="12" r="8" pathLength="100"/></svg><span id="update-status-label">Update</span></button><button id="update-more" class="status-button update-more" type="button" aria-label="Release notes and more" title="Release notes and more" aria-haspopup="dialog" aria-expanded="false" aria-controls="update-popover" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m7.5 10 4.5 4.5 4.5-4.5"/></svg></button>
@@ -361,6 +358,14 @@
       </footer>
     </div>
 
+    <dialog id="files-dialog" class="files-dialog" aria-labelledby="files-title">
+      <section class="explorer" id="explorer" aria-label="Workspace files" hidden>
+        <header class="explorer-heading"><div><h2 id="files-title">Files</h2><p id="files-location"></p></div><button id="refresh-files" class="icon-button" type="button" aria-label="Refresh files" title="Refresh files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button><button id="close-files" class="icon-button" type="button" aria-label="Close files" title="Close files (Esc)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12"/></svg></button></header>
+        <p id="files-error" class="files-error" role="alert" hidden></p>
+        <div id="file-tree" class="file-tree" role="region" aria-label="Folders and files"></div>
+        <p class="explorer-footnote">Choose a file to preview or attach to your message.</p>
+      </section>
+    </dialog>
     <dialog id="workspace-options-dialog" class="compact-dialog" aria-labelledby="workspace-options-title">
       <header><h2 id="workspace-options-title">Workspace settings</h2><button id="close-workspace-options" class="icon-button" type="button" aria-label="Close workspace settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
       <form id="rename-workspace-form"><label for="rename-workspace-name">Workspace name</label><input id="rename-workspace-name" maxlength="120" required autocomplete="off" /><div class="form-actions"><button id="save-workspace-name" class="primary-button" type="submit">Save name</button></div></form>

@@ -1,0 +1,34 @@
+{
+  "measuredOn": "2026-11-06",
+  "mode": "live Firebase pilot",
+  "workload": {
+    "progressRefreshes": 30,
+    "simulatedSeconds": 60,
+    "initialTextBytes": 4160,
+    "appendedTextBytes": 15600,
+    "workspaces": 8,
+    "description": "One visible phone, streaming reply, workspace metadata refreshed every progress update before and once per minute after. Events run without wall-clock delays."
+  },
+  "scope": "Combined desktop + phone database application bytes, including encrypted JSON, SSE frames and HTTP response bodies. Excludes authentication, Hosting, HTTP headers, TLS and keepalive differences; not Firebase billed usage.",
+  "baseline": {
+    "downloadBytes": 1271901,
+    "uploadBytes": 632975,
+    "databaseRequests": 165,
+    "streams": 2,
+    "apiRequests": {
+      "conversation": 31,
+      "projects": 31
+    }
+  },
+  "optimized": {
+    "downloadBytes": 73612,
+    "uploadBytes": 69880,
+    "databaseRequests": 107,
+    "streams": 2,
+    "apiRequests": {
+      "conversation": 31,
+      "projects": 2
+    }
+  },
+  "downloadReductionPercent": 94.21
+}

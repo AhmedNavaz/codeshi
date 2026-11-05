@@ -44,12 +44,11 @@ summary::-webkit-details-marker { display: none; }
   display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) var(--statusbar-height); height: 100dvh; min-height: 480px;
 }
-.app-shell:has(.side-panel:not([hidden])) { grid-template-columns: var(--sidebar-width) minmax(380px, 1fr) var(--inspector-width, var(--inspector-width-default)); }
+/* A saved wide panel must still fit after the window is made smaller. */
+.app-shell:has(.side-panel:not([hidden])) { grid-template-columns: var(--sidebar-width) minmax(0, 1fr) min(var(--inspector-width, var(--inspector-width-default)), calc(100vw - var(--sidebar-width) - 200px)); }
 
 /* Sidebar */
 .sidebar { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--border); }
-/* A sized workspace list keeps its height; the files take the rest. */
-.sidebar.sized .workspace-list { flex-grow: 0; flex-shrink: 0; }
 .sidebar-titlebar { display: flex; align-items: center; gap: 8px; flex: none; height: var(--titlebar-height); padding: 0 14px; }
 .brand { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; text-decoration: none; border-radius: 4px; }
 .brand-mark { display: block; flex: none; width: 18px; height: 18px; border-radius: 4px; }
@@ -995,6 +994,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .queue-up::before { transform: rotate(180deg); }
 .queue-down { --queue-icon: var(--icon-chevron-down); }
 .queue-edit { --queue-icon: var(--icon-pencil); }
+.queue-task { --queue-icon: var(--icon-tasks); }
 .queue-remove { --queue-icon: var(--icon-close); }
 
 /* An offer to hand the task to another agent before a usage limit stops the run (#17). */
@@ -1221,6 +1221,9 @@ button.commit-hash:hover { text-decoration: underline; }
 .task-note { margin: 0; color: var(--warning); }
 .limits-reached { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 2px 0 0; color: var(--warning); line-height: 1.45; }
 .task-row-prompt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ledger-row { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.ledger-row .panel-row-meta { overflow-wrap: anywhere; }
+.task-card-line, .task-agents { flex-wrap: wrap; }
 
 /* Dialogs for the rare forms: limits, adding skills, and the full brief. */
 .panel-dialog { width: min(520px, calc(100vw - 48px)); max-height: calc(100vh - 64px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
@@ -1308,10 +1311,8 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 /* On phones the side panels cover the conversation. */
 @media (max-width: 760px) { .git-panel, .agents-panel, .review-panel { right: 0 !important; } }
 
-/* Layout buttons at the top right of the window, as in an editor: sidebar, Run panel and side panel. Each icon is
-   filled while its area shows. They keep their place whether or not the side panel is open, so the conversation
-   header, and a side panel's header, leave room for them. */
-.layout-toggles { position: fixed; z-index: 35; top: 0; right: 8px; display: flex; align-items: center; gap: 2px; height: var(--titlebar-height); -webkit-app-region: no-drag; }
+/* The layout buttons sit at the end of the conversation header, after a divider, so a side panel's tabs keep their whole width. */
+.layout-toggles { display: flex; align-items: center; gap: 2px; margin-left: 4px; padding-left: 6px; border-left: 1px solid var(--border-strong); -webkit-app-region: no-drag; }
 .layout-toggle { -webkit-app-region: no-drag; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
 .layout-toggle:hover:enabled { background: var(--hover); color: var(--text); }
 .layout-toggle:disabled { opacity: .35; }
@@ -1319,8 +1320,6 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 .layout-icon .layout-fill { fill: none; stroke: none; }
 .layout-toggle[aria-pressed="true"] { color: var(--text); }
 .layout-toggle[aria-pressed="true"] .layout-fill { fill: currentColor; }
-.conversation-header, .inspector-heading { padding-right: 76px; }
-.app-shell:has(#git-panel:not([hidden]), #agents-panel:not([hidden]), #review-panel:not([hidden])) .conversation-header { padding-right: 8px; }
 .git-toolbar { display: flex; align-items: center; gap: 4px; }
 .git-toolbar select { flex: 1; min-width: 0; }
 .git-toolbar .refresh-button { width: 28px; height: 28px; margin: 0; }
@@ -1329,22 +1328,12 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 .app-shell.sidebar-collapsed > .sidebar { visibility: hidden; overflow: hidden; border: 0; }
 .mac-titlebar .app-shell.sidebar-collapsed .conversation-header { padding-left: 82px; }
 @media (max-width: 760px) {
-  .layout-toggles { top: 44px; }
   #toggle-sidebar { display: none; }
-  .conversation-header, .inspector-heading { padding-right: 44px; }
   .app-shell.sidebar-collapsed > .sidebar { visibility: visible; overflow: visible; border-bottom: 1px solid var(--border); }
 }
 
-/* The top bar is a search bar for workspaces and actions, centred like an editor's command centre. */
-/* Centred on the whole window, not between the sidebar and the side panel, so it stays put as they open and close.
-   Its width leaves room for whatever sits on either side: the sidebar or the workspace name, and the side panel or
-   the layout buttons. */
-.app-shell { --left-reserve: calc(var(--sidebar-width) + 16px); --right-reserve: 92px; }
-.app-shell.sidebar-collapsed { --left-reserve: 268px; }
-.mac-titlebar .app-shell.sidebar-collapsed { --left-reserve: 350px; }
-.app-shell:has(.side-panel:not([hidden])) { --right-reserve: calc(var(--inspector-width, var(--inspector-width-default)) + 16px); }
-.app-shell:has(#review-panel:not([hidden])) { --right-reserve: calc(var(--inspector-width, var(--inspector-width-default)) + 16px); }
-.command-bar { position: fixed; z-index: 25; top: calc((var(--titlebar-height) - 28px) / 2); left: 50%; transform: translateX(-50%); display: flex; align-items: center; width: clamp(180px, calc(100vw - 2 * max(var(--left-reserve), var(--right-reserve))), 520px); }
+/* Search shares the header with the layout controls, shrinking as the side panels grow. */
+.command-bar { position: relative; z-index: 25; display: flex; align-items: center; flex: 1 1 520px; min-width: 0; max-width: 520px; margin: 0 auto; }
 .command-bar > .icon { position: absolute; left: 10px; width: 14px; height: 14px; color: var(--faint); pointer-events: none; }
 .command-bar input { width: 100%; height: 28px; padding: 0 12px 0 30px; border: 1px solid var(--border); border-radius: 8px; background: var(--chip-bg); color: var(--text); font: inherit; font-size: 12.5px; text-align: center; transition: background .12s, border-color .12s; }
 .command-bar input::placeholder { color: var(--faint); }
@@ -1358,8 +1347,8 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 .command-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .command-detail { flex: none; color: var(--faint); font-size: 11.5px; }
 .conversation-header { justify-content: center; }
-/* Nothing in the header's action group shows any more, so it takes no space and the search bar stays centred. */
-.conversation-header > .header-actions { display: contents; }
+/* Keep the layout buttons together at the right end of the search bar. */
+.conversation-header > .header-actions { margin-left: 0; }
 
 /* With the sidebar hidden, the top bar's left names the open workspace, so it is always clear where you are. */
 .workspace-chip { display: none; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 240px; height: 28px; margin-right: 12px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text-strong); font-size: 12.5px; font-weight: 500; }

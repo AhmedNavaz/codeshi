@@ -253,7 +253,6 @@
   function filteredProjects() { return state.projects.filter(project => project.name.toLowerCase().includes(state.workspaceFilter.toLowerCase())); }
   function renderWorkspaceList() {
     const level = sidebarLevelFor();
-    $("explorer").hidden = level === 'workspace';
     const signature = JSON.stringify([state.projects,state.projectId,projectBusy(),state.loading,state.status?.runningConversationId,state.workspaceFilter,selectedFolderId(),state.conversation?.pendingApprovals?.length,level]);
     if (signature === state.listSignature) return;
     renderFolderSettings();
@@ -976,6 +975,17 @@
     try { await post(endpoint(id, "queue"), body, projectId); await refresh(); return true; }
     catch (error) { showNotice(error.message); return false; }
   }
+  // A queued prompt can start now as a task beside this conversation (#108): it leaves the queue and runs in a folder of its own,
+  // with the settings it was queued with. The folder is the one selected; with several and none selected, the row asks.
+  async function queueAsTask(item, folderId) {
+    if (!folderId) { state.queueTasking = item.id; renderQueue(); return; }
+    state.queueTasking = null;
+    try {
+      const task = await post("/api/tasks/from-queue", { id: item.id, folderId });
+      await refresh();
+      announce(`“${task.title}” is now a task in ${task.folderName}.`);
+    } catch (error) { showNotice(error.message); await refresh(); }
+  }
   async function queuePrompt() {
     const text = ui.input.value.trim(), attachments = window.relayFiles?.ids() || [], projectId = state.projectId, draft = ui.input.value;
     if (!text || state.pending || !state.conversation || $("queue-button").hidden) return;
@@ -1071,7 +1081,7 @@
   function renderQueue() {
     const c = state.conversation, queue = c?.queue || [], section = $("prompt-queue");
     section.hidden = !queue.length;
-    const signature = JSON.stringify([c?.id, queue, c?.queuePaused, state.queueEditing, Boolean(state.pending)]);
+    const signature = JSON.stringify([c?.id, queue, c?.queuePaused, state.queueEditing, state.queueTasking, Boolean(state.pending), state.taskId, Boolean(state.taskDraft), selectedFolderId(), sidebarLevelFor()]);
     if (!queue.length || signature === state.queueSignature) return;
     state.queueSignature = signature;
     $("prompt-queue-title").textContent = `Up next · ${queue.length}`;
@@ -1092,11 +1102,21 @@
         const buttons = element("div", "prompt-queue-edit-actions"); buttons.append(save, cancel);
         body.append(editor, buttons);
       } else body.append(element("p", "prompt-queue-text", item.text), element("span", "prompt-queue-meta", meta));
+      // A task's own queue stays a queue: tasks start from the main conversation.
+      const folders = state.taskId || state.taskDraft ? [] : foldersFor(currentProject()), folderName = folder => folder.displayName || folder.name;
+      const chosen = sidebarLevelFor() === "folder" ? folders.find(folder => folder.id === selectedFolderId()) : folders.length === 1 ? folders[0] : null;
+      if (state.queueTasking === item.id && !chosen) {
+        const where = element("div", "prompt-queue-edit-actions");
+        where.append(element("span", "prompt-queue-meta", "Run as a task in"), ...folders.map(folder => { const choice = element("button", "pill-button", folderName(folder)); choice.type = "button"; choice.addEventListener("click", () => queueAsTask(item, folder.id)); return choice; }));
+        const cancel = element("button", "pill-button", "Cancel"); cancel.type = "button"; cancel.addEventListener("click", () => { state.queueTasking = null; renderQueue(); });
+        where.append(cancel); body.append(where);
+      }
       const actions = element("div", "prompt-queue-actions");
       actions.append(
         icon("up", "Move up", () => queueAction({ action: "move", id: item.id, index: index - 1 }), index === 0),
         icon("down", "Move down", () => queueAction({ action: "move", id: item.id, index: index + 1 }), index === queue.length - 1),
         icon("edit", "Edit", () => { state.queueEditing = item.id; renderQueue(); }),
+        ...(folders.length ? [icon("task", chosen ? `Run as a task in ${folderName(chosen)}` : "Run as a task", () => queueAsTask(item, chosen?.id))] : []),
         icon("remove", "Remove from queue", () => queueAction({ action: "remove", id: item.id })));
       row.append(element("span", "prompt-queue-number", String(index + 1)), body, actions);
       return row;
@@ -1881,7 +1901,7 @@
     terminal: () => { if (!state.projectId || !window.relayTerminal) return false; window.relayTerminal.toggle(); return true; },
     voice: () => Boolean(state.projectId && window.relayVoice?.toggle()),
     "local-models": () => window.relayLocal?.open(),
-    "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), files: press("toggle-explorer"), "keep-awake": press("keep-awake"),
+    "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), files: () => { if ($('files-dialog')?.open) { $('close-files').click(); return true; } return press('toggle-explorer')(); }, "keep-awake": press("keep-awake"),
     "add-folder": () => { if (covered()) return false; toggleFolderForm(true); return true; },
     agent: provider => ["codex", "claude", "gemini"].includes(provider) && press("select-" + provider)(),
     continue: () => !ui.continuation.hidden && press("continue-button")(),
@@ -2022,6 +2042,16 @@
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
     commands, isRunning, filteredProjects, setRouting, routeFor, showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,
+    prepareQuestionAnswer(conversationId, text, projectId = state.projectId) {
+      const current = state.projectId === projectId && state.conversation?.id === conversationId && !state.taskDraft;
+      const key = projectId ? `ai-relay:project:${projectId}:draft:${conversationId}` : storageKey(`ai-relay:draft:${conversationId}`);
+      let previous = current ? ui.input.value : '';
+      if (!current) { try { previous = localStorage.getItem(key) || ''; } catch { /* Storage is optional. */ } }
+      const draft = [previous.trim(), text].filter(Boolean).join('\n\n');
+      try { localStorage.setItem(key, draft); } catch { /* The open composer's draft still works. */ }
+      if (current) { ui.input.value = draft; resizeInput(); renderControls(); }
+      showNotice('Answer added to your draft. Send it to continue.');
+    },
     selectLocalModel(model) {
       if (!state.projectId || !state.ready || state.pending || state.settingsPending || isRunning()) throw Error('Finish the current run before changing the model.');
       if (model && (typeof model.model !== 'string' || !/^[a-f0-9]{64}$/i.test(model.digest))) throw Error('Refresh local models and choose a downloaded model.');

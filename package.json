@@ -1,6 +1,6 @@
 {
   "name": "codeshi",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "Claude Code, Codex, Gemini and local models in one conversation. Switch agents mid-task, keep going when one hits its limit, and use the plans you already pay for.",
   "keywords": [
     "claude-code",
@@ -45,17 +45,23 @@
     "eval": "node evals/cli.mjs",
     "stats": "node scripts/stats.mjs",
     "package": "node desktop/package.mjs",
-    "icons": "electron desktop/icons.mjs"
+    "icons": "electron desktop/icons.mjs",
+    "build:phone": "node scripts/build-phone.mjs",
+    "measure:phone": "node scripts/measure-phone.mjs",
+    "test:phone:remote": "firebase emulators:exec --only auth,database --project demo-codeshi-phone --config remote/firebase.json \"node --test remote/test/relay.test.mjs\""
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.302",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
-    "electron": "^44.9.0"
+    "electron": "^44.9.0",
+    "jsqr": "^1.4.0",
+    "pngjs": "^7.0.0"
   },
   "overrides": {
     "@electron/asar": {

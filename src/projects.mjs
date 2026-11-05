@@ -116,7 +116,7 @@ export class ProjectRegistry extends EventEmitter {
     const broker = this.brokers.get(entry.id)?.broker;
     const count = broker ? broker.conversations.size : this.journalIds(entry.id).length;
     const { folderAliases, removedAt, ...visible } = entry;
-    return { ...visible, previousConversationsDismissed: entry.previousConversationsDismissed === true, folders: entry.folders.map(folder => ({ ...folder, available: folderAvailable(folder.path) })), available: folderAvailable(entry.path), runningConversationId: broker?.running?.c.id || (broker?.tasks?.running ? 'parallel-task' : null), pendingApprovals: (broker?.running?.approvals.size || 0) + (broker?.tasks?.openLanes().reduce((sum, lane) => sum + (lane.running?.approvals.size || 0), 0) || 0), conversationCount: count ? 1 : 0, archivedConversationCount: Math.max(0, count - 1) };
+    return { ...visible, previousConversationsDismissed: entry.previousConversationsDismissed === true, folders: entry.folders.map(folder => ({ ...folder, available: folderAvailable(folder.path) })), available: folderAvailable(entry.path), runningConversationId: broker?.running?.c.id || (broker?.tasks?.running ? 'parallel-task' : null), pendingApprovals: (broker?.pendingCount() || 0) + (broker?.tasks?.openLanes().reduce((sum, lane) => sum + lane.pendingCount(), 0) || 0), conversationCount: count ? 1 : 0, archivedConversationCount: Math.max(0, count - 1) };
   }
   list() { this.reload(); return [...this.projects.values()].filter(entry => !entry.removedAt).map(entry => this.public(entry)); }
   get(id) { this.reload(); return this.public(this.entry(id)); }

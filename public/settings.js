@@ -91,6 +91,7 @@
     const automatic = kit.toggle(work, { label: 'Hand off automatically', description: 'Near a limit, or when a run reaches one, switch to an agent on a subscription without asking, and say so in the conversation. If every agent is out, the task waits for the first reset.', keywords: 'handoff hand off automatic', checked: handoff?.automatic === true, disabled: !handoff || handoff.threshold === 0, onChange: value => saveHandoff({ automatic: value }) });
     if (!handoff) api().api('/api/handoff-preferences').then(value => { handoff = value; offer.value = String(value.threshold); offer.disabled = false; automatic.checked = value.automatic === true; automatic.disabled = value.threshold === 0; }).catch(() => {});
     if (window.relayUpdater) { const updates = node('div', undefined, 'settings-section'); host.append(updates); window.relayUpdater.settings(updates, kit); }
+    window.relayPhone?.settings(host, kit);
   }
   // Turned on from the offer at a usage limit.
   window.addEventListener('relay-handoff-preferences', () => { handoff = null; });

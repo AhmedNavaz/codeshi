@@ -1,5 +1,5 @@
-/* Independent tasks (#88): a section in the sidebar, between the workspaces and their files. */
-.task-section { display: flex; flex-direction: column; flex: none; max-height: 38%; min-height: 0; border-top: 1px solid var(--border); margin-top: 4px; overflow: hidden; }
+/* Tasks stay directly under workspaces; file browsing does not change this stack. */
+.task-section { display: flex; flex-direction: column; flex: 1; min-height: 0; border-top: 1px solid var(--border); margin-top: 4px; overflow: hidden; }
 .task-section[hidden] { display: none; }
 .task-section-heading { display: flex; align-items: center; gap: 8px; flex: none; padding: 7px 12px 5px 10px; }
 .task-section-heading > button:first-child { display: flex; align-items: center; gap: 7px; flex: 1; padding: 0; border: 0; background: none; color: var(--text); font-size: 11px; font-weight: 600; text-align: left; }
@@ -13,13 +13,12 @@
 .task-row.active { background: var(--list-active); color: var(--text-strong); }
 .task-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-row-side { flex: none; max-width: 42%; overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.task-row-dot { flex: none; width: 7px; height: 7px; margin: 0 3.5px; border-radius: 50%; background: var(--faint); }
-.task-row[data-status="running"] .task-row-dot { background: var(--link); animation: pulse 1.4s ease-in-out infinite; }
-.task-row[data-status="complete"] .task-row-dot, .task-row[data-status="integrated"] .task-row-dot { background: var(--success); }
-.task-row[data-status="failed"] .task-row-dot, .task-row[data-status="blocked"] .task-row-dot, .task-row[data-status="lost"] .task-row-dot { background: var(--danger); }
-.task-row[data-status="stopped"] .task-row-dot, .task-row[data-status="detached"] .task-row-dot { background: var(--warning); }
+.task-row-icon { flex: none; width: 14px; height: 14px; background: var(--faint); -webkit-mask: var(--icon-tasks) center / contain no-repeat; mask: var(--icon-tasks) center / contain no-repeat; }
+.task-row[data-status="running"] .task-row-icon { background: var(--link); }
+.task-row[data-status="complete"] .task-row-icon, .task-row[data-status="integrated"] .task-row-icon { background: var(--success); -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); }
+.task-row[data-status="failed"] .task-row-icon, .task-row[data-status="blocked"] .task-row-icon, .task-row[data-status="lost"] .task-row-icon { background: var(--danger); }
+.task-row[data-status="stopped"] .task-row-icon, .task-row[data-status="detached"] .task-row-icon { background: var(--warning); }
 .task-row[data-status="waiting"] .task-row-title { color: var(--faint); }
-@media (prefers-reduced-motion: reduce) { .task-row[data-status="running"] .task-row-dot { animation: none; } }
 .task-row-badge { flex: none; min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--warning); color: var(--bg); font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; }
 .task-row-review { flex: none; padding: 0 5px; border-radius: 8px; background: var(--chip-bg); color: var(--link); font-size: 10.5px; font-weight: 600; line-height: 16px; }
 /* The main conversation belongs to the whole workspace, so it reads differently from the tasks under it. */
@@ -29,16 +28,13 @@
 .task-row-main-icon { flex: none; width: 14px; height: 14px; background: currentColor; color: var(--muted); -webkit-mask: var(--icon-agent) center / contain no-repeat; mask: var(--icon-agent) center / contain no-repeat; }
 .task-row-main.active .task-row-main-icon, .task-row-main[data-status="running"] .task-row-main-icon { color: var(--link); }
 .task-row-main .task-row-side { font-weight: 400; }
-/* At the workspace level Files is hidden, so the tasks take its room. */
-.sidebar:has(.explorer[hidden]) .task-section { flex: 1; max-height: none; }
-.sidebar:has(.explorer[hidden]) .workspace-list { flex: 0 1 auto; max-height: 45%; }
-.sidebar:has(.explorer[hidden]) > .resize-handle.before { display: none; }
-.explorer[hidden] { display: none !important; }
-.task-section.collapsed, .sidebar:has(.explorer[hidden]) .task-section.collapsed { flex: none; }
+.task-row[data-status="running"] :is(.task-row-icon, .task-row-main-icon) { animation: task-working 1.6s ease-in-out infinite; }
+@keyframes task-working { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .task-row[data-status="running"] :is(.task-row-icon, .task-row-main-icon) { animation: none; } }
+.task-section.collapsed { flex: none; }
 @media (max-width: 700px) {
   .task-section { display: none; }
   .sidebar.workspaces-open .task-section:not([hidden]) { position: fixed; z-index: 35; top: 40dvh; left: 0; display: flex; width: 260px; max-height: 22dvh; background: var(--sidebar); }
-  .sidebar.workspaces-open:has(.task-section:not([hidden])) .explorer { top: 62dvh; }
 }
 
 .task-banner { display: flex; align-items: center; gap: 12px; flex: none; padding: 7px 16px; border-bottom: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.45; }

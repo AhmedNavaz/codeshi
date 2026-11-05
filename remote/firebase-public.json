@@ -1,0 +1,6 @@
+{
+  "projectId": "codeshi-phone",
+  "apiKey": "AIzaSyAdKoljG4P1M8qpK1snTnUMQEL95b01iT8",
+  "databaseURL": "https://codeshi-phone-default-rtdb.europe-west1.firebasedatabase.app",
+  "phoneURL": "https://remote.codeshi.dev"
+}
