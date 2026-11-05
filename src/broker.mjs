@@ -14,6 +14,7 @@ import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
 import { readLedger, taskIdentity } from './task-ledger.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
+import { SkillCatalog } from './skills.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
@@ -118,6 +119,7 @@ export class Broker extends EventEmitter {
     });
     this.workspaceSignature = createHash('sha256').update(JSON.stringify({ primary: this.workspace, roots: [...this.workspaces].sort() })).digest('hex');
     this.dataDir = dataDir; this.googleRoot = googleRoot;
+    this.skills = new SkillCatalog(this);
     this.attachments = new AttachmentStore(dataDir);
     this.configuredBins = { ...bins };
     this.acquireMutation = acquireMutation;
@@ -242,6 +244,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'memory_update') c.memory = (c.memory || []).map(entry => entry.id === record.id ? { ...entry, ...record.changes, updatedAt: record.at } : entry);
     if (record.type === 'memory_remove') c.memory = (c.memory || []).filter(entry => entry.id !== record.id);
     if (record.type === 'memory_dismiss') c.memoryDismissed = [...(c.memoryDismissed || []), record.key];
+    if (record.type === 'skills') { c.skills = record.skills; c.skillDirs = record.dirs; }
     if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: record.observedAt || record.at }; }
     if (record.type === 'routing') c.routing = record.routing;
     if (record.type === 'retry_offer') c.retryOffer = record.offer;
@@ -367,7 +370,7 @@ export class Broker extends EventEmitter {
   // What a fresh agent would be told if this task moved now, without starting anything (#85).
   briefPreview(c) {
     const provider = c.provider, text = c.messages.some(message => message.role === 'user') ? continuationRequest : 'Preview';
-    const prepared = prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), readAttachment: () => ({ text: '' }), includeImages: false });
+    const prepared = prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider }), readAttachment: () => ({ text: '' }), includeImages: false });
     return { brief: JSON.parse(prepared.prompt.slice(prepared.prompt.indexOf('\n') + 1)).brief || null, metadata: prepared.metadata };
   }
 
@@ -403,7 +406,7 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null } = {}) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, quotaReadings, ...visible } = c;
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, quotaReadings, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     return { ...visible, cursor: records, ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
@@ -575,7 +578,7 @@ export class Broker extends EventEmitter {
     const effectiveFresh = Boolean(fresh || changedWorkspace || switchedAgent || provider === 'gemini' || !c.sessions[provider]?.id);
     const sessionReason = review ? 'review' : local ? 'local-handoff' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : provider === 'gemini' ? 'provider-fresh-session' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     const sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
-    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -594,6 +597,7 @@ export class Broker extends EventEmitter {
         ...(automaticReview ? { automaticReview } : {}),
         message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
+    for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', `Using skill ${skill.name}: ${skill.reason}`, provider);
     // A message sent by hand takes the place of a wait for a reset.
     if (c.resume && !resume && !review) this.resume.end(c, 'superseded');
     // So does any new run for an offered retry.
@@ -708,7 +712,7 @@ export class Broker extends EventEmitter {
                 return;
               }
               // Ask before changes: an action that only reads the workspace folders goes ahead without asking.
-              if (!review && run.mode === 'edit' && readOnlyRequest(message.request, { workspaces: this.workspaces })) { run.child.send({ type: 'approval-result', id: message.request.id, allow: true }); return; }
+              if (!review && run.mode === 'edit' && readOnlyRequest(message.request, { workspaces: [...this.workspaces, this.skills.root] })) { run.child.send({ type: 'approval-result', id: message.request.id, allow: true }); return; }
               // A rule the person chose earlier, for this run or this workspace, allows the same exact action again.
               const scope = !review && run.mode === 'edit' ? approvalScope(message.request, { provider, workspaces: this.workspaces }) : null;
               const rule = scope && !run.allowances?.has(scope.key) ? this.permissions.find(scope.key) : null;

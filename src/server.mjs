@@ -217,9 +217,9 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       }
       const projectRoute=url.pathname.match(/^\/api\/projects\/([a-zA-Z0-9-]+)$/);
       if(req.method==='POST'&&projectRoute)return json(res,200,await registry.update(projectRoute[1],await body(req)));
-      if(req.method==='GET'&&(url.pathname==='/api/ledger'||url.pathname==='/api/memory'||url.pathname==='/api/conversation/brief')){
+      if(req.method==='GET'&&(url.pathname==='/api/ledger'||url.pathname==='/api/memory'||url.pathname==='/api/skills'||url.pathname==='/api/conversation/brief')){
         const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);
-        return json(res,200,url.pathname==='/api/ledger'?await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}):url.pathname==='/api/memory'?broker.memory(c):broker.briefPreview(c));
+        return json(res,200,url.pathname==='/api/ledger'?await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}):url.pathname==='/api/memory'?broker.memory(c):url.pathname==='/api/skills'?broker.skills.view(c):broker.briefPreview(c));
       }
       if(req.method==='GET'&&url.pathname==='/api/conversation')return json(res,200,registry.mainConversation(selectedProjectId(url),{since:url.searchParams.has('since')?Number(url.searchParams.get('since')):null}));
       if (await commandRoutes.route({ req, res, url })) return;
@@ -259,7 +259,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           return json(res,existed?200:201,registry.mainConversation(projectId));
         }
       }
-      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|approval|answer|resume|queue|handoff|steer|routing|retry))?$/);
+      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|skills|approval|answer|resume|queue|handoff|steer|routing|retry))?$/);
       if (match) {
         const broker = selectedBroker(url);
         const c = broker.get(match[1]);
@@ -270,6 +270,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
           if (match[2] === 'context') return json(res, 200, await broker.updateContext(c, input));
           if (match[2] === 'memory') return json(res, 200, broker.changeMemory(c, input));
+          if (match[2] === 'skills') return json(res, 200, broker.skills.change(c, input));
           if (match[2] === 'approval') return json(res, 200, await broker.approve(input.runId, input.approvalId, input.allow === true, input.remember ?? null));
           if (match[2] === 'answer') return json(res, 200, await broker.answer(input.runId, input.questionId, input.skip === true ? null : input.answers));
           if (match[2] === 'provider') return json(res, 200, await broker.settings(c, input));
