@@ -7,7 +7,7 @@ Hand off at the limit, run tasks side by side, and send prompts or approve from 
 
 <p align="center"><a href="https://github.com/AhmedNavaz/codeshi/releases/latest"><img src="https://img.shields.io/github/v/release/AhmedNavaz/codeshi?label=release" alt="Latest release"></a> <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="Runs on macOS and Windows"> <a href="https://github.com/AhmedNavaz/codeshi/actions/workflows/ci.yml"><img src="https://github.com/AhmedNavaz/codeshi/actions/workflows/ci.yml/badge.svg" alt="CI"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a> <a href="https://www.patreon.com/17048317/join"><img src="https://img.shields.io/badge/Support-Patreon-FF424D?logo=patreon&amp;logoColor=white" alt="Support Codeshi on Patreon"></a></p>
 
-<p align="center"><a href="https://codeshi.dev"><img src="docs/hero.jpg" width="900" alt="Codeshi's demo: Codex finishes Claude's checkout task in the same conversation, with a separate task in the sidebar"></a><br><a href="https://codeshi.dev">Watch remote access, task queues and agent handoff in the live demo →</a></p>
+<p align="center"><a href="https://codeshi.dev"><img src="docs/hero.jpg" width="900" alt="Codeshi's demo with both side panels open: workspaces and a separate task on the left, Codex finishing Claude's checkout task in the same conversation in the middle, and each agent's plan usage and routing on the right"></a><br><a href="https://codeshi.dev">Watch remote access, task queues and agent handoff in the live demo →</a></p>
 
 Every coding agent runs out of usage at some point, and moving to another one usually means explaining your project all over again. Codeshi gives each project one permanent conversation that all your agents share. Claude can start a task, Codex can finish it, and a model on your own machine can take over when both are out, each picking up from everything said and done so far.
 
@@ -33,7 +33,7 @@ Choose **Remote access** in the desktop's bottom bar to pair. The phone has its 
 
 ### Run tasks side by side
 
-<img src="docs/features/tasks.jpg" alt="Codeshi's website demo with Workspace chat and a separate running task in the sidebar, a queued prompt below the message box, and Codex continuing Claude's checkout work">
+<img src="docs/features/tasks.jpg" alt="The sidebar lists Workspace chat working, two running tasks, one with an approval waiting, and a finished task ready for review. One task is open in its own copy of the web folder, with Claude's steps, its own queue, plan and Stop button">
 
 Keep the Workspace chat going while another task works in one of the project's folders. Each task has its own conversation, output, approvals, queue and Stop. Start one with **+** beside **Tasks**, or choose **Run as a task** on a queued prompt to start it immediately with the agent, model and access it was queued with.
 
