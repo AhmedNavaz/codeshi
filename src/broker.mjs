@@ -8,7 +8,7 @@ import { probeCli } from './cli-probe.mjs';
 import { isAgy, agyUnsupported } from './gemini.mjs';
 import { resolveBinary } from './resolve-binary.mjs';
 import { fileURLToPath } from 'node:url';
-import { prepareContext, emptyContext, validateContext } from './context.mjs';
+import { prepareContext, emptyContext, validateContext, continuationRequest } from './context.mjs';
 import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
@@ -107,9 +107,9 @@ function importPlaces(existing, entries) {
 }
 
 export class Broker extends EventEmitter {
-  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), handoffPreferences = () => ({ threshold: 90, automatic: false }), tests = null }) {
+  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), tests = null }) {
     super();
-    this.workspace = savedWorkspace(workspace);
+    this.workspace = savedWorkspace(workspace); this.contextPolicy = contextPolicy;
     this.workspaces = [...new Set([this.workspace, ...workspaces.map(savedWorkspace), ...workspaceFolders.map(folder => savedWorkspace(folder.path))])];
     this.workspaceFolders = this.workspaces.map(directory => {
       const configured = workspaceFolders.find(folder => savedWorkspace(folder.path) === directory);
@@ -308,7 +308,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'run_end') { if (c.activeRun && !c.activeRun.reviewId) c.lastBuilder = c.activeRun.provider; c.lastRun = { ...c.activeRun, status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at }; c.activeRun = null; c.status = record.status; }
       // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
     if ((record.type === 'submission' && !record.review) || record.type === 'run_start') {
-      c.runs = [...(c.runs || []), { id: record.id, ...(record.task ? { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation } : {}), provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
+      c.runs = [...(c.runs || []), { id: record.id, ...(record.task ? { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation } : {}), ...(record.context?.scope ? { context: { scope: record.context.scope } } : {}), provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
         ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building', summary: 'Build first, then one read-only review of the selected folders.' } } : {}),
         ...(record.routing ? { routing: { mode: record.routing.mode, tier: record.routing.tier || null } } : {}), ...(record.retryOf ? { retryOf: record.retryOf } : {}) }].slice(-50);
     }
@@ -335,6 +335,13 @@ export class Broker extends EventEmitter {
 
   // The task ledger for a conversation (#84), worked out from its journal. Prompts and commands only when asked for.
   ledger(c, options = {}) { return readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options); }
+
+  // What a fresh agent would be told if this task moved now, without starting anything (#85).
+  briefPreview(c) {
+    const provider = c.provider, text = c.messages.some(message => message.role === 'user') ? continuationRequest : 'Preview';
+    const prepared = prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), readAttachment: () => ({ text: '' }), includeImages: false });
+    return { brief: JSON.parse(prepared.prompt.slice(prepared.prompt.indexOf('\n') + 1)).brief || null, metadata: prepared.metadata };
+  }
 
   record(c, value) {
     const record = { ...value, seq: c.records + 1, at: new Date().toISOString() };
@@ -540,7 +547,7 @@ export class Broker extends EventEmitter {
     const effectiveFresh = Boolean(fresh || changedWorkspace || switchedAgent || provider === 'gemini' || !c.sessions[provider]?.id);
     const sessionReason = review ? 'review' : local ? 'local-handoff' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : provider === 'gemini' ? 'provider-fresh-session' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     const sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
-    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -716,7 +723,9 @@ export class Broker extends EventEmitter {
     run.seenTools ||= new Set();
     for (const id of toolIds) if (!run.seenTools.has(id)) { run.seenTools.add(id); if (run.c.activeRun) run.c.activeRun.toolCount = run.seenTools.size; }
     this.touch(run, phase);
-    if (event.type === 'relay.progress') return;
+    // The agent shortened its own context, which Codeshi can't see into, so it is only counted (#85).
+    if (event.type === 'relay.progress' && event.phase === 'compacting' && run.lastProgress !== 'compacting') { run.compactions = (run.compactions || 0) + 1; this.record(c, { type: 'run_metadata', metadata: { compactions: run.compactions } }); }
+    if (event.type === 'relay.progress') { run.lastProgress = event.phase; return; }
     const { c, provider } = run;
     if (!event || typeof event !== 'object') throw new Error('Invalid provider protocol event.');
     // The agent's own plan for the run, shown as a to-do list.

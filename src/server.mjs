@@ -217,9 +217,9 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       }
       const projectRoute=url.pathname.match(/^\/api\/projects\/([a-zA-Z0-9-]+)$/);
       if(req.method==='POST'&&projectRoute)return json(res,200,await registry.update(projectRoute[1],await body(req)));
-      if(req.method==='GET'&&(url.pathname==='/api/ledger')){
+      if(req.method==='GET'&&(url.pathname==='/api/ledger'||url.pathname==='/api/conversation/brief')){
         const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);
-        return json(res,200,await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}));
+        return json(res,200,url.pathname==='/api/ledger'?await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}):broker.briefPreview(c));
       }
       if(req.method==='GET'&&url.pathname==='/api/conversation')return json(res,200,registry.mainConversation(selectedProjectId(url),{since:url.searchParams.has('since')?Number(url.searchParams.get('since')):null}));
       if (await commandRoutes.route({ req, res, url })) return;

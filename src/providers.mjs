@@ -113,6 +113,7 @@ export async function runCodex(config, { event, approval, question = null, metad
       if (/reasoning.*(?:Delta|delta)|reasoning\//i.test(message.method)) event({ type: 'relay.progress', phase: 'reasoning' });
       if (message.method === 'item/commandExecution/outputDelta') event({ type: 'relay.progress', phase: 'tool' });
       if (message.method === 'thread/tokenUsage/updated') metadata({ usage: p.tokenUsage });
+      if (message.method === 'thread/compacted' || (message.method === 'item/started' && p.item?.type === 'contextCompaction')) event({ type: 'relay.progress', phase: 'compacting' });
       if (message.method === 'turn/plan/updated' && Array.isArray(p.plan)) event({ type: 'relay.plan', explanation: p.explanation || null, steps: p.plan.map(step => ({ text: step.step, status: step.status === 'completed' ? 'done' : step.status === 'inProgress' ? 'active' : 'pending' })) });
       if (message.method === 'item/agentMessage/delta') event({ type: 'relay.delta', id: p.itemId, text: p.delta });
       if (['item/started', 'item/completed'].includes(message.method)) {
