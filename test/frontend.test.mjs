@@ -1314,7 +1314,6 @@ test('selected findings prepare a draft without starting a fix or overwriting ex
   ui.$('view-review').click(); await flush();
   assert.equal(ui.$('review-result').querySelectorAll('img').length, 0); assert.match(ui.$('review-result').textContent, /<img onerror=alert\(1\)>/);
   const choice = ui.$('review-result').querySelectorAll('input')[0]; choice.checked = true; choice.dispatchEvent(new UIEvent('change'));
-  ui.$('message-input').value = 'An existing draft'; ui.$('prepare-review-fix').click(); await flush(); assert.match(ui.$('review-error').textContent, /current draft/); assert.equal(ui.$('message-input').value, 'An existing draft');
   ui.$('message-input').value = ''; ui.$('prepare-review-fix').click(); await flush();
   assert.equal(ui.$('message-input').value, 'Address the selected finding: fix the return value.'); assert.equal(ui.$('review-dialog').open, false);
   assert.equal(ui.requests.filter(request => /\/(messages|continue)$/.test(request.path)).length, 0, 'A fix is only drafted; Send remains an explicit action.');
@@ -1345,12 +1344,25 @@ test('a finished review updates its conversation summary, and an interrupted rev
   assert.equal(ui.$('continuation').hidden, true); assert.match(ui.$('run-phase').textContent, /Review/);
 });
 
-test('a draft typed while review fixes are being prepared is preserved', async () => {
+test('drafting a fix keeps the message in progress and its attachments, and sends nothing', async () => {
+  const open = async () => { const ui = await browser({ reviewsUI: true }); reviewBrowserRoutes(ui, { status: 'complete' }); await ui.window.relayUI.refresh(); ui.$('view-review').click(); await flush(); const choice = ui.$('review-result').querySelectorAll('input')[0]; choice.checked = true; choice.dispatchEvent(new UIEvent('change')); return ui; };
+  const fix = 'Address the selected finding: fix the return value.', sends = ui => ui.requests.filter(request => /\/(messages|continue)$/.test(request.path)).length;
+  const typed = await open(); typed.$('message-input').value = 'An existing draft'; typed.$('prepare-review-fix').click(); await flush();
+  assert.equal(typed.$('message-input').value, 'An existing draft\n\n' + fix, 'What was being typed stays, with the fix request after it.');
+  assert.equal(typed.$('review-error').hidden, true); assert.equal(sends(typed), 0); assert.equal(typed.$('review-dialog').open, false);
+  const filed = await open(); const ids = ['file-one']; filed.window.relayFiles = { ids: () => ids, accepted() {} };
+  filed.$('prepare-review-fix').click(); await flush();
+  assert.equal(filed.$('message-input').value, fix, 'Attachments no longer get in the way.'); assert.deepEqual(ids, ['file-one'], 'And they stay.'); assert.equal(sends(filed), 0);
+  const twice = await open(); twice.$('message-input').value = fix; twice.$('prepare-review-fix').click(); await flush();
+  assert.equal(twice.$('message-input').value, fix, 'The same request is not added twice.');
+});
+
+test('a draft typed while review fixes are being prepared stays, with the fix request after it', async () => {
   const ui = await browser({ reviewsUI: true }); reviewBrowserRoutes(ui, { status: 'complete' }); await ui.window.relayUI.refresh(); ui.$('view-review').click(); await flush();
   const choice = ui.$('review-result').querySelectorAll('input')[0]; choice.checked = true; choice.dispatchEvent(new UIEvent('change'));
   const gate = deferred(); ui.setIntercept((request, next) => request.path.endsWith('/prepare-fix') ? gate.promise : next());
   ui.$('prepare-review-fix').click(); ui.$('message-input').value = 'A newly typed draft'; gate.resolve(response({ provider: 'codex', text: 'Replace the draft' })); await flush();
-  assert.equal(ui.$('message-input').value, 'A newly typed draft'); assert.match(ui.$('review-error').textContent, /draft changed/);
+  assert.equal(ui.$('message-input').value, 'A newly typed draft\n\nReplace the draft', 'Text typed while it was being prepared stays too.'); assert.equal(ui.$('review-error').hidden, true);
 });
 
 test('attachments stay with their workspace and accepted-send retry preserves attachment identity',async()=>{

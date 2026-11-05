@@ -103,7 +103,7 @@
       article.append(check, body); host.append(article);
     }
     if (report.findings.length) {
-      host.append(node('p', 'Choose findings to draft a fix request. You can edit the request before sending it; your current access mode is preserved.', 'review-hint'));
+      host.append(node('p', 'Choose findings to draft a fix request. It’s added to the message box after anything already there, for you to edit and send; your current access mode is preserved.', 'review-hint'));
       const actions = node('div', undefined, 'review-actions'), fix = button(`Prepare fixes with ${name(report.builder)}`, () => perform(prepareFix), 'primary-button'); fix.id = 'prepare-review-fix'; actions.append(fix); host.append(actions);
     }
     if (report.snapshot) { const details = node('details', undefined, 'review-scope'), content = node('div'); details.append(node('summary', `Reviewed scope · ${report.snapshot.files.length} file${report.snapshot.files.length === 1 ? '' : 's'}`)); showSnapshot(report.snapshot, content); details.append(content); host.append(details); }
@@ -119,16 +119,17 @@
   }
   async function prepareFix(token) {
     const state = api.getState(), projectId = scope, conversationId = state.conversation.id, input = $('message-input');
-    if (input.value.trim() || window.relayFiles?.ids().length) throw Error('Send or save your current draft before preparing review fixes.');
     const result = await api.post('/api/reviews/' + report.id + '/prepare-fix', { findingIds: [...findings] }, projectId);
     if (token !== generation || !current()) return;
-    if (input.value.trim() || window.relayFiles?.ids().length) throw Error('Your draft changed. Save it before preparing review fixes.');
     await api.post(`/api/conversations/${conversationId}/provider`, { provider: result.provider, mode: state.mode }, projectId);
     if (token !== generation || !current()) return;
     await api.refresh();
     if (token !== generation || !current()) return;
-    if (!current() || input.value.trim() || window.relayFiles?.ids().length) throw Error('Your draft changed. Save it before preparing review fixes.');
-    input.value = result.text; input.dispatchEvent(new Event('input', { bubbles: true })); dialog.close(); input.focus(); api.renderControls(); api.announce('Review findings are ready in the message box. Review the request and press Send when ready.');
+    if (!current()) return;
+    // Whatever is in the box by now stays, attachments too, with the fix request after it. Nothing is sent from here.
+    const kept = input.value.trimEnd(), had = Boolean(kept);
+    if (!kept.endsWith(result.text)) input.value = had ? `${kept}\n\n${result.text}` : result.text;
+    input.dispatchEvent(new Event('input', { bubbles: true })); dialog.close(); input.focus(); input.setSelectionRange?.(input.value.length, input.value.length); api.renderControls(); api.announce(had ? 'The fix request was added after your message. Review it and press Send when ready.' : 'Review findings are ready in the message box. Review the request and press Send when ready.');
   }
   async function open(id, { suggested = false } = {}) {
     const state = api.getState();
