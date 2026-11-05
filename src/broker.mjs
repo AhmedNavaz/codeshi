@@ -12,6 +12,7 @@ import { prepareContext, emptyContext, validateContext } from './context.mjs';
 import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
+import { readLedger, taskIdentity } from './task-ledger.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
@@ -235,6 +236,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'created') Object.assign(c, { createdAt: record.at, title: record.title });
     if (record.type === 'settings') { Object.assign(c, { provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model ?? null, transport: record.transport || c.transport, settingsRevision: record.seq }); c.models[record.provider] = record.model ?? null; c.transports[record.provider] = record.transport || c.transport; }
     if (record.type === 'context') c.context = record.context;
+    if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: record.observedAt || record.at }; }
     if (record.type === 'routing') c.routing = record.routing;
     if (record.type === 'retry_offer') c.retryOffer = record.offer;
     if (record.type === 'retry_offer_end' && c.retryOffer?.id === record.id) c.retryOffer = null;
@@ -277,6 +279,7 @@ export class Broker extends EventEmitter {
       c.messages.push({ ...record.message, seq: record.seq });
       c.requests[record.requestId] = { runId: record.id, requestId: record.requestId, fingerprint: record.fingerprint };
       c.activeRun = { id: record.id, provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.effectiveTransport || record.transport, baseline: record.baseline, context: record.context, ...(record.local ? { connection: 'local', local: record.local } : {}), ...(record.review ? { purpose: 'review', reviewId: record.id } : {}), ...(record.routing ? { routing: record.routing } : {}), ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building' } } : {}), effort: record.effort ?? null, phase: 'starting', lastEventAt: record.at, toolCount: 0, startedAt: record.at }; c.status = 'running';
+      if (record.task) Object.assign(c.activeRun, { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation });
     }
     if (record.type === 'background_review') { c.reviews = [record.review, ...c.reviews].slice(0, 10); c.reviewRequests[record.review.requestId] = { reviewId: record.review.id, requestId: record.review.requestId, fingerprint: record.review.fingerprint }; }
     if (record.type === 'review_process') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, { pid: record.pid, pidStart: record.pidStart }); }
@@ -303,9 +306,9 @@ export class Broker extends EventEmitter {
     }
     if (record.type === 'run_process' && c.activeRun) Object.assign(c.activeRun, { pid: record.pid, pidStart: record.pidStart });
     if (record.type === 'run_end') { if (c.activeRun && !c.activeRun.reviewId) c.lastBuilder = c.activeRun.provider; c.lastRun = { ...c.activeRun, status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at }; c.activeRun = null; c.status = record.status; }
-    // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
+      // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
     if ((record.type === 'submission' && !record.review) || record.type === 'run_start') {
-      c.runs = [...(c.runs || []), { id: record.id, provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
+      c.runs = [...(c.runs || []), { id: record.id, ...(record.task ? { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation } : {}), provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
         ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building', summary: 'Build first, then one read-only review of the selected folders.' } } : {}),
         ...(record.routing ? { routing: { mode: record.routing.mode, tier: record.routing.tier || null } } : {}), ...(record.retryOf ? { retryOf: record.retryOf } : {}) }].slice(-50);
     }
@@ -317,6 +320,21 @@ export class Broker extends EventEmitter {
       for (const run of [c.activeRun, c.lastRun, ...c.runs]) if (run?.id === record.runId && run.automaticReview) Object.assign(run.automaticReview, record.phase);
     }
   }
+
+  // Keeps usage limit readings apart from what runs used: these are account-wide and may include other tools (#84). Only a
+  // reading that differs from the last one is saved.
+  observeQuota(c, provider, usage) {
+    if (!usage?.available || !Array.isArray(usage.windows) || !usage.windows.length) return;
+    const windows = usage.windows.filter(row => typeof row.usedPercent === 'number').map(({ id, label, usedPercent, resetsAt, scope }) => ({ id, label, usedPercent, resetsAt: resetsAt || null, ...(scope ? { scope } : {}) }));
+    const signature = JSON.stringify(windows.map(row => [row.id, row.usedPercent, row.resetsAt])), key = `${c.id}:${provider}`;
+    this.quotaSeen ||= new Map();
+    if (!windows.length || this.quotaSeen.get(key) === signature) return;
+    this.quotaSeen.set(key, signature);
+    this.record(c, { type: 'quota_observation', provider, observedAt: usage.fetchedAt ? new Date(usage.fetchedAt).toISOString() : undefined, plan: usage.plan || null, windows });
+  }
+
+  // The task ledger for a conversation (#84), worked out from its journal. Prompts and commands only when asked for.
+  ledger(c, options = {}) { return readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options); }
 
   record(c, value) {
     const record = { ...value, seq: c.records + 1, at: new Date().toISOString() };
@@ -350,7 +368,7 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null } = {}) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, ...visible } = c;
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, quotaReadings, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     return { ...visible, cursor: records, ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.running?.c.id === c.id ? [...this.running.approvals.values()] : [], canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
@@ -495,6 +513,7 @@ export class Broker extends EventEmitter {
     const accepted = c.requests[requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) throw Object.assign(new Error('This request ID was already used for another message.'), { status: 409 }); return { runId: accepted.runId, requestId, duplicate: true }; }
     if (this.running) throw Object.assign(new Error('An assistant is already working in this workspace. Stop it before starting another run.'), { status: 409 });
+    const runId = randomUUID(), task = taskIdentity(c, { runId, text, retryOf, review });
     if (automaticReview !== null) {
       if (review || local || resume || queued || retryOf || !this.automaticReviews || this.automaticReviews.closed || this.backgroundReview) throw Object.assign(new Error('Preview automatic review for a new coding prompt after the current review finishes.'), { status: 409 });
       automaticReview = validateAutomaticReview(this, c, automaticReview, { text, provider, model, mode, approvalPolicy, attachments: attachmentIds });
@@ -528,14 +547,13 @@ export class Broker extends EventEmitter {
     const lease = this.acquireMutation(`provider:${provider}`);
     let baseline;
     try { if (review) verifyReview(); baseline = review ? { kind: 'review', git: true, digest: review.snapshot.digest, capturedAt: new Date().toISOString() } : workspaceBaseline(this.workspace, this.workspaceFolders); } catch (error) { lease.release(); throw error; }
-    const runId = randomUUID();
-    const run = { id: runId, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
+    const run = { id: runId, taskId: task.id, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
       stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, limitChain, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
       model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview };
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
-      this.record(c, { type: 'submission', id: runId, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
+      this.record(c, { type: 'submission', id: runId, task, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
         ...(local ? { local } : {}), ...(review ? { review } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
         ...(automaticReview ? { automaticReview } : {}),

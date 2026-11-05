@@ -6,6 +6,8 @@ import { Broker } from './broker.mjs';
 import { copyReviewFiles, reviewFreshness } from './agent-review.mjs';
 
 const fail = (message, status = 409) => { throw Object.assign(new Error(message), { status }); };
+// What the reviewer used, for the task's totals (#84). The reviewer's own journal goes away with its temporary folder.
+const reviewCost = run => ({ ...(run?.usage ? { usage: run.usage } : {}), ...(typeof run?.costUSD === 'number' ? { costUSD: run.costUSD } : {}), ...(run?.account?.billingSource ? { billingSource: run.account.billingSource } : {}) });
 export const reviewRequestKey = input => createHash('sha256').update(JSON.stringify({ goal: input.goal, files: input.files, approvedDigest: input.approvedDigest })).digest('hex');
 
 export class ReviewJobs {
@@ -21,6 +23,7 @@ export class ReviewJobs {
     const fingerprint = reviewRequestKey(input), accepted = c.reviewRequests[input.requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) fail('This request ID was used for another review.'); return { ...accepted, duplicate: true }; }
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId)) fail('Invalid review request ID.', 400);
+    const taskId = c.lastRun?.taskId || c.lastRun?.id || null;
     if (this.jobs.has(project.id)) fail('A background review is already running in this workspace.');
     if (this.jobs.size >= 4) fail('Four background reviews are running. Wait for one to finish.');
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-review-'));
@@ -33,7 +36,7 @@ export class ReviewJobs {
       const conversation = worker.get(worker.create().id), id = randomUUID();
       worker.updateContext(conversation, c.context);
       // Save ownership before launching a provider. A crash in either journal can then be recovered as interrupted.
-      main.record(c, { type: 'background_review', review: { ...review, id, requestId: input.requestId, fingerprint, background: true, startedAt: new Date().toISOString(), status: 'running', findings: [] } });
+      main.record(c, { type: 'background_review', taskId, review: { ...review, id, requestId: input.requestId, fingerprint, background: true, startedAt: new Date().toISOString(), status: 'running', findings: [] } });
       savedId = id;
       const progress = () => {
         const current = c.reviews.find(item => item.id === id), run = conversation.activeRun;
@@ -48,7 +51,7 @@ export class ReviewJobs {
       job.done = worker.running.done.then(() => {
         const report = conversation.reviews[0];
         const failure = report?.status === 'failed' ? conversation.messages.filter(message => message.role === 'error').at(-1)?.text?.split('\n')[0].slice(0, 1000) : null;
-        main.record(c, { type: 'review_result', id, result: { status: report?.status || 'failed', summary: failure || report?.summary || 'Review did not finish.', findings: report?.findings || [], errorCategory: conversation.lastRun?.errorCategory || null, rawResponse: conversation.messages.filter(message => message.role === 'assistant').at(-1)?.text?.slice(0, 64000), elapsedMs: conversation.lastRun?.elapsedMs, effectiveModel: conversation.lastRun?.effectiveModel } });
+        main.record(c, { type: 'review_result', id, result: { ...reviewCost(conversation.lastRun), status: report?.status || 'failed', summary: failure || report?.summary || 'Review did not finish.', findings: report?.findings || [], errorCategory: conversation.lastRun?.errorCategory || null, rawResponse: conversation.messages.filter(message => message.role === 'assistant').at(-1)?.text?.slice(0, 64000), elapsedMs: conversation.lastRun?.elapsedMs, effectiveModel: conversation.lastRun?.effectiveModel } });
       }).catch(error => {
         main.record(c, { type: 'review_result', id, result: { status: 'failed', summary: error.message, findings: [] } });
       }).finally(async () => {

@@ -49,12 +49,16 @@ export class HandoffMonitor {
   // The scope an offer is bound to. Progress within the run does not change it; a new task, folders or project context does.
   scope(c, run) { return createHash('sha256').update(JSON.stringify([run.id, this.broker.workspaceSignature, c.context])).digest('hex'); }
 
+  // A reading that can't be saved must never get in the way of a handoff.
+  observe(c, provider, usage) { try { this.broker.observeQuota(c, provider, usage); } catch (error) { console.error('Codeshi could not save a usage reading:', error.message); } }
+
   async destination(c, run, exclude = []) {
     const threshold = this.preferences().threshold;
     let best = null;
     for (const provider of this.broker.availableProviders().filter(value => value !== run.provider && !exclude.includes(value))) {
       const model = c.models[provider] || null, options = this.broker.usageOptions(provider);
       let usage = null; try { usage = await this.usage(provider, options); } catch {}
+      this.observe(c, provider, usage);
       if (limitState(usage, model).limited === true) continue;
       const top = highest(usage, model);
       if (top && top.usedPercent >= threshold) continue;
@@ -85,6 +89,7 @@ export class HandoffMonitor {
     const { c } = run, preferences = this.preferences();
     if (this.closed || this.broker.running !== run || run.handoffDismissed || run.handoff || c.handoffOffer || !(preferences.threshold > 0)) return;
     let usage = null; try { usage = await this.usage(run.provider, this.broker.usageOptions(run.provider)); } catch {}
+    this.observe(c, run.provider, usage);
     // The model the run is really using, which is known once it starts even when the agent's default was left selected.
     const top = highest(usage, c.activeRun?.effectiveModel || c.model);
     if (!top || top.usedPercent < preferences.threshold) return;

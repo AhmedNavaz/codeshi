@@ -217,7 +217,17 @@ export async function runClaude(config, { event, approval, question = null, meta
         return allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'The user declined this action.' };
       },
     } });
+    // Claude only sums a run up in its result, and a run that is stopped, as at a handoff, never gets one. Its messages each
+    // carry their own usage, so what they add up to is kept until then, marked as a partial count.
+    const seenUsage = new Map();
+    const countMessage = ({ id, usage }) => {
+      if (!id || !usage) return;
+      seenUsage.set(id, usage);
+      const sum = key => [...seenUsage.values()].reduce((total, item) => total + (item[key] || 0), 0);
+      metadata({ usage: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cache_read_input_tokens: sum('cache_read_input_tokens'), cache_creation_input_tokens: sum('cache_creation_input_tokens'), partial: true } });
+    };
     for await (const message of stream) {
+      if (message.type === 'assistant' && message.message) countMessage(message.message);
       if (message.type === 'stream_event' && (message.event?.content_block?.type === 'thinking' || message.event?.delta?.type === 'thinking_delta')) event({ type: 'relay.progress', phase: 'reasoning' });
       if (message.type === 'system' && message.subtype === 'status' && message.status === 'compacting') event({ type: 'relay.progress', phase: 'compacting' });
       if (message.type === 'system' && message.subtype === 'init') metadata({ effectiveModel: message.model || 'unknown', transport: 'sdk', authMode: message.apiKeySource || 'unknown', effectiveEffort: message.effort ?? config.effort ?? null });
