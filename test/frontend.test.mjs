@@ -198,6 +198,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(modelPickerUI)vm.runInContext(fs.readFileSync(new URL('../public/model-picker.js',import.meta.url),'utf8'),context,{filename:'public/model-picker.js'});
   if(layoutUI)vm.runInContext(fs.readFileSync(new URL('../public/layout.js',import.meta.url),'utf8'),context,{filename:'public/layout.js'});
   if(agentsUI)vm.runInContext(fs.readFileSync(new URL('../public/agents-panel.js',import.meta.url),'utf8'),context,{filename:'public/agents-panel.js'});
+  if(agentsUI)for(const name of ['brief-panel','memory','skills','tasks-panel'])vm.runInContext(fs.readFileSync(new URL(`../public/${name}.js`,import.meta.url),'utf8'),context,{filename:`public/${name}.js`});
   if(historyUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-history.js',import.meta.url),'utf8'),context,{filename:'public/conversation-history.js'});
   if(desktopControls)vm.runInContext(fs.readFileSync(new URL('../public/desktop-controls.js',import.meta.url),'utf8'),context,{filename:'public/desktop-controls.js'});
   if(setup)vm.runInContext(fs.readFileSync(new URL('../public/setup.js',import.meta.url),'utf8'),context,{filename:'public/setup.js'});
@@ -1713,6 +1714,217 @@ test('commands are added and edited in a short form, stay with their workspace, 
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
 });
 
+const panelFixture = () => ({ ledgerTask: { id: 't1', prompt: 'Add promo codes to checkout', agents: { claude: {}, codex: {} }, workingMs: 150000, runs: 2, handoffs: 1, retries: 0, reviews: 0, status: 'complete', verification: 'passed', usage: { input: 1200, output: 50, cacheRead: 300, cacheWrite: null, reasoning: null, runs: 2, runsWithTokens: 1, partialRuns: 0 } } });
+const emptyUsage = () => ({ input: null, output: null, cacheRead: null, cacheWrite: null, reasoning: null, runs: 1, runsWithTokens: 0, partialRuns: 0 });
+
+test('the side panel has four tabs; each opens its own panel, is remembered, and old links into the Agents panel still land', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, layoutUI: true, wide: true });
+  await flush();
+  assert.equal(ui.$('agents-panel').hidden, false, 'Agents opens first.');
+  const show = ui.window.relayUI.showSidePanel;
+  show('brief'); await flush();
+  assert.deepEqual([ui.$('brief-panel').hidden, ui.$('agents-panel').hidden, ui.$('git-panel').hidden], [false, true, true], 'One panel at a time.');
+  assert.equal(ui.storage.get('throughline:side-panel'), 'brief');
+  show('tasks'); await flush();
+  assert.deepEqual([ui.$('tasks-panel').hidden, ui.$('brief-panel').hidden], [false, true]);
+  show('git'); await flush();
+  assert.deepEqual([ui.$('git-panel').hidden, ui.$('tasks-panel').hidden], [false, true]);
+  ui.window.relayAgents.open('memory'); await flush();
+  assert.equal(ui.$('brief-panel').hidden, false, 'Memory now lives in the Brief panel, and older links follow it there.');
+  ui.$('toggle-side-panel').click(); await flush();
+  assert.equal(ui.$('brief-panel').hidden, true);
+  ui.$('toggle-side-panel').click(); await flush();
+  assert.equal(ui.$('brief-panel').hidden, false, 'The layout button brings back the panel last open.');
+  const remembered = await browser({ insights: true, agentsUI: true, layoutUI: true, wide: true, stored: { 'throughline:side-panel': 'tasks' } }); await flush();
+  assert.deepEqual([remembered.$('tasks-panel').hidden, remembered.$('agents-panel').hidden], [false, true], 'A workspace reopens on the panel last chosen.');
+});
+
+test('the Tasks panel shows the current task with its agents, numbers and tests, the tasks before it, and never shows unknown as zero', async () => {
+  const { ledgerTask } = panelFixture();
+  const ledger = prompts => ({ runs: [], quotaObservations: [], tasks: [
+    { id: 'old', ...(prompts ? { prompt: 'Fix the header' } : {}), agents: { gemini: {} }, workingMs: 5000, runs: 1, handoffs: 0, retries: 0, reviews: 0, status: 'complete', verification: 'unverified', usage: emptyUsage() },
+    { ...ledgerTask, ...(prompts ? {} : { prompt: undefined }) },
+  ] });
+  const ui = await browser({ insights: true, agentsUI: true, wide: true });
+  const asked = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/ledger') { asked.push(request.params.prompts); return response(ledger(request.params.prompts === '1')); }
+    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
+    return next();
+  });
+  await ui.window.relayUI.refresh(); ui.window.relayTasks.open(); await flush(); ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  const card = ui.$('task-card');
+  assert.equal(card.hidden, false);
+  assert.equal(ui.$('tasks-empty').hidden, true);
+  assert.equal(card.querySelector('.task-prompt').textContent, 'Add promo codes to checkout');
+  assert.deepEqual(card.querySelectorAll('.status-pill').map(item => item.textContent), ['Finished', 'Tests passed']);
+  assert.deepEqual(card.querySelectorAll('.message-avatar').map(item => item.className), ['message-avatar claude', 'message-avatar codex']);
+  assert.deepEqual(card.querySelectorAll('.stat').map(tile => tile.querySelector('strong').textContent), ['2m 30s', '1.3k', '2']);
+  assert.match(card.querySelectorAll('.stat')[1].title, /1 of 2 runs reported/);
+  assert.equal(card.querySelector('.task-limits'), null, 'No limits set, so no bars.');
+  const earlier = ui.$('tasks-list').children;
+  assert.equal(earlier.length, 1);
+  assert.match(earlier[0].textContent, /Fix the header/);
+  assert.match(earlier[0].textContent, /No tests run/);
+  assert.match(earlier[0].textContent, /Usage not reported/);
+  assert.doesNotMatch(earlier[0].textContent, /\b0 (input|output)/);
+  assert.equal(ui.$('tasks-export').hidden, false);
+  assert.equal(asked.at(-1), '1');
+});
+
+test('the Brief panel says what the next agent gets, opens the full brief, and keeps a note for it', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true });
+  const brief = { note: 'Compiled', scope: { folders: ['website'], otherFolders: ['desktop'] }, repositoryInstructions: [{ folder: 'website', path: 'AGENTS.md', text: 'rules' }], memory: [{ kind: 'decision', text: 'Prices show the code first' }], skills: { active: [{ name: 'test-authoring', reason: 'asked for' }], available: [{ name: 'api-contracts' }] }, changedFiles: [{ folder: 'website', path: 'hero.tsx', status: 'M' }], failedAttempts: [{ what: 'npm test', how: 'exit 1', times: 2 }], unfinishedPlan: [{ text: 'Write the test', status: 'pending' }] };
+  const posted = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/conversation/brief') return response({ brief, metadata: { size: { estimatedTokens: 4200 } } });
+    if (request.path === '/api/memory') return response({ entries: [{ id: 'm', kind: 'decision', text: 'Prices show the code first', status: 'active', source: {} }], suggestions: [] });
+    if (request.path === '/api/skills') return response({ dirs: [], enabled: [], available: [] });
+    if (/\/context$/.test(request.path)) { posted.push(request.body); return next(); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); ui.window.relayBrief.open(); await flush(); ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  const rows = ui.$('brief-composition').querySelectorAll('.brief-item-value').map(item => item.textContent);
+  assert.deepEqual(rows, ['website (not desktop)', 'All 1 entry', '2 enabled, 1 in use', 'AGENTS.md', '1', '1 attempt', '1']);
+  assert.match(ui.$('brief-size').textContent, /≈4.2k tokens \(estimate\)/);
+  ui.$('brief-view').click(); await flush();
+  assert.equal(ui.$('brief-dialog').open, true);
+  const titles = ui.$('brief-dialog-body').querySelectorAll('.brief-block-title').map(item => item.textContent);
+  assert.deepEqual(titles, ['Folders in scope', 'Repository instructions', 'Memory', 'Skills', 'Changed so far', 'Went wrong before', 'Steps left']);
+  assert.match(ui.$('brief-dialog-body').textContent, /npm test.*exit 1 · 2×/);
+  ui.$('brief-dialog-close').click();
+  assert.equal(ui.$('memory-empty').hidden, true);
+  assert.equal(ui.$('skills-empty').hidden, false, 'With nothing enabled, the section explains what a skill is.');
+  ui.$('brief-note').value = 'Ship behind a flag'; ui.$('brief-save').click(); await flush();
+  assert.deepEqual(posted, [{ summary: 'Ship behind a flag' }]);
+});
+
+test('Remember on a message opens the dialog, and memory lists what is kept with its suggestions, recheck flags and retiring', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true, setup: true });
+  let view = { entries: [{ id: 'one', kind: 'convention', text: 'Dates are UTC', folderId: null, status: 'active', needsRecheck: true, changedFiles: ['a.js'], source: { commit: 'abc1234' } }], suggestions: [{ key: '0123456789abcdef', kind: 'decision', text: 'Prices show the code first', folderId: null, messageId: 'u1', runId: 'r1' }] };
+  const posted = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/memory') return response(view);
+    if (request.path === '/api/conversation/brief') return response({ brief: null, metadata: {} });
+    if (request.path === '/api/skills') return response({ dirs: [], enabled: [], available: [] });
+    if (/\/memory$/.test(request.path)) { posted.push(request.body); return response(view); }
+    return next();
+  });
+  ui.canonical.get('project-one').messages.push({ id: 'u1', runId: 'r1', role: 'user', text: 'Keep prices in cents', createdAt: '2026-11-01T10:00:00Z' }, { id: 's1', runId: 'r1', role: 'activity', text: '$ npm test\nok' });
+  await ui.window.relayUI.refresh(); ui.window.relayBrief.open(); await flush(); ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  const rows = ui.$('memory-list').children, buttons = host => host.querySelectorAll('button'), named = (host, label) => buttons(host).find(item => item.textContent === label);
+  assert.equal(rows.length, 1);
+  assert.equal(ui.$('memory-count').textContent, '1');
+  assert.match(rows[0].textContent, /Dates are UTC/);
+  assert.equal(rows[0].querySelector('.kind-dot').dataset.kind, 'convention');
+  assert.match(rows[0].querySelector('.panel-row-meta').textContent, /Convention · abc1234/);
+  assert.match(rows[0].querySelector('.bad').textContent, /Needs recheck/);
+  assert.equal(ui.$('memory-suggested').hidden, false);
+  assert.match(ui.$('memory-suggestions').children[0].textContent, /Prices show the code first/);
+  named(rows[0], 'Retire').click(); await flush();
+  assert.deepEqual(posted.at(-1), { action: 'retire', id: 'one' });
+  named(ui.$('memory-suggestions').children[0], 'Keep').click(); await flush();
+  assert.deepEqual([posted.at(-1).action, posted.at(-1).text, posted.at(-1).suggested], ['add', 'Prices show the code first', true], 'Kept only because the person chose it.');
+  named(ui.$('memory-suggestions').children[0], 'Dismiss').click(); await flush();
+  assert.deepEqual(posted.at(-1), { action: 'dismiss', key: '0123456789abcdef' });
+  ui.$('message-u1').querySelector('.message-remember').click();
+  assert.equal(ui.$('memory-dialog').open, true);
+  assert.equal(ui.$('memory-text').value, 'Keep prices in cents');
+  ui.$('memory-kind').value = 'decision';
+  ui.$('memory-form').dispatchEvent(new UIEvent('submit')); await flush();
+  assert.deepEqual([posted.at(-1).action, posted.at(-1).kind, posted.at(-1).text, posted.at(-1).messageId, posted.at(-1).runId], ['add', 'decision', 'Keep prices in cents', 'u1', 'r1']);
+  assert.equal(ui.$('memory-dialog').open, false);
+  assert(ui.document.querySelector('.activity-remember'), 'A step can be remembered too.');
+  view = { entries: [{ id: 'old', kind: 'decision', text: 'Old rule', status: 'retired', source: {} }], suggestions: [] };
+  ui.$('memory-add').click(); ui.$('memory-cancel').click();
+  ui.$('memory-text').value = 'x'; ui.$('memory-form').dispatchEvent(new UIEvent('submit')); await flush();
+  assert.deepEqual(buttons(ui.$('memory-list').children[0]).map(item => item.textContent), ['Edit', 'Restore', 'Delete'], 'Deleting takes retiring first.');
+  assert.equal(ui.$('memory-count').hidden, true);
+});
+
+test('skills show as a list with switches, and Add skills opens everything found with what is unavailable said up front', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true, desktop: true });
+  const compatibility = unavailable => ({ route: 'instructions', adapters: {}, unavailable, blocking: unavailable.some(item => item.blocking) });
+  let view = { dirs: ['/my/skills'], enabled: [{ name: 'long-guide', description: 'A long description. '.repeat(8), version: 'abcdef1234', license: 'MIT', sourceKind: 'starter', sourceLabel: 'the starter set', sourcePath: '/s/long-guide', enabled: true, pinned: false, updateAvailable: false, sourceMissing: false, compatibility: compatibility([]) }, { name: 'tone-guide', description: 'Copy rules.', version: 'abcdef1234', license: 'MIT', sourceKind: 'folder', sourceLabel: '/my/skills', sourcePath: '/my/skills/tone-guide', enabled: true, pinned: false, updateAvailable: true, sourceMissing: false, compatibility: compatibility([]) }],
+    available: [{ name: 'test-authoring', description: 'Write tests.', path: '/s/test-authoring', license: 'MIT', source: { kind: 'starter' }, compatibility: compatibility([]), problems: [] }, { name: 'fills-in', description: 'Uses arguments.', path: '/s/fills-in', source: { kind: 'folder', folder: '/my/skills' }, compatibility: compatibility([{ feature: 'substitutions', detail: 'Its placeholders stay as written.', blocking: true }]), problems: [] }, { name: 'Broken', path: '/s/broken', source: { kind: 'folder' }, problems: ['name must be lowercase'] }] };
+  const posted = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/skills') return response(view);
+    if (request.path === '/api/memory') return response({ entries: [], suggestions: [] });
+    if (request.path === '/api/conversation/brief') return response({ brief: null, metadata: {} });
+    if (/\/skills$/.test(request.path)) { posted.push(request.body); return response(request.body.action === 'preview-update' ? { name: 'tone-guide', source: '/my/skills', diff: '-old\n+new' } : view); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); ui.window.relayBrief.open(); await flush(); ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  const row = () => ui.$('skills-list').children[1], named = (host, label) => host.querySelectorAll('button').find(item => item.textContent === label);
+  assert.equal(ui.$('skills-count').textContent, '2');
+  const long = ui.$('skills-list').children[0], more = long.querySelector('.panel-row-more');
+  assert.equal(more.textContent, 'More');
+  assert.equal(long.querySelector('.panel-row-text').classList.contains('expanded'), false);
+  more.click();
+  assert.equal(long.querySelector('.panel-row-text').classList.contains('expanded'), true, 'The full description opens in place.');
+  assert.equal(more.textContent, 'Less');
+  assert.equal(row().querySelector('.skill-name').textContent, '/tone-guide');
+  assert.equal(row().querySelector('.panel-row-more'), null, 'A short description has nothing to open.');
+  assert.equal(row().querySelector('.mini-switch').getAttribute('aria-checked'), 'true');
+  assert.match(row().querySelector('.panel-row-meta').textContent, /Your folder · abcdef1 · MIT/);
+  row().querySelector('.mini-switch').click(); await flush();
+  assert.deepEqual(posted.at(-1), { action: 'disable', name: 'tone-guide' });
+  named(row(), 'Pin').click(); await flush();
+  assert.deepEqual(posted.at(-1), { action: 'pin', name: 'tone-guide' });
+  named(row(), 'See update').click(); await flush();
+  assert.equal(posted.at(-1).action, 'preview-update');
+  assert.match(row().querySelector('.skill-diff').textContent, /-old[\s\S]*\+new/);
+  named(row(), 'Use this version').click(); await flush();
+  assert.deepEqual(posted.at(-1), { action: 'update', path: '/my/skills/tone-guide', acceptPartial: true });
+  ui.$('skills-add').click(); await flush();
+  assert.equal(ui.$('skills-add-dialog').open, true);
+  const groups = ui.$('skills-available').querySelectorAll('.panel-group-title').map(item => item.textContent);
+  assert.deepEqual(groups, ['Starter set, from Codeshi', 'From your folders']);
+  const rows = ui.$('skills-available').querySelectorAll('.panel-row'), [starter, partial, broken] = rows;
+  assert.equal(named(starter, 'Enable').className, 'secondary-button', 'A real button, where a skill is chosen.');
+  assert.equal(starter.querySelector('.panel-row-text').className, 'panel-row-text', 'The whole description shows there.');
+  named(starter, 'Enable').click(); await flush();
+  assert.deepEqual(posted.at(-1), { action: 'enable', path: '/s/test-authoring' });
+  assert.match(partial.textContent, /placeholders stay as written/);
+  named(partial, 'Enable as instructions only').click(); await flush();
+  assert.deepEqual(posted.at(-1), { action: 'enable', path: '/s/fills-in', acceptPartial: true }, 'Only an explicit choice accepts what is missing.');
+  assert.match(broken.textContent, /Can.t be used: name must be lowercase/);
+  assert.equal(broken.querySelectorAll('button').length, 0);
+  assert.equal(ui.$('skills-add-folder').hidden, false, 'On the desktop, a folder can be added.');
+});
+
+test('task limits show as bars on the current task, are set in a dialog, and a refused run offers to allow more', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true, setup: true }), { ledgerTask } = panelFixture();
+  const limits = { maxWorkingMinutes: 30, maxTokens: 5000, maxSpendUSD: null, maxHandoffs: 4, maxRetries: 3, maxReviews: 5, maxRepeatedFailures: 5, maxConcurrent: 2 };
+  let view = { policy: { ...limits, allowedProviders: null, allowedModels: null }, defaults: {}, quota: {}, task: { taskId: 't1', limits, runs: 2, retries: 0, reviews: 0, handoffs: 1, workingMs: 120000, tokens: 6200, cacheRead: 900, spendUSD: 0, runsWithoutUsage: 1, active: 0, stopped: null, failures: [{ what: 'npm test', count: 3, kind: 'command' }], exceeded: { limit: 'maxTokens', message: 'This task has used 6,200 tokens, over its limit of 5,000.' } } };
+  const posted = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/budget') return response(view);
+    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [ledgerTask] });
+    if (/\/budget$/.test(request.path)) { posted.push(request.body); return response(view); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); ui.window.relayTasks.open(); await flush(); ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  const card = ui.$('task-card'), bars = card.querySelectorAll('.limit-row');
+  assert.deepEqual(bars.map(row => row.querySelector('.limit-value').textContent), ['2 of 30 min', '6.2k of 5k', '1 of 4', '0 of 3']);
+  assert.deepEqual(bars.map(row => row.className), ['limit-row', 'limit-row over', 'limit-row', 'limit-row']);
+  assert.match(card.textContent, /1 run reported no tokens, so the total is lower than the real one/);
+  assert.match(card.querySelector('.task-note').textContent, /Went wrong 3 of 5 times: npm test/);
+  card.querySelector('.limits-reached').querySelector('button').click(); await flush();
+  assert.deepEqual(posted.at(-1), { action: 'extend', taskId: 't1', limit: 'maxTokens' });
+  ui.$('limits-open').click(); await flush();
+  assert.equal(ui.$('limits-dialog').open, true);
+  assert.equal(ui.$('limit-maxTokens').value, 5000);
+  ui.$('limit-maxTokens').value = ''; ui.$('limit-agent-gemini').checked = false;
+  ui.$('limits-form').dispatchEvent(new UIEvent('submit')); await flush();
+  const saved = posted.at(-1);
+  assert.equal(saved.action, 'policy');
+  assert.equal(saved.policy.maxTokens, null, 'Empty means no limit.');
+  assert.deepEqual([...saved.policy.allowedProviders].sort(), ['claude', 'codex', 'local']);
+  assert.equal(ui.$('limits-dialog').open, false);
+});
+
 test('what Full auto-approval allowed for Codex shows in the run, and a block by Read only names the setting', async () => {
   const ui = await browser({ setup: true }), describe = ui.window.relayUI.describeActivity;
   const allowed = describe('Auto-approved: git push origin main');
@@ -2460,7 +2672,7 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
 test('the sidebar, side panel, workspaces and the terminal and Run panel resize from handles that work with the keyboard, are remembered and reset on double-click',async()=>{
   const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300})}});
   const root=ui.document.documentElement,handles=ui.document.querySelectorAll('.resize-handle');
-  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel','Resize workspaces and files']);
+  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel','Resize workspaces and files']);
   assert.equal(root.style['--inspector-width'],'600px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel').style.height,'300px','The Run panel’s height carries over to the shared panel.');
   assert.deepEqual(Object.keys(JSON.parse(ui.storage.get('throughline:layout')||'{}')).filter(key=>['terminal','commands'].includes(key)),[]);
   const sidebar=handles.find(handle=>handle.getAttribute('aria-label')==='Resize the sidebar');assert.equal(sidebar.getAttribute('role'),'separator');assert.equal(sidebar.tabIndex,0);

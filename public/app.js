@@ -88,7 +88,7 @@
   }
   async function api(path, options = {}, projectId = state.projectId) {
     const providerEndpoint = /^\/api\/providers(?:\/|$)/.test(path);
-    if (/^\/api\/(?:status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
+    if (/^\/api\/(?:ledger|memory|budget|skills|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
       if (!projectId) throw new Error("Choose a project first.");
       path += `${path.includes("?") ? "&" : "?"}projectId=${encodeURIComponent(projectId)}`;
     }
@@ -522,6 +522,8 @@
     // Codex asks only for what its sandbox blocks, so what Full auto-approval allowed for it stays in the timeline.
     const automatic = text.match(/^Auto-approved: ([\s\S]*)$/);
     if (automatic) return { kind: "approval", icon: "approval", verb: "Auto-approved", detail: automatic[1].split("\n")[0], mono: true, output: "", raw: text };
+    const usedSkill = text.match(/^Using skill ([\w-]+): ([\s\S]*)$/);
+    if (usedSkill) return { kind: "tool", icon: "tool", verb: "Using skill", detail: `${usedSkill[1]} (${usedSkill[2].split("\n")[0]})`, output: "", raw: text };
     const blocked = text.match(/^Blocked by Read only: ([\s\S]*)$/);
     if (blocked) return { kind: "approval", icon: "denied", verb: "Blocked by Read only", detail: blocked[1].charAt(0).toUpperCase() + blocked[1].slice(1), output: "", raw: text };
     // Remembered approvals say which rule allowed the action.
@@ -584,6 +586,11 @@
     else if (step.detail) { const detail = element(step.mono ? "code" : "span", "activity-entry-detail", step.detail); detail.title = step.cmd || step.title || step.detail; toggle.append(detail); }
     if (more) toggle.append(element("span", "disclosure-chevron"));
     head.append(toggle, copyButton("activity-copy", "Copy", step.output || step.copy || step.raw));
+    if (step.message?.id && step.kind !== "approval") {
+      const remember = element("button", "activity-remember", "Remember"); remember.type = "button"; remember.title = "Keep this for every agent in this workspace";
+      remember.addEventListener("click", () => window.relayMemory?.remember({ text: step.detail || step.verb || step.raw || "", messageId: step.message.id, runId: step.message.runId || null, host: entry }));
+      head.append(remember);
+    }
     entry.append(node, head);
     if (!more) return entry;
     const output = element("pre", "activity-output", step.diff ? undefined : step.output), outputId = "activity-output-" + entryId;
@@ -661,6 +668,11 @@
       actions.append(jumpRun);
     }
     if (message.text) actions.append(copyButton("message-copy", "Copy message", message.text));
+    if (message.text && message.id) {
+      const remember = element("button", "message-action message-remember", "Remember"); remember.type = "button"; remember.title = "Keep this for every agent in this workspace";
+      remember.addEventListener("click", () => window.relayMemory?.remember({ text: message.text, messageId: message.id, runId: message.runId || null, host: row }));
+      actions.append(remember);
+    }
     const body=element('div',user?'message-text':'message-text markdown');
     if (!user && message.reviewId) {
       const review = state.conversation?.reviews?.find(item => item.id === message.reviewId);
@@ -946,7 +958,7 @@
       const info = connection(provider);
       // Antigravity has no read-only access and works with one folder, as starting a run checks.
       const unsupported = provider === "gemini" && (state.mode === "read" || foldersFor(project).length > 1);
-      return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported, billingSource: info.account?.billingSource || "unknown", usedPercent: window.relayUsage?.usedPercent?.(provider) ?? null, models: window.relayModelPicker?.models?.(provider) || [] };
+      return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usedPercent: window.relayUsage?.usedPercent?.(provider) ?? null, models: window.relayModelPicker?.models?.(provider) || [] };
     });
     return window.relayRouting.route({ text, attachments, mode: routing.mode, allowApi: routing.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
   }
@@ -1068,7 +1080,7 @@
     const model = offer.to.model ? window.relayModelPicker?.modelName?.(offer.to.provider, offer.to.model) || offer.to.model : "";
     const billing = { subscription: "subscription", api: "API billing" }[offer.to.billingSource] || "unknown billing";
     $("handoff-title").textContent = `${label(offer.from.provider)} has used ${Math.round(offer.from.usedPercent)}% of its ${offer.from.window ? offer.from.window + " " : ""}limit.`;
-    $("handoff-detail").textContent = `Hand off to ${label(offer.to.provider)}${model ? ` · ${model}` : ""} (${billing}) to continue${offer.task ? ` “${offer.task.replace(/[.!?]+$/, "")}”` : " this task"}. ${offer.to.mode === "read" ? "Read only" : "Can edit files"} · ${offer.to.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}.`;
+    $("handoff-detail").textContent = `Hand off to ${label(offer.to.provider)}${model ? ` · ${model}` : ""} (${billing}) to continue${offer.task ? ` “${offer.task.replace(/[.!?]+$/, "")}”` : " this task"}. ${offer.to.mode === "read" ? "Read only" : "Can edit files"} · ${offer.to.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}.${offer.to.quota === "unknown" ? " It doesn’t report its usage, so it may be near a limit." : offer.to.quota === "stale" ? " Its usage reading is out of date." : ""}`;
     const charges = offer.to.billingSource !== "subscription";
     $("handoff-billing").hidden = !charges;
     if (charges) $("handoff-billing-text").textContent = offer.to.billingSource === "api" ? `Accept charges: ${label(offer.to.provider)} bills your API account.` : `Accept possible charges: ${label(offer.to.provider)}'s billing could not be confirmed.`;
@@ -1391,7 +1403,11 @@
       await refresh();
       render(true);
     } catch (error) {
-      showNotice(error.message, () => run(continuing));
+      // A task limit can be raised for this task, by the person, right here.
+      const budget = error.details?.budget;
+      if (budget?.canExtend && window.relayLimits) showNotice(error.message, async () => { try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing); } catch (failure) { showNotice(failure.message); } }, "Allow more");
+      else if (budget) showNotice(error.message);
+      else showNotice(error.message, () => run(continuing));
       await refresh();
     } finally { state.pending = null; render(); ui.input.focus(); }
   }
@@ -1667,6 +1683,8 @@
     { label: "Review changes…", id: "open-review" }, { label: "Ask a friend…", id: "ask-friend" },
     { label: "Previous chats…", id: "open-import" }, { label: "Export conversation…", id: "open-export" },
     { label: "Agents: routing and handoff", run: () => window.relayAgents?.open() },
+    { label: "Brief: memory and skills every agent gets", run: () => window.relayBrief?.open() },
+    { label: "Tasks: what each task used, and its limits", run: () => window.relayTasks?.open() },
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", run: () => window.relayTerminal?.open() },
     { label: "Run: your dev servers, tests and scripts", run: () => window.relayPanel?.show("run") },
@@ -1834,7 +1852,10 @@
   // Choosing an action from the ⋯ menu closes it.
   $("header-menu").addEventListener("click", event => { if (event.target?.closest?.("button")) $("header-menu").hidePopover?.(); });
   // The tabs at the top of a side panel switch to the other panel.
-  document.querySelectorAll(".panel-tab").forEach(tab => tab.addEventListener("click", () => { if (tab.getAttribute("aria-selected") !== "true") $(tab.dataset.panel === "git" ? "open-git" : "open-agents").click(); }));
+  // The side panel's tabs: Agents, Brief, Tasks and Git, each opened by its own module.
+  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open() };
+  const showSidePanel = name => { const panel = $(`${name}-panel`); if (panel?.hidden !== false) sidePanelOpeners[name]?.(); };
+  document.querySelectorAll(".panel-tab").forEach(tab => tab.addEventListener("click", () => showSidePanel(tab.dataset.panel)));
   $("route-preview").addEventListener("click", () => window.relayModelPicker?.open());
   $("run-plan-toggle").addEventListener("click", () => {
     const list = $("run-plan-list"); list.hidden = !list.hidden;
@@ -1896,7 +1917,7 @@
   window.addEventListener("beforeunload", saveDraft);
   window.relayUI = {
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
-    commands, isRunning, filteredProjects, setRouting, routeFor,
+    commands, isRunning, filteredProjects, setRouting, routeFor, showSidePanel,
     ensureConversation: ensureCanonicalConversation,
     selectLocalModel(model) {
       if (!state.projectId || !state.ready || state.pending || state.settingsPending || isRunning()) throw Error('Finish the current run before changing the model.');

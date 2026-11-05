@@ -16,7 +16,7 @@
   const clamp = (value, min, max) => Math.round(Math.max(min, Math.min(max, value)));
   // Covers the window during a drag, so the cursor stays the same over everything.
   const shield = document.createElement('div');
-  const sidePanels = () => ['git-panel', 'agents-panel', 'review-panel'].map($).filter(Boolean);
+  const sidePanels = () => ['git-panel', 'agents-panel', 'brief-panel', 'tasks-panel', 'review-panel'].map($).filter(Boolean);
 
   // name: [how to measure the current size, how to apply a size, min, max, axis, sign, label]
   const sections = {
@@ -78,7 +78,7 @@
   function sync() {
     $('toggle-sidebar')?.setAttribute('aria-pressed', String(!shell?.classList.contains('sidebar-collapsed')));
     $('toggle-side-panel')?.setAttribute('aria-pressed', String(sidePanels().some(panel => !panel.hidden)));
-    if (!$('agents-panel')?.hidden) write(LAST_PANEL_KEY, 'agents'); else if (!$('git-panel')?.hidden) write(LAST_PANEL_KEY, 'git');
+    for (const [id, name] of [['agents-panel', 'agents'], ['git-panel', 'git'], ['brief-panel', 'brief'], ['tasks-panel', 'tasks']]) if ($(id) && !$(id).hidden) write(LAST_PANEL_KEY, name);
   }
   function setSidebar(collapsed) {
     shell?.classList.toggle('sidebar-collapsed', collapsed);
@@ -90,8 +90,10 @@
   $('toggle-side-panel')?.addEventListener('click', () => {
     if (!$('agents-panel')?.hidden) { write(LAST_PANEL_KEY, 'agents'); $('open-agents')?.click(); }
     else if (!$('git-panel')?.hidden) { write(LAST_PANEL_KEY, 'git'); $('open-git')?.click(); }
+    else if (!$('brief-panel')?.hidden) { write(LAST_PANEL_KEY, 'brief'); window.relayBrief?.close(); }
+    else if (!$('tasks-panel')?.hidden) { write(LAST_PANEL_KEY, 'tasks'); window.relayTasks?.close(); }
     else if (!$('review-panel')?.hidden) window.relayReviews?.closePanel?.();
-    else $(read(LAST_PANEL_KEY) === 'git' ? 'open-git' : 'open-agents')?.click();
+    else { const last = read(LAST_PANEL_KEY); if (last === 'brief') window.relayBrief?.open(); else if (last === 'tasks') window.relayTasks?.open(); else $(last === 'git' ? 'open-git' : 'open-agents')?.click(); }
     sync();
   });
   if (typeof MutationObserver === 'function') {
@@ -99,6 +101,7 @@
     for (const target of [...sidePanels(), shell].filter(Boolean)) observer.observe(target, { attributes: true, attributeFilter: ['hidden', 'disabled', 'class'] });
   }
   window.addEventListener('relay-state', sync);
+  window.addEventListener('relay-side-panel', sync);
   sync();
   window.relayLayout = { reset: () => { for (const name of Object.keys(sections)) set(name, null); save(); }, toggleSidebar: () => { setSidebar(!shell?.classList.contains('sidebar-collapsed')); return true; }, sync };
 })();

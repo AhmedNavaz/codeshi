@@ -98,9 +98,11 @@
   function setOpen(open, section = null, keep = true) {
     panel.hidden = !open; button.setAttribute('aria-expanded', String(open));
     if (keep) remember(open ? 'agents' : 'none');
+    window.dispatchEvent(new CustomEvent('relay-side-panel'));
     if (open) {
       window.relayGit?.close();
       window.relayReviews?.closePanel?.();
+      window.relayBrief?.close(); window.relayTasks?.close();
       loadPreferences();
       loadTestCommand();
       render();
@@ -131,6 +133,8 @@
     }
     render();
   });
-  window.relayAgents = { open: section => setOpen(true, section), close: () => setOpen(false, null, false), isOpen: () => !panel.hidden };
+  // Memory, skills and the brief live in the Brief panel, and tasks and limits in the Tasks panel; older links still work.
+  const elsewhere = { memory: () => window.relayBrief?.open('memory'), skills: () => window.relayBrief?.open('skills'), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), limits: () => window.relayTasks?.open('limits') };
+  window.relayAgents = { open: section => elsewhere[section] ? elsewhere[section]() : setOpen(true, section), close: () => { if (!panel.hidden) setOpen(false, null, false); }, isOpen: () => !panel.hidden };
   render();
 })();

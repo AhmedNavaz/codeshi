@@ -280,7 +280,8 @@
   function setGitPanel(open, remember = true) {
     $('git-panel').hidden = !open; $('open-git').setAttribute('aria-expanded', String(open));
     if (remember) try { localStorage.setItem('throughline:side-panel', open ? 'git' : 'none'); } catch { /* Panel state is a convenience. */ }
-    if (open) { window.relayReviews?.closePanel(); window.relayAgents?.close(); loadGit(); }
+    if (open) { window.relayReviews?.closePanel(); window.relayAgents?.close(); window.relayBrief?.close(); window.relayTasks?.close(); loadGit(); }
+    window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
   $('open-git').addEventListener('click', () => setGitPanel($('git-panel').hidden));
   // One side panel shows at a time, and docked layouts reopen the one last chosen (Agents at first). Narrow layouts
