@@ -10,3 +10,4 @@ sharing/.data/
 .env.*
 skills/
 native/bin/
+evals/results/

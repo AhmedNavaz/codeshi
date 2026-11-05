@@ -42,6 +42,7 @@
     "test": "node --import ./test/isolate.mjs --test test/*.test.mjs sharing/test/*.test.mjs",
     "test:desktop": "node desktop/launch.mjs --smoke-test",
     "sharing": "node sharing/server.mjs",
+    "eval": "node evals/cli.mjs",
     "package": "node desktop/package.mjs",
     "icons": "electron desktop/icons.mjs"
   },
