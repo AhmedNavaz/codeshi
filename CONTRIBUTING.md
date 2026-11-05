@@ -44,6 +44,11 @@ Backend code lives in `src/`; Electron, browser UI and the separately deployable
 | `src/local-models.mjs` | Ollama local-model discovery, validation and scoped Codex tool-harness launch routes |
 | `src/resolve-binary.mjs` | Finds the installed `claude`, `codex` and `gemini` executables |
 | `src/conversation-routes.mjs`, `src/conversation-import.mjs`, `src/conversation-export.mjs` | Previous-chat discovery, reviewed imports and conversation files for other users |
+| `src/task-context.mjs` | The brief a fresh agent gets for a task: its folders, instructions, changed files and what went wrong |
+| `src/project-memory.mjs` | What is kept for every agent in a workspace: entries, what is relevant to a task, and rule-based suggestions |
+| `src/skills.mjs`, `starter-skills/` | The skill catalog: finding, checking, private copies and what a task is told, plus the optional starters |
+| `src/task-budget.mjs` | Limits for a whole task, checked before every run and worked out from the journal |
+| `src/task-ledger.mjs`, `evals/` | What tasks used, worked out from the journal, and repeatable evaluations with hidden checks |
 | `src/collaboration*.mjs`, `src/patches.mjs`, `src/sharing-client.mjs` | Ask a Friend: approved packages, returned patches and the private-link client |
 | `src/workspace-*.mjs`, `src/file-explorer.mjs`, `src/mutation-lock.mjs` | Safe file access, Git activity, snapshots and locks that prevent conflicting edits |
 | `public/` | Interface: `app.js` (core), `insights.js` (models, progress, Git and usage), `conversation-history.js` (import and export), `conversation-search.js` (find in the conversation), `files.js`, `setup.js`, `settings.js` (searchable app settings), `workbench.js` (the separate Ask a Friend dialog) and the CSS |

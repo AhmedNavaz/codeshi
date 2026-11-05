@@ -1,6 +1,6 @@
 # Core execution roadmap
 
-Status: design proposals tracked in GitHub issues #84–#90, with scope extensions posted to #12, #21 and #15. Existing behavior is described separately from proposals. No runtime feature is implemented by this document.
+Status: design proposals tracked in GitHub issues #84–#90, with scope extensions posted to #12, #21 and #15. The first milestones of #84, #85, #86, #87 and #21 are built, each noted under its section; everything else here is still a proposal. Existing behavior is described separately from proposals. No runtime feature is implemented by this document.
 
 ## Product outcome
 
@@ -45,7 +45,7 @@ The following sections preserve the scope, dependencies and acceptance criteria 
 
 **Issue title:** Measure completed-task quality and agent usage before claiming efficiency gains
 
-**Tracking:** [#84](https://github.com/AhmedNavaz/codeshi/issues/84) — proposed, not implemented.
+**Tracking:** [#84](https://github.com/AhmedNavaz/codeshi/issues/84) — the first milestone is built: the ledger in `src/task-ledger.mjs` and the suite in [`evals/`](../evals/README.md). Live comparisons so far are too small to claim a gain.
 
 #### Problem
 
@@ -82,7 +82,7 @@ Extend broker run metadata, provider usage normalization and run-check results. 
 
 **Issue title:** Build task-scoped context from relevant code, history and verified project memory
 
-**Tracking:** [#85](https://github.com/AhmedNavaz/codeshi/issues/85) — proposed, not implemented.
+**Tracking:** [#85](https://github.com/AhmedNavaz/codeshi/issues/85) — the first milestone is built in `src/task-context.mjs`. Retrieval reads Git and the files when a prompt is built, without a saved index, and reviewed memory (#21) goes out with the brief.
 
 #### Problem
 
@@ -120,7 +120,7 @@ Build on src/context.mjs and #21 project memory, with a local retrieval index an
 
 **Issue title:** Load reusable skills across providers with explicit compatibility and scope
 
-**Tracking:** [#86](https://github.com/AhmedNavaz/codeshi/issues/86) — proposed, not implemented.
+**Tracking:** [#86](https://github.com/AhmedNavaz/codeshi/issues/86) — the first milestone is built in `src/skills.mjs` and `starter-skills/`. Every agent gets skills as instructions in the prompt; using each agent's own skill system is still to do.
 
 #### Problem
 
@@ -156,7 +156,7 @@ A provider-aware skill catalog based on SKILL.md, with on-demand loading, visibl
 
 **Issue title:** Enforce shared task budgets across agents, retries, reviews and quota fallback
 
-**Tracking:** [#87](https://github.com/AhmedNavaz/codeshi/issues/87) — proposed, not implemented.
+**Tracking:** [#87](https://github.com/AhmedNavaz/codeshi/issues/87) — the first milestone is built in `src/task-budget.mjs`. Concurrent limits only matter for background reviews until #88.
 
 #### Problem
 
@@ -329,6 +329,8 @@ Implementation proposals: #84 (measurement), #85 (context), #87 (shared budgets)
 ### Existing issue #21: Promote reviewed project memory into the efficiency foundation
 
 [Existing issue #21](https://github.com/AhmedNavaz/codeshi/issues/21) · [Posted scope extension](https://github.com/AhmedNavaz/codeshi/issues/21#issuecomment-6627785636)
+
+**Tracking:** the first version is built in `src/project-memory.mjs`, following the [design](https://github.com/AhmedNavaz/codeshi/issues/21#issuecomment-6652426011). The proposal below is kept as written.
 
 #### Proposed core-roadmap follow-up
 

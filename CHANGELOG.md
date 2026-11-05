@@ -4,6 +4,19 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Added
+
+- **A side panel with four tabs.** Agents, Brief, Tasks and Git. **Agents** keeps plan usage, routing and handoff. **Brief** shows what every agent is told when it starts on a task, with the memory and skills you add to it. **Tasks** shows what each task used, and its limits.
+- **See what each task used** (#84). The Tasks panel shows the current task with the agents involved, working time, tokens as each agent reported them, and whether the project's tests passed. A task follows its handoffs, retries and reviews. A value an agent didn't report shows as not reported, never as zero. Tokens aren't turned into a price, and usage limit readings are kept apart because other tools count toward them. It all stays on your computer, and **Export without prompts** saves a copy with no prompts or commands.
+- **Project memory** (#21). **Remember** on any message or step keeps it for every agent in this workspace, and **Memory** in the Brief panel lists what's kept, to edit, retire, delete or export. Local rules suggest things you wrote as lasting rules and approaches that failed before the tests passed, and nothing is kept unless you choose it. An agent is told only what's relevant to its task, and an entry whose files have changed is marked for a recheck. Memory stays out of your repository and doesn't cross workspaces.
+- **Skills** (#86). Reusable procedures in the Agent Skills format, used by Claude, Codex and Gemini alike, and kept when a task moves to another agent. **Skills** in the Brief panel finds your repository's skills and any folder you add, and has six optional starters: frontend implementation, API contracts, database migration planning, accessibility, test authoring and independent review. Type `/name` in a prompt to use one. Agents only get names and descriptions until a task needs the instructions. Nothing is on until you enable it, nothing in a skill is ever run by Codeshi, and enabling keeps a private copy at that version until you accept an update. A skill reaches agents as instructions, so anything that relies on one agent's own skill system is listed as unavailable. A memory can become a skill after you review it.
+- **Task limits** (#87). One set of limits for a whole task, across its agents, retries and reviews: working time, tokens, API spend, and how many handoffs, retries and reviews. A new prompt starts a new task. The same failure repeated is counted across restarts and changes of agent, and the next agent is told about it. By default only those counts have limits, and they're generous; time, tokens and spend have no limit until you set one. Reaching a limit stops the run, saves its work and says why, and **Allow more** raises it for that task. You can also choose which agents a workspace may use.
+- **Evaluations** (#84). `npm run eval` runs nine small tasks with hidden checks and compares settings on the same pinned code. Recorded runs need no account. Live runs use your own agents, only when you pass `--live` with a budget.
+
+### Changed
+
+- **A new agent gets a task-focused brief** (#85). When an agent starts fresh, such as after a handoff, it's told the current task first, along with the folders it concerns, each folder's instruction files, the files changed so far, what already went wrong and the steps left, all worked out locally with no model. Work from other folders and repeated steps are left out, and the full history stays saved. Claude now gets each folder's `AGENTS.md` and `CLAUDE.md`, which it wasn't reading here. The **Brief** panel shows this, with **See the full brief** for all of it, and you can add a note to it.
+
 ## [0.25.1] - 2026-11-04
 
 ### Added
