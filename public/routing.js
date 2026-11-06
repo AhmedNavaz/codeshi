@@ -125,9 +125,11 @@
   // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
   // limit is skipped, and the agent that did the last run is preferred, so the conversation keeps its native session.
-  function route({ text, attachments = 0, mode = 'balanced', candidates = [], current = null, allowApi = false }) {
+  // A plan step (Orchestrate) comes with the tier it was planned with, which then counts instead of how its text reads.
+  const planned = { light: 'a small step, as planned', standard: 'a focused step, as planned', deep: 'a complex step, as planned' };
+  function route({ text, attachments = 0, mode = 'balanced', candidates = [], current = null, allowApi = false, tier: given = null }) {
     if (!MODES.includes(mode)) mode = 'balanced';
-    const task = classify(text, { attachments });
+    const task = TIERS.includes(given) ? { tier: given, reason: planned[given] } : classify(text, { attachments });
     const [tier, wantedEffort] = plan[mode][task.tier];
     const skipped = [];
     const pool = candidates.flatMap(candidate => {
@@ -167,6 +169,14 @@
     return { ...choice, quota: chosen.quota, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
 
+  // Who plans an orchestrated message: the deepest work each mode allows, under the same allowance rules as any message.
+  // Cost saving plans with a standard model rather than its lightest, since a weak plan costs more runs than it saves.
+  // A planning run is read-only, so tests never retry it.
+  function planner(options) {
+    const routed = route({ ...options, tier: 'deep' });
+    return routed.error ? routed : { ...routed, reason: 'Plans the steps', escalation: null };
+  }
+
   // The same choice when the agent is already decided: a queued prompt that moved at a handoff is routed again for the
   // agent that took over (#93). Null when that agent lists no models, so the caller keeps its own choice.
   function routeTo(provider, rows, { text, attachments = 0, mode = 'balanced' }) {
@@ -177,5 +187,5 @@
     return { ...choice, escalation: escalate(provider, rows, choice) };
   }
 
-  root.relayRouting = { MODES, modeNames, classify, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies };
+  root.relayRouting = { MODES, modeNames, classify, modelTier, route, routeTo, planner, escalate, assessQuota, quotaText, windowApplies };
 })(typeof window === 'undefined' ? globalThis : window);

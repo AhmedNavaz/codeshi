@@ -722,6 +722,12 @@
       const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the reviewer…')); body.append(raw);
       row.append(heading, body, actions); return row;
     }
+    if (!user && message.orchestrationId) {
+      const plan = state.conversation?.orchestrations?.find(item => item.id === message.orchestrationId);
+      body.append(element('p', '', window.relayOrchestration?.describe(plan) || (streaming ? 'Planning the steps…' : 'The planner’s response.')));
+      const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the planner…')); body.append(raw);
+      row.append(heading, body, actions); return row;
+    }
     const text=message.text || (streaming ? '' : 'No text response.');
     const parts=text.split(/```([^\n`]*)\n([\s\S]*?)```/g);
     for(let i=0;i<parts.length;i+=3){if(parts[i]){if(user)body.append(document.createTextNode(parts[i]));else renderProse(body,parts[i]);}if(parts[i+2]!==undefined){const block=element('div','code-block'),head=element('div','code-head'),pre=element('pre');head.append(element('span','code-language',parts[i+1].trim()||'code'),copyButton('code-copy','Copy code',parts[i+2]));pre.append(highlightedCode(parts[i+2],parts[i+1].trim()));block.append(head,pre);body.append(block);}}
@@ -729,6 +735,7 @@
     row.append(body);
     // A prompt stays at the top of its turn while the results scroll past (see .message-prompt). A long one shows its
     // first lines until opened, so it never fills the view; an opened one scrolls normally.
+    if (user && message.orchestrationId) row.insertBefore(element("div", "message-orchestrate-label", "Orchestrate · planning the steps"), body);
     if (user && message.retry) { row.classList.add("message-retry"); row.insertBefore(element("div", "message-retry-label", "Sent by Codeshi after the tests failed"), body); }
     if (user && !message.steer) {
       row.classList.add("message-prompt");
@@ -781,7 +788,7 @@
   function renderMessages(forceScroll = false) {
     const c = state.conversation, messages = c?.messages || [];
     const folders = state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path);
-    const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
+    const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.orchestrations?.map(plan => window.relayOrchestration?.describe(plan)), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
     const scope = JSON.stringify([state.projectId, c?.id, folders]);
     const noProvider=state.ready&&!messages.length&&!['codex','claude','gemini'].some(available);
     ui.empty.hidden = messages.length > 0 || !state.ready || noProvider || Boolean(state.taskDraft);
@@ -806,6 +813,7 @@
     const messageExtra = message => {
       let extra = "";
       if (message.reviewId) { const review = c?.reviews?.find(item => item.id === message.reviewId); extra += JSON.stringify([Boolean(review), review?.summary]); }
+      if (message.orchestrationId && message.role !== "user") extra += window.relayOrchestration?.describe(c?.orchestrations?.find(item => item.id === message.orchestrationId)) || "";
       if (message.routing) extra += (window.relayModelPicker?.modelName?.(message.provider, message.routing.model) || "") + (window.relayRouting?.modeNames?.[message.routing.mode] || "");
       if (message.attachments?.length && window.relayFiles) extra += "attachments";
       if (!message.provider) extra += c?.provider || "";
@@ -1005,26 +1013,30 @@
   }
   // Auto (#12): Codeshi picks the agent, model and effort for each message, shown before it is sent.
   const autoRouting = () => !state.localSelections[state.projectId] && state.conversation?.routing ? state.conversation.routing : null;
-  function routeFor(text, attachments = 0) {
+  // Orchestrate (#12) asks the same rules who plans (plan: a read-only run) and who does each step (tier: as planned;
+  // only: the agent the person chose for that step).
+  function routeFor(text, attachments = 0, { plan = false, tier = null, only = null } = {}) {
     const routing = autoRouting(); if (!routing || !window.relayRouting) return null;
     const project = state.projects.find(item => item.id === state.projectId);
-    const candidates = ["codex", "claude", "gemini"].map(provider => {
+    const candidates = ["codex", "claude", "gemini"].filter(provider => !only || provider === only).map(provider => {
       const info = connection(provider);
       // Antigravity has no read-only access and works with one folder, as starting a run checks.
-      const unsupported = provider === "gemini" && (state.mode === "read" || foldersFor(project).length > 1);
+      const unsupported = provider === "gemini" && (state.mode === "read" || plan || foldersFor(project).length > 1);
       return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usage: window.relayUsage?.snapshot?.(provider), allowedModels: state.conversation?.taskPolicy?.allowedModels?.[provider] || null, models: window.relayModelPicker?.models?.(provider) || [] };
     });
-    return window.relayRouting.route({ text, attachments, mode: routing.mode, allowApi: routing.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
+    const options = { text, attachments, mode: routing.mode, allowApi: routing.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider, tier };
+    return plan ? window.relayRouting.planner(options) : window.relayRouting.route(options);
   }
   function renderRoute() {
     const node = $("route-preview"); if (!node) return;
     const text = ui.input.value.trim(), files = window.relayFiles?.ids().length || 0;
-    const routed = !isRunning() && !state.conversation?.resume && (text || files) ? routeFor(text, files) : null;
+    const planning = window.relayOrchestration?.armed() === true;
+    const routed = !isRunning() && !state.conversation?.resume && (text || files) ? routeFor(text, files, { plan: planning }) : null;
     node.hidden = !routed; if (!routed) return;
     node.classList.toggle("error", Boolean(routed.error));
     if (routed.error) { $("route-choice").textContent = "Auto can’t choose"; $("route-reason").textContent = routed.error; return; }
-    $("route-choice").textContent = [label(routed.provider), routed.modelName || "default model", routed.effort ? `${routed.effort[0].toUpperCase()}${routed.effort.slice(1)} effort` : ""].filter(Boolean).join(" · ");
-    $("route-reason").textContent = `${routed.reason} · ${window.relayRouting.quotaText(routed.quota)}`;
+    $("route-choice").textContent = (planning ? "Plan with " : "") + [label(routed.provider), routed.modelName || "default model", routed.effort ? `${routed.effort[0].toUpperCase()}${routed.effort.slice(1)} effort` : ""].filter(Boolean).join(" · ");
+    $("route-reason").textContent = `${routed.reason}${planning ? " · Read only · Counts as one run" : ""} · ${window.relayRouting.quotaText(routed.quota)}`;
     node.title = `Account-wide allowance, shared with other clients. ${routed.quota?.observedAt ? 'Observed ' + new Date(routed.quota.observedAt).toLocaleTimeString() + '. ' : ''}Rechecked before the agent starts. Model tiers remain local heuristics, not measured quality guarantees.`;
     node.setAttribute("aria-label", `Auto will use ${$("route-choice").textContent}: ${routed.reason}. Choose a model yourself instead.`);
   }
@@ -1460,8 +1472,10 @@
     const text = ui.input.value.trim() || (attachments.length ? "Please review the attached files." : "");
     if (window.relayFiles?.uploading()) return;
     if (state.pending || state.loading || state.projectSaving || isRunning() || isOtherRunning() || !state.ready || (!state.localSelections[state.projectId] && !(autoRouting() && !continuing) && connection(state.provider).blocked) || (!continuing && !text)) return;
-    // Under Auto the message goes to the agent, model and effort shown before sending.
-    const routed = continuing ? null : routeFor(text, attachments.length);
+    // Under Auto the message goes to the agent, model and effort shown before sending. With Orchestrate on, that is the
+    // planner, and the server makes the run read-only.
+    const orchestrate = !continuing && window.relayOrchestration?.armed() === true;
+    const routed = continuing ? null : routeFor(text, attachments.length, { plan: orchestrate });
     if (routed?.error) { showNotice(routed.error); return; }
     const provider = routed?.provider || state.provider, model = routed ? routed.model : state.model, effort = routed ? routed.effort : state.effort;
     const routing = routed ? { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } : undefined;
@@ -1473,7 +1487,8 @@
     let automaticReview;
     try { automaticReview = window.relayAutomaticReview?.submission({ text, attachments, provider, model, mode, approvalPolicy }, { continuing }) || null; }
     catch (error) { showNotice(error.message); return; }
-    const payloadKey = JSON.stringify([state.projectId,state.conversation?.id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
+    if (orchestrate && automaticReview) { showNotice("Review after doesn’t apply to planning. The plan reviews the combined changes after its last step."); return; }
+    const payloadKey = JSON.stringify([state.projectId,state.conversation?.id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview,orchestrate]);
     const requestId = state.retrySubmission?.key === payloadKey ? state.retrySubmission.id : crypto.randomUUID();
     state.retrySubmission = { ...(state.retrySubmission?.key === payloadKey ? state.retrySubmission : {}), key:payloadKey,id:requestId };
     const projectId = state.projectId;
@@ -1496,7 +1511,7 @@
       }
       if (!state.conversation) await ensureCanonicalConversation();
       const id = state.conversation.id;
-      state.retrySubmission.key = JSON.stringify([state.projectId,id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
+      state.retrySubmission.key = JSON.stringify([state.projectId,id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview,orchestrate]);
       if (localChoice) {
         if (!state.retrySubmission.localContext) {
           const catalog = await api('/api/local-models', {}, projectId);
@@ -1505,9 +1520,10 @@
           state.retrySubmission.localContext = catalog.context;
         }
         await post('/api/local-models/start', { model:localChoice.model, digest:localChoice.digest, task:continuing ? 'Continue the unfinished task from the saved conversation. Inspect current files first.' : text, ...(continuing ? { continuing:true } : {}), attachments, requestId, context:state.retrySubmission.localContext }, projectId);
-      } else await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
+      } else await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), ...(orchestrate ? { orchestrate: true } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
       state.retrySubmission = null;
       window.relayAutomaticReview?.accepted(projectId, automaticReview);
+      if (orchestrate) window.relayOrchestration?.accepted(projectId);
       if (!continuing) window.relayFiles?.accepted(projectId, attachments);
       if (!continuing && ui.input.value === originalDraft) {
         ui.input.value = "";

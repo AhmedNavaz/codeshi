@@ -37,6 +37,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
   '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
+  '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'], '/alerts.css': ['alerts.css', 'text/css; charset=utf-8'],
@@ -281,7 +282,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           return json(res,existed?200:201,registry.mainConversation(projectId));
         }
       }
-      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry))?$/);
+      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry|orchestration))?$/);
       if (match) {
         const workspaceBroker = selectedBroker(url);
         // A conversation can belong to a task's lane (#88), which answers for its own run. Memory, skills, limits and the project
@@ -307,6 +308,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (match[2] === 'queue') return json(res, 200, broker.queueAction(c, input));
           if (match[2] === 'steer') return json(res, 200, await broker.addToRun(c, input));
           if (match[2] === 'routing') return json(res, 200, broker.setRouting(c, input));
+          if (match[2] === 'orchestration') return json(res, 200, broker.orchestrationAction(c, input));
           if (match[2] === 'retry') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissRetry(c, input.offerId) : broker.acceptRetry(c, input));
           if (match[2] === 'handoff') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissHandoff(c, input.offerId) : await broker.acceptHandoff(c, input));
           if (match[2] === 'messages') return json(res, 202, await broker.start(c, input));

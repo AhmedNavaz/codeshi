@@ -30,6 +30,7 @@ import { PermissionRules } from './permission-rules.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
 import { HandoffMonitor } from './handoff.mjs';
 import { RunChecks } from './run-checks.mjs';
+import { applyOrchestration, orchestrationAction, planningRequest, planningResult, restartedPlanning } from './orchestration.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
 const transportFor = (provider, transport, configured) => transport === 'auto' ? provider === 'gemini' ? 'acp' : configured ? 'cli' : provider === 'codex' ? 'app-server' : 'sdk' : transport;
@@ -160,6 +161,7 @@ export class Broker extends EventEmitter {
         }
         this.message(conversation, 'error', 'The previous run was interrupted. Its saved output is available; inspect project changes before continuing.', conversation.provider);
         if (conversation.activeRun.reviewId) this.record(conversation, { type: 'review_result', id: conversation.activeRun.reviewId, result: { status: 'interrupted', summary: 'The review was interrupted. Start a new review to check these changes.', findings: [] } });
+        if (conversation.activeRun.orchestrationId) this.record(conversation, { type: 'orchestration_result', id: conversation.activeRun.orchestrationId, result: restartedPlanning() });
         this.record(conversation, { type: 'run_end', status: 'interrupted', errorCategory: 'interrupted' });
       }
       for (const review of conversation.reviews.filter(item => item.background && item.status === 'running')) {
@@ -230,7 +232,7 @@ export class Broker extends EventEmitter {
   acceptHandoff(c, input = {}) { return this.handoff.accept(c, { offerId: input.offerId, billingConfirmed: input.billingConfirmed === true, queueBillingConfirmed: input.queueBillingConfirmed === true, queueDigest: input.queueDigest }); }
   // Continue with another agent after a limit: the person's own handoff, so queued prompts for the limited agent follow it (#93).
   async continueTask(c, input = {}) {
-    const previous = c.lastRun, result = this.start(c, { ...input, fresh: true, text: continuationRequest });
+    const previous = c.lastRun, result = this.start(c, { ...input, orchestrate: false, fresh: true, text: continuationRequest });
     if (!result.duplicate && previous?.errorCategory === 'quota' && this.running?.provider !== previous.provider) await this.handoff.followContinue(c, previous.provider, this.running).catch(error => console.error('Codeshi could not move the queued prompts:', error.message));
     return result;
   }
@@ -241,7 +243,7 @@ export class Broker extends EventEmitter {
 
   empty(id) {
     return { id, title: 'New conversation', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', status: 'idle', messages: [],
-      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
+      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], orchestrations: [], snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
   }
 
   apply(c, record) {
@@ -305,7 +307,8 @@ export class Broker extends EventEmitter {
     if (record.type === 'submission') {
       if (!record.review && !record.local) {
         if (record.resetSession) delete c.sessions[record.provider];
-        Object.assign(c, { provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.transport, settingsRevision: record.seq });
+        // A planning run is read-only by itself; the person's own access and approval settings stay as they were.
+        Object.assign(c, { provider: record.provider, ...(record.orchestration ? {} : { mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask' }), model: record.model, transport: record.transport, settingsRevision: record.seq });
         c.models[record.provider] = record.model; c.transports[record.provider] = record.transport;
       } else if (record.review) c.reviews = [{ ...record.review, id: record.id, startedAt: record.at, status: 'running', findings: [] }, ...c.reviews].slice(0, 10);
       if (record.title) c.title = record.title;
@@ -314,7 +317,9 @@ export class Broker extends EventEmitter {
       c.activeRun = { id: record.id, provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.effectiveTransport || record.transport, baseline: record.baseline, context: record.context, ...(record.local ? { connection: 'local', local: record.local } : {}), ...(record.review ? { purpose: 'review', reviewId: record.id } : {}), ...(record.routing ? { routing: record.routing } : {}), ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building' } } : {}), effort: record.effort ?? null, phase: 'starting', lastEventAt: record.at, toolCount: 0, startedAt: record.at }; c.status = 'running';
       if (record.task) Object.assign(c.activeRun, { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation });
       if (record.plan) c.activeRun.plan = record.plan;
+      if (record.orchestration) c.activeRun.orchestrationId = record.id;
     }
+    applyOrchestration(c, record);
     if (record.type === 'background_review') { c.reviews = [record.review, ...c.reviews].slice(0, 10); c.reviewRequests[record.review.requestId] = { reviewId: record.review.id, requestId: record.review.requestId, fingerprint: record.review.fingerprint }; }
     if (record.type === 'review_process') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, { pid: record.pid, pidStart: record.pidStart }); }
     if (record.type === 'review_result') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, record.result, { endedAt: record.at }); }
@@ -422,7 +427,7 @@ export class Broker extends EventEmitter {
     else if (existing && (text !== existing.text || (status && status !== existing.status))) this.record(c, { type: 'message_update', id, update: { ...(text !== existing.text ? { text } : {}), ...(status ? { status } : {}) } });
     else if (existing) return id;
     else this.record(c, { type: 'message', message: { id, role, text, provider, status,
-      createdAt: new Date().toISOString(), runId: c.activeRun?.id, ...(c.activeRun?.connection === 'local' ? { connection: 'local' } : {}), ...(c.activeRun?.reviewId ? { reviewId: c.activeRun.reviewId } : {}), model: c.activeRun?.effectiveModel || c.activeRun?.model || null, effort: c.activeRun?.effectiveEffort || c.activeRun?.effort || null } });
+      createdAt: new Date().toISOString(), runId: c.activeRun?.id, ...(c.activeRun?.connection === 'local' ? { connection: 'local' } : {}), ...(c.activeRun?.reviewId ? { reviewId: c.activeRun.reviewId } : {}), ...(c.activeRun?.orchestrationId ? { orchestrationId: c.activeRun.orchestrationId } : {}), model: c.activeRun?.effectiveModel || c.activeRun?.model || null, effort: c.activeRun?.effectiveEffort || c.activeRun?.effort || null } });
     if (role === 'activity' && c.activeRun?.id) { try { this.budget.observeStep(c, { id, role, text, runId: c.activeRun.id }); } catch (error) { console.error('Codeshi could not count a step:', error.message); } }
     return id;
   }
@@ -468,6 +473,8 @@ export class Broker extends EventEmitter {
 
   // Auto (#12): Codeshi picks the agent, model and effort for each message, in one of three modes. Agents billed
   // outside a subscription are only chosen when allowed. Choosing a model by hand turns it off.
+  orchestrationAction(c, input) { return orchestrationAction(this, c, input); }
+
   setRouting(c, input = {}) {
     const routing = input.mode === null || input.mode === undefined ? null : { mode: input.mode, allowApi: input.allowApi === true, check: input.check === true };
     if (routing && !ROUTING_MODES.includes(routing.mode)) throw Object.assign(new Error('Choose Cost saving, Balanced or Maximum quality.'), { status: 400 });
@@ -593,8 +600,12 @@ export class Broker extends EventEmitter {
 
   prompt(c, text, fresh = false) { return prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
 
-  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null } = {}) {
+  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null, orchestrate = false }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
+    // Orchestrate (#12): a read-only run that proposes a plan, in the conversation's own session so it knows the context.
+    // Only a new message asks for one; reviews, queued prompts, retries, resumes and local runs never pass it.
+    orchestrate = orchestrate === true;
+    if (orchestrate) { mode = 'read'; approvalPolicy = 'ask'; if (automaticReview !== null) throw Object.assign(new Error('Review after doesn\u2019t apply to planning. The plan reviews the combined changes after its last step.'), { status: 400 }); }
     if (local) { if (review || typeof verifyLocal !== 'function') throw Object.assign(new Error('Invalid local run.'), { status: 400 }); provider = 'codex'; model = local.model; transport = 'app-server'; effort = null; fresh = true; }
     checkSettings(provider, mode, approvalPolicy);
     this.validateSelection(model, transport, effort);
@@ -604,7 +615,7 @@ export class Broker extends EventEmitter {
     const attachments = this.attachments.select(attachmentIds);
     if (local && attachments.some(file => file.kind !== 'text')) throw Object.assign(new Error('This local connection supports text and code attachments. Remove image attachments or choose a cloud agent; your draft stays saved.'), { status: 400 });
     text = text.trim(); model = model || null;
-    const fingerprint = createHash('sha256').update(JSON.stringify({ text, ...(automaticReview !== null ? { automaticReview } : {}), ...(local ? { local } : {}), ...(review ? { review: review.snapshot.digest } : {}), ...(attachments.length ? { attachments: attachmentIds } : {}), provider, mode, approvalPolicy, fresh, model, ...(effort ? { effort } : {}), transport: transportFor(provider, transport, this.configuredBins[provider]) })).digest('hex');
+    const fingerprint = createHash('sha256').update(JSON.stringify({ text, ...(orchestrate ? { orchestrate } : {}), ...(automaticReview !== null ? { automaticReview } : {}), ...(local ? { local } : {}), ...(review ? { review: review.snapshot.digest } : {}), ...(attachments.length ? { attachments: attachmentIds } : {}), provider, mode, approvalPolicy, fresh, model, ...(effort ? { effort } : {}), transport: transportFor(provider, transport, this.configuredBins[provider]) })).digest('hex');
     const accepted = c.requests[requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) throw Object.assign(new Error('This request ID was already used for another message.'), { status: 409 }); return { runId: accepted.runId, requestId, duplicate: true }; }
     if (this.running) throw Object.assign(new Error('An assistant is already working in this workspace. Stop it before starting another run.'), { status: 409 });
@@ -641,7 +652,7 @@ export class Broker extends EventEmitter {
     const effectiveFresh = Boolean(fresh || changedWorkspace || switchedAgent || provider === 'gemini' || !c.sessions[provider]?.id);
     const sessionReason = review ? 'review' : local ? 'local-handoff' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : provider === 'gemini' ? 'provider-fresh-session' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     const sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
-    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text) : text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -650,15 +661,15 @@ export class Broker extends EventEmitter {
     try { if (review) verifyReview(); baseline = review ? { kind: 'review', git: true, digest: review.snapshot.digest, capturedAt: new Date().toISOString() } : workspaceBaseline(this.workspace, this.workspaceFolders); } catch (error) { lease.release(); throw error; }
     const run = { id: runId, taskId: task.id, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
       stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, limitChain, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
-      model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview };
+      model, effort, steerable: !review && !orchestrate && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview, orchestrate };
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
       this.record(c, { type: 'submission', id: runId, task, ...(plan ? { plan } : {}), previousProvider: c.lastRun?.provider || null, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
-        ...(local ? { local } : {}), ...(review ? { review } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
+        ...(local ? { local } : {}), ...(review ? { review } : {}), ...(orchestrate ? { orchestration: { goal: text } } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
         ...(automaticReview ? { automaticReview } : {}),
-        message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
+        message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(orchestrate ? { orchestrationId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
     for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', `Using skill ${skill.name}: ${skill.reason}`, provider);
     // A message sent by hand takes the place of a wait for a reset.
@@ -688,6 +699,7 @@ export class Broker extends EventEmitter {
         }
         for (const message of c.messages.filter(m => m.runId === runId && m.role === 'assistant')) this.record(c, { type: 'message_update', id: message.id, update: { status: success ? 'complete' : 'incomplete' } });
         this.record(c, { type: 'run_metadata', metadata: { elapsedMs: Date.now() - Date.parse(c.activeRun.startedAt), phase: success ? 'complete' : 'stopped', lastEventAt: c.activeRun.lastEventAt } });
+        if (orchestrate) this.record(c, { type: 'orchestration_result', id: runId, result: planningResult(success, run.stopped, c.messages.filter(message => message.runId === runId && message.role === 'assistant').at(-1)?.text) });
         if (review) this.record(c, { type: 'review_result', id: runId, result: success ? parseReviewResult(c.messages.filter(message => message.runId === runId && message.role === 'assistant').at(-1)?.text, review.snapshot) : { status: run.stopped ? 'interrupted' : 'failed', summary: run.stopped ? 'Review stopped. Start a new review when ready.' : 'The review did not finish. Check the agent response and try again.', findings: [] } });
         this.record(c, { type: 'run_end', status: run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete', errorCategory: run.errorCategory });
         if (!review) this.checkpoints.after(c, run);

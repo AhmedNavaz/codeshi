@@ -1,0 +1,31 @@
+/* Orchestrate (#12): the toggle beside Review after, the line saying a plan comes first, and the plan card above the
+   message box. */
+.orchestrate-toggle { flex: none; padding: 5px 7px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); font: 11px var(--font); cursor: pointer; white-space: nowrap; }
+.orchestrate-toggle:hover { color: var(--text); background: var(--hover); }
+.orchestrate-toggle[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
+.orchestrate-toggle[hidden], .orchestrate-armed[hidden] { display: none; }
+.orchestrate-armed { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin: 0 0 8px; border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.orchestrate-armed > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+.orchestration-card { display: grid; gap: 8px; margin: 0 0 8px; padding: 10px 12px; max-height: min(460px, 52vh); overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--text); font-size: 12.5px; }
+.orchestration-card[hidden], .orchestration-card [hidden] { display: none; }
+.orchestration-head { display: flex; align-items: center; gap: 10px; }
+.orchestration-title { flex: 1; min-width: 0; margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.orchestration-summary, .orchestration-status, .orchestration-cost { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.orchestration-summary { color: var(--text); }
+.orchestration-status, .orchestration-cost { color: var(--muted); font-size: 11.5px; }
+.orchestration-error { margin: 0; color: var(--danger); font-size: 11.5px; line-height: 1.5; }
+.orchestration-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.orchestration-step { display: grid; gap: 5px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
+.orchestration-step-head, .orchestration-step-meta { display: flex; align-items: center; gap: 6px; }
+.orchestration-step-number { flex: none; width: 18px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: center; }
+.orchestration-step-title, .orchestration-step-files { flex: 1; min-width: 0; }
+.orchestration-step-instructions { width: 100%; resize: vertical; }
+.orchestration-step-title, .orchestration-step-files, .orchestration-step-instructions, .orchestration-step-tier, .orchestration-step-agent { padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text); font: 12px var(--font); }
+.orchestration-step-move { display: flex; flex: none; gap: 2px; }
+.orchestration-step-route, .orchestration-step-needs { margin: 0; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.orchestration-tools, .orchestration-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.orchestration-actions { justify-content: flex-end; }
+.orchestration-actions:empty { display: none; }
+.orchestration-review-option { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 12px; }
+.message-orchestrate-label { color: var(--muted); font-size: 11px; }
