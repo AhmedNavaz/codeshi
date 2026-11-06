@@ -4,7 +4,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { gitExecutable } from './resolve-binary.mjs';
 
@@ -18,18 +17,20 @@ const regular = entry => !entry || /^100(644|755)$/.test(entry.mode);
 const same = (x, y) => (!x && !y) || Boolean(x && y && x.oid === y.oid && x.mode === y.mode);
 const binary = buffer => buffer.subarray(0, 8000).includes(0);
 export const ACTIONS = ['remove', 'restore', 'merge', 'recreate'];
+// Not os.devNull: Git for Windows refuses its \\.\nul and every command then fails, so no checkpoint would be saved.
+const NOTHING = '/dev/null';
 
 // Git with no inherited repository variables, no hooks, no user or system config and no prompts, so it can only
 // ever act on the private store it is pointed at.
 function environment() {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
-  return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_ATTR_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C',
+  return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: NOTHING, GIT_ATTR_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C',
     GIT_AUTHOR_NAME: 'Codeshi', GIT_AUTHOR_EMAIL: 'checkpoints@throughline.invalid', GIT_COMMITTER_NAME: 'Codeshi', GIT_COMMITTER_EMAIL: 'checkpoints@throughline.invalid' };
 }
 export function git(args, { gitDir, workTree, input, buffer = false, timeout = 60000, codes = [0], literal = false } = {}) {
   const bin = gitExecutable();
   if (!bin) return Promise.reject(new Error('Git is not available, so checkpoints are off.'));
-  const prefix = ['-c', `core.hooksPath=${os.devNull}`, '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', ...(literal ? ['--literal-pathspecs'] : []), ...(gitDir ? ['--git-dir', gitDir] : []), ...(workTree ? ['--work-tree', workTree] : [])];
+  const prefix = ['-c', `core.hooksPath=${NOTHING}`, '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', ...(literal ? ['--literal-pathspecs'] : []), ...(gitDir ? ['--git-dir', gitDir] : []), ...(workTree ? ['--work-tree', workTree] : [])];
   return new Promise((resolve, reject) => {
     const child = execFile(bin, [...prefix, ...args], { encoding: buffer ? 'buffer' : 'utf8', env: environment(), timeout, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       const code = error ? (typeof error.code === 'number' ? error.code : null) : 0;

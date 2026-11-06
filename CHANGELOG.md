@@ -19,6 +19,10 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 - **Agent messages on the phone are separated by a line**, so it's easy to find where the latest one starts.
 - **The phone's mic stays visible on Same Wi-Fi**, dimmed, and a tap explains why voice needs a secure connection and what to use instead. It used to be hidden there with no explanation.
 
+### Fixed
+
+- **Undo, redo and Timeline work on Windows.** Since 0.20.0, Git refused a setting Codeshi passed on Windows, so no checkpoint was saved and runs there couldn't be undone. Runs themselves weren't affected.
+
 ## [0.27.1] - 2026-11-06
 
 ### Changed
