@@ -86,7 +86,10 @@ test('Gemini filesystem proxy rejects outside paths and symlinks and rechecks fi
   const root = folder(t), workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
   fs.writeFileSync(path.join(workspace, 'file.txt'), 'original'); fs.writeFileSync(path.join(root, 'outside.txt'), 'private');
   fs.symlinkSync(path.join(root, 'outside.txt'), path.join(workspace, 'link.txt'));
-  for (const target of [path.join(root, 'outside.txt'), path.join(workspace, 'link.txt')]) {
+  // A directory junction leads out as well as a link does.
+  fs.mkdirSync(path.join(root, 'elsewhere')); fs.writeFileSync(path.join(root, 'elsewhere', 'secret.txt'), 'private');
+  fs.symlinkSync(path.join(root, 'elsewhere'), path.join(workspace, 'joined'), 'junction');
+  for (const target of [path.join(root, 'outside.txt'), path.join(workspace, 'link.txt'), path.join(workspace, 'joined', 'secret.txt')]) {
     const client = new Client(async c => { assert((await c.rpc('fs/read_text_file', { path: target })).error); });
     await assert.rejects(run(client, { workspace }), /denied or unsupported/);
   }

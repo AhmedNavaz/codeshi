@@ -29,6 +29,15 @@ test('explorer is lazy, sorted, bounded, multi-root scoped and excludes private 
   fs.writeFileSync(path.join(f.workspace,'binary.bin'),Buffer.from([0,255]));assert.throws(()=>readExplorerFile(f.folder,'binary.bin'),/binary/);
 });
 
+test('a directory junction never leads the explorer outside the workspace',t => {
+  const f=fixture(t);fs.writeFileSync(path.join(f.workspace,'main.js'),'');fs.mkdirSync(path.join(f.root,'elsewhere'));fs.writeFileSync(path.join(f.root,'elsewhere','secret.txt'),'private');
+  // A junction needs no special rights on Windows; elsewhere this makes an ordinary folder link.
+  fs.symlinkSync(path.join(f.root,'elsewhere'),path.join(f.workspace,'joined'),'junction');
+  assert.deepEqual(listFiles(f.folder).entries.map(e=>e.name),['main.js']);
+  assert.throws(()=>listFiles(f.folder,'joined'));
+  assert.throws(()=>readExplorerFile(f.folder,'joined/secret.txt'));
+});
+
 test('attachment snapshots are immutable, bounded, content-verified and isolated by workspace',t=>{
   const f=fixture(t), one=f.store.put({name:'notes.md',data:Buffer.from('Saved notes').toString('base64')});
   assert.equal(new AttachmentStore(path.join(f.root,'data')).read(one.id).text,'Saved notes');
