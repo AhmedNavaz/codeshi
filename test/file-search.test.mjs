@@ -13,6 +13,7 @@ test('file search covers every workspace folder, ranks by name and never shows p
   for (const file of ['src/app.js', 'src/components/AppShell.jsx', 'docs/mapping-notes.md', 'node_modules/lib/app.js', '.git/app.js', '.env', 'dist/app.js', 'keys/app.pem']) write(path.join(web, file));
   write(path.join(api, 'server/app.js'));
   write(path.join(root, 'elsewhere/app.js')); fs.symlinkSync(path.join(root, 'elsewhere'), path.join(web, 'linked'));
+  write(path.join(root, 'joined/app.js')); fs.symlinkSync(path.join(root, 'joined'), path.join(api, 'joined'), 'junction');
   const workspaces = [{ id: 'one', name: 'Web', folders: [{ id: 'web', name: 'web', path: web }] }, { id: 'two', name: 'API', folders: [{ id: 'api', name: 'api', path: api }] }];
   const found = searchFiles(workspaces, 'app');
   assert.deepEqual(found.map(file => [file.projectName, file.path]), [['Web', 'src/app.js'], ['API', 'server/app.js'], ['Web', 'src/components/AppShell.jsx'], ['Web', 'docs/mapping-notes.md']], 'Names that start with the text first, shorter paths first among them, then names that contain it; nothing private, built or linked.');
