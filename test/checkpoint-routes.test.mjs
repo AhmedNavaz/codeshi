@@ -17,6 +17,7 @@ test('checkpoint routes list history, enforce the workspace lease and restore on
   const run = { id: randomUUID(), provider: 'codex' };
   broker.record(c, { type: 'run_start', ...run, message: { text: 'Change the file' } });
   await broker.checkpoints.before(c, run);
+  for (const folder of c.snapshots[run.id].before.folders) assert.ok(folder.commit, `Checkpoint not saved: ${folder.error}`);
   fs.writeFileSync(path.join(workspace, 'file.txt'), 'after\n');
   broker.record(c, { type: 'run_end', status: 'complete' });
   broker.checkpoints.after(c, run); await broker.checkpoints.idle();
