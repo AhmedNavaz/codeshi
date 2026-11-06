@@ -78,6 +78,7 @@ export function applyBudgetRecord(c, record) {
     c.budgetActive = record.id;
     c.budgetTotals ||= {};
     if (record.resetSession || record.context?.sessionMode !== 'resumed') delete c.budgetTotals[record.provider];
+    else if (!c.budgetTotals[record.provider]) c.budgetTotals[record.provider] = { input: null, output: null, cacheRead: null, cacheWrite: null, reasoning: null, costEstimateUSD: null };
     return;
   }
   const activeState = () => { const taskId = c.budgetActive && c.taskOfRun?.[c.budgetActive]; return taskId ? c.taskBudgets?.[taskId] : null; };
@@ -88,7 +89,8 @@ export function applyBudgetRecord(c, record) {
     if (record.type === 'review_process' || record.began) entry.began = true;
     const metadata = record.metadata || {};
     if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage);
-    if (typeof metadata.costUSD === 'number') entry.costUSD = metadata.costUSD;
+    if (entry.usage?.source === 'claude-model-usage-total') entry.costUSD = entry.usage.costEstimateUSD;
+    else if (typeof metadata.costUSD === 'number') entry.costUSD = metadata.costUSD;
     if (metadata.account?.billingSource) entry.billing = metadata.account.billingSource;
     return;
   }
@@ -98,19 +100,21 @@ export function applyBudgetRecord(c, record) {
     if (metadata.effectiveModel || metadata.usage) entry.began = true;
     if (metadata.account?.billingSource) entry.billing = metadata.account.billingSource;
     if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage, { previous: c.budgetTotals?.[entry.provider] });
-    if (typeof metadata.costUSD === 'number') entry.costUSD = metadata.costUSD;
+    if (entry.usage?.source === 'claude-model-usage-total') entry.costUSD = entry.usage.costEstimateUSD;
+    else if (typeof metadata.costUSD === 'number') entry.costUSD = metadata.costUSD;
     return;
   }
   if (record.type === 'run_end' || (record.type === 'review_result' && c.taskOfRun?.[record.id] && c.taskBudgets?.[c.taskOfRun[record.id]]?.active[record.id]?.background)) {
     const id = record.type === 'run_end' ? c.budgetActive : record.id, taskId = id && c.taskOfRun?.[id], state = taskId && c.taskBudgets?.[taskId], entry = state?.active[id];
     if (record.type === 'run_end') { c.budgetLast = entry ? { provider: entry.provider } : c.budgetLast; c.budgetActive = null; }
     if (!entry) return;
-    if (record.type === 'review_result') { const result = record.result || {}; if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage); if (typeof result.costUSD === 'number') entry.costUSD = result.costUSD; if (result.billingSource) entry.billing = result.billingSource; if (result.usage || result.status === 'complete') entry.began = true; }
+    if (record.type === 'review_result') { const result = record.result || {}; if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage); if (entry.usage?.source === 'claude-model-usage-total') entry.costUSD = entry.usage.costEstimateUSD; else if (typeof result.costUSD === 'number') entry.costUSD = result.costUSD; if (result.billingSource) entry.billing = result.billingSource; if (result.usage || result.status === 'complete') entry.began = true; }
     delete state.active[id];
     // A run refused before anything started used nothing, so what it reserved goes back.
     if (!entry.began) { state.runs--; if (entry.counted) state[entry.counted]--; return; }
     state.workingMs += Math.max(0, new Date(record.at).getTime() - new Date(entry.startedAt).getTime());
-    if (entry.usage?.reported?.length) { for (const key of ['input', 'output', 'cacheWrite', 'cacheRead']) state.tokens[key] += entry.usage[key] || 0; if (entry.usage.sessionTotal && !entry.background) c.budgetTotals[entry.provider] = entry.usage.sessionTotal; }
+    if (!entry.background) c.budgetTotals[entry.provider] = entry.usage?.sessionTotal || { input: null, output: null, cacheRead: null, cacheWrite: null, reasoning: null, costEstimateUSD: null };
+    if (entry.usage?.reported?.length) { for (const key of ['input', 'output', 'cacheWrite', 'cacheRead']) state.tokens[key] += entry.usage[key] || 0; }
     else state.runsWithoutUsage++;
     if (entry.billing === 'api' && typeof entry.costUSD === 'number') state.spendUSD += entry.costUSD;
     return;

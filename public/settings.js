@@ -95,6 +95,25 @@
     const automatic = kit.toggle(work, { label: 'Hand off automatically', description: 'Near a limit, or when a run reaches one, switch to an agent on a subscription without asking, and say so in the conversation. If every agent is out, the task waits for the first reset.', keywords: 'handoff hand off automatic', checked: handoff?.automatic === true, disabled: !handoff || handoff.threshold === 0, onChange: value => saveHandoff({ automatic: value }) });
     if (!handoff) api().api('/api/handoff-preferences').then(value => { handoff = value; offer.value = String(value.threshold); offer.disabled = false; automatic.checked = value.automatic === true; automatic.disabled = value.threshold === 0; }).catch(() => {});
     }
+    if (window.relayFlow?.isOn?.()) {
+      const target = { saving: 40000, balanced: 75000, quality: 120000 }[api().getState().conversation?.routing?.mode || 'balanced'];
+      kit.row(work, { label: 'Context refresh', description: `Flow starts a fresh native session before the next turn at ${target.toLocaleString()} context tokens, or earlier for a smaller reported window. Chat history stays complete.`, keywords: 'context compact compaction token memory limit' });
+    } else {
+      let savedLimit = 'auto';
+      const custom = node('input', undefined, 'settings-select'); custom.type = 'number'; custom.min = '8000'; custom.max = '1000000'; custom.step = '1000'; custom.value = '75000'; custom.id = 'settings-context-custom'; custom.setAttribute('aria-label', 'Custom context token limit'); custom.hidden = true;
+      const save = value => perform(async () => {
+        limit.disabled = true;
+        try { const result = await api().post('/api/preferences', { contextLimit: value }); savedLimit = result.contextLimit ?? 'auto'; await api().refresh(); }
+        finally { limit.value = typeof savedLimit === 'number' && ![50000, 100000, 150000].includes(savedLimit) ? 'custom' : String(savedLimit); limit.disabled = false; custom.hidden = limit.value !== 'custom'; customRow.hidden = custom.hidden; }
+      });
+      const limit = kit.select(work, { label: 'Context limit', description: 'Before another turn, refresh agent memory in a fresh native session when its reported context signal reaches this limit. Full chat history stays saved. Off leaves native compaction in charge.', keywords: 'context tokens threshold compact compaction memory refresh', options: [['off', 'Off'], ['auto', 'Auto (by model)'], ['50000', '50,000 tokens'], ['100000', '100,000 tokens'], ['150000', '150,000 tokens'], ['custom', 'Custom…']], value: 'auto', disabled: true,
+        onChange: value => { custom.hidden = value !== 'custom'; customRow.hidden = custom.hidden; if (value === 'custom') { custom.focus(); return; } save(['off', 'auto'].includes(value) ? value : Number(value)); } });
+      limit.id = 'settings-context-limit';
+      const customRow = kit.row(work, { label: 'Custom context limit', description: '8,000–1,000,000 tokens. Takes effect on the next turn.', control: custom }); customRow.hidden = true;
+      custom.addEventListener('change', () => save(Number(custom.value)));
+      api().api('/api/preferences').then(value => { savedLimit = value.contextLimit ?? 'auto'; limit.value = typeof savedLimit === 'number' && ![50000, 100000, 150000].includes(savedLimit) ? 'custom' : String(savedLimit); custom.hidden = limit.value !== 'custom'; customRow.hidden = custom.hidden; if (typeof savedLimit === 'number') custom.value = String(savedLimit); limit.disabled = false; }).catch(() => {});
+      kit.note(work.parentNode, 'Auto targets 75,000 tokens, capped at 75% of a smaller reported window. Older unmeasured sessions refresh once on the next send. Recorded chat activity supplies a labeled estimate when native readings are missing. Codex last-request input is labeled as an estimate signal, not total context. Refreshes happen between turns; in-run growth remains owned by the native agent. Use Compact context or /compact for a manual refresh without a model call.');
+    }
     const testing = kit.group(host, 'Testing');
     let savedCadence = 'as-needed';
     const cadence = kit.select(testing, {

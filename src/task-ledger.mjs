@@ -25,25 +25,58 @@ export function taskIdentity(c, { runId, text, retryOf = null, review = null }) 
 // reasoning. previous is the same session's earlier total, for an agent that reports a running total for the whole session.
 export function normalizeUsage(provider, raw, { previous = null } = {}) {
   if (!raw || typeof raw !== 'object') return null;
-  let tokens = {}, source = 'unknown', context = null, sessionTotal = null;
-  if (typeof raw.input_tokens === 'number' || typeof raw.output_tokens === 'number') {
+  let tokens = {}, source = 'unknown', context = null, sessionTotal = null, coverage = null, costEstimateUSD = null;
+  const models = raw.modelUsage && typeof raw.modelUsage === 'object' ? Object.values(raw.modelUsage) : [];
+  if (provider === 'claude' && models.some(model => number(model?.inputTokens) !== null || number(model?.outputTokens) !== null)) {
+    // The SDK's usage is main-loop, per-turn usage. modelUsage is a cumulative session counter covering the query
+    // pipeline, including subagents, sidechains and compaction. Prefer it, and never add it to main-loop usage.
+    source = 'claude-model-usage-total';
+    const names = { input: 'inputTokens', output: 'outputTokens', cacheRead: 'cacheReadInputTokens', cacheWrite: 'cacheCreationInputTokens', reasoning: 'thinkingTokens', costEstimateUSD: 'costUSD' };
+    sessionTotal = {}; coverage = { scope: 'query-pipeline', excluded: ['helpers-outside-query-pipeline'], models: models.length, reportedBy: {} };
+    for (const [field, key] of Object.entries(names)) {
+      const values = models.map(model => number(model?.[key])).filter(value => value !== null);
+      coverage.reportedBy[field] = values.length;
+      // A partially reported field cannot be safely differenced against an earlier session total.
+      sessionTotal[field] = values.length === models.length ? values.reduce((sum, value) => sum + value, 0) : null;
+      if (raw.pendingUsage && field !== 'costEstimateUSD') {
+        const pending = number(raw.pendingUsage[key]);
+        sessionTotal[field] = sessionTotal[field] !== null && pending !== null ? sessionTotal[field] + pending : null;
+      }
+      const delta = sessionTotal[field] === null || previous && previous[field] == null ? null : sessionTotal[field] - (previous?.[field] ?? 0);
+      if (field === 'costEstimateUSD') costEstimateUSD = delta !== null && delta >= 0 ? delta : null;
+      else tokens[field] = delta !== null && delta >= 0 ? delta : null;
+    }
+    if (raw.pendingUsage) {
+      coverage.scope = 'query-pipeline-plus-observed-messages'; costEstimateUSD = null;
+      // Observed messages are a lower bound, not a complete native-session reading suitable for the next run's baseline.
+      sessionTotal = Object.fromEntries(Object.keys(names).map(key => [key, null]));
+    }
+  } else if (typeof raw.input_tokens === 'number' || typeof raw.output_tokens === 'number') {
     source = 'claude-result';
+    coverage = { scope: raw.partial ? 'observed-messages' : 'main-agent-turn', excluded: ['separate-subagent-and-auxiliary-calls'] };
     tokens = { input: number(raw.input_tokens), output: number(raw.output_tokens), cacheRead: number(raw.cache_read_input_tokens), cacheWrite: number(raw.cache_creation_input_tokens), reasoning: null };
   } else if (raw.total && typeof raw.total === 'object') {
     source = 'codex-thread-total';
     const total = raw.total, cached = number(total.cachedInputTokens);
     sessionTotal = { input: number(total.inputTokens), output: number(total.outputTokens), cacheRead: cached, cacheWrite: number(total.cacheWriteInputTokens), reasoning: number(total.reasoningOutputTokens) };
-    const since = key => sessionTotal[key] === null ? null : sessionTotal[key] - (previous?.[key] || 0);
+    // An earlier missing counter cannot supply a baseline for a resumed session. A decreasing counter means a reset
+    // we cannot attribute, not negative consumption.
+    const since = key => {
+      if (sessionTotal[key] === null || previous && previous[key] == null) return null;
+      const delta = sessionTotal[key] - (previous?.[key] ?? 0);
+      return delta >= 0 ? delta : null;
+    };
     const input = since('input'), cacheRead = since('cacheRead');
-    tokens = { input: input === null ? null : input - (cacheRead || 0), output: since('output'), cacheRead, cacheWrite: since('cacheWrite'), reasoning: since('reasoning') };
-    context = number(raw.modelContextWindow) === null ? null : { size: raw.modelContextWindow };
+    tokens = { input: input === null || cacheRead === null || input < cacheRead ? null : input - cacheRead, output: since('output'), cacheRead, cacheWrite: since('cacheWrite'), reasoning: since('reasoning') };
+    // The last request is a separate provider reading, not a session total or a measurement of the entire native context.
+    context = { size: number(raw.modelContextWindow), lastRequest: raw.last && Object.keys(raw.last).length ? raw.last : null };
   } else if (typeof raw.used === 'number') {
     // The context the session is holding, which is not what the run used, so its tokens stay unknown.
     source = 'acp-context';
     context = { used: raw.used, size: number(raw.size) };
     tokens = Object.fromEntries(FIELDS.map(key => [key, null]));
   } else return { provider, source, ...Object.fromEntries(FIELDS.map(key => [key, null])), reported: [], raw };
-  return { provider, source, ...tokens, ...(raw.partial ? { partial: true } : {}), reported: FIELDS.filter(key => tokens[key] !== null), ...(context ? { context } : {}), ...(sessionTotal ? { sessionTotal } : {}), raw };
+  return { provider, source, ...tokens, ...(raw.partial ? { partial: true } : {}), reported: FIELDS.filter(key => tokens[key] !== null), ...(coverage ? { coverage } : {}), ...(source === 'claude-model-usage-total' ? { costEstimateUSD } : {}), ...(context ? { context } : {}), ...(sessionTotal ? { sessionTotal } : {}), raw };
 }
 
 // Adds runs up field by field. A field no run reported stays unknown, and reportedBy says how many of the runs each sum covers.
@@ -71,15 +104,16 @@ const newEntry = (id, record, overrides = {}) => ({
   runId: id, taskId: id, parentRunId: null, relation: null, provider: record.provider || null, model: record.model || null, effectiveModel: null, effort: record.effort || null,
   mode: record.mode || null, approvalPolicy: record.approvalPolicy || null, transport: record.effectiveTransport || record.transport || null, local: Boolean(record.local), billingSource: null,
   startedAt: record.at || null, endedAt: null, elapsedMs: null, status: 'running', errorCategory: null, usage: null, costEstimateUSD: null, costBasis: null,
-  tools: { commands: 0, edits: 0, other: 0 }, approvals: { allowed: 0, denied: 0, automatic: 0, byRule: 0 }, interventions: 0, compactions: 0, check: null, filesChanged: null, retryOf: record.retryOf || null,
-  context: record.context ? { bytes: record.context.bytes ?? null, estimatedTokens: record.context.size?.estimatedTokens ?? null, policy: record.context.policy || null, sessionMode: record.context.sessionMode || null, memoryEntries: record.context.memory?.length ?? null, skills: record.context.skills?.map(({ name, version, reason }) => ({ name, version, reason })) || [] } : null,
+  tools: { commands: 0, edits: 0, other: 0 }, approvals: { allowed: 0, denied: 0, automatic: 0, byRule: 0 }, interventions: 0, compactions: 0, compactionEvents: [], check: null, filesChanged: null, retryOf: record.retryOf || null,
+  context: record.context ? { bytes: record.context.bytes ?? null, estimatedTokens: record.context.size?.estimatedTokens ?? null, policy: record.context.policy || null, sessionMode: record.context.sessionMode || null, sessionReason: record.context.sessionReason || null, omittedMessages: record.context.omittedMessages ?? null, shortenedMessages: record.context.shortenedMessages ?? null, memoryEntries: record.context.memory?.length ?? null, skills: record.context.skills?.map(({ name, version, reason }) => ({ name, version, reason })) || [] } : null,
   ...overrides,
 });
 
 function finishCost(entry, reported) {
+  if (reported === null) { entry.costEstimateUSD = null; entry.costBasis = null; return; }
   if (typeof reported !== 'number') return;
   entry.costEstimateUSD = reported;
-  // What the agent worked out at API prices: a real charge only when this run is billed to an API account.
+  // Provider-reported estimates are not billing statements, including on an API account.
   entry.costBasis = entry.billingSource === 'api' ? 'api-estimate' : entry.billingSource === 'subscription' ? 'not-charged-subscription' : 'billing-unknown';
 }
 
@@ -99,6 +133,7 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       active = open(record.id, record, record.review ? { relation: 'review' } : {});
       // An agent's session total carries over only into a run that resumed that session.
       if (record.resetSession || record.context?.sessionMode !== 'resumed') totals.delete(record.provider);
+      else if (!totals.has(record.provider)) totals.set(record.provider, Object.fromEntries([...FIELDS, 'costEstimateUSD'].map(key => [key, null])));
     } else if (record.type === 'run_start') active = open(record.id, record);
     else if (record.type === 'run_metadata' && active) {
       const metadata = record.metadata || {};
@@ -108,8 +143,15 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       if (metadata.account?.billingSource) active.billingSource = metadata.account.billingSource;
       if (metadata.usage) active.usage = normalizeUsage(active.provider, metadata.usage, { previous: totals.get(active.provider) });
       if (typeof metadata.elapsedMs === 'number') active.elapsedMs = metadata.elapsedMs;
-      if (metadata.costUSD !== undefined) finishCost(active, metadata.costUSD);
+      if (metadata.costUSD !== undefined || active.usage?.source === 'claude-model-usage-total') finishCost(active, active.usage?.source === 'claude-model-usage-total' ? active.usage.costEstimateUSD : metadata.costUSD);
       if (typeof metadata.compactions === 'number') active.compactions = metadata.compactions;
+    } else if (record.type === 'native_compaction') {
+      const entry = runs.get(record.runId);
+      if (entry) {
+        const prior = entry.compactionEvents.find(item => item.id === record.event.id);
+        if (!prior) entry.compactions++;
+        entry.compactionEvents = [...entry.compactionEvents.filter(item => item.id !== record.event.id), { ...prior, ...record.event, observedAt: record.at }];
+      }
     } else if (record.type === 'message') {
       const message = record.message || {}, entry = message.runId ? runs.get(message.runId) : null;
       if (!entry) continue;
@@ -119,7 +161,7 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       if (active) {
         Object.assign(active, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at });
         active.elapsedMs ??= active.startedAt ? Date.parse(record.at) - Date.parse(active.startedAt) : null;
-        if (active.usage?.sessionTotal) totals.set(active.provider, active.usage.sessionTotal);
+        totals.set(active.provider, active.usage?.sessionTotal || Object.fromEntries([...FIELDS, 'costEstimateUSD'].map(key => [key, null])));
         last = active;
       }
       active = null;
@@ -137,7 +179,7 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       if (!entry || entry.status !== 'running') continue;
       if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage);
       if (metadata.account?.billingSource) entry.billingSource = metadata.account.billingSource;
-      if (metadata.costUSD !== undefined) finishCost(entry, metadata.costUSD);
+      if (metadata.costUSD !== undefined || entry.usage?.source === 'claude-model-usage-total') finishCost(entry, entry.usage?.source === 'claude-model-usage-total' ? entry.usage.costEstimateUSD : metadata.costUSD);
       if (metadata.effectiveModel) entry.effectiveModel = metadata.effectiveModel;
     } else if (record.type === 'review_result') {
       const entry = runs.get(record.id), result = record.result || {};
@@ -146,7 +188,18 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
         entry.elapsedMs ??= entry.startedAt ? Date.parse(record.at) - Date.parse(entry.startedAt) : null;
         if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage);
         if (result.billingSource) entry.billingSource = result.billingSource;
-        if (result.costUSD !== undefined) finishCost(entry, result.costUSD);
+        if (result.costUSD !== undefined || entry.usage?.source === 'claude-model-usage-total') finishCost(entry, entry.usage?.source === 'claude-model-usage-total' ? entry.usage.costEstimateUSD : result.costUSD);
+        if (result.effectiveModel) entry.effectiveModel = result.effectiveModel;
+        if (number(result.elapsedMs) !== null) entry.elapsedMs = result.elapsedMs;
+        if (result.accounting) {
+          const { effort, tools, approvals, interventions, compactions, compactionEvents } = result.accounting;
+          if (effort) entry.effort = effort;
+          if (tools) entry.tools = tools;
+          if (approvals) entry.approvals = approvals;
+          if (number(interventions) !== null) entry.interventions = interventions;
+          if (number(compactions) !== null) entry.compactions = compactions;
+          if (Array.isArray(compactionEvents)) entry.compactionEvents = compactionEvents;
+        }
       }
     } else if (record.type === 'quota_observation') quota.push({ provider: record.provider, observedAt: Object.hasOwn(record, 'observedAt') ? record.observedAt : record.at, plan: record.plan || null, windows: record.windows || [] });
   }
@@ -167,7 +220,8 @@ export function summarizeTasks(runs) {
     }
     for (const agent of Object.values(agents)) agent.usage = sumUsage(agent.usage);
     return {
-      id, ...(first.prompt ? { prompt: first.prompt } : {}), startedAt: first.startedAt, endedAt: final.endedAt, status: final.status,
+      id, ...(first.prompt ? { prompt: first.prompt } : {}), startedAt: first.startedAt,
+      endedAt: list.every(run => run.endedAt) ? list.map(run => run.endedAt).sort().at(-1) : null, status: final.status,
       // Only the time agents worked: waiting for a limit to reset falls between runs and isn't counted.
       workingMs: list.reduce((sum, run) => sum + (run.elapsedMs || 0), 0),
       runs: list.length, retries: list.filter(run => run.relation === 'retry').length, continuations: list.filter(run => run.relation === 'continuation').length, reviews: list.filter(run => run.relation === 'review').length,

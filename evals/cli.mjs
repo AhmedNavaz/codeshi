@@ -18,7 +18,7 @@ if (command === 'run') {
   if (options.pin) {
     try {
       if (typeof options.pin !== 'string') throw new Error('Give --pin a saved result file.');
-      const overridden = ['fixture', 'agent', 'to', 'context', 'skill', 'no-skills', 'limits'].filter(key => options[key] !== undefined);
+      const overridden = ['fixture', 'agent', 'to', 'context', 'skill', 'no-skills', 'limits', 'threads', 'context-limit'].filter(key => options[key] !== undefined);
       if (overridden.length) throw new Error(`A pinned repeat keeps its saved settings; remove: ${overridden.map(key => `--${key}`).join(', ')}.`);
       const file = fs.existsSync(options.pin) ? options.pin : path.join(resultsDir, path.basename(options.pin));
       pin = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -33,8 +33,8 @@ if (command === 'run') {
   if (options.repeat !== undefined && !(typeof options.repeat === 'string' && Number.isSafeInteger(Number(options.repeat)) && Number(options.repeat) > 0)) { console.error('--repeat must be a positive, finite integer.'); process.exit(2); }
   const budget = { maxRuns: live ? Number(options['max-runs']) : Infinity, maxTokens: Number(options['max-tokens']) || 0, runs: 0, tokens: 0 }, repeat = Number(options.repeat) || 1, results = [];
   fs.mkdirSync(resultsDir, { recursive: true, mode: 0o700 });
-  for (const context of String(pin?.policy.context || options.context || 'task').split(',')) for (const fixture of chosen) for (let index = 0; index < repeat; index++) {
-    const policy = pin?.policy || parsePolicy({ agent: options.agent || 'codex', to: options.to || null, context, skills: options['no-skills'] !== true, skill: options.skill || null, limits: options.limits ? JSON.parse(options.limits) : null });
+  for (const context of String(pin?.policy.context || options.context || 'task').split(',')) for (const threads of String(pin?.policy.threads || options.threads || 'continuous').split(',')) for (const fixture of chosen) for (let index = 0; index < repeat; index++) {
+    const policy = pin?.policy || parsePolicy({ agent: options.agent || 'codex', to: options.to || null, context, threads, contextLimit: options['context-limit'] === undefined ? 'off' : ['off', 'auto'].includes(options['context-limit']) ? options['context-limit'] : Number(options['context-limit']), skills: options['no-skills'] !== true, skill: options.skill || null, limits: options.limits ? JSON.parse(options.limits) : null });
     const result = await runFixture(fixture, policy, { live, budget, pin, ...(pin ? { runLimitMs: pin.experiment.inputs.runLimitMs } : {}) });
     const name = `${new Date().toISOString().replace(/[:.]/g, '-')}-${fixture.id}-${context}-${index}.json`;
     fs.writeFileSync(path.join(resultsDir, name), JSON.stringify(result, null, 2), { mode: 0o600 });

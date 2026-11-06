@@ -91,6 +91,8 @@ test('background review tokens stop the worker against its parent budget and rel
   assert.equal(job.worker.budget.remainingSpend(job.conversation, 'anything'), null);
   assert.throws(() => api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'carry-on' }), /allowance is reserved/);
   const duplicate = await api.request('/start', input); assert.equal(duplicate.body.duplicate, true);
+  job.worker.message(job.conversation, 'activity', '$ node --test\nOne test passed.', 'claude');
+  job.worker.event(job.worker.running, { type: 'relay.progress', phase: 'compacting' });
   job.worker.record(job.conversation, { type: 'run_metadata', metadata: { usage: { input_tokens: 110, output_tokens: 10, partial: true } } });
   await job.done;
   const saved = api.c.taskBudgets[taskId];
@@ -101,6 +103,8 @@ test('background review tokens stop the worker against its parent budget and rel
   assert.equal(fs.existsSync(job.directory), false);
   const ledger = await readLedger(path.join(api.broker.dataDir, `${api.c.id}.jsonl`));
   assert.equal(ledger.tasks.find(task => task.id === taskId).usage.input, 110);
+  assert.equal(ledger.runs.find(run => run.relation === 'review').tools.commands, 1, 'The worker journal was deleted, but its tool accounting stays.');
+  assert.equal(ledger.runs.find(run => run.relation === 'review').compactionEvents.length, 1, 'The reviewer compaction observation survives cleanup too.');
   assert.throws(() => api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'retry-over-limit' }), /used 120 tokens/);
   api.broker.budget.extend(api.c, { taskId, limit: 'maxTokens' });
   f.scenario({}); api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'allowed-more' }); await api.broker.running.done;

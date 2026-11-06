@@ -1,8 +1,7 @@
 (() => {
   'use strict';
   // Flow mode (#107): just the chat, with plain-language cards in the space either side. Each card reads what
-  // Codeshi has already recorded, with no extra model call: how routing and handoff are working and what another
-  // choice would change, what's left on each plan, the plan and the queue, and the files changed with Undo.
+  // Codeshi has already recorded, with no extra model call: how routing and handoff are working, what's left on each plan, the plan and the queue, and the files changed with Undo.
   // Entering hides the sidebar and the panels behind a short seal moment; leaving brings them back as they were.
   // Approvals, questions and Stop stay in the chat, so they are never hidden.
   const $ = id => document.getElementById(id), api = window.relayUI, shell = $('app-shell');
@@ -22,9 +21,9 @@
   // always routes, so there is no manual mode here; leaving Flow is how you choose the agent and model by hand.
   // Handoff follows the mode too, with no separate setting: the task moves to another agent at the mode's share of a limit.
   const modes = [
-    { mode: 'saving', name: 'Cost saving', hint: 'Lighter models and agents with allowance left. Hands off at 80% of a limit.', does: 'Codeshi favors lighter models and agents with allowance left, and moves the task to another agent at 80% of a limit.', would: 'Codeshi would favor lighter models and agents with allowance left, moving the task on at 80% of a limit.' },
-    { mode: 'balanced', name: 'Balanced', hint: 'The model and effort matched to each message. Hands off at 90%.', does: 'Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit.', would: 'Codeshi would match the model and effort to each message, moving the task on at 90% of a limit.' },
-    { mode: 'quality', name: 'Maximum quality', hint: 'Stronger models and deeper reasoning. Hands off only at 95%.', does: 'Codeshi favors stronger models and deeper reasoning, and holds on until 95% of a limit before moving the task.', would: 'Codeshi would favor stronger models and deeper reasoning, moving the task on only at 95% of a limit.' },
+    { mode: 'saving', name: 'Cost saving', does: 'Codeshi favors lighter models and agents with allowance left, and moves the task to another agent at 80% of a limit.' },
+    { mode: 'balanced', name: 'Balanced', does: 'Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit.' },
+    { mode: 'quality', name: 'Maximum quality', does: 'Codeshi favors stronger models and deeper reasoning, and holds on until 95% of a limit before moving the task.' },
   ];
   // The four cards, always present: each has a job, so none can be closed.
   const CARDS = [
@@ -33,7 +32,7 @@
     { id: 'next', title: 'What’s next', side: right },
     { id: 'files', title: 'Files changed', side: right },
   ];
-  let on = false, saved = null, pending = null, busy = false, focusConfirm = false, changeOpen = false, peeking = null, scheduled = false, ticker = null;
+  let on = false, saved = null, testingPending = false, peeking = null, scheduled = false, ticker = null;
   let checkingMode = false, transitioning = false, restored = false;
   const LOCK_MESSAGE = 'Finish or stop workspace work, cancel its reset wait, or pause its queue before changing views.';
   function activityBusy(activity) { return activity?.busy === true || ['running', 'checking', 'reviewing', 'waiting', 'queued'].some(key => activity?.[key] > 0); }
@@ -213,7 +212,7 @@
   }
 
   // How it's working now: the routing mode first, with what it does and when it hands off in plain words, what the next
-  // message would do, and a way to change the mode that says first what would change. Access, approvals and billing stay.
+  // message would do, and an inline testing preference. Routing changes live in Agent settings.
   function modeSentence(current) {
     const option = modes.find(item => item.mode === current?.mode), extras = [];
     if (!option) return routingPending ? 'Turning routing on…' : 'Routing is off. Flow turns it on when the workspace is idle.';
@@ -242,70 +241,52 @@
     const model = state.model ? window.relayModelPicker?.modelName?.(state.provider, state.model) || state.model : null;
     return `Your next message goes to ${agentNames[state.provider] || 'the agent'}${model ? `, ${model}` : ''}.`;
   }
-  async function choose(option) {
-    if (busy) return;
-    const current = routing();
-    busy = true; render();
-    try { await api.setRouting({ mode: option.mode, allowApi: current?.allowApi === true, check: current?.check === true }); pending = null; api.announce?.(`Now ${option.name}.`); }
-    catch (error) { api.showNotice?.(error.message); }
-    finally { busy = false; render(); }
+  async function setReviewFirst(enabled) {
+    if (testingPending) return;
+    testingPending = true; render();
+    try {
+      await api.post('/api/preferences', { verificationCadence: enabled ? 'review-first' : 'as-needed' });
+      await api.refresh();
+      api.announce?.(enabled ? 'Review first enabled for new turns.' : 'Checks as needed enabled for new turns.');
+    } catch (error) { api.showNotice?.(`Testing preference could not be saved. ${error.message}`); }
+    finally { testingPending = false; render(); }
   }
-  function confirmBlock(option, current) {
-    const block = node('div', 'flow-confirm'); block.setAttribute('role', 'group'); block.setAttribute('aria-label', `Switch to ${option.name}`);
-    block.append(node('strong', undefined, `Switch to ${option.name}?`));
-    const { text, files } = draft();
-    let would;
-    if (text || files) { const route = routeWords(api.routeFor(text, files, option.mode)); would = route?.error || (route ? `Your draft would ${route.words}.` : option.would); }
-    else would = option.would;
-    block.append(node('p', undefined, would));
-    block.append(node('p', 'flow-note', `Access and permissions stay as they are${current?.allowApi ? ', and agents billed by use stay allowed' : ', and agents billed by use stay off'}.`));
-    const actions = node('div', 'flow-actions'), apply = button('flow-apply', `Switch to ${option.name}`, () => choose(option)), currentName = (modes.find(item => item.mode === current?.mode) || modes[1]).name;
-    apply.disabled = busy;
-    actions.append(apply, button('text-link', `Keep ${currentName}`, () => { pending = null; render(); }));
-    block.append(actions);
-    return block;
+  // Keep the switch mounted as live routing and draft previews change, including while a save is pending.
+  const testingControl = node('div', 'flow-testing'), testingLabel = node('div', 'flow-testing-label');
+  const testingName = node('span', undefined, 'Review first'), testingDescription = node('p', 'flow-testing-description');
+  testingDescription.id = 'flow-testing-description';
+  const testingSwitch = button('flow-switch', '', () => setReviewFirst(api.getState().status?.verificationCadence !== 'review-first'));
+  testingSwitch.id = 'flow-testing-toggle'; testingSwitch.setAttribute('role', 'switch'); testingSwitch.setAttribute('aria-label', 'Review first');
+  testingSwitch.setAttribute('aria-describedby', testingDescription.id);
+  const switchThumb = node('span'); switchThumb.setAttribute('aria-hidden', 'true'); testingSwitch.append(switchThumb);
+  testingLabel.append(testingName, testingSwitch); testingControl.append(testingLabel, testingDescription);
+  const workingMode = node('div', 'flow-mode'), workingModeName = node('strong', 'flow-mode-name'), workingModeText = node('p', 'flow-mode-text'), workingNext = node('dd');
+  workingMode.append(node('span', 'flow-mode-eyebrow', 'Routing'), workingModeName, workingModeText);
+  const workingFacts = node('dl', 'flow-facts');
+  for (const [term, detail] of [['Next message', workingNext], ['Testing', testingControl]]) {
+    const row = node('div'), value = detail.tagName === 'DD' ? detail : node('dd');
+    if (value !== detail) value.append(detail);
+    row.append(node('dt', undefined, term), value); workingFacts.append(row);
   }
   function renderWorking(card) {
-    const state = api.getState(), current = routing(), locked = busy || routingPending || !current || !state.projectId || api.isRunning();
-    const currentMode = current?.mode || null;
-    if (pending && pending.mode === currentMode) pending = null;
-    const signature = JSON.stringify([current, pending?.mode, busy, locked, routingPending, nextLine(), state.provider, state.model, changeOpen, state.status?.verificationCadence]);
+    const state = api.getState(), current = routing(), currentMode = current?.mode || null;
+    const signature = JSON.stringify([current, routingPending, nextLine(), state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence]);
     if (signature === card.signature) return;
     card.signature = signature;
-    const body = card.body; body.replaceChildren();
-    // The mode comes first and large: it is the one choice Flow makes on your behalf.
-    const option = modes.find(item => item.mode === currentMode), mode = node('div', 'flow-mode');
-    mode.append(node('span', 'flow-mode-eyebrow', 'Routing'), node('strong', 'flow-mode-name', option ? option.name : routingPending ? 'Turning on…' : 'Off'), node('p', 'flow-mode-text', modeSentence(current)));
-    body.append(mode);
-    const facts = node('dl', 'flow-facts');
-    const fact = (term, text) => { const row = node('div'), detail = node('dd', undefined, text); row.append(node('dt', undefined, term), detail); facts.append(row); return detail; };
-    fact('Next message', nextLine());
-    const testing = fact('Testing', state.status?.verificationCadence === 'review-first' ? 'Review first: small safeguards now; verify when you ask to finalize.' : 'Checks as needed, focused on what changed.');
-    testing.append(' ', button('text-link', 'Change…', () => window.relaySettings?.open?.('general', 'Testing')));
-    body.append(facts);
-    const change = node('details', 'flow-change'), summary = node('summary', undefined, 'Change how it works');
-    change.open = changeOpen; change.addEventListener('toggle', () => { changeOpen = change.open; });
-    const group = node('div', 'flow-options'); group.setAttribute('role', 'radiogroup'); group.setAttribute('aria-label', 'How Codeshi chooses the agent and model');
-    const radios = modes.map(option => {
-      const selected = currentMode === option.mode, row = node('button', 'routing-option'); row.type = 'button'; row.disabled = locked;
-      row.setAttribute('role', 'radio'); row.setAttribute('aria-checked', String(selected)); row.dataset.mode = option.mode;
-      const text = node('span', 'routing-option-text'); text.append(node('strong', undefined, option.name), node('small', undefined, option.hint));
-      row.append(node('span', 'routing-option-mark'), text);
-      row.addEventListener('click', () => { if (selected) { pending = null; render(); return; } pending = option; focusConfirm = true; render(); });
-      return row;
-    });
-    group.append(...radios);
-    // The arrow keys move between the choices, as in a group of radio buttons; Enter or Space picks one.
-    group.addEventListener('keydown', event => {
-      if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
-      const index = radios.indexOf(event.target); if (index < 0) return;
-      event.preventDefault(); radios[(index + (event.key === 'ArrowDown' ? 1 : radios.length - 1)) % radios.length].focus();
-    });
-    change.append(summary, group);
-    if (locked && state.projectId) change.append(node('p', 'flow-locked', busy ? 'Changing…' : routingPending || !current ? 'Available once routing is on.' : 'Available when the current run finishes.'));
-    body.append(change);
-    if (pending) { changeOpen = true; change.open = true; const block = confirmBlock(pending, current); body.append(block); if (focusConfirm) { focusConfirm = false; block.querySelector('.flow-apply')?.focus(); } }
-    card.foot.replaceChildren(button('text-link', 'Agent settings', () => window.relayAgents?.open?.()));
+    if (!card.body.childNodes.length) {
+      card.body.append(workingMode, workingFacts);
+      card.foot.append(button('flow-button', 'Agent settings', () => window.relayAgents?.open?.()));
+    }
+    const option = modes.find(item => item.mode === currentMode);
+    workingModeName.textContent = option ? option.name : routingPending ? 'Turning on…' : 'Off';
+    workingModeText.textContent = modeSentence(current);
+    workingNext.textContent = nextLine();
+    const reviewFirst = state.status?.verificationCadence === 'review-first';
+    testingSwitch.setAttribute('aria-checked', String(reviewFirst));
+    testingSwitch.disabled = testingPending || !state.ready || !state.status;
+    testingSwitch.setAttribute('aria-busy', String(testingPending));
+    testingDescription.textContent = reviewFirst ? 'Small safeguards now; verify when you ask to finalize.' : 'Checks as needed, focused on what changed.';
+    testingDescription.title = 'Applies to new turns in every workspace. Running agents keep their starting setting. Required checks and selected build/review workflows still apply.';
   }
 
   // What's left on your plans: each connected agent's tightest limit in plain words. Readings come from the agents'
@@ -334,7 +315,7 @@
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
     if (!rows.length) {
       body.append(node('p', 'flow-empty', 'Connect an agent in Settings to see what’s left on its plan.'));
-      card.foot.append(button('text-link', 'Open Settings', () => window.relaySettings?.open?.('accounts')));
+      card.foot.append(button('flow-button', 'Open Settings', () => window.relaySettings?.open?.('accounts')));
       return;
     }
     const list = node('ul', 'flow-plans');
@@ -345,7 +326,7 @@
       if (!row.tightest) {
         head.append(node('span', 'flow-plan-value', row.reported ? 'No reading yet' : 'Not reported'));
         item.append(head);
-        if (window.relayUsage?.load) item.append(button('text-link', 'Check now', () => window.relayUsage.load(row.provider)));
+        if (window.relayUsage?.load) item.append(button('flow-button', 'Check now', () => window.relayUsage.load(row.provider)));
       } else {
         const percent = remaining(row.tightest);
         item.dataset.level = level(percent);
@@ -358,7 +339,7 @@
     }
     body.append(list);
     const chosen = rows.some(row => row.provider === state.provider) ? state.provider : rows[0].provider;
-    card.foot.append(button('text-link', 'All limits', () => window.relayUsage?.open?.(chosen)));
+    card.foot.append(button('flow-button', 'All limits', () => window.relayUsage?.open?.(chosen)));
   }
 
   // What's next: the agent's plan for the task, then what's queued. The plan stays while the task can still go on.
@@ -404,8 +385,8 @@
     if (others.length || state.taskId) {
       body.append(node('h3', 'flow-subhead', state.taskId ? 'This task runs beside the workspace chat' : 'Running beside this chat'));
       const list = node('ul', 'flow-tasks'), taskWords = task => task.status === 'waiting' ? 'waiting to start' : task.status === 'running' ? 'working' : task.status === 'complete' ? 'finished' : task.status;
-      for (const task of others) { const item = node('li', 'flow-task'); item.append(button('text-link', clip(task.title, 45), () => selectTask(task.id)), node('span', 'flow-task-meta', `${task.folderName ? `${task.folderName} · ` : ''}${taskWords(task)}`)); list.append(item); }
-      if (state.taskId) { const item = node('li', 'flow-task'); item.append(button('text-link', 'Workspace chat', () => selectTask(null)), node('span', 'flow-task-meta', 'the whole workspace')); list.append(item); }
+      for (const task of others) { const item = node('li', 'flow-task'); item.append(button('flow-button', clip(task.title, 45), () => selectTask(task.id)), node('span', 'flow-task-meta', `${task.folderName ? `${task.folderName} · ` : ''}${taskWords(task)}`)); list.append(item); }
+      if (state.taskId) { const item = node('li', 'flow-task'); item.append(button('flow-button', 'Workspace chat', () => selectTask(null)), node('span', 'flow-task-meta', 'the whole workspace')); list.append(item); }
       body.append(list);
     }
   }
@@ -423,7 +404,7 @@
     if (signature === card.signature) return;
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
-    card.foot.append(button('text-link', 'Timeline', () => window.relayTimeline?.open?.()), button('text-link', 'Review changes', () => window.relayGit?.open?.()));
+    card.foot.append(button('flow-button', 'Timeline', () => window.relayTimeline?.open?.()), button('flow-button', 'Review changes', () => window.relayGit?.open?.()));
     if (!rows.length) { body.append(node('p', 'flow-empty', 'No files changed in this conversation yet. Each run that changes files appears here, with Undo.')); return; }
     const total = rows.filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0);
     body.append(node('p', 'flow-lead', `${plural(total, 'file')} changed, across ${plural(rows.length, 'run')}.`));
@@ -432,7 +413,7 @@
       const item = node('li', 'flow-run');
       item.append(node('span', 'flow-run-title', row.undone ? 'Changes undone' : `${plural(row.files, 'file')} changed`));
       item.append(node('span', 'flow-run-meta', [agentName(row.run?.provider, row.run?.local), when(row.run?.startedAt)].filter(Boolean).join(' · ')));
-      const action = button('text-link flow-run-action', row.undone ? 'Redo' : 'Undo', () => window.relayRewind?.open?.(row.undone ? { kind: 'rewind', id: row.undone } : { kind: 'run', id: row.runId }));
+      const action = button('flow-button flow-run-action', row.undone ? 'Redo' : 'Undo', () => window.relayRewind?.open?.(row.undone ? { kind: 'rewind', id: row.undone } : { kind: 'run', id: row.runId }));
       action.disabled = running || !window.relayRewind; action.title = running ? 'Available when the current run finishes' : row.undone ? 'Put this run’s changes back' : 'Review this run’s changes, then undo them';
       item.append(action); list.append(item);
     }
@@ -464,7 +445,12 @@
     status.hidden = !on;
     if (!on) return;
     const line = statusLine(), text = $('flow-status-text');
-    if (text) text.textContent = line.text; else status.textContent = line.text;
+    const c = api.getState().conversation, run = api.isRunning() ? c?.activeRun : c?.lastRun;
+    const native = run?.contextUsage;
+    const context = typeof native?.used === 'number' ? ` · ${native.estimated ? '≈' : ''}${native.used.toLocaleString()} context tokens` : '';
+    const compact = run?.compactions > 0 ? ` · context organized ${run.compactions}×` : '';
+    if (text) text.textContent = line.text + context + compact; else status.textContent = line.text + context + compact;
+    status.title = run ? `${run.compactions || 0} native compaction notifications observed. ${typeof native?.used === 'number' ? 'Context snapshot observed ' + (native.observedAt || 'at an unknown time') : 'Native context usage not reported.'}${run.context?.restoredAfterCompaction ? ' Task context restored in the same native session.' : ''}` : '';
     status.dataset.live = String(Boolean(line.live)); status.dataset.attention = String(Boolean(line.attention));
   }
 
@@ -529,7 +515,7 @@
         if (saved.bottom) window.relayPanel?.hide?.();
         on = true; shell.classList.add('flow'); liftHeader(); moveControls(); place(); tick(); ensureRouting();
       } else {
-        on = false; pending = null; closeDetail(); closePeek(); window.relayPanel?.hide?.(); releaseRouting();
+        on = false; closeDetail(); closePeek(); window.relayPanel?.hide?.(); releaseRouting();
         clearTimeout(ticker); ticker = null;
         const previous = saved; saved = null;
         shell.classList.remove('flow'); restoreControls(); dropHeader();

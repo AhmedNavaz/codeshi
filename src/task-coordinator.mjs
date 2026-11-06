@@ -161,7 +161,7 @@ export class TaskCoordinator {
     const open = this.lanes.get(task.id);
     if (open) return open;
     if (!task.scopePath) return null;
-    const broker = new this.BrokerClass({ lane: true, workspace: task.scopePath, workspaceFolders: [{ id: task.folderId, name: task.folderName, path: task.scopePath }], dataDir: path.join(this.directory(task), 'journal'), googleRoot: this.main.googleRoot, bins: this.main.configuredBins, contextPolicy: this.main.contextPolicy, handoffPreferences: this.main.handoff.preferences, verificationCadence: this.main.verificationCadence, acquireMutation: operation => this.acquireFolders([task.scopePath], `${operation} for “${task.title}”`) });
+    const broker = new this.BrokerClass({ lane: true, workspace: task.scopePath, workspaceFolders: [{ id: task.folderId, name: task.folderName, path: task.scopePath }], dataDir: path.join(this.directory(task), 'journal'), googleRoot: this.main.googleRoot, bins: this.main.configuredBins, contextPolicy: this.main.contextPolicy, handoffPreferences: this.main.handoff.preferences, verificationCadence: this.main.verificationCadence, contextLimit: this.main.contextLimit, contextRouting: () => c.routing?.mode || null, acquireMutation: operation => this.acquireFolders([task.scopePath], `${operation} for “${task.title}”`) });
     broker.attachments = this.main.attachments; broker.skills.root = this.main.skills.root;
     broker.admit = () => this.admit(c, task);
     const lane = { broker, task, c: task.conversationId ? broker.conversations.get(task.conversationId) : null };

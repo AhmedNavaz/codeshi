@@ -12,7 +12,7 @@ import { checkPin, experimentInputs, fingerprint, validatePin } from '../evals/e
 const cli = new URL('../evals/cli.mjs', import.meta.url).pathname;
 
 test('every kind of task the issue asks for has a fixture with a check the agent cannot see', () => {
-  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'review']);
+  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'review']);
   for (const fixture of fixtures) {
     assert(fixture.check || fixture.checkReply, fixture.id);
     assert(fixture.rubric, fixture.id);
@@ -51,6 +51,61 @@ test('a handoff is one task across two runs, with both runs in its total', { ski
   assert.equal(result.runs[0].status, 'interrupted');
   assert.deepEqual([result.usage.input, result.usage.output], [1500 + 2400, 80 + 170], 'The second run counts only what it added to the running total.');
   assert.equal(result.outcome.firstAttemptSuccess, null, 'A run stopped on purpose says nothing about its first attempt.');
+});
+
+test('long workloads compare resumed sessions, separate threads and switching back on the same snapshots and checks', { skip: scriptCLIs }, async () => {
+  const fixture = fixtureById('long-thread');
+  const continuous = await runFixture(fixture, parsePolicy({ agent: 'codex' }));
+  const separate = await runFixture(fixture, parsePolicy({ agent: 'codex', threads: 'separate' }));
+  const switched = await runFixture(fixture, parsePolicy({ agent: 'codex', to: 'claude' }));
+  for (const result of [continuous, separate, switched]) {
+    assert.equal(result.failure, undefined);
+    assert.equal(result.check.passed, true);
+    assert.equal(result.runs.length, 3);
+    assert.equal(result.outcome.missingUsage, 0);
+    assert.deepEqual([result.usage.input, result.usage.cacheRead, result.usage.output], [6500, 2300, 310]);
+    assert.equal(result.outcome.compactions, 1);
+    assert.equal(result.outcome.repeatedFileReads, 1);
+    assert(result.turns.every(turn => turn.reconstruction.source === 'fresh-envelope-probe'));
+    assert(result.turns.every(turn => turn.reconstruction.factsKept === turn.reconstruction.factsTotal));
+    assert.deepEqual(result.snapshot, continuous.snapshot);
+    assert.deepEqual(result.experiment.inputs.checks, continuous.experiment.inputs.checks);
+    assert.equal(result.accounting.nativeCompactionUsage, 'not-separately-attributable');
+  }
+  assert.deepEqual(continuous.runs.map(run => run.context.sessionMode), ['fresh', 'resumed', 'resumed']);
+  assert.equal(continuous.turns[2].context.restoredAfterCompaction, true, 'The actual resumed dispatch rebuilds task context after the native compaction notification.');
+  assert.equal(separate.turns[2].context.restoredAfterCompaction, undefined);
+  assert.deepEqual(separate.runs.map(run => run.context.sessionMode), ['fresh', 'fresh', 'fresh']);
+  assert.deepEqual(switched.runs.map(run => run.provider), ['codex', 'claude', 'codex']);
+  assert.deepEqual(switched.runs.map(run => run.context.sessionReason), ['new-conversation', 'cross-agent-handoff', 'cross-agent-handoff']);
+  assert.equal(continuous.usage.reasoning, 90);
+  assert.equal(switched.usage.reportedBy.reasoning, 2, 'Claude did not report separate reasoning tokens.');
+  assert.equal(continuous.runs[2].usage.sessionTotal.input, 8800, 'The session counter includes cached input and earlier tasks.');
+  assert.equal(continuous.runs[2].usage.context.lastRequest.inputTokens, 2400);
+  assert.equal(switched.runs[2].usage.sessionTotal.input, 2400, 'Switching back really starts a new session.');
+  assert.equal(compareResults([continuous, separate, switched]).length, 3);
+});
+
+test('workload budgets stop between turns, and reconstruction alone cannot verify a broken result', { skip: scriptCLIs }, async () => {
+  const fixture = fixtureById('long-thread'), policy = parsePolicy({ agent: 'codex' });
+  const budget = { maxRuns: 3, maxTokens: 100, runs: 0, tokens: 0 };
+  const stopped = await runFixture(fixture, policy, { budget });
+  assert.equal(stopped.skipped, 'budget');
+  assert.equal(stopped.runs.length, 1);
+  assert.equal(budget.tokens, 4420, 'Cached inputs count toward the evaluation budget; reasoning is already in output.');
+  assert.equal(stopped.outcome.verifiedCompletion, false);
+  const failedDispatch = await runFixture(fixture, parsePolicy({ agent: 'codex', to: 'unsupported' }));
+  assert(failedDispatch.failure);
+  assert.equal(failedDispatch.runs.length, 1);
+  assert.equal(failedDispatch.usage.input, 3500, 'A later failed dispatch cannot erase earlier measured usage.');
+  assert.equal(failedDispatch.outcome.verifiedCompletion, false);
+  const trace = structuredClone(fixture.trace);
+  trace[2].steps.find(step => step.type === 'write').content = "export function receipt() { return 'wrong separator and currency'; }\n";
+  const broken = await runFixture({ ...fixture, trace }, policy);
+  assert.equal(broken.turns[2].reconstruction.factsKept, broken.turns[2].reconstruction.factsTotal);
+  assert.equal(broken.outcome.verifiedCompletion, false);
+  assert.equal(broken.outcome.firstAttemptSuccess, false);
+  assert.match(reportMarkdown(compareResults([broken])), /does not measure retention inside/);
 });
 
 test('task context keeps every fact of a long history and leaves out the other folder, unlike the older selection', { skip: scriptCLIs }, async () => {
@@ -124,7 +179,8 @@ test('results can be listed, reported and deleted, and are written only where th
 
 test('repeated reads count a file a later run reads again', () => {
   const read = (runId, file) => ({ role: 'activity', runId, text: `Read\n${JSON.stringify({ file_path: `/w/${file}` })}\nok` });
-  assert.equal(repeatedFileReads([read('a', 'x.js'), read('a', 'x.js'), read('a', 'y.js'), read('b', 'x.js'), { role: 'activity', runId: 'b', text: '$ cat y.js\nok' }, { role: 'activity', runId: 'b', text: '$ cat new.js\nok' }]), 2);
+  assert.equal(repeatedFileReads([read('a', 'x.js'), read('a', 'x.js'), read('a', 'y.js'), read('b', 'x.js'), { role: 'activity', runId: 'b', text: '$ cat y.js\nok' }, { role: 'activity', runId: 'b', text: '$ cat new.js\nok' }], { workspace: '/w' }), 2);
+  assert.equal(repeatedFileReads([read('a', 'shop/index.js'), read('b', 'ops/index.js')]), 0, 'Same basename in another folder is different work.');
 });
 
 test('pins cover skill resources, checks and runtime, and keep their contents private', t => {
@@ -201,6 +257,7 @@ test('CLI repeats a saved pin, rejects overrides and drift, and never implies li
   assert.equal(repeat.status, 0, repeat.stderr);
   assert.match(repeat.stdout, /verified/);
   assert.equal(run('--pin', file, '--agent', 'claude').status, 2);
+  assert.equal(run('--pin', file, '--threads', 'separate').status, 2);
   assert.equal(run('--pin', file, '--live', '--max-runs', '1').status, 2);
   const drift = { ...original, experiment: { ...original.experiment, inputs: { ...original.experiment.inputs, engine: 'old-engine' } } };
   drift.experiment.id = fingerprint(drift.experiment.inputs);

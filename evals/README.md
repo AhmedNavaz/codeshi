@@ -12,6 +12,7 @@ Small repeatable tasks for finding out whether a change to Codeshi helps, before
 | `memory-reuse` | Following a saved convention that nothing in the code shows, with an unrelated entry that must stay out |
 | `skill-procedure` | Following a procedure only an enabled skill describes |
 | `skill-handoff` | The same, with a second agent finishing what the first one started |
+| `long-thread` | Shop decisions carried through unrelated folder work and a return to the shop, across three real broker turns |
 | `review` | A read-only review that has to find a seeded bug |
 
 ## Running
@@ -30,6 +31,31 @@ npm run eval -- run --live --agent claude:haiku --to codex::low --fixture quota-
 ```
 
 `--no-skills` leaves a fixture's own skill out, for comparing with and without it. `--skill test-authoring` enables a starter skill and asks for it in the prompt. `--limits '{"maxTokens":5000}'` sets task limits for the run.
+
+### Long conversations and separate task threads
+
+The `long-thread` workload begins with 200 recorded tool-log entries, then runs three successive requests on the same pinned two-folder repository. Its final hidden checks verify earlier currency and precision decisions, the agreed receipt separator, and the other folder's work. The human rubric also checks that the unresolved tax decision remains unresolved.
+
+```sh
+# Same agent, native resume versus a separate conversation per task (offline):
+npm run eval -- run --fixture long-thread --agent codex --threads continuous,separate --repeat 3
+# Repeated provider switches, including switching back (offline):
+npm run eval -- run --fixture long-thread --agent codex --to claude --repeat 3
+# Live comparisons are a separate, explicit use of the owner's accounts:
+npm run eval -- run --live --fixture long-thread --agent codex::low --threads continuous,separate --repeat 3 --max-runs 18 --max-tokens 2000000
+```
+
+For multi-turn workloads, `--to` alternates the builder and second agent on successive turns. With `--threads separate`, each task gets a new conversation and a fixture-authored standalone brief containing the prior decisions it needs; the working files and final checks remain the same. Skills and task limits carry into every new conversation. This is an explicit manual-brief baseline, not a free model-generated summary. Report its wall time as evaluation execution time; the human time spent authoring baseline briefs is not measured.
+
+Saved `turns` record session mode/reason, text-envelope bytes and estimates, omissions, and a fresh-envelope fact reconstruction probe. That probe does **not** inspect a provider's resumed context or prove retention through a native compaction. Final correctness comes from hidden checks; the saved human rubric covers remaining qualitative judgments. A provider switch, including a return to the first provider, rebuilds a fresh session through the broker's normal path.
+
+Recorded Codex traces persist session totals across worker restarts, and fresh sessions start at zero. A synthetic compaction notification exercises accounting without forcing or measuring a live compaction. Recorded Claude traces use the CLI protocol; live Claude evaluations use the normal SDK. These traces verify lifecycle and accounting, not provider behavior or efficiency. Gemini can be selected for explicit live runs; it has no recorded trace adapter here.
+
+The final `long-thread` trace also requires the actual dispatched prompt to contain the earlier currency, separator and tax-blocker facts. After a native compaction notification, the task policy reconstructs bounded context on the next send, while keeping the native session. Saved turn context labels this as `restoredAfterCompaction`. A trace missing those facts fails before applying its final edit, so a successful fresh-envelope probe alone cannot pass it. This tests delivery after a simulated compaction, not hidden-state retention inside a live provider. Ordinary task-policy resumes remain deltas; the older `recency` policy is retained as a comparison and does not perform this reconstruction.
+
+The shared run budget covers every turn. Evaluation `--max-tokens` counts measured input, output, cache-read and cache-write tokens, with reasoning already included in output. It is checked between turns, so a turn can overshoot it, and unreported fields cannot enforce a hard token ceiling. A budget-stopped workload still receives its final checks and is never declared complete merely because reconstruction passed.
+
+`--context-limit off|auto|<tokens>` pins Normal-mode rollover policy as part of the experiment (custom limits start at 8,000 tokens). Evaluation runs default to Off for an explicit baseline; the product defaults to Auto. For example, `npm run eval -- run --fixture long-thread --agent codex --context-limit 8000` exercises the policy with recorded providers; the dedicated regression trace raises its first reported request above the target and checks that the next thread starts fresh, keeps the task facts and does not inherit old token counters. The stock trace may remain below the target. A live comparison still requires `--live` and a new stated budget. Context limits are checked before turns; they do not constrain provider-internal tool loops, and these recorded counts are not live efficiency evidence.
 
 An agent is written `provider:model:effort`, and any part after the provider can be left out. `--context` compares `task`, the current selection, with `recency`, the older one. A run on another billing basis than a subscription fails rather than spending money.
 
@@ -60,7 +86,11 @@ The provider-reported model and effort are checked after execution too. A change
 ## Reading the results
 
 - **Unknown is not zero.** An agent that doesn't report a value shows as `unknown`, and totals only cover the runs that reported. **Runs without usage** says how many didn't.
+- **Field coverage** lists how many runs reported each token field across repeats. A reasoning or cache total from only some runs is a partial measurement. Missing cache counters or missing session baselines cannot produce a fresh-input estimate; decreasing counters remain unknown rather than negative.
+- **Context and consumption are distinct.** Text-envelope estimates cover Codeshi's outbound text only. Native capacity and last-request counters, where reported, are saved under a run's normalized `usage.context`; cumulative native totals are in `usage.sessionTotal`. Last-request counters are not a measurement of the entire native context.
+- **Compactions** counts notifications observed by Codeshi; zero means no notification was observed. Their separate token cost is unavailable, and the report makes no inference about savings from their count.
 - **Partial counts.** Claude only sums up a run at its end, so a stopped run is counted from its messages and marked `partial`.
+- **Claude pipeline coverage.** When `modelUsage` is reported, totals include main-loop, subagent, sidechain and internal query-pipeline work, including compaction. They use cumulative model totals with the preceding session baseline subtracted, rather than adding the narrower main-loop `usage` to them. Raw per-model counters and coverage remain in the local journal. SDK helper calls outside the query pipeline are excluded by the provider. A stopped follow-up retains the last pipeline reading plus newly observed messages; its unreported reasoning and cost remain unknown. Missing per-model fields are unknown, and a resumed session without an observed baseline is unattributable. API dollar figures remain estimates and are differenced with the same baseline.
 - **Tokens are not a price.** A dollar figure from an agent is kept with its basis, and on a subscription it isn't a charge. Nothing here converts tokens to money.
 - **Usage limit readings are separate.** They are account-wide and other tools count toward them, so they are never attributed to a task.
 - **`rubric`** in each result says what a person should judge that a check can't. Its `verdict` starts empty.
@@ -69,7 +99,7 @@ Run enough repeats to see the spread: agents vary from run to run. Don't adverti
 
 Reports pool repeats only when experiment inputs, live/recorded mode and reported model/effort sequences match. Each row shows its experiment ID and actual models. Changed fixtures, skill resources, checks or engine versions stay separate; legacy results without pins remain readable but are not pooled. **Work (ms)** adds agent working intervals. **Wall (ms)** includes setup, quota observations, checks and cleanup as well, so evaluation overhead stays visible. Neither recorded-provider timings nor token counts are evidence of a live efficiency gain.
 
-Reviewers already count in the task ledger. Planning, summaries and retrieval currently use local rules, not model calls; delegated model workers remain planned. When those calls are introduced, they must carry task identities and join the same totals before this suite can claim to measure their overhead. Broader routing cases from the roadmap (stale quota, unsuitable models and concurrent account usage) and longer live comparisons are still outstanding.
+Reviewers count in the task ledger, including their final effective model/effort, elapsed time, tool counts and interventions after temporary worker files are removed. Separate independent folder tasks retain separate task identities. Planning, summaries and retrieval currently use local rules or the ordinary provider turn, without separate Codeshi model calls. Delegated Codeshi model workers remain planned. Claude pipeline totals cover native delegated work where reported, but cannot attribute it to individual roles; other providers' internal delegation coverage is unknown. Saved evaluation `accounting` labels these boundaries. When separate model calls are introduced, they must carry task identities and join the same totals before this suite can claim to measure their overhead. Broader routing cases from the roadmap (stale quota, unsuitable models and concurrent account usage), delegated-worker evaluations, and longer live comparisons remain outstanding.
 
 ## Measured so far
 

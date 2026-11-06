@@ -22,6 +22,7 @@ import { createTaskRoutes } from './task-routes.mjs';
 import { atomicJSON } from './patches.mjs';
 import { appearance, appearances, preferencePatch, publicPreferences } from './preferences.mjs';
 import { verificationCadence } from './verification.mjs';
+import { contextLimit } from './context-rollover.mjs';
 import { createPhoneAccess } from './phone-access.mjs';
 import { createRemotePhoneAccess } from './phone-remote.mjs';
 import { phoneConversation } from './phone-conversation.mjs';
@@ -87,6 +88,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   let config=readSettings()||{};
   registry.conversationDefaults = () => config.defaults;
   registry.verificationCadence = () => verificationCadence(config);
+  registry.contextLimit = () => contextLimit(config);
   // The desktop app hears each saved appearance, so its window follows whichever request saved it.
   const saveSettings = patch => { config = { ...(readSettings() || config), ...patch }; atomicJSON(settingsFile, config); if (patch.appearance !== undefined) onAppearance(appearance(config)); };
   let sharing=(sharingURL||config.sharingURL)?new SharingClient({baseUrl:sharingURL||config.sharingURL,storePath:path.join(registry.dataRoot,'sharing-client.json'),createKey:process.env.AI_RELAY_SHARING_CREATE_KEY}):null;
@@ -284,7 +286,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           return json(res,existed?200:201,registry.mainConversation(projectId));
         }
       }
-      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry))?$/);
+      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry|compact))?$/);
       if (match) {
         const workspaceBroker = selectedBroker(url);
         // A conversation can belong to a task's lane (#88), which answers for its own run. Memory, skills, limits and the project
@@ -298,6 +300,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if(!owner&&registry.mainConversation(selectedProjectId(url)).id!==c.id)return json(res,409,{error:'This project has one active chat. Open its project conversation to continue.'});
           const input = await body(req);
           if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
+          if (match[2] === 'compact') return json(res, 200, broker.compactContext(c, input));
           if (match[2] === 'context') return json(res, 200, await broker.updateContext(c, input));
           if (match[2] === 'memory') return json(res, 200, broker.changeMemory(c, input));
           if (match[2] === 'skills') return json(res, 200, broker.skills.change(c, input));

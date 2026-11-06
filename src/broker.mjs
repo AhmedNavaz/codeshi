@@ -12,7 +12,9 @@ import { prepareContext, emptyContext, validateContext, continuationRequest } fr
 import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
-import { readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
+import { normalizeUsage, readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
+import { claudeRequestContext, contextReading, restoreAfterCompaction } from './context-state.mjs';
+import { estimateContext, managedContextVersion, milestoneMemory, observationsFor, rolloverDecision } from './context-rollover.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
@@ -113,7 +115,7 @@ function importPlaces(existing, entries) {
 }
 
 export class Broker extends EventEmitter {
-  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), acquireFolders, withFolders, lane = false, contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), verificationCadence = () => 'as-needed', tests = null }) {
+  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), acquireFolders, withFolders, lane = false, contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), verificationCadence = () => 'as-needed', contextLimit = () => 'auto', contextRouting = () => null, tests = null }) {
     super();
     this.workspace = savedWorkspace(workspace); this.contextPolicy = contextPolicy; this.budget = new TaskBudgets(this);
     this.workspaces = [...new Set([this.workspace, ...workspaces.map(savedWorkspace), ...workspaceFolders.map(folder => savedWorkspace(folder.path))])];
@@ -122,7 +124,7 @@ export class Broker extends EventEmitter {
       return { id: configured?.id || createHash('sha256').update(directory).digest('hex').slice(0, 16), name: configured?.name || path.basename(directory), ...(configured?.displayName ? { displayName: configured.displayName } : {}), path: directory };
     });
     this.workspaceSignature = createHash('sha256').update(JSON.stringify({ primary: this.workspace, roots: [...this.workspaces].sort() })).digest('hex');
-    this.dataDir = dataDir; this.googleRoot = googleRoot; this.verificationCadence = verificationCadence;
+    this.dataDir = dataDir; this.googleRoot = googleRoot; this.verificationCadence = verificationCadence; this.contextLimit = contextLimit; this.contextRouting = contextRouting;
     this.skills = new SkillCatalog(this);
     this.attachments = new AttachmentStore(dataDir);
     this.configuredBins = { ...bins };
@@ -246,11 +248,18 @@ export class Broker extends EventEmitter {
   }
 
   apply(c, record) {
+    const previousBytes = ['message_delta', 'message_update'].includes(record.type) ? Buffer.byteLength(c.messages.find(message => message.id === record.id)?.text || '') : 0;
     c.records = record.seq;
     c.updatedAt = record.at;
     if (record.type === 'created') Object.assign(c, { createdAt: record.at, title: record.title });
     if (record.type === 'settings') { Object.assign(c, { provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model ?? null, transport: record.transport || c.transport, settingsRevision: record.seq }); c.models[record.provider] = record.model ?? null; c.transports[record.provider] = record.transport || c.transport; }
     if (record.type === 'context') c.context = record.context;
+    if (record.type === 'semantic_observation') c.semanticObservations = [...(c.semanticObservations || []).filter(item => item.id !== record.observation.id), { ...record.observation, observedAt: record.at }].slice(-200);
+    if (record.type === 'context_compact_requested') {
+      c.contextRollovers ||= {}; c.contextRollovers[record.provider] = { pending: true, reason: 'manual', at: record.at };
+      delete c.sessions[record.provider];
+      c.messages.push({ id: `compact-${record.seq}`, role: 'system', text: 'Context refresh scheduled. The next message to this agent starts a fresh session with a task brief. Chat history stays saved.', contextMilestone: true, createdAt: record.at, seq: record.seq });
+    }
     if (record.type === 'async_question') c.asyncQuestions = [...(c.asyncQuestions || []), record.question];
     if (record.type === 'async_question_end') c.asyncQuestions = (c.asyncQuestions || []).filter(item => item.id !== record.id);
     // A new prompt supersedes optional questions from earlier work. Background reviews do not.
@@ -301,9 +310,26 @@ export class Broker extends EventEmitter {
     if (record.type === 'message_delta') { const message = c.messages.find(m => m.id === record.id); if (!message) throw new Error('Message delta has no original message.'); message.text += record.text; message.seq = record.seq; if (record.status) message.status = record.status; }
     if (record.type === 'run_metadata') {
       if (c.activeRun) Object.assign(c.activeRun, record.metadata);
+      if (c.activeRun && record.metadata?.usage) c.activeRun.usageMeasured = normalizeUsage(c.activeRun.provider, record.metadata.usage, { previous: c.budgetTotals?.[c.activeRun.provider] });
+      const reading = c.activeRun && contextReading(c.activeRun.provider, record.metadata || {}, record.at);
+      if (reading) { c.activeRun.contextUsage = reading; if (c.sessions[c.activeRun.provider]) c.sessions[c.activeRun.provider].contextUsage = reading; }
       if (record.metadata?.routingQuota && c.activeRun) { const run = c.runs?.find(item => item.id === c.activeRun.id); if (run) run.routingQuota = record.metadata.routingQuota; }
     }
+    if (record.type === 'native_compaction' && c.activeRun?.id === record.runId) {
+      const run = c.activeRun, events = run.compactionEvents || [], prior = events.find(item => item.id === record.event.id);
+      run.compactions = (run.compactions || 0) + (prior ? 0 : 1);
+      run.compactionEvents = [...events.filter(item => item.id !== record.event.id), { ...prior, ...record.event, observedAt: record.at }].slice(-20);
+      if (c.sessions[record.provider]) c.sessions[record.provider].needsContextRefresh = true;
+      run.contextUsage = { used: record.event.afterTokens ?? null, capacity: run.contextUsage?.capacity ?? null,
+        source: 'native-compaction', estimated: true, observedAt: record.at,
+        note: record.event.afterTokens == null ? 'Awaiting a provider context reading after compaction.' : 'Provider-reported estimate after compaction.' };
+      if (c.sessions[record.provider]) c.sessions[record.provider].contextUsage = run.contextUsage;
+    }
     if (record.type === 'submission') {
+      if (record.context?.rollover) {
+        c.contextRollovers ||= {}; c.contextRollovers[record.provider] = { pending: true, reason: record.context.rollover.reason, at: record.at };
+        c.messages.push({ id: `rollover-${record.id}`, role: 'system', text: 'Starting a fresh agent session with a task brief. Chat history stays saved.', contextMilestone: true, createdAt: record.at, seq: record.seq });
+      }
       if (!record.review && !record.local) {
         if (record.resetSession) delete c.sessions[record.provider];
         Object.assign(c, { provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.transport, settingsRevision: record.seq });
@@ -331,11 +357,22 @@ export class Broker extends EventEmitter {
       if (!message) throw new Error('Conversation contains an update without its original message.');
       Object.assign(message, record.update, { seq: record.seq });
     }
-    if (record.type === 'session') c.sessions[record.provider] = {
+    if (record.type === 'session') {
+      const previous = c.sessions[record.provider], same = previous?.id === record.id;
+      c.sessions[record.provider] = {
       id: record.id, cursor: c.sessions[record.provider]?.id === record.id ? c.sessions[record.provider].cursor : 0,
+      managedContextVersion: record.managedContextVersion ?? (same ? previous.managedContextVersion : undefined),
+      ...(same && previous.contextEstimate ? { contextEstimate: previous.contextEstimate } : record.managedContextVersion ? { contextEstimate: { baseTokens: 0, bytes: c.activeRun?.context?.bytes || 0, observedAt: record.at } } : {}),
+      ...(c.sessions[record.provider]?.id === record.id && c.sessions[record.provider]?.needsContextRefresh ? { needsContextRefresh: true } : {}),
+      ...(c.sessions[record.provider]?.id === record.id && c.sessions[record.provider]?.contextUsage ? { contextUsage: c.sessions[record.provider].contextUsage } : {}),
       workspaceSignature: record.workspaceSignature,
-    };
-    if (record.type === 'checkpoint' && c.sessions[record.provider]) c.sessions[record.provider].cursor = record.seq;
+      };
+    }
+    if (record.type === 'checkpoint' && c.sessions[record.provider]) {
+      c.sessions[record.provider].cursor = record.seq;
+      if (c.lastRun?.context?.restoredAfterCompaction && !c.lastRun.compactions) c.sessions[record.provider].needsContextRefresh = false;
+      if (c.lastRun?.context?.rollover && c.contextRollovers?.[record.provider]) c.contextRollovers[record.provider].pending = false;
+    }
     if (record.type === 'run_start') {
       c.activeRun = { id: record.id, provider: record.provider, startedAt: record.at };
       c.status = 'running';
@@ -350,11 +387,14 @@ export class Broker extends EventEmitter {
     }
     if (record.type === 'run_end') {
       const run = c.runs?.findLast(item => item.id === c.lastRun?.id && !item.endedAt);
-      if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at, ...(typeof c.lastRun?.elapsedMs === 'number' ? { elapsedMs: c.lastRun.elapsedMs } : {}) });
+      if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at,
+        ...(c.lastRun ? { compactions: c.lastRun.compactions, compactionEvents: c.lastRun.compactionEvents, contextUsage: c.lastRun.contextUsage, usageMeasured: c.lastRun.usageMeasured } : {}),
+        ...(typeof c.lastRun?.elapsedMs === 'number' ? { elapsedMs: c.lastRun.elapsedMs } : {}) });
     }
     if (record.type === 'automatic_review_phase') {
       for (const run of [c.activeRun, c.lastRun, ...c.runs]) if (run?.id === record.runId && run.automaticReview) Object.assign(run.automaticReview, record.phase);
     }
+    estimateContext(c, record, previousBytes);
   }
 
   // Keeps usage limit readings apart from what runs used: these are account-wide and may include other tools (#84). Only a
@@ -396,11 +436,26 @@ export class Broker extends EventEmitter {
   // The task ledger for a conversation (#84), worked out from its journal. Prompts and commands only when asked for.
   async ledger(c, options = {}) { const ledger = await readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options); return this.tasks ? { ...ledger, tasks: [...ledger.tasks, ...await this.tasks.ledgers(options)].sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt))) } : ledger; }
 
+  compactContext(c, { provider = c.provider } = {}) {
+    if (!PROVIDERS.includes(provider)) throw Object.assign(new Error('Choose a supported agent.'), { status: 400 });
+    if (this.running || c.resume || c.limitSwitching) throw Object.assign(new Error('Finish or stop the current run or reset wait before compacting context.'), { status: 409 });
+    if (c.contextRollovers?.[provider]?.pending) return this.view(c);
+    const lease = this.acquireMutation('compact-context');
+    try {
+      const milestone = milestoneMemory(c, { folders: this.workspaceFolders, text: continuationRequest });
+      this.record(c, { type: 'context_compact_requested', provider, milestone });
+    } finally { lease.release(); }
+    return this.view(c);
+  }
+
   // What a fresh agent would be told if this task moved now, without starting anything (#85).
   briefPreview(c) {
     const provider = c.provider, text = c.messages.some(message => message.role === 'user') ? continuationRequest : 'Preview';
-    const prepared = prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider }), readAttachment: () => ({ text: '' }), includeImages: false });
-    return { brief: JSON.parse(prepared.prompt.slice(prepared.prompt.indexOf('\n') + 1)).brief || null, metadata: prepared.metadata };
+    const decision = rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() });
+    const rollover = decision.rollover ? { ...decision, memory: milestoneMemory(c, { folders: this.workspaceFolders, text }) } : null;
+    const prepared = prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider }), readAttachment: () => ({ text: '' }), includeImages: false });
+    const envelope = JSON.parse(prepared.prompt.slice(prepared.prompt.indexOf('\n') + 1));
+    return { brief: envelope.brief || null, ...(envelope.milestone ? { milestone: envelope.milestone } : {}), metadata: prepared.metadata };
   }
 
   record(c, value) {
@@ -413,6 +468,11 @@ export class Broker extends EventEmitter {
       catch (error) { try { fs.truncateSync(filename, start); } catch {} throw error; }
     } finally { fs.closeSync(fd); }
     this.apply(c, record);
+    for (const observation of observationsFor(c, record)) {
+      const prior = c.semanticObservations?.find(item => item.id === observation.id);
+      const { observedAt, ...value } = prior || {};
+      if (JSON.stringify(value) !== JSON.stringify(observation)) this.record(c, { type: 'semantic_observation', observation });
+    }
     this.emit('update', { conversationId: c.id });
     return record;
   }
@@ -436,9 +496,9 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null } = {}) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, parallelTasks, asyncQuestions, ...visible } = c;
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, parallelTasks, asyncQuestions, semanticObservations, contextRollovers, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
-    return { ...visible, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
+    return { ...visible, contextControl: rolloverDecision(c, c.activeRun?.provider || c.provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() }), cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
 
   pendingApprovals(c) {
@@ -654,12 +714,16 @@ export class Broker extends EventEmitter {
     // Reconstruct from the canonical journal whenever membership changes.
     const switchedAgent = Boolean(c.lastRun && (c.lastRun.provider !== provider || c.lastRun.connection === 'local'));
     const changedWorkspace = Boolean(c.sessions[provider] && c.sessions[provider].workspaceSignature !== this.workspaceSignature);
-    const resetSession = Boolean(c.sessions[provider] && (changedWorkspace || switchedAgent || fresh));
-    const effectiveFresh = Boolean(fresh || changedWorkspace || switchedAgent || provider === 'gemini' || !c.sessions[provider]?.id);
-    const sessionReason = review ? 'review' : local ? 'local-handoff' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : provider === 'gemini' ? 'provider-fresh-session' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
+    const ordinaryFresh = Boolean(fresh || changedWorkspace || switchedAgent || provider === 'gemini' || !c.sessions[provider]?.id);
+    const decision = rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: routing?.mode || c.routing?.mode || this.contextRouting() });
+    const rollover = !review && !local && decision.rollover
+      ? { ...decision, previousSessionId: c.sessions[provider]?.id || null, memory: milestoneMemory(c, { folders: this.workspaceFolders, text }) } : null;
+    const resetSession = Boolean(c.sessions[provider] && (changedWorkspace || switchedAgent || fresh || rollover));
+    const effectiveFresh = ordinaryFresh || Boolean(rollover);
+    const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : provider === 'gemini' ? 'provider-fresh-session' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     const sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
     const verification = verificationForRun(this.verificationCadence(), { retryOf, automaticReview });
-    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { verification, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -848,6 +912,22 @@ export class Broker extends EventEmitter {
     return { runId, requestId };
   }
 
+  compaction(run, event) {
+    run.compactionKeys ||= new Map();
+    const known = event.id && run.compactionKeys.get(event.id);
+    const id = known || (event.stage === 'complete' ? run.pendingCompaction : run.lastProgress === 'compacting' ? run.pendingCompaction : null) || randomUUID();
+    if (event.id) run.compactionKeys.set(event.id, id);
+    const prior = run.c.activeRun?.compactionEvents?.find(item => item.id === id);
+    if (prior?.stage === event.stage) return;
+    if (!prior) run.compactions = (run.compactions || 0) + 1;
+    run.pendingCompaction = event.stage === 'complete' ? null : id;
+    const count = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+    this.record(run.c, { type: 'native_compaction', runId: run.id, provider: run.provider,
+      event: { id, stage: event.stage || 'started', source: event.source || 'provider-status', trigger: event.trigger || null,
+        ...(count(event.beforeTokens) !== undefined ? { beforeTokens: event.beforeTokens } : {}),
+        ...(count(event.afterTokens) !== undefined ? { afterTokens: event.afterTokens } : {}) } });
+  }
+
   event(run, event) {
     const phase = event.type === 'thread.started' || event.type === 'system' && event.subtype === 'init' ? 'working' : event.item?.type === 'reasoning' ? 'reasoning' : event.type === 'relay.progress' ? event.phase : event.type === 'relay.delta' ? 'responding' : event.type === 'stream_event' && event.event?.delta?.type === 'text_delta' ? 'responding' : ['command_execution', 'file_change', 'mcp_tool_call', 'web_search'].includes(event.item?.type) ? (event.type === 'item.started' ? 'tool' : 'working') : event.type === 'assistant' && event.message?.content?.some(block => block.type === 'tool_use') ? 'tool' : null;
     const toolIds = [...(event.item && ['command_execution', 'file_change', 'mcp_tool_call', 'web_search'].includes(event.item.type) && event.item.id ? [event.item.id] : []), ...(event.type === 'assistant' ? (event.message?.content || []).filter(block => block.type === 'tool_use').map(block => block.id) : [])];
@@ -855,8 +935,17 @@ export class Broker extends EventEmitter {
     for (const id of toolIds) if (!run.seenTools.has(id)) { run.seenTools.add(id); if (run.c.activeRun) run.c.activeRun.toolCount = run.seenTools.size; }
     this.touch(run, phase);
     const { c, provider } = run;
+    if (provider === 'claude' && c.activeRun?.transport === 'cli' && event.type === 'assistant' && !event.parent_tool_use_id && !event.agent_id) {
+      const reading = claudeRequestContext(event.message?.usage);
+      if (reading) this.record(c, { type: 'run_metadata', metadata: { contextUsage: reading } });
+    }
+    if (c.activeRun?.transport === 'cli' && event.context_usage && !event.parent_tool_use_id) this.record(c, { type: 'run_metadata', metadata: { contextUsage: {
+      used: event.context_usage.total_tokens, capacity: event.context_usage.raw_max_tokens, model: event.context_usage.model,
+      source: 'claude-context-report', estimated: true, windowKind: 'compaction-policy-or-model' } } });
     // The agent shortened its own context, which Codeshi can't see into, so it is only counted (#85).
-    if (event.type === 'relay.progress' && event.phase === 'compacting' && run.lastProgress !== 'compacting') { run.compactions = (run.compactions || 0) + 1; this.record(c, { type: 'run_metadata', metadata: { compactions: run.compactions } }); }
+    if (event.type === 'relay.compaction') { this.touch(run, 'compacting'); this.compaction(run, event); run.lastProgress = 'compacting'; return; }
+    if (event.type === 'system' && event.subtype === 'compact_boundary') { this.compaction(run, { stage: 'complete', id: event.uuid, source: 'claude-compact-boundary', trigger: event.compact_metadata?.trigger, beforeTokens: event.compact_metadata?.pre_tokens, afterTokens: event.compact_metadata?.post_tokens }); run.lastProgress = 'compacting'; return; }
+    if (event.type === 'relay.progress' && event.phase === 'compacting' && run.lastProgress !== 'compacting') this.compaction(run, { stage: 'started', source: 'provider-status' });
     if (event.type === 'relay.progress') { run.lastProgress = event.phase; return; }
     if (!event || typeof event !== 'object') throw new Error('Invalid provider protocol event.');
     // The agent's own plan for the run, shown as a to-do list.
@@ -868,7 +957,7 @@ export class Broker extends EventEmitter {
     }
     if (event.type === 'relay.delta') { const id = `${run.id}:${event.id}`; const existing = c.messages.find(m => m.id === id); this.message(c, 'assistant', (existing?.text || '') + event.text, provider, id, 'streaming'); return; }
     if (provider === 'codex' || provider === 'gemini') {
-      if (!run.review && !run.local && event.type === 'thread.started' && event.thread_id) this.record(c, { type: 'session', provider, id: event.thread_id, workspaceSignature: run.workspaceSignature || this.workspaceSignature });
+      if (!run.review && !run.local && event.type === 'thread.started' && event.thread_id) this.record(c, { type: 'session', provider, id: event.thread_id, workspaceSignature: run.workspaceSignature || this.workspaceSignature, managedContextVersion: c.activeRun?.context?.sessionMode === 'fresh' ? managedContextVersion : c.sessions[provider]?.managedContextVersion });
       if (event.type === 'turn.completed') run.terminalSuccess = true;
       if (event.type === 'error') this.message(c, 'activity', clip(`Codex diagnostic: ${event.message || JSON.stringify(event)}`), provider);
       if (event.type === 'turn.failed') {
@@ -911,7 +1000,7 @@ export class Broker extends EventEmitter {
       }
     }
     if (event.type === 'assistant' && event.error) { run.failed = true; run.errorCategory = classifyError(event.error + ' ' + JSON.stringify(event.message?.content || [])); }
-    if (!run.review && event.session_id && c.sessions.claude?.id !== event.session_id) this.record(c, { type: 'session', provider, id: event.session_id, workspaceSignature: run.workspaceSignature || this.workspaceSignature });
+    if (!run.review && event.session_id && c.sessions.claude?.id !== event.session_id) this.record(c, { type: 'session', provider, id: event.session_id, workspaceSignature: run.workspaceSignature || this.workspaceSignature, managedContextVersion: c.activeRun?.context?.sessionMode === 'fresh' ? managedContextVersion : c.sessions[provider]?.managedContextVersion });
     if (event.type === 'stream_event') {
       const stream = event.event;
       if (stream?.type === 'message_start') run.currentClaudeMessage = stream.message?.id || randomUUID();
@@ -941,6 +1030,10 @@ export class Broker extends EventEmitter {
     }
     if (event.type === 'system' && event.subtype === 'init' && event.model) this.record(c, { type: 'run_metadata', metadata: { effectiveModel: event.model } });
     if (event.type === 'result') {
+      if (c.activeRun?.transport === 'cli' && (event.usage || event.modelUsage)) {
+        this.record(c, { type: 'run_metadata', metadata: { usage: { ...event.usage, ...(event.modelUsage ? { modelUsage: event.modelUsage } : {}) }, ...(typeof event.total_cost_usd === 'number' ? { costUSD: event.total_cost_usd } : {}) } });
+        this.budget.check(run);
+      }
       run.terminalSuccess = event.subtype === 'success' && !event.is_error;
       if (!run.terminalSuccess) {
         run.failed = true; if (run.errorCategory !== 'quota') run.errorCategory = classifyError(event.result || event.errors?.join(' '));

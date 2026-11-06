@@ -1,3 +1,4 @@
+import { claudeRequestContext } from './context-state.mjs';
 import { googleQuota } from './antigravity-usage.mjs';
 import { isAntigravityACP, googleMetadata, connectGoogle, disconnectGoogle, closeGoogleConnections } from './antigravity.mjs';
 import { geminiSetup, isAgy, agyUnsupported } from './gemini.mjs';
@@ -91,7 +92,7 @@ export async function runCodex(config, { event, approval, question = null, metad
   if (config.reviewSnapshot && (config.mode !== 'read' || config.sessionId)) throw new Error('Snapshot reviews require read-only access and a fresh native session.');
   if (config.local) config.local = { ...config.local, ...await verifyLocal(config.local.model, config.local.digest, { endpoint: config.local.endpoint }) };
   const client = clientFactory({ bin: config.bin, cwd: config.workspace, ...(config.local ? { local: config.local } : {}), ...(config.reviewSnapshot ? { reviewSnapshot: true } : {}) });
-  let threadId, turnId, resolveEnd, rejectEnd;
+  let threadId, turnId, resolveEnd, rejectEnd, compactionId = null, compactionNumber = 0;
   const ended = new Promise((resolve, reject) => { resolveEnd = resolve; rejectEnd = reject; });
   // Initialization failures may happen before awaiting the terminal promise.
   ended.catch(() => {});
@@ -114,7 +115,14 @@ export async function runCodex(config, { event, approval, question = null, metad
       if (/reasoning.*(?:Delta|delta)|reasoning\//i.test(message.method)) event({ type: 'relay.progress', phase: 'reasoning' });
       if (message.method === 'item/commandExecution/outputDelta') event({ type: 'relay.progress', phase: 'tool' });
       if (message.method === 'thread/tokenUsage/updated') metadata({ usage: p.tokenUsage });
-      if (message.method === 'thread/compacted' || (message.method === 'item/started' && p.item?.type === 'contextCompaction')) event({ type: 'relay.progress', phase: 'compacting' });
+      if (p.item?.type === 'contextCompaction' && ['item/started', 'item/completed'].includes(message.method)) {
+        compactionId = p.item.id || compactionId || `compaction-${++compactionNumber}`;
+        event({ type: 'relay.compaction', id: compactionId, stage: message.method === 'item/started' ? 'started' : 'complete', source: 'codex-context-compaction' });
+      }
+      if (message.method === 'thread/compacted') {
+        event({ type: 'relay.compaction', id: compactionId || `compaction-${++compactionNumber}`, stage: 'complete', source: 'codex-thread-compacted' });
+        compactionId = null;
+      }
       if (message.method === 'turn/plan/updated' && Array.isArray(p.plan)) event({ type: 'relay.plan', explanation: p.explanation || null, steps: p.plan.map(step => ({ text: step.step, status: step.status === 'completed' ? 'done' : step.status === 'inProgress' ? 'active' : 'pending' })) });
       if (message.method === 'item/agentMessage/delta') event({ type: 'relay.delta', id: p.itemId, text: p.delta });
       if (['item/started', 'item/completed'].includes(message.method)) {
@@ -264,19 +272,34 @@ export async function runClaude(config, { event, approval, question = null, meta
     // Claude only sums a run up in its result, and a run that is stopped, as at a handoff, never gets one. Its messages each
     // carry their own usage, so what they add up to is kept until then, marked as a partial count.
     const seenUsage = new Map();
+    let lastModelUsage = null;
     const countMessage = ({ id, usage }) => {
       if (!id || !usage) return;
       seenUsage.set(id, usage);
-      const sum = key => [...seenUsage.values()].reduce((total, item) => total + (item[key] || 0), 0);
-      metadata({ usage: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cache_read_input_tokens: sum('cache_read_input_tokens'), cache_creation_input_tokens: sum('cache_creation_input_tokens'), partial: true } });
+      const sum = key => {
+        const reported = [...seenUsage.values()].map(item => item[key]).filter(value => typeof value === 'number' && Number.isFinite(value));
+        return reported.length ? reported.reduce((total, value) => total + value, 0) : undefined;
+      };
+      metadata({ usage: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cache_read_input_tokens: sum('cache_read_input_tokens'), cache_creation_input_tokens: sum('cache_creation_input_tokens'), partial: true,
+        ...(lastModelUsage ? { modelUsage: lastModelUsage, pendingUsage: { inputTokens: sum('input_tokens'), outputTokens: sum('output_tokens'), cacheReadInputTokens: sum('cache_read_input_tokens'), cacheCreationInputTokens: sum('cache_creation_input_tokens') } } : {}) } });
     };
     for await (const received of stream) {
       const message = received.type === 'result' && received.permission_denials?.length ? { ...received, permission_denials: received.permission_denials.filter(denial => !declined.has(denial.tool_use_id)) } : received;
-      if (message.type === 'assistant' && message.message) countMessage(message.message);
+      if (message.type === 'assistant' && message.message) {
+        countMessage(message.message);
+        const reading = !message.parent_tool_use_id && !message.agent_id && claudeRequestContext(message.message.usage);
+        if (reading) metadata({ contextUsage: { ...reading, model: message.message.model || null } });
+      }
       if (message.type === 'stream_event' && (message.event?.content_block?.type === 'thinking' || message.event?.delta?.type === 'thinking_delta')) event({ type: 'relay.progress', phase: 'reasoning' });
       if (message.type === 'system' && message.subtype === 'status' && message.status === 'compacting') event({ type: 'relay.progress', phase: 'compacting' });
       if (message.type === 'system' && message.subtype === 'init') metadata({ effectiveModel: message.model || 'unknown', transport: 'sdk', authMode: message.apiKeySource || 'unknown', effectiveEffort: message.effort ?? config.effort ?? null });
-      if (message.type === 'result' && message.modelUsage) metadata({ effectiveModel: Object.keys(message.modelUsage).join(', ') || 'unknown', usage: message.usage, costUSD: message.total_cost_usd });
+      if (message.context_usage && !message.parent_tool_use_id) metadata({ contextUsage: { used: message.context_usage.total_tokens, capacity: message.context_usage.raw_max_tokens,
+        model: message.context_usage.model, source: 'claude-context-report', estimated: true, windowKind: 'compaction-policy-or-model' } });
+      if (message.type === 'result') {
+        metadata({ ...(message.modelUsage ? { effectiveModel: Object.keys(message.modelUsage).join(', ') || 'unknown' } : {}), ...(message.usage || message.modelUsage ? { usage: { ...message.usage, ...(message.modelUsage ? { modelUsage: message.modelUsage } : {}) } } : {}), costUSD: message.total_cost_usd });
+        lastModelUsage = message.modelUsage || null;
+        seenUsage.clear();
+      }
       follow(message);
       event(withoutTodos(message, todoIds, event));
     }

@@ -64,10 +64,14 @@ export class ReviewJobs {
       const result = worker.start(conversation, { text: 'Review approved changes: ' + review.goal, provider: review.provider, model: review.model, mode: 'read', requestId: input.requestId, billingConfirmed: input.billingConfirmed === true }, { review: { ...review, background: true }, verifyReview() {} });
       const job = { id, worker, conversation, directory, done: null }; this.jobs.set(project.id, job); main.backgroundReview = job;
       progress();
-      job.done = worker.running.done.then(() => {
+      job.done = worker.running.done.then(async () => {
         const report = conversation.reviews[0];
+        // Preserve the worker's measured activity before its temporary journal is deleted. A review is a model run,
+        // including its tools and interventions, rather than just its final answer and token count.
+        const measured = (await worker.ledger(conversation)).runs.at(-1);
         const failure = report?.status === 'failed' ? conversation.messages.filter(message => message.role === 'error').at(-1)?.text?.split('\n')[0].slice(0, 1000) : null;
-        main.record(c, { type: 'review_result', id, result: { ...reviewCost(conversation.lastRun), status: report?.status || 'failed', summary: failure || report?.summary || 'Review did not finish.', findings: report?.findings || [], errorCategory: conversation.lastRun?.errorCategory || null, rawResponse: conversation.messages.filter(message => message.role === 'assistant').at(-1)?.text?.slice(0, 64000), elapsedMs: conversation.lastRun?.elapsedMs, effectiveModel: conversation.lastRun?.effectiveModel } });
+        main.record(c, { type: 'review_result', id, result: { ...reviewCost(conversation.lastRun), status: report?.status || 'failed', summary: failure || report?.summary || 'Review did not finish.', findings: report?.findings || [], errorCategory: conversation.lastRun?.errorCategory || null, rawResponse: conversation.messages.filter(message => message.role === 'assistant').at(-1)?.text?.slice(0, 64000), elapsedMs: measured?.elapsedMs ?? conversation.lastRun?.elapsedMs, effectiveModel: measured?.effectiveModel ?? conversation.lastRun?.effectiveModel,
+          accounting: measured ? { sourceRunId: measured.runId, effort: measured.effort, tools: measured.tools, approvals: measured.approvals, interventions: measured.interventions, compactions: measured.compactions, compactionEvents: measured.compactionEvents } : null } });
       }).catch(error => {
         main.record(c, { type: 'review_result', id, result: { status: 'failed', summary: error.message, findings: [] } });
       }).finally(async () => {

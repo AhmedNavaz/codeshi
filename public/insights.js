@@ -130,18 +130,35 @@
     if (run.budgetEnforcement) metrics.push(`API spend limit: $${run.budgetEnforcement.maxSpendUSD} · ${run.budgetEnforcement.spend === 'native' ? 'enforced by the native adapter' : 'checked as usage is reported; in-flight overshoot is possible'}`);
     if (run.connection === 'local') metrics.push('No cloud model charges');
     // Codex's inputTokens include its cached input; Claude reports the input it read from and wrote to its cache apart from input_tokens.
+    const measured = run.usageMeasured;
+    if (measured) {
+      const fields = [[measured.input, 'fresh input'], [measured.cacheRead, 'cache read'], [measured.cacheWrite, 'cache write'], [measured.output, 'output']];
+      metrics.push(`This run${measured.partial ? ' (partial)' : ''}: ${fields.map(([value, label]) => `${typeof value === 'number' ? value.toLocaleString() : 'unknown'} ${label}`).join(' · ')} tokens`);
+    }
     const usage = run.usage?.total || run.usage, output = usage?.outputTokens ?? usage?.output_tokens;
     const input = usage?.inputTokens ?? (typeof usage?.input_tokens === 'number' ? usage.input_tokens + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0) : undefined);
-    if (typeof input === 'number') metrics.push(`${input.toLocaleString()} input tokens`);
-    if (typeof output === 'number') metrics.push(`${output.toLocaleString()} output tokens`);
-    if (typeof usage?.used === 'number') metrics.push(`${usage.used.toLocaleString()}${typeof usage.size === 'number' ? ' / ' + usage.size.toLocaleString() : ''} context tokens`);
+    const total = measured?.sessionTotal;
+    if (total) metrics.push(`Session total: ${['input', 'cacheRead', 'cacheWrite', 'output'].map(key => `${typeof total[key] === 'number' ? total[key].toLocaleString() : 'unknown'} ${key === 'cacheRead' ? 'cache read' : key === 'cacheWrite' ? 'cache write' : key}`).join(' · ')} tokens`);
+    else {
+      if (typeof input === 'number') metrics.push(`${run.usage?.total ? 'Session total: ' : 'Main turn: '}${input.toLocaleString()} input tokens`);
+      if (typeof output === 'number') metrics.push(`${output.toLocaleString()} output tokens`);
+    }
+    const native = run.contextUsage || (typeof usage?.used === 'number' ? { used: usage.used, capacity: usage.size } : null);
+    if (typeof native?.used === 'number') metrics.push(`Native context${native.estimated ? ' (provider estimate)' : ''}: ${native.used.toLocaleString()}${typeof native.capacity === 'number' ? ' / ' + native.capacity.toLocaleString() : ''} context tokens${native.observedAt ? ' · observed ' + date(native.observedAt) : ''}`);
+    else if (native || run.context) metrics.push(`Native context usage: not reported${typeof native?.capacity === 'number' ? ` · capacity ${native.capacity.toLocaleString()} tokens` : ''}`);
+    if (typeof native?.lastRequestInput === 'number') metrics.push(`Last model request: ${native.lastRequestInput.toLocaleString()} input tokens · full context usage unavailable`);
+    if (native?.windowKind === 'compaction-policy-or-model') metrics.push('The reported window may be a compaction-policy window');
+    if (run.compactions > 0) metrics.push(`Native compactions: ${run.compactions} observed${run.compactionEvents?.length ? ' · last observed ' + date(run.compactionEvents.at(-1).observedAt) : ''}`);
     const handed = run.context;
     if (handed?.sessionMode) {
       metrics.push(handed.sessionMode === 'fresh' ? 'Fresh session · shared history' : 'Resumed native session');
       if (handed.sessionReason === 'cross-agent-handoff') metrics.push('Cross-agent handoff');
+      if (handed.rollover) metrics.push(`Context refreshed by Codeshi · ${handed.rollover.reason === 'manual' ? 'requested manually' : handed.rollover.reason === 'legacy-session' ? 'older session refreshed automatically' : `threshold ${handed.rollover.thresholdTokens.toLocaleString()} tokens`} · full chat history preserved`);
+      if (handed.restoredAfterCompaction) metrics.push('Task context restored after native compaction · same native session');
+      if (typeof handed.size?.estimatedTokens === 'number') metrics.push(`Text envelope: ≈${handed.size.estimatedTokens.toLocaleString()} tokens (byte estimate)`);
       if (Number.isSafeInteger(handed.includedMessages)) metrics.push(`${handed.includedMessages} history messages included · ${handed.omittedMessages || 0} omitted`);
       if (handed.shortenedMessages) metrics.push(`${handed.shortenedMessages} history excerpts`);
-      if (handed.compactedActivityMessages) metrics.push(`${handed.compactedActivityMessages} tool logs compacted`);
+      if (handed.compactedActivityMessages) metrics.push(`${handed.compactedActivityMessages} tool logs excerpted by Codeshi`);
     }
     $('run-metrics').replaceChildren(...metrics.map(value => el('span', value, 'run-metric-item')));
     if (run.purpose === 'review') {

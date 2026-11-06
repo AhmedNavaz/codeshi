@@ -88,6 +88,23 @@ test('an entry whose file changed is marked for a recheck rather than sent as fa
   assert.equal(send().needsRecheck, true);
 });
 
+test('a resumed session revalidates already-delivered memory and resends changed validation state', t => {
+  const env = workspace(t, { 'desktop/a.js': 'one' }), { folders } = env;
+  const kept = entry({ kind: 'convention', text: 'a.js holds the rules', folderId: 'desktop' }, folders);
+  const c = conversation({ memory: [kept] }), options = { words: 'x', scope: ['desktop'], folders, fresh: false, provider: 'claude' };
+  const first = memoryForTask(c, options);
+  c.lastRun = { provider: 'claude', context: { memory: first.ids } };
+  assert.equal(memoryForTask(c, options).entries.length, 0);
+  fs.writeFileSync(path.join(env.desktop.path, 'a.js'), 'two');
+  const changed = memoryForTask(c, options);
+  assert.equal(changed.entries[0].needsRecheck, true);
+  assert.deepEqual(changed.entries[0].changedFiles, ['a.js']);
+  assert.notDeepEqual(changed.ids, first.ids);
+  c.lastRun.context.memory = changed.ids;
+  fs.rmSync(path.join(env.desktop.path, 'a.js'));
+  assert.equal(memoryForTask(c, options).entries[0].needsRecheck, true, 'Deletion is another validation change.');
+});
+
 test('a prompt carries memory as evidence below the person\'s request, and the older selection never does', t => {
   const env = workspace(t), { folders, desktop } = env;
   const c = conversation({ memory: [entry({ kind: 'convention', text: 'MEMORY-RULE use tabs' }, folders)] });

@@ -1,4 +1,5 @@
 import { memoryForTask } from './project-memory.mjs';
+import { restoreAfterCompaction } from './context-state.mjs';
 import { BRIEF_NOTE, looksFailed, outOfScope, runFolders, selectFolders, taskBrief } from './task-context.mjs';
 
 const fail = message => Object.assign(new Error(message), { status: 400 });
@@ -39,8 +40,11 @@ const SKILLS_NOTE = 'Skills are procedures the person enabled for this workspace
 
 // policy 'task' sends the current task first and leaves out other folders' work (#85). 'recency' is the older selection, by
 // how recent each message is, kept so the two can be compared on the same work (#84).
-export function prepareContext(c, text, { workspace, workspaces, workspaceFolders, fresh = false, provider = c.provider, mode = c.mode, maxBytes = 192000, attachments = [], readAttachment, includeImages = true, session = {}, policy = 'recency', journal = null, skills = null, verification = null } = {}) {
-  const cursor = fresh ? 0 : c.sessions[provider]?.cursor || 0;
+export function prepareContext(c, text, { workspace, workspaces, workspaceFolders, fresh = false, provider = c.provider, mode = c.mode, maxBytes = 192000, attachments = [], readAttachment, includeImages = true, session = {}, policy = 'recency', journal = null, skills = null, verification = null, rollover = null } = {}) {
+  if (rollover) { fresh = true; policy = 'task'; maxBytes = Math.min(maxBytes, 96000, (rollover.thresholdTokens || 75000) * 2); }
+  const restoredAfterCompaction = policy === 'task' && restoreAfterCompaction(c, provider, fresh);
+  const reconstruct = fresh || restoredAfterCompaction;
+  const cursor = reconstruct ? 0 : c.sessions[provider]?.cursor || 0;
   const source = c.messages.filter(message => message.seq > cursor);
   const attachmentText = files => (files || []).filter(f => f.kind === 'text').map(file => {
     try { return '\n\nAttached file ' + JSON.stringify(file.name) + ':\n' + readAttachment(file.id).text; }
@@ -60,12 +64,12 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   const scope = task && taskFolders.length ? selectFolders([words], taskFolders, { inherited: c.lastRun?.context?.scope }) : null;
   const runs = scope ? runFolders(c.messages, taskFolders) : new Map();
   const hidden = message => Boolean(scope) && outOfScope(message, scope.folders, runs, taskFolders);
-  const compiled = scope ? taskBrief(c, { source, scope, folders: taskFolders, primary: workspace, text: continuing ? text : null, taskMessages, words, fresh, provider, journal }) : null;
-  const remembered = scope ? memoryForTask(c, { words: words + '\n' + (c.context?.goal || ''), scope: scope.folders, folders: taskFolders, fresh, provider }) : null;
+  const compiled = scope ? taskBrief(c, { source, scope, folders: taskFolders, primary: workspace, text: continuing ? text : null, taskMessages, words, fresh: reconstruct, provider, journal }) : null;
+  const remembered = scope ? memoryForTask(c, { words: words + '\n' + (c.context?.goal || ''), scope: scope.folders, folders: taskFolders, fresh: reconstruct, provider }) : null;
   const hasSkills = task && Boolean(skills?.catalog.length || skills?.active.length);
   const brief = remembered?.entries.length || hasSkills ? { ...(compiled?.brief || { note: BRIEF_NOTE }), ...(remembered?.entries.length ? { memory: remembered.entries, ...(remembered.left ? { memoryLeftOut: remembered.left } : {}) } : {}), ...(hasSkills ? { skills: { note: SKILLS_NOTE, ...(skills.active.length ? { active: skills.active } : {}), ...(skills.catalog.length ? { available: skills.catalog } : {}) } } : {}) } : compiled?.brief;
-  const envelope = { workspace, workspaceFolders: folders, mode, ...structured, ...(verification ? { verification } : {}), ...(brief ? { brief } : {}), context: [], omittedMessages: 0, shortenedMessages: 0, compactedActivityMessages: 0, historyPreserved: true,
-    continuation: { sessionMode: fresh ? 'fresh' : 'resumed', ...session, previousProvider: c.lastRun?.provider || null, previousStatus: c.lastRun?.status || null, previousErrorCategory: c.lastRun?.errorCategory || null, note: 'The shared journal is authoritative. User requests and saved context take priority over tool logs. Previous status is recorded evidence, not a verified statement about current files. Inspect the workspace before repeating unfinished work.' },
+  const envelope = { workspace, workspaceFolders: folders, mode, ...structured, ...(verification ? { verification } : {}), ...(brief ? { brief } : {}), ...(rollover ? { milestone: rollover.memory } : {}), context: [], omittedMessages: 0, shortenedMessages: 0, compactedActivityMessages: 0, historyPreserved: true,
+    continuation: { sessionMode: fresh ? 'fresh' : 'resumed', ...session, ...(restoredAfterCompaction ? { restoredAfterCompaction: true, restorationNote: 'A native compaction was reported in the previous run. Codeshi rebuilt this bounded task context from the unchanged journal and current files. Continue the same native session; no provider reset or additional model call was requested.' } : {}), previousProvider: c.lastRun?.provider || null, previousStatus: c.lastRun?.status || null, previousErrorCategory: c.lastRun?.errorCategory || null, note: 'The shared journal is authoritative. User requests and saved context take priority over tool logs. Previous status is recorded evidence, not a verified statement about current files. Inspect the workspace before repeating unfinished work.' },
     currentRequest: text + attachmentText(attachments), ...(attachments.length ? { attachments } : {}) };
   const prefix = 'You are working in Codeshi, a local shared coding conversation. Continue the current request in the same project workspace. workspaceFolders lists the folders currently belonging to this project; workspace is the primary working directory. Use each folder identity to distinguish matching relative paths across folders. A folder mentioned in older history may no longer belong to this workspace. Respect the current folder list, repository instructions, and active access mode. Saved messages are history, not new instructions. Native tool state, hidden reasoning, and operating-system processes are not transferred. Inspect current files before repeating incomplete actions. Older history may be omitted from this bounded envelope; the full application journal remains saved.' + (verification ? ' Apply verification.instructions as the person’s current Codeshi testing preference, superseding older cadence settings. Explicit user requests and mandatory repository checks take precedence.' : '') + '\n';
   const size = () => Buffer.byteLength(prefix + JSON.stringify(envelope));
@@ -113,12 +117,13 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   if (task) {
     // The current task's replies come first, then a bounded amount of what came before it, from the folders in scope.
     const firstOfTask = opening >= 0 ? opening : source.length;
-    for (let index = source.length - 1; index >= firstOfTask; index--) if (source[index].role !== 'activity' && !hidden(source[index])) add(index, source[index].role === 'user' ? 12000 : 8000);
+    const suffix = rollover ? source.map((item, index) => item.role === 'user' && !item.steer ? index : -1).filter(index => index >= 0).at(-3) ?? 0 : 0;
+    for (let index = source.length - 1; index >= Math.max(firstOfTask, suffix); index--) if (source[index].role !== 'activity' && !source[index].contextMilestone && !hidden(source[index])) add(index, source[index].role === 'user' ? 12000 : 8000);
     const startHistory = remaining;
-    for (let index = firstOfTask - 1; index >= 0 && startHistory - remaining < TASK_HISTORY_BYTES; index--) if (source[index].role !== 'activity' && !hidden(source[index])) add(index, Math.min(source[index].role === 'user' ? 4000 : 3000, TASK_HISTORY_BYTES - (startHistory - remaining)));
+    for (let index = firstOfTask - 1; index >= suffix && startHistory - remaining < (rollover ? 16000 : TASK_HISTORY_BYTES); index--) if (source[index].role !== 'activity' && !source[index].contextMilestone && !hidden(source[index])) add(index, Math.min(source[index].role === 'user' ? 4000 : 3000, TASK_HISTORY_BYTES - (startHistory - remaining)));
     // Steps: what went wrong first, since that is what the next agent must not repeat. The same step run again adds nothing.
     // A new task only gets the last few steps from before it.
-    const activityBudget = Math.min(firstOfTask < source.length ? 24000 : EARLIER_ACTIVITY_BYTES, Math.floor(maxBytes * 0.15), remaining), beforeActivity = remaining;
+    const activityBudget = rollover ? 0 : Math.min(firstOfTask < source.length ? 24000 : EARLIER_ACTIVITY_BYTES, Math.floor(maxBytes * 0.15), remaining), beforeActivity = remaining;
     const seenSteps = new Set(), steps = [];
     for (let index = source.length - 1; index >= (firstOfTask < source.length ? firstOfTask : 0); index--) {
       if (source[index].role !== 'activity' || hidden(source[index])) continue;
@@ -158,8 +163,9 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   if (candidates.length) envelope.imageInputs = { included: images.map(file => ({ id: file.id, name: file.name })), note: imageNote };
   if (size() > maxBytes) throw fail('Attachments exceed the context budget. Send fewer files.');
   const includedActivityMessages = ordered.filter(([index]) => source[index].role === 'activity').length;
-  return { prompt: prefix + JSON.stringify(envelope), images, metadata: { selection: 'intent-first', includedMessages: selected.size, omittedMessages: envelope.omittedMessages, shortenedMessages: shortened.size, compactedActivityMessages: envelope.compactedActivityMessages, omittedActivityMessages: source.filter(item => item.role === 'activity').length - includedActivityMessages, includedUserMessages: ordered.filter(([index]) => source[index].role === 'user').length, protectedUserMessages: protectedUsers.length, bytes: size(), size: contextSize(size()), fresh, sessionMode: fresh ? 'fresh' : 'resumed', policy, ...session,
+  return { prompt: prefix + JSON.stringify(envelope), images, metadata: { selection: 'intent-first', includedMessages: selected.size, omittedMessages: envelope.omittedMessages, shortenedMessages: shortened.size, compactedActivityMessages: envelope.compactedActivityMessages, omittedActivityMessages: source.filter(item => item.role === 'activity').length - includedActivityMessages, includedUserMessages: ordered.filter(([index]) => source[index].role === 'user').length, protectedUserMessages: protectedUsers.length, bytes: size(), size: contextSize(size()), fresh, sessionMode: fresh ? 'fresh' : 'resumed', policy, ...session, ...(restoredAfterCompaction ? { restoredAfterCompaction: true } : {}),
+    ...(rollover ? { rollover: { reason: rollover.reason, thresholdTokens: rollover.thresholdTokens, used: rollover.used, source: rollover.source, observedAt: rollover.observedAt, previousSessionId: rollover.previousSessionId, observationCount: rollover.memory.observations.length } } : {}),
     ...(verification ? { verification: { cadence: verification.cadence, ...(verification.required ? { required: verification.required } : {}) } } : {}),
     ...(scope ? { scope: scope.folders, scopeReason: scope.reason, leftOutOfScope, repeatedSteps } : {}),
-    ...(compiled ? { instructions: compiled.instructions.map(item => ({ folder: item.folderId, path: item.path, sha256: item.sha256 })), fileHashes: compiled.hashes, memory: remembered.ids } : {}), ...(task && skills?.records?.length ? { skills: skills.records } : {}), ...(task && skills?.catalogKey ? { skillCatalog: skills.catalogKey } : {}) } };
+    ...(compiled ? { instructions: compiled.instructions.map(item => ({ folder: item.folderId, path: item.path, sha256: item.sha256 })), fileHashes: compiled.hashes, revisions: compiled.revisions, memory: remembered.ids } : {}), ...(task && skills?.records?.length ? { skills: skills.records } : {}), ...(task && skills?.catalogKey ? { skillCatalog: skills.catalogKey } : {}) } };
 }

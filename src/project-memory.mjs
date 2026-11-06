@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { continuationRequest } from './context.mjs';
-import { failedAttempts, fileHash, foldersInText, headOf } from './task-context.mjs';
+import { failedAttempts, fileHash, foldersInText, headOf, revisionOf } from './task-context.mjs';
 
 // Project memory (#21): what should outlive a single task, shared by every agent in a workspace. Entries are records in the
 // conversation's journal, and nothing enters without the person's approval, so a file or a command can't plant an instruction.
@@ -37,18 +37,30 @@ export function newEntry(input, folders, { now = new Date().toISOString() } = {}
   const clean = cleanEntryInput(input, folders), folder = folders.find(item => item.id === (clean.folderId || folders[0]?.id));
   const commit = folder ? headOf(folder) : null;
   return { id: randomUUID(), ...clean, status: 'active', createdAt: now, updatedAt: now, files: attachedFiles(clean.text, folders, clean.folderId),
-    source: { ...(typeof input.messageId === 'string' ? { messageId: input.messageId.slice(0, 200) } : {}), ...(typeof input.runId === 'string' ? { runId: input.runId.slice(0, 200) } : {}), ...(commit ? { commit } : {}), suggested: input.suggested === true } };
+    source: { ...(typeof input.messageId === 'string' ? { messageId: input.messageId.slice(0, 200) } : {}), ...(typeof input.runId === 'string' ? { runId: input.runId.slice(0, 200) } : {}), ...(commit ? { commit, revision: revisionOf(folder), folderId: folder.id } : {}), suggested: input.suggested === true } };
 }
 
 // Whether what an entry rests on has moved. It stays usable, but is no longer stated as fact.
-export function entryState(entry, folders) {
-  const changed = (entry.files || []).filter(file => { const folder = folders.find(item => item.id === file.folderId); return !folder || fileHash(folder, file.path) !== file.sha256; }).map(file => file.path);
+export function entryState(entry, folders, cache = new Map()) {
+  const current = (entry.files || []).map(file => {
+    const folder = folders.find(item => item.id === file.folderId), key = file.folderId + '\0' + file.path;
+    if (!cache.has(key)) cache.set(key, folder ? fileHash(folder, file.path) : null);
+    return { ...file, current: cache.get(key) };
+  });
+  const changed = current.filter(file => file.current !== file.sha256).map(file => file.path);
   const folderGone = Boolean(entry.folderId) && !folders.some(folder => folder.id === entry.folderId);
-  return { needsRecheck: changed.length > 0 || folderGone, changedFiles: changed, folderGone };
+  const folder = folders.find(item => item.id === (entry.source?.folderId || entry.folderId || folders[0]?.id));
+  const key = 'revision\0' + folder?.id;
+  if (entry.source?.revision && !cache.has(key)) cache.set(key, folder ? revisionOf(folder) : null);
+  const revision = entry.source?.revision ? cache.get(key) : null;
+  const branchChanged = Boolean(entry.source?.revision) && JSON.stringify(entry.source.revision) !== JSON.stringify(revision);
+  return { needsRecheck: changed.length > 0 || folderGone || branchChanged, changedFiles: changed, folderGone, branchChanged,
+    validationHash: createHash('sha256').update(JSON.stringify({ files: current.map(file => [file.folderId, file.path, file.current]), revision, folderGone })).digest('hex') };
 }
 
 export function memoryView(c, folders) {
-  return { entries: (c.memory || []).map(entry => ({ ...entry, ...entryState(entry, folders) })), suggestions: memorySuggestions(c, folders), limit: MAX_ENTRIES };
+  const cache = new Map();
+  return { entries: (c.memory || []).map(entry => ({ ...entry, ...entryState(entry, folders, cache) })), suggestions: memorySuggestions(c, folders), limit: MAX_ENTRIES };
 }
 
 // What a task should be told. Conventions and decisions for its folders always qualify; a fix or a failed approach only when
@@ -64,15 +76,16 @@ export function memoryForTask(c, { words, scope, folders, fresh, provider, limit
     scored.push({ entry, score: (standing ? 2 : 0) + (fileNamed ? 3 : 0) + Math.min(shared, 3) });
   }
   scored.sort((a, b) => b.score - a.score || b.entry.updatedAt.localeCompare(a.entry.updatedAt));
-  const sent = [], ids = [];
+  const sent = [], ids = [], cache = new Map();
   let spent = 0, left = 0;
   for (const { entry } of scored) {
-    if (delivered.has(signature(entry))) { ids.push(signature(entry)); continue; }
-    const state = entryState(entry, folders), folder = folders.find(item => item.id === entry.folderId);
-    const item = { kind: entry.kind, text: entry.text, ...(folder ? { folder: folder.displayName || folder.name } : {}), savedAt: entry.createdAt, ...(entry.source?.commit ? { commit: entry.source.commit } : {}), ...(state.needsRecheck ? { needsRecheck: true, ...(state.changedFiles.length ? { changedFiles: state.changedFiles } : {}) } : {}) };
+    const state = entryState(entry, folders, cache), version = signature(entry) + ':' + state.validationHash;
+    if (delivered.has(version)) { ids.push(version); continue; }
+    const folder = folders.find(item => item.id === entry.folderId);
+    const item = { kind: entry.kind, text: entry.text, ...(folder ? { folder: folder.displayName || folder.name } : {}), savedAt: entry.createdAt, ...(entry.source?.commit ? { commit: entry.source.commit } : {}), ...(state.needsRecheck ? { needsRecheck: true, ...(state.branchChanged ? { branchChanged: true } : {}), ...(state.changedFiles.length ? { changedFiles: state.changedFiles } : {}) } : {}) };
     const size = Buffer.byteLength(JSON.stringify(item));
     if (spent + size > limit) { left++; continue; }
-    spent += size; sent.push(item); ids.push(signature(entry));
+    spent += size; sent.push(item); ids.push(version);
   }
   return { entries: sent, ids, left };
 }

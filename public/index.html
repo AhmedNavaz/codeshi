@@ -206,6 +206,7 @@
         <div id="composer-region" class="composer-region">
           <button id="jump-latest" class="jump-latest" type="button" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5.5 12.5 12 19l6.5-6.5"/></svg><span id="jump-latest-text">Jump to latest</span></button>
           <div id="other-running" class="running-notice" hidden><span>This workspace has an active run.</span><button id="view-running" type="button">Refresh status</button></div>
+        <div id="context-limit-notice" class="running-notice" role="status" hidden></div>
           <div id="connection-notice" class="connection-notice" role="status" hidden><span id="connection-notice-text"></span><div class="connection-notice-actions"><button id="connection-install" class="secondary-action" type="button" hidden>How to install ↗</button><button id="connection-action" type="button">Connect account</button></div></div>
           <div id="folder-ask" class="folder-ask" role="group" aria-labelledby="folder-ask-text" hidden><span id="folder-ask-text"></span><div id="folder-ask-choices" class="folder-ask-choices"></div></div>
           <section id="run-plan" class="run-plan" aria-label="The task plan" hidden><button id="run-plan-toggle" class="run-plan-summary" type="button" aria-expanded="false" aria-controls="run-plan-list"><span id="run-plan-ring" class="run-plan-ring" aria-hidden="true"></span><span id="run-plan-label" class="run-plan-label">Task plan</span><span id="run-plan-count" class="run-plan-count"></span><span id="run-plan-current" class="run-plan-current" aria-live="polite"></span><span id="run-plan-from" class="run-plan-from" hidden></span><svg class="icon run-plan-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><ol id="run-plan-list" class="run-plan-list" hidden></ol></section>
@@ -218,7 +219,14 @@
             <div id="attachment-list" class="attachment-list" aria-label="Message attachments" hidden></div>
             <p id="attachment-status" class="attachment-status" role="status" aria-live="polite" hidden></p>
             <input id="attachment-input" type="file" multiple hidden accept="image/png,image/jpeg,image/gif,image/webp,text/*,.md,.json,.js,.jsx,.ts,.tsx,.py,.html,.css,.scss,.csv,.yaml,.yml,.toml,.xml,.sh,.sql,.rs,.go,.java,.c,.cpp,.h,.swift,.rb,.vue,.svelte,.log" />
-            <label class="sr-only" for="message-input">Message the selected assistant</label><textarea id="message-input" name="message" rows="3" placeholder="Describe a task…" autocomplete="off" spellcheck="true" aria-describedby="composer-hint"></textarea>
+            <div class="composer-input">
+              <label class="sr-only" for="message-input">Message the selected assistant</label><textarea id="message-input" name="message" rows="3" placeholder="Describe a task…" autocomplete="off" spellcheck="true" aria-describedby="composer-hint"></textarea>
+              <button id="compact-context" class="context-compact" type="button" aria-label="Compact context" aria-haspopup="dialog" aria-controls="compact-confirmation" title="Compact context — review what will happen" disabled>
+                <span id="context-meter" class="context-meter" role="img" aria-label="Context reading unavailable">
+                  <svg viewBox="0 0 36 36" aria-hidden="true"><circle class="context-meter-track" cx="18" cy="18" r="15"/><circle class="context-meter-fill" cx="18" cy="18" r="15" pathLength="100"/></svg>
+                </span>
+              </button>
+            </div>
             <div class="composer-toolbar">
               <div class="composer-controls">
                 <button id="attach-files" class="attach-files" type="button" title="Attach images or text files · also paste or drop files" aria-label="Attach images or text files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 15l8-8"/></svg><span>Attach</span></button>
@@ -376,6 +384,14 @@
         </div>
       </footer>
     </div>
+
+    <dialog id="compact-confirmation" class="context-confirm" aria-labelledby="compact-confirm-title" aria-describedby="compact-confirm-description compact-confirm-note">
+      <h2 id="compact-confirm-title">Compact context?</h2>
+      <p id="compact-confirm-description"></p>
+      <ul><li>Your chat history and draft stay saved.</li><li>Older conversation details may be left out of the agent’s active context.</li></ul>
+      <p id="compact-confirm-note" class="context-confirm-note">No model summary runs now. The refresh takes effect when this agent next receives a message.</p>
+      <footer><button id="compact-cancel" class="secondary-button" type="button">Cancel</button><button id="compact-confirm" class="primary-button" type="button">Refresh on next send</button></footer>
+    </dialog>
 
     <dialog id="flow-detail" class="flow-detail" aria-labelledby="flow-detail-title" aria-describedby="flow-detail-description">
       <header class="flow-detail-head"><div><span class="flow-detail-eyebrow">Flow / Details</span><h2 id="flow-detail-title">Details</h2><p id="flow-detail-description"></p></div><button id="flow-detail-close" class="secondary-button" type="button">Back to Flow <span aria-hidden="true">×</span></button></header>

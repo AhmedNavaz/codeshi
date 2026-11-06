@@ -172,7 +172,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
       }
 
       if(request.path==='/api/conversation/export'){const redacted=request.params.redact!=='0';return response({package:{schema:'ai-relay.conversation',version:1,id:'export-one',workspace:{name:selected.name,folders:['frontend']},messages:clone(ensureChat(selected).messages).map(message=>({id:message.id,role:message.role,text:message.text})),digest:'exported'},stats:{messages:ensureChat(selected).messages.length,omitted:0,bytes:420,from:null,to:null,providers:[]},findings:{secrets:1,localPaths:0},redacted});}
-      if(request.path==='/api/status')return response({workspace:selected.path,projectId:selected.id,project:clone(selected),providers:{codex:providerStatus('codex'),claude:providerStatus('claude'),gemini:providerStatus('gemini')},runningConversationId:canonical.get(selected.id)?.status==='running'?canonical.get(selected.id).id:null});
+      if(request.path==='/api/status')return response({verificationCadence:preferences.verificationCadence || 'as-needed',workspace:selected.path,projectId:selected.id,project:clone(selected),providers:{codex:providerStatus('codex'),claude:providerStatus('claude'),gemini:providerStatus('gemini')},runningConversationId:canonical.get(selected.id)?.status==='running'?canonical.get(selected.id).id:null});
       if(request.path==='/api/conversation')return response(clone(ensureChat(selected)));
       if(request.path==='/api/collaboration/handoffs/prepare'){const body=request.body;const outgoing=body.draft?sealPackage(body.draft):sealPackage({schema:'ai-relay.handoff',version:1,id:randomUUID(),createdAt:'2026-10-20T00:00:00.000Z',mode:body.mode||'context',goal:body.goal||'',problem:body.problem||'',expectedOutcome:body.expectedOutcome||'',decisions:body.decisions||[],tasks:body.tasks||[],messages:[],files:[],baseline:[]});return response({package:outgoing,warnings:[]});}
       if(request.path==='/api/collaboration/handoffs/approve'){const record={id:request.body.package.id,package:request.body.package,direction:'outgoing',status:'approved'};handoffs.push(record);return response(clone(record));}
@@ -1925,7 +1925,7 @@ test('the Brief panel says what the next agent gets, opens the full brief, and k
   ui.$('brief-view').click(); await flush();
   assert.equal(ui.$('brief-dialog').open, true);
   const titles = ui.$('brief-dialog-body').querySelectorAll('.brief-block-title').map(item => item.textContent);
-  assert.deepEqual(titles, ['Folders in scope', 'Repository instructions', 'Memory', 'Skills', 'Changed so far', 'Went wrong before', 'The plan so far']);
+  assert.deepEqual(titles, ['Folders in scope', 'Repository instructions', 'Current file evidence', 'Changed since the last run', 'Memory', 'Skills', 'Changed so far', 'Went wrong before', 'The plan so far']);
   assert.match(ui.$('brief-dialog-body').textContent, /npm test.*exit 1 · 2×/);
   ui.$('brief-dialog-close').click();
   assert.equal(ui.$('memory-empty').hidden, true);
@@ -2684,9 +2684,175 @@ test('run details expose fresh versus resumed context and actual handoff omissio
   chat.status='running';chat.activeRun={id:'handoff-fixture',provider:'claude',phase:'starting',startedAt:new Date().toISOString(),context:{sessionMode:'fresh',sessionReason:'cross-agent-handoff',includedMessages:20,omittedMessages:480,shortenedMessages:9,compactedActivityMessages:8}};
   await ui.window.relayUI.refresh();
   assert.match(ui.$('run-metrics').textContent,/Fresh session · shared history/);assert.match(ui.$('run-metrics').textContent,/Cross-agent handoff/);
-  assert.match(ui.$('run-metrics').textContent,/20 history messages included · 480 omitted/);assert.match(ui.$('run-metrics').textContent,/8 tool logs compacted/);
+  assert.match(ui.$('run-metrics').textContent,/20 history messages included · 480 omitted/);assert.match(ui.$('run-metrics').textContent,/8 tool logs excerpted by Codeshi/);
   chat.activeRun.context={sessionMode:'resumed',sessionReason:'same-agent-continuation',includedMessages:0,omittedMessages:0};await ui.window.relayUI.refresh();
-  assert.match(ui.$('run-metrics').textContent,/Resumed native session/);assert.doesNotMatch(ui.$('run-metrics').textContent,/Cross-agent handoff|tool logs compacted/);
+  assert.match(ui.$('run-metrics').textContent,/Resumed native session/);assert.doesNotMatch(ui.$('run-metrics').textContent,/Cross-agent handoff|tool logs excerpted/);
+});
+
+test('run context readings distinguish consumption, envelope estimates and persistent native compactions', async () => {
+  const ui = await browser({ insights: true }), c = ui.canonical.get('project-one');
+  c.lastRun = { id: 'context-fixture', provider: 'codex', status: 'complete', startedAt: new Date().toISOString(), endedAt: new Date().toISOString(),
+    usageMeasured: { input: 200, output: 20, cacheRead: 100, cacheWrite: null, sessionTotal: { input: 900000, output: 20000, cacheRead: 800000 } },
+    contextUsage: { used: null, capacity: 200000, lastRequestInput: 12000, observedAt: '2026-11-07T00:00:00Z' },
+    compactions: 2, compactionEvents: [{ observedAt: '2026-11-07T00:00:00Z' }], context: { sessionMode: 'resumed', restoredAfterCompaction: true, size: { estimatedTokens: 1500 } } };
+  await ui.window.relayUI.refresh();
+  const text = ui.$('run-metrics').textContent;
+  assert.match(text, /This run: 200 fresh input/);
+  assert.match(text, /Session total: 900,000/);
+  assert.match(text, /Native context usage: not reported/);
+  assert.match(text, /Last model request: 12,000 input tokens/);
+  assert.match(text, /Native compactions: 2 observed/);
+  assert.match(text, /Text envelope: ≈1,500 tokens \(byte estimate\)/);
+  assert.match(text, /Task context restored after native compaction/);
+  assert.doesNotMatch(text, /900,000 \/ 200,000|450%/);
+});
+
+test('Compact context and /compact preserve the draft and never submit model work', async () => {
+  const ui = await browser(), c = ui.canonical.get('project-one');
+  ui.setIntercept((request, next) => {
+    if (/\/compact$/.test(request.path)) { c.messages.push({ id: 'compact-fixture', role: 'system', text: 'Context refresh scheduled for your next send.', contextMilestone: true }); return response(c); }
+    return next();
+  });
+  ui.$('message-input').value = 'Keep this draft';
+  ui.$('compact-context').click(); await flush();
+  assert.equal(ui.$('compact-confirmation').open, true);
+  assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false, 'Opening the explanation starts no work.');
+  assert.match(ui.$('compact-confirm-description').textContent, /next message sent to Codex.*fresh session.*task brief/);
+  assert.equal(ui.document.activeElement, ui.$('compact-cancel'));
+  ui.$('compact-confirm').click(); await flush();
+  assert.equal(ui.$('compact-confirmation').open, false);
+  assert.equal(ui.$('message-input').value, 'Keep this draft');
+  assert(ui.requests.some(request => /\/compact$/.test(request.path)));
+  assert.equal(ui.requests.some(request => /\/(messages|continue|queue|steer)$/.test(request.path)), false);
+  ui.$('message-input').value = '/compact'; ui.fire('message-input', 'input'); ui.$('composer').dispatchEvent(new UIEvent('submit')); await flush();
+  assert.equal(ui.$('message-input').value, '/compact');
+  assert.equal(ui.requests.filter(request => /\/compact$/.test(request.path)).length, 1);
+  ui.$('compact-confirm').click(); await flush();
+  assert.equal(ui.$('message-input').value, '');
+  assert.equal(ui.requests.filter(request => /\/compact$/.test(request.path)).length, 2);
+  c.status = 'running'; c.canAddToRun = true; c.activeRun = { id: 'working', provider: 'codex', startedAt: new Date().toISOString() };
+  await ui.window.relayUI.refresh();
+  ui.$('message-input').value = '/compact'; ui.fire('message-input', 'input'); ui.$('queue-button').click(); await flush();
+  ui.$('steer-button').click(); await flush();
+  assert.equal(ui.requests.some(request => /\/(queue|steer)$/.test(request.path)), false);
+  assert.equal(ui.$('message-input').value, '/compact');
+});
+
+test('the typing box exposes compact context and explains automatic upgrades without inventing occupancy', async () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<div class="composer-input">\s*<label[^>]*for="message-input"[\s\S]*?<textarea[^>]*id="message-input"[\s\S]*?<button[^>]*id="compact-context"[^>]*aria-label="Compact context"/);
+  assert.equal([...html.matchAll(/id="compact-context"/g)].length, 1);
+  assert.doesNotMatch(html, /context-meter-value/, 'The small ring has no visible percentage or status glyph.');
+  const ui = await browser({ flowUI: true, layoutUI: true }), c = ui.canonical.get('project-one');
+  c.contextControl = { legacy: true, near: false, used: null, thresholdTokens: 75000, rollover: true };
+  for (const flow of [false, true]) {
+    if (flow) ui.window.relayFlow.enter();
+    await ui.window.relayUI.refresh(); await flush();
+    assert.equal(ui.$('compact-context').hidden, false);
+    assert.equal(ui.$('compact-context').disabled, false);
+    assert.equal(ui.$('compact-context').dataset.refreshDue, 'true');
+    assert.equal(ui.$('context-limit-notice').hidden, false);
+    assert.match(ui.$('context-limit-notice').textContent, /older agent session will refresh automatically.*chat history stays intact/);
+    assert.doesNotMatch(ui.$('context-limit-notice').textContent, /null|tokens|2,000,000/);
+  }
+});
+
+test('the compact ring shows progress to the refresh target, updates live, and resets with a new signal', async () => {
+  const ui = await browser(), c = ui.canonical.get('project-one');
+  c.contextControl = { used: 37500, thresholdTokens: 75000, estimated: true };
+  await ui.window.relayUI.refresh();
+  const button = ui.$('compact-context'), meter = ui.$('context-meter');
+  assert.equal(meter.style['--context-progress'], '50');
+  assert.equal(meter.getAttribute('role'), 'meter');
+  assert.equal(meter.getAttribute('aria-valuenow'), '50');
+  assert.match(button.title, /Estimated context signal: 37,500 of 75,000 tokens.*50% left \(37,500 tokens\)/);
+  ui.$('message-input').value = 'Keep this draft';
+  c.status = 'running'; c.activeRun = { id: 'meter-run', provider: 'codex', startedAt: new Date().toISOString() };
+  c.contextControl.used = 71250;
+  await ui.window.relayUI.refresh();
+  assert.equal(button.dataset.nearLimit, 'true');
+  assert.equal(button.disabled, true, 'The live meter remains visible while manual compact is unavailable.');
+  assert.equal(ui.$('message-input').value, 'Keep this draft');
+  c.status = 'complete'; c.activeRun = null;
+  c.contextControl = { used: 90000, thresholdTokens: 75000, rollover: true };
+  await ui.window.relayUI.refresh();
+  assert.equal(meter.getAttribute('aria-valuenow'), '100');
+  assert.match(button.title, /0% left \(0 tokens\).*next send refreshes agent memory/);
+  c.contextControl = { used: 1000, thresholdTokens: 75000, estimated: true };
+  await ui.window.relayUI.refresh();
+  assert.equal(meter.getAttribute('aria-valuenow'), '1');
+  assert.equal(button.dataset.refreshDue, 'false');
+  assert.equal(button.dataset.nearLimit, 'false');
+});
+
+test('the compact ring distinguishes unavailable readings, disabled automation and a prepared refresh', async () => {
+  const ui = await browser(), c = ui.canonical.get('project-one');
+  const button = ui.$('compact-context'), meter = ui.$('context-meter');
+  for (const context of [{ used: null, thresholdTokens: 75000 }, { used: -1, thresholdTokens: 75000 }]) {
+    c.contextControl = context; await ui.window.relayUI.refresh();
+    assert.equal(button.dataset.meterState, 'unknown');
+    assert.equal(meter.getAttribute('role'), 'img');
+    assert.equal(meter.getAttribute('aria-valuenow'), null);
+    assert.match(button.title, /Context reading unavailable.*75,000 tokens/);
+  }
+  c.contextControl = { used: 90000, thresholdTokens: null };
+  await ui.window.relayUI.refresh();
+  assert.match(button.title, /Automatic context refresh is off/);
+  c.contextControl = { used: 90000, thresholdTokens: 75000, pending: true, rollover: true };
+  await ui.window.relayUI.refresh();
+  assert.equal(button.dataset.meterState, 'ready');
+  assert.equal(meter.getAttribute('aria-valuenow'), null, 'Prepared refreshes do not display a stale occupancy percentage.');
+  assert.match(button.title, /Refresh scheduled.*next message to this agent starts a fresh session/);
+  c.provider = 'gemini'; c.contextControl = { used: 5000, thresholdTokens: 75000 };
+  await ui.window.relayUI.refresh();
+  assert.equal(button.dataset.meterState, 'fresh');
+  assert.match(button.title, /fresh session each turn/);
+});
+
+test('compact confirmation can be cancelled and refuses a changed chat or a newly busy agent', async () => {
+  const ui = await browser(), c = ui.canonical.get('project-one');
+  ui.$('message-input').value = '/compact'; ui.fire('composer', 'submit'); await flush();
+  ui.$('compact-cancel').click(); await flush();
+  assert.equal(ui.$('message-input').value, '/compact');
+  assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false);
+  ui.$('compact-context').click(); await flush();
+  ui.state().provider = 'claude';
+  ui.$('compact-confirm').click(); await flush();
+  assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false);
+  assert.match(ui.$('notice-text').textContent, /chat or agent changed/);
+  ui.state().provider = 'codex';
+  ui.$('compact-context').click(); await flush();
+  c.status = 'running'; c.activeRun = { id: 'started-elsewhere', provider: 'codex', startedAt: new Date().toISOString() };
+  await ui.window.relayUI.refresh();
+  ui.$('compact-confirm').click(); await flush();
+  assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false);
+  assert.match(ui.$('notice-text').textContent, /Finish or stop/);
+});
+
+test('a failed confirmed refresh preserves the draft and reports the error', async () => {
+  const ui = await browser();
+  ui.setIntercept((request, next) => /\/compact$/.test(request.path) ? response({ error: 'The journal could not be saved.' }, 503) : next());
+  ui.$('message-input').value = '/compact'; ui.fire('composer', 'submit'); await flush();
+  ui.$('compact-confirm').click(); await flush();
+  assert.equal(ui.$('message-input').value, '/compact');
+  assert.match(ui.$('notice-text').textContent, /journal could not be saved/);
+  assert.equal(ui.$('compact-context').disabled, false);
+});
+
+test('Normal context settings save custom limits and the near-limit indicator labels estimates', async () => {
+  const ui = await browser({ workbench: true }), c = ui.canonical.get('project-one');
+  await ui.window.relaySettings.open('general'); await flush();
+  const limit = ui.$('settings-context-limit');
+  assert.equal(limit.value, 'auto');
+  limit.value = 'custom'; limit.dispatchEvent(new UIEvent('change'));
+  const custom = ui.$('settings-context-custom'); custom.value = '64000'; custom.dispatchEvent(new UIEvent('change')); await flush();
+  assert(ui.requests.some(request => request.path === '/api/preferences' && request.body?.contextLimit === 64000));
+  assert.equal(ui.requests.some(request => /\/(messages|continue)$/.test(request.path)), false);
+  ui.window.relaySettings.close();
+  c.contextControl = { near: true, used: 65000, thresholdTokens: 64000, estimated: true, rollover: true };
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('context-limit-notice').hidden, false);
+  assert.match(ui.$('context-limit-notice').textContent, /Estimated context signal: 65,000 tokens.*next message starts a fresh session/);
 });
 
 test('after a usage limit the task can wait for a reset without raising access, shows the wait and can cancel it', async () => {
@@ -4342,6 +4508,16 @@ test('Accounts connects through the provider flow, preserves a draft and shows f
 const flowBrowser = options => browser({ insights: true, agentsUI: true, layoutUI: true, rewindUI: true, flowUI: true, modelPickerUI: true, ...options });
 const flowText = (ui, id) => ui.$(`flow-card-${id}`).textContent.replace(/\s+/g, ' ');
 
+test('Flow retains observed native compaction counts after the run completes', async () => {
+  const ui = await flowBrowser(), c = ui.canonical.get('project-one');
+  ui.window.relayFlow.enter(); await flush();
+  c.lastRun = { id: 'compacted', provider: 'claude', status: 'complete', compactions: 2,
+    contextUsage: { used: 8000, capacity: 200000, estimated: true, observedAt: '2026-11-07T00:00:00Z' } };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(ui.$('flow-status-text').textContent, /Done · ≈8,000 context tokens · context organized 2×/);
+  assert.match(ui.$('flow-status').title, /2 native compaction notifications/);
+});
+
 test('Flow mode shows only the chat and its cards, and leaving brings the layout back as it was', async () => {
   const ui = await flowBrowser({ desktop: true, desktopControls: true }), shell = ui.$('app-shell');
   ui.window.relayAgents.open(); await flush();
@@ -4413,7 +4589,7 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').map(request => request.body.target), [{ kind: 'run', id: 'run-1' }]);
 });
 
-test('Flow turns routing on as it opens, offers three modes with no manual one, says what a change would do first, and turns routing off on leaving', async () => {
+test('Flow turns routing on, keeps mode changes in Agent settings, and turns routing off on leaving', async () => {
   const ui = await flowBrowser(), chat = ui.canonical.get('project-one');
   ui.setIntercept((request, next) => { if (request.path.endsWith('/routing')) { chat.routing = request.body.mode ? { mode: request.body.mode, allowApi: request.body.allowApi, check: request.body.check } : null; return response(clone(chat)); } return next(); });
   await ui.window.relayUI.refreshAccounts(); await flush();
@@ -4421,27 +4597,19 @@ test('Flow turns routing on as it opens, offers three modes with no manual one, 
   ui.window.relayFlow.enter(); await flush();
   assert.deepEqual(chat.routing, { mode: 'balanced', allowApi: false, check: false }, 'Entering Flow turns routing on, Balanced at first.');
   assert.match(flowText(ui, 'working'), /Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit\..*Next message\s*Type a message to see who would take it\./);
-  const card = ui.$('flow-card-working'), radio = mode => card.querySelectorAll('[role="radio"]').find(item => item.dataset.mode === mode);
-  assert.deepEqual(card.querySelectorAll('[role="radio"]').map(item => item.dataset.mode), ['saving', 'balanced', 'quality'], 'No manual mode in Flow.');
-  assert.equal(radio('balanced').getAttribute('aria-checked'), 'true');
+  const card = ui.$('flow-card-working');
+  assert.equal(card.querySelector('.flow-change'), null);
+  assert.equal(card.querySelectorAll('[role="radio"]').length, 0, 'Routing controls live in Agent settings.');
+  assert.doesNotMatch(card.textContent, /Change how it works|Change…/);
   ui.$('message-input').value = 'Rename the variable in app.js'; ui.fire('message-input', 'input'); await flush();
   assert.match(flowText(ui, 'working'), /Next message\s*It would go to (Codex|Claude), /);
-  radio('saving').click(); await flush();
-  const confirm = card.querySelector('.flow-confirm'); assert(confirm, 'Choosing asks first.');
-  const asked = confirm.textContent.replace(/\s+/g, ' ');
-  assert.match(asked, /^Switch to Cost saving\?/); assert.match(asked, /Your draft would go to (Codex|Claude), /); assert.match(asked, /Access and permissions stay as they are, and agents billed by use stay off\./);
-  assert.equal(ui.requests.filter(request => request.path.endsWith('/routing')).length, 1, 'Nothing changes before Switch.');
-  assert.equal(ui.document.activeElement, confirm.querySelector('.flow-apply'), 'Focus moves to the confirmation.');
-  ui.findButton('Keep Balanced').click(); await flush();
-  assert.equal(card.querySelector('.flow-confirm'), null); assert.equal(chat.routing.mode, 'balanced');
-  radio('quality').click(); await flush(); ui.findButton('Switch to Maximum quality').click(); await flush();
-  assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Only the mode changes; API billing and Check with tests stay as they were.');
-  assert.equal(radio('quality').getAttribute('aria-checked'), 'true'); assert.equal(card.querySelector('.flow-confirm'), null);
-  assert.match(flowText(ui, 'working'), /Routing\s*Maximum quality\s*Codeshi favors stronger models and deeper reasoning, and holds on until 95% of a limit/);
-  // The Agents sheet shows Routing in Flow, without Manual, and no Handoff settings, since handoff follows the mode; the normal view hides Routing and says why.
-  ui.$('flow-card-working').querySelectorAll('button').find(button => button.textContent === 'Agent settings').click(); await flush();
+  ui.findButton('Agent settings').click(); await flush();
   assert.equal(ui.$('agents-routing').hidden, false); assert.equal(ui.$('agents-routing-note').hidden, true); assert.equal(ui.$('agents-handoff').hidden, true);
   assert.deepEqual(ui.$('routing-options').querySelectorAll('.routing-option').map(row => row.dataset.mode), ['saving', 'balanced', 'quality']);
+  const quality = ui.$('routing-options').querySelectorAll('.routing-option').find(row => row.dataset.mode === 'quality');
+  quality.click(); await flush();
+  assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Agent settings change the mode without changing billing or tests.');
+  assert.match(flowText(ui, 'working'), /Routing\s*Maximum quality\s*Codeshi favors stronger models and deeper reasoning, and holds on until 95% of a limit/);
   ui.$('flow-detail-close').click(); await flush();
   ui.window.relayUI.commands.agent('codex'); await flush();
   assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Choosing an agent by hand is not Flow’s way: routing stays.');
@@ -4795,9 +4963,50 @@ test('Flow explains Review first and deferred automatic tests without treating t
   ui.state().status.verificationCadence = 'review-first';
   ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
   assert.match(flowText(ui, 'working'), /Routine automatic tests wait while you review/);
-  assert.match(flowText(ui, 'working'), /small safeguards now; verify when you ask to finalize/);
+  assert.match(flowText(ui, 'working'), /Small safeguards now; verify when you ask to finalize/);
   chat.messages.push({ id: 'deferred-check', role: 'activity', provider: 'codex', text: 'Tests deferred: npm test\nNo Codeshi-managed test result is available.', status: 'complete' });
   await ui.window.relayUI.refresh(); await flush();
   assert.match(ui.$('messages').textContent, /Automatic tests deferred/);
   assert.doesNotMatch(ui.$('messages').textContent, /Tests passed/);
+});
+
+
+test('Flow toggles Review first inline, persists it across views and recovers from a failed save', async () => {
+  const ui = await flowBrowser({ workbench: true });
+  ui.window.relayFlow.enter(); await flush();
+  const toggle = ui.$('flow-testing-toggle');
+  assert.equal(toggle.getAttribute('role'), 'switch');
+  assert.equal(toggle.getAttribute('aria-checked'), 'false');
+  const saved = deferred(); let fail = false;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/preferences' && request.method === 'POST') {
+      if (fail) return response({ error: 'Disk unavailable' }, 503);
+      const result = next(); return saved.promise.then(() => result);
+    }
+    return next();
+  });
+  toggle.click(); await flush();
+  assert.equal(toggle.disabled, true);
+  toggle.click(); await flush();
+  assert.equal(ui.requests.filter(request => request.path === '/api/preferences' && request.method === 'POST').length, 1);
+  saved.resolve(); await flush();
+  assert.equal(toggle.disabled, false);
+  assert.equal(toggle.getAttribute('aria-checked'), 'true');
+  assert.match(flowText(ui, 'working'), /Small safeguards now; verify when you ask to finalize/);
+  assert.equal(ui.$('settings').open, false, 'No Settings dialog is needed.');
+  ui.$('message-input').value = 'Keep my draft'; ui.fire('message-input', 'input'); await flush();
+  assert.equal(ui.$('flow-testing-toggle'), toggle, 'Draft previews keep the switch in place.');
+  ui.window.relayFlow.leave(); await flush();
+  await ui.window.relaySettings.open('general'); await flush();
+  assert.equal(ui.$('settings-testing-cadence').value, 'review-first');
+  ui.window.relaySettings.close();
+  ui.window.relayFlow.enter(); await flush();
+  fail = true; toggle.click(); await flush();
+  assert.equal(toggle.getAttribute('aria-checked'), 'true');
+  assert.equal(toggle.disabled, false);
+  assert.match(ui.$('notice-text').textContent, /Testing preference could not be saved.*Disk unavailable/);
+  fail = false; toggle.click(); await flush();
+  assert.equal(toggle.getAttribute('aria-checked'), 'false');
+  assert.equal(ui.$('message-input').value, 'Keep my draft');
+  assert.equal(ui.requests.some(request => request.method === 'POST' && /\/(messages|continue)$/.test(request.path)), false);
 });

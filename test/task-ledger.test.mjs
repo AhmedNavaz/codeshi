@@ -6,6 +6,7 @@ import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest } from '../src/context.mjs';
 import { runClaude } from '../src/providers.mjs';
+import { applyBudgetRecord } from '../src/task-budget.mjs';
 import { ledgerFromRecords, normalizeUsage, readLedger, sumUsage, taskIdentity } from '../src/task-ledger.mjs';
 
 const at = minute => `2026-11-05T10:${String(minute).padStart(2, '0')}:00.000Z`;
@@ -72,6 +73,77 @@ test('totals never turn unknown into zero, and say how many runs they cover', ()
   const partial = sumUsage([normalizeUsage('claude', { input_tokens: 5, output_tokens: 1 }), null]);
   assert.equal(partial.input, 5);
   assert.deepEqual([partial.reportedBy.input, partial.runs, partial.runsWithTokens], [1, 2, 1]);
+});
+
+test('missing cache counters, missing baselines and counter resets never invent fresh or negative tokens', () => {
+  const missing = normalizeUsage('codex', { total: { inputTokens: 100, outputTokens: 10 } });
+  assert.equal(missing.input, null);
+  assert.equal(missing.cacheRead, null);
+  const next = normalizeUsage('codex', { total: { inputTokens: 200, cachedInputTokens: 40, outputTokens: 20 } }, { previous: missing.sessionTotal });
+  assert.equal(next.input, null);
+  assert.equal(next.cacheRead, null);
+  assert.equal(next.output, 10);
+  const reset = normalizeUsage('codex', { total: { inputTokens: 20, cachedInputTokens: 0, outputTokens: 1 } }, { previous: next.sessionTotal });
+  assert.equal(reset.input, null);
+  assert.equal(reset.output, null);
+  assert.deepEqual(reset.raw.total, { inputTokens: 20, cachedInputTokens: 0, outputTokens: 1 });
+});
+
+test('Claude pipeline totals include auxiliary models once, with per-run deltas and API estimates across resumes', () => {
+  const model = (input, output, cost, thinking = 2) => ({ inputTokens: input, outputTokens: output, cacheReadInputTokens: 20, cacheCreationInputTokens: 5, thinkingTokens: thinking, costUSD: cost });
+  const first = { input_tokens: 1, output_tokens: 1, modelUsage: { builder: model(100, 10, 0.1), helper: model(200, 20, 0.2) } };
+  const second = { input_tokens: 2, output_tokens: 2, modelUsage: { builder: model(150, 15, 0.15), helper: model(250, 25, 0.25), reviewer: model(40, 4, 0.04) } };
+  const records = [
+    submission('first', 0), metadata(1, { usage: first, account: { billingSource: 'api' }, costUSD: 0.3 }), end(1),
+    submission('next', 2, { context: { sessionMode: 'resumed' }, task: { id: 'first', parentRunId: 'first', relation: 'continuation' } }), metadata(3, { usage: second, account: { billingSource: 'api' }, costUSD: 0.44 }), end(3),
+  ];
+  const { runs, tasks } = ledgerFromRecords(records);
+  assert.deepEqual(runs.map(run => run.usage.input), [300, 140]);
+  assert.equal(tasks[0].usage.input, 440, 'Main-loop usage is not added to the broader pipeline total.');
+  assert.equal(runs[0].usage.source, 'claude-model-usage-total');
+  assert.equal(runs[0].usage.coverage.scope, 'query-pipeline');
+  assert.equal(runs[1].usage.raw.modelUsage.reviewer.inputTokens, 40);
+  assert(Math.abs(runs[1].costEstimateUSD - 0.14) < 1e-10, 'Cumulative dollar estimates are differenced as well.');
+  assert.equal(runs[1].costBasis, 'api-estimate');
+  const c = {};
+  for (const record of records) applyBudgetRecord(c, record);
+  assert.equal(c.taskBudgets.first.tokens.input, tasks[0].usage.input, 'The shared budget uses the same pipeline deltas as the ledger.');
+  assert(Math.abs(c.taskBudgets.first.spendUSD - 0.44) < 1e-10);
+  const unreported = normalizeUsage('claude', { modelUsage: { builder: model(100, 10, 0.1), old: { inputTokens: 20, outputTokens: 2 } } });
+  assert.equal(unreported.reasoning, null);
+  assert.equal(unreported.cacheRead, null);
+  assert.equal(unreported.coverage.reportedBy.reasoning, 1);
+  const missingBaseline = ledgerFromRecords([submission('resumed', 0, { context: { sessionMode: 'resumed' } }), metadata(1, { usage: second }), end(1)]);
+  assert.equal(missingBaseline.runs[0].usage.input, null, 'An unobserved earlier session cannot be attributed to this run.');
+});
+
+test('a stopped Claude follow-up retains prior pipeline work and adds only new partial messages', async () => {
+  const seen = [], base = { builder: { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 20, cacheCreationInputTokens: 5, thinkingTokens: 2, costUSD: 0.1 } };
+  async function* queryImpl() {
+    yield { type: 'result', subtype: 'success', usage: { input_tokens: 100, output_tokens: 10 }, modelUsage: base };
+    yield { type: 'assistant', message: { id: 'follow-up', content: [], usage: { input_tokens: 30, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } };
+    yield { type: 'assistant', message: { id: 'follow-up', content: [], usage: { input_tokens: 30, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } };
+  }
+  await runClaude({ workspace: '/project', prompt: 'Go', mode: 'edit', bin: '/x' }, { queryImpl, event() {}, metadata: value => seen.push(value), approval: async () => false });
+  const partial = normalizeUsage('claude', seen.filter(value => value.usage).at(-1).usage);
+  assert.deepEqual([partial.input, partial.output, partial.cacheRead, partial.partial], [130, 14, 20, true]);
+  assert.equal(partial.costEstimateUSD, null);
+  assert.equal(partial.reasoning, null, 'The partial messages did not report thinking separately.');
+  assert.equal(partial.sessionTotal.input, null, 'A partial lower bound cannot be used as a precise baseline for a resumed run.');
+});
+
+test('review accounting survives worker deletion and keeps final model, tools and elapsed time', () => {
+  const { runs, tasks } = ledgerFromRecords([submission('build', 0), end(1),
+    { type: 'background_review', at: at(2), taskId: 'build', parentRunId: 'build', review: { id: 'rev', provider: 'codex', model: 'alias' } },
+    { type: 'review_result', id: 'rev', at: at(4), result: { status: 'complete', effectiveModel: 'actual-model', elapsedMs: 500,
+      accounting: { effort: 'high', tools: { commands: 2, edits: 0, other: 1 }, approvals: { allowed: 0, denied: 1, automatic: 0, byRule: 0 }, interventions: 1, compactions: 1 } } }]);
+  assert.equal(runs[1].effectiveModel, 'actual-model');
+  assert.equal(runs[1].effort, 'high');
+  assert.equal(runs[1].elapsedMs, 500);
+  assert.equal(tasks[0].agents.codex.commands, 2);
+  assert.equal(tasks[0].interventions, 1);
+  assert.equal(tasks[0].endedAt, at(4));
+  assert.equal(tasks[0].usage.runsWithTokens, 0);
 });
 
 test('a task follows its handoff, retry and review, and its totals leave out the wait for a reset', () => {

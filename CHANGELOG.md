@@ -4,6 +4,23 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-07
+
+### Added
+
+- **Automatic context refresh** (#123). Keep the same workspace chat while Codeshi starts a fresh native agent session between turns when its context signal reaches the selected target. Normal defaults to Auto, with Off, presets and custom limits in Settings; Flow follows its Cost saving, Balanced or Maximum quality target. Older Claude and Codex sessions without a usable reading refresh once before their next send. Explicit Off choices remain respected.
+- **Compact context in the message box.** A small, number-free ring shows progress toward the refresh target; hover for reported or estimated readings. Clicking it, or sending `/compact`, explains what will happen and asks for confirmation. Confirming schedules a refresh without calling a model. The next message to that agent starts a fresh session with a bounded task brief; the full chat and draft stay saved. Older details may be omitted from active context. This is a local fresh-session refresh, not a native model-generated summary or a cap on tool loops inside a running turn.
+- **Native compaction visibility and context recovery** (#85). Run details and Flow retain observed native compaction counts and available context snapshots. The next send after native compaction rebuilds bounded task context, governing instructions and current file evidence while keeping the native session. The Brief panel shows sources and invalidation notices; changed files, revisions and instructions are rechecked.
+- **Long-thread evaluation fixtures** (#84). Recorded traces compare resumed sessions, separate task briefs and repeated agent switches across successive tasks and folders. Reports separate context signals, consumption, cache fields and compactions. Offline checks cover retained facts and outcomes; live efficiency measurements remain budgeted, separate work, with no claim of proven token savings.
+
+### Changed
+
+- **Flow controls.** Review first can be switched directly in the working card. Routing changes stay in Agent settings, and card actions use rounded buttons with hover and keyboard-focus states.
+
+### Fixed
+
+- **Usage accounting across continued sessions.** Claude's reported pipeline totals use a resumed-session baseline instead of repeatedly counting cumulative usage as a new run. Reported auxiliary work, reasoning coverage and reviewer tool counts remain visible; unavailable fields stay unknown. Context readings and journal size estimates never become billing totals.
+
 ## [0.29.2] - 2026-11-06
 
 ### Fixed
@@ -569,3 +586,4 @@ First public release.
 [0.6.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.6.0
 [0.5.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.4.0
+[0.30.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.30.0

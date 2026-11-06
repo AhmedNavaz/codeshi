@@ -1020,6 +1020,7 @@
     } catch (error) { showNotice(error.message); await refresh(); }
   }
   async function queuePrompt() {
+    if (ui.input.value.trim() === '/compact') { showNotice('Finish or stop the current run or reset wait before compacting context.'); return; }
     const text = ui.input.value.trim(), attachments = window.relayFiles?.ids() || [], projectId = state.projectId, draft = ui.input.value;
     if (!text || state.pending || !state.conversation || $("queue-button").hidden) return;
     try { window.relayAutomaticReview?.submission({}, { queued: true }); }
@@ -1069,6 +1070,7 @@
   }
   // A note added to the working run (#32): the agent takes it into the same task instead of after it.
   async function addToRun() {
+    if (ui.input.value.trim() === '/compact') { showNotice('Finish or stop the current run before compacting context.'); return; }
     const text = ui.input.value.trim(), id = state.conversation?.id, projectId = state.projectId, draft = ui.input.value;
     if (!text || state.pending || !id || $("steer-button").hidden || $("steer-button").disabled) return;
     state.pending = "steer"; renderControls();
@@ -1245,6 +1247,41 @@
     finally { state.pending = null; renderControls(); }
   }
 
+  function renderContextMeter() {
+    const c = state.conversation, context = c?.contextControl, button = $('compact-context'), meter = $('context-meter');
+    const target = context?.thresholdTokens, used = context?.used;
+    const available = c && !state.taskDraft;
+    const provider = c?.activeRun?.provider || c?.provider || state.provider;
+    const local = c?.activeRun?.connection === 'local' || !isRunning() && state.localSelections[state.projectId];
+    const measured = available && Number.isFinite(used) && used >= 0 && Number.isFinite(target) && target > 0;
+    let kind = 'unknown', description = 'Context reading unavailable. A context signal is needed to show progress toward automatic refresh.', percent = null;
+    if (!available) description = 'Context reading unavailable until this chat has an agent session.';
+    else if (state.pending === 'compact') { kind = 'preparing'; description = 'Scheduling a context refresh for the next send.'; }
+    else if (context?.pending) { kind = 'ready'; description = 'Refresh scheduled. The next message to this agent starts a fresh session.'; }
+    else if (local || provider === 'gemini') { kind = 'fresh'; description = 'This agent starts a fresh session each turn.'; }
+    else if (context?.legacy) { description = 'This older agent session will refresh automatically on your next message. Context size is unavailable.'; }
+    else if (context && target === null) { kind = 'off'; description = 'Automatic context refresh is off. You can still compact manually.'; }
+    else if (measured) {
+      kind = 'known'; percent = Math.min(100, Math.floor(100 * used / target));
+      description = `${context.estimated ? 'Estimated context signal' : 'Reported context'}: ${used.toLocaleString()} of ${target.toLocaleString()} tokens. ${percent}% toward automatic refresh; ${100 - percent}% left (${Math.max(0, target - used).toLocaleString()} tokens).`;
+      if (context.rollover) description += ' The next send refreshes agent memory.';
+    } else if (Number.isFinite(target) && target > 0) description = `Context reading unavailable. Automatic refresh target: ${target.toLocaleString()} tokens.`;
+    button.dataset.meterState = kind;
+    button.dataset.refreshDue = String(Boolean(available && context?.rollover));
+    button.dataset.nearLimit = String(Boolean(measured && used >= target * .85 && kind === 'known'));
+    button.setAttribute('aria-busy', String(state.pending === 'compact'));
+    button.title = `Compact context — ${description} Chat history stays intact.${button.disabled ? ' Manual compact is available when the chat is idle.' : ' Click to review what will happen.'}`;
+    button.setAttribute('aria-label', `Compact context. ${description}`);
+    meter.style.setProperty('--context-progress', String(percent ?? 0));
+    meter.setAttribute('role', percent === null ? 'img' : 'meter');
+    meter.setAttribute('aria-label', percent === null ? description : 'Context toward automatic refresh');
+    for (const name of ['aria-valuemin', 'aria-valuemax', 'aria-valuenow', 'aria-valuetext']) meter.removeAttribute(name);
+    if (percent !== null) {
+      meter.setAttribute('aria-valuemin', '0'); meter.setAttribute('aria-valuemax', '100'); meter.setAttribute('aria-valuenow', String(percent));
+      meter.setAttribute('aria-valuetext', description);
+    }
+  }
+
   function renderControls() {
     const running = isRunning();
     const otherRunning = isOtherRunning();
@@ -1279,7 +1316,12 @@
     $("queue-button").hidden = !queueing;
     $("queue-button").disabled = !state.ready || busy || Boolean(state.localSelections[state.projectId]) || window.relayFiles?.uploading() || !ui.input.value.trim();
     ui.send.hidden = running;
-    ui.send.disabled = !state.ready || busy || otherRunning || (!state.localSelections[state.projectId] && selectedConnection.blocked) || window.relayFiles?.uploading() || (!ui.input.value.trim() && !window.relayFiles?.ids().length);
+    ui.send.disabled = !state.ready || busy || otherRunning || (ui.input.value.trim() !== '/compact' && !state.localSelections[state.projectId] && selectedConnection.blocked) || window.relayFiles?.uploading() || (!ui.input.value.trim() && !window.relayFiles?.ids().length);
+    $('compact-context').disabled = !state.ready || busy || state.settingsPending > 0 || running || otherRunning || !state.conversation || Boolean(state.taskDraft || state.conversation?.resume || state.conversation?.limitSwitching);
+    const context = state.conversation?.contextControl, notice = $('context-limit-notice');
+    renderContextMeter();
+    notice.hidden = running || !(context?.legacy || context?.near) || !context.thresholdTokens;
+    notice.textContent = context?.legacy ? 'This older agent session will refresh automatically on your next message. Your chat history stays intact.' : context?.near ? `${context.estimated ? 'Estimated context signal' : 'Reported context'}: ${context.used.toLocaleString()} tokens · limit ${context.thresholdTokens.toLocaleString()}. ${context.rollover ? 'The next message starts a fresh session with a memory brief.' : 'A fresh session will be used when the limit is reached.'}` : '';
     ui.send.firstElementChild.textContent = state.pending === "send" ? "Sending…" : "Send";
     ui.stop.hidden = !running;
     ui.stop.disabled = busy;
@@ -1489,9 +1531,51 @@
     });
   }
 
+  let compactIntent = null;
+  function canCompactContext() {
+    if (!state.conversation || !state.ready || state.pending || state.loading || state.projectSaving || state.settingsPending || state.taskDraft) return false;
+    if (isRunning() || isOtherRunning() || state.conversation.resume || state.conversation.limitSwitching) {
+      showNotice('Finish or stop the current run or reset wait before compacting context.'); return false;
+    }
+    return true;
+  }
+  const compactScopeMatches = intent => intent && sameProject(intent.projectId, intent.version) && state.conversation?.id === intent.id && state.provider === intent.provider && !state.taskDraft;
+  function compactCurrentContext({ command = false } = {}) {
+    if (!canCompactContext()) return false;
+    const dialog = $('compact-confirmation');
+    if (dialog.open) return false;
+    compactIntent = { projectId: state.projectId, version: state.projectVersion, id: state.conversation.id, provider: state.provider, command, draft: ui.input.value };
+    $('compact-confirm-description').textContent = `The next message sent to ${label(state.provider)} will start a fresh session with a short task brief built from your saved chat and current project files.`;
+    dialog.showModal(); $('compact-cancel').focus();
+    return true;
+  }
+  async function confirmCompactContext() {
+    const intent = compactIntent;
+    if (!compactScopeMatches(intent)) {
+      $('compact-confirmation').close(); showNotice('The chat or agent changed. Review compact context again before confirming.'); return;
+    }
+    if (!canCompactContext()) { $('compact-confirmation').close(); return; }
+    $('compact-confirmation').close();
+    state.pending = 'compact'; render();
+    try {
+      const result = await post(endpoint(intent.id, 'compact'), { provider: intent.provider }, intent.projectId);
+      if (compactScopeMatches(intent)) {
+        applyConversation(result, { adoptSettings: false });
+        if (intent.command && ui.input.value === intent.draft) { ui.input.value = ''; storedWrite(draftKey(), ''); resizeInput(); }
+        announce('Context refresh scheduled for your next send.');
+      }
+    } catch (error) { showNotice(error.message); }
+    finally { state.pending = null; render(); }
+  }
+
   async function run(continuing = false) {
     const attachments = continuing ? [] : window.relayFiles?.ids() || [];
     const text = ui.input.value.trim() || (attachments.length ? "Please review the attached files." : "");
+    if (!continuing && text === '/compact') {
+      if (attachments.length) { showNotice('Remove attachments before compacting context. Your draft stays saved.'); return; }
+      compactCurrentContext({ command: true });
+      return;
+    }
     if (window.relayFiles?.uploading()) return;
     if (state.pending || state.loading || state.projectSaving || isRunning() || isOtherRunning() || !state.ready || (!state.localSelections[state.projectId] && !(autoRouting() && !continuing) && connection(state.provider).blocked) || (!continuing && !text)) return;
     // Under Auto the message goes to the agent, model and effort shown before sending.
@@ -1842,7 +1926,7 @@
   // only. It never filters the sidebar. Enter runs the highlighted result, the first match at first, and Escape clears it.
   const commandActions = [
     { label: "Review changes…", id: "open-review" }, { label: "Ask a friend…", id: "ask-friend" },
-    { label: "Previous chats…", id: "open-import" }, { label: "Export conversation…", id: "open-export" },
+    { label: "Previous chats…", id: "open-import" }, { label: "Export conversation…", id: "open-export" }, { label: 'Compact context', id: 'compact-context' },
     { label: "Flow mode: just the chat, with plain-language cards", run: () => window.relayFlow?.toggle() },
     { label: "Agents: plan usage and handoff", run: () => window.relayAgents?.open() },
     { label: "Brief: memory and skills every agent gets", run: () => window.relayBrief?.open() },
@@ -1947,6 +2031,7 @@
     "add-folder": () => { if (covered()) return false; toggleFolderForm(true); return true; },
     agent: provider => ["codex", "claude", "gemini"].includes(provider) && press("select-" + provider)(),
     continue: () => !ui.continuation.hidden && press("continue-button")(),
+    'compact-context': press('compact-context'),
     "open-approval": async target => {
       if (!target || typeof target.projectId !== "string" || !state.projects.some(project => project.id === target.projectId)) return false;
       if (target.projectId !== state.projectId) await selectProject(target.projectId); else await refresh();
@@ -2006,6 +2091,10 @@
   document.addEventListener("click", (event) => { if (!event.target.closest(".sidebar")) closeWorkspaceMenu(); });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !event.isComposing) { closeWorkspaceMenu(); if (!ui.projectPanel.hidden) toggleProjectForm(false); if (!ui.folderPanel.hidden) toggleFolderForm(false); } });
   ui.form.addEventListener("submit", (event) => { event.preventDefault(); if (!$("queue-button").hidden) queuePrompt(); else run(); });
+  $('compact-context').addEventListener('click', () => compactCurrentContext());
+  $('compact-cancel').addEventListener('click', () => $('compact-confirmation').close());
+  $('compact-confirm').addEventListener('click', confirmCompactContext);
+  $('compact-confirmation').addEventListener('close', () => { if (!$('compact-confirmation').open) compactIntent = null; });
   $("queue-button").addEventListener("click", queuePrompt);
   $("handoff-accept").addEventListener("click", () => answerHandoff(true));
   $("handoff-dismiss").addEventListener("click", () => answerHandoff(false));

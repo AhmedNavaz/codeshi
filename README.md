@@ -31,6 +31,14 @@ Scan a QR code, match the number and allow it on your computer. From your phone'
 
 Choose **Remote access** in the desktop's bottom bar to pair. The phone has its own page for the conversation, workspace and task selection, and agent controls. Supported browsers also offer a microphone on the remote HTTPS connection: dictate into the message box, then press Send. Same-Wi-Fi pairing uses unencrypted HTTP for trusted networks; lock-screen notifications are still planned.
 
+### Keep the chat, refresh the working context
+
+<img src="docs/features/flow-controls.png" alt="Codeshi Flow with four cards around the chat, a Review first switch, rounded Agent settings and file-action buttons, and a small context ring at the top-right of the message box">
+
+Long chats stay saved while the agent's working context can start fresh between turns. Automatic refresh is on by default: Normal has configurable limits, and Flow follows its routing mode. Older unmeasured Claude and Codex sessions refresh once before their next send. The small ring in the typing box shows progress toward the next refresh target. Clicking it explains the effect and asks for confirmation; the next message to that agent uses a bounded task brief. No model summary runs when you click, and older details may be omitted from active context.
+
+Flow keeps the chat between four plain-language cards. Change **Review first** directly in the working card, and open **Agent settings** for routing choices. Reported context, estimates, native compactions and total token consumption have separate labels; these controls do not establish measured token savings or limit a native agent's tool loop inside a turn.
+
 ### Run tasks side by side
 
 <img src="docs/features/tasks.jpg" alt="The sidebar lists Workspace chat working, two running tasks, one with an approval waiting, and a finished task ready for review. One task is open in its own copy of the web folder, with Claude's steps, its own queue, plan and Stop button">
@@ -119,7 +127,7 @@ Also included:
 - **A task-focused brief**, showing the next agent its task, relevant folders, instructions, changed files and unfinished work; see what it receives in the Brief panel
 - **Task usage and limits**, for working time, reported tokens, API spend and retries across agents, handoffs and reviews; missing usage stays marked as not reported
 - **Undo, redo and Timeline restore**, to take back any run after a preview of every line that changes, or return the workspace to a saved checkpoint with a recovery point saved first
-- **Flow**, a focused view using your current routing and handoff settings, with mode changes held until the workspace is idle: how routing and handoff are working and what another choice would change, what's left on each plan, what's next, and the files changed with Undo
+- **Flow**, a focused chat with cards for routing, plan allowance, next steps and changed files; Review first switches inline, and Agent settings holds routing choices
 - **Files, Terminal, Run and Git** for each workspace: a separate Files browser, shells in tabs or side by side, and each project's dev server, tests and changes in reach
 - **Chat import** from your earlier Claude Code and Codex sessions
 - **Ask a Friend**, for help from another developer with a patch you review

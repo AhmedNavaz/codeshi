@@ -9,6 +9,7 @@ import { continuationRequest, prepareContext } from '../src/context.mjs';
 import { providerUsage } from '../src/providers.mjs';
 import { STARTER_ROOT } from '../src/skills.mjs';
 import { sumUsage } from '../src/task-ledger.mjs';
+import { validateContextLimit } from '../src/context-rollover.mjs';
 import { checkPin, comparisonKey, experimentInputs, fingerprint, observedModels, validatePin } from './experiment.mjs';
 
 // Runs one fixture under one policy and reports what happened (#84). Everything happens in a throwaway copy of the fixture.
@@ -45,17 +46,22 @@ function runCheck(fixture, folders, replies) {
   return { passed: results.every(result => result.passed), results };
 }
 
-// Files an agent looked at that an earlier run of the same task had already read or changed: the rediscovery good context should cut.
-export function repeatedFileReads(messages) {
+// File paths an agent read that an earlier run had already read. This is observed read activity, not all filesystem I/O.
+export function repeatedFileReads(messages, { workspace = null } = {}) {
   const byRun = new Map(), target = text => { const value = String(text || ''); if (value.startsWith('Read\n')) { try { return JSON.parse(value.split('\n')[1]).file_path; } catch { return null; } } return value.match(/^\$ (?:\/bin\/\w+ -\w+ )?['"]?(?:cat|sed -n \S+|head(?: -\S+ \S+)?|tail(?: -\S+ \S+)?|nl(?: -\S+ \S+)?) ([^\s'"|;&]+)/)?.[1] || null; };
-  for (const message of messages) { if (message.role !== 'activity' || !message.runId) continue; const file = target(message.text); if (!file) continue; if (!byRun.has(message.runId)) byRun.set(message.runId, new Set()); byRun.get(message.runId).add(path.basename(file)); }
+  for (const message of messages) { if (message.role !== 'activity' || !message.runId) continue; const file = target(message.text); if (!file) continue; if (!byRun.has(message.runId)) byRun.set(message.runId, new Set()); byRun.get(message.runId).add(workspace ? path.resolve(workspace, file) : path.normalize(file)); }
   const seen = new Set(); let repeated = 0;
   for (const files of byRun.values()) { for (const file of files) if (seen.has(file)) repeated++; for (const file of files) seen.add(file); }
   return repeated;
 }
 
 const describeAgent = text => { const [provider, model, effort] = String(text).split(':'); return { provider, model: model || null, effort: effort || null }; };
-export const parsePolicy = ({ agent, to = null, context = 'task', skills = true, skill = null, limits = null }) => ({ builder: describeAgent(agent), to: to ? describeAgent(to) : null, context, skills, skill, limits, id: [agent, to && `to-${to}`, context, skills ? null : 'no-skills', skill && `skill-${skill}`, limits && `limits-${JSON.stringify(limits)}`].filter(Boolean).join(' ') });
+export const parsePolicy = ({ agent, to = null, context = 'task', skills = true, skill = null, limits = null, threads = 'continuous', contextLimit = 'off' }) => {
+  if (!['continuous', 'separate'].includes(threads)) throw new Error('Choose continuous or separate task threads.');
+  contextLimit = validateContextLimit(contextLimit);
+  return { builder: describeAgent(agent), to: to ? describeAgent(to) : null, context, skills, skill, limits, threads, contextLimit,
+    id: [agent, to && `to-${to}`, context, threads === 'separate' && 'separate-threads', contextLimit !== 'off' && `context-limit-${contextLimit}`, skills ? null : 'no-skills', skill && `skill-${skill}`, limits && `limits-${JSON.stringify(limits)}`].filter(Boolean).join(' ') };
+};
 
 // Includes each skill's text, so a changed skill counts as a different experiment.
 const sameFixture = fixture => fingerprint({ ...fixture, checkReply: fixture.checkReply && { source: fixture.checkReply.source, flags: fixture.checkReply.flags }, history: fixture.history?.toString(), trace: undefined });
@@ -73,16 +79,17 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
     const trace = path.join(root, 'trace.json'), wrapper = path.join(root, 'agent.mjs');
     fs.writeFileSync(trace, JSON.stringify(fixture.trace));
     fs.writeFileSync(wrapper, `#!${process.execPath}\nprocess.env.EVAL_TRACE=${JSON.stringify(trace)};process.env.EVAL_STATE=${JSON.stringify(path.join(root, 'trace.state'))};process.env.EVAL_FOLDERS=${JSON.stringify(JSON.stringify(folders))};\nawait import(${JSON.stringify(pathToFileURL(path.join(here, 'fake-agent.mjs')).href)});\n`, { mode: 0o700 });
-    bins.codex = wrapper; bins.claude = path.join(root, 'not-installed'); bins.gemini = path.join(root, 'not-installed');
+    bins.codex = wrapper; bins.claude = wrapper; bins.gemini = path.join(root, 'not-installed');
   }
-  const broker = new Broker({ workspace: folders[names[0]], workspaceFolders, dataDir: path.join(root, 'data'), bins, contextPolicy: policy.context, handoffPreferences: () => ({ threshold: 0, automatic: false }) });
-  const c = broker.get(broker.create().id), run = { fixture: fixture.id, fixtureHash: sameFixture(fixture), snapshot, policy, live, sourceCommit: gitIn(here, ['rev-parse', 'HEAD']).stdout.trim() || null, startedAt: new Date().toISOString(), skipped: null, rubric: { criteria: fixture.rubric, verdict: null } };
+  const broker = new Broker({ workspace: folders[names[0]], workspaceFolders, dataDir: path.join(root, 'data'), bins, contextPolicy: policy.context, contextLimit: () => policy.contextLimit || 'off', handoffPreferences: () => ({ threshold: 0, automatic: false }) });
+  let c = broker.get(broker.create().id);
+  const conversations = [c], run = { fixture: fixture.id, fixtureHash: sameFixture(fixture), snapshot, policy, live, sourceCommit: gitIn(here, ['rev-parse', 'HEAD']).stdout.trim() || null, startedAt: new Date().toISOString(), skipped: null, rubric: { criteria: fixture.rubric, verdict: null } };
   const quota = async phase => { if (!live) return null; const readings = {}; for (const provider of new Set([policy.builder.provider, policy.to?.provider].filter(Boolean))) { try { const usage = await providerUsage(provider, { ...broker.usageOptions(provider), refresh: true }); readings[provider] = usage.available ? { observedAt: new Date().toISOString(), windows: usage.windows.map(({ label, usedPercent, resetsAt }) => ({ label, usedPercent, resetsAt })) } : { unavailable: usage.reason || true }; } catch { readings[provider] = { unavailable: true }; } } return { phase, note: 'Account-wide: other tools count here too, so this is not what the task used.', readings }; };
   const spent = () => budget && (budget.runs >= budget.maxRuns || (budget.maxTokens && budget.tokens >= budget.maxTokens));
   const start = async (agent, text, { fresh = false, stopAfterFirstEdit = false, mode = 'edit' } = {}) => {
     if (spent()) { run.skipped = 'budget'; return false; }
     if (budget) budget.runs++;
-    broker.start(c, { text, provider: agent.provider, ...(live ? {} : { transport: 'app-server' }), model: agent.model, effort: agent.effort, mode, approvalPolicy: mode === 'read' ? 'ask' : 'auto', fresh, requestId: `eval-${Date.now()}-${budget?.runs ?? Math.random().toString(36).slice(2)}` });
+    broker.start(c, { text, provider: agent.provider, ...(live ? {} : { transport: agent.provider === 'claude' ? 'cli' : 'app-server' }), model: agent.model, effort: agent.effort, mode, approvalPolicy: mode === 'read' ? 'ask' : 'auto', fresh, requestId: `eval-${Date.now()}-${budget?.runs ?? Math.random().toString(36).slice(2)}` });
     const active = broker.running;
     // Nobody is here to answer. A question is skipped and counted, since needing to ask is part of the result, and a request
     // for approval is declined. A run that goes past the time limit is stopped rather than waited for.
@@ -112,32 +119,82 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
       const prompt = prepared.prompt;
       run.context = { bytes: prepared.metadata.bytes, factsKept: fixture.facts.filter(fact => prompt.includes(fact)).length, factsTotal: fixture.facts.length, unrelatedSteps: fixture.leakMarker ? prompt.split(fixture.leakMarker).length - 1 : 0 };
     }
-    if (fixture.continues) await start(policy.builder, continuationRequest, { fresh: true });
+    if (fixture.turns) {
+      run.turns = [];
+      for (const [index, turn] of fixture.turns.entries()) {
+        if (spent()) { run.skipped = 'budget'; break; }
+        if (index && policy.threads === 'separate') {
+          c = broker.get(broker.create().id); conversations.push(c);
+          // Independent threads receive the same enabled procedures and limits, with the fixture's explicit standalone
+          // brief supplying prior decisions. They share the identical working files and hidden final acceptance checks.
+          const original = conversations[0];
+          if (original.skills?.length) broker.record(c, { type: 'skills', skills: original.skills, dirs: original.skillDirs || [] });
+          for (const entry of original.memory || []) broker.record(c, { type: 'memory_add', entry });
+          if (policy.limits) broker.budget.setPolicy(c, policy.limits);
+        }
+        const agent = index % 2 && policy.to ? policy.to : policy.builder;
+        const text = policy.threads === 'separate' ? turn.standalone : turn.prompt;
+        // This probe measures what a fresh handoff can reconstruct, not what the provider retained internally.
+        const probe = prepareContext(c, text, { workspace: folders[names[0]], workspaceFolders, fresh: true, provider: agent.provider, mode: 'edit', policy: policy.context, readAttachment: () => ({ text: '' }), includeImages: false });
+        const facts = turn.facts || [];
+        const started = await start(agent, text);
+        if (!started) break;
+        const context = c.lastRun?.context;
+        run.turns.push({ index, provider: agent.provider, status: c.lastRun?.status || null,
+          context: context ? { bytes: context.bytes, estimatedTokens: context.size?.estimatedTokens ?? null, sessionMode: context.sessionMode, sessionReason: context.sessionReason, omittedMessages: context.omittedMessages, shortenedMessages: context.shortenedMessages, ...(context.restoredAfterCompaction ? { restoredAfterCompaction: true } : {}) } : null,
+          reconstruction: { source: 'fresh-envelope-probe', factsKept: facts.filter(fact => probe.prompt.includes(fact)).length, factsTotal: facts.length } });
+        // Limits count every reported input, including cache hits; reasoning is already part of output.
+        if (budget) {
+          const latest = (await broker.ledger(c)).runs.at(-1)?.usage;
+          budget.tokens += (latest?.input || 0) + (latest?.output || 0) + (latest?.cacheRead || 0) + (latest?.cacheWrite || 0);
+        }
+        if (run.timedOut || c.lastRun?.status !== 'complete') break;
+      }
+    } else if (fixture.continues) await start(policy.builder, continuationRequest, { fresh: true });
     else {
       await start(policy.builder, policy.skill ? `/${policy.skill} ${fixture.prompt}` : fixture.prompt, { stopAfterFirstEdit: fixture.stopAfterFirstEdit, mode: fixture.readOnly ? 'read' : 'edit' });
       if (fixture.needsSecondAgent) await start(policy.to || policy.builder, continuationRequest, { fresh: true });
     }
     await broker.checkpoints?.close?.();
-    const ledger = await broker.ledger(c);
-    run.check = run.skipped && !ledger.runs.length ? { passed: false, results: [] } : runCheck(fixture, folders, c.messages.filter(message => message.role === 'assistant').map(message => message.text));
+    const ledgers = await Promise.all(conversations.map(conversation => broker.ledger(conversation)));
+    const ledger = { runs: ledgers.flatMap(item => item.runs), tasks: ledgers.flatMap(item => item.tasks) };
+    const messages = conversations.flatMap(conversation => conversation.messages);
+    run.check = run.skipped && !ledger.runs.length ? { passed: false, results: [] } : runCheck(fixture, folders, messages.filter(message => message.role === 'assistant').map(message => message.text));
     run.runs = ledger.runs.map(entry => { const { usage, ...rest } = entry; return { ...rest, usage: usage && { ...usage, raw: undefined } }; });
     run.tasks = ledger.tasks;
     run.usage = sumUsage(ledger.runs.map(entry => entry.usage));
-    if (budget) budget.tokens += (run.usage.input || 0) + (run.usage.output || 0) + (run.usage.cacheWrite || 0);
+    if (budget && !fixture.turns) budget.tokens += (run.usage.input || 0) + (run.usage.output || 0) + (run.usage.cacheRead || 0) + (run.usage.cacheWrite || 0);
     const real = ledger.runs;
     run.outcome = {
-      firstAttemptSuccess: real[0]?.status === 'complete' && !fixture.stopAfterFirstEdit ? run.check.passed : fixture.stopAfterFirstEdit ? null : false,
+      firstAttemptSuccess: real.every(entry => entry.status === 'complete') && real.length > 0 && !fixture.stopAfterFirstEdit ? run.check.passed : fixture.stopAfterFirstEdit ? null : false,
       verifiedCompletion: run.check.passed, workingMs: real.reduce((sum, entry) => sum + (entry.elapsedMs || 0), 0), runs: real.length,
       retries: real.filter(entry => entry.relation === 'retry').length, interventions: real.reduce((sum, entry) => sum + entry.interventions, 0),
-      questionsAsked: run.questionsAsked || 0, timedOut: Boolean(run.timedOut), repeatedFileReads: repeatedFileReads(c.messages), missingUsage: real.filter(entry => !entry.usage?.reported?.length).length,
+      questionsAsked: run.questionsAsked || 0, timedOut: Boolean(run.timedOut), repeatedFileReads: repeatedFileReads(messages, { workspace: folders[names[0]] }), missingUsage: real.filter(entry => !entry.usage?.reported?.length).length,
+      compactions: real.reduce((sum, entry) => sum + entry.compactions, 0),
     };
+    run.accounting = { source: 'broker-journals', planning: 'local-rules-or-in-provider-usage', summaries: 'no-separate-codeshi-model-calls', retrieval: 'local-rules',
+      nativeDelegation: 'included-in-claude-modelUsage-where-reported; other-providers-unknown', nativeCompactionUsage: 'not-separately-attributable',
+      providerCoverage: real.map(entry => ({ provider: entry.provider, source: entry.usage?.source || 'unreported', coverage: entry.usage?.coverage || null })) };
     run.quotaAfter = await quota('after');
     if (pin && fingerprint(observedModels(pin.runs || [])) !== fingerprint(observedModels(run.runs))) {
       run.failure = 'The provider-reported model or effort changed. This run is not a repeat of the pinned experiment.';
     }
   } catch (error) {
     run.failure = error.message;
-    run.outcome = { firstAttemptSuccess: false, verifiedCompletion: false, workingMs: null, runs: c.runs?.length || 0, retries: 0, interventions: 0, repeatedFileReads: null, missingUsage: null };
+    // A later dispatch or check error must not erase the work already paid for. Gather every conversation before its
+    // temporary journals are removed, just as on a successful workload.
+    if (!run.runs) {
+      const ledgers = await Promise.all(conversations.map(conversation => broker.ledger(conversation)));
+      const measured = ledgers.flatMap(ledger => ledger.runs);
+      run.runs = measured.map(({ usage, ...entry }) => ({ ...entry, usage: usage && { ...usage, raw: undefined } }));
+      run.tasks = ledgers.flatMap(ledger => ledger.tasks);
+      run.usage = sumUsage(measured.map(entry => entry.usage));
+      if (budget && !fixture.turns) budget.tokens += (run.usage.input || 0) + (run.usage.output || 0) + (run.usage.cacheRead || 0) + (run.usage.cacheWrite || 0);
+    }
+    run.outcome = { firstAttemptSuccess: false, verifiedCompletion: false,
+      workingMs: run.runs.reduce((sum, entry) => sum + (entry.elapsedMs || 0), 0), runs: run.runs.length,
+      retries: run.runs.filter(entry => entry.relation === 'retry').length, interventions: run.runs.reduce((sum, entry) => sum + entry.interventions, 0),
+      repeatedFileReads: repeatedFileReads(conversations.flatMap(conversation => conversation.messages), { workspace: folders[names[0]] }), missingUsage: run.runs.filter(entry => !entry.usage?.reported?.length).length };
   } finally {
     await broker.close(); fs.rmSync(root, { recursive: true, force: true });
   }
@@ -147,7 +204,7 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
 }
 
 const median = values => { const sorted = values.filter(value => typeof value === 'number').sort((a, b) => a - b); return sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : null; };
-const spread = values => { const known = values.filter(value => typeof value === 'number'); return known.length ? { median: median(known), min: Math.min(...known), max: Math.max(...known), reported: known.length, of: values.length } : { median: null, reported: 0, of: values.length }; };
+const spread = values => { const known = values.filter(value => typeof value === 'number' && Number.isFinite(value)); return known.length ? { median: median(known), min: Math.min(...known), max: Math.max(...known), reported: known.length, of: values.length } : { median: null, reported: 0, of: values.length }; };
 
 // Compares results fixture by fixture: how often each policy worked, and what it used, with the spread across repeats and what went unreported.
 export function compareResults(results) {
@@ -157,6 +214,10 @@ export function compareResults(results) {
     const outcomes = list.map(result => result.outcome || {}), rate = key => { const known = outcomes.filter(outcome => typeof outcome[key] === 'boolean'); return known.length ? { passed: known.filter(outcome => outcome[key]).length, of: known.length } : null; };
     return { fixture: list[0].fixture, policy: list[0].policy.id, experiment: list[0].experiment?.id || null, models: observedModels(list[0].runs || []), live: list[0].live, repeats: list.length, firstAttemptSuccess: rate('firstAttemptSuccess'), verifiedCompletion: rate('verifiedCompletion'),
       input: spread(list.map(result => result.usage?.input ?? null)), output: spread(list.map(result => result.usage?.output ?? null)), cacheRead: spread(list.map(result => result.usage?.cacheRead ?? null)), cacheWrite: spread(list.map(result => result.usage?.cacheWrite ?? null)),
+      reasoning: spread(list.map(result => result.usage?.reasoning ?? null)), compactions: spread(outcomes.map(outcome => outcome.compactions ?? null)),
+      tokenCoverage: Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'].map(field => [field, list.every(result => result.usage?.reportedBy && typeof result.usage.runs === 'number')
+        ? { reported: list.reduce((sum, result) => sum + result.usage.reportedBy[field], 0), of: list.reduce((sum, result) => sum + result.usage.runs, 0) } : null])),
+      reconstruction: spread(list.map(result => result.turns?.length ? result.turns.reduce((sum, turn) => sum + turn.reconstruction.factsKept, 0) / result.turns.reduce((sum, turn) => sum + turn.reconstruction.factsTotal, 0) : null)),
       workingMs: spread(outcomes.map(outcome => outcome.workingMs ?? null)), retries: spread(outcomes.map(outcome => outcome.retries ?? null)), interventions: spread(outcomes.map(outcome => outcome.interventions ?? null)), repeatedFileReads: spread(outcomes.map(outcome => outcome.repeatedFileReads ?? null)),
       wallMs: spread(outcomes.map(outcome => outcome.wallMs ?? null)),
       contextBytes: spread(list.map(result => result.context?.bytes ?? null)), factsKept: list[0].context ? `${list[0].context.factsKept} of ${list[0].context.factsTotal}` : null, unrelatedSteps: list[0].context ? median(list.map(result => result.context?.unrelatedSteps)) : null,
@@ -167,9 +228,12 @@ export function compareResults(results) {
 const cell = value => value?.median === null || value === undefined ? 'unknown' : value.min === value.max ? value.median.toLocaleString('en-US') : `${value.median.toLocaleString('en-US')} (${value.min.toLocaleString('en-US')}–${value.max.toLocaleString('en-US')})`;
 const rateCell = value => value ? `${value.passed}/${value.of}` : 'n/a';
 export function reportMarkdown(rows) {
-  const lines = ['| Fixture | Policy | Experiment | Models / effort | Runs | First try | Verified | Input | Cache read | Cache write | Output | Work (ms) | Wall (ms) | Retries | Asked you | Repeat reads | Facts kept | Unrelated steps | Runs without usage |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
-  for (const row of rows) lines.push(`| ${row.fixture} | ${row.policy}${row.live ? '' : ' (recorded)'} | ${row.experiment?.slice(0, 12) || 'legacy (unmatched)'} | ${row.models.map(agent => `${agent.provider}:${agent.model || 'unknown'}:${agent.effort || 'unknown'}`).join(' → ') || 'unknown'} | ${row.repeats} | ${rateCell(row.firstAttemptSuccess)} | ${rateCell(row.verifiedCompletion)} | ${cell(row.input)} | ${cell(row.cacheRead)} | ${cell(row.cacheWrite)} | ${cell(row.output)} | ${cell(row.workingMs)} | ${cell(row.wallMs)} | ${cell(row.retries)} | ${cell(row.interventions)} | ${cell(row.repeatedFileReads)} | ${row.factsKept ?? 'n/a'} | ${row.unrelatedSteps ?? 'n/a'} | ${cell(row.missingUsage)} |`);
+  const lines = ['| Fixture | Policy | Experiment | Models / effort | Runs | First try | Verified | Input | Cache read | Cache write | Output | Reasoning (in output) | Work (ms) | Wall (ms) | Retries | Asked you | Repeat reads | Facts kept | Unrelated steps | Observed compactions | Reconstruction fraction | Runs without usage |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
+  for (const row of rows) lines.push(`| ${row.fixture} | ${row.policy}${row.live ? '' : ' (recorded)'} | ${row.experiment?.slice(0, 12) || 'legacy (unmatched)'} | ${row.models.map(agent => `${agent.provider}:${agent.model || 'unknown'}:${agent.effort || 'unknown'}`).join(' → ') || 'unknown'} | ${row.repeats} | ${rateCell(row.firstAttemptSuccess)} | ${rateCell(row.verifiedCompletion)} | ${cell(row.input)} | ${cell(row.cacheRead)} | ${cell(row.cacheWrite)} | ${cell(row.output)} | ${cell(row.reasoning)} | ${cell(row.workingMs)} | ${cell(row.wallMs)} | ${cell(row.retries)} | ${cell(row.interventions)} | ${cell(row.repeatedFileReads)} | ${row.factsKept ?? 'n/a'} | ${row.unrelatedSteps ?? 'n/a'} | ${cell(row.compactions)} | ${cell(row.reconstruction)} | ${cell(row.missingUsage)} |`);
   lines.push('', 'Repeats are grouped only when pinned inputs, recorded/live mode and reported model/effort sequences match. Older results without pins stay separate. A changed skill, fixture, check, policy, engine or runtime starts another experiment.');
   lines.push('', 'Values are the median, with the range across repeats. "Asked you" counts approvals and questions; nobody answers a question in an evaluation, so the agent carries on without an answer. "unknown" means the agent did not report it: it is not zero. Totals only cover runs that reported, so check the last column: a run stopped part way usually reports nothing. Tokens are not a price, and usage limit readings are kept apart because other tools count toward them too.');
+  lines.push('', 'Reconstruction is the fraction of fixture facts present in a fresh envelope probe. It does not measure retention inside a resumed native session. Observed compactions count notifications, not their token cost; zero means none observed. Provider-internal delegation and compaction costs are not separately attributable. Text envelope estimates, last-request counters and cumulative session usage are separate readings in saved results.');
+  lines.push('', '| Fixture / policy | Token field coverage (reporting runs / all runs, across repeats) |', '| --- | --- |');
+  for (const row of rows) lines.push(`| ${row.fixture} / ${row.policy} / ${row.experiment?.slice(0, 12) || 'legacy'} | ${Object.entries(row.tokenCoverage).map(([key, value]) => `${key}: ${value ? `${value.reported}/${value.of}` : 'unknown'}`).join('; ')} |`);
   return lines.join('\n') + '\n';
 }

@@ -159,3 +159,60 @@ test('sizes in tokens say they are estimates, and private paths are recognized',
   for (const name of ['.env', 'a/.env.local', 'node_modules/x', 'keys/server.pem', '.ssh/id', 'credentials.json']) assert.equal(privatePath(name), true, name);
   for (const name of ['src/env.js', 'README.md', 'docs/keys.md']) assert.equal(privatePath(name), false, name);
 });
+
+test('after native compaction the next resume restores task constraints, instructions and evidence without resetting the session', t => {
+  const { desktop } = workspace(t, { 'desktop/AGENTS.md': 'PRESERVE-USER-DATA', 'desktop/app.js': 'export const value = 1;' });
+  const c = conversation([
+    { role: 'user', runId: 'r', text: 'Implement app.js. Acceptance: keep the existing API. Decision: use UTC. Blocker: do not add billing until approved.' },
+    { role: 'user', runId: 'r', steer: true, text: 'Also preserve saved settings.' },
+    ...Array.from({ length: 100 }, () => ({ role: 'activity', runId: 'r', text: '$ noisy\n' + 'log '.repeat(100) })),
+  ], { sessions: { claude: { id: 'same-native-session', cursor: 200 } }, lastRun: { id: 'r', provider: 'claude', compactions: 1, status: 'complete' } });
+  const before = JSON.stringify(c.messages);
+  const result = build(c, continuationRequest, [desktop], { fresh: false });
+  const value = envelope(result);
+  for (const fact of ['existing API', 'use UTC', 'do not add billing', 'saved settings', 'PRESERVE-USER-DATA']) assert(result.prompt.includes(fact), fact);
+  assert.equal(result.metadata.restoredAfterCompaction, true);
+  assert.equal(result.metadata.sessionMode, 'resumed');
+  assert.equal(c.sessions.claude.id, 'same-native-session');
+  assert.equal(JSON.stringify(c.messages), before, 'Reconstruction does not rewrite history.');
+  assert.equal(value.continuation.restoredAfterCompaction, true);
+  const next = { ...c, lastRun: { provider: 'claude', context: result.metadata, compactions: 0 } };
+  assert.equal(build(next, 'Next', [desktop], { fresh: false }).metadata.restoredAfterCompaction, undefined, 'An ordinary next resume returns to deltas.');
+});
+
+test('retrieved excerpts and nested instructions are tracked, re-read on handoff, and invalidated on resume', t => {
+  const { desktop } = workspace(t, { 'desktop/src/ui/button.js': 'export function makeButton() { return "OLD-VALUE"; }', 'desktop/src/AGENTS.md': 'NESTED-RULE' });
+  spawnSync('git', ['init', '-q'], { cwd: desktop.path });
+  spawnSync('git', ['add', '.'], { cwd: desktop.path });
+  spawnSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Initial'], { cwd: desktop.path });
+  const c = conversation([{ role: 'user', text: 'Fix `makeButton`' }]);
+  const first = build(c, continuationRequest, [desktop]);
+  assert(first.prompt.includes('OLD-VALUE'));
+  assert(first.metadata.fileHashes['desktop\0src/ui/button.js']);
+  assert(envelope(first).brief.repositoryInstructions.some(item => item.path === 'src/AGENTS.md' && item.text === 'NESTED-RULE'));
+  const resumed = { ...c, sessions: { claude: { id: 's', cursor: 100 } }, lastRun: { provider: 'claude', context: first.metadata } };
+  fs.writeFileSync(path.join(desktop.path, 'src/ui/button.js'), 'export function makeButton() { return "CURRENT-VALUE"; }');
+  const next = build(resumed, 'Next', [desktop], { fresh: false });
+  assert(envelope(next).brief.changedSinceLastRun.some(item => item.path === 'src/ui/button.js'));
+  assert.notEqual(next.metadata.fileHashes['desktop\0src/ui/button.js'], first.metadata.fileHashes['desktop\0src/ui/button.js']);
+  const handoff = build(resumed, continuationRequest, [desktop]);
+  assert.equal(handoff.prompt.includes('OLD-VALUE'), false);
+  assert(handoff.prompt.includes('CURRENT-VALUE'));
+  fs.rmSync(path.join(desktop.path, 'src/ui/button.js'));
+  assert(envelope(build(resumed, 'Next', [desktop], { fresh: false })).brief.changedSinceLastRun.some(item => item.missing));
+});
+
+test('a branch change invalidates earlier conclusions and an out-of-scope folder is not read on resume', t => {
+  const { folders, desktop, website } = workspace(t, { 'desktop/a.js': 'one', 'website/b.js': 'two' });
+  const git = (...args) => spawnSync('git', args, { cwd: desktop.path, encoding: 'utf8' });
+  git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid'); git('add', '.'); git('commit', '-qm', 'Initial');
+  const c = conversation([{ role: 'user', text: 'Work across both folders. Inspect a.js and b.js.' }]);
+  const first = build(c, continuationRequest, folders);
+  git('checkout', '-qb', 'another-branch');
+  const resumed = { ...c, sessions: { claude: { id: 's', cursor: 99 } }, lastRun: { provider: 'claude', context: first.metadata } };
+  const value = envelope(build(resumed, 'Continue in desktop', folders, { fresh: false }));
+  assert.equal(value.brief.repositoryChanged[0].branch, 'another-branch');
+  fs.writeFileSync(path.join(website.path, 'b.js'), 'PRIVATE-TO-OTHER-SCOPE');
+  assert.equal(JSON.stringify(value).includes('PRIVATE-TO-OTHER-SCOPE'), false);
+  assert.equal(Object.keys(build(resumed, 'Continue in desktop', folders, { fresh: false }).metadata.fileHashes).some(key => key.startsWith('website\0')), false);
+});

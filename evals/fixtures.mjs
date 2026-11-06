@@ -94,6 +94,33 @@ export const fixtures = [
     ],
   },
   {
+    id: 'long-thread', title: 'Decisions survive successive tasks and switching back',
+    folders: { shop: { 'money.mjs': '// Money helpers.\n', 'receipt.mjs': '// Receipt helpers.\n' }, ops: { 'limit.mjs': 'export const limit = 10;\n' } },
+    history: ({ ops }) => [
+      { role: 'user', text: 'Shop conventions: formatPrice uses EUR by default, currency code first, two decimal places with toFixed(2). Receipt entries are joined with a semicolon. Do not use Intl: it previously produced comma decimals. Blocker: tax calculation is awaiting a decision; leave tax out.' },
+      ...Array.from({ length: 200 }, (_, index) => ({ role: 'activity', text: `$ tail -n 500 ${ops}/deploy.log\nold-deploy-${index} ${'restart successful; '.repeat(50)}` })),
+      { role: 'assistant', text: 'Deployment investigation finished. Shop conventions and the unresolved tax decision still apply.' },
+    ],
+    turns: [
+      { prompt: 'In shop/money.mjs, export formatPrice(amount) using the earlier shop conventions. Leave ops unchanged.',
+        standalone: 'In shop/money.mjs, export formatPrice(amount): default EUR, currency code first, two decimal places using toFixed(2), e.g. EUR 1.50. Do not use Intl (it gave comma decimals). Tax is undecided; leave it out. Leave ops unchanged.',
+        facts: ['EUR', 'toFixed(2)', 'Intl', 'tax'] },
+      { prompt: 'Separate task: change only ops/limit.mjs so limit is 25. Keep the shop work and its decisions for later.',
+        standalone: 'Change only ops/limit.mjs so its exported limit is 25. Keep all shop files unchanged.', facts: ['25'] },
+      { prompt: 'Return to shop. Export receipt(amounts) from receipt.mjs, importing formatPrice from money.mjs. Format each amount and join them with the separator agreed earlier. Respect the unresolved blocker. Leave ops as it is.',
+        standalone: 'In shop/receipt.mjs, export receipt(amounts), importing formatPrice from ./money.mjs. Shop conventions: default EUR, currency code first, two decimal places with toFixed(2), entries joined with a semicolon (no space). Intl gave comma decimals; do not use it. The tax calculation is awaiting a decision; leave it out. Leave ops unchanged.',
+        facts: ['EUR', 'semicolon', 'tax', 'Intl'] },
+    ],
+    check: { shop: { 'money.test.mjs': test("import { formatPrice } from '../money.mjs';\nimport { receipt } from '../receipt.mjs';\ntest('decisions retained', () => { assert.equal(formatPrice(1.5), 'EUR 1.50'); assert.equal(receipt([1.5, 2]), 'EUR 1.50;EUR 2.00'); assert.equal(receipt([]), ''); });") },
+      ops: { 'limit.test.mjs': test("import { limit } from '../limit.mjs';\ntest('other task kept', () => assert.equal(limit, 25));") } },
+    rubric: 'Preserves currency, precision and separator decisions after unrelated folder work; does not invent tax behavior. Compare the final diff as well as checks. The reconstruction probe is not evidence of retention inside a native session or a native compaction.',
+    trace: [
+      { steps: [{ type: 'command', command: 'cat money.mjs', output: '// Money helpers.' }, { type: 'write', folder: 'shop', file: 'money.mjs', content: "export function formatPrice(amount) { return `EUR ${amount.toFixed(2)}`; }\n" }, { type: 'say', text: 'Price formatting follows the agreed conventions.' }], usage: { input: 3500, cached: 800, output: 120, reasoning: 40 } },
+      { compact: true, steps: [{ type: 'write', folder: 'ops', file: 'limit.mjs', content: 'export const limit = 25;\n' }, { type: 'say', text: 'Only the ops limit changed.' }], usage: { input: 1200, cached: 900, output: 60, reasoning: 20 } },
+      { requiresPrompt: ['EUR', 'semicolon', 'tax'], steps: [{ type: 'command', command: 'cat money.mjs', output: 'export function formatPrice(amount) { ... }' }, { type: 'write', folder: 'shop', file: 'receipt.mjs', content: "import { formatPrice } from './money.mjs';\nexport function receipt(amounts) { return amounts.map(formatPrice).join(';'); }\n" }, { type: 'say', text: 'Receipt uses the existing formatter and semicolon separator. Tax remains undecided.' }], usage: { input: 1800, cached: 600, output: 130, reasoning: 30 } },
+    ],
+  },
+  {
     id: 'review', title: 'Read-only review finds a seeded bug', readOnly: true,
     folders: { app: { 'discount.mjs': 'export function discount(price, percent) {\n  // percent is 0 to 100\n  return price * percent;\n}\n' } },
     prompt: 'Review discount.mjs and tell me what is wrong with it. Do not change anything.',
