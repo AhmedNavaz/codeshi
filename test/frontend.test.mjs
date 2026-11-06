@@ -70,7 +70,7 @@ const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,questionsUI=false,alertsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -166,8 +166,8 @@ async function browser({existing=true,available=true,providers={},authenticated=
       if(request.path==='/api/conversation')return response(clone(ensureChat(selected)));
       if(request.path==='/api/collaboration/handoffs/prepare'){const body=request.body;const outgoing=body.draft?sealPackage(body.draft):sealPackage({schema:'ai-relay.handoff',version:1,id:randomUUID(),createdAt:'2026-10-20T00:00:00.000Z',mode:body.mode||'context',goal:body.goal||'',problem:body.problem||'',expectedOutcome:body.expectedOutcome||'',decisions:body.decisions||[],tasks:body.tasks||[],messages:[],files:[],baseline:[]});return response({package:outgoing,warnings:[]});}
       if(request.path==='/api/collaboration/handoffs/approve'){const record={id:request.body.package.id,package:request.body.package,direction:'outgoing',status:'approved'};handoffs.push(record);return response(clone(record));}
-      const match=request.path.match(/^\/api\/conversations\/([^/]+)(?:\/(provider|messages|continue))?$/);
-      if(match){const conversation=canonical.get(selected.id);assert(conversation&&conversation.id===match[1],'The browser must target this workspace’s permanent conversation.');if(request.method==='GET')return response(clone(conversation));if(match[2]==='provider'){const provider=request.body.provider,mode=request.body.mode,approvalPolicy=request.body.approvalPolicy||'ask',model=request.body.model===undefined?conversation.models[provider]||null:request.body.model;conversation.efforts ||= {};const effort=request.body.effort===undefined?conversation.efforts[provider]?.[model||'default']??null:request.body.effort;Object.assign(conversation,{provider,mode,approvalPolicy,model,effort});conversation.models[provider]=model;conversation.efforts[provider] ||= {};conversation.efforts[provider][model||'default']=effort;return response(clone(conversation));}if(['messages','continue'].includes(match[2])){if(!submissions.has(request.body.requestId)){submissions.set(request.body.requestId,{runId:randomUUID()});conversation.messages.push({id:randomUUID(),role:'user',text:request.body.text||'Continue',createdAt:'2026-10-20T00:00:00.000Z'});}conversation.status='complete';return response(submissions.get(request.body.requestId),202);}}
+      const match=request.path.match(/^\/api\/conversations\/([^/]+)(?:\/(provider|messages|continue|routing))?$/);
+      if(match){const conversation=canonical.get(selected.id);assert(conversation&&conversation.id===match[1],'The browser must target this workspace’s permanent conversation.');if(request.method==='GET')return response(clone(conversation));if(match[2]==='routing'){conversation.routing=request.body.mode?{mode:request.body.mode,allowApi:request.body.allowApi===true,check:request.body.check===true}:null;return response(clone(conversation));}if(match[2]==='provider'){const provider=request.body.provider,mode=request.body.mode,approvalPolicy=request.body.approvalPolicy||'ask',model=request.body.model===undefined?conversation.models[provider]||null:request.body.model;conversation.efforts ||= {};const effort=request.body.effort===undefined?conversation.efforts[provider]?.[model||'default']??null:request.body.effort;Object.assign(conversation,{provider,mode,approvalPolicy,model,effort});conversation.models[provider]=model;conversation.efforts[provider] ||= {};conversation.efforts[provider][model||'default']=effort;return response(clone(conversation));}if(['messages','continue'].includes(match[2])){if(!submissions.has(request.body.requestId)){submissions.set(request.body.requestId,{runId:randomUUID()});conversation.messages.push({id:randomUUID(),role:'user',text:request.body.text||'Continue',createdAt:'2026-10-20T00:00:00.000Z'});}conversation.status='complete';return response(submissions.get(request.body.requestId),202);}}
       throw new Error('Unexpected browser request: '+request.method+' '+request.path);
     };return intercept?intercept(request,next):next();
   }
@@ -212,6 +212,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
   if(automaticReviewUI)vm.runInContext(fs.readFileSync(new URL('../public/automatic-review.js',import.meta.url),'utf8'),context,{filename:'public/automatic-review.js'});
   if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
+  if(flowUI)vm.runInContext(fs.readFileSync(new URL('../public/flow.js',import.meta.url),'utf8'),context,{filename:'public/flow.js'});
   if(alertsUI)vm.runInContext(fs.readFileSync(new URL('../public/alerts.js',import.meta.url),'utf8'),context,{filename:'public/alerts.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
   // A stand-in for xterm.js: it records what the page writes and lets a test type into it.
@@ -1252,10 +1253,10 @@ test('Find in Conversation, Find Next and Find Previous do what ⌘F, Enter and 
 
 test('the menu bar follows the page: the workspace, a run, the agent, Continue, Files, Git activity and the first nine workspaces',async()=>{
   const web=await browser({desktopControls:true,insights:true,historyUI:true,filesUI:true});assert.equal(web.menuStates.length,0,'The browser has no menu bar.');
-  const none=await browser({empty:true,existing:false,desktop:true,desktopControls:true,historyUI:true});assert.deepEqual(none.menuStates.at(-1),{workspace:false,running:false,agent:'codex',codex:false,claude:false,gemini:false,continue:null,files:false,git:false,terminal:false,imports:false,export:false,workspaces:[]});
+  const none=await browser({empty:true,existing:false,desktop:true,desktopControls:true,historyUI:true});assert.deepEqual(none.menuStates.at(-1),{workspace:false,running:false,agent:'codex',codex:false,claude:false,gemini:false,continue:null,files:false,git:false,terminal:false,flow:false,flowLocked:false,imports:false,export:false,workspaces:[]});
   const ui=await browser({desktop:true,desktopControls:true,moreProjects:true,insights:true,historyUI:true,filesUI:true,stored:{'ai-relay:sidebar-level:project-one':'folder'}}),shown=()=>ui.menuStates.at(-1);
   const workspaces=[{name:'Example workspace',current:true},{name:'Other workspace',current:false}];
-  assert.deepEqual(shown(),{workspace:true,running:false,agent:'codex',codex:true,claude:true,gemini:false,continue:null,files:false,git:false,terminal:false,imports:true,export:false,workspaces});
+  assert.deepEqual(shown(),{workspace:true,running:false,agent:'codex',codex:true,claude:true,gemini:false,continue:null,files:false,git:false,terminal:false,flow:false,flowLocked:false,imports:true,export:false,workspaces});
   const reported=ui.menuStates.length;ui.window.dispatchEvent(new UIEvent('relay-state'));await flush();assert.equal(ui.menuStates.length,reported,'An unchanged state is not sent again.');
   ui.$('select-claude').click();await flush();assert.equal(shown().agent,'claude');
   ui.$('toggle-explorer').click();await flush();assert.equal(shown().files,true);
@@ -2954,7 +2955,7 @@ test('the task plan keeps its list open during progress and closes it for anothe
   assert.equal(ui.$('run-plan').hidden,true,'An empty plan has no blank card.');
 });
 
-test('routing is chosen in the Agents panel; the model button then shows the mode and opens it, and what will run is shown before sending',async()=>{
+test('routing is chosen in the Agents panel’s Routing section, which Flow shows; the model button then shows the mode and opens it, and what will run is shown before sending',async()=>{
   const ui=await browser({modelPickerUI:true,agentsUI:true,insights:true}),conversation=ui.canonical.get('project-one'),choices=[],handoff=[];let preferences={threshold:90,automatic:false};
   ui.setIntercept((request,next)=>{
     if(request.path.endsWith('/routing')){choices.push(request.body);conversation.routing=request.body.mode?{mode:request.body.mode,allowApi:request.body.allowApi===true,check:request.body.check===true}:null;return response(conversation);}
@@ -2965,11 +2966,14 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
   assert.equal(ui.$('auto-button'),null,'Routing has no button of its own in the message box.');
   assert.equal(ui.$('picked-agent').textContent,'Codex');
   ui.$('open-agents').click();await flush();await flush();
-  const options=ui.$('routing-options').querySelectorAll('.routing-option');
-  assert.deepEqual(options.map(row=>row.querySelector('strong').textContent),['Manual','Cost saving','Balanced','Maximum quality']);
-  assert.match(options[2].textContent,/Matches the model and effort to each message/,'Each mode says what it does.');
-  assert.equal(options[0].getAttribute('aria-checked'),'true');
-  options[2].click();await flush();await flush();
+  assert.equal(ui.$('agents-routing').hidden,true,'Routing belongs to Flow; the normal view hides it.');assert.equal(ui.$('agents-routing-note').hidden,false);
+  ui.window.relayFlow={isOn:()=>true};ui.window.dispatchEvent(new UIEvent('relay-flow'));await flush();
+  assert.equal(ui.$('agents-routing').hidden,false,'In Flow the section shows.');assert.equal(ui.$('agents-routing-note').hidden,true);
+  const options=()=>ui.$('routing-options').querySelectorAll('.routing-option');
+  assert.deepEqual(options().map(row=>row.querySelector('strong').textContent),['Cost saving','Balanced','Maximum quality'],'No manual mode: Flow always routes.');
+  assert.match(options()[1].textContent,/Matches the model and effort to each message/,'Each mode says what it does.');
+  assert.deepEqual(options().map(row=>row.getAttribute('aria-checked')),['false','false','false']);
+  options()[1].click();await flush();await flush();
   assert.deepEqual(choices[0],{mode:'balanced',allowApi:false,check:false});
   assert.equal(ui.$('picked-agent').textContent,'Routing');assert.equal(ui.$('picked-model').textContent,'Balanced');
   assert(ui.$('model-picker-button').classList.contains('routing'));assert.equal(ui.$('effort-button').hidden,true,'Routing chooses the effort with the model.');
@@ -3003,8 +3007,10 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
   ui.$('handoff-threshold').value='80';ui.fire('handoff-threshold','change');await flush();
   ui.$('handoff-automatic').checked=true;ui.fire('handoff-automatic','change');await flush();
   assert.deepEqual(handoff,[{threshold:80},{automatic:true}]);
-  ui.$('routing-options').querySelectorAll('.routing-option')[0].click();await flush();await flush();
-  assert.deepEqual(choices.at(-1),{mode:null,allowApi:true,check:true});assert.equal(ui.$('picked-agent').textContent,'Codex','Manual shows the chosen agent again.');
+  ui.window.relayFlow.isOn=()=>false;ui.window.dispatchEvent(new UIEvent('relay-flow'));await flush();
+  assert.equal(ui.$('agents-routing').hidden,true,'Back in the normal view the section goes.');
+  ui.$('select-codex').click();await flush();await flush();
+  assert.deepEqual(choices.at(-1),{mode:null});assert.equal(ui.$('picked-agent').textContent,'Codex','Choosing an agent yourself turns routing off.');
   ui.$('open-git').click();await flush();
   assert.equal(ui.$('agents-panel').hidden,true,'Git and Agents share the side panel.');
 });
@@ -4115,6 +4121,22 @@ test('Settings applies a search again when delayed alert settings arrive', async
   assert.equal(page.querySelectorAll('.settings-row').filter(row => !row.hidden).length, 1);
 });
 
+test('Testing cadence saves without starting work, survives reopening, and restores the previous choice on failure', async () => {
+  const ui = await browser({ workbench: true });
+  await ui.window.relaySettings.open('general', 'Testing'); await flush();
+  let select = ui.labelledInput('Testing cadence');
+  assert.equal(select.value, 'as-needed'); assert.equal(select.disabled, false);
+  select.value = 'review-first'; select.dispatchEvent(new UIEvent('change')); await flush();
+  assert(ui.requests.some(request => request.path === '/api/preferences' && request.body?.verificationCadence === 'review-first'));
+  assert.equal(ui.requests.some(request => /\/(messages|continue)$/.test(request.path)), false);
+  ui.window.relaySettings.close(); await ui.window.relaySettings.open(); await flush();
+  select = ui.labelledInput('Testing cadence'); assert.equal(select.value, 'review-first');
+  ui.setIntercept((request, next) => request.path === '/api/preferences' && request.method === 'POST' ? response({ error: 'Could not save testing cadence.' }, 503) : next());
+  select.value = 'as-needed'; select.dispatchEvent(new UIEvent('change')); await flush();
+  assert.equal(select.value, 'review-first'); assert.equal(select.disabled, false);
+  assert.match(ui.$('settings-error').textContent, /Could not save testing cadence/);
+});
+
 test('General Settings saves handoff and keep-awake controls and reports a save failure', async () => {
   const ui = await browser({ workbench: true, desktop: true });
   await ui.window.relaySettings.open(); await flush();
@@ -4194,4 +4216,468 @@ test('Accounts connects through the provider flow, preserves a draft and shows f
   ui.setIntercept((request, next) => request.path === '/api/providers/codex/connect' ? response({ error: 'Connection unavailable.' }, 503) : next());
   card().querySelectorAll('button').find(button => button.textContent === 'Connect account').click(); await flush();
   assert.equal(ui.$('settings-error').hidden, false); assert.equal(ui.$('settings-error').textContent, 'Connection unavailable.'); assert.equal(ui.$('settings').open, true);
+});
+
+// Flow mode (#107): just the chat, with plain-language cards either side that read what Codeshi already recorded.
+const flowBrowser = options => browser({ insights: true, agentsUI: true, layoutUI: true, rewindUI: true, flowUI: true, modelPickerUI: true, ...options });
+const flowText = (ui, id) => ui.$(`flow-card-${id}`).textContent.replace(/\s+/g, ' ');
+
+test('Flow mode shows only the chat and its cards, and leaving brings the layout back as it was', async () => {
+  const ui = await flowBrowser({ desktop: true, desktopControls: true }), shell = ui.$('app-shell');
+  ui.window.relayAgents.open(); await flush();
+  assert.equal(ui.$('agents-panel').hidden, false); assert.equal(ui.$('toggle-flow').disabled, false); assert.equal(ui.$('toggle-flow').getAttribute('aria-pressed'), 'false');
+  assert.equal(ui.window.relayUI.commands.flow(), true); await flush();
+  assert.equal(shell.classList.contains('flow'), true);
+  assert.equal(ui.$('agents-panel').hidden, true, 'The side panel steps aside.');
+  assert.equal(ui.$('flow-left').hidden, false); assert.equal(ui.$('flow-right').hidden, false); assert.equal(ui.$('flow-strip').hidden, true, 'A wide window keeps the cards at the sides.');
+  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-card-working', 'flow-card-plans', 'flow-space']);
+  assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-card-next', 'flow-card-files', 'flow-connect']);
+  assert.equal(ui.$('toggle-flow').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('flow-status').hidden, false); assert.equal(ui.$('flow-status-text').textContent, 'Ready');
+  assert.equal(ui.$('toggle-flow-label').textContent, 'Leave Flow'); assert.equal(ui.$('flow-brand').hidden, false); assert.equal(ui.$('flow-brand-workspace').textContent, 'Example workspace');
+  assert.equal(ui.$('message-input').placeholder, 'What should we build next?', 'Flow has its own voice in the message box.');
+  assert.equal(ui.$('toggle-sidebar').disabled, true); assert.equal(ui.window.relayLayout.toggleSidebar(), false, 'The sidebar waits until Flow mode is left.');
+  assert.equal(ui.menuStates.at(-1).flow, true, 'The menu bar ticks Flow Mode.');
+  // Approvals, questions and Stop live in the chat, which stays; the toggle is the one way out, and ⌘⇧F is the same command.
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: 'F', ctrlKey: true, shiftKey: true })); await flush();
+  assert.equal(shell.classList.contains('flow'), false);
+  assert.equal(ui.$('agents-panel').hidden, false, 'The side panel that was open comes back.');
+  assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-status').hidden, true); assert.equal(ui.$('toggle-sidebar').disabled, false);
+  assert.equal(ui.$('toggle-flow-label').textContent, 'Flow'); assert.equal(ui.$('flow-brand').hidden, true); assert.equal(ui.$('message-input').placeholder, 'Describe the task or ask a question…');
+  assert.equal(ui.menuStates.at(-1).flow, false); assert.equal(ui.storage.get('throughline:flow'), 'off');
+  // The choice is remembered per browser, and a workspace is needed for it.
+  const again = await flowBrowser({ stored: { 'throughline:flow': 'on' } });
+  assert.equal(again.$('app-shell').classList.contains('flow'), true, 'Flow mode comes back on the next visit.');
+  const none = await flowBrowser({ empty: true, existing: false, stored: { 'throughline:flow': 'on' } });
+  assert.equal(none.$('app-shell').classList.contains('flow'), false); assert.equal(none.$('toggle-flow').disabled, true); assert.equal(none.window.relayFlow.toggle(), false);
+});
+
+test('Flow cards say in plain words how routing and handoff work, what is left, what is next and what changed', async () => {
+  const later = hours => new Date(Date.now() + hours * 3600e3).toISOString();
+  const ui = await flowBrowser({ usage: { claude: { available: true, windows: [{ id: 'five', label: '5-hour', usedPercent: 38, resetsAt: later(2) }, { id: 'week', label: 'Weekly', usedPercent: 62, resetsAt: later(50) }] }, codex: { available: true, windows: [{ id: 'week', label: 'Weekly', usedPercent: 92, resetsAt: later(30) }] } } });
+  const chat = ui.canonical.get('project-one');
+  assert.equal(ui.window.relayFlow.enter(), true); await flush();
+  Object.assign(chat, { routing: { mode: 'balanced', allowApi: false, check: true }, queue: [{ id: 'q1', text: 'Then write the docs for it', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }],
+    runs: [{ id: 'run-1', provider: 'claude', startedAt: '2026-11-06T09:00:00.000Z', status: 'complete' }, { id: 'run-2', provider: 'codex', startedAt: '2026-11-06T10:00:00.000Z', status: 'complete' }],
+    checkpoints: { 'run-1': { files: 3 }, 'run-2': { files: 2, undone: 'rewind-9' } },
+    status: 'running', activeRun: { id: 'run-3', provider: 'codex', startedAt: new Date().toISOString(), plan: { steps: [{ text: 'Read the code', status: 'done' }, { text: 'Write the tests', status: 'active' }, { text: 'Fix the bug', status: 'pending' }] } } });
+  await ui.window.relayUI.refresh(); await ui.window.relayUI.refreshAccounts(); await flush();
+  assert.equal(ui.window.relayFlow.enter(), true); await flush();
+  assert.match(ui.$('flow-status-text').textContent, /^Codex is on “Write the tests” · \d/, 'The status bar says what is happening.'); assert.equal(ui.$('flow-status').dataset.live, 'true');
+  const working = flowText(ui, 'working');
+  assert.match(working, /^How it’s working now\s*Routing\s*Balanced\s*Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit\./, 'The mode leads, with its handoff.');
+  assert.match(working, /After a run changes files, your tests run/);
+  assert.match(working, /Next message\s*Codex is working on it now\./);
+  assert.doesNotMatch(working, /Near a limit/, 'Handoff follows the mode; there is no separate line for it.');
+  assert.equal(ui.$('flow-card-working').querySelectorAll('[role="radio"]').every(radio => radio.disabled), true, 'The mode waits while a run works.');
+  const plans = flowText(ui, 'plans');
+  assert.match(plans, /Claude\s*38% left\s*this week · resets/, 'The tightest limit, in words: the weekly one here.');
+  assert.match(plans, /1 other limit/); assert.match(plans, /Codex\s*8% left/);
+  assert.equal(ui.$('flow-card-plans').querySelectorAll('.flow-plan').map(item => item.dataset.level).join(','), 'critical,ok', 'Codex, then Claude, as in Plan usage.');
+  const next = flowText(ui, 'next');
+  assert.match(next, /1 of 3 done\./); assert.match(next, /Read the code.*Write the tests.*Fix the bug/); assert.match(next, /Then · 1 queued message\s*Then write the docs for it/);
+  assert.equal(ui.$('flow-card-next').querySelectorAll('.flow-step').map(step => step.className).join('|'), 'flow-step done|flow-step active|flow-step pending');
+  const files = flowText(ui, 'files');
+  assert.match(files, /3 files changed, across 2 runs\./, 'Undone changes are not counted.');
+  assert.match(files, /Changes undone\s*Codex.*Redo.*3 files changed\s*Claude.*Undo/, 'Newest first.');
+  const actions = ui.$('flow-card-files').querySelectorAll('.flow-run-action');
+  assert.deepEqual(actions.map(action => [action.textContent, action.disabled]), [['Redo', true], ['Undo', true]], 'Undo waits for the run to finish.');
+  // The run ends: the cards follow, and Undo opens the same preview as the line in the chat.
+  Object.assign(chat, { status: 'complete', activeRun: null, lastRun: { id: 'run-3', provider: 'codex', status: 'complete', plan: chat.activeRun.plan } });
+  ui.setIntercept((request, next) => request.path === '/api/checkpoints/preview' ? response({ digest: 'd', files: [], run: {}, runId: request.body.target.id }) : next());
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(flowText(ui, 'working'), /Next message\s*Type a message to see who would take it\./);
+  assert.equal(ui.$('flow-status-text').textContent, 'Done'); assert.equal(ui.$('flow-status').dataset.live, 'false');
+  assert.doesNotMatch(flowText(ui, 'next'), /Read the code/, 'A finished plan is not what’s next.'); assert.match(flowText(ui, 'next'), /Then · 1 queued message/);
+  const undo = ui.$('flow-card-files').querySelectorAll('.flow-run-action').find(action => action.textContent === 'Undo');
+  assert.equal(undo.disabled, false); undo.click(); await flush();
+  assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').map(request => request.body.target), [{ kind: 'run', id: 'run-1' }]);
+});
+
+test('Flow turns routing on as it opens, offers three modes with no manual one, says what a change would do first, and turns routing off on leaving', async () => {
+  const ui = await flowBrowser(), chat = ui.canonical.get('project-one');
+  ui.setIntercept((request, next) => { if (request.path.endsWith('/routing')) { chat.routing = request.body.mode ? { mode: request.body.mode, allowApi: request.body.allowApi, check: request.body.check } : null; return response(clone(chat)); } return next(); });
+  await ui.window.relayUI.refreshAccounts(); await flush();
+  assert.equal(chat.routing, undefined, 'The normal view has no routing.');
+  ui.window.relayFlow.enter(); await flush();
+  assert.deepEqual(chat.routing, { mode: 'balanced', allowApi: false, check: false }, 'Entering Flow turns routing on, Balanced at first.');
+  assert.match(flowText(ui, 'working'), /Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit\..*Next message\s*Type a message to see who would take it\./);
+  const card = ui.$('flow-card-working'), radio = mode => card.querySelectorAll('[role="radio"]').find(item => item.dataset.mode === mode);
+  assert.deepEqual(card.querySelectorAll('[role="radio"]').map(item => item.dataset.mode), ['saving', 'balanced', 'quality'], 'No manual mode in Flow.');
+  assert.equal(radio('balanced').getAttribute('aria-checked'), 'true');
+  ui.$('message-input').value = 'Rename the variable in app.js'; ui.fire('message-input', 'input'); await flush();
+  assert.match(flowText(ui, 'working'), /Next message\s*It would go to (Codex|Claude), /);
+  radio('saving').click(); await flush();
+  const confirm = card.querySelector('.flow-confirm'); assert(confirm, 'Choosing asks first.');
+  const asked = confirm.textContent.replace(/\s+/g, ' ');
+  assert.match(asked, /^Switch to Cost saving\?/); assert.match(asked, /Your draft would go to (Codex|Claude), /); assert.match(asked, /Access and permissions stay as they are, and agents billed by use stay off\./);
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/routing')).length, 1, 'Nothing changes before Switch.');
+  assert.equal(ui.document.activeElement, confirm.querySelector('.flow-apply'), 'Focus moves to the confirmation.');
+  ui.findButton('Keep Balanced').click(); await flush();
+  assert.equal(card.querySelector('.flow-confirm'), null); assert.equal(chat.routing.mode, 'balanced');
+  radio('quality').click(); await flush(); ui.findButton('Switch to Maximum quality').click(); await flush();
+  assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Only the mode changes; API billing and Check with tests stay as they were.');
+  assert.equal(radio('quality').getAttribute('aria-checked'), 'true'); assert.equal(card.querySelector('.flow-confirm'), null);
+  assert.match(flowText(ui, 'working'), /Routing\s*Maximum quality\s*Codeshi favors stronger models and deeper reasoning, and holds on until 95% of a limit/);
+  // The Agents sheet shows Routing in Flow, without Manual, and no Handoff settings, since handoff follows the mode; the normal view hides Routing and says why.
+  ui.$('flow-card-working').querySelectorAll('button').find(button => button.textContent === 'Agent settings').click(); await flush();
+  assert.equal(ui.$('agents-routing').hidden, false); assert.equal(ui.$('agents-routing-note').hidden, true); assert.equal(ui.$('agents-handoff').hidden, true);
+  assert.deepEqual(ui.$('routing-options').querySelectorAll('.routing-option').map(row => row.dataset.mode), ['saving', 'balanced', 'quality']);
+  ui.$('flow-detail-close').click(); await flush();
+  ui.window.relayUI.commands.agent('codex'); await flush();
+  assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Choosing an agent by hand is not Flow’s way: routing stays.');
+  assert.match(ui.$('notice-text').textContent, /Leave Flow to pick one yourself/);
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(chat.routing, null, 'Leaving Flow turns routing off: the normal view picks by hand.');
+  assert.equal(ui.$('picked-agent').textContent, 'Codex');
+  assert.equal(ui.$('agents-routing').hidden, true); assert.equal(ui.$('agents-routing-note').hidden, false); assert.equal(ui.$('agents-handoff').hidden, false);
+  ui.window.relayFlow.enter(); await flush();
+  assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Flow remembers the mode this workspace used last.');
+  const fresh = await flowBrowser();
+  fresh.canonical.get('project-one').routing = { mode: 'saving', allowApi: false, check: false };
+  await fresh.window.relayUI.refresh(); await flush();
+  assert.equal(fresh.canonical.get('project-one').routing, null, 'Routing found on outside Flow is turned off at the next idle moment.');
+});
+
+test('a narrow window keeps the Flow cards out of the chat as chips, and one opens at a time', async () => {
+  const ui = await flowBrowser({ wide: true }), chat = ui.canonical.get('project-one');
+  ui.window.relayFlow.enter(); await flush();
+  Object.assign(chat, { routing: { mode: 'quality' }, queue: [{ id: 'q1', text: 'Next thing', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }] });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.window.relayFlow.enter(); await flush();
+  // Every media query matches here, so the window counts as narrow: chips under the header, no side columns.
+  assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-strip').hidden, false);
+  const chips = () => ui.$('flow-strip').querySelectorAll('.flow-chip').map(chip => chip.textContent);
+  assert.deepEqual(chips(), ['Maximum quality', 'Plans', '1 queued message', 'Files', 'Your space'], 'Every card has a chip, with preferences available separately.');
+  ui.$('flow-strip').querySelectorAll('.flow-chip')[2].click(); await flush();
+  assert.equal(ui.$('flow-peek').hidden, false); assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-next'); assert.equal(ui.document.activeElement, ui.$('flow-peek-close'));
+  assert.equal(ui.$('flow-strip').querySelectorAll('.flow-chip')[2].getAttribute('aria-pressed'), 'true');
+  ui.$('flow-strip').querySelectorAll('.flow-chip')[1].click(); await flush();
+  assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-plans', 'Another chip swaps the open card.');
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
+  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children.map(card => card.id).join(','), 'flow-card-next,flow-card-files,flow-connect', 'The cards go back to their sides.');
+  assert.equal(ui.$('flow-card-working').querySelectorAll('button').some(item => /hide/i.test(item.getAttribute('aria-label') || '')), false, 'Cards have no close button.');
+  assert.equal(ui.window.relayFlow.cards().length, 4);
+});
+
+test('Flow details use a dismissible sheet and restore the workbench when leaving', async () => {
+  const ui = await flowBrowser();
+  ui.window.relayFlow.enter(); await flush();
+  const openAgents = ui.$('flow-card-working').querySelectorAll('button').find(button => button.textContent === 'Agent settings');
+  openAgents.focus(); openAgents.click(); await flush();
+  assert.equal(ui.$('flow-detail').open, true);
+  assert.equal(ui.$('agents-panel').parentNode.id, 'flow-detail-body', 'Agents no longer opens the docked sidebar.');
+  assert.equal(ui.$('flow-detail-title').textContent, 'Your agents');
+  assert.equal(ui.document.activeElement, ui.$('flow-detail-close'));
+  ui.$('flow-detail-close').click(); await flush();
+  assert.equal(ui.$('flow-detail').open, false); assert.equal(ui.$('agents-panel').hidden, true);
+  assert.equal(ui.$('agents-panel').parentNode.id, 'app-shell'); assert.equal(ui.document.activeElement, openAgents);
+
+  const timeline = ui.$('flow-card-files').querySelectorAll('button').find(button => button.textContent === 'Timeline');
+  assert(timeline, 'Timeline is available even when no files have changed.');
+  timeline.focus(); timeline.click(); await flush();
+  assert.equal(ui.$('flow-detail-title').textContent, 'Your timeline');
+  assert.equal(ui.$('timeline-panel').parentNode.id, 'flow-detail-body');
+  assert(ui.requests.some(request => request.path === '/api/checkpoints'), 'The real timeline still loads its checkpoints.');
+  ui.$('flow-detail').dispatchEvent(new UIEvent('cancel')); await flush();
+  assert.equal(ui.$('flow-detail').open, false); assert.equal(ui.$('timeline-panel').hidden, true);
+  assert.equal(ui.document.activeElement, timeline);
+
+  ui.window.relayAgents.open(); await flush();
+  ui.window.relayTimeline.open(); await flush();
+  assert.equal(ui.$('agents-panel').hidden, true); assert.equal(ui.$('agents-panel').parentNode.id, 'app-shell');
+  assert.equal(ui.$('timeline-panel').parentNode.id, 'flow-detail-body');
+  const bounds = ui.$('flow-detail').getBoundingClientRect();
+  ui.$('flow-detail').dispatchEvent(new UIEvent('click', { clientX: bounds.left - 1, clientY: bounds.top - 1 })); await flush();
+  assert.equal(ui.$('flow-detail').open, false, 'Clicking the backdrop dismisses details.');
+  ui.window.relayTimeline.open(); await flush();
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(ui.$('flow-detail').open, false); assert.equal(ui.$('timeline-panel').hidden, true, 'A Flow detail never leaks into the normal layout.');
+  ui.window.relayAgents.open(); await flush();
+  assert.equal(ui.$('flow-detail').open, false); assert.equal(ui.$('agents-panel').hidden, false);
+  assert.equal(ui.$('agents-panel').parentNode.id, 'app-shell', 'Normal mode still opens the normal panel.');
+});
+
+test('Flow separates its utilities across the rails and excludes shell tools until leaving', async () => {
+  const ui = await flowBrowser({ commandsUI: true, terminalUI: true, theme: true });
+  const phone = ui.$('connect-phone'), originalParent = phone.parentNode;
+  ui.window.relayPanel.show('run'); await flush();
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(phone.closest('.flow-utility')?.id, 'flow-connect');
+  assert.equal(ui.$('relay-settings').closest('.flow-utility')?.id, 'flow-space');
+  assert.equal(ui.$('flow-status').parentNode.id, 'flow-card-working');
+  assert.equal(ui.$('appearance-options').closest('.flow-utility')?.id, 'flow-space');
+  assert.equal(ui.window.relayPanel.isOpen(), false);
+  const buttons = ['next', 'working', 'files'].flatMap(id => ui.$(`flow-card-${id}`).querySelectorAll('button').map(button => button.textContent));
+  assert.equal(buttons.some(text => text === 'Run commands' || text === 'Terminal'), false);
+  assert.equal(ui.window.relayUI.commands.terminal(), false);
+  ui.window.relayPanel.show('run'); ui.window.relayTerminal.open();
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: 'j', ctrlKey: true }));
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: '`', ctrlKey: true }));
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true }));
+  await flush();
+  assert.equal(ui.window.relayPanel.isOpen(), false, 'Menu actions and shortcuts cannot open shell tools in Flow.');
+  assert.equal(ui.requests.some(request => request.path === '/api/terminal/start'), false, 'The new-shell shortcut creates no hidden session.');
+  for (const text of ['>terminal', '>Run: your dev']) {
+    ui.$('workspace-search').value = text; ui.fire('workspace-search', 'input'); await flush();
+    assert.equal(ui.$('command-results').textContent.includes('Terminal'), false);
+    assert.equal(ui.$('command-results').textContent.includes('Run: your dev'), false);
+  }
+  ui.$('appearance-options').querySelectorAll('[data-appearance]').find(button => button.dataset.appearance === 'light').click(); await flush();
+  assert.equal(ui.document.documentElement.getAttribute('data-theme'), 'light', 'Theme controls stay functional in the separate rail.');
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(ui.window.relayPanel.isOpen('run'), true, 'The workbench tool that was open before Flow returns.');
+  assert.equal(phone.parentNode, originalParent, 'The live phone control returns to its original location.');
+  assert.equal(ui.$('relay-settings').closest('.flow-utility'), null);
+});
+
+test('dismissing Flow details in a narrow window returns to its originating card', async () => {
+  const ui = await flowBrowser({ wide: true });
+  ui.window.relayFlow.enter(); await flush();
+  ui.window.relayFlow.peek('files'); await flush();
+  const timeline = ui.$('flow-card-files').querySelectorAll('button').find(button => button.textContent === 'Timeline');
+  timeline.focus(); timeline.click(); await flush();
+  assert.equal(ui.$('flow-detail').open, true); assert.equal(ui.$('flow-peek').hidden, true);
+  ui.$('flow-detail-close').click(); await flush();
+  assert.equal(ui.$('flow-peek').hidden, false);
+  assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-files');
+  assert.equal(ui.document.activeElement, timeline, 'Keyboard focus returns to the visible originating action.');
+  timeline.click(); await flush();
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(ui.$('flow-peek').hidden, true, 'Leaving Flow does not reopen its narrow card.');
+  assert.equal(ui.$('flow-detail').open, false);
+});
+
+
+test('narrow Flow keeps appearance, settings and phone access reachable through Your space', async () => {
+  const ui = await flowBrowser({ wide: true });
+  ui.window.relayFlow.enter(); await flush();
+  ui.$('flow-strip').querySelectorAll('.flow-chip').find(button => button.textContent === 'Your space').click(); await flush();
+  assert.equal(ui.$('flow-peek').hidden, false);
+  assert.equal(ui.$('connect-phone').closest('.flow-preferences') !== null, true);
+  assert.equal(ui.$('relay-settings').closest('.flow-preferences') !== null, true);
+  ui.$('flow-peek-close').click(); await flush();
+  assert.equal(ui.$('flow-peek').hidden, true);
+  assert.equal(ui.$('flow-space').parentNode.id, 'flow-left');
+  assert.equal(ui.$('flow-connect').parentNode.id, 'flow-right');
+});
+
+
+test('Flow blocks entering and leaving while workspace work is active without changing settings', async () => {
+  const ui = await flowBrowser({ desktop: true, desktopControls: true }), chat = ui.canonical.get('project-one');
+  Object.assign(chat, { status: 'running', activeRun: { id: 'busy', provider: 'codex' } });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('toggle-flow').disabled, true); assert.equal(ui.menuStates.at(-1).flowLocked, true);
+  assert.equal(ui.window.relayUI.commands.flow(), false); assert.equal(ui.window.relayFlow.enter(), false);
+  assert.equal(ui.$('app-shell').classList.contains('flow'), false);
+  assert.match(ui.$('toggle-flow').title, /Finish or stop workspace work/);
+  Object.assign(chat, { status: 'complete', activeRun: null });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.window.relayFlow.enter(); await flush();
+  Object.assign(chat, { status: 'running', activeRun: { id: 'flow-busy', provider: 'claude' } });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.window.relayFlow.leave(), false); assert.equal(ui.$('app-shell').classList.contains('flow'), true);
+  assert.equal(ui.storage.get('throughline:flow'), 'on');
+  Object.assign(chat, { status: 'complete', activeRun: null });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('toggle-flow').disabled, false);
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(ui.$('app-shell').classList.contains('flow'), false);
+  assert.equal(ui.requests.some(request => request.method === 'POST' && /handoff|tasks|messages/.test(request.path)), false, 'Changing views never starts work.');
+});
+
+test('Flow checks other tasks, review/check phases, continuation waits and unpaused queues', async () => {
+  const ui = await flowBrowser(), chat = ui.canonical.get('project-one');
+  const activities = [
+    { parallelTasks: [{ id: 'other', title: 'Other work', status: 'running' }] },
+    { reviews: [{ id: 'review', status: 'running' }] },
+    { runs: [{ id: 'check', check: { status: 'running' } }] },
+    { resume: { providers: ['codex'], mode: 'read', approvalPolicy: 'ask' } },
+    { queue: [{ id: 'q', text: 'Next work' }] },
+    { parallelTasks: [{ id: 'waiting', status: 'waiting', held: false }] },
+  ];
+  for (const activity of activities) {
+    Object.assign(chat, { parallelTasks: [], reviews: [], runs: [], resume: null, queue: [], ...activity });
+    await ui.window.relayUI.refresh(); await flush();
+    assert.equal(ui.window.relayFlow.enter(), false, JSON.stringify(activity));
+  }
+  Object.assign(chat, { parallelTasks: [], reviews: [], runs: [], resume: null, queue: [{ id: 'q', text: 'Paused work' }], queuePaused: true });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.window.relayFlow.enter(), true); await flush();
+  assert.equal(ui.window.relayFlow.isOn(), true, 'A deliberately paused queue allows choosing a view.');
+});
+
+test('Flow refuses stale idle state and failed activity checks', async () => {
+  const ui = await flowBrowser();
+  ui.setIntercept((request, next) => request.path === '/api/status' ? response({ runningConversationId: null, workspaceActivity: { busy: true, reviewing: 1 } }) : next());
+  assert.equal(ui.window.relayFlow.enter(), true); await flush();
+  assert.equal(ui.window.relayFlow.isOn(), false, 'An unseen workspace reviewer blocks switching.');
+  assert.notEqual(ui.storage.get('throughline:flow'), 'on');
+  ui.setIntercept((request, next) => request.path === '/api/status' ? response({ error: 'Activity unavailable' }, 503) : next());
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(ui.window.relayFlow.isOn(), false, 'Failed checks never assume the workspace is idle.');
+  assert.match(ui.$('notice-text').textContent, /Could not check workspace activity/);
+});
+
+test('Flow keeps waiting tasks and completed task threads reachable while view changes are locked', async () => {
+  const ui = await flowBrowser(), chat = ui.canonical.get('project-one');
+  ui.window.relayFlow.enter(); await flush();
+  const waiting = { id: 'aaaaaaaa-0000-4000-8000-000000000001', title: 'Docs', folderName: 'website', status: 'waiting', reason: 'Another task is working.' };
+  const complete = { id: 'bbbbbbbb-0000-4000-8000-000000000002', title: 'Search', folderName: 'website', status: 'complete', conversationId: 'lane-search' };
+  chat.parallelTasks = [waiting, complete];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/conversation' && request.params.task === complete.id) return response({ ...chat, id: complete.conversationId, task: complete, resume: { providers: ['codex'], mode: 'read', approvalPolicy: 'ask' } });
+    if (request.path === `/api/tasks/${waiting.id}/discard`) { chat.parallelTasks = [complete]; return response({}); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  const action = text => ui.$('flow-card-next').querySelectorAll('button').find(button => button.textContent === text);
+  assert.equal(ui.window.relayFlow.leave(), false);
+  assert.match(flowText(ui, 'next'), /Running beside this chat\s*Docs\s*website · waiting to start\s*Search\s*website · finished/, 'Tasks beside the chat are listed with where and how they stand.');
+  action('Docs').click(); await flush();
+  assert.match(ui.$('task-banner').textContent, /website · Waiting/);
+  ui.$('task-banner').querySelectorAll('button').find(button => button.textContent === 'Cancel').click(); await flush();
+  assert(ui.requests.some(request => request.path === `/api/tasks/${waiting.id}/discard`));
+  assert.equal(ui.requests.some(request => request.path === `/api/tasks/${waiting.id}/start`), false, 'Opening waiting work never starts it.');
+  action('Search').click(); await flush();
+  assert.equal(ui.state().taskId, complete.id);
+  assert.equal(ui.window.relayFlow.leave(), false, 'The task’s reset wait stays protected and reachable.');
+  assert.match(flowText(ui, 'next'), /This task runs beside the workspace chat/);
+  action('Workspace chat').click(); await flush();
+  assert.equal(ui.state().taskId, null);
+  assert.equal(ui.$('task-banner').hidden, true, 'Returning clears the selected task banner.');
+});
+
+test('Flow rechecks activity during its animation and serializes view changes', async () => {
+  const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), animations = [];
+  ui.$('flow-veil').animate = () => { const animation = {}; animations.push(animation); return animation; };
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(animations.length, 1); assert.equal(ui.window.relayFlow.enter(), false, 'A second transition cannot overlap the first.');
+  Object.assign(chat, { status: 'running', activeRun: { id: 'started-during-fade', provider: 'codex' } });
+  await ui.window.relayUI.refresh(); await flush();
+  animations[0].onfinish(); animations[1].onfinish(); await flush();
+  assert.equal(ui.window.relayFlow.isOn(), false); assert.equal(ui.$('app-shell').classList.contains('flow'), false);
+  assert.notEqual(ui.storage.get('throughline:flow'), 'on', 'An aborted transition does not persist the requested view.');
+});
+
+test('the Flow header spans the window, with the brand beside the window controls and the way out at the far right, and says nothing about a preview', async () => {
+  // The page keeps the order the header's grid places: the seal and the word, then search, then the way out last.
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8'), header = html.slice(html.indexOf('<header id="conversation-header"'), html.indexOf('</header>'));
+  const at = marker => header.indexOf(marker);
+  assert(at('id="flow-brand"') >= 0 && at('id="flow-brand"') < at('class="command-bar"') && at('class="command-bar"') < at('id="toggle-flow"'), 'Brand, then search, then the way out.');
+  const actions = header.slice(at('class="header-actions"'), at('id="header-menu"'));
+  assert.equal(actions.lastIndexOf('<button'), actions.indexOf('<button id="toggle-flow"'), 'Leave Flow is the last control, at the far right.');
+  assert.doesNotMatch(header, /preview/i);
+  // In Flow the header moves from the chat column to the top of the shell, and leaving puts it back where it was.
+  const ui = await flowBrowser({ desktop: true, desktopControls: true }), node = ui.$('conversation-header'), home = node.parentNode, index = home.children.indexOf(node);
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(node.parentNode.id, 'app-shell', 'The header leaves the chat column and spans the window.');
+  assert.equal(ui.$('flow-about'), null); assert.equal(ui.$('flow-space').querySelector('.flow-feedback'), null);
+  for (const id of ['flow-brand', 'flow-left', 'flow-right']) assert.doesNotMatch(ui.$(id).textContent, /preview|feedback/i, `${id} has no preview or feedback wording.`);
+  assert.doesNotMatch(ui.$('toggle-flow').title, /preview/i);
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(node.parentNode, home); assert.equal(home.children.indexOf(node), index, 'The header goes back where it was.');
+  assert.doesNotMatch(ui.$('toggle-flow').title, /preview/i);
+});
+
+test('Remote access in Flow opens a Flow sheet with the pairing controls instead of Settings', async () => {
+  const ui = await flowBrowser({ workbench: true }), polls = [];
+  const state = { enabled: false, interfaces: [{ name: 'Wi-Fi', address: '192.168.1.10' }], devices: [], remote: { configured: true, enabled: false, devices: [] } };
+  let fail = null;
+  ui.setIntercept((request, next) => {
+    if (request.path !== '/api/phone') return next();
+    if (request.method === 'POST') { if (fail) return response({ error: fail }, 503); if (request.body.action === 'start') state.enabled = true; }
+    return response(state);
+  });
+  vm.runInNewContext(fs.readFileSync(new URL('../public/phone-access.js', import.meta.url), 'utf8'), { window: ui.window, document: ui.document, requestAnimationFrame: fn => fn(), setInterval: fn => polls.push(fn) });
+  ui.window.relayFlow.enter(); await flush();
+  const entry = ui.$('connect-phone'); entry.focus(); entry.click(); await flush();
+  assert.equal(ui.$('flow-detail').open, true); assert.equal(ui.$('settings').open, false, 'Settings stays closed.');
+  assert.equal(ui.$('flow-detail-title').textContent, 'Remote access');
+  const sheet = ui.$('flow-detail-body'), button = text => sheet.querySelectorAll('button').find(item => item.textContent === text);
+  assert.equal(ui.labelledInput('Connection').value, 'local');
+  assert(button('Enable same-Wi-Fi access'), 'The pairing controls are the same as in Settings.');
+  button('Enable same-Wi-Fi access').click(); await flush();
+  assert.deepEqual(ui.requests.filter(request => request.path === '/api/phone' && request.method === 'POST').map(request => request.body), [{ action: 'start', address: '192.168.1.10' }]);
+  assert(button('Turn off'), 'The sheet redraws with the new state.');
+  assert.equal(ui.$('connect-phone-label').textContent, 'Remote access on', 'The entry in the rail follows.');
+  fail = 'Pairing is unavailable.';
+  button('Show QR code').click(); await flush();
+  assert.match(ui.$('notice-text').textContent, /Pairing is unavailable/, 'A failed action is reported in Flow, not in the closed Settings dialog.');
+  assert.equal(ui.$('settings-error').hidden, true);
+  ui.$('flow-detail-close').click(); await flush();
+  assert.equal(ui.$('flow-detail').open, false); assert.equal(sheet.children.length, 0); assert.equal(ui.document.activeElement, entry);
+  // Status polls keep the rail entry current after the sheet closes; outside Flow the entry opens Settings as before.
+  state.devices.push({ id: 'pending-phone', name: 'Phone', code: '123456', state: 'pending' });
+  polls[0](); await flush();
+  assert.equal(ui.$('connect-phone-count').textContent, '1'); assert.equal(ui.$('flow-detail').open, false);
+  ui.window.relayFlow.leave(); await flush();
+  entry.click(); await flush();
+  assert.equal(ui.$('settings').open, true); assert.equal(ui.$('flow-detail').open, false);
+  assert.match(ui.$('settings-content').textContent, /Same-Wi-Fi access is on/, 'Settings still has the section.');
+});
+
+// Gemini on the Antigravity connection works in one folder at a time (#116): with several, the message waits for a choice.
+test('Gemini on the Antigravity connection in a workspace with several folders asks which folder, then runs the message as a task there', async () => {
+  const ui = await browser({ providers: { gemini: { available: true } }, agentsUI: true }), chat = ui.canonical.get('project-one'), posted = [];
+  let account = { installed: true, available: true, authenticated: true, authMode: 'google-oauth', source: 'antigravity-acp', billingSource: 'subscription', usage: 'unknown' };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/providers/gemini/account') return response(account);
+    if (request.path === '/api/tasks') { posted.push(request.body); const task = { id: 'dddddddd-0000-4000-8000-000000000004', title: request.body.text, folderName: 'Backend', folderId: request.body.folderId, status: 'running', mode: 'direct', approvals: 0, conversationId: 'lane-backend', hasWorktree: false }; chat.parallelTasks = [task]; return response(task, 202); }
+    if (request.path === '/api/conversation' && request.params.task) return response({ ...chat, id: 'lane-backend', task: chat.parallelTasks[0], messages: [], cursor: 0 });
+    if (request.method === 'POST' && /\/messages$/.test(request.path) && request.body.provider === 'gemini') return response({ error: 'This Antigravity connection works in one project folder at a time.', details: { folderChoice: true } }, 400);
+    return next();
+  });
+  await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
+  ui.$('select-gemini').click(); await flush();
+  assert.equal(ui.state().provider, 'gemini');
+  ui.$('message-input').value = 'Tidy the API docs'; ui.fire('message-input', 'input');
+  ui.fire('composer', 'submit'); await flush();
+  assert.equal(ui.$('folder-ask').hidden, false, 'The page asks before sending anything.');
+  assert.match(ui.$('folder-ask-text').textContent, /^Gemini works in one folder at a time on this connection/);
+  const choices = () => ui.$('folder-ask-choices').querySelectorAll('button');
+  assert.deepEqual(choices().map(button => button.textContent), ['Frontend', 'Backend', 'Cancel']);
+  assert.equal(ui.requests.some(request => request.method === 'POST' && /\/(messages|tasks)$/.test(request.path)), false, 'Nothing is sent until a folder is chosen.');
+  assert.equal(ui.$('message-input').value, 'Tidy the API docs', 'The draft waits for the choice.');
+  choices().find(button => button.textContent === 'Cancel').click(); await flush();
+  assert.equal(ui.$('folder-ask').hidden, true); assert.equal(ui.$('message-input').value, 'Tidy the API docs', 'Cancel keeps the draft.');
+  ui.fire('composer', 'submit'); await flush();
+  ui.$('message-input').value = 'Tidy the API docs and the README'; ui.fire('message-input', 'input'); await flush();
+  assert.equal(ui.$('folder-ask').hidden, true, 'Editing the message withdraws the choice.');
+  ui.fire('composer', 'submit'); await flush();
+  choices().find(button => button.textContent === 'Backend').click(); await flush();
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].folderId, 'backend'); assert.equal(posted[0].provider, 'gemini'); assert.equal(posted[0].text, 'Tidy the API docs and the README'); assert.equal(posted[0].mode, ui.state().mode);
+  assert.equal(ui.$('folder-ask').hidden, true); assert.equal(ui.$('message-input').value, '', 'The message went with the task.');
+  assert.equal(ui.requests.some(request => request.method === 'POST' && /\/messages$/.test(request.path)), false, 'The workspace chat received nothing.');
+  assert.equal(ui.state().taskId, 'dddddddd-0000-4000-8000-000000000004', 'The conversation moves to the task.');
+  await ui.window.relayUI.setTask(null); await flush();
+  // The page could not tell in advance: the server's answer offers the folders instead of a retry that would fail again.
+  account = { installed: true, available: true, authenticated: true, billingSource: 'subscription', usage: 'unknown' };
+  await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
+  ui.$('message-input').value = 'Rename the module'; ui.fire('message-input', 'input');
+  ui.fire('composer', 'submit'); await flush();
+  assert.equal(ui.requests.filter(request => request.method === 'POST' && /\/messages$/.test(request.path)).length, 1, 'With no way to tell, the message is sent.');
+  assert.equal(ui.$('folder-ask').hidden, false, 'The server’s answer brings the same choice.'); assert.equal(ui.$('notice').hidden, true);
+  assert.equal(ui.$('message-input').value, 'Rename the module');
+  // Codex takes the whole workspace, so it needs no choice.
+  choices().find(button => button.textContent === 'Cancel').click(); await flush();
+  ui.$('select-codex').click(); await flush();
+  ui.fire('composer', 'submit'); await flush();
+  assert.equal(ui.$('folder-ask').hidden, true);
+  assert.equal(ui.requests.filter(request => request.method === 'POST' && /\/messages$/.test(request.path) && request.body.provider === 'codex').length, 1);
+});
+
+test('Flow explains Review first and deferred automatic tests without treating them as verified', async () => {
+  const ui = await flowBrowser({ workbench: true }), chat = ui.canonical.get('project-one');
+  ui.window.relayFlow.enter(); await flush();
+  chat.routing = { mode: 'balanced', check: true };
+  await ui.window.relayUI.refresh(); await flush();
+  ui.state().status.verificationCadence = 'review-first';
+  ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  assert.match(flowText(ui, 'working'), /Routine automatic tests wait while you review/);
+  assert.match(flowText(ui, 'working'), /small safeguards now; verify when you ask to finalize/);
+  chat.messages.push({ id: 'deferred-check', role: 'activity', provider: 'codex', text: 'Tests deferred: npm test\nNo Codeshi-managed test result is available.', status: 'complete' });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(ui.$('messages').textContent, /Automatic tests deferred/);
+  assert.doesNotMatch(ui.$('messages').textContent, /Tests passed/);
 });

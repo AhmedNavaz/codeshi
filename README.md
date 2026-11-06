@@ -64,9 +64,9 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 <table>
 <tr>
 <td width="50%" valign="top">
-<img src="docs/features/routing.jpg" alt="Routing in the Agents panel, set to Balanced among Manual, Cost saving and Maximum quality, and its choice above the message box: Claude with Opus 5.5 for a complex refactoring task">
+<img src="docs/features/routing.jpg" alt="Routing in the Agents panel, set to Balanced among Cost saving and Maximum quality, and its choice above the message box: Claude with Opus 5.5 for a complex refactoring task">
 <h3>Routing</h3>
-<p>Picks the agent, model and effort for each message, from a light model for a typo to the strongest for a refactor, and shows its choice before you send. It stays on your subscriptions unless you allow API billing.</p>
+<p>In Flow, picks the agent, model and effort for each message, from a light model for a typo to the strongest for a refactor, and shows its choice before you send. It stays on your subscriptions unless you allow API billing.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/recap.jpg" alt="The While you were away recap: a finished task, a usage limit, a reset to wait for, uncommitted changes and an approval waiting">
@@ -119,6 +119,7 @@ Also included:
 - **A task-focused brief**, showing the next agent its task, relevant folders, instructions, changed files and unfinished work; see what it receives in the Brief panel
 - **Task usage and limits**, for working time, reported tokens, API spend and retries across agents, handoffs and reviews; missing usage stays marked as not reported
 - **Undo, redo and Timeline restore**, to take back any run after a preview of every line that changes, or return the workspace to a saved checkpoint with a recovery point saved first
+- **Flow**, a focused view using your current routing and handoff settings, with mode changes held until the workspace is idle: how routing and handoff are working and what another choice would change, what's left on each plan, what's next, and the files changed with Undo
 - **Files, Terminal, Run and Git** for each workspace: a separate Files browser, shells in tabs or side by side, and each project's dev server, tests and changes in reach
 - **Chat import** from your earlier Claude Code and Codex sessions
 - **Ask a Friend**, for help from another developer with a patch you review
@@ -179,7 +180,7 @@ npm start
 ## How it works
 
 1. **Add a project.** Create a workspace and add its folders, such as `web` and `api`. Its permanent conversation is the **Workspace chat**, with separate tasks alongside it when you need them.
-2. **Send a task to any agent.** Pick Claude, Codex or Gemini, or let Routing choose. Switch whenever you like; the next agent receives the shared conversation and task brief, with the memory and skills you enabled.
+2. **Send a task to any agent.** Pick Claude, Codex or Gemini, or let Routing choose in Flow. Switch whenever you like; the next agent receives the shared conversation and task brief, with the memory and skills you enabled.
 3. **Stay in charge.** Agents ask before changing your project, you review the diffs, and you decide what gets committed.
 
 Codeshi runs the agents you have installed, on your own accounts. It ships no API keys, adds no model service of its own and stores your conversations on your computer. The [guide](docs/guide.md) covers each feature in detail, including what is stored where.

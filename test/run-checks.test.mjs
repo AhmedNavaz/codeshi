@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
-import { CHECK_PAUSE, retryPrompt } from '../src/run-checks.mjs';
+import { CHECK_PAUSE, RunChecks, retryPrompt } from '../src/run-checks.mjs';
 import { createRelayServer } from '../src/server.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
@@ -38,8 +38,8 @@ function setup(t, results = []) {
   t.after(async () => { await Promise.all(brokers.map(broker => broker.close())); fs.rmSync(root, { recursive: true, force: true }); });
   return {
     runs, notices, release: () => fs.writeFileSync(path.join(workspace, '.release'), ''), unsave: () => { saved = null; },
-    open(usedPercent = 10) {
-      const broker = new Broker({ workspace, dataDir, bins: { codex: bin }, tests });
+    open(usedPercent = 10, verificationCadence = () => 'as-needed') {
+      const broker = new Broker({ workspace, dataDir, bins: { codex: bin }, tests, verificationCadence });
       broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent }] });
       broker.on('notify', notice => notices.push(notice));
       brokers.push(broker); return broker;
@@ -50,6 +50,38 @@ const routed = (mode, extra = {}) => ({ provider: 'codex', mode: 'edit', model: 
 async function until(check, ms = 15000) { const end = Date.now() + ms; while (!check()) { if (Date.now() > end) throw new Error('Timed out waiting'); await new Promise(resolve => setTimeout(resolve, 10)); } }
 const checks = c => c.messages.filter(message => message.role === 'activity' && message.text.startsWith('Tests ')).map(message => message.text.split('\n')[0]);
 const settled = (broker, c, count) => until(() => !broker.running && c.runs.filter(run => run.check && run.check.status !== 'running').length >= count);
+
+test('Review first defers the routine check and repair loop, preserves queues and snapshots the starting cadence', { skip: scriptCLIs }, async t => {
+  const env = setup(t, [{ status: 'failed', exitCode: 1, output: 'Would fail if run.' }]);
+  let cadence = 'review-first';
+  const broker = env.open(10, () => cadence), c = broker.get(broker.create().id);
+  broker.setRouting(c, { mode: 'balanced', check: true });
+  broker.start(c, { text: 'Hold the workspace', ...routed('balanced') });
+  broker.queueAction(c, { action: 'add', text: 'A follow-up without edits', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
+  cadence = 'as-needed';
+  env.release();
+  await until(() => c.runs.length === 2 && !broker.running);
+  assert.equal(env.runs.length, 0, 'The routine test command and its failure retry were never started.');
+  assert.equal(c.runs[0].check.status, 'deferred');
+  assert.equal(c.runs[0].verification.cadence, 'review-first');
+  assert.equal(c.runs[1].verification.cadence, 'as-needed', 'New turns use the latest setting.');
+  assert.deepEqual(checks(c), ['Tests deferred: npm test']);
+  assert.equal(c.queue.length, 0); assert.equal(c.retryOffer, null);
+  assert.equal(c.messages.find(message => message.text.startsWith('Tests deferred:')).runId, c.runs[0].id);
+  await broker.close();
+  const reopened = env.open();
+  assert.equal(reopened.get(c.id).runs[0].check.status, 'deferred', 'Deferral stays explicit after restart.');
+});
+
+test('Review first never skips explicitly selected workflow checks or test repair', async () => {
+  const checks = new RunChecks({ record() { assert.fail('A required check must not be deferred.'); } });
+  let started = 0;
+  checks.wanted = () => ({ command: 'npm test' });
+  checks.check = async () => { started++; };
+  for (const workflow of [{ retryOf: 'failed-run' }, { automaticReview: { enabled: true } }]) assert.equal(checks.runEnded({}, { verification: { cadence: 'review-first' }, ...workflow }, 'complete'), true);
+  await Promise.all(checks.pending);
+  assert.equal(started, 2);
+});
 
 test('a routed run that changes files is checked with the saved Test command, and queued prompts wait for it', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);

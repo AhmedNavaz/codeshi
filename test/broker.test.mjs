@@ -350,7 +350,11 @@ test('requires both a successful terminal event and a successful process exit', 
   await run(broker, c, 'Permission denied', 'claude');
   assert.equal(c.status, 'incomplete');
   assert.equal(c.sessions.claude.cursor, 0);
-  assert.ok(c.messages.some(m => m.role === 'error' && /needs approval/.test(m.text)));
+  // One plain error: no raw JSON, no second "exit 0" message, and no talk of a terminal that nothing was waiting in (#112).
+  const errors = c.messages.filter(m => m.role === 'error' && m.runId === c.runs.at(-1).id || m.role === 'error' && /permission/.test(m.text));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].text, /couldn't get permission to use Bash/);
+  assert.doesNotMatch(errors[0].text, /native terminal|tool_name|exit 0/);
 });
 
 test('a recovered Codex connection diagnostic does not fail a completed turn', { skip: scriptCLIs }, async t => {

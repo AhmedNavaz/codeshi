@@ -67,6 +67,13 @@ export class RunChecks {
   runEnded(c, run, status) {
     const command = this.wanted(c, run, status);
     if (!command) return false;
+    // This is only the routine post-run loop. A deliberately selected review workflow or a test repair still checks.
+    // The native agent receives the same cadence and handles explicit test/finalization requests before publication.
+    if (run.verification?.cadence === 'review-first' && !run.retryOf && !run.automaticReview) {
+      this.broker.record(c, { type: 'check', runId: run.id, check: { status: 'deferred', command: command.command, reason: 'review-first' } });
+      this.broker.record(c, { type: 'message', message: { id: randomUUID(), role: 'activity', text: `Tests deferred: ${command.command}\nReview first is on. Codeshi did not run its automatic test command or start a test-repair loop. The agent follows your explicit test and finalization requests; no Codeshi-managed test result is available for this run.`, provider: run.provider, runId: run.id, status: 'complete', createdAt: new Date().toISOString() } });
+      return false;
+    }
     const task = this.check(c, run, command).catch(error => { console.error('Codeshi could not check the run:', error.message); this.hold(c, `Checking the run failed: ${error.message}`); });
     this.pending.add(task); task.finally(() => this.pending.delete(task));
     return true;

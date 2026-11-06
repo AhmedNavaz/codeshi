@@ -9,6 +9,7 @@ import { probeCli } from './cli-probe.mjs';
 import { resolveBinary, withBinaryPath } from './resolve-binary.mjs';
 import { localEndpoint, verifyLocalModel } from './local-models.mjs';
 import { claudeQuestions, claudeAnswers, codexQuestions, codexAnswers } from './agent-questions.mjs';
+import { claudePlanName, readClaudeProfile } from './claude-plan.mjs';
 
 export function classifyError(error) {
   const text = typeof error === 'string' ? error : `${error?.code || ''} ${error?.message || ''} ${JSON.stringify(error?.data || error || {})}`;
@@ -173,16 +174,49 @@ export async function runCodex(config, { event, approval, question = null, metad
   } finally { steerable(null); client.close(); }
 }
 
-export async function runClaude(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, queryImpl } = {}) {
+// How long a run waits for Claude once a turn has ended: settleMs for a finished background command or a late note to start
+// another turn, and backgroundMs for a background command that never reports back. Claude stops its own background
+// commands within two hours, so reaching that limit means something is stuck.
+export const claudeWaits = { settleMs: 5000, backgroundMs: 125 * 60_000 };
+
+export async function runClaude(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, queryImpl, waits = claudeWaits } = {}) {
   const query = queryImpl || (await import('@anthropic-ai/claude-agent-sdk')).query;
   const controller = new AbortController();
   const timer = setInterval(() => { if (cancelled()) controller.abort(); }, 100);
-  // The prompt is streamed, so a note the person adds while Claude works joins the turn at its next step. Input
-  // closes when the turn's result arrives; Claude still answers any note it already received before closing.
+  // The prompt is streamed, so a note the person adds while Claude works joins the turn at its next step. Permission
+  // requests use this same connection, and a finished background command wakes Claude after its result (#112), so input
+  // stays open until a turn has ended with nothing left that could start another.
   const inbox = []; let wake = null, open = true;
   const deliver = value => { if (wake) { const resolve = wake; wake = null; resolve(value); } else inbox.push(value); };
   const close = () => { if (!open) return; open = false; steerable(null); deliver(null); };
   const todoIds = new Set();
+  // reportsState: this Claude says when it is idle. Without it, use turn results plus any background/request events.
+  let reportsState = false, turnOver = false, live = 0, unread = false, settling = null, expiry = null, expired = false;
+  const waitNoLonger = () => { clearTimeout(settling); clearTimeout(expiry); settling = expiry = null; };
+  const review = () => {
+    waitNoLonger();
+    if (!open || !turnOver) return;
+    if (live) expiry = setTimeout(() => { expired = true; controller.abort(); }, waits.backgroundMs);
+    else if (unread) settling = setTimeout(close, waits.settleMs);
+    else close();
+  };
+  const follow = message => {
+    if (message.type === 'result' && !reportsState) { turnOver = true; review(); }
+    if (message.type === 'assistant' && !reportsState) { turnOver = false; review(); }
+    if (message.type !== 'system') return;
+    if (message.subtype === 'session_state_changed') { reportsState = true; turnOver = message.state === 'idle'; review(); }
+    // A model request has consumed the pending wake/note and is active work, even before its first assistant
+    // message or session-state event. Cancel the old idle closing timer so a slow request can still ask permission.
+    if (message.subtype === 'status' && message.status === 'requesting') { unread = false; turnOver = false; review(); }
+    if (message.subtype === 'background_tasks_changed' && Array.isArray(message.tasks)) {
+      const running = message.tasks.filter(task => !task.ambient).length;
+      if (running < live) unread = true;
+      live = running; review();
+    }
+  };
+  const stuck = () => new Error(`A background command was still running after ${Math.round(waits.backgroundMs / 3_600_000)} hours, so Codeshi ended this run. Anything it was still doing may be incomplete.`);
+  // Tools Codeshi answered itself. Declining one is a normal answer that Claude carries on from, unlike a request that never got through.
+  const declined = new Set();
   try {
     const first = { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: config.images?.length ? [
       { type: 'text', text: config.prompt },
@@ -195,11 +229,11 @@ export async function runClaude(config, { event, approval, question = null, meta
       yield first;
       while (true) { const next = inbox.length ? inbox.shift() : await new Promise(resolve => { wake = resolve; }); if (!next) return; yield next; }
     }
-    if (!config.reviewSnapshot) steerable(async text => { if (!open || cancelled()) throw new Error('This turn has finished.'); deliver({ type: 'user', parent_tool_use_id: null, priority: 'next', message: { role: 'user', content: text } }); });
+    if (!config.reviewSnapshot) steerable(async text => { if (!open || cancelled()) throw new Error('This turn has finished.'); unread = true; deliver({ type: 'user', parent_tool_use_id: null, priority: 'next', message: { role: 'user', content: text } }); });
     const stream = query({ prompt: input(), options: {
       cwd: config.workspace, pathToClaudeCodeExecutable: config.bin, permissionMode: config.mode === 'read' ? 'plan' : 'default',
       // Current versions of Claude Code replace TodoWrite with task tools unless told otherwise, and Claude's plan comes from TodoWrite.
-      env: { ...process.env, CLAUDE_CODE_ENABLE_TASKS: 'false' },
+      env: { ...process.env, CLAUDE_CODE_ENABLE_TASKS: 'false', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' },
       additionalDirectories: [...new Set(config.workspaces || [])].filter(directory => directory !== config.workspace),
       settingSources: [], settings: { disableAllHooks: true }, mcpServers: {}, strictMcpConfig: true, disallowedTools: ['mcp__*'],
       // Claude enforces a spending limit itself when it is billed per use; on a subscription this isn't set (#87).
@@ -210,18 +244,23 @@ export async function runClaude(config, { event, approval, question = null, meta
       tools: [...(config.mode === 'read' ? ['Read', 'Glob', 'Grep', 'TodoWrite'] : ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'TodoWrite']), ...(question && !config.reviewSnapshot ? ['AskUserQuestion'] : [])],
       includePartialMessages: true, ...(config.effort ? { effort: config.effort } : {}), abortController: controller, ...(config.sessionId ? { resume: config.sessionId } : {}), model: config.model || 'default',
       canUseTool: async (toolName, input, options) => {
-        if (toolName === 'TodoWrite') return { behavior: 'allow', updatedInput: input };
-        // The questions wait in Codeshi like an approval; the answers go back with them, and skipping tells Claude to decide.
-        if (toolName === 'AskUserQuestion') {
-          const questions = question && !config.reviewSnapshot ? claudeQuestions(input) : [];
-          const answers = questions.length ? await question({ id: options?.toolUseID || `${Date.now()}-${Math.random()}`, questions }) : null;
-          return answers ? { behavior: 'allow', updatedInput: { ...input, answers: claudeAnswers(input, answers) } } : { behavior: 'deny', message: 'The user skipped these questions. Continue with your best judgement, and say which choices you made.' };
-        }
-        if (config.mode === 'read' && !['Read', 'Glob', 'Grep'].includes(toolName)) return { behavior: 'deny', message: 'Read-only mode blocks this tool.' };
-        const allow = await approval({ id: options?.toolUseID || `${Date.now()}-${Math.random()}`, kind: toolName, input });
-        return allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'The user declined this action.' };
+        const answer = await decide(toolName, input, options);
+        if (answer.behavior === 'deny' && options?.toolUseID) declined.add(options.toolUseID);
+        return answer;
       },
     } });
+    async function decide(toolName, input, options) {
+      if (toolName === 'TodoWrite') return { behavior: 'allow', updatedInput: input };
+      // The questions wait in Codeshi like an approval; the answers go back with them, and skipping tells Claude to decide.
+      if (toolName === 'AskUserQuestion') {
+        const questions = question && !config.reviewSnapshot ? claudeQuestions(input) : [];
+        const answers = questions.length ? await question({ id: options?.toolUseID || `${Date.now()}-${Math.random()}`, questions }) : null;
+        return answers ? { behavior: 'allow', updatedInput: { ...input, answers: claudeAnswers(input, answers) } } : { behavior: 'deny', message: 'The user skipped these questions. Continue with your best judgement, and say which choices you made.' };
+      }
+      if (config.mode === 'read' && !['Read', 'Glob', 'Grep'].includes(toolName)) return { behavior: 'deny', message: 'Read-only mode blocks this tool.' };
+      const allow = await approval({ id: options?.toolUseID || `${Date.now()}-${Math.random()}`, kind: toolName, input });
+      return allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'The user declined this action.' };
+    }
     // Claude only sums a run up in its result, and a run that is stopped, as at a handoff, never gets one. Its messages each
     // carry their own usage, so what they add up to is kept until then, marked as a partial count.
     const seenUsage = new Map();
@@ -231,16 +270,19 @@ export async function runClaude(config, { event, approval, question = null, meta
       const sum = key => [...seenUsage.values()].reduce((total, item) => total + (item[key] || 0), 0);
       metadata({ usage: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cache_read_input_tokens: sum('cache_read_input_tokens'), cache_creation_input_tokens: sum('cache_creation_input_tokens'), partial: true } });
     };
-    for await (const message of stream) {
+    for await (const received of stream) {
+      const message = received.type === 'result' && received.permission_denials?.length ? { ...received, permission_denials: received.permission_denials.filter(denial => !declined.has(denial.tool_use_id)) } : received;
       if (message.type === 'assistant' && message.message) countMessage(message.message);
       if (message.type === 'stream_event' && (message.event?.content_block?.type === 'thinking' || message.event?.delta?.type === 'thinking_delta')) event({ type: 'relay.progress', phase: 'reasoning' });
       if (message.type === 'system' && message.subtype === 'status' && message.status === 'compacting') event({ type: 'relay.progress', phase: 'compacting' });
       if (message.type === 'system' && message.subtype === 'init') metadata({ effectiveModel: message.model || 'unknown', transport: 'sdk', authMode: message.apiKeySource || 'unknown', effectiveEffort: message.effort ?? config.effort ?? null });
       if (message.type === 'result' && message.modelUsage) metadata({ effectiveModel: Object.keys(message.modelUsage).join(', ') || 'unknown', usage: message.usage, costUSD: message.total_cost_usd });
-      if (message.type === 'result') close();
+      follow(message);
       event(withoutTodos(message, todoIds, event));
     }
-  } finally { close(); clearInterval(timer); }
+    if (expired) throw stuck();
+  } catch (error) { throw expired ? stuck() : error; }
+  finally { waitNoLonger(); close(); clearInterval(timer); }
 }
 // Claude's to-do list becomes the run's plan instead of tool activity.
 function withoutTodos(message, todoIds, event) {
@@ -295,7 +337,9 @@ export async function accountStatus(provider, { bin = resolveBinary(provider), w
     if (result.timedOut) return { ...base, errorCategory: 'timeout' };
     try {
       const status = JSON.parse(result.stdout);
-      return { ...base, authenticated: status.loggedIn ?? 'unknown', authMode: status.authMethod || status.apiKeySource || 'unknown', billingSource: /oauth|claude.?ai/i.test(status.authMethod || '') ? 'subscription' : /api.?key/i.test(status.authMethod || '') ? 'api' : 'unknown', subscriptionType: status.subscriptionType || null };
+      // The CLI says "pro" for Max accounts too; the profile in its config knows the plan and its tier (Max 5x, Max 20x).
+      const plan = status.loggedIn === true ? claudePlanName({ subscriptionType: status.subscriptionType, ...readClaudeProfile() }) : null;
+      return { ...base, authenticated: status.loggedIn ?? 'unknown', authMode: status.authMethod || status.apiKeySource || 'unknown', billingSource: /oauth|claude.?ai/i.test(status.authMethod || '') ? 'subscription' : /api.?key/i.test(status.authMethod || '') ? 'api' : 'unknown', subscriptionType: status.subscriptionType || null, ...(plan ? { planType: plan } : {}) };
     } catch { return base; }
   }
   const client = new CodexClient({ bin, cwd: workspace });
@@ -346,7 +390,7 @@ async function readUsage(provider, bin, workspace, googleRoot) {
       if (typeof read !== 'function') return { available: false, reason: 'This Claude Code version does not report plan usage.' };
       const result = await read.call(stream, { skipBehaviors: true });
       const windows = result?.rate_limits_available ? claudeUsageWindows(result.rate_limits) : [];
-      return windows.length ? { available: true, plan: result.subscription_type || null, windows } : { available: false, reason: 'Plan usage is reported only for Claude subscription accounts.' };
+      return windows.length ? { available: true, plan: claudePlanName({ subscriptionType: result.subscription_type, ...readClaudeProfile() }), windows } : { available: false, reason: 'Plan usage is reported only for Claude subscription accounts.' };
     } finally { clearTimeout(timeout); controller.abort(); stream.close(); }
   }
   const client = new CodexClient({ bin, cwd: workspace });

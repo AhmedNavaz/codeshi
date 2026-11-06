@@ -99,12 +99,13 @@
   const draftFolder = () => folders().find(folder => folder.id === api.getState().taskDraft?.folderId);
   const folderName = folder => folder?.displayName || folder?.name || 'this folder';
   let planKey = null, knownKey = null;
-  async function openDraft() {
+  async function openDraft(folderId) {
     const state = api.getState();
     if (!state.projectId) return;
     if (api.sidebarLevel?.() === 'workspace') api.showFolderLevel?.();
-    const chosen = api.selectedFolderId?.() || folders()[0]?.id;
+    const chosen = folders().some(folder => folder.id === folderId) ? folderId : api.selectedFolderId?.() || folders()[0]?.id;
     if (!chosen) return;
+    if (folderId && api.selectedFolderId?.() !== chosen) api.selectFolder?.(chosen);
     if (state.taskDraft?.folderId === chosen) { $('message-input').focus?.(); return; }
     focused = null; planKey = knownKey = null;
     $('task-draft-history').checked = false; $('task-draft-after').value = '';
@@ -221,6 +222,6 @@
   });
   $('task-merge-close').addEventListener('click', () => $('task-merge-dialog').close());
   window.addEventListener('relay-state', () => render());
-  window.relayTaskThreads = { open: () => attempt(openDraft), start: startTask, started };
+  window.relayTaskThreads = { open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => selectThread(tasks().find(task => task.id === id) || null) };
   render(true);
 })();

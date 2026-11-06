@@ -14,6 +14,8 @@
     const menu = {
       workspace: Boolean(state.projectId), running: api.isRunning(), agent: state.provider, codex: usable('select-codex'), claude: usable('select-claude'), gemini: usable('select-gemini'),
       continue: offered ? state.continuationProvider || state.provider : null, files: !$('explorer').hidden && !$('file-tree').hidden, git: !$('git-panel').hidden, terminal: Boolean($('terminal-panel') && !$('terminal-panel').hidden),
+      flow: Boolean($('app-shell')?.classList.contains('flow')),
+      flowLocked: Boolean(window.relayFlow?.isLocked?.() || api.isRunning()),
       imports: usable('open-import'), export: usable('open-export'),
       // The menu takes names of up to 120 characters, the longest a workspace can be renamed to.
       workspaces: api.filteredProjects().slice(0, 9).map(project => ({ name: project.name.slice(0, 120) || 'Workspace', current: project.id === state.projectId })),
@@ -29,6 +31,7 @@
   // The bottom panel says when it shows or hides, or changes tab, however that happened.
   window.addEventListener('relay-panel', schedule);
   window.addEventListener('relay-files', schedule);
+  window.addEventListener('relay-flow', schedule);
   const unsubscribe = bridge.onMenuCommand((name, value) => { if (Object.hasOwn(api.commands, name)) api.commands[name](value); });
   window.addEventListener('beforeunload', () => unsubscribe?.());
   report();

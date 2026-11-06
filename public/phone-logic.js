@@ -83,8 +83,8 @@
     const text = String(raw || '').trim();
     if (!text) return '';
     if (text.startsWith('$ ')) return `Running ${shellInner(text.slice(2).split('\n')[0].trim())}`;
-    const check = text.match(/^Tests (running|passed|failed|timed out|stopped|skipped|interrupted): ([^\n]*)/);
-    if (check) return check[1] === 'running' ? 'Running the tests' : `Tests ${check[1]}`;
+    const check = text.match(/^Tests (running|passed|failed|timed out|stopped|skipped|interrupted|deferred): ([^\n]*)/);
+    if (check) return check[1] === 'deferred' ? 'Automatic tests deferred' : check[1] === 'running' ? 'Running the tests' : `Tests ${check[1]}`;
     if (text.startsWith('File changes:')) {
       let names = [];
       try { names = JSON.parse(text.slice('File changes:'.length)).map(file => shortPath(file?.path || file?.file)).filter(Boolean); } catch { /* The step is still a change. */ }

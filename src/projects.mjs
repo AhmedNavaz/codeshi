@@ -55,6 +55,7 @@ export class ProjectRegistry extends EventEmitter {
     this.dataRoot = path.resolve(dataRoot); this.bins = bins; this.lock = lock;
     // The app sets these from its saved preferences; workspaces read them when they check usage.
     this.handoffPreferences = () => ({ threshold: 90, automatic: false });
+    this.verificationCadence = () => 'as-needed';
     this.projects = new Map(); this.brokers = new Map(); this.closing = false; this.closePromise = null; this.activeMutations = new Set();
     fs.mkdirSync(this.dataRoot, { recursive: true, mode: 0o700 }); fs.chmodSync(this.dataRoot, 0o700);
     this.filename = path.join(this.dataRoot, 'projects.json'); this.mutations = new MutationCoordinator(this.dataRoot);
@@ -268,7 +269,7 @@ export class ProjectRegistry extends EventEmitter {
   openBroker(entry, unlock) {
     const paths = entry.folders.map(folder => folder.path);
     let broker;
-    try { broker = new Broker({ workspace: entry.path, workspaces: paths, workspaceFolders: entry.folders, dataDir: path.join(this.dataRoot, entry.id), googleRoot: path.join(this.dataRoot, 'google'), bins: this.bins, handoffPreferences: () => this.handoffPreferences(), tests: { saved: () => this.testCommand?.(entry.id) ?? null, run: () => this.runTest(entry.id) }, acquireMutation: operation => this.mutations.acquireMany(paths, operation), acquireFolders: (folders, operation) => this.mutations.acquireMany(folders, operation), withFolders: (folders, operation, work) => this.mutations.withMutations(folders, operation, work) }); }
+    try { broker = new Broker({ workspace: entry.path, workspaces: paths, workspaceFolders: entry.folders, dataDir: path.join(this.dataRoot, entry.id), googleRoot: path.join(this.dataRoot, 'google'), bins: this.bins, handoffPreferences: () => this.handoffPreferences(), verificationCadence: () => this.verificationCadence(), tests: { saved: () => this.testCommand?.(entry.id) ?? null, run: () => this.runTest(entry.id) }, acquireMutation: operation => this.mutations.acquireMany(paths, operation), acquireFolders: (folders, operation) => this.mutations.acquireMany(folders, operation), withFolders: (folders, operation, work) => this.mutations.withMutations(folders, operation, work) }); }
     catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw fail(`Project folder is unavailable: ${entry.path}. Restore it or update workspace folders.`, 404); if (['EACCES', 'EPERM'].includes(error.code)) throw fail(`Cannot access the project or saved conversation: ${entry.path}. Check permissions.`, 400); throw error; }
     broker.workspaces = paths; broker.workspaceFolders = entry.folders.map(folder => ({ ...folder }));
     const rawCreate = broker.create.bind(broker); const rawList = broker.list.bind(broker);

@@ -93,6 +93,7 @@ test('phone page logic: a step reads as one plain line, whatever form it was sav
   assert.equal(describeStep('Grep\n{"pattern":"needle","path":"/a"'), 'Searching a', 'A step cut short still names what it acted on.');
   assert.equal(describeStep('File changes:[{"path":"/r/a.js"},{"path":"/r/b.js"},{"path":"/r/c.js"}]'), 'Editing r/a.js, r/b.js and 1 more');
   assert.equal(describeStep('Tests running: npm test'), 'Running the tests');
+  assert.equal(describeStep('Tests deferred: npm test'), 'Automatic tests deferred');
   assert.equal(describeStep('TodoWrite\n{"todos":[]}'), 'Updating its plan');
   assert.equal(describeStep(''), '');
 });

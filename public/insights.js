@@ -470,7 +470,7 @@
     const rows = (result.windows || []).filter(row => Number.isFinite(row.usedPercent) && !row.disabled && !row.scope && !row.scopes);
     return rows.length ? Math.max(...rows.map(row => row.usedPercent)) : null;
   };
-  window.relayUsage = { open: openUsage, usedPercent, snapshot: provider => api.getState().accounts?.[provider]?.authenticated === true ? usage[provider] || null : null };
+  window.relayUsage = { open: openUsage, usedPercent, snapshot: provider => api.getState().accounts?.[provider]?.authenticated === true ? usage[provider] || null : null, load: provider => loadUsage(provider, true) };
   for (const trigger of [$('codex-status'), $('claude-status'), $('gemini-status'), $('usage-chip')]) { trigger.setAttribute('aria-controls','usage-dialog'); trigger.setAttribute('aria-haspopup','dialog'); trigger.setAttribute('aria-expanded','false'); }
   usagePopover.addEventListener('toggle',() => { if (!usageIsOpen()) usageAnchor?.setAttribute('aria-expanded','false'); });
   $('close-usage').addEventListener('click',()=>closeUsage(true));

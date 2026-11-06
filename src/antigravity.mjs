@@ -7,10 +7,12 @@ import { googleRelay, relayEnvironment } from './google-relay.mjs';
 
 export const isAntigravityACP = bin => /^(?:agy_acp_server(?:\.par|\.exe)?|antigravity-acp)$/i.test(path.basename(bin || ''));
 export const antigravityReadOnly = 'Antigravity does not expose a verified read-only mode through this connection. Choose Edit with approvals, or use Codex or Claude for read-only work.';
+// The runtime's session takes one working directory, so a workspace with several folders runs it as a task in one of them.
+export const antigravityOneFolder = 'This Antigravity connection works in one project folder at a time. Run the message as a task in one folder, or choose Codex or Claude for the whole workspace.';
 export const defaultGoogleRoot = () => path.join(os.homedir(), '.local/share/throughline/google');
 export function antigravityInvocation(config) {
   if (config.mode === 'read') throw new Error(antigravityReadOnly);
-  if ((config.workspaces || []).some(folder => path.resolve(folder) !== path.resolve(config.workspace))) throw new Error('This Antigravity connection currently supports one project folder. Choose a workspace with one folder.');
+  if ((config.workspaces || []).some(folder => path.resolve(folder) !== path.resolve(config.workspace))) throw new Error(antigravityOneFolder);
   const profile = path.join(config.googleRoot || defaultGoogleRoot(), 'profile');
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
   const env = { ...withBinaryPath(config.bin), GEMINI_HOME: profile, ANTIGRAVITY_HARNESS_PATH: path.join(path.dirname(config.bin), process.platform === 'win32' ? 'localharness_external.exe' : 'localharness_external') };

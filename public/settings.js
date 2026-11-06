@@ -10,7 +10,7 @@
   if (!modal || !content) return;
   const PAGES = [['general', 'General'], ['accounts', 'Accounts'], ['alerts', 'Alerts'], ['voice', 'Voice']];
   // Places in Settings by the names other parts of the app used before it had these pages.
-  const ALIASES = { preferences: 'general', connections: 'accounts' }, HEADINGS = { Alerts: 'alerts', Voice: 'voice', Updates: 'general', Appearance: 'general' };
+  const ALIASES = { preferences: 'general', connections: 'accounts' }, HEADINGS = { Alerts: 'alerts', Voice: 'voice', Updates: 'general', Appearance: 'general', Testing: 'general' };
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const providerName = provider => ({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini' })[provider];
   const openExternal = async url => { if (window.relayDesktop?.openExternal) await window.relayDesktop.openExternal(url); else window.open(url, '_blank', 'noopener,noreferrer'); };
@@ -87,9 +87,33 @@
       box.id = 'settings-keep-awake';
       if (!keepAwake) bridge.getKeepAwake().then(state => { keepAwake = state; box.checked = state.enabled === true; box.disabled = false; }).catch(() => { if (box.isConnected) { error.textContent = 'Keep awake could not be loaded. Close Settings and try again.'; error.hidden = false; } });
     }
+    if (window.relayFlow?.isOn?.()) {
+      const mode = api().getState().conversation?.routing?.mode || 'balanced', routing = window.relayRouting;
+      kit.row(work, { label: 'Flow handoff', description: `Follows ${routing.modeNames[mode]} routing: at ${routing.handoffThresholds[mode]}% used, continue with another eligible subscription agent with confirmed room. Change the mode in Flow’s routing card.`, keywords: 'handoff hand off automatic routing limit quota switch agent' });
+    } else {
     const offer = kit.select(work, { label: 'Offer a handoff near a usage limit', description: 'When an agent is close to its limit, offer to continue the task with another connected agent.', keywords: 'handoff hand off limit quota switch agent', options: [['0', 'Never'], ['80', 'At 80%'], ['90', 'At 90%'], ['95', 'At 95%']], value: String(handoff?.threshold ?? 90), disabled: !handoff, onChange: value => saveHandoff({ threshold: Number(value) }) });
     const automatic = kit.toggle(work, { label: 'Hand off automatically', description: 'Near a limit, or when a run reaches one, switch to an agent on a subscription without asking, and say so in the conversation. If every agent is out, the task waits for the first reset.', keywords: 'handoff hand off automatic', checked: handoff?.automatic === true, disabled: !handoff || handoff.threshold === 0, onChange: value => saveHandoff({ automatic: value }) });
     if (!handoff) api().api('/api/handoff-preferences').then(value => { handoff = value; offer.value = String(value.threshold); offer.disabled = false; automatic.checked = value.automatic === true; automatic.disabled = value.threshold === 0; }).catch(() => {});
+    }
+    const testing = kit.group(host, 'Testing');
+    let savedCadence = 'as-needed';
+    const cadence = kit.select(testing, {
+      label: 'Testing cadence',
+      description: 'Review first keeps checks small while you request changes. Ask to test, verify, finalize, commit, push or release when you want the agent to verify the current changes first.',
+      keywords: 'tests verification review iterations broad suite token time finalize commit push release',
+      options: [['as-needed', 'As needed'], ['review-first', 'Review first']], value: savedCadence, disabled: true,
+      onChange: value => perform(async () => {
+        cadence.disabled = true;
+        try {
+          const result = await api().post('/api/preferences', { verificationCadence: value });
+          savedCadence = result.verificationCadence;
+          await api().refresh();
+        } finally { cadence.value = savedCadence; cadence.disabled = false; }
+      }),
+    });
+    cadence.id = 'settings-testing-cadence';
+    api().api('/api/preferences').then(value => { savedCadence = value.verificationCadence || 'as-needed'; cadence.value = savedCadence; cadence.disabled = false; }).catch(() => { if (cadence.isConnected) { error.textContent = 'Testing preferences could not be loaded. Close Settings and try again.'; error.hidden = false; } });
+    kit.note(testing.parentNode, 'Applies to new turns in every workspace, in Normal and Flow. Running agents keep their starting setting. Review first defers Codeshi’s routine automatic test command and repair loop; explicitly selected build/review workflows and required repository checks still apply. Agents receive guidance, not a command block, and must report deferred verification honestly.');
     if (window.relayUpdater) { const updates = node('div', undefined, 'settings-section'); host.append(updates); window.relayUpdater.settings(updates, kit); }
     window.relayPhone?.settings(host, kit);
   }

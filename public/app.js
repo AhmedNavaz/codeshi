@@ -471,10 +471,10 @@
       return { kind: "command", icon: "command", verb: "Run", detail: displayCommand(cmd), mono: true, cmd, output: text, raw: text };
     }
     // A check with the workspace's tests after a routed run (#12): running, then how it ended, with its output.
-    const check = text.match(/^Tests (running|passed|failed|timed out|stopped|skipped|interrupted): ([^\n]*)(?:\n([\s\S]*))?$/);
+    const check = text.match(/^Tests (running|passed|failed|timed out|stopped|skipped|interrupted|deferred): ([^\n]*)(?:\n([\s\S]*))?$/);
     if (check) {
       const [, outcome, command, rest = ""] = check, failed = ["failed", "timed out"].includes(outcome);
-      const verb = { running: "Running the tests", passed: "Tests passed", failed: "Tests failed", "timed out": "Tests didn’t finish", stopped: "Tests stopped", skipped: "Tests skipped", interrupted: "Tests interrupted" }[outcome];
+      const verb = { running: "Running the tests", passed: "Tests passed", failed: "Tests failed", "timed out": "Tests didn’t finish", stopped: "Tests stopped", skipped: "Tests skipped", interrupted: "Tests interrupted", deferred: "Automatic tests deferred" }[outcome];
       return { kind: "check", icon: outcome === "running" ? "tests-running" : outcome === "passed" ? "tests-passed" : failed ? "tests-failed" : "general", verb, detail: command, mono: true, output: rest.trim(), error: failed, raw: text };
     }
     if (text.startsWith("File changes:")) {
@@ -975,6 +975,39 @@
     try { await post(endpoint(id, "queue"), body, projectId); await refresh(); return true; }
     catch (error) { showNotice(error.message); return false; }
   }
+  // Gemini on the Antigravity connection works in one folder at a time (#116). In a workspace with several, the message waits
+  // while a folder is chosen, then runs as a task there with the agent, model and access chosen; nothing is sent until then.
+  function oneFolderOnly(provider) { const account = state.accounts[provider]; return provider === "gemini" && (account?.authMode === "google-oauth" || account?.source === "antigravity-acp"); }
+  function askFolder(submission) { state.folderAsk = { ...submission, projectId: state.projectId }; renderFolderAsk(); $("folder-ask-choices").querySelector?.("button")?.focus?.(); }
+  function clearFolderAsk() { if (!state.folderAsk) return; state.folderAsk = null; renderFolderAsk(); }
+  function renderFolderAsk() {
+    const host = $("folder-ask"), choices = $("folder-ask-choices"); if (!host || !choices) return;
+    const ask = state.folderAsk && state.folderAsk.projectId === state.projectId && !state.taskId && !state.taskDraft ? state.folderAsk : null;
+    if (!ask) { host.hidden = true; choices.replaceChildren(); return; }
+    $("folder-ask-text").textContent = `${label(ask.provider)} works in one folder at a time on this connection. Run this as a task in:`;
+    choices.replaceChildren(...foldersFor(currentProject()).filter(folder => folder.available !== false).map(folder => {
+      const choice = element("button", "pill-button", folder.displayName || folder.name); choice.type = "button"; choice.dataset.folder = folder.id;
+      choice.addEventListener("click", () => startFolderTask(folder.id)); return choice;
+    }));
+    const cancel = element("button", "pill-button", "Cancel"); cancel.type = "button"; cancel.addEventListener("click", () => { clearFolderAsk(); ui.input.focus(); });
+    choices.append(cancel);
+    host.hidden = false;
+  }
+  async function startFolderTask(folderId) {
+    const ask = state.folderAsk; if (!ask || state.pending) return;
+    clearFolderAsk();
+    const projectId = state.projectId;
+    state.pending = "send"; render(); hideNotice();
+    try {
+      const task = await post("/api/tasks", { text: ask.text, attachments: ask.attachments, provider: ask.provider, model: ask.model || null, effort: ask.effort || null, mode: ask.mode, approvalPolicy: ask.approvalPolicy, requestId: ask.requestId, billingConfirmed: window.relayBillingConfirmed === true, folderId }, projectId);
+      state.retrySubmission = null;
+      window.relayFiles?.accepted(projectId, ask.attachments);
+      if (ui.input.value === ask.originalDraft) { ui.input.value = ""; storedWrite(draftKey(), ""); storedWrite(draftKey(null), ""); resizeInput(); }
+      if (window.relayTaskThreads?.started) await window.relayTaskThreads.started(task); else await refresh();
+      announce(`The task in ${task.folderName} has started.`);
+    } catch (error) { showNotice(error.message); await refresh(); }
+    finally { state.pending = null; render(); ui.input.focus(); }
+  }
   // A queued prompt can start now as a task beside this conversation (#108): it leaves the queue and runs in a folder of its own,
   // with the settings it was queued with. The folder is the one selected; with several and none selected, the row asks.
   async function queueAsTask(item, folderId) {
@@ -1005,8 +1038,9 @@
   }
   // Auto (#12): Codeshi picks the agent, model and effort for each message, shown before it is sent.
   const autoRouting = () => !state.localSelections[state.projectId] && state.conversation?.routing ? state.conversation.routing : null;
-  function routeFor(text, attachments = 0) {
-    const routing = autoRouting(); if (!routing || !window.relayRouting) return null;
+  // With a mode given, says what that mode would do with the text before it is chosen (Flow mode, #107).
+  function routeFor(text, attachments = 0, mode = null) {
+    const routing = autoRouting(); if ((!routing && !mode) || !window.relayRouting) return null;
     const project = state.projects.find(item => item.id === state.projectId);
     const candidates = ["codex", "claude", "gemini"].map(provider => {
       const info = connection(provider);
@@ -1014,7 +1048,7 @@
       const unsupported = provider === "gemini" && (state.mode === "read" || foldersFor(project).length > 1);
       return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usage: window.relayUsage?.snapshot?.(provider), allowedModels: state.conversation?.taskPolicy?.allowedModels?.[provider] || null, models: window.relayModelPicker?.models?.(provider) || [] };
     });
-    return window.relayRouting.route({ text, attachments, mode: routing.mode, allowApi: routing.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
+    return window.relayRouting.route({ text, attachments, mode: mode || routing.mode, allowApi: routing?.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
   }
   function renderRoute() {
     const node = $("route-preview"); if (!node) return;
@@ -1313,7 +1347,7 @@
     window.relayAutomaticReview?.render();
     document.title = currentProject() ? currentProject().name + " · Codeshi" : "Codeshi · Your project workspaces";
   }
-  function render(forceScroll = false) { renderProjects(); renderStatus(); renderWorkspaceList(); renderMessages(forceScroll); renderControls(); window.dispatchEvent(new CustomEvent("relay-state")); }
+  function render(forceScroll = false) { renderProjects(); renderStatus(); renderWorkspaceList(); renderMessages(forceScroll); renderControls(); renderFolderAsk(); window.dispatchEvent(new CustomEvent("relay-state")); }
   // The message box grows with its text up to 200px. Lines can be a fraction of a pixel tall while scrollHeight is a
   // whole number, so the box gets one pixel more, and it only scrolls once it has stopped growing; otherwise a message
   // of three lines showed a scroll bar.
@@ -1473,6 +1507,8 @@
     let automaticReview;
     try { automaticReview = window.relayAutomaticReview?.submission({ text, attachments, provider, model, mode, approvalPolicy }, { continuing }) || null; }
     catch (error) { showNotice(error.message); return; }
+    // An agent that works in one folder, in a workspace with several: the message waits for a choice of folder, then runs as a task there.
+    if (!continuing && !state.taskId && !state.taskDraft && !localChoice && !automaticReview && oneFolderOnly(provider) && foldersFor(currentProject()).length > 1) { askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId: crypto.randomUUID(), originalDraft }); return; }
     const payloadKey = JSON.stringify([state.projectId,state.conversation?.id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
     const requestId = state.retrySubmission?.key === payloadKey ? state.retrySubmission.id : crypto.randomUUID();
     state.retrySubmission = { ...(state.retrySubmission?.key === payloadKey ? state.retrySubmission : {}), key:payloadKey,id:requestId };
@@ -1528,6 +1564,8 @@
       const budget = error.details?.budget;
       if (budget?.canExtend && window.relayLimits) showNotice(error.message, async () => { try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing); } catch (failure) { showNotice(failure.message); } }, "Allow more");
       else if (budget) showNotice(error.message);
+      // The server knew the agent works in one folder before the page did: offer the folders rather than a retry that would fail again.
+      else if (error.details?.folderChoice && !continuing && !state.taskId && !state.taskDraft) askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId, originalDraft });
       else showNotice(error.message, () => run(continuing));
       await refresh();
     } finally { state.pending = null; render(); ui.input.focus(); }
@@ -1805,14 +1843,15 @@
   const commandActions = [
     { label: "Review changes…", id: "open-review" }, { label: "Ask a friend…", id: "ask-friend" },
     { label: "Previous chats…", id: "open-import" }, { label: "Export conversation…", id: "open-export" },
-    { label: "Agents: routing and handoff", run: () => window.relayAgents?.open() },
+    { label: "Flow mode: just the chat, with plain-language cards", run: () => window.relayFlow?.toggle() },
+    { label: "Agents: plan usage and handoff", run: () => window.relayAgents?.open() },
     { label: "Brief: memory and skills every agent gets", run: () => window.relayBrief?.open() },
     { label: "Tasks: what each task used, and its limits", run: () => window.relayTasks?.open() },
     { label: "New task beside this one", run: () => window.relayTaskThreads?.open() },
     { label: "Timeline: review and restore checkpoints", run: () => window.relayTimeline?.open() },
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
-    { label: "Terminal", run: () => window.relayTerminal?.open() },
-    { label: "Run: your dev servers, tests and scripts", run: () => window.relayPanel?.show("run") },
+    { label: "Terminal", workbench: true, run: () => window.relayTerminal?.open() },
+    { label: "Run: your dev servers, tests and scripts", workbench: true, run: () => window.relayPanel?.show("run") },
     ...(window.relayDesktop?.openPreview ? [{ label: "Preview your app and point at what to change", run: () => { const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
     { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
@@ -1840,7 +1879,7 @@
     const { actionsOnly, text } = commandQuery();
     const workspaces = actionsOnly ? [] : state.projects.filter(project => project.name.toLowerCase().includes(text)).slice(0, 6).map(project => ({ group: "Workspaces", label: project.name, detail: project.id === state.projectId ? "Open" : "", run: () => { selectProject(project.id); ui.input.focus(); } }));
     const files = actionsOnly || commandFiles.query !== text ? [] : commandFiles.files.slice(0, 10).map(file => ({ group: "Files", label: file.path.split("/").pop(), detail: [state.projects.length > 1 ? file.projectName : "", file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : file.folderName].filter(Boolean).join(" · "), run: () => openFound(file) }));
-    const actions = commandActions.filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled))
+    const actions = commandActions.filter(action => !action.workbench || !window.relayFlow?.isOn?.()).filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled))
       .map(action => ({ group: "Actions", label: action.label, detail: "", run: action.run || (() => $(action.id).click()) }));
     return [...workspaces, ...files, ...actions];
   }
@@ -1883,6 +1922,7 @@
   $("workspace-search").placeholder = `Search workspaces and actions   ${shortcut("K")}`;
   $("open-git").title = `Git activity (${shortcut("G", true)})`;
   $("toggle-sidebar").title = `Toggle sidebar (${shortcut("B")})`;
+  $("toggle-flow").title = `Flow mode: just the chat, with plain-language cards (${shortcut("F", true)})`;
   ui.input.title = `Focus with ${shortcut("L")}`;
   // Shortcuts and the desktop menu bar run these commands. Each returns whether the page handled it, and a shortcut
   // is only claimed when it did, so a key the page leaves alone goes on to the menu, whose item makes the same check.
@@ -1900,7 +1940,7 @@
     "alert-settings": () => { if ([...document.querySelectorAll("dialog")].some(dialog => dialog.open && dialog.id !== "settings") || !window.relaySettings) return false; window.relaySettings.open("alerts"); return true; },
     "whats-new": () => { if (covered() || !window.relayUpdates) return false; window.relayUpdates.open(); return true; },
     "check-updates": () => { if (!window.relayUpdater) return false; window.relayUpdater.checkNow(); return true; },
-    terminal: () => { if (!state.projectId || !window.relayTerminal) return false; window.relayTerminal.toggle(); return true; },
+    terminal: () => { if (!state.projectId || !window.relayTerminal || window.relayFlow?.isOn?.()) return false; window.relayTerminal.toggle(); return true; },
     voice: () => Boolean(state.projectId && window.relayVoice?.toggle()),
     "local-models": () => window.relayLocal?.open(),
     "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), files: () => { if ($('files-dialog')?.open) { $('close-files').click(); return true; } return press('toggle-explorer')(); }, "keep-awake": press("keep-awake"),
@@ -1918,6 +1958,7 @@
     appearance: value => { if (!["system", "graphite", "light"].includes(value)) return false; window.relayTheme?.choose(value); return true; },
     "workspace-settings": () => { if (covered() || !state.projectId) return false; openWorkspaceOptions(state.projectId); return true; },
     "toggle-sidebar": () => !covered() && Boolean(window.relayLayout?.toggleSidebar()),
+    flow: () => !covered() && Boolean(window.relayFlow?.toggle()),
     "remove-workspace": () => { if (covered() || !state.projectId) return false; confirmRemoveWorkspace(state.projectId); return true; },
   };
   document.addEventListener("keydown", (event) => {
@@ -1929,6 +1970,7 @@
     else if (key === "l" && !event.shiftKey) run("focus-message");
     else if (key === "g" && event.shiftKey) run("git");
     else if (key === "b" && !event.shiftKey) run("toggle-sidebar");
+    else if (key === "f" && event.shiftKey) run("flow");
     else if (key === ".") run("stop");
     else if (/^[1-9]$/.test(event.key) && !event.shiftKey) run("workspace", Number(event.key));
   });
@@ -1971,7 +2013,8 @@
   $("retry-dismiss").addEventListener("click", () => answerRetry(false));
   $("handoff-billing-confirm").addEventListener("change", renderHandoff);
   $("prompt-queue-toggle").addEventListener("click", () => queueAction({ action: state.conversation?.queuePaused ? "resume" : "pause" }));
-  ui.input.addEventListener("input", () => { resizeInput(); saveDraft(); renderControls(); });
+  // A folder choice waits for the message as written; editing it withdraws the choice until it is sent again.
+  ui.input.addEventListener("input", () => { resizeInput(); saveDraft(); renderControls(); if (state.folderAsk && ui.input.value !== state.folderAsk.originalDraft) clearFolderAsk(); });
   $("steer-button").addEventListener("click", addToRun);
   $("workspace-chip").addEventListener("click", () => window.relayLayout?.toggleSidebar());
   // Choosing an action from the ⋯ menu closes it.
@@ -1995,8 +2038,11 @@
     if (selected === "local") { ui.agent.value = state.provider; window.relayLocal?.open(); }
     else if (["codex", "claude", "gemini"].includes(selected) && available(selected)) changeSettings(selected, state.mode, state.approvalPolicy);
   });
-  // Choosing an agent yourself, here or from the Agent menu, turns Auto off.
-  const chooseAgent = provider => { delete state.localSelections[state.projectId]; if (autoRouting()) setRouting({ mode: null }).catch(error => showNotice(error.message)); changeSettings(provider, state.mode, state.approvalPolicy); };
+  // Choosing an agent yourself, here or from the Agent menu, turns Auto off. In Flow the choice is routing's (#107).
+  const chooseAgent = provider => {
+    if (window.relayFlow?.isOn?.()) { showNotice("Flow chooses the agent and model for each message. Leave Flow to pick one yourself."); return; }
+    delete state.localSelections[state.projectId]; if (autoRouting()) setRouting({ mode: null }).catch(error => showNotice(error.message)); changeSettings(provider, state.mode, state.approvalPolicy);
+  };
   ui.codex.addEventListener("click", () => chooseAgent("codex"));
   ui.claude.addEventListener("click", () => chooseAgent("claude"));
   ui.gemini.addEventListener("click", () => chooseAgent("gemini"));

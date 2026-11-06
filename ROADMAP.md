@@ -25,6 +25,73 @@ Specialist roles can include frontend, backend, database, design and QA, but a r
 
 Codeshi cannot change subscription allowances or reset rules. Keep five-hour, weekly and model-specific windows distinct, label missing usage data, and count coordination overhead. Detailed scopes, dependencies, acceptance criteria, CLI examples and proposed updates to existing issues are in the [core execution plan](docs/core-roadmap.md).
 
+## Normal and Flow: the agreed execution split
+
+This is the direction for future implementation, not a description of released mode enforcement. **Normal** keeps explicit control over agents, models, effort, tasks and next actions. **Flow** lets the person describe an outcome and delegates execution decisions to Codeshi within an authorized scope and budget. Flow is an execution contract as well as a distinct interface.
+
+Flow-exclusive behavior means discretionary routing, handoff, recovery and future task assignment. A queue the person wrote, an exact selected build/review sequence, native agent planning and context protection remain available in Normal. These are working styles, not levels of user expertise.
+
+| Feature | Normal | Flow |
+| --- | --- | --- |
+| Agent, model and effort | Explicit selection; optional recommendations require acceptance | Automatic routing under Cost Saving, Balanced or Maximum Quality; one-step or pinned overrides |
+| Near-limit handoff | Chat offer naming destination, settings, billing and allowance; accept or decline | Automatic policy-aware handoff within task authorization |
+| Quota failure and reset waits | Manual destination/local choice, or explicitly wait for a selected agent | Choose a suitable allowed alternative; otherwise wait or report the blocker |
+| Queued prompts | Exact user prompts and settings, with edit/reorder/cancel | Same user queue plus clearly identified managed work; do not silently rewrite user prompts |
+| Tasks and concurrency | Manually create, assign and run independent tasks | Decide whether bounded splitting, assignment and parallel execution are worthwhile |
+| Native agent plan and tools | Retain the native agent's own planning and tool loop | Present progress toward the outcome; Codeshi manages cross-agent execution |
+| Tests and retries | Run checks directly or attach an exact check sequence; approve new repair decisions | Run agreed checks and choose bounded repair/escalation |
+| Testing cadence | Choose As needed or Review first; explicit test/finalization requests still verify | Same cadence preference; managed recovery must respect it without skipping explicitly selected workflow checks |
+| Reviews | Choose scope/reviewer/findings; retain explicit one-prompt build-then-review | Select a suitable independent reviewer and manage authorized finite repair cycles |
+| Local models | Explicit choice or manual continuation | Eligible fallback only after capability/hardware checks; never assume all local models fit |
+| Preview and point-and-tell | Full preview and element selection | Central feedback loop: inspect, point, describe and continue |
+| Files and attachments | Full browser and exact attachment controls | Simple attach/browse actions with detail available |
+| Git, diffs and publishing | Full repository controls | Plain-language change review; publishing remains user-controlled |
+| Undo, redo and Timeline | Full recovery controls | Equally accessible previewed recovery; no hidden way back |
+| Terminal and Run windows | Full tools | Omitted from Flow UI; authorized agent commands still work |
+| Voice | Dictation and read-aloud | Dictation plus the future continuous hands-free conversation loop (#72) |
+| Remote access | Control manual work from the phone | Observe, steer, answer requests and stop managed work under the same backend policy |
+| Split requests (#108) | Manual split/assignment; accept an agent's draft proposal | Create/assign bounded subtasks within an authorized outcome |
+| Specialist teams (#89) | Individual role/task/review building blocks remain usable | Managed contracts, role assignment, dependencies, integration and verification |
+| Visual Plans (#97) | Create/edit/connect cards; explicitly assign and run an exact graph | Draft an outcome plan, assign work and manage execution within authorization |
+| Task boards and schedules ([board/schedule issue draft](docs/flow-issue-plan.md#board-and-schedule-execution)) | Fixed prompts/workflows, explicit settings and selected cards/graphs | Authorized outcomes or bounded backlog sets with automatic assignment |
+| Race mode (#16) | Explicit two-attempt comparison and result selection | Optional managed comparison; never implied by Maximum Quality |
+| GitHub/CI context (#18) | Select context and actions explicitly | Gather relevant context within authorized repository scope; external text remains untrusted |
+| Contextual suggestions (#106) | Explain and offer a change for acceptance | Explain decisions and propose meaningful policy changes; suggestions grant no authority |
+| Multiplayer (#24) | Shared manual collaboration | Shared observation/steering with explicit authority and no conflicting controllers |
+| Future CLI (#90) | Explicit agents and exact workflows | Same backend Flow policy; no second orchestration engine |
+
+Both modes retain context selection and native-compaction visibility, the canonical shared history and briefs, reviewed memory, portable skills, usage readings and task accounting, budgets and concurrency protection, recovery, read/edit access and tool approvals (including optional full auto-approval), import/export, conversation search, Ask a Friend, recaps, notifications and menu-bar status, keep-awake, themes, setup, updates, accessibility, translations and platform/adapter support. Phone notifications/Home Screen support, binary patches and collaboration improvements are also shared. Flow may change their presentation, not remove their protections or grant extra access. Durable memory changes remain reviewed.
+
+### One selection policy across a task
+
+Initial assignment, near-limit handoff, quota-error fallback, reset resumption, retry, reviewer selection and future subtasks use the same policy in [#12](https://github.com/AhmedNavaz/codeshi/issues/12). Required tools, inputs, context and verified capability come before allowance. Refresh the selected model's applicable five-hour, weekly and model-specific limits, consider concurrent usage and context-transfer overhead, and retain a visible reason and override. More unused allowance cannot make an incompatible model suitable.
+
+- **Cost Saving:** sufficient capability and existing allowance, with restrained switches, retries and reviewers.
+- **Balanced:** match capability and effort to remaining work and escalate when verification justifies it.
+- **Maximum Quality:** stronger suitable reasoning and targeted independent checks, within the same limits; no implied full team or race attempts.
+
+The shipped handoff selector does not yet apply the full routing policy to destination model and effort. Model-name tiers remain heuristics. Unknown/stale quota or billing cannot authorize automatic work; local/free fallback needs verified capability and adapter/hardware support. With no suitable destination, wait or offer a manual choice.
+
+### Task authority, takeover and migration
+
+**First release boundary:** keep the existing routing/handoff behavior and present it honestly as a focused view. Before entering or leaving, check that the selected workspace has no running task, review, test, reset continuation or unpaused queue; do not create a task or queue a delayed view change implicitly. Keep task navigation and Stop available; backend-managed Flow exclusivity and takeover remain future work.
+
+Backend enforcement is [backend task policy draft](docs/flow-issue-plan.md#backend-task-policy). Store execution policy per task in the shared journal, separate from layout, read/edit access, tool approvals and API consent. Desktop, phone and the future CLI control the same task authority; different tasks may use different policies. Inspecting another view does not change authorization.
+
+**Take manual control** revokes future discretionary starts at a safe boundary and preserves work; **Stop** is immediate and separate. Saved queues, waits, child work and restart recovery must honor current policy and deduplicate starts. Preview migration from today's routing/handoff preferences and preserve recoverable in-flight work without silently broadening authority. Flow never grants permission to publish, push, deploy or release.
+
+### Flow delivery stages
+
+**Testing cadence, both views:** locally implemented, unreleased. Review first sends lightweight-iteration/final-verification guidance on every new turn, including resumed sessions and task lanes. Routine Codeshi test/retry loops record a deferral, while explicit repair/build-review workflows retain checks. The agent interprets explicit test/commit/push/release requests; a keyword alone never schedules or authorizes publication. This is agent guidance, not command enforcement or a cache of verified results. Future evidence-based reuse should bind a result to the command, relevant files, configuration, dependencies and environment; deferred checks must never count as passed. Measure repeated verification overhead under #84.
+
+1. **One managed task:** backend mode policy and safe takeover ([backend task policy draft](docs/flow-issue-plan.md#backend-task-policy)), unified selection/handoff (#12, extending #17/#32/#91), visible decisions, checks and bounded recovery (#15), with measurements (#84) and controlled context (#85).
+2. **Managed task splitting:** build on manual task isolation (#88), bounded fan-out (#108), shared Plan cards (#97), board/schedule execution ([board/schedule issue draft](docs/flow-issue-plan.md#board-and-schedule-execution)) and one parent budget (#87).
+3. **Specialist teams and hands-free work:** managed contracts and integration (#89), then the continuous voice loop (#72), with verified lifecycle, context retention and measurable overhead.
+
+Existing manual capabilities and exact user-configured sequences remain available throughout. These are implementation stages, not release promises.
+
+The tracking umbrella is [#107](https://github.com/AhmedNavaz/codeshi/issues/107); [implementation boundaries and issue ownership](docs/core-roadmap.md#normal-and-flow-execution-contract) are in the core roadmap. Manual features, shared protections and explicit workflows are not removed to create the distinction.
+
 ## Shipped
 
 | Feature | Since |
@@ -103,6 +170,7 @@ Codeshi cannot change subscription allowances or reset rules. Keep five-hour, we
 
 | Feature | Status | Issue |
 | --- | --- | --- |
+| Normal/Flow execution policy with safe manual takeover | Planned backend foundation for managed Flow; [agreed split](#normal-and-flow-the-agreed-execution-split). No runtime enforcement implied by the local UI work | [backend task policy draft](docs/flow-issue-plan.md#backend-task-policy) |
 | More agents and models, such as Grok, DeepSeek, Qwen and free cloud tiers, on your own accounts | Gemini through Google Antigravity and local models through Ollama have shipped; further agents are next | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | Notarized macOS builds, so downloads open without a security prompt | Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
 | Install with Homebrew: `brew install --cask codeshi` | Depends on #1 | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
@@ -111,8 +179,9 @@ Codeshi cannot change subscription allowances or reset rules. Keep five-hour, we
 
 | Feature | Status | Issue |
 | --- | --- | --- |
-| Reproducible task evaluations and a local ledger of verified outcomes, usage and coordination overhead | First milestone shipped in 0.26.0: the **Tasks** panel and [`evals/`](evals/README.md). Saved experiment pins, skill/resource version checks and separated comparison groups shipped in [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0). More live comparisons are needed before claiming efficiency gains | [#84](https://github.com/AhmedNavaz/codeshi/issues/84) |
-| Task-scoped context: relevant code, instructions and history, with source references and fresh handoff briefs | First milestone shipped in 0.26.0, with the **Brief** panel showing what a new agent is told; extends #69. Early results are promising but too few to claim a saving | [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
+| Reproducible task evaluations and a local ledger of verified outcomes, usage and coordination overhead | First milestone shipped in 0.26.0: the **Tasks** panel and [`evals/`](evals/README.md). Saved experiment pins, skill/resource version checks and separated comparison groups shipped in [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0). Next: long-thread, repeated-switch and compaction comparisons against separate task threads, including retention, cache behavior and total measured overhead before claiming efficiency gains; [measurement plan](docs/core-roadmap.md#next-milestone-long-thread-and-compaction-measurements) | [#84](https://github.com/AhmedNavaz/codeshi/issues/84) |
+| Task-scoped context: relevant code, instructions and history, with source references and fresh handoff briefs | First milestone shipped in 0.26.0, with the **Brief** panel showing what a new agent is told; extends #69. Next: visible native context and compaction records, smaller task-focused handoffs and verified retention through compaction; [context plan](docs/core-roadmap.md#next-milestone-controlled-working-context-and-visible-compaction). Envelope limits do not bound native-session usage; savings remain unproven | [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
+| Auto-compact workspace context and roll over native agent sessions at token limits | Planned; tiered threshold compaction (Cost Saving: ~40k, Balanced: ~75k, Quality: ~120k), incremental semantic observation distillation and fresh provider session roll-over while preserving full UI chat history | [#123](https://github.com/AhmedNavaz/codeshi/issues/123) |
 | Reviewed project memory and reusable learnings shared across agents | First version shipped in 0.26.0: **Remember** and rule-based suggestions, sent by relevance, with changed files marked for a recheck, and a memory can become a skill after review; [design](https://github.com/AhmedNavaz/codeshi/issues/21#issuecomment-6652426011) | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
 | Portable skills and workflow packs loaded on demand, with visible provider compatibility | First milestone shipped in 0.26.0: a catalog with six optional starters, loaded when a task needs them and kept across a handoff. Agents get skills as instructions; their own skill systems are not used yet | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
 | One task budget across providers, child runs, retries, reviews and handoffs | First milestone shipped in 0.26.0. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) adds live parent accounting and shared deadlines for background reviews, exclusive reservation of remaining measured allowance per task, and review slots in workspace concurrency. API consent, cancellation and interrupted-usage recovery are covered by simulated-provider tests; real paid API verification remains | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
@@ -122,10 +191,11 @@ Codeshi cannot change subscription allowances or reset rules. Keep five-hour, we
 | Hands-free voice conversations: say "send", keep talking while the agent works, hear what it did | Needs design; follows voice mode | [#72](https://github.com/AhmedNavaz/codeshi/issues/72) |
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/codeshi/issues/73) |
 | Status in the Windows notification area | Planned, help wanted; follows the macOS menu bar status | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
-| Linux builds | Windows builds are done; Linux packaging is open, help wanted | [#5](https://github.com/AhmedNavaz/codeshi/issues/5) |
-| Run the symbolic link checks on Windows | Planned, help wanted | [#104](https://github.com/AhmedNavaz/codeshi/issues/104) |
+| Linux builds and CI | Windows builds are done; Linux CI test suite added in PR [#118](https://github.com/AhmedNavaz/codeshi/pull/118) ([#101](https://github.com/AhmedNavaz/codeshi/issues/101)), packaging open | [#5](https://github.com/AhmedNavaz/codeshi/issues/5) |
+| Run the symbolic link checks on Windows | In progress in PR [#119](https://github.com/AhmedNavaz/codeshi/pull/119) (depends on [#120](https://github.com/AhmedNavaz/codeshi/pull/120)) | [#104](https://github.com/AhmedNavaz/codeshi/issues/104) |
 | Rewind: undo any run's changes, whichever agent made them, then one timeline of checkpoints | Stage 1 shipped in [0.20.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.20.0). Stage 2, the Timeline panel and previewed workspace restore with recovery checkpoints, shipped in [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0). Commits and optional conversation rewind remain stage 3 | [#20](https://github.com/AhmedNavaz/codeshi/issues/20) |
-| Deployment templates for the private-link service | Planned, help wanted | [#9](https://github.com/AhmedNavaz/codeshi/issues/9) |
+| Deployment templates for the private-link service | Docker Compose with Caddy and Fly.io templates implemented in PR [#121](https://github.com/AhmedNavaz/codeshi/pull/121), awaiting review | [#9](https://github.com/AhmedNavaz/codeshi/issues/9) |
+| Open links in the terminal output with a click | Implemented with `@xterm/addon-web-links` in PR [#122](https://github.com/AhmedNavaz/codeshi/pull/122), awaiting review | [#83](https://github.com/AhmedNavaz/codeshi/issues/83) |
 | Everything in the thread: GitHub issues, pull requests and failing CI checks as context, then pull requests from the conversation | Planned in stages; failed command output from Run shipped in [0.19.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.19.0); [details below](#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
 
 ### Everything in the thread
@@ -138,7 +208,7 @@ Bring the work around the code into the project conversation, so an agent sees w
 
 ### Adaptive agent and model routing
 
-Extend [smart model and effort selection (#12)](https://github.com/AhmedNavaz/codeshi/issues/12) into an optional routing mode. For each prompt, Codeshi should choose an eligible agent, model and reasoning effort using the task, project context, required tools, available allowance and the user's budget. Larger requests may be split into subtasks when doing so improves the result enough to justify the extra usage and coordination.
+Extend [smart model and effort selection (#12)](https://github.com/AhmedNavaz/codeshi/issues/12) into Flow’s common execution policy. Automatic selection belongs to Flow; Normal keeps explicit settings and recommendations accepted by the person. Historical shipped behavior below predates this planned mode boundary. For each prompt, Codeshi should choose an eligible agent, model and reasoning effort using the task, project context, required tools, available allowance and the user's budget. Larger requests may be split into subtasks when doing so improves the result enough to justify the extra usage and coordination.
 
 | Mode | Planned behavior |
 | --- | --- |
@@ -190,8 +260,8 @@ Larger ideas for bringing project context, execution and collaboration into one 
 | **Parallel tasks from one request.** Split a big request into tasks that run side by side, each with its own agent and model: from **Up next**, by you, or proposed by the agent for you to accept. Tasks stay as ones you can continue in, grouped under the one that started them. | [#108](https://github.com/AhmedNavaz/codeshi/issues/108) |
 | **Specialist team workflows.** Frontend, backend, database, design and QA roles assigned only where needed; shared contracts, isolated edits, deterministic checks and bounded independent review. Build on #12/#15 after context, skills, task budgets and concurrency are ready; the editable team plan could use [Plans](https://github.com/AhmedNavaz/codeshi/issues/97). | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
 | **Codeshi CLI.** Run, inspect, stop and continue the same workflows from a terminal; coordinate providers and retain desktop continuity through one execution engine. Start with headless run/status/continue/stop; add team commands later. | [#90](https://github.com/AhmedNavaz/codeshi/issues/90) |
-| **Task board and schedules.** Capture tasks from meetings or anywhere on a board for each project, with priority and details, and let agents work through them while you review the results; run tasks on a schedule. [Plan below](#task-board-and-schedules). | Not opened yet |
-| **Flow mode.** Just the chat, with every panel gone and plain-language cards in the space on either side: how routing and handoff are working and what another choice would change, what's left on your plans, a timeline of what they did, measured savings, what's next, the files changed, and the plan and task cards. Uses the same capability, quota and decision records as normal mode; the routing trust requirements above apply before expanding automatic selection. For people who want to build without thinking about models. | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
+| **Task board and schedules.** Normal runs explicit cards/graphs and fixed schedules; Flow executes authorized outcomes or bounded backlog selections. Reuse #97 cards and #88 tasks. [Plan below](#task-board-and-schedules). | [board/schedule issue draft](docs/flow-issue-plan.md#board-and-schedule-execution) |
+| **Flow mode.** Managed outcomes with automatic policy-aware routing, handoff and bounded recovery; later task splitting, specialist teams and hands-free operation. The first milestone is implemented locally and uncommitted, with workspace-wide idle checks before either view change; backend execution-mode enforcement is planned in [backend task policy draft](docs/flow-issue-plan.md#backend-task-policy). Normal retains manual controls and exact selected workflows. [Agreed split](#normal-and-flow-the-agreed-execution-split). | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
 | **Suggestions at the right moment.** A feature that fits what's happening, offered in a sentence at a pause, from local rules: never changing a setting by itself, and easy to dismiss. | [#106](https://github.com/AhmedNavaz/codeshi/issues/106) |
 | **Plans.** A visual plan for personal and company projects, as in project management tools: cards and blocks on a canvas, connected like a flowchart, showing what's done. Build it yourself, or give an agent a file or doc and it lays the plan out for you to rearrange and comment on. Set each card's agent, model and effort, then let the agents take it from there. Private until you share it, with a link others can comment on. Cards should be shared with the board and [#89](https://github.com/AhmedNavaz/codeshi/issues/89). | [#97](https://github.com/AhmedNavaz/codeshi/issues/97) |
 | **Live progress near the top of the screen.** A compact pill under the menu bar while a run works, alongside the alerts from [#13](https://github.com/AhmedNavaz/codeshi/issues/13). | [#75](https://github.com/AhmedNavaz/codeshi/issues/75) |
@@ -202,10 +272,10 @@ Larger ideas for bringing project context, execution and collaboration into one 
 
 ### Task board and schedules
 
-A board for each project to capture work as it comes up, in a meeting or anywhere else, and let agents work through it while you review the results. Tasks can also run on a schedule.
+A board for each project to capture work as it comes up and run it under an explicit Normal or Flow policy, tracked in [board/schedule issue draft](docs/flow-issue-plan.md#board-and-schedule-execution). #97 owns the shared card/canvas/board views; this issue owns execution and schedules, reusing #88 tasks.
 
-1. **The board and running tasks.** Columns for Backlog, Ready, Doing, Review and Done. A card has a title, a description, a priority, labels, a checklist of what done means, and the agent to use, Auto by default so routing chooses. Running a card sends it to the agent and moves it to Doing; when the run ends, the card keeps the files it changed, the result of **Check with tests** and a short summary. **Run the Ready column** works through cards in priority order with the prompt queue, one at a time in each project and in parallel across projects. Cards can be dictated with voice input, and the saved context's unfinished tasks become the board's open cards, so agents know the backlog.
-2. **Schedules.** Run a card or a prompt once at a set time, or repeat it daily, on weekdays or weekly. Codeshi can keep running in the menu bar after its window closes, and open at login. Schedules run while the Mac is awake; a missed run shows in the "While you were away" recap and waits for you, unless you let it run late.
+1. **The board and running tasks.** Columns for Backlog, Ready, Doing, Review and Done. A card has a title, a description, a priority, labels, a checklist of what done means, and the execution policy: explicit assignments in Normal, or authorized automatic assignment in Flow. No new Normal card defaults to Auto. Running a card sends it to the agent and moves it to Doing; when the run ends, the card keeps the files it changed, the result of **Check with tests** and a short summary. **Run the Ready column** executes the exact selected graph in Normal, or an explicitly authorized bounded selection with Flow assignments. Dependencies, workspace concurrency and shared budgets apply in both. Cards can be dictated with voice input, and the saved context's unfinished tasks become the board's open cards, so agents know the backlog.
+2. **Schedules.** Run a card or a prompt once at a set time, or repeat it daily, on weekdays or weekly. Normal binds fixed agents/settings and an exact workflow; Flow binds an outcome/backlog scope and permitted automation. Store the policy and material card revisions with the schedule; deduplicate starts and stop future automatic dispatch after takeover. Codeshi can keep running in the menu bar after its window closes, and open at login. Schedules run while the Mac is awake; a missed run shows in the "While you were away" recap and waits for you, unless you let it run late.
 3. **Later.** Turn pasted meeting notes into cards with an agent, checked by you before any is added; sync cards with GitHub Issues through the access from [#18](https://github.com/AhmedNavaz/codeshi/issues/18); and run cards in parallel in separate worktrees with [#16](https://github.com/AhmedNavaz/codeshi/issues/16).
 
 Design boundaries:

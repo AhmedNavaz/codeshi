@@ -70,6 +70,22 @@ test('account probe preserves version, authentication and malformed/error result
   assert.equal((await accountStatus('claude', { bin: good.root + '/missing' })).errorCategory, 'installation');
 });
 
+// Claude Code's `auth status` says "pro" for a Max account; the profile in its config says which plan it really is.
+test('the Claude plan comes from the account profile, with the CLI’s word only as a fallback', { skip: scriptCLIs }, async t => {
+  const pro = fixture(t, { output: '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"pro"}' });
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = pro.root;
+  t.after(() => { if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous; });
+  const fallback = await accountStatus('claude', { bin: pro.bin });
+  assert.equal(fallback.subscriptionType, 'pro'); assert.equal(fallback.planType, 'Pro', 'With no profile, the CLI’s word stands.');
+  fs.writeFileSync(path.join(pro.root, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'someone@example.com', organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_5x' } }));
+  const max = await accountStatus('claude', { bin: pro.bin });
+  assert.equal(max.planType, 'Max 5x', 'The profile outranks the CLI.'); assert.equal(max.subscriptionType, 'pro', 'What the CLI said is kept as it was.');
+  assert.equal(max.billingSource, 'subscription');
+  const signedOut = fixture(t, { output: '{"loggedIn":false}' });
+  assert.equal((await accountStatus('claude', { bin: signedOut.bin })).planType, undefined, 'No plan is claimed for an account that is not signed in.');
+});
+
 for (const stage of ['version', 'auth']) {
   test(`account ${stage} timeout kills the child and reports a timeout, not a missing CLI`, { skip: scriptCLIs }, async t => {
     const f = fixture(t, { stage, wait: 15000 });

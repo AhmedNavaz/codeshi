@@ -1,3 +1,5 @@
+import { verificationCadence, verificationCadences } from './verification.mjs';
+
 const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
 // Dark is saved as graphite, the name of its palette. System applies until a choice is saved.
 export const appearances = ['system', 'graphite', 'light'];
@@ -5,6 +7,10 @@ export const appearance = config => appearances.includes(config.appearance) ? co
 export const defaultPreferences = { provider: 'codex', model: null, effort: null, mode: 'edit', billing: 'subscription' };
 export function preferencePatch(input, previous = {}) {
   const patch = {};
+  if (input.verificationCadence !== undefined) {
+    if (!verificationCadences.includes(input.verificationCadence)) fail('Choose As needed or Review first for testing.');
+    patch.verificationCadence = input.verificationCadence;
+  }
   if (input.theme !== undefined) {
     if (!appearances.includes(input.theme)) fail('Choose System, Light or Dark.');
     patch.appearance = input.theme;
@@ -28,5 +34,5 @@ export function preferencePatch(input, previous = {}) {
   return patch;
 }
 export function publicPreferences(config, hasProjects) {
-  return { defaults: { ...defaultPreferences, ...config.defaults }, theme: appearance(config), onboarding: config.onboarding || { step: 0 }, firstRun: !hasProjects && !config.onboarding?.completedAt && !config.onboarding?.dismissed };
+  return { defaults: { ...defaultPreferences, ...config.defaults }, theme: appearance(config), verificationCadence: verificationCadence(config), onboarding: config.onboarding || { step: 0 }, firstRun: !hasProjects && !config.onboarding?.completedAt && !config.onboarding?.dismissed };
 }

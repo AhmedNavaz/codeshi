@@ -95,9 +95,12 @@
   const SIDEBAR_KEY = 'throughline:sidebar', LAST_PANEL_KEY = 'throughline:side-panel-last', shell = $('app-shell');
   const read = key => { try { return localStorage.getItem(key); } catch { return null; } };
   const write = (key, value) => { try { localStorage.setItem(key, value); } catch { /* A convenience only. */ } };
+  // In Flow mode (#107) the sidebar and the side panel step aside, so their buttons and ⌘B wait until it is left.
+  const flowing = () => Boolean(shell?.classList.contains('flow'));
   function sync() {
     $('toggle-sidebar')?.setAttribute('aria-pressed', String(!shell?.classList.contains('sidebar-collapsed')));
     $('toggle-side-panel')?.setAttribute('aria-pressed', String(sidePanels().some(panel => !panel.hidden)));
+    for (const id of ['toggle-sidebar', 'toggle-side-panel']) if ($(id)) $(id).disabled = flowing();
     for (const [id, name] of [['agents-panel', 'agents'], ['git-panel', 'git'], ['brief-panel', 'brief'], ['tasks-panel', 'tasks'], ['timeline-panel', 'timeline']]) if ($(id) && !$(id).hidden) write(LAST_PANEL_KEY, name);
   }
   function setSidebar(collapsed) {
@@ -109,6 +112,7 @@
   if (read(SIDEBAR_KEY) === 'hidden') shell?.classList.add('sidebar-collapsed');
   $('toggle-sidebar')?.addEventListener('click', () => setSidebar(!shell?.classList.contains('sidebar-collapsed')));
   $('toggle-side-panel')?.addEventListener('click', () => {
+    if (flowing()) return;
     if (!$('agents-panel')?.hidden) { write(LAST_PANEL_KEY, 'agents'); $('open-agents')?.click(); }
     else if (!$('git-panel')?.hidden) { write(LAST_PANEL_KEY, 'git'); $('open-git')?.click(); }
     else if (!$('brief-panel')?.hidden) { write(LAST_PANEL_KEY, 'brief'); window.relayBrief?.close(); }
@@ -124,6 +128,7 @@
   }
   window.addEventListener('relay-state', sync);
   window.addEventListener('relay-side-panel', sync);
+  window.addEventListener('relay-flow', sync);
   sync();
-  window.relayLayout = { reset: () => { endDrag(); for (const name of Object.keys(sections)) set(name, null); save(); }, toggleSidebar: () => { setSidebar(!shell?.classList.contains('sidebar-collapsed')); return true; }, sync };
+  window.relayLayout = { reset: () => { endDrag(); for (const name of Object.keys(sections)) set(name, null); save(); }, toggleSidebar: () => { if (flowing()) return false; setSidebar(!shell?.classList.contains('sidebar-collapsed')); return true; }, sync };
 })();

@@ -1,4 +1,4 @@
-import { isAntigravityACP, antigravityReadOnly } from './antigravity.mjs';
+import { isAntigravityACP, antigravityReadOnly, antigravityOneFolder } from './antigravity.mjs';
 import { fork } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -30,6 +30,7 @@ import { PermissionRules } from './permission-rules.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
 import { HandoffMonitor } from './handoff.mjs';
 import { RunChecks } from './run-checks.mjs';
+import { verificationForRun } from './verification.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
 const transportFor = (provider, transport, configured) => transport === 'auto' ? provider === 'gemini' ? 'acp' : configured ? 'cli' : provider === 'codex' ? 'app-server' : 'sdk' : transport;
@@ -112,7 +113,7 @@ function importPlaces(existing, entries) {
 }
 
 export class Broker extends EventEmitter {
-  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), acquireFolders, withFolders, lane = false, contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), tests = null }) {
+  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), acquireFolders, withFolders, lane = false, contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), verificationCadence = () => 'as-needed', tests = null }) {
     super();
     this.workspace = savedWorkspace(workspace); this.contextPolicy = contextPolicy; this.budget = new TaskBudgets(this);
     this.workspaces = [...new Set([this.workspace, ...workspaces.map(savedWorkspace), ...workspaceFolders.map(folder => savedWorkspace(folder.path))])];
@@ -121,7 +122,7 @@ export class Broker extends EventEmitter {
       return { id: configured?.id || createHash('sha256').update(directory).digest('hex').slice(0, 16), name: configured?.name || path.basename(directory), ...(configured?.displayName ? { displayName: configured.displayName } : {}), path: directory };
     });
     this.workspaceSignature = createHash('sha256').update(JSON.stringify({ primary: this.workspace, roots: [...this.workspaces].sort() })).digest('hex');
-    this.dataDir = dataDir; this.googleRoot = googleRoot;
+    this.dataDir = dataDir; this.googleRoot = googleRoot; this.verificationCadence = verificationCadence;
     this.skills = new SkillCatalog(this);
     this.attachments = new AttachmentStore(dataDir);
     this.configuredBins = { ...bins };
@@ -311,7 +312,7 @@ export class Broker extends EventEmitter {
       if (record.title) c.title = record.title;
       c.messages.push({ ...record.message, seq: record.seq });
       c.requests[record.requestId] = { runId: record.id, requestId: record.requestId, fingerprint: record.fingerprint };
-      c.activeRun = { id: record.id, provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.effectiveTransport || record.transport, baseline: record.baseline, context: record.context, ...(record.local ? { connection: 'local', local: record.local } : {}), ...(record.review ? { purpose: 'review', reviewId: record.id } : {}), ...(record.routing ? { routing: record.routing } : {}), ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building' } } : {}), effort: record.effort ?? null, phase: 'starting', lastEventAt: record.at, toolCount: 0, startedAt: record.at }; c.status = 'running';
+      c.activeRun = { id: record.id, provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.effectiveTransport || record.transport, baseline: record.baseline, context: record.context, ...(record.context?.verification ? { verification: record.context.verification } : {}), ...(record.local ? { connection: 'local', local: record.local } : {}), ...(record.review ? { purpose: 'review', reviewId: record.id } : {}), ...(record.routing ? { routing: record.routing } : {}), ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building' } } : {}), effort: record.effort ?? null, phase: 'starting', lastEventAt: record.at, toolCount: 0, startedAt: record.at }; c.status = 'running';
       if (record.task) Object.assign(c.activeRun, { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation });
       if (record.plan) c.activeRun.plan = record.plan;
     }
@@ -343,7 +344,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'run_end') { if (c.activeRun && !c.activeRun.reviewId) c.lastBuilder = c.activeRun.provider; c.lastRun = { ...c.activeRun, status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at }; c.activeRun = null; c.status = record.status; }
       // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
     if ((record.type === 'submission' && !record.review) || record.type === 'run_start') {
-      c.runs = [...(c.runs || []), { id: record.id, ...(record.task ? { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation } : {}), ...(record.context?.scope ? { context: { scope: record.context.scope } } : {}), provider: record.provider, model: record.model || null, local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
+      c.runs = [...(c.runs || []), { id: record.id, ...(record.task ? { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation } : {}), ...(record.context?.scope ? { context: { scope: record.context.scope } } : {}), provider: record.provider, model: record.model || null, ...(record.context?.verification ? { verification: record.context.verification } : {}), local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
         ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building', summary: 'Build first, then one read-only review of the selected folders.' } } : {}),
         ...(record.routing ? { routing: { mode: record.routing.mode, tier: record.routing.tier || null } } : {}), ...(record.retryOf ? { retryOf: record.retryOf } : {}) }].slice(-50);
     }
@@ -398,7 +399,7 @@ export class Broker extends EventEmitter {
   // What a fresh agent would be told if this task moved now, without starting anything (#85).
   briefPreview(c) {
     const provider = c.provider, text = c.messages.some(message => message.role === 'user') ? continuationRequest : 'Preview';
-    const prepared = prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider }), readAttachment: () => ({ text: '' }), includeImages: false });
+    const prepared = prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider }), readAttachment: () => ({ text: '' }), includeImages: false });
     return { brief: JSON.parse(prepared.prompt.slice(prepared.prompt.indexOf('\n') + 1)).brief || null, metadata: prepared.metadata };
   }
 
@@ -588,10 +589,25 @@ export class Broker extends EventEmitter {
       // Only the first check waits. Later ones refresh in the background, so a slow CLI never delays the conversation.
       if (!this.providerStatus) await this.providerStatusPending;
     }
-    return { workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, providers: this.providerStatus, runningConversationId: this.running?.c.id || null, pendingApprovals: [...this.conversations.values()].flatMap(c => this.pendingApprovals(c)) };
+    return { workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, providers: this.providerStatus, runningConversationId: this.running?.c.id || null, workspaceActivity: this.workspaceActivity(), verificationCadence: this.verificationCadence(), pendingApprovals: [...this.conversations.values()].flatMap(c => this.pendingApprovals(c)) };
   }
 
-  prompt(c, text, fresh = false) { return prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
+  // Read-only activity across the workspace, even when the viewer has a different task open. This describes
+  // pending work for the Flow preview's view-switch guard; it does not grant or change execution authority.
+  workspaceActivity() {
+    const activity = { running: 0, checking: this.tasks?.checking?.size || 0, reviewing: 0, waiting: 0, queued: 0 };
+    for (const broker of [this, ...(this.tasks?.openLanes() || [])]) for (const c of broker.conversations.values()) {
+      if (c.status === 'running' || broker.running?.c === c) activity.running++;
+      activity.checking += (c.runs || []).filter(run => run.check?.status === 'running').length;
+      activity.reviewing += (c.reviews || []).filter(review => review.status === 'running').length;
+      if (c.resume || c.limitSwitching) activity.waiting++;
+      if (!c.queuePaused) activity.queued += c.queue?.length || 0;
+      activity.waiting += (c.parallelTasks || []).filter(task => task.status === 'waiting' && !task.held && !task.closed).length;
+    }
+    return { ...activity, busy: Object.values(activity).some(count => count > 0) };
+  }
+
+  prompt(c, text, fresh = false) { return prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
 
   start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
@@ -629,7 +645,8 @@ export class Broker extends EventEmitter {
     if (provider === 'gemini' && isAntigravityACP(bin) && mode === 'read') throw Object.assign(new Error(antigravityReadOnly), { status: 400, category: 'permission' });
     // Gemini CLI takes its effort from the model, so a level saved under the Antigravity connection doesn't apply and can't stop a run.
     if (provider === 'gemini' && !isAntigravityACP(bin)) effort = null;
-    if (provider === 'gemini' && isAntigravityACP(bin) && this.workspaces.length > 1) throw Object.assign(new Error('This Antigravity connection currently supports one project folder. Choose a workspace with one folder.'), { status: 400 });
+    // The page offers the folders on seeing folderChoice: the message then runs as a task in the one chosen.
+    if (provider === 'gemini' && isAntigravityACP(bin) && this.workspaces.length > 1) throw Object.assign(new Error(antigravityOneFolder), { status: 400, details: { folderChoice: true } });
     if (provider === 'gemini' && isAgy(bin)) throw Object.assign(new Error(agyUnsupported), { status: 503, category: 'installation' });
     const actualTransport = transportFor(provider, transport, this.configuredBins[provider]);
     if ((provider === 'gemini' && actualTransport !== 'acp') || (provider !== 'gemini' && actualTransport === 'acp') || (provider === 'codex' && actualTransport === 'sdk') || (provider === 'claude' && actualTransport === 'app-server')) throw Object.assign(new Error('This transport does not support the selected provider.'), { status: 400 });
@@ -641,7 +658,8 @@ export class Broker extends EventEmitter {
     const effectiveFresh = Boolean(fresh || changedWorkspace || switchedAgent || provider === 'gemini' || !c.sessions[provider]?.id);
     const sessionReason = review ? 'review' : local ? 'local-handoff' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : provider === 'gemini' ? 'provider-fresh-session' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     const sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
-    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    const verification = verificationForRun(this.verificationCadence(), { retryOf, automaticReview });
+    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { verification, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -650,7 +668,7 @@ export class Broker extends EventEmitter {
     try { if (review) verifyReview(); baseline = review ? { kind: 'review', git: true, digest: review.snapshot.digest, capturedAt: new Date().toISOString() } : workspaceBaseline(this.workspace, this.workspaceFolders); } catch (error) { lease.release(); throw error; }
     const run = { id: runId, taskId: task.id, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
       stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, limitChain, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
-      model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview };
+      model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview, verification: prepared.metadata.verification };
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
@@ -676,7 +694,7 @@ export class Broker extends EventEmitter {
         for (const resolve of run.steers.values()) resolve({ ok: false, error: 'The run ended.' });
         run.steers.clear();
         if (!success) {
-          const detail = run.budgetStop ? `Stopped: ${run.budgetStop.message} Files already changed by this run remain in the workspace.` : run.stopped ? 'Stopped. Files already changed by this run remain in the workspace.' : error?.message || run.stderr.trim() || `The assistant ended without completing the turn (exit ${code ?? signal ?? 'unknown'}).`;
+          const detail = run.budgetStop ? `Stopped: ${run.budgetStop.message} Files already changed by this run remain in the workspace.` : run.stopped ? 'Stopped. Files already changed by this run remain in the workspace.' : error?.message || run.failureDetail || run.stderr.trim() || `The assistant ended without completing the turn (exit ${code ?? signal ?? 'unknown'}).`;
           run.errorCategory ||= run.stopped ? 'interrupted' : classifyError(error || detail);
           const notice = clip(detail) + (review ? '\nStart a new read-only review when ready.' : run.stopped ? '' : '\nYour conversation is saved. Select the other assistant and continue, or retry after resolving the error.');
           if (run.errorCategory === 'quota' && this.handoff.atLimit(run)) { run.limitNotice ||= notice; continuing = true; }
@@ -931,8 +949,10 @@ export class Broker extends EventEmitter {
         this.message(c, 'assistant', event.result, provider, `${run.id}:response`, 'complete');
       }
       if (event.permission_denials?.length) {
+        // Only requests that never reached Codeshi get here: a tool you declined was answered, and Claude carries on.
+        const tools = [...new Set(event.permission_denials.map(denial => denial.tool_name).filter(Boolean))].join(', ') || 'a tool';
         run.failed = true; run.errorCategory = 'permission';
-        this.message(c, 'error', 'Claude requested a tool that needs approval in its native terminal. Some work may be incomplete.\n' + clip(JSON.stringify(event.permission_denials)), provider);
+        run.failureDetail = `Claude couldn't get permission to use ${tools}, so that step didn't run. Some work may be incomplete.`;
       }
     }
   }

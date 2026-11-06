@@ -1,0 +1,215 @@
+/* Flow mode (#107): just the chat in the middle, with plain-language cards in the space either side. It has its own
+   look: the seal and the word Flow in the header, cards without frames, a larger message box and type, and controls
+   at the foot of both rails. Details open in a focused Flow sheet; the workbench chrome steps aside. */
+
+/* The way in: the seal and the word, at the right of the header. In Flow it reads Leave Flow. */
+.flow-entry { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; margin-left: 6px; padding: 0 11px 0 8px; border: 1px solid var(--border-strong); border-radius: 14px; background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; -webkit-app-region: no-drag; }
+.flow-entry:hover:enabled { background: var(--hover); color: var(--text-strong); }
+.flow-entry:disabled { opacity: .4; }
+.flow-entry-mark { width: 14px; height: 14px; }
+.flow-entry[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 50%, transparent); color: var(--link); }
+
+/* The shell: a header across the whole window, then three columns with no sidebar and no docked panels. */
+#app-shell.flow, #app-shell.flow:has(.side-panel:not([hidden])), #app-shell.flow:has(#review-panel:not([hidden])) { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(300px, 360px); --content-width: 820px; }
+#app-shell.flow > .sidebar { display: none; }
+#app-shell.flow > .main-panel { grid-column: 2; grid-row: 2; }
+#app-shell.flow { grid-template-rows: 56px minmax(0, 1fr); }
+#app-shell.flow > .status-bar, #app-shell.flow .side-panel, #app-shell.flow .review-panel { display: none; }
+/* The What's next card carries the plan, so the line above the message box steps aside. */
+#app-shell.flow #run-plan { display: none; }
+
+/* The header spans the window: the seal and the word Flow beside the window controls, search in the middle of the
+   window, and the way out at its far right. The two outer columns match, so the search stays centred. */
+#app-shell.flow > .conversation-header { grid-column: 1 / -1; grid-row: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px) minmax(0, 1fr); align-items: center; gap: 16px; height: 56px; padding: 0 18px; border-bottom: 0; }
+/* The padding stays equal on both sides so the search is centred; on macOS the brand alone moves past the window controls. */
+.mac-titlebar #app-shell.flow .flow-brand { margin-left: 64px; }
+#app-shell.flow .workspace-chip, #app-shell.flow #layout-toggles, #app-shell.flow .panel-toggles { display: none; }
+#app-shell.flow .command-bar { grid-column: 2; grid-row: 1; width: 100%; max-width: none; margin: 0; }
+#app-shell.flow .command-bar input { border-color: transparent; background: transparent; }
+#app-shell.flow .command-bar input:hover { border-color: var(--border); }
+#app-shell.flow .command-bar input:focus { border-color: var(--focus); background: var(--surface-input); }
+#app-shell.flow .header-actions { grid-column: 3; grid-row: 1; justify-self: end; }
+.flow-brand { display: none; grid-column: 1; grid-row: 1; align-items: center; gap: 8px; min-width: 0; }
+#app-shell.flow .flow-brand:not([hidden]) { display: inline-flex; animation: flow-in .5s cubic-bezier(.2, .8, .2, 1) both; }
+.flow-brand-mark { flex: none; width: 20px; height: 20px; }
+.flow-brand-name { color: var(--text-strong); font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
+.flow-brand-workspace { min-width: 0; max-width: 260px; margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--border-strong); overflow: hidden; color: var(--muted); font-size: 12.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.flow-brand-workspace:empty { display: none; }
+
+/* The chat: a little larger and calmer, with a message box that asks what to build. */
+#app-shell.flow .message-text { font-size: 15px; line-height: 1.7; }
+#app-shell.flow .composer { border-radius: 18px; border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
+#app-shell.flow .composer textarea { min-height: 76px; padding: 16px 18px 6px; font-size: 15px; }
+#app-shell.flow .composer textarea::placeholder { color: var(--muted); }
+#app-shell.flow .composer-toolbar { padding: 4px 10px 10px; }
+#app-shell.flow .empty-state h2 { font-size: 26px; font-weight: 600; letter-spacing: -.02em; }
+#app-shell.flow .empty-state p { max-width: 440px; font-size: 14px; }
+#app-shell.flow .capabilities { display: none; }
+
+/* Live status and useful controls belong to the working card, with no footer or reserved footer row. */
+.flow-status { display: none; align-items: center; gap: 7px; min-width: 0; min-height: 20px; padding: 0; color: var(--muted); font-size: 11px; }
+#app-shell.flow .flow-status:not([hidden]) { display: inline-flex; }
+.flow-status > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.flow-status[data-live="true"] > i { background: var(--link); animation: pulse 1.4s ease-in-out infinite; }
+.flow-status[data-attention="true"] > i { background: var(--warning); animation: none; }
+.flow-status[data-attention="true"] { color: var(--text); }
+.flow-status > span { overflow-wrap: anywhere; }
+/* Preferences and connection controls live at the foot of opposite rails, away from the task cards. */
+.flow-utility { flex: none; display: grid; gap: 12px; margin-top: auto; padding: 24px 8px 0; border-top: 1px solid var(--border); color: var(--text); }
+.flow-utility h2 { margin: 0; color: var(--text-strong); font-size: 12px; font-weight: 600; }
+.flow-utility-hint { margin: -6px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.flow-appearance { display: grid; gap: 8px; }
+.flow-utility-label { color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.flow-utility .appearance-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); }
+.flow-utility .appearance-options button { display: flex; flex-direction: column; justify-content: center; gap: 6px; width: auto; height: 48px; border-radius: 9px; color: var(--muted); font-size: 10px; }
+.flow-utility .appearance-options button .sr-only { position: static; width: auto; height: auto; margin: 0; padding: 0; overflow: visible; clip: auto; clip-path: none; white-space: normal; }
+.flow-utility .appearance-options button[aria-pressed="true"] { background: var(--bg); color: var(--text-strong); box-shadow: var(--shadow-sm); }
+.flow-utility .status-button { justify-content: flex-start; gap: 9px; width: 100%; min-height: 36px; height: auto; padding: 8px 10px; border-radius: 10px; color: var(--muted); text-align: left; font-size: 12px; }
+.flow-utility .status-button .icon { width: 15px; height: 15px; flex: none; }
+.flow-utility .status-button:hover { background: var(--surface-raised); color: var(--text-strong); }
+.flow-utility #connect-phone { border: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text); }
+.flow-utility #relay-settings::after { content: "↗"; margin-left: auto; color: var(--faint); }
+.flow-preferences { display: grid; gap: 28px; }
+.flow-preferences .flow-utility { margin-top: 0; padding-top: 16px; }
+
+/* The sides: cards without frames, each with a seal-red tick, in the row under the header. The rails never act as drag regions. */
+.flow-side { grid-row: 2; display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; padding: 0 16px 24px; overflow: auto; }
+.flow-side[hidden] { display: none; }
+#app-shell.flow .flow-side { animation: flow-in .5s cubic-bezier(.2, .8, .2, 1) both; }
+.flow-left { grid-column: 1; }
+.flow-right { grid-column: 3; animation-delay: .06s; }
+/* Full-height drag regions intercept native window controls and dialog clicks in Electron. Only the header drags. */
+.mac-titlebar #app-shell.flow .flow-side, .mac-titlebar #app-shell.flow .composer-region, .flow-peek, .flow-detail { -webkit-app-region: no-drag; }
+.mac-titlebar #app-shell.flow :is(button, a, input, textarea, select, summary) { -webkit-app-region: no-drag; }
+.flow-card { display: grid; gap: 9px; padding: 13px 16px 15px; border-radius: 14px; background: color-mix(in srgb, var(--surface-raised) 86%, transparent); box-shadow: var(--shadow-sm); color: var(--text); font-size: 12.5px; line-height: 1.55; }
+.flow-card-head { display: flex; align-items: center; gap: 9px; min-height: 22px; }
+.flow-card-head::before { content: ""; flex: none; width: 3px; height: 14px; border-radius: 2px; background: var(--accent); }
+.flow-card-head h2 { flex: 1; min-width: 0; margin: 0; color: var(--text-strong); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
+.flow-card-body { display: grid; gap: 8px; min-width: 0; }
+.flow-card-body:empty { display: none; }
+.flow-lead { margin: 0; color: var(--text); }
+.flow-empty { margin: 0; color: var(--muted); }
+.flow-card-foot { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.flow-card-foot:empty { display: none; }
+.flow-card .text-link { font-size: 12.5px; }
+.flow-card .text-link:disabled { color: var(--faint); text-decoration: none; }
+
+/* The mode leads the working card: the one choice Flow makes on your behalf, with what it does in a sentence. */
+.flow-mode { display: grid; gap: 3px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-raised); }
+.flow-mode-eyebrow { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.flow-mode-name { color: var(--text-strong); font-size: 16px; font-weight: 600; letter-spacing: -.01em; line-height: 1.3; }
+.flow-mode-text { margin: 2px 0 0; color: var(--text); font-size: 12px; line-height: 1.5; }
+.flow-tasks { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.flow-task { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.flow-task-meta { color: var(--faint); font-size: 11.5px; }
+.flow-facts { display: grid; gap: 8px; margin: 0; }
+.flow-facts > div { display: grid; gap: 1px; min-width: 0; }
+.flow-facts dt { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.flow-facts dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.flow-facts dd .text-link { font-size: 12px; }
+
+.flow-change { margin: 0; }
+.flow-change > summary { display: flex; align-items: center; gap: 6px; height: 24px; margin: 0 -6px; padding: 0 6px; border-radius: 6px; color: var(--link); font-size: 12.5px; list-style: none; cursor: default; }
+.flow-change > summary::-webkit-details-marker { display: none; }
+.flow-change > summary:hover { background: var(--hover); }
+.flow-change > summary::before { content: ""; flex: none; width: 10px; height: 10px; background: currentColor; mask: var(--icon-chevron-right) center / contain no-repeat; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform .12s; }
+.flow-change[open] > summary::before { transform: rotate(90deg); }
+.flow-options { display: grid; gap: 1px; margin: 4px -6px 0; }
+.flow-options .routing-option { padding: 6px; }
+.flow-locked { margin: 4px 0 0; color: var(--faint); font-size: 11.5px; }
+
+/* Changing the mode says what would change first; nothing about access, permissions or billing moves with it. */
+.flow-confirm { display: grid; gap: 6px; padding: 11px 13px; border-radius: 10px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.flow-confirm strong { color: var(--text-strong); font-size: 13px; }
+.flow-confirm p { margin: 0; }
+.flow-note { color: var(--muted); font-size: 11.5px; }
+.flow-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 2px; }
+.flow-apply { height: 27px; padding: 0 13px; border: 0; border-radius: 14px; background: var(--accent); color: var(--on-accent); font: inherit; font-size: 12px; font-weight: 600; }
+.flow-apply:hover:enabled { background: var(--accent-strong); }
+.flow-apply:disabled { opacity: .6; }
+
+.flow-plans { display: grid; gap: 11px; margin: 0; padding: 0; list-style: none; }
+.flow-plan { display: grid; gap: 4px; }
+.flow-plan-head { display: flex; align-items: center; gap: 7px; }
+.flow-plan-head strong { flex: 1; min-width: 0; color: var(--text-strong); font-weight: 600; }
+.flow-plan-head .agent-icon { width: 13px; height: 13px; }
+.flow-plan-value { color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.flow-plan[data-level="low"] .flow-plan-value { color: var(--warning); }
+.flow-plan[data-level="critical"] .flow-plan-value { color: var(--danger); }
+.flow-meter { position: relative; height: 5px; border-radius: 3px; background: var(--chip-bg); overflow: hidden; }
+.flow-meter::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--left, 0%); border-radius: 3px; background: var(--success); }
+.flow-plan[data-level="low"] .flow-meter::after { background: var(--warning); }
+.flow-plan[data-level="critical"] .flow-meter::after { background: var(--danger); }
+.flow-plan-when { color: var(--faint); font-size: 11.5px; }
+
+.flow-steps, .flow-queue, .flow-runs { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.flow-step { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); }
+.flow-step-mark { flex: none; width: 12px; height: 12px; margin-top: 3px; border: 1.5px solid var(--faint); border-radius: 50%; }
+.flow-step.done { color: var(--faint); }
+.flow-step.done .flow-step-text { text-decoration: line-through; }
+.flow-step.done .flow-step-mark { border-color: var(--success); background: var(--success); }
+.flow-step.active { color: var(--text-strong); }
+.flow-step.active .flow-step-mark { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2.5px var(--surface-raised); }
+.flow-subhead { margin: 4px 0 0; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.flow-queue { counter-reset: queued; }
+.flow-queue-item { display: flex; gap: 8px; color: var(--text); }
+.flow-queue-item::before { counter-increment: queued; content: counter(queued); flex: none; min-width: 14px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.flow-queue-more { color: var(--faint); }
+.flow-run { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; align-items: center; }
+.flow-run-title { color: var(--text); }
+.flow-run-meta { grid-column: 1; color: var(--faint); font-size: 11px; }
+.flow-run-action { grid-column: 2; grid-row: 1 / span 2; }
+
+/* A narrow window: one chip per card under the header; a chip opens its card over the right edge of the chat. */
+.flow-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: none; padding: 2px 18px 8px; }
+.flow-strip[hidden] { display: none; }
+.flow-chip { height: 26px; padding: 0 11px; border: 0; border-radius: 13px; background: color-mix(in srgb, var(--surface-raised) 86%, transparent); box-shadow: var(--shadow-sm); color: var(--text); font: inherit; font-size: 12px; white-space: nowrap; }
+.flow-chip:hover, .flow-chip[aria-pressed="true"] { color: var(--text-strong); background: var(--surface-strong); }
+.flow-peek { position: fixed; z-index: 31; top: 56px; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; width: min(400px, 90vw); padding: 10px 14px 18px; overflow: auto; border: 1px solid var(--border); border-radius: 18px; background: var(--bg); box-shadow: var(--shadow-lg); }
+.flow-peek[hidden] { display: none; }
+.flow-peek-head { display: flex; justify-content: flex-end; flex: none; }
+.flow-peek-close { width: 32px; height: 32px; -webkit-app-region: no-drag; }
+.flow-peek-close::before { content: ""; width: 12px; height: 12px; background: currentColor; mask: var(--icon-close) center / contain no-repeat; -webkit-mask: var(--icon-close) center / contain no-repeat; }
+@media (max-width: 1180px) {
+  #app-shell.flow, #app-shell.flow:has(.side-panel:not([hidden])), #app-shell.flow:has(#review-panel:not([hidden])) { grid-template-columns: 0 minmax(0, 1fr) 0; }
+  #app-shell.flow > .conversation-header { grid-template-columns: minmax(0, 1fr) minmax(0, 260px) minmax(0, 1fr); }
+  .flow-brand-workspace { display: none; }
+}
+
+/* Going in and out: a veil covers the change of layout, and on the way in the seal appears on it for a moment. */
+.flow-veil { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: var(--bg); opacity: 0; pointer-events: none; }
+.flow-veil[hidden] { display: none; }
+.flow-veil img { width: 96px; height: 96px; opacity: 0; }
+.flow-veil:not(.with-seal) img { display: none; }
+@keyframes flow-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* Flow details: a focused sheet rather than the workbench's dock and tab strip. Native modal behavior keeps
+   keyboard focus inside, while Escape, the backdrop and Back to Flow all return to the originating card. */
+.flow-detail { width: min(720px, calc(100vw - 48px)); max-width: none; max-height: calc(100dvh - 112px); margin: auto; padding: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--bg); color: var(--text); box-shadow: var(--shadow-lg); }
+.flow-detail[open] { display: flex; flex-direction: column; animation: flow-in .2s ease-out both; }
+.flow-detail::backdrop { background: color-mix(in srgb, var(--bg) 65%, transparent); backdrop-filter: blur(8px); }
+.flow-detail-head { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 24px; border-bottom: 1px solid var(--border); }
+.flow-detail-eyebrow { color: var(--link); font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+.flow-detail-head h2 { margin: 7px 0; color: var(--text-strong); font-size: 23px; font-weight: 600; letter-spacing: -.03em; }
+.flow-detail-head p { margin: 0; max-width: 420px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.flow-detail-head button { flex: none; border-radius: 16px; }
+.flow-detail-body { display: flex; min-height: 0; overflow: auto; }
+.flow-detail .side-panel, .flow-detail .review-panel { position: static; flex: 1; width: 100%; min-width: 0; max-height: none; border: 0; background: transparent; box-shadow: none; }
+.flow-detail .inspector-heading, .flow-detail .resize-handle { display: none; }
+.flow-detail .panel-body, .flow-detail .agents-body { padding: 20px 24px; }
+/* Remote access in the sheet: the Settings section's rows, under the sheet's own heading rather than the group's. */
+.flow-phone { flex: 1; min-width: 0; padding: 20px 24px 24px; }
+.flow-phone:empty { display: none; }
+.flow-phone > .settings-section > .settings-group:first-child > .settings-group-title { display: none; }
+.flow-phone .settings-group-description { margin-top: 0; }
+.flow-phone :is(button, input, select, summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+/* Flow keeps shell tools out of the conversation, including keyboard and menu entry points. */
+#app-shell.flow #bottom-panel { display: none; }
+@media (max-width: 600px) {
+  .flow-detail { width: calc(100vw - 24px); max-height: calc(100dvh - 80px); border-radius: 16px; }
+  .flow-detail-head { gap: 12px; padding: 18px; }
+  .flow-detail-head h2 { font-size: 20px; }
+  .flow-detail-head button { padding: 6px 10px; font-size: 11px; }
+  .flow-detail .panel-body, .flow-detail .agents-body { padding: 16px 18px; }
+}
+@media (prefers-reduced-motion: reduce) { .flow-detail[open] { animation: none; } }

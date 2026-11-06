@@ -232,6 +232,54 @@ else {
       for(let tries=0;tries<100;tries++){result.updates=await win.webContents.executeJavaScript(`({open:document.getElementById('updates-dialog').open,notes:!!document.querySelector('#updates-content .updates-release')})`);if(result.updates.open)break;await new Promise(resolve=>setTimeout(resolve,20));}
       await win.webContents.executeJavaScript(`document.getElementById('updates-dismiss').click()`);
       for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!document.getElementById('updates-dialog').open`)){result.updates.dismissed=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
+      // Flow: exercise the real renderer/API with a disposable workspace and no installed agents.
+      {
+        // Let native rendering and the transition animations advance, including on macOS with a hidden main window.
+        win.showInactive();
+        const folder=path.join(app.getPath('userData'),'flow-smoke-workspace');fs.mkdirSync(folder,{recursive:true});
+        const project=relay.registry.add({path:folder,name:'Flow smoke'});
+        await win.webContents.executeJavaScript(`(async()=>{await window.relayUI.refreshProjects({choose:true});await window.relayUI.selectProject(${JSON.stringify(project.id)});window.relayFlow.enter();})()`);
+        for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        // Routing is Flow's: entering turns it on, Balanced at first, and leaving turns it off.
+        for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`window.relayUI.getState().conversation?.routing?.mode==='balanced'`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        win.setContentSize(1440,900);
+        result.flow=await win.webContents.executeJavaScript(`(async()=>{
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+          const left=document.getElementById('flow-left');
+          window.relayAgents.open();await new Promise(resolve=>setTimeout(resolve,20));
+          const close=document.getElementById('flow-detail-close'),rect=close.getBoundingClientRect();
+          const details=document.getElementById('flow-detail').open&&document.getElementById('agents-panel').parentElement.id==='flow-detail-body'&&close.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2));
+          close.click();await new Promise(resolve=>setTimeout(resolve,20));
+          // The header spans the window: the seal beside the window controls, search in the middle, the way out at the far right.
+          const header=document.getElementById('conversation-header'),brand=document.getElementById('flow-brand').getBoundingClientRect(),search=document.querySelector('.command-bar').getBoundingClientRect(),out=document.getElementById('toggle-flow').getBoundingClientRect();
+          const headerPlaced=header.parentElement.id==='app-shell'&&brand.top>=0&&brand.bottom<=56&&brand.left>=(document.documentElement.classList.contains('mac-titlebar')?82:0)&&Math.abs((search.left+search.right)/2-innerWidth/2)<8&&out.right>innerWidth-40&&out.right<=innerWidth;
+          // Remote access opens in Flow's own sheet, drawn by the same module as the Settings section.
+          document.getElementById('connect-phone').click();
+          for(let tries=0;tries<100&&!document.querySelector('.flow-phone .settings-row');tries++)await new Promise(resolve=>setTimeout(resolve,20));
+          const remote=document.getElementById('flow-detail').open&&document.getElementById('flow-detail-title').textContent==='Remote access'&&!document.getElementById('settings').open&&!!document.querySelector('.flow-phone .settings-row');
+          close.click();await new Promise(resolve=>setTimeout(resolve,20));
+          return {entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:document.querySelectorAll('.flow-card').length===4,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about')&&!/preview/i.test(document.getElementById('flow-left').textContent+document.getElementById('flow-right').textContent),routingOn:window.relayUI.getState().conversation.routing?.mode==='balanced'&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
+        })()`);
+        const screenshot=path.join(os.tmpdir(),`codeshi-flow-${process.pid}.png`);
+        const captured=await Promise.race([win.webContents.capturePage(),new Promise(resolve=>setTimeout(()=>resolve(null),3000))]);
+        if(captured&&!captured.isEmpty()){fs.writeFileSync(screenshot,captured.toPNG());result.flow.screenshot=screenshot;}else result.flow.screenshotUnavailable=true;
+        win.setContentSize(900,800);
+        await new Promise(resolve=>setTimeout(resolve,100));
+        result.flow.narrow=await win.webContents.executeJavaScript(`document.getElementById('flow-left').hidden&&!document.getElementById('flow-strip').hidden&&document.querySelectorAll('.flow-chip').length===5`);
+        const broker=relay.registry.broker(project.id),conversation=[...broker.conversations.values()][0];
+        conversation.status='running';conversation.activeRun={id:'flow-smoke-run',provider:'codex',mode:'read',startedAt:new Date().toISOString(),phase:'working'};
+        await win.webContents.executeJavaScript(`window.relayUI.refresh()`);
+        result.flow.locked=await win.webContents.executeJavaScript(`document.getElementById('toggle-flow').disabled&&window.relayFlow.leave()===false&&window.relayFlow.isOn()`);
+        conversation.status='idle';conversation.activeRun=null;
+        await win.webContents.executeJavaScript(`window.relayUI.refresh().then(()=>window.relayFlow.leave())`);
+        for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        result.flow.left=await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&getComputedStyle(document.querySelector('.status-bar')).display!=='none'`);
+        for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        result.flow.routingOff=await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing&&document.getElementById('agents-routing').hidden`);
+        result.flow.passed=['entered','footerHidden','cards','windowControlsClear','details','headerPlaced','remote','noPreview','routingOn','narrow','locked','left','routingOff'].every(key=>result.flow[key]===true);
+        console.log('AI_RELAY_FLOW_SMOKE '+JSON.stringify(result.flow));
+        if(!result.flow.passed)throw Error('Flow smoke check failed: '+JSON.stringify(result.flow));
+      }
       if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.voiceUI||result.speech===false||result.statusItem===false||result.overlay===false||!result.preview||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
       console.log('AI_RELAY_DESKTOP_SMOKE '+JSON.stringify(result));app.quit();
     }

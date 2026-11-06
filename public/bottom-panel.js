@@ -27,6 +27,7 @@
   }
   function announce() { window.dispatchEvent(new CustomEvent('relay-panel', { detail: { open: !panel.hidden, tool: active } })); }
   function show(tool = active) {
+    if (window.relayFlow?.isOn?.()) return;
     if (!TOOLS.includes(tool)) return;
     const changed = panel.hidden || tool !== active;
     active = tool; panel.hidden = false; sync(); save();

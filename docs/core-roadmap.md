@@ -8,12 +8,72 @@ Help a person finish a verified task across their chosen coding agents with less
 
 Codeshi cannot increase a provider's subscription allowance, change its reset rules or guarantee a token-to-quota conversion. Improvements must come from relevant context, appropriate model/effort selection, reusable procedures, early verification and bounded recovery. More agents can improve elapsed time or coverage while increasing total usage.
 
+## Normal and Flow execution contract
+
+Agreed direction, not released behavior: **Normal** is explicit agent/settings/task control; **Flow** delegates execution decisions for an authorized outcome. The [feature ownership matrix](../ROADMAP.md#normal-and-flow-the-agreed-execution-split) covers shipped capabilities and planned features. Native agent planning/tool loops, context handling, reviewed memory/skills, explicit queues and exact user-configured workflows remain available in Normal. Budgets, approvals and recovery protect both modes.
+
+### Backend mode policy and safe takeover
+
+**Focused view first:** the current build is a focused view using existing routing/handoff settings. Both entry and exit require an idle workspace, including other tasks, reviews, tests, reset waits and unpaused queues. A view request never starts a new task and blocked requests are not deferred. Recheck before applying an animated transition and keep all active work reachable. This read-only activity guard is not the backend execution-policy milestone below.
+
+**Tracking:** [backend task policy draft](flow-issue-plan.md#backend-task-policy). #107 owns the user experience; #12 owns selection; #87 owns accounting and limits. Extend their existing engine/journal rather than inventing another task store or routing engine.
+
+- [ ] Persist versioned Normal/Flow policy per task, independently of browser layout, with allowed automation, routing preference, overrides and authorization provenance.
+- [ ] Check current policy before initial/queued dispatch, handoff, quota/reset continuation, retry, review and child creation; reject stale clients and revoked automatic decisions.
+- [ ] Let different tasks use different policies. Desktop, phone, restart recovery and CLI share backend authority; opening another view or closing a window does not change it.
+- [ ] Take manual control revokes future discretionary dispatch at a safe boundary while preserving current/completed work; define in-flight turn behavior. Immediate Stop is distinct.
+- [ ] Preserve/deduplicate queued work and counters through restart and takeover. Preview migration from existing routing/handoff settings without silently changing in-flight authorization.
+- [ ] Keep tool access, approval mode and billing separate. Flow, quality preferences and schedules never grant permission to publish, push, deploy or release.
+
+### Common assignment, handoff and recovery policy
+
+The local, unreleased **Testing cadence** preference applies in both views: Review first guides lightweight iteration and verification at an explicit finalization request. New turns inherit it across agents and task lanes; routine post-run checks are explicitly deferred, while selected test-repair/build-review workflows retain required checks. It does not enforce a command ban or cache verified results. Future automation must honor the same cadence and use input-bound evidence before reusing a successful check; count deferred work as unverified and measure repeated verification overhead under #84.
+
+**Tracking:** #12, extending shipped #17/#32/#91 behavior. Existing closed milestones stay closed; new mode enforcement is [backend task policy draft](flow-issue-plan.md#backend-task-policy).
+
+- Required capability, tools/inputs/context and remaining task come before allowance. Model-name tiers are heuristics until verified under #84.
+- Select provider, model and effort consistently for initial work, both forms of quota handoff, waits, retries, reviewers and future subtasks. The current handoff selector does not yet implement the complete routing-mode policy.
+- Apply Cost Saving (sufficient capability and restrained overhead), Balanced (task fit and evidence-based escalation) or Maximum Quality (stronger suitable reasoning and targeted checks) under the same total budget.
+- Recheck applicable five-hour/weekly/model limits and freshness before dispatch; include concurrent usage, continuity, transfer/re-reading cost and manual pins. Unknown quota/billing does not authorize automatic work.
+- Normal keeps manual offers/choices and fixed-agent waits. Flow may choose an eligible alternative or authorized wait. No suitable candidate means a visible wait/blocker, not an incompatible downgrade or unauthorized spend.
+
+### Board and schedule execution
+
+**Tracking:** [board/schedule issue draft](flow-issue-plan.md#board-and-schedule-execution). #97 owns card/canvas/board/outline views; #88 supplies tasks/isolation. Reuse the same cards and IDs in all views.
+
+- Normal: explicit cards, assignments, graphs and fixed schedules. Flow: authorized outcomes or bounded backlog selections with automatic assignments. No default Auto for new Normal cards.
+- Bind policy, relevant card revisions, scope, permissions and budget to scheduled work. Preserve user edits, distinguish worker completion from acceptance, deduplicate starts and show missed runs without inventing always-on availability.
+- Pauses, failed prerequisites, quota waits, takeover and restart cannot start unapproved or unrelated work. External publication remains user-controlled.
+
+### Feature issue ownership and delivery
+
+| Workstream | Owner | Mode boundary |
+| --- | --- | --- |
+| Flow experience | #107 | Explain and control delegated outcomes; preserve manual override/recovery |
+| Runtime authority, migration and takeover | [backend task policy draft](flow-issue-plan.md#backend-task-policy) | Backend task policy shared across clients |
+| Selection and automatic continuation | #12, #17, #32, #91 | Manual choice/fixed wait in Normal; common-policy automatic choices in Flow |
+| Queue editing | #113 | Normal explicit settings; Flow automatic versus pinned choices with policy provenance |
+| Manual concurrency and bounded fan-out | #88, #108 | Manual tasks remain shared; delegated creation/assignment belongs to Flow |
+| Plans, board execution and schedules | #97, [board/schedule issue draft](flow-issue-plan.md#board-and-schedule-execution) | Shared cards, exact Normal execution, authorized Flow management |
+| Reviews and teams | #15, #89 | Explicit build/review stays in Normal; discretionary finite cycles and managed teams in Flow |
+| Race comparisons | #16 | Explicit comparison in Normal; separately authorized managed comparison in Flow |
+| Voice and contextual suggestions | #72, #106 | Dictation/suggestions shared; continuous hands-free loop in Flow |
+| GitHub/CI and publication | #18 | Explicit Normal reads; authorized scoped Flow reads; no implied publishing authority |
+| CLI | #90 | Same backend policies, journals, budgets and lifecycle |
+| Context, accounting and limits | #85, #84, #87, #123 | Shared foundation with honest occupancy/consumption reporting |
+
+1. **One managed task:** backend mode policy and safe takeover ([backend task policy draft](flow-issue-plan.md#backend-task-policy)), unified selection/handoff (#12, extending #17/#32/#91), visible decisions, checks and bounded recovery (#15), with measurements (#84) and controlled context (#85).
+2. **Managed task splitting:** build on manual task isolation (#88), bounded fan-out (#108), shared Plan cards (#97), board/schedule execution ([board/schedule issue draft](flow-issue-plan.md#board-and-schedule-execution)) and one parent budget (#87).
+3. **Specialist teams and hands-free work:** managed contracts and integration (#89), then the continuous voice loop (#72), with verified lifecycle, context retention and measurable overhead.
+
+Existing manual capabilities and exact user-configured sequences remain available throughout. These are implementation stages, not release promises.
+
 ## Existing foundation and gaps
 
 - Local rule-based routing and model/effort selection already ship; see public/routing.js and #12.
-- Context already favors task intent over tool logs, preserves the original journal and uses native-session deltas; see src/context.mjs and #69. Task-based code retrieval and reviewed learned memory remain proposed.
+- Context already favors task intent over tool logs, preserves the original journal and uses native-session deltas; see src/context.mjs and #69. Task-focused retrieval and reviewed memory shipped in 0.26.0; further retention/revalidation and context visibility remain planned.
 - Handoff/reset waiting, one test-triggered escalation, build/review and checkpoints already exist; see src/handoff.mjs, src/resume.mjs, src/run-checks.mjs and src/automatic-review.mjs.
-- The broker still serializes active work per workspace, and mutation leases protect shared files. Concurrency requires a new task/ownership model, not removal of a guard.
+- Manual folder tasks already use separate brokers/journals, worktree isolation and shared mutation leases (#88). Flow fan-out must reuse that task/ownership model rather than removing guards.
 - Native provider capabilities differ. Codeshi disables user/project hooks for its invocations and restricts tools; skills/plugins/team features need an explicit compatibility design.
 - Approval correctness (#81) and reliable Stop/completion/worker cleanup must be fixed before widening unattended orchestration. Record actual provider failures separately from frontend state errors.
 
@@ -78,6 +138,16 @@ Add a local task-efficiency ledger and a reproducible evaluation suite. Compare 
 
 Extend broker run metadata, provider usage normalization and run-check results. Keep account quota observations distinct from per-run tokens. This supplies evidence for #12 routing, #17 handoff, #15 review and #21 memory; it is not a dashboard-only project.
 
+#### Next milestone: long-thread and compaction measurements
+
+Track with [#84](https://github.com/AhmedNavaz/codeshi/issues/84), alongside the context milestone in #85. These are planned comparisons, not measured savings.
+
+- [ ] Compare long same-agent continuations, repeated agent switches (including switching back), successive tasks and multi-folder work against separate task threads and a manually selected single-agent baseline, using equivalent pinned snapshots, requests and acceptance checks.
+- [ ] Separate current context occupancy from cumulative input/output/cache consumption, and per-run/task usage from native-session totals. Text-envelope estimates do not measure the agent's entire context.
+- [ ] Include handoff reconstruction, repeated file reads, summaries/retrieval calls, retries/reviews and native compaction where attribution is available. Mark unavailable or unattributable overhead; do not invent subscription costs.
+- [ ] Check retention of instructions, decisions, acceptance criteria and unresolved blockers alongside final correctness. Report wall time, interventions, cache behavior, measured usage and variability before claiming token savings.
+- [ ] Keep live comparisons explicit and budgeted; recorded traces cover offline regressions without claiming live-provider efficiency.
+
 **Sequence:** Foundation; implement first.
 
 ### Task scoped context
@@ -111,6 +181,19 @@ Build a task-scoped context service that supplies the smallest sufficient brief 
 - [ ] Stale summaries or excerpts are revalidated, and untrusted file/tool text is not promoted into higher-priority instructions.
 - [ ] Native compaction, context size estimates and unavailable tokenizers are labelled accurately.
 - [ ] Evaluate relevant-fact retention, repeated file reads, task correctness and total usage against current prepareContext behavior.
+
+#### Next milestone: controlled working context and visible compaction
+
+Track with [#85](https://github.com/AhmedNavaz/codeshi/issues/85), measured under #84. Product intent: **one continuous conversation with controlled working context**.
+
+Today Codeshi selects and truncates history into a bounded text envelope, without automatically generating an AI summary. Its default 192,000-byte cloud and 96,000-byte local caps do not bound the native agent's full context or total token consumption. Consecutive same-agent turns resume with unseen history; agent switches, including switching back, rebuild a fresh handoff, and Gemini currently starts fresh each run. Native Codex/Claude compaction is counted when reported and briefly shown as **Organizing context**; the UI does not persistently show that count. Shortened tool-log excerpts are a separate operation.
+
+- [ ] Show current native context usage/capacity separately from cumulative session usage and per-run/task tokens. Prefer provider-reported data and label estimates and missing readings explicitly.
+- [ ] Persistently show native compaction records/counts where reported, separately from Codeshi history omissions and excerpts, in run details and a concise Flow presentation.
+- [ ] Make handoffs smaller around the active task, relevant instructions and decisions, acceptance criteria, blockers, failed approaches and current file references. Retrieve older journal content when needed rather than replaying unrelated work.
+- [ ] Preserve the full journal, source provenance and access boundaries; revalidate file-backed facts and verify retention through native compaction and handoff.
+- [ ] Respect native compaction ownership. Proactive policies or fresh-session resets require capability checks and measured retention/cost evidence, rather than a universal invented context percentage.
+- [ ] Validate long threads and repeated switches against separate task threads under #84, including re-reading, cache behavior and compaction/summarization overhead where measurable. A smaller envelope or successful compaction alone is not evidence of token savings.
 
 #### Implementation boundary
 
@@ -329,7 +412,7 @@ Keep this as the routing issue rather than opening a duplicate. Stages 1 and 2 a
 
 #### Routing and handoff trust requirements
 
-These are planned acceptance criteria for #12 and #17, not claims about the shipped name-based model tiers. Flow mode (#107) presents the same policy and decision records; improving presentation does not replace verifying the selection logic.
+These are planned acceptance criteria for #12 and #17, not claims about the shipped name-based model tiers. Flow (#107) will own delegated selection, with backend authority in [backend task policy draft](flow-issue-plan.md#backend-task-policy). Normal retains explicit choices and can inspect the same decision records. This is a planned mode boundary; improving presentation does not replace verifying the selection logic.
 
 **0.28.0, quota milestone:** the page, task-budget view, handoff and retry paths share model-specific quota assessment. Routed dispatch refreshes the selected agent's usage before launch and saves its windows and observation time. Unknown readings are explicit for manual Send and cannot trigger automatic handoffs, retries or their reset fallback. Scoped-window arrays survive the journal, and old readings are not scored as known capacity. This does not complete the trust criteria: model capability verification, unified suitability ranking, allowance reservations across concurrent work, decision comparisons and measured manual-agent baselines remain open. Model tiers are still local heuristics.
 

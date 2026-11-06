@@ -137,6 +137,38 @@ test('closing reports each step and its time, so a slow shutdown can be traced',
   assert(steps.every(step => Number.isFinite(step.ms) && !step.error));
 });
 
+test('workspace status reports work outside the selected conversation for Flow switching', async t => {
+  const f = await fixture(t), broker = f.app.broker;
+  await fetch(`${f.url}/api/conversation`);
+  const c = [...broker.conversations.values()][0];
+  const activity = async () => (await (await fetch(`${f.url}/api/status`)).json()).workspaceActivity;
+  assert.deepEqual(await activity(), { running: 0, checking: 0, reviewing: 0, waiting: 0, queued: 0, busy: false });
+  c.status = 'running';
+  assert.equal((await activity()).running, 1);
+  c.status = 'complete'; c.runs = [{ id: 'checked-run', check: { status: 'running' } }];
+  assert.equal((await activity()).checking, 1);
+  c.runs = []; c.reviews = [{ id: 'review', status: 'running' }];
+  assert.equal((await activity()).reviewing, 1);
+  c.reviews = []; c.resume = { provider: 'codex' };
+  assert.equal((await activity()).waiting, 1);
+  c.resume = null; c.queue = [{ id: 'queued', text: 'Next' }];
+  assert.equal((await activity()).busy, true);
+  c.queuePaused = true;
+  assert.equal((await activity()).busy, false);
+  c.parallelTasks = [{ id: 'waiting', status: 'waiting' }];
+  assert.equal((await activity()).waiting, 1);
+  c.parallelTasks[0].held = true;
+  assert.equal((await activity()).busy, false);
+  broker.tasks.checking.set('merge-check', new AbortController());
+  assert.equal((await activity()).checking, 1, 'Task integration checks also prevent switching views.');
+  broker.tasks.checking.clear();
+  const original = broker.tasks.openLanes;
+  try {
+    broker.tasks.openLanes = () => [{ conversations: new Map([['lane', { status: 'running' }]]), pendingCount: () => 0 }];
+    assert.equal((await activity()).running, 1, 'Another task lane is visible to the workspace guard.');
+  } finally { broker.tasks.openLanes = original; }
+});
+
 test('a forced close drops requests still in flight instead of waiting for them', async t => {
   const f = await fixture(t);
   const socket = (await import('node:net')).connect(f.port, '127.0.0.1');
@@ -414,6 +446,33 @@ test('setup preferences survive restart, apply only to new chats, and do not cha
   assert.equal(fresh.provider,'claude');assert.equal(fresh.model,'fixture-model');assert.equal(fresh.effort,'high');assert.equal(fresh.mode,'read');assert.equal(fresh.messages.length,0);
   await f.app.close();const reopened=await f.launch();const restored=await (await fetch(`${reopened.url}/api/preferences`)).json();
   assert.deepEqual(restored.defaults,preferences.defaults);assert.equal(restored.theme,'light');assert.equal(restored.onboarding.completedAt,preferences.onboarding.completedAt);assert.equal(restored.firstRun,false);
+});
+
+test('testing cadence persists and reaches existing workspace and task brokers without starting work', async t => {
+  const f = await fixture(t), broker = f.app.broker;
+  const initial = await (await fetch(`${f.url}/api/preferences`)).json();
+  assert.equal(initial.verificationCadence, 'as-needed');
+  const c = broker.get((await (await fetch(`${f.url}/api/conversation`)).json()).id);
+  const task = { id: 'aaaaaaaa-0000-4000-8000-000000000001', scopePath: f.workspace, folderId: 'folder', folderName: 'project' };
+  const lane = broker.tasks.lane(c, task);
+  assert.equal(lane.broker.verificationCadence(), 'as-needed');
+  const saved = await post(`${f.url}/api/preferences`, { verificationCadence: 'review-first', theme: 'light' });
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.json()).verificationCadence, 'review-first');
+  assert.equal(broker.verificationCadence(), 'review-first');
+  assert.equal(lane.broker.verificationCadence(), 'review-first', 'Already-open task threads use the same setting on their next run.');
+  assert.match(broker.prompt(c, 'Commit when verified'), /Review first: while the person reviews/);
+  assert.equal((await (await fetch(`${f.url}/api/status`)).json()).verificationCadence, 'review-first');
+  assert.equal(c.messages.length, 0, 'Saving the cadence never starts a verification run or sends a message.');
+  for (const invalid of [null, false, 'never', {}, ['review-first']]) assert.equal((await post(`${f.url}/api/preferences`, { verificationCadence: invalid })).status, 400);
+  assert.equal(broker.verificationCadence(), 'review-first');
+  await post(`${f.url}/api/preferences`, { defaults: { provider: 'claude' } });
+  await f.app.close();
+  const reopened = await f.launch(), restored = await (await fetch(`${reopened.url}/api/preferences`)).json();
+  assert.equal(restored.verificationCadence, 'review-first'); assert.equal(restored.theme, 'light');
+  assert.equal(reopened.app.broker.verificationCadence(), 'review-first');
+  await post(`${reopened.url}/api/preferences`, { verificationCadence: 'as-needed' });
+  assert.match(reopened.app.broker.prompt(reopened.app.broker.get(c.id), 'Another edit'), /Prefer focused regression checks/);
 });
 
 test('desktop keep awake preference persists without overwriting theme or assistant defaults',async t=>{

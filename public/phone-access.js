@@ -4,8 +4,12 @@
   let target, kit, signature = '', selectedAddress = '', connection = 'local', checking = false, mutating = false, revision = 0, focusPhone = false;
   const entry = document.getElementById('connect-phone');
   if (entry) {
-    entry.addEventListener('click', async () => { focusPhone = true; await window.relaySettings?.open('general'); load(true); });
+    // In Flow the entry opens Flow's own remote-access sheet; otherwise it goes to the section in Settings.
+    entry.addEventListener('click', async () => { if (window.relayFlow?.remoteAccess?.() === true) return; focusPhone = true; await window.relaySettings?.open('general'); load(true); });
   }
+  // The section draws only while it can be seen: in Settings, or wherever else hosts it and says so.
+  let shown = null;
+  const visible = () => Boolean(target?.isConnected) && Boolean(shown ? shown() : document.getElementById('settings')?.open);
   function updateEntry(state) {
     if (!entry) return;
     if (state.remote?.devices.some(item => item.state === 'pending')) connection = 'remote';
@@ -20,7 +24,7 @@
   function revealQR(qr, requested) {
     if (!requested) return;
     requestAnimationFrame(() => {
-      if (qr.isConnected && document.getElementById('settings')?.open) {
+      if (qr.isConnected && visible()) {
         qr.scrollIntoView({ block: 'center', inline: 'nearest', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
       }
     });
@@ -29,7 +33,7 @@
     if (checking || mutating || document.hidden) return;
     checking = true;
     const request = revision;
-    try { const state = await window.relayUI.api('/api/phone'); if (request !== revision) return; updateEntry(state); const next = JSON.stringify(state); if (target?.isConnected && document.getElementById('settings')?.open && (force || next !== signature)) { signature = next; draw(state); } }
+    try { const state = await window.relayUI.api('/api/phone'); if (request !== revision) return; updateEntry(state); const next = JSON.stringify(state); if (visible() && (force || next !== signature)) { signature = next; draw(state); } }
     catch (error) { if (!signature && target?.isConnected) { target.replaceChildren(); kit.note(target, error.message || 'Remote access could not be loaded.'); } }
     finally { checking = false; }
   }
@@ -93,8 +97,10 @@
     }
     kit.note(target, 'Both devices need internet. Live progress works while the phone page is open; lock-screen notifications are not included. Same Wi-Fi access has its own on/off control.');
   }
-  window.relayPhone = { settings(host, settingsKit) {
-    target = node('div', undefined, 'settings-section'); host.append(target); kit = settingsKit; signature = '';
+  // settings(host, kit, isShown): draw the section into host with the Settings kit. A host other than Settings
+  // passes isShown, saying whether the section can be seen, so a closed sheet gets no redraws or scrolling.
+  window.relayPhone = { settings(host, settingsKit, isShown = null) {
+    target = node('div', undefined, 'settings-section'); host.append(target); kit = settingsKit; shown = isShown; signature = '';
     kit.note(target, 'Loading remote access…'); Promise.resolve().then(() => load(true));
   } };
   setInterval(() => load(), 2000); Promise.resolve().then(() => load());

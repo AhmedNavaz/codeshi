@@ -32,6 +32,11 @@ function setup(t, { preferences = { threshold: 90, automatic: false }, scenarios
   broker.checks.usage = (...args) => broker.handoff.usage(...args);
   // Gemini is not installed in these tests, as its missing binary says.
   broker.handoff.account = async provider => ({ installed: provider !== 'gemini' || Boolean(gemini), authenticated: true, billingSource: billing[provider] || 'subscription' });
+  const fixtureModels = {
+    codex: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }, { reasoningEffort: 'high' }, { reasoningEffort: 'xhigh' }] }],
+    claude: [{ id: 'haiku', value: 'haiku', displayName: 'Haiku' }, { id: 'sonnet', value: 'sonnet', displayName: 'Sonnet', isDefault: true, supportedEffortLevels: ['low', 'medium', 'high'] }, { id: 'opus', value: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] }],
+  };
+  broker.handoff.models = async provider => ({ models: fixtureModels[provider] || [] });
   broker.on('notify', notice => notices.push(notice));
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const c = broker.get(broker.create().id);
@@ -178,6 +183,24 @@ const reached = (env, text = 'Quota stop', provider = 'codex', approvalPolicy = 
 const continued = (env, provider) => until(() => env.requests().find(([agent, request]) => agent === provider && request === continuationRequest), `${provider} to continue`);
 const done = env => until(() => !env.broker.running && !env.c.limitSwitching && env.c.lastRun, 'the runs to end');
 const captures = env => fs.readFileSync(path.join(env.workspace, '.mock-captures.jsonl'), 'utf8').split('\n').slice(0, -1).map(JSON.parse);
+
+// In Flow a routed run hands off by its mode (#107), whatever Settings says for the normal view.
+test('a routed run hands off by its routing mode, without asking: Cost saving at 80%, Maximum quality not before 95%', { skip: scriptCLIs }, async t => {
+  const routed = mode => ({ text: 'Build the feature', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode, reason: 'A test', tier: 'standard' } });
+  const saving = setup(t);
+  saving.broker.start(saving.c, routed('saving'));
+  const first = await until(() => saving.requests().length && saving.broker.running, 'the Cost saving run');
+  await saving.broker.handoff.check(first);
+  await first.done; assert.equal(saving.broker.running?.provider, 'claude', 'Offers-only Settings do not hold Flow back: at 92% used, Cost saving moves on.');
+  await saving.broker.running.done;
+  assert(saving.c.messages.some(message => /Codeshi handed the task to Claude/.test(message.text)));
+  const quality = setup(t);
+  quality.broker.start(quality.c, routed('quality'));
+  const run = await until(() => quality.requests().length && quality.broker.running, 'the Maximum quality run');
+  await quality.broker.handoff.check(run);
+  assert.equal(quality.c.handoffOffer, null, 'Maximum quality holds the strongest model until 95%.'); assert.equal(quality.broker.running, run);
+  quality.release(); await run.done;
+});
 
 test('with automatic handoff allowed, a Codex run stopped on a limit continues on an agent with room, as a handoff and not an error', { skip: scriptCLIs }, async t => {
   const env = setup(t, { preferences: allowed });

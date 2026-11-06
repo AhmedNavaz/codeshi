@@ -508,6 +508,13 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .continuation > span:first-child, .connection-notice > span:first-child, .running-notice > span:first-child { display: inline-flex; align-items: center; gap: 7px; flex: 1; min-width: 0; color: var(--muted); }
 .continuation > span:first-child::before, .connection-notice > span:first-child::before { content: ""; flex: none; width: 14px; height: 14px; background: var(--warning); -webkit-mask: var(--icon-alert) center / contain no-repeat; mask: var(--icon-alert) center / contain no-repeat; }
 .connection-notice-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+/* An agent that works in one folder, in a workspace with several: the message waits while a folder is chosen. */
+.folder-ask { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-height: 30px; padding: 0 2px; color: var(--text); font-size: 12.5px; line-height: 1.5; }
+.folder-ask[hidden] { display: none; }
+.folder-ask > span:first-child { display: inline-flex; align-items: center; gap: 7px; flex: 1; min-width: 0; color: var(--muted); }
+.folder-ask > span:first-child::before { content: ""; flex: none; width: 14px; height: 14px; background: var(--muted); -webkit-mask: var(--icon-folder) center / contain no-repeat; mask: var(--icon-folder) center / contain no-repeat; }
+.folder-ask-choices { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: none; }
+.folder-ask-choices .pill-button[data-folder] { background: var(--accent); color: var(--on-accent); }
 .continuation button, .running-notice button, .connection-notice button, .pill-button {
   display: inline-flex; align-items: center; gap: 5px; flex: none; height: 26px; padding: 0 12px; border: 0; border-radius: 13px;
   background: var(--chip-bg); color: var(--text-strong); font-size: 12px; font-weight: 500; white-space: nowrap; transition: background .12s;
@@ -1058,6 +1065,8 @@ button.commit-hash:hover { text-decoration: underline; }
 .agents-section { padding: 12px 0 14px; border-bottom: 1px solid var(--border); scroll-margin-top: 8px; transition: background .4s; }
 .agents-section:last-child { border-bottom: 0; }
 .agents-section.flash { background: var(--hover); border-radius: 8px; }
+#agents-routing-note { padding: 16px 2px; }
+#agents-routing-note .agents-hint { margin: 0; line-height: 1.6; }
 /* Plan usage: one button per agent. A connected agent shows what its tightest limit has left, as a bar, with which
    limit it is and when it resets underneath; any other agent shows its state on one line. */
 .agent-accounts { display: grid; gap: 2px; margin: 0 -8px; }

@@ -6,9 +6,9 @@ import { alertMenu } from './status.mjs';
 
 const repository = 'https://github.com/AhmedNavaz/codeshi';
 const agents = ['codex', 'claude', 'gemini'], names = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini' };
-const flags = ['workspace', 'running', 'codex', 'claude', 'gemini', 'files', 'git', 'terminal', 'imports', 'export'];
+const flags = ['workspace', 'running', 'codex', 'claude', 'gemini', 'files', 'git', 'terminal', 'flow', 'flowLocked', 'imports', 'export'];
 // What the menu offers until the page reports: nothing that needs a workspace.
-const initial = { workspace: false, running: false, agent: 'codex', codex: false, claude: false, gemini: false, continue: null, files: false, git: false, imports: false, export: false, workspaces: [] };
+const initial = { workspace: false, running: false, agent: 'codex', codex: false, claude: false, gemini: false, continue: null, files: false, git: false, terminal: false, flow: false, flowLocked: false, imports: false, export: false, workspaces: [] };
 
 // The page reports what it shows. Anything not in exactly this shape is ignored.
 export function menuState(input) {
@@ -61,7 +61,9 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command('Show Git Activity', ['git'], { type: 'checkbox', checked: page.git, accelerator: 'CmdOrCtrl+Shift+G', enabled: page.workspace }),
     command('Show Files', ['files'], { type: 'checkbox', checked: page.files, enabled: page.workspace }),
     // ⌃` as in VS Code, on every system: ⌘` switches windows on macOS.
-    command('Terminal', ['terminal'], { type: 'checkbox', checked: page.terminal, accelerator: 'Ctrl+`', enabled: page.workspace }),
+    command('Terminal', ['terminal'], { type: 'checkbox', checked: page.terminal, accelerator: 'Ctrl+`', enabled: page.workspace && !page.flow }),
+    // Just the chat, with plain-language cards either side; the panels come back as they were on leaving (#107).
+    command('Flow Mode', ['flow'], { type: 'checkbox', checked: page.flow, accelerator: 'CmdOrCtrl+Shift+F', enabled: page.workspace && !page.running && !page.flowLocked }),
     command('Focus Message Box', ['focus-message'], { accelerator: 'CmdOrCtrl+L', enabled: page.workspace }),
     separator(),
     { label: 'Appearance', submenu: [['system', 'System'], ['graphite', 'Dark'], ['light', 'Light']].map(([value, label]) => command(label, ['appearance', value], { id: `appearance-${value}`, type: 'radio', checked: appearance === value })) },
@@ -70,7 +72,8 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, separator(), { role: 'togglefullscreen' },
   ] };
   const agent = { label: 'Agent', submenu: [
-    ...agents.map(name => command(`Use ${names[name]}`, ['agent', name], { type: 'radio', checked: page.agent === name, enabled: page[name] })),
+    // In Flow, routing chooses the agent for each message, so these wait until the normal view (#107).
+    ...agents.map(name => command(`Use ${names[name]}`, ['agent', name], { type: 'radio', checked: page.agent === name, enabled: page[name] && !page.flow })),
     command('Continue Locally…', ['local-models'], { enabled: page.workspace && !page.running }),
     separator(),
     command('Stop Run', ['stop'], { accelerator: 'CmdOrCtrl+.', enabled: page.running }),

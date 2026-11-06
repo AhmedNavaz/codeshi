@@ -1,14 +1,15 @@
 (() => {
   'use strict';
   // The Agents panel holds two settings: Routing (Auto, #12), which chooses the agent, model and effort for each
-  // message, and Handoff (#17), which moves a running task to another agent before a usage limit. While routing is on,
-  // the model button in the message box shows the mode and opens Routing here. One side panel shows at a time; the
-  // last one chosen is remembered, and Agents opens on first launch.
+  // message and belongs to Flow (#107), so its section shows there and the normal view says so instead; and Handoff
+  // (#17), which moves a running task to another agent before a usage limit. While routing is on, the model button in
+  // the message box shows the mode and opens Routing here. One side panel shows at a time; the last one chosen is
+  // remembered, and Agents opens on first launch.
   const $ = id => document.getElementById(id), api = window.relayUI, panel = $('agents-panel'), button = $('open-agents');
   if (!panel || !api) return;
   const PANEL_KEY = 'throughline:side-panel';
+  // Three modes: Flow always routes, so there is no manual one; leaving Flow is how you choose by hand again.
   const options = [
-    { mode: null, name: 'Manual', hint: 'Uses the agent, model and effort you pick.' },
     { mode: 'saving', name: 'Cost saving', hint: 'Lighter models; prefers the agent with the most allowance left.' },
     { mode: 'balanced', name: 'Balanced', hint: 'Matches the model and effort to each message.' },
     { mode: 'quality', name: 'Maximum quality', hint: 'Strongest model and highest effort for every message.' },
@@ -33,7 +34,7 @@
       const selected = (current?.mode || null) === option.mode, row = node('button', 'routing-option');
       row.type = 'button'; row.disabled = locked;
       row.setAttribute('role', 'radio'); row.setAttribute('aria-checked', String(selected));
-      row.dataset.mode = option.mode || 'manual';
+      row.dataset.mode = option.mode;
       const text = node('span', 'routing-option-text');
       text.append(node('strong', '', option.name), node('small', '', option.hint));
       row.append(node('span', 'routing-option-mark'), text);
@@ -72,7 +73,9 @@
   }
 
   function render() {
-    const state = api.getState(), current = routing();
+    const state = api.getState(), current = routing(), flow = window.relayFlow?.isOn?.() === true;
+    // In Flow, handoff follows the routing mode, so its settings step aside with the normal view.
+    $('agents-routing').hidden = !flow; $('agents-routing-note').hidden = flow; $('agents-handoff').hidden = flow;
     if (panel.hidden) return;
     renderOptions($('routing-options'));
     $('routing-api-row').hidden = !current;
@@ -130,6 +133,8 @@
   $('handoff-automatic').addEventListener('change', () => savePreferences({ automatic: $('handoff-automatic').checked }));
   // Turned on from the offer at a usage limit.
   window.addEventListener('relay-handoff-preferences', () => { if (!panel.hidden) loadPreferences(); });
+  // Routing shows in Flow and steps aside in the normal view.
+  window.addEventListener('relay-flow', render);
   // The overview in a new conversation links to the matching part of the panel.
   document.querySelectorAll('[data-agents]').forEach(link => link.addEventListener('click', () => setOpen(true, link.dataset.agents)));
   // On a docked layout, a workspace opens with the side panel last chosen, Agents at first.

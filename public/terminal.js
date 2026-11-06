@@ -267,6 +267,7 @@
   document.addEventListener('keydown', event => {
     if (!event.ctrlKey || event.metaKey || event.altKey || !(event.key === '`' || event.key === '~' || event.code === 'Backquote') || !api.getState().projectId) return;
     event.preventDefault();
+    if (window.relayFlow?.isOn?.()) return;
     if (!event.shiftKey) { toggle(); return; }
     const folderId = focusedPane(activeTab())?.folderId || project()?.folders?.[0]?.id;
     if (!shown()) window.relayPanel?.show('terminal');

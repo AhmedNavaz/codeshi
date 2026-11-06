@@ -21,6 +21,7 @@ import { createLocalRoutes } from './local-models.mjs';
 import { createTaskRoutes } from './task-routes.mjs';
 import { atomicJSON } from './patches.mjs';
 import { appearance, appearances, preferencePatch, publicPreferences } from './preferences.mjs';
+import { verificationCadence } from './verification.mjs';
 import { createPhoneAccess } from './phone-access.mjs';
 import { createRemotePhoneAccess } from './phone-remote.mjs';
 import { phoneConversation } from './phone-conversation.mjs';
@@ -39,6 +40,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
+  '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
   '/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'], '/alerts.css': ['alerts.css', 'text/css; charset=utf-8'],
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/settings.js': ['settings.js', 'text/javascript; charset=utf-8'], '/settings.css': ['settings.css', 'text/css; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/logo.svg': ['logo.svg', 'image/svg+xml'], '/mark.svg': ['mark.svg', 'image/svg+xml'],
@@ -84,6 +86,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   };
   let config=readSettings()||{};
   registry.conversationDefaults = () => config.defaults;
+  registry.verificationCadence = () => verificationCadence(config);
   // The desktop app hears each saved appearance, so its window follows whichever request saved it.
   const saveSettings = patch => { config = { ...(readSettings() || config), ...patch }; atomicJSON(settingsFile, config); if (patch.appearance !== undefined) onAppearance(appearance(config)); };
   let sharing=(sharingURL||config.sharingURL)?new SharingClient({baseUrl:sharingURL||config.sharingURL,storePath:path.join(registry.dataRoot,'sharing-client.json'),createKey:process.env.AI_RELAY_SHARING_CREATE_KEY}):null;

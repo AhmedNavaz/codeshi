@@ -7,6 +7,7 @@
   'use strict';
   const MODES = ['saving', 'balanced', 'quality'];
   const modeNames = { saving: 'Cost saving', balanced: 'Balanced', quality: 'Maximum quality' };
+  const handoffThresholds = Object.freeze({ saving: 80, balanced: 90, quality: 95 });
   const agentNames = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
   const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
   const TIERS = ['light', 'standard', 'deep'];
@@ -125,7 +126,7 @@
   // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
   // limit is skipped, and the agent that did the last run is preferred, so the conversation keeps its native session.
-  function route({ text, attachments = 0, mode = 'balanced', candidates = [], current = null, allowApi = false }) {
+  function route({ text, attachments = 0, mode = 'balanced', candidates = [], current = null, allowApi = false, quotaThreshold = 95 }) {
     if (!MODES.includes(mode)) mode = 'balanced';
     const task = classify(text, { attachments });
     const [tier, wantedEffort] = plan[mode][task.tier];
@@ -139,7 +140,7 @@
       // Try equivalent-tier models before ruling out the agent; never downgrade solely to escape a model's limit.
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
       const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && modelId(row) !== 'default' && !row.hidden && distance(row) === distance(preferred))] : [null];
-      const choices = options.map(model => ({ ...candidate, selectedModel: model, quota: assessQuota(candidate.usage, model && modelId(model), { threshold: 95 }) }));
+      const choices = options.map(model => ({ ...candidate, selectedModel: model, quota: assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold }) }));
       const usable = choices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
       const selected = usable.find(row => row.quota.state === 'ok') || usable[0];
       if (!selected) { skipped.push(`${agentNames[candidate.provider]}: ${quotaText(choices[0].quota)}`); return []; }
@@ -177,5 +178,5 @@
     return { ...choice, escalation: escalate(provider, rows, choice) };
   }
 
-  root.relayRouting = { MODES, modeNames, classify, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies };
+  root.relayRouting = { MODES, modeNames, handoffThresholds, classify, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies };
 })(typeof window === 'undefined' ? globalThis : window);
