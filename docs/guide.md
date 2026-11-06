@@ -332,7 +332,7 @@ For a same-computer test:
 npm run sharing
 ```
 
-Set the GUI service URL to `http://127.0.0.1:4319`. These are local test links; another computer cannot open them. Remote links require a separately deployed HTTPS service with persistent private storage. Each release publishes a container image, `ghcr.io/ahmednavaz/throughline-sharing`; it keeps its name from before Codeshi was renamed. Deployment, Docker, limits, capabilities and proxy configuration are in [sharing/README.md](../sharing/README.md). `AI_RELAY_SHARING_URL` can configure the client, and `AI_RELAY_SHARING_CREATE_KEY` can provide the service's optional creation key.
+Set the GUI service URL to `http://127.0.0.1:4319`. These are local test links; another computer cannot open them. Remote links require a separately deployed HTTPS service with persistent private storage. Each release publishes a container image, `ghcr.io/ahmednavaz/throughline-sharing`; it keeps its name from before Codeshi was renamed. Deployment, Docker, limits, capabilities and proxy configuration are in [sharing/README.md](../sharing/README.md), and [sharing/deploy](../sharing/deploy) has ready-made templates for Docker Compose with Caddy, which gets the HTTPS certificate by itself, and for Fly.io. `AI_RELAY_SHARING_URL` can configure the client, and `AI_RELAY_SHARING_CREATE_KEY` can provide the service's optional creation key.
 
 The sharing service stores only approved packages and solutions. It has no execution endpoints, provider credentials, repository mounts or account integration. Do not expose or tunnel the local coding server. Production hosting has **not** been deployed or verified by this implementation.
 
@@ -365,7 +365,7 @@ If package installation disabled lifecycle scripts, run `node node_modules/elect
 ## Limitations
 
 - macOS builds are signed ad hoc and not notarized, so macOS asks you to approve a browser download once. Windows builds are not signed, so SmartScreen asks you to confirm a browser download once (**More info**, then **Run anyway**). Linux builds are not provided yet.
-- The private-link sharing service is not hosted for you. Run the container image yourself with HTTPS and persistent storage (see `sharing/README.md`) before sharing remote links.
+- The private-link sharing service is not hosted for you. Run the container image yourself with HTTPS and persistent storage, for example with one of the templates in `sharing/deploy` (see `sharing/README.md`), before sharing remote links.
 - Returned patches support UTF-8 text files only; binary files and symlinks are rejected, and stale baselines need a new solution.
 - Built-in verification covers reviewed JavaScript syntax and `git diff --check`, not arbitrary test scripts.
 - Secret scanning and redaction help you review what you share; they cannot guarantee that every secret is removed.

@@ -22,9 +22,79 @@ Configuration:
 | `PORT` | `4319` | Service port. |
 | `SHARING_DATA_DIR` | `sharing/.data` | Private persistent data directory. |
 | `REQUIRE_HTTPS` | `false` | Set `true` behind the HTTPS reverse proxy (Docker default). Trust forwarded headers only from that proxy. |
-| `SHARING_CREATE_KEY` | unset | Optional deployment key required in `X-Sharing-Create-Key` for uploads. Supply the same key to the local `SharingClient` constructor as `createKey`. This is a service deployment key, never an AI account credential. |
+| `SHARING_CREATE_KEY` | unset | Optional deployment key required in `X-Sharing-Create-Key` for uploads. Codeshi sends the key it reads from `AI_RELAY_SHARING_CREATE_KEY` (see [Point Codeshi at the service](#point-codeshi-at-the-service)). This is a service deployment key, never an AI account credential. |
 
 Without a creation key, uploads are open subject to limits. Use a creation key on a personal public deployment to prevent strangers consuming its storage. One service process/replica per data directory is required. This simple file store is not a distributed database. Back up the private volume using restricted access; do not log request bodies, Authorization headers, or capability URL fragments. Verify HTTPS, persistence after restart, expiry, revocation, and a full round trip before calling a hosted deployment ready. No hosted deployment is created by this repository.
+
+`GET /health` answers `{"ok":true}`. With `REQUIRE_HTTPS=true` it is refused like any other plain request, so a health check that reaches the service directly must send `X-Forwarded-Proto: https`.
+
+## Deployment templates
+
+`sharing/deploy` holds ready-made setups for the published image. Each runs one copy of the service, keeps `/data` on a persistent volume, sets `REQUIRE_HTTPS=true` and requires a creation key, which stays out of the template files.
+
+Make the key first, on any computer with OpenSSL:
+
+```sh
+openssl rand -hex 32
+```
+
+That is 256 random bits as 64 characters, safe to paste into env files and commands. Keep it in your password manager: the service checks it whenever a link is created, and Codeshi needs the same key.
+
+### Docker Compose with Caddy
+
+For any server with Docker Compose v2, ports 80 and 443 open to the internet and a hostname whose DNS record points at it. Caddy gets the HTTPS certificate for that hostname and renews it by itself.
+
+1. Copy the three files in `sharing/deploy/compose` to the server.
+2. In that folder run `cp env.example .env` and `chmod 600 .env`, then set `SHARING_DOMAIN` to the hostname and `SHARING_CREATE_KEY` to the key.
+3. `docker compose config --quiet` checks the files and stops if either value is missing. Then run `docker compose up -d`.
+4. `curl https://share.example.com/health`, with your hostname, should answer `{"ok":true}`.
+
+Only Caddy publishes ports; the service is reachable only on the project's own Docker network. Requests are kept in the `codeshi-sharing_sharing-data` volume and certificates in `codeshi-sharing_caddy-data`. To keep requests in a folder on the server instead, make the folder owned by user ID 1000, the image's `node` user, before mounting it at `/data`.
+
+### Fly.io
+
+Fly matches what the service needs: one machine with its own volume, HTTPS from Fly's proxy, which sets `X-Forwarded-Proto`, a volume Fly makes writable for the image's own user, health checks that can send the header `REQUIRE_HTTPS` needs, and secrets for the key. The rest of the setup is in `fly.toml`.
+
+With [flyctl](https://fly.io/docs/flyctl/install/) installed and signed in (`fly auth login`), in `sharing/deploy/fly`:
+
+1. Set `app` in `fly.toml` to a name of your own, and `primary_region` to a region near you.
+2. Run `fly apps create <name>`.
+3. Run `fly secrets set SHARING_CREATE_KEY=<key>`.
+4. Run `fly deploy --ha=false`. The first deploy creates the 1 GB `sharing_data` volume and one machine. Keep it at one: a second machine would get a separate, empty volume.
+5. `curl https://<name>.fly.dev/health` should answer `{"ok":true}`. For a hostname of your own, run `fly certs add share.example.com` and add the DNS records it lists.
+
+The machine stops when idle and starts again on the next request. It has 512 MB of memory, because a service filled to its 100 MiB storage limit needs more than Fly's default 256 MB. Fly snapshots volumes daily; that doesn't replace your own backups.
+
+### Other hosts
+
+Another host fits if it provides all of these:
+
+- One running copy of the service, since copies can't share a data folder.
+- A persistent volume at `/data` that user ID 1000 can write to. The image doesn't run as root, so a volume the host mounts owned by root needs its owner changed first.
+- HTTPS in front that sets `X-Forwarded-Proto: https`, replacing anything a client sends in that header, with no other way to reach the service's port.
+- Health checks, if any, on `GET /health` with `X-Forwarded-Proto: https`.
+- `SHARING_CREATE_KEY` set from the host's secret settings.
+
+### Point Codeshi at the service
+
+In Codeshi, open **Ask a friend**, then **Returned solutions › Sharing service settings**. Enter the service's address on its own, such as `https://share.example.com` with no path, and choose **Save service URL**. Setting `AI_RELAY_SHARING_URL` before Codeshi starts does the same; while it is set, it takes the place of the saved address at every start.
+
+Codeshi reads the creation key from the `AI_RELAY_SHARING_CREATE_KEY` environment variable when it starts. Quit Codeshi, then start it with the key:
+
+- **macOS:** `AI_RELAY_SHARING_CREATE_KEY=<key> open -a Codeshi` in Terminal. The key lasts until Codeshi quits.
+- **Windows:** `setx AI_RELAY_SHARING_CREATE_KEY <key>` in a terminal, then open Codeshi from the Start menu. Windows keeps the key for later starts too.
+- **From source:** `AI_RELAY_SHARING_CREATE_KEY=<key> npm start`, or `npm run web`.
+
+**Create private link** then gives your friend a link on your service.
+
+### Update the image
+
+Each release publishes `ghcr.io/ahmednavaz/throughline-sharing:<version>`, such as `0.28.0` (no `v`), and moves `latest` to it. The templates use `latest`.
+
+- **Compose:** run `docker compose pull` and then `docker compose up -d` in the template folder.
+- **Fly:** run `fly deploy` again in `sharing/deploy/fly`; it fetches the image again.
+
+The volume keeps every request through the update; links are unavailable while the service restarts. To decide when updates happen, put a release version in place of `latest` and change it when you want to update.
 
 ## Access and limits
 

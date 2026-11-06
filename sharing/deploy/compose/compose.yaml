@@ -1,0 +1,52 @@
+# The Codeshi private-link service behind Caddy, which gets and renews its HTTPS
+# certificate by itself. Copy env.example to .env, fill it in, then run
+# `docker compose up -d` in this folder. Steps are in sharing/README.md.
+name: codeshi-sharing
+
+services:
+  sharing:
+    image: ghcr.io/ahmednavaz/throughline-sharing:latest
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: "4319"
+      SHARING_DATA_DIR: /data
+      # Caddy sets X-Forwarded-Proto to https; anything that skips it is refused.
+      REQUIRE_HTTPS: "true"
+      SHARING_CREATE_KEY: ${SHARING_CREATE_KEY:?Set SHARING_CREATE_KEY in .env}
+    volumes:
+      # Docker gives a new named volume to the image's node user, so the service can write to it.
+      - sharing-data:/data
+    # No published ports: only Caddy, on this project's own network, reaches the service.
+    expose:
+      - "4319"
+    healthcheck:
+      # A plain request is refused under REQUIRE_HTTPS, so the check sends the header Caddy would.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4319/health',{headers:{'x-forwarded-proto':'https'}}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      sharing:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SHARING_DOMAIN: ${SHARING_DOMAIN:?Set SHARING_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live here; keeping them avoids asking for new ones on every restart.
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  sharing-data:
+  caddy-data:
+  caddy-config:
