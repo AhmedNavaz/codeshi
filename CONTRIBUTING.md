@@ -13,7 +13,7 @@ Thanks for helping. Bug reports, fixes and focused improvements are all welcome.
 
 You need Node.js 22.12 or later. Claude Code, the Codex CLI or the Google connection (**Settings › Install Google connection**) are only needed to try real runs; the tests use stand-ins, so they run with no agents installed.
 
-Codeshi is built and tested on macOS and Windows. It isn't tested on Linux yet, so expect rough edges there; [#5](https://github.com/AhmedNavaz/codeshi/issues/5) tracks that, and help is welcome.
+Codeshi is built for macOS and Windows. The tests run on macOS, Windows and Linux, but there's no Linux build of the app yet, so expect rough edges there; [#5](https://github.com/AhmedNavaz/codeshi/issues/5) tracks that, and help is welcome.
 
 ```sh
 npm ci

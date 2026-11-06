@@ -31,3 +31,15 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      # node-pty has no prebuilt binary for Linux, so npm ci compiles it with the runner's build tools.
+      - run: npm ci
+      - run: npm test
