@@ -146,3 +146,18 @@ test('real changelog produces clean user-facing notes for 0.13.0 without interna
   assert.equal(JSON.stringify(notes).includes('src/'), false);
   assert.equal(JSON.stringify(notes).includes('backend modules'), false);
 });
+
+test('bundled notes fall back to latest user-facing release when current patch has only internal items', () => {
+  const internalPatchChangelog = `# Changelog
+## [0.10.1] - 2026-11-03
+### Fixed
+- Automated checks and unit tests for internal packaging.
+## [0.10.0] - 2026-11-02
+### Added
+- A user facing feature.
+`;
+  const notes = releaseNotes(internalPatchChangelog, '0.10.1');
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0].version, '0.10.0');
+  assert.equal(notes[0].sections[0].items[0], 'A user facing feature.');
+});

@@ -30,7 +30,7 @@
     });
   }
   async function load(force = false) {
-    if (checking || mutating || document.hidden) return;
+    if (checking || mutating || (document.hidden && !force && document.documentElement.dataset.smokeTest !== 'true')) return;
     checking = true;
     const request = revision;
     try { const state = await window.relayUI.api('/api/phone'); if (request !== revision) return; updateEntry(state); const next = JSON.stringify(state); if (visible() && (force || next !== signature)) { signature = next; draw(state); } }

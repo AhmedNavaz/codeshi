@@ -217,6 +217,7 @@ else {
           if(!result.preview)result.previewSteps={outlined,picked:Boolean(pick),selector:pick?.element?.selector??null,image:pick?.image?.data?.length??0,capture:preview.lastCapture,title};
         }finally{preview.close();server.close();}
       }
+      await win.webContents.executeJavaScript(`document.documentElement.dataset.smokeTest = 'true'`);
       if(process.platform==='darwin'&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));
       result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'&&typeof window.WebLinksAddon?.WebLinksAddon==='function'`);
       // The menu bar is Codeshi's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
@@ -229,14 +230,13 @@ else {
       result.setupHeader=await win.webContents.executeJavaScript(`window.relaySetup.open().then(()=>{const controls=[...document.querySelectorAll('.onboarding-header :is(button,a)')];return controls.length>0&&controls.every(control=>{const box=control.getBoundingClientRect();return control.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2));});})`);
       await win.webContents.executeJavaScript(`document.getElementById('setup-dialog').close()`);
       Menu.getApplicationMenu().getMenuItemById('whats-new').click();
-      for(let tries=0;tries<100;tries++){result.updates=await win.webContents.executeJavaScript(`({open:document.getElementById('updates-dialog').open,notes:!!document.querySelector('#updates-content .updates-release')})`);if(result.updates.open)break;await new Promise(resolve=>setTimeout(resolve,20));}
+      for(let tries=0;tries<100;tries++){result.updates=await win.webContents.executeJavaScript(`({open:document.getElementById('updates-dialog').open,notes:!!document.querySelector('#updates-content .updates-release')})`);if(result.updates.open&&result.updates.notes)break;await new Promise(resolve=>setTimeout(resolve,20));}
       await win.webContents.executeJavaScript(`document.getElementById('updates-dismiss').click()`);
       for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!document.getElementById('updates-dialog').open`)){result.updates.dismissed=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
       // Flow: exercise the real renderer/API with a disposable workspace and no installed agents.
       {
         // Let native rendering advance, including on macOS with a hidden main window.
         win.showInactive();
-        await win.webContents.executeJavaScript(`document.documentElement.dataset.smokeTest = 'true'`);
         const folder=path.join(app.getPath('userData'),'flow-smoke-workspace');fs.mkdirSync(folder,{recursive:true});
         const project=relay.registry.add({path:folder,name:'Flow smoke'});
         await win.webContents.executeJavaScript(`(async()=>{await window.relayUI.refreshProjects({choose:true});await window.relayUI.selectProject(${JSON.stringify(project.id)});window.relayFlow.enter();})()`);

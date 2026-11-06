@@ -4,6 +4,13 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.29.2] - 2026-11-06
+
+### Fixed
+
+- **Remote access in Flow.** Opening remote access from Flow’s bottom bar now reliably loads connection options in all desktop window environments.
+- **Update release notes.** The What’s New viewer reliably loads notes for the current version across platforms.
+
 ## [0.29.1] - 2026-11-06
 
 ### Fixed

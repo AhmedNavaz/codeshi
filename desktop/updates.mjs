@@ -70,11 +70,19 @@ export function releaseNotes(changelog, current, since = null) {
     }
   }
   if (!releases.some(item => compareVersions(item.version, current) === 0)) return [];
-  return releases
+  const available = releases
     .map(item => ({ ...item, sections: item.sections.filter(s => s.items.length > 0) }))
-    .filter(item => item.sections.length > 0 && compareVersions(item.version, current) <= 0 && (since ? compareVersions(item.version, since) > 0 : compareVersions(item.version, current) === 0))
-    .sort((a, b) => compareVersions(b.version, a.version))
-    .slice(0, 5);
+    .filter(item => item.sections.length > 0 && compareVersions(item.version, current) <= 0);
+  if (since) {
+    return available
+      .filter(item => compareVersions(item.version, since) > 0)
+      .sort((a, b) => compareVersions(b.version, a.version))
+      .slice(0, 5);
+  }
+  const matching = available.filter(item => compareVersions(item.version, current) === 0);
+  if (matching.length > 0) return matching;
+  const latest = available.sort((a, b) => compareVersions(b.version, a.version))[0];
+  return latest ? [latest] : [];
 }
 
 // App bundles change when updated, reinstalled or translocated. Only the app version decides
