@@ -14,8 +14,8 @@ const MAX_OUTPUT = 256 * 1024 * 1024, DIFF_LIMIT = 64 * 1024, CHECK_LIMIT_MS = 1
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 const sha = value => createHash('sha256').update(value).digest('hex');
 
-export function git(cwd, args, { encoding = 'utf8', timeout = 30000 } = {}) {
-  return spawnSync(gitExecutable(), [...PREFIX, ...args], { cwd, encoding, timeout, maxBuffer: MAX_OUTPUT, shell: false, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+export function git(cwd, args, { encoding = 'utf8', timeout = 30000, input } = {}) {
+  return spawnSync(gitExecutable(), [...PREFIX, ...args], { cwd, encoding, timeout, input, maxBuffer: MAX_OUTPUT, shell: false, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
 }
 function must(cwd, args, options) {
   const result = git(cwd, args, options);
@@ -96,8 +96,15 @@ export function keepBranch(root, result, title, id) {
   return name;
 }
 
-const blob = (root, rev, file) => { const found = git(root, ['cat-file', 'blob', `${rev}:${file}`], { encoding: 'buffer' }); return found.status === 0 ? found.stdout : null; };
-const modeOf = (root, rev, file) => { const line = git(root, ['ls-tree', rev, '--', file]).stdout?.split('\n')[0] || ''; return line.split(' ')[0] || null; };
+// Git can change a file between the repository and the folder: line endings with core.autocrlf (on by default in Git for
+// Windows) or an eol attribute, or a filter. So the folder's copy is compared as Git would store it, and each side is read
+// both as stored and as a checkout writes it.
+const entryOf = (root, rev, file) => { const [mode, , id] = (git(root, ['ls-tree', rev, '--', file]).stdout?.split('\n')[0] || '').split('\t')[0].split(' '); return { mode: mode || null, id: id || null }; };
+// These never fail quietly, since a missing answer would read as an empty or deleted file.
+const stored = (root, rev, file) => must(root, ['cat-file', 'blob', `${rev}:${file}`], { encoding: 'buffer' });
+const checkedOut = (root, rev, file) => must(root, ['cat-file', '--filters', `${rev}:${file}`], { encoding: 'buffer' });
+const storedId = (root, file, content) => must(root, ['hash-object', '--stdin', `--path=${file}`], { input: content }).trim();
+const same = (a, b) => a === b || Boolean(a && b && a.equals(b));
 const isText = buffer => !buffer.includes(0);
 // Nothing is written through a link or into Git's own folder, whatever a path in the commit says.
 function reachable(root, file) {
@@ -135,21 +142,26 @@ export function integrationPlan({ root, prefix = '', base, result }) {
     const code = named[index], file = named[index + 1], target = path.join(root, file), row = { path: file, change: code === 'A' ? 'add' : code === 'D' ? 'delete' : 'update', ...(counts.get(file) || { added: 0, removed: 0 }) };
     const conflict = reason => files.push({ ...row, status: 'conflict', reason });
     if (prefix && file !== prefix && !file.startsWith(`${prefix}/`)) { conflict(`It's outside this task's folder.`); continue; }
-    const baseMode = modeOf(root, base, file), theirMode = modeOf(root, result, file);
+    const { mode: baseMode, id: baseId } = entryOf(root, base, file), { mode: theirMode, id: theirId } = entryOf(root, result, file);
     if (['120000', '160000'].includes(baseMode) || ['120000', '160000'].includes(theirMode)) { conflict(`Links and submodules aren't merged.`); continue; }
     if (!reachable(root, file)) { conflict(`Its path goes through a link or into Git's own folder.`); continue; }
     const current = readCurrent(target);
     if (current.unreadable) { conflict('Something other than a plain file is at this path now.'); continue; }
-    const was = baseMode ? blob(root, base, file) : null, theirs = theirMode ? blob(root, result, file) : null, now = current.content;
-    const same = (a, b) => a === b || (a && b && a.equals(b));
+    const now = current.content, nowId = now === null ? null : storedId(root, file, now), is = id => nowId === id;
+    // A file keeps the form it has here: the stored bytes if that's what it holds, as when Git converts nothing, and
+    // otherwise what a checkout writes, which is also what a new file gets.
+    const read = how => ({ was: baseMode ? how(root, base, file) : null, theirs: theirMode ? how(root, result, file) : null });
+    const forms = [read(checkedOut)], raw = read(stored);
+    if (!(same(raw.was, forms[0].was) && same(raw.theirs, forms[0].theirs))) forms.push(raw);
+    const texts = forms.filter(form => now && form.was && form.theirs && isText(now) && isText(form.was) && isText(form.theirs));
     let content, status;
-    if (same(now, theirs)) status = 'same';
-    else if (same(now, was)) { status = 'clean'; content = theirs; }
-    else if (now && was && theirs && isText(now) && isText(was) && isText(theirs)) {
-      const merged = mergeText(root, now, was, theirs);
+    if (is(theirId)) status = 'same';
+    else if (is(baseId)) { status = 'clean'; content = (forms.find(form => now && same(form.was, now)) || forms[0]).theirs; }
+    else if (texts.length) {
+      const merged = texts.reduce((done, form) => done ?? mergeText(root, now, form.was, form.theirs), null);
       if (merged === null) { conflict('This file also changed here, in the same lines.'); continue; }
       status = 'merged'; content = merged;
-    } else { conflict(now === null ? 'This file was deleted here after the task began.' : theirs === null ? 'The task deleted this file, and it also changed here.' : 'This file also changed here.'); continue; }
+    } else { conflict(now === null ? 'This file was deleted here after the task began.' : !theirMode ? 'The task deleted this file, and it also changed here.' : 'This file also changed here.'); continue; }
     if (status !== 'same') writes.push({ path: file, content, mode: theirMode });
     const diff = total < 512 * 1024 ? git(root, ['diff', '--no-renames', '--no-ext-diff', '--no-textconv', base, result, '--', file]).stdout || '' : '';
     total += diff.length;
