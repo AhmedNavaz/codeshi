@@ -7,7 +7,7 @@ import { scriptCLIs } from './platform.mjs';
 import '../public/routing.js';
 import { Broker } from '../src/broker.mjs';
 
-const { classify, modelTier, route, escalate } = globalThis.relayRouting;
+const { classify, modelTier, route, escalate, planner } = globalThis.relayRouting;
 const levels = (...values) => values.map(reasoningEffort => ({ reasoningEffort }));
 const models = {
   codex: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high', 'xhigh') }, { id: 'gpt-codex-mini', displayName: 'GPT Codex Mini', supportedReasoningEfforts: levels('low', 'medium') }],
@@ -39,6 +39,26 @@ test('each mode matches the model and effort to the task, within the levels each
   const routed = route({ text: 'Refactor the payment module', mode: 'balanced', candidates: agents(), current: 'claude' });
   assert.equal(routed.reason, 'A complex task (refactoring)'); assert.equal(routed.modelName, 'Opus');
   assert.deepEqual(route({ text: 'Add a test', mode: 'balanced', candidates: agents({ claude: { models: [] } }), current: 'claude' }).model, null, 'Without a model list, the agent’s default.');
+});
+
+test('a plan step is routed by the tier it was planned with, and the planner gets the deepest work each mode allows', () => {
+  const step = (tier, mode = 'balanced') => { const { model, effort, tier: given } = route({ text: 'Fix the typo in the README', tier, mode, candidates: agents(), current: 'claude' }); return [model, effort, given]; };
+  assert.deepEqual(step('deep'), ['opus', 'high', 'deep'], 'The planned tier wins over how the text reads.');
+  assert.deepEqual(step('standard'), ['sonnet', 'medium', 'standard']);
+  assert.deepEqual(step('light', 'quality'), ['sonnet', 'medium', 'light']);
+  assert.deepEqual(step('huge'), ['haiku', null, 'light'], 'An unknown tier is read from the text, as before.');
+  assert.equal(route({ text: 'Fix the typo', tier: 'deep', mode: 'balanced', candidates: agents(), current: 'claude' }).reason, 'A complex step, as planned');
+
+  const plans = mode => { const { provider, model, effort, reason, escalation } = planner({ text: 'Fix the typo in the README', mode, candidates: agents(), current: 'claude' }); return [provider, model, effort, reason, escalation]; };
+  assert.deepEqual(plans('balanced'), ['claude', 'opus', 'high', 'Plans the steps', null]);
+  assert.deepEqual(plans('quality'), ['claude', 'opus', 'max', 'Plans the steps', null]);
+  assert.deepEqual(plans('saving'), ['claude', 'sonnet', 'medium', 'Plans the steps', null], 'Cost saving plans with a standard model, not its lightest: a weak plan costs more runs than it saves.');
+  // The planner follows the same allowance rules as any message.
+  assert.equal(planner({ text: 'Plan it', mode: 'balanced', candidates: agents({ claude: { usedPercent: 96 } }), current: 'claude' }).provider, 'codex');
+  // With no agent allowed, the planner gets the same answer as any message.
+  const none = { text: 'Plan it', mode: 'balanced', candidates: agents({ claude: { eligible: false }, codex: { eligible: false } }) };
+  assert.match(planner(none).error, /no connected agent/);
+  assert.deepEqual(planner(none), route({ ...none, tier: 'deep' }));
 });
 
 test('Auto keeps the agent that did the last run, moves away from one near its limit, and only uses API billing when allowed', () => {
