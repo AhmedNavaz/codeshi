@@ -131,17 +131,24 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       if (entry) entry.filesChanged = record.files ?? null;
     } else if (record.type === 'background_review') {
       const review = record.review || {};
-      runs.set(review.id, newEntry(review.id, { provider: review.provider, model: review.model, at: record.at, mode: 'read' }, { relation: 'review', ...(last ? { taskId: last.taskId, parentRunId: last.runId } : {}) }));
+      runs.set(review.id, newEntry(review.id, { provider: review.provider, model: review.model, at: record.at, mode: 'read' }, { relation: 'review', taskId: record.taskId || last?.taskId || review.id, parentRunId: record.parentRunId || last?.runId || null }));
+    } else if (record.type === 'review_budget') {
+      const entry = runs.get(record.id), metadata = record.metadata || {};
+      if (!entry || entry.status !== 'running') continue;
+      if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage);
+      if (metadata.account?.billingSource) entry.billingSource = metadata.account.billingSource;
+      if (metadata.costUSD !== undefined) finishCost(entry, metadata.costUSD);
+      if (metadata.effectiveModel) entry.effectiveModel = metadata.effectiveModel;
     } else if (record.type === 'review_result') {
       const entry = runs.get(record.id), result = record.result || {};
       if (entry?.status === 'running' || entry?.relation === 'review') {
-        Object.assign(entry, { status: result.status || 'failed', endedAt: entry.endedAt || record.at });
+        Object.assign(entry, { status: result.status || 'failed', errorCategory: result.errorCategory || entry.errorCategory || null, endedAt: entry.endedAt || record.at });
         entry.elapsedMs ??= entry.startedAt ? Date.parse(record.at) - Date.parse(entry.startedAt) : null;
         if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage);
         if (result.billingSource) entry.billingSource = result.billingSource;
         if (result.costUSD !== undefined) finishCost(entry, result.costUSD);
       }
-    } else if (record.type === 'quota_observation') quota.push({ provider: record.provider, observedAt: record.observedAt || record.at, plan: record.plan || null, windows: record.windows || [] });
+    } else if (record.type === 'quota_observation') quota.push({ provider: record.provider, observedAt: Object.hasOwn(record, 'observedAt') ? record.observedAt : record.at, plan: record.plan || null, windows: record.windows || [] });
   }
   return { runs: [...runs.values()], tasks: summarizeTasks([...runs.values()]), quotaObservations: quota };
 }

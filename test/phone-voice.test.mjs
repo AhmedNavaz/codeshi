@@ -49,10 +49,30 @@ function voice({ supported = true, secure = true, agreed = false, startThrows = 
   return { mic, input, recognizers, toasts, stored, sheets, requests, tap, send, addToRun, attrs, classes, document, S, view, stopListening: () => context.stopListening(), listening: () => context.listening };
 }
 
-test('the mic is hidden where the browser cannot recognise speech, and on plain HTTP', () => {
+test('the mic is hidden only on a secure page whose browser cannot recognise speech', () => {
   assert.equal(voice({ supported: false }).mic.hidden, true);
-  assert.equal(voice({ secure: false }).mic.hidden, true, 'Browsers block the microphone on a same-Wi-Fi connection.');
-  assert.equal(voice().mic.hidden, false);
+  const ready = voice();
+  assert.equal(ready.mic.hidden, false);
+  assert.equal(ready.classes.has('unavailable'), false);
+});
+
+test('on plain HTTP the mic stays visible, dimmed, and a tap says why instead of starting', async () => {
+  for (const supported of [true, false]) {
+    const v = voice({ secure: false, supported });
+    assert.equal(v.mic.hidden, false, 'A same-Wi-Fi connection still shows where voice would be.');
+    assert.equal(v.classes.has('unavailable'), true);
+    await v.tap();
+    assert.match(v.toasts[0], /secure connection/);
+    assert.match(v.toasts[0], /Away from home/);
+    assert.match(v.toasts[0], /dictation key/);
+    assert.equal(v.sheets.length, 0, 'The privacy sheet is not shown for voice that cannot start.');
+    assert.equal(v.recognizers.length, 0, 'Nothing starts listening.');
+  }
+});
+
+test('consecutive agent messages get a divider, so the last one is easy to find', () => {
+  const css = fs.readFileSync(new URL('../public/phone.css', import.meta.url), 'utf8');
+  assert.match(css, /\.m-agent \+ \.m-agent \{[^}]*border-top:/);
 });
 
 test('the first use says where the audio goes, declining starts nothing, and agreeing is remembered', async () => {

@@ -242,10 +242,17 @@ export class ProjectRegistry extends EventEmitter {
     } finally { try { if (held && releaseHeld) held(); } finally { lease.release(); } }
   }
 
-  async withMutation(id, operationName, callback) {
+  async withMutation(id, operationName, callback, { workspaces = null } = {}) {
     this.assertOpen(); this.reload(); const entry = this.entry(id);
-    const operation = this.mutations.withMutations(entry.folders.map(folder => folder.path), operationName, callback); this.activeMutations.add(operation);
-    try { return await operation; } finally { this.activeMutations.delete(operation); }
+    const operation = this.mutations.withMutations(workspaces || entry.folders.map(folder => folder.path), operationName, callback); this.activeMutations.add(operation);
+    try { return await operation; } finally {
+      this.activeMutations.delete(operation);
+      // A task may have waited for a Git hook, patch or restore rather than another agent. Reconsider it after the lease
+      // is released, including tasks in another workspace attached to the same repository.
+      for (const { broker } of this.brokers.values()) {
+        try { broker.tasks?.tickAll(); } catch (error) { console.error('Codeshi could not resume waiting tasks:', error.message); }
+      }
+    }
   }
 
   broker(id) {

@@ -260,7 +260,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'memory_remove') c.memory = (c.memory || []).filter(entry => entry.id !== record.id);
     if (record.type === 'memory_dismiss') c.memoryDismissed = [...(c.memoryDismissed || []), record.key];
     if (record.type === 'skills') { c.skills = record.skills; c.skillDirs = record.dirs; }
-    if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: record.observedAt || record.at }; }
+    if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: Object.hasOwn(record, 'observedAt') ? record.observedAt : record.at }; }
     applyBudgetRecord(c, record);
     if (record.type === 'routing') c.routing = record.routing;
     if (record.type === 'retry_offer') c.retryOffer = record.offer;
@@ -298,7 +298,10 @@ export class Broker extends EventEmitter {
       }
     }
     if (record.type === 'message_delta') { const message = c.messages.find(m => m.id === record.id); if (!message) throw new Error('Message delta has no original message.'); message.text += record.text; message.seq = record.seq; if (record.status) message.status = record.status; }
-    if (record.type === 'run_metadata') { if (c.activeRun) Object.assign(c.activeRun, record.metadata); }
+    if (record.type === 'run_metadata') {
+      if (c.activeRun) Object.assign(c.activeRun, record.metadata);
+      if (record.metadata?.routingQuota && c.activeRun) { const run = c.runs?.find(item => item.id === c.activeRun.id); if (run) run.routingQuota = record.metadata.routingQuota; }
+    }
     if (record.type === 'submission') {
       if (!record.review && !record.local) {
         if (record.resetSession) delete c.sessions[record.provider];
@@ -317,8 +320,9 @@ export class Broker extends EventEmitter {
     if (record.type === 'review_result') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, record.result, { endedAt: record.at }); }
     if (record.type === 'title') c.title = record.title;
     // Checkpoints (#20): a run's folders saved before and after it, and the undos made from them.
+    if (['run_snapshot', 'rewind', 'snapshot_expired'].includes(record.type)) c.checkpointRevision = record.seq;
     if (record.type === 'run_snapshot') { c.snapshots ||= {}; const saved = c.snapshots[record.runId] ||= {}; saved[record.phase] = { folders: record.folders, at: record.at }; if (record.phase === 'after') { saved.files = record.files || 0; const run = c.runs?.findLast(item => item.id === record.runId); if (run) run.files = saved.files; } }
-    if (record.type === 'rewind') c.rewinds = [...(c.rewinds || []), { id: record.id, target: record.target, runId: record.runId, folders: record.folders, counts: record.counts, left: record.left || [], at: record.at }];
+    if (record.type === 'rewind') c.rewinds = [...(c.rewinds || []).filter(item => item.id !== record.id), { id: record.id, target: record.target, runId: record.runId, folders: record.folders, counts: record.counts, left: record.left || [], pending: Boolean(record.pending), at: record.at }];
     if (record.type === 'snapshot_expired') { for (const id of record.runIds || []) delete c.snapshots?.[id]; const gone = new Set(record.rewindIds || []); c.rewinds = (c.rewinds || []).filter(item => !gone.has(item.id)); }
     if (record.type === 'message') c.messages.push({ ...record.message, seq: record.seq });
     if (record.type === 'message_update') {
@@ -356,12 +360,14 @@ export class Broker extends EventEmitter {
   // reading that differs from the last one is saved.
   observeQuota(c, provider, usage) {
     if (!usage?.available || !Array.isArray(usage.windows) || !usage.windows.length) return;
-    const windows = usage.windows.filter(row => typeof row.usedPercent === 'number').map(({ id, label, usedPercent, resetsAt, scope }) => ({ id, label, usedPercent, resetsAt: resetsAt || null, ...(scope ? { scope } : {}) }));
-    const signature = JSON.stringify(windows.map(row => [row.id, row.usedPercent, row.resetsAt])), key = `${c.id}:${provider}`;
+    const windows = usage.windows.filter(row => Number.isFinite(row.usedPercent) && !row.disabled).map(({ id, label, usedPercent, resetsAt, scope, scopes }) => ({ id, label, usedPercent, resetsAt: resetsAt || null, ...(scope ? { scope } : {}), ...(Array.isArray(scopes) ? { scopes } : {}) }));
+    const signature = JSON.stringify(windows), key = `${c.id}:${provider}`;
     this.quotaSeen ||= new Map();
-    if (!windows.length || this.quotaSeen.get(key) === signature) return;
+    const at = usage.checkedAt ?? usage.observedAt ?? usage.fetchedAt, time = at && new Date(at).getTime();
+    const priorTime = Date.parse(c.quotaReadings?.[provider]?.observedAt);
+    if (!windows.length || this.quotaSeen.get(key) === signature && (!Number.isFinite(time) || time - priorTime < 60000)) return;
     this.quotaSeen.set(key, signature);
-    this.record(c, { type: 'quota_observation', provider, observedAt: usage.fetchedAt ? new Date(usage.fetchedAt).toISOString() : undefined, plan: usage.plan || null, windows });
+    this.record(c, { type: 'quota_observation', provider, observedAt: Number.isFinite(time) ? new Date(time).toISOString() : null, plan: usage.plan || null, windows });
   }
 
   // Project memory (#21): every change comes from the person, through here.
@@ -603,7 +609,7 @@ export class Broker extends EventEmitter {
     if (accepted) { if (accepted.fingerprint !== fingerprint) throw Object.assign(new Error('This request ID was already used for another message.'), { status: 409 }); return { runId: accepted.runId, requestId, duplicate: true }; }
     if (this.running) throw Object.assign(new Error('An assistant is already working in this workspace. Stop it before starting another run.'), { status: 409 });
     // Every task in a workspace shares one limit on how many work at once (#88).
-    if (!review) this.admit?.(c);
+    this.admit?.(c);
     // The one place every run starts from, so nothing gets past the task's limits (#87). A request already accepted returned above.
     const runId = randomUUID(), task = taskIdentity(c, { runId, text, retryOf, review });
     this.budget.assertCanStart(c, { task, provider, model, local: Boolean(local) });
@@ -726,6 +732,20 @@ export class Broker extends EventEmitter {
           run.billingSource = account.billingSource;
           if (account.billingSource !== 'subscription' && !billingConfirmed) throw Object.assign(new Error(`Billing source is ${account.billingSource}. Explicitly confirm this provider run before it may consume usage.`), { category: 'permission' });
         }
+        if (routing && !review && !local) {
+          let usage = null, timer;
+          try {
+            usage = await Promise.race([this.checks.usage(provider, this.usageOptions(provider)), new Promise(resolve => { timer = setTimeout(() => resolve(null), 6000); })]);
+          } catch { /* Unavailable stays unknown, with no assumed capacity. */ }
+          finally { clearTimeout(timer); }
+          if (run.stopped) return complete(null, null, new Error('Run stopped.'));
+          const quota = globalThis.relayRouting.assessQuota(usage, model, { threshold: 95 });
+          this.observeQuota(c, provider, usage);
+          this.record(c, { type: 'run_metadata', metadata: { routingQuota: quota } });
+          if (['near', 'exhausted', 'stale'].includes(quota.state)) throw Object.assign(new Error(`Routing paused before starting ${provider}: ${globalThis.relayRouting.quotaText(quota)}. Refresh plan usage or choose a model manually.`), { category: 'routing' });
+          // Unknown usage remains explicit. Send is a manual request, unlike a background retry or automatic handoff,
+          // which require confirmed allowance. The selected agent/model never changes during this final check.
+        }
         if (!review) await this.checkpoints.before(c, run);
         if (run.stopped) return complete(null, null, new Error('Run stopped.'));
         const command = commandFor(provider, { mode, approvalPolicy, sessionId, bin, workspace: this.workspace, workspaces: this.workspaces, effort });
@@ -737,6 +757,9 @@ export class Broker extends EventEmitter {
           command.args.push('--setting-sources', '', '--settings', '{"disableAllHooks":true}');
           command.args.push('--model', model || 'default');
         }
+        const remainingSpend = run.billingSource === 'api' ? this.budget.remainingSpend(c, run.taskId) : null;
+        const maxBudgetUsd = provider === 'claude' && actualTransport === 'sdk' ? remainingSpend : null;
+        if (remainingSpend !== null) this.record(c, { type: 'run_metadata', metadata: { budgetEnforcement: { spend: maxBudgetUsd !== null ? 'native' : 'reported-usage', maxSpendUSD: remainingSpend } } });
         // The worker cannot launch a provider until its PID and mutation lease are durable.
         run.child = fork(fileURLToPath(new URL('./provider-worker.mjs', import.meta.url)), [], { cwd: this.workspace, silent: true, detached: process.platform !== 'win32', execArgv: [], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
         run.child.on('error', error => { run.spawnError = error; });
@@ -799,7 +822,7 @@ export class Broker extends EventEmitter {
         const pidStart = processStart(run.child.pid);
         this.record(c, { type: 'run_process', pid: run.child.pid, pidStart });
         lease.setProcess(run.child.pid, pidStart);
-        run.child.send({ type: 'start', config: { ...(run.billingSource === 'api' && this.budget.remainingSpend(c, run.taskId) !== null ? { maxBudgetUsd: this.budget.remainingSpend(c, run.taskId) } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
+        run.child.send({ type: 'start', config: { ...(maxBudgetUsd !== null ? { maxBudgetUsd } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
       } catch (error) { run.errorCategory = error.category || classifyError(error); complete(null, null, error); }
     };
     launch();

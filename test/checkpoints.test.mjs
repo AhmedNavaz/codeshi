@@ -150,3 +150,107 @@ test('old checkpoints are let go, and writes never follow a link out of the fold
   for (const unsafe of ['../escape.txt', 'a/../../escape.txt', '/etc/passwd', 'a//b']) assert.throws(() => safeTarget(env.workspace, unsafe), error => error.status === 409);
   assert.equal(safeTarget(env.workspace, 'new/folder/file.txt'), path.join(fs.realpathSync(env.workspace), 'new', 'folder', 'file.txt'));
 });
+
+test('Timeline restores a whole saved point across runs, previews later edits, and keeps a recoverable checkpoint', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { repository: true, files: { 'a.txt': 'original\n' }, scenarios: {
+    First: { write: { 'a.txt': 'first\n' } }, Second: { write: { 'a.txt': 'second\n', 'later.txt': 'added later\n' } },
+  } });
+  const first = await env.run('First'); await env.run('Second');
+  fs.writeFileSync(path.join(env.workspace, 'a.txt'), 'my later edit\n');
+  const index = fs.readFileSync(path.join(env.workspace, '.git/index'));
+  const head = git(env.workspace, 'rev-parse', 'HEAD');
+  const target = { kind: 'checkpoint', id: first, phase: 'after' };
+  const preview = await env.broker.checkpoints.preview(env.c, target);
+  assert.deepEqual(preview.files.map(file => [file.path, file.action]), [['a.txt', 'restore'], ['later.txt', 'remove']]);
+  assert.match(preview.files[0].diff, /-my later edit\n\+first/);
+  assert.equal(read(env.workspace, 'a.txt'), 'my later edit\n', 'Preview writes nothing.');
+  const beforeMessages = env.c.messages.length;
+  const result = await env.broker.checkpoints.apply(env.c, target, preview.digest);
+  assert.equal(read(env.workspace, 'a.txt'), 'first\n');
+  assert.equal(exists(env.workspace, 'later.txt'), false);
+  assert.equal(env.c.messages.length, beforeMessages + 1, 'The conversation remains and gets a restore note.');
+  assert.match(env.c.messages.at(-1).text, /Restored the workspace.*conversation is kept.*inspect the current files/i);
+  assert.deepEqual(fs.readFileSync(path.join(env.workspace, '.git/index')), index);
+  assert.equal(git(env.workspace, 'rev-parse', 'HEAD'), head);
+  const restored = env.broker.checkpoints.timeline(env.c).find(item => item.id === result.id);
+  assert.equal(restored.kind, 'restore');
+  assert(restored.checkpoints.every(point => point.available));
+  await env.undo(restored.checkpoints.find(point => point.target.phase === 'before').target);
+  assert.equal(read(env.workspace, 'a.txt'), 'my later edit\n');
+  assert.equal(read(env.workspace, 'later.txt'), 'added later\n');
+  assert.equal(env.c.rewinds.filter(item => item.id === result.id).length, 1, 'Pending and final records describe one restoration.');
+  const replay = new Broker({ workspace: env.workspace, dataDir: env.dataDir });
+  try { assert.deepEqual(replay.checkpoints.timeline(replay.get(env.c.id)), env.broker.checkpoints.timeline(env.c), 'History survives a restart.'); }
+  finally { await replay.close(); }
+  assert(!JSON.stringify(restored).includes(env.dataDir), 'Private stores are not exposed.');
+});
+
+test('restoring rejects stale previews, detached folders and missing snapshots without changing files', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { files: { 'a.txt': 'old\n' }, scenarios: { Change: { write: { 'a.txt': 'agent\n' } } } });
+  const id = await env.run('Change'), target = { kind: 'checkpoint', id, phase: 'before' };
+  const preview = await env.broker.checkpoints.preview(env.c, target);
+  fs.writeFileSync(path.join(env.workspace, 'later.txt'), 'new after preview\n');
+  await assert.rejects(env.broker.checkpoints.apply(env.c, target, preview.digest), /Review the changes again/);
+  assert.equal(read(env.workspace, 'a.txt'), 'agent\n');
+  const folders = env.broker.workspaceFolders;
+  env.broker.workspaceFolders = [...folders, { id: 'detached', path: env.root, name: 'Added folder' }];
+  assert.equal(env.broker.checkpoints.timeline(env.c)[0].checkpoints[0].available, false);
+  await assert.rejects(env.broker.checkpoints.preview(env.c, target), /workspace folders changed/);
+  env.broker.workspaceFolders = folders;
+  env.c.snapshots[id].before.folders[0].commit = null;
+  await assert.rejects(env.broker.checkpoints.preview(env.c, target), /did not save every folder/);
+  await assert.rejects(env.broker.checkpoints.preview(env.c, { ...target, phase: 'other' }), /before or after/);
+  assert.equal(read(env.workspace, 'later.txt'), 'new after preview\n');
+});
+
+test('restore records recovery before writing, and an interrupted restore can be recovered', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { files: { 'a.txt': 'old\n', 'b.txt': 'old\n' }, scenarios: { Change: { write: { 'a.txt': 'new\n', 'b.txt': 'new\n' } } } });
+  const id = await env.run('Change'), target = { kind: 'checkpoint', id, phase: 'before' };
+  const preview = await env.broker.checkpoints.preview(env.c, target), put = env.broker.checkpoints.put.bind(env.broker.checkpoints);
+  let seen = false;
+  env.broker.checkpoints.put = async (...args) => {
+    const pending = env.c.rewinds.at(-1);
+    assert(pending.pending, 'A durable recovery record exists before any file changes.');
+    seen = true;
+    if (args[2] === 'b.txt') throw new Error('Write interrupted');
+    return put(...args);
+  };
+  await assert.rejects(env.broker.checkpoints.apply(env.c, target, preview.digest), /Write interrupted/);
+  assert(seen);
+  env.broker.checkpoints.put = put;
+  fs.writeFileSync(path.join(env.workspace, 'a.txt'), 'partial restoration\n');
+  const recovery = env.broker.checkpoints.timeline(env.c).find(item => item.pending);
+  assert.equal(recovery.checkpoints.length, 1);
+  assert.equal(recovery.checkpoints[0].available, true);
+  await env.undo(recovery.checkpoints[0].target);
+  assert.equal(read(env.workspace, 'a.txt'), 'new\n');
+  assert.equal(read(env.workspace, 'b.txt'), 'new\n');
+});
+
+test('restoration recovery includes unchanged folders, and a failed current snapshot blocks all writes', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { files: { 'a.txt': 'old\n' }, scenarios: { Change: { write: { 'a.txt': 'new\n' } } } });
+  const other = path.join(env.root, 'other'); fs.mkdirSync(other); fs.writeFileSync(path.join(other, 'untouched.txt'), 'keep\n');
+  env.broker.workspaceFolders.push({ id: 'second-folder', name: 'Other', path: other });
+  const id = await env.run('Change'), target = { kind: 'checkpoint', id, phase: 'before' };
+  const result = await env.undo(target);
+  const recovery = env.broker.checkpoints.timeline(env.c).find(entry => entry.id === result.result.id);
+  assert(recovery.checkpoints.every(point => point.available));
+  assert.equal(env.c.rewinds.at(-1).folders.length, 2);
+  await env.undo(recovery.checkpoints[0].target);
+  assert.equal(read(env.workspace, 'a.txt'), 'new\n');
+  assert.equal(read(other, 'untouched.txt'), 'keep\n');
+  env.broker.checkpoints.limits.files = 0;
+  await assert.rejects(env.broker.checkpoints.preview(env.c, target), /recovery checkpoint can be made/);
+  assert.equal(read(env.workspace, 'a.txt'), 'new\n');
+});
+
+test('restoring a checkpoint supersedes old Changes undone labels without discarding their history', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { files: { 'a.txt': 'old\n' }, scenarios: { Change: { write: { 'a.txt': 'new\n' } } } });
+  const id = await env.run('Change');
+  const undone = await env.undo({ kind: 'run', id });
+  assert.equal(env.view().checkpoints[id].undone, undone.result.id);
+  await env.undo({ kind: 'checkpoint', id, phase: 'after' });
+  assert.equal(read(env.workspace, 'a.txt'), 'new\n');
+  assert.equal(env.view().checkpoints[id].undone, undefined);
+  assert(env.broker.checkpoints.timeline(env.c).some(entry => entry.id === undone.result.id));
+});

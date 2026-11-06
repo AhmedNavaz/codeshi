@@ -47,6 +47,8 @@ The following sections preserve the scope, dependencies and acceptance criteria 
 
 **Tracking:** [#84](https://github.com/AhmedNavaz/codeshi/issues/84) — the first milestone is built: the ledger in `src/task-ledger.mjs` and the suite in [`evals/`](../evals/README.md). Live comparisons so far are too small to claim a gain.
 
+**0.28.0:** evaluations can repeat a saved input pin with `--pin`, checking skill versions and resources alongside fixture snapshots, policy, checks, engine and runtime before dispatch. Reports separate incompatible experiments, recorded/live results and changed reported models, and show wall time alongside working time. Pins verify inputs rather than archive them; hosted model behavior cannot be frozen. Full coordination accounting and the broader routing cases below remain open, as do longer live comparisons.
+
 #### Problem
 
 Codeshi records some provider usage and test results, but does not yet demonstrate whether routing, context handling, skills or extra agents produce more correct completed work for the same allowance. More activity and more agents can increase usage without improving the result.
@@ -158,6 +160,8 @@ A provider-aware skill catalog based on SKILL.md, with on-demand loading, visibl
 
 **Tracking:** [#87](https://github.com/AhmedNavaz/codeshi/issues/87) — the first milestone is built in `src/task-budget.mjs`. Concurrent limits now cover the tasks of #88 and the main conversation together.
 
+Shipped in 0.28.0: background reviews occupy workspace concurrency slots and stream usage into the parent's journal and budget checks, including quiet-run deadlines. With a time, token or spend cap, one worker reserves the remaining allowance for that task; additional same-task work waits rather than receiving the same remainder. No per-worker usage estimate is assumed. Cancellation before launch returns count reservations, accepted IDs are deduplicated, and interrupted recovery retains the latest reported usage. Fresh review sessions cannot change the builder's token baseline. The native Claude API cap uses the parent's remaining spend; other adapters use best-effort reported-usage checks. Simulated-provider tests cover API/unknown billing consent, shared token/spend overshoot, cancellation, quiet deadlines and recovery. Real paid API verification, reservations split among simultaneous workers, model selection controls in the limits form and future orchestration-call accounting remain open. #12's local changes add the selected-model quota freshness checks described above.
+
 #### Problem
 
 Routing and handoff already use subscription eligibility and available quota, but a user needs one execution policy covering the entire task. A builder, reviewer and repair loop must not each get an unrelated budget or keep launching work after the user intended it to stop.
@@ -191,6 +195,8 @@ A backend policy shared by the desktop, future CLI and team runner. It bounds to
 **Issue title:** Run independent folder tasks concurrently with isolated edits and recovery
 
 **Tracking:** [#88](https://github.com/AhmedNavaz/codeshi/issues/88) — the first milestone is built in `src/task-coordinator.mjs` and `src/task-isolation.mjs`. Each task is a lane with its own broker and journal.
+
+Shipped in 0.28.0: the Git panel's stage, unstage and commit actions take the same durable mutation leases as runs, patches, imports, checkpoint restores and task integration. Git writes lease the canonical repository root, including when the attached folder is nested or reached through a link, because sibling folders share the index. Independent repositories and separate worktree indices remain independent. Routes recheck folder membership after upload and under the lease, commit hooks retain the lease until completion, and shutdown waits for tracked Git actions. Tasks waiting on a tracked mutation retry when it releases its lease. Tests cover refusal without changing index/HEAD, cross-process exclusion, aliases, nested roots, separate worktrees/repositories, failed hooks, membership changes and shutdown. This addresses the remaining first-milestone Git-panel gap recorded in the issue comment. Worktree dependency setup, local models, task reviews, undo and recap integration remain follow-up work.
 
 #### Problem
 
@@ -324,6 +330,8 @@ Keep this as the routing issue rather than opening a duplicate. Stages 1 and 2 a
 #### Routing and handoff trust requirements
 
 These are planned acceptance criteria for #12 and #17, not claims about the shipped name-based model tiers. Flow mode (#107) presents the same policy and decision records; improving presentation does not replace verifying the selection logic.
+
+**0.28.0, quota milestone:** the page, task-budget view, handoff and retry paths share model-specific quota assessment. Routed dispatch refreshes the selected agent's usage before launch and saves its windows and observation time. Unknown readings are explicit for manual Send and cannot trigger automatic handoffs, retries or their reset fallback. Scoped-window arrays survive the journal, and old readings are not scored as known capacity. This does not complete the trust criteria: model capability verification, unified suitability ranking, allowance reservations across concurrent work, decision comparisons and measured manual-agent baselines remain open. Model tiers are still local heuristics.
 
 - [ ] Model capabilities have a source and verification date, cover the tools, inputs, context and skill support exposed by Codeshi, and distinguish provider claims from observed task outcomes. An unknown model is not ranked by its name alone.
 - [ ] Required capabilities are checked before ranking suitable models by task fit, allowance, continuity and budget. More unused allowance cannot make an incompatible model eligible.

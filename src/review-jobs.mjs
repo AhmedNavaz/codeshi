@@ -23,7 +23,8 @@ export class ReviewJobs {
     const fingerprint = reviewRequestKey(input), accepted = c.reviewRequests[input.requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) fail('This request ID was used for another review.'); return { ...accepted, duplicate: true }; }
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId)) fail('Invalid review request ID.', 400);
-    const taskId = c.lastRun?.taskId || c.lastRun?.id || null;
+    const parent = c.activeRun || c.lastRun, taskId = parent?.taskId || parent?.id || null;
+    main.admit?.(c);
     main.budget.assertCanStart(c, { task: taskId ? { id: taskId, relation: 'review' } : null, provider: review.provider, model: review.model });
     if (this.jobs.has(project.id)) fail('A background review is already running in this workspace.');
     if (this.jobs.size >= 4) fail('Four background reviews are running. Wait for one to finish.');
@@ -35,13 +36,27 @@ export class ReviewJobs {
       if (reviewFreshness(review, project.folders).stale) fail('The selected changes moved. Refresh the review preview.');
       worker = new Broker({ workspace: folders[0].path, workspaces: folders.map(folder => folder.path), workspaceFolders: folders, bins: main.configuredBins, dataDir: path.join(directory, 'journal') });
       const conversation = worker.get(worker.create().id), id = randomUUID();
+      const budgetTaskId = taskId || id;
+      // The copied-files worker has no previous task history. Its native API cap must come from its parent's remaining
+      // allowance, and the parent's monitor below enforces all measured limits against the shared, durable totals.
+      worker.budget.remainingSpend = () => main.budget.remainingSpend(c, budgetTaskId);
       worker.updateContext(conversation, c.context);
       // Save ownership before launching a provider. A crash in either journal can then be recovered as interrupted.
-      main.record(c, { type: 'background_review', taskId, review: { ...review, id, requestId: input.requestId, fingerprint, background: true, startedAt: new Date().toISOString(), status: 'running', findings: [] } });
+      main.record(c, { type: 'background_review', taskId: budgetTaskId, parentRunId: parent?.id || null, review: { ...review, id, requestId: input.requestId, fingerprint, background: true, startedAt: new Date().toISOString(), status: 'running', findings: [] } });
       savedId = id;
+      let budgetSample = null, watchedRun = null;
       const progress = () => {
         const current = c.reviews.find(item => item.id === id), run = conversation.activeRun;
         if (current && run?.pid && current.pid !== run.pid) main.record(c, { type: 'review_process', id, pid: run.pid, pidStart: run.pidStart });
+        if (current && run && worker.running) {
+          const entry = conversation.taskBudgets?.[run.taskId]?.active[run.id];
+          const sample = { began: Boolean(entry?.began), metadata: { ...(run.usage ? { usage: run.usage } : {}), ...(typeof run.costUSD === 'number' ? { costUSD: run.costUSD } : {}), ...(run.account ? { account: run.account } : {}), ...(run.effectiveModel ? { effectiveModel: run.effectiveModel } : {}) } };
+          const signature = JSON.stringify(sample);
+          if (signature !== budgetSample) { main.record(c, { type: 'review_budget', id, ...sample }); budgetSample = signature; }
+          watchedRun = worker.running;
+          if (!main.budget.watches.has(watchedRun.id)) main.budget.watch(watchedRun, { owner: worker, c, taskId: budgetTaskId, recordRunId: id });
+          main.budget.check(watchedRun);
+        }
         if (current && run) { current.progress = { phase: run.phase, toolCount: run.toolCount || 0, startedAt: run.startedAt }; main.emit('update', { conversationId: c.id }); }
       };
       // Persist the worker PID in the main journal before its start message can launch the native provider.
@@ -56,6 +71,7 @@ export class ReviewJobs {
       }).catch(error => {
         main.record(c, { type: 'review_result', id, result: { status: 'failed', summary: error.message, findings: [] } });
       }).finally(async () => {
+        if (watchedRun) main.budget.unwatch(watchedRun);
         await worker.close(); fs.rmSync(directory, { recursive: true, force: true });
         if (main.backgroundReview === job) delete main.backgroundReview;
         if (this.jobs.get(project.id) === job) this.jobs.delete(project.id);

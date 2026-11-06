@@ -765,11 +765,16 @@
   // ---- Voice on the phone. The phone's own browser recognises speech, so on an iPhone or Android phone the audio
   // goes to Apple or Google, unlike the computer, where it never leaves the Mac. The first use says so. Words land in
   // the message box as they're recognised; nothing is sent until you press Send. Browsers block the microphone on plain
-  // HTTP, so a same-Wi-Fi connection doesn't offer it.
+  // HTTP, so on a same-Wi-Fi connection the button is dimmed and a tap says why, rather than it silently going missing.
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const mic = $('mic');
   const VOICE_FAILED = 'Voice didn’t work in this browser. You can still type, or use the keyboard’s dictation key.';
-  if (mic) mic.hidden = !Recognition || !window.isSecureContext;
+  const VOICE_NEEDS_HTTPS = 'Browsers only allow the microphone on a secure connection, which Same Wi-Fi isn’t. For voice, pair with Away from home, which works on Wi-Fi too. Or use the keyboard’s dictation key.';
+  const voiceBlocked = !window.isSecureContext;
+  if (mic) {
+    mic.hidden = !voiceBlocked && !Recognition;
+    if (voiceBlocked) mic.classList.add('unavailable');
+  }
   function showListening(on) {
     mic.classList[on ? 'add' : 'remove']('listening');
     mic.setAttribute('aria-pressed', String(on)); mic.setAttribute('aria-label', on ? 'Stop listening' : 'Speak');
@@ -839,6 +844,7 @@
     });
   }
   mic?.addEventListener('click', () => attempt(async () => {
+    if (voiceBlocked) { toast(VOICE_NEEDS_HTTPS); return; }
     if (listening && !listening.closing) { finishListening(); return; }
     stopListening();
     if (await voiceAllowed()) startListening();

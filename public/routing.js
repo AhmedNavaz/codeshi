@@ -11,6 +11,36 @@
   const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
   const TIERS = ['light', 'standard', 'deep'];
 
+  // Shared by the page, task budgets, handoff and retries. Each applicable window constrains the selected model;
+  // short-window room never cancels a weekly/model limit. Missing observation times are not evidence of fresh room.
+  const windowApplies = (row, model) => {
+    const name = String(model || '').toLowerCase();
+    return Array.isArray(row.scopes) ? row.scopes.some(scope => typeof scope === 'string' && name.includes(scope.toLowerCase())) : !row.scope || name.includes(String(row.scope).toLowerCase());
+  };
+  function assessQuota(usage, model = null, { now = Date.now(), threshold = 90, staleMs = 15 * 60 * 1000 } = {}) {
+    model ||= usage?.defaultModel || null;
+    const all = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => row && !row.disabled);
+    const unresolvedModel = !model && all.some(row => row.scope || row.scopes?.length);
+    const rows = all.filter(row => windowApplies(row, model));
+    const rawTime = usage?.checkedAt ?? usage?.observedAt ?? usage?.fetchedAt;
+    const time = typeof rawTime === 'number' ? rawTime : Date.parse(rawTime), age = now - time;
+    const observedAt = Number.isFinite(time) ? new Date(time).toISOString() : null;
+    const old = Number.isFinite(time) && (age > staleMs || age < -60000);
+    const windows = rows.map(row => {
+      const usedPercent = Number.isFinite(row.usedPercent) && row.usedPercent >= 0 ? row.usedPercent : null;
+      const resetPassed = row.resetsAt && Date.parse(row.resetsAt) <= now;
+      return { label: row.label || row.id || 'Plan limit', usedPercent, resetsAt: row.resetsAt || null,
+        ...(row.scope ? { scope: row.scope } : {}), ...(Array.isArray(row.scopes) ? { scopes: row.scopes } : {}),
+        state: old || resetPassed ? 'stale' : usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : usedPercent >= threshold ? 'near' : 'ok' };
+    });
+    const state = windows.some(row => row.state === 'exhausted') ? 'exhausted' : old || windows.some(row => row.state === 'stale') ? 'stale'
+      : unresolvedModel || !observedAt || !windows.length || windows.some(row => row.state === 'unknown') ? 'unknown' : windows.some(row => row.state === 'near') ? 'near' : 'ok';
+    return { state, windows, observedAt, usedPercent: ['ok', 'near', 'exhausted'].includes(state) ? Math.max(...windows.map(row => row.usedPercent ?? 0)) : null,
+      ...(['unknown', 'stale'].includes(state) ? { reason: state === 'stale' ? 'Usage needs a fresh reading.' : usage?.reason || 'Fresh plan usage is not reported for this model.' } : {}) };
+  }
+  const quotaText = quota => !quota || ['unknown', 'stale'].includes(quota.state) ? `Plan usage ${quota?.state || 'unknown'}${quota?.reason ? ': ' + quota.reason : ''}`
+    : quota.windows.map(row => `${row.label}: ${Math.round(row.usedPercent)}% used`).join('; ');
+
   // Work that needs the strongest reasoning, named so the reason can say what was recognised.
   const deepSignals = [
     [/\barchitect(ure|ural)?\b|\bsystem design\b|\bdesign (a|the|an) (new )?(system|service|api|schema)\b/, 'architecture'],
@@ -92,7 +122,7 @@
     return null;
   }
 
-  // Chooses for one message. candidates: [{ provider, models, billingSource, usedPercent, eligible }].
+  // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
   // limit is skipped, and the agent that did the last run is preferred, so the conversation keeps its native session.
   function route({ text, attachments = 0, mode = 'balanced', candidates = [], current = null, allowApi = false }) {
@@ -100,30 +130,41 @@
     const task = classify(text, { attachments });
     const [tier, wantedEffort] = plan[mode][task.tier];
     const skipped = [];
-    const pool = candidates.filter(candidate => {
-      if (!candidate.eligible) return false;
-      if (!allowApi && candidate.billingSource !== 'subscription') { skipped.push(`${agentNames[candidate.provider]} isn’t billed to a subscription`); return false; }
-      if (Number.isFinite(candidate.usedPercent) && candidate.usedPercent >= 95) { skipped.push(`${agentNames[candidate.provider]} is at ${Math.round(candidate.usedPercent)}% of its limit`); return false; }
-      return true;
+    const pool = candidates.flatMap(candidate => {
+      if (!candidate.eligible) return [];
+      if (!allowApi && candidate.billingSource !== 'subscription') { skipped.push(`${agentNames[candidate.provider]} isn’t billed to a subscription`); return []; }
+      const rows = (candidate.models || []).filter(row => !candidate.allowedModels || candidate.allowedModels.includes(modelId(row)));
+      const preferred = pickModel(rows, tier);
+      if (candidate.allowedModels && !preferred) { skipped.push(`${agentNames[candidate.provider]} has no model allowed by task limits`); return []; }
+      // Try equivalent-tier models before ruling out the agent; never downgrade solely to escape a model's limit.
+      const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
+      const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && modelId(row) !== 'default' && !row.hidden && distance(row) === distance(preferred))] : [null];
+      const choices = options.map(model => ({ ...candidate, selectedModel: model, quota: assessQuota(candidate.usage, model && modelId(model), { threshold: 95 }) }));
+      const usable = choices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
+      const selected = usable.find(row => row.quota.state === 'ok') || usable[0];
+      if (!selected) { skipped.push(`${agentNames[candidate.provider]}: ${quotaText(choices[0].quota)}`); return []; }
+      return [selected];
     });
-    if (!pool.length) return { error: `Auto found no connected agent within your rules${skipped.length ? ` (${skipped.join('; ')})` : ''}. Choose a model yourself, or allow API-billed agents.`, task, mode };
+    if (!pool.length) return { error: `Auto found no connected agent within your rules${skipped.length ? ` (${skipped.join('; ')})` : ''}. Refresh plan usage or choose a model yourself. API-billed agents need separate consent.`, task, mode };
     // The agent is chosen by allowance and continuity, not by model names: each agent's own strongest model serves
     // complex work, so a vendor is never preferred just because its model is called "pro" or "opus".
     const score = candidate => {
-      const used = Number.isFinite(candidate.usedPercent) ? candidate.usedPercent : 50;
+      if (candidate.quota.state !== 'ok') return 1000 - (candidate.provider === current ? 15 : 0);
+      const used = candidate.quota.usedPercent;
       const usage = mode === 'saving' ? used : mode === 'balanced' ? (used >= 80 ? 100 + used : used / 4) : (used >= 90 ? 100 + used : 0);
       return usage - (candidate.provider === current ? 15 : 0);
     };
     const order = ['codex', 'claude', 'gemini'];
     const chosen = [...pool].sort((a, b) => score(a) - score(b) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
-    const model = pickModel(chosen.models, tier), effort = pickEffort(effortsOf(model), wantedEffort);
+    const model = chosen.selectedModel, effort = pickEffort(effortsOf(model), wantedEffort);
     const why = [task.reason[0].toUpperCase() + task.reason.slice(1)];
     if (current && chosen.provider !== current) {
       const before = candidates.find(candidate => candidate.provider === current);
-      why.push(!before?.eligible || !pool.includes(before) ? `${agentNames[current]} isn’t available under your rules` : Number.isFinite(before.usedPercent) && before.usedPercent >= 80 ? `${agentNames[current]} is at ${Math.round(before.usedPercent)}% of its limit` : `${agentNames[chosen.provider]} has more allowance left`);
+      const previous = pool.find(candidate => candidate.provider === current);
+      why.push(!before?.eligible || !previous ? `${agentNames[current]} isn’t available under your rules` : previous.quota.usedPercent >= 80 ? `${agentNames[current]} is at ${Math.round(previous.quota.usedPercent)}% of its limit` : previous.quota.state !== 'ok' ? `${agentNames[current]} has no confirmed allowance` : `${agentNames[chosen.provider]} has more allowance left`);
     }
     const choice = { provider: chosen.provider, model: model ? modelId(model) : null, modelName: model ? (model.displayName || model.name || modelId(model)) : null, effort, tier: task.tier, mode, reason: why.join(' · ') };
-    return { ...choice, escalation: escalate(chosen.provider, chosen.models, choice) };
+    return { ...choice, quota: chosen.quota, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
 
   // The same choice when the agent is already decided: a queued prompt that moved at a handoff is routed again for the
@@ -136,5 +177,5 @@
     return { ...choice, escalation: escalate(provider, rows, choice) };
   }
 
-  root.relayRouting = { MODES, modeNames, classify, modelTier, route, routeTo, escalate };
+  root.relayRouting = { MODES, modeNames, classify, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies };
 })(typeof window === 'undefined' ? globalThis : window);

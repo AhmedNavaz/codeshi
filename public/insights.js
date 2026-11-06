@@ -126,6 +126,8 @@
     // Opening the line explains a pause; otherwise it holds the token and context counts.
     $('run-detail').textContent = !running ? '' : state.streamConnected === false ? 'The app connection was interrupted. The agent may still be running; reconnecting to restore its live status.' : phase === 'approval' ? 'Review the permission request below to let the agent continue.' : quiet ? `No activity from ${agent} for ${duration(silence)}. This can happen during a long request; you can wait or stop the run.` : '';
     const metrics = [];
+    if (run.routingQuota && window.relayRouting) metrics.push(`Allowance at dispatch: ${window.relayRouting.quotaText(run.routingQuota)}${run.routingQuota.observedAt ? ` · observed ${new Date(run.routingQuota.observedAt).toLocaleTimeString()}` : ''} · account-wide, including other clients`);
+    if (run.budgetEnforcement) metrics.push(`API spend limit: $${run.budgetEnforcement.maxSpendUSD} · ${run.budgetEnforcement.spend === 'native' ? 'enforced by the native adapter' : 'checked as usage is reported; in-flight overshoot is possible'}`);
     if (run.connection === 'local') metrics.push('No cloud model charges');
     // Codex's inputTokens include its cached input; Claude reports the input it read from and wrote to its cache apart from input_tokens.
     const usage = run.usage?.total || run.usage, output = usage?.outputTokens ?? usage?.output_tokens;
@@ -287,7 +289,7 @@
   function setGitPanel(open, remember = true) {
     $('git-panel').hidden = !open; $('open-git').setAttribute('aria-expanded', String(open));
     if (remember) try { localStorage.setItem('throughline:side-panel', open ? 'git' : 'none'); } catch { /* Panel state is a convenience. */ }
-    if (open) { window.relayReviews?.closePanel(); window.relayAgents?.close(); window.relayBrief?.close(); window.relayTasks?.close(); loadGit(); }
+    if (open) { window.relayReviews?.closePanel(); window.relayTimeline?.close(); window.relayAgents?.close(); window.relayBrief?.close(); window.relayTasks?.close(); loadGit(); }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
   $('open-git').addEventListener('click', () => setGitPanel($('git-panel').hidden));
@@ -468,7 +470,7 @@
     const rows = (result.windows || []).filter(row => Number.isFinite(row.usedPercent) && !row.disabled && !row.scope && !row.scopes);
     return rows.length ? Math.max(...rows.map(row => row.usedPercent)) : null;
   };
-  window.relayUsage = { open: openUsage, usedPercent };
+  window.relayUsage = { open: openUsage, usedPercent, snapshot: provider => api.getState().accounts?.[provider]?.authenticated === true ? usage[provider] || null : null };
   for (const trigger of [$('codex-status'), $('claude-status'), $('gemini-status'), $('usage-chip')]) { trigger.setAttribute('aria-controls','usage-dialog'); trigger.setAttribute('aria-haspopup','dialog'); trigger.setAttribute('aria-expanded','false'); }
   usagePopover.addEventListener('toggle',() => { if (!usageIsOpen()) usageAnchor?.setAttribute('aria-expanded','false'); });
   $('close-usage').addEventListener('click',()=>closeUsage(true));

@@ -5,7 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest } from '../src/context.mjs';
-import { assessQuota, classifyStep, defaultPolicy, validatePolicy } from '../src/task-budget.mjs';
+import { applyBudgetRecord, assessQuota, classifyStep, defaultPolicy, validatePolicy } from '../src/task-budget.mjs';
+import { ledgerFromRecords } from '../src/task-ledger.mjs';
 import { scriptCLIs } from './platform.mjs';
 
 // Two stand-in agents speaking Codex's protocol: what each does comes from the marker in its prompt, and each records its prompts.
@@ -32,7 +33,19 @@ if(prompt.includes('RUN-FAILS-TWICE')){fail('f1');fail('f2');return setInterval(
 finish();}
 });
 `, { mode: 0o700 });
-  const brokers = [], bins = { codex: bin, claude: path.join(root, 'none'), gemini: path.join(root, 'none') };
+  const claudeBin = path.join(root, 'claude.mjs');
+  fs.writeFileSync(claudeBin, `#!${process.execPath}
+import fs from 'node:fs';
+if(process.argv.includes('--version')){console.log('budget-fixture 1');process.exit(0);}
+let prompt='';for await(const part of process.stdin)prompt+=part;
+fs.appendFileSync(${JSON.stringify(prompts)},JSON.stringify(prompt)+'\\n');
+const emit=value=>console.log(JSON.stringify(value));
+emit({type:'assistant',message:{id:'step',content:[{type:'tool_use',id:'failure',name:'Bash',input:{command:'npm test'}}]}});
+emit({type:'user',message:{content:[{type:'tool_result',tool_use_id:'failure',content:'Error: the same failure at line 12\\nfailed'}]}});
+emit({type:'assistant',message:{id:'answer',content:[{type:'text',text:'Done'}]}});
+emit({type:'result',subtype:'success',result:'Done'});
+`, { mode: 0o700 });
+  const brokers = [], bins = { codex: bin, claude: claudeBin, gemini: path.join(root, 'none') };
   const open = () => { const broker = new Broker({ workspace, dataDir, bins, handoffPreferences: () => ({ threshold: 0, automatic: false }) }); brokers.push(broker); return broker; };
   t.after(async () => { await Promise.all(brokers.map(broker => broker.close())); });
   const broker = open(), c = broker.get(broker.create().id);
@@ -81,12 +94,15 @@ test('the same failure counts across a restart and a change of agent, and goes w
   const reopened = env.open(), c = reopened.get(env.c.id);
   assert.equal(Object.values(state(c, taskId).failures)[0].count, 1, 'The restart kept it.');
   // A fresh agent carrying on, as after a handoff, adds to the same count.
-  await env.start(reopened, c, continuationRequest, { fresh: true }).done;
+  await env.start(reopened, c, continuationRequest, { provider: 'claude', transport: 'cli', fresh: true }).done;
   assert.equal(c.lastRun.taskId, taskId);
   assert.equal(c.lastRun.relation, 'continuation');
   assert.match(env.prompt(), /failedAttempts/);
   assert.match(env.prompt(), /task-record/);
   assert.match(env.prompt(), /npm test/);
+  const [continued] = Object.values(state(c, taskId).failures);
+  assert.equal(continued.count, 2);
+  assert.deepEqual(continued.agents, ['codex', 'claude'], 'Restart and changing provider cannot reset the same-failure counter.');
 });
 
 test('a repeated failure stops the run with its reason, saves the checkpoint and frees the workspace, and only the person can allow more', { skip: scriptCLIs }, async t => {
@@ -228,4 +244,66 @@ test('the policy and counters stay out of each conversation update and out of wh
   const env = setup(t, { maxRetries: 1 }), view = env.broker.view(env.c);
   assert.equal(view.taskPolicy.maxRetries, 1, 'The page needs the policy to route within it.');
   for (const key of ['taskBudgets', 'taskOfRun', 'budgetActive', 'budgetTotals', 'quotaReadings']) assert.equal(key in view, false, key);
+});
+
+test('measured allowance is reserved once per task, released after cancellation and never consumed twice on replay', t => {
+  for (const limit of ['maxTokens', 'maxSpendUSD', 'maxWorkingMinutes']) {
+    const { broker, c } = setup(t, { [limit]: 100 });
+    const reservation = { type: 'background_review', taskId: 'parent', review: { id: 'review', provider: 'claude', requestId: 'review', status: 'running', background: true } };
+    broker.record(c, reservation);
+    // A duplicate journal record must not allocate again (request retries normally return before writing one).
+    applyBudgetRecord(c, reservation);
+    assert.equal(state(c, 'parent').reviews, 1);
+    const plan = { provider: 'claude', model: null, task: { id: 'parent', relation: 'review' } };
+    assert.equal(broker.budget.refusal(c, plan).limit, 'reservation');
+    assert.throws(() => broker.budget.assertCanStart(c, plan), error => error.details.budget.canExtend === false);
+    assert.equal(broker.budget.refusal(c, { ...plan, task: { id: 'unrelated', relation: null } }), null);
+    broker.record(c, { type: 'review_result', id: 'review', result: { status: 'failed', summary: 'Refused before launch' } });
+    assert.deepEqual([state(c, 'parent').reviews, state(c, 'parent').runs, Object.keys(state(c, 'parent').active).length], [0, 0, 0]);
+    assert.equal(broker.budget.refusal(c, plan), null, 'An unused reservation is returned.');
+    applyBudgetRecord(c, reservation);
+    assert.equal(state(c, 'parent').runs, 0, 'Replaying an old accepted ID cannot reopen a finished reservation.');
+  }
+});
+
+test('review usage is live, replacement-based and preserved through restart even without a final report', async t => {
+  const { broker, c, open } = setup(t, { maxTokens: 1000, maxSpendUSD: 5 });
+  broker.record(c, { type: 'background_review', taskId: 'parent', parentRunId: 'build', review: { id: 'review', provider: 'claude', requestId: 'review', background: true, status: 'running' } });
+  const sample = { type: 'review_budget', id: 'review', began: true, metadata: { account: { billingSource: 'api' }, usage: { input_tokens: 80, output_tokens: 20, partial: true }, costUSD: 0.5 } };
+  broker.record(c, sample); broker.record(c, sample);
+  assert.equal(broker.budget.view(c).task.taskId, 'parent', 'A review before any builder run still has visible task limits.');
+  assert.deepEqual([broker.budget.used(state(c, 'parent')).tokens, broker.budget.remainingSpend(c, 'parent')], [100, 4.5]);
+  await broker.close();
+  const next = open(), restored = next.get(c.id), saved = state(restored, 'parent');
+  assert.equal(restored.reviews[0].status, 'interrupted');
+  assert.deepEqual([next.budget.used(saved).tokens, saved.spendUSD, saved.reviews, Object.keys(saved.active).length], [100, 0.5, 1, 0]);
+  assert.equal(next.budget.refusal(restored, { task: { id: 'parent', relation: 'review' }, provider: 'claude' }), null);
+  const ledger = ledgerFromRecords(fs.readFileSync(path.join(next.dataDir, `${c.id}.jsonl`), 'utf8').trim().split('\n').map(JSON.parse));
+  assert.equal(ledger.runs[0].taskId, 'parent'); assert.equal(ledger.runs[0].parentRunId, 'build');
+  assert.equal(ledger.runs[0].usage.input, 80); assert.equal(ledger.runs[0].costEstimateUSD, 0.5);
+});
+
+test('a measured limit cannot promise one remaining allowance to two workers already on the same task', t => {
+  const { broker, c } = setup(t);
+  for (const id of ['one', 'two']) broker.record(c, { type: 'background_review', taskId: 'parent', review: { id, provider: 'claude', requestId: id, status: 'running' } });
+  assert.throws(() => broker.budget.setPolicy(c, { maxSpendUSD: 5 }), /only one agent/);
+  assert.equal(broker.budget.policy(c).maxSpendUSD, null, 'A refused policy leaves the previous one intact.');
+  broker.budget.setPolicy(c, { maxHandoffs: 2 });
+  assert.equal(broker.budget.policy(c).maxHandoffs, 2, 'Count-only changes remain available.');
+  broker.record(c, { type: 'review_result', id: 'one', result: { status: 'failed' } });
+  broker.budget.setPolicy(c, { maxSpendUSD: 5 });
+  assert.equal(broker.budget.policy(c).maxSpendUSD, 5);
+});
+
+test('a partial and then final review sample replaces live usage and is charged exactly once', t => {
+  const { broker, c } = setup(t);
+  c.budgetTotals = { codex: { input: 9000, output: 1000 } };
+  broker.record(c, { type: 'background_review', taskId: 'parent', review: { id: 'r', provider: 'codex', requestId: 'r', status: 'running' } });
+  broker.record(c, { type: 'review_budget', id: 'r', began: true, metadata: { usage: { total: { inputTokens: 500, cachedInputTokens: 100, outputTokens: 20 } }, costUSD: 10, account: { billingSource: 'subscription' } } });
+  assert.equal(broker.budget.used(state(c, 'parent')).tokens, 420);
+  const result = { type: 'review_result', id: 'r', result: { status: 'complete', usage: { total: { inputTokens: 600, cachedInputTokens: 100, outputTokens: 30 } }, costUSD: 12, billingSource: 'subscription' } };
+  broker.record(c, result); broker.record(c, result);
+  assert.equal(broker.budget.used(state(c, 'parent')).tokens, 530);
+  assert.equal(state(c, 'parent').spendUSD, 0);
+  assert.deepEqual(c.budgetTotals.codex, { input: 9000, output: 1000 }, 'A fresh reviewer cannot change the builder’s session baseline.');
 });

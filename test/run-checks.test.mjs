@@ -40,7 +40,7 @@ function setup(t, results = []) {
     runs, notices, release: () => fs.writeFileSync(path.join(workspace, '.release'), ''), unsave: () => { saved = null; },
     open(usedPercent = 10) {
       const broker = new Broker({ workspace, dataDir, bins: { codex: bin }, tests });
-      broker.checks.usage = async () => ({ available: true, windows: [{ usedPercent }] });
+      broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent }] });
       broker.on('notify', notice => notices.push(notice));
       brokers.push(broker); return broker;
     },
@@ -159,6 +159,18 @@ test('the retry prompt names the command and keeps only the end of the output', 
   assert.match(text, /Test command: pnpm test \(in web\)\nExit code: 1/);
   assert.match(text, /Don't skip, delete or weaken tests/);
   assert.match(text, /```\nFAIL src\/cart.test.js\n```/);
+});
+
+test('unavailable or stale quota makes a failed routed check ask before retrying automatically', { skip: scriptCLIs }, async t => {
+  const env = setup(t, [{ status: 'failed', exitCode: 1, output: 'Failing assertion' }]), broker = env.open(), c = broker.get(broker.create().id);
+  broker.checks.usage = async () => ({ available: false });
+  broker.setRouting(c, { mode: 'balanced', check: true });
+  broker.start(c, { text: 'Add promo codes', ...routed('balanced') });
+  await until(() => c.retryOffer);
+  assert.match(c.retryOffer.blocked, /allowance is unknown/);
+  assert.equal(c.runs.length, 1);
+  broker.checks.usage = async () => ({ available: true, checkedAt: new Date(Date.now() - 3600000).toISOString(), windows: [{ usedPercent: 1 }] });
+  assert.match(await broker.checks.limited(step, 80), /allowance is stale/);
 });
 
 test('through the app, the Test command saved in Project commands checks a routed run, and the retry route answers', { skip: scriptCLIs }, async t => {

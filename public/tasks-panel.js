@@ -68,6 +68,7 @@
       if (limits.maxSpendUSD !== null) bars.append(limitRow('Spend', state.spendUSD, limits.maxSpendUSD, `$${state.spendUSD.toFixed(2)} of $${limits.maxSpendUSD}`));
       bars.append(limitRow('Handoffs', state.handoffs, limits.maxHandoffs, `${state.handoffs} of ${limits.maxHandoffs}`), limitRow('Retries', state.retries, limits.maxRetries, `${state.retries} of ${limits.maxRetries}`));
       card.append(bars);
+      if (state.active && [limits.maxWorkingMinutes, limits.maxTokens, limits.maxSpendUSD].some(value => value !== null)) card.append(node('p', 'panel-muted', 'The remaining measured allowance is reserved for this task’s running agent. Continue or review this task after it finishes.'));
       if (state.runsWithoutUsage && limits.maxTokens !== null) card.append(node('p', 'panel-muted', `${plural(state.runsWithoutUsage, 'run')} reported no tokens, so the total is lower than the real one.`));
       const top = state.failures?.[0];
       if (top && top.count > 1) card.append(node('p', 'task-note', `Went wrong ${top.count} of ${limits.maxRepeatedFailures} times: ${top.what}`));
@@ -91,7 +92,7 @@
     $('tasks-export').hidden = !(ledger?.tasks || []).length;
   }
   const render = () => { renderCurrent(); renderEarlier(); };
-  const scope = () => { const state = api.getState(), c = state.conversation; return c ? `${state.projectId}:${c.id}:${c.lastRun?.id || ''}:${c.status}:${c.activeRun?.toolCount || 0}` : null; };
+  const scope = () => { const state = api.getState(), c = state.conversation; return c ? `${state.projectId}:${c.id}:${c.lastRun?.id || ''}:${c.status}:${c.activeRun?.toolCount || 0}:${c.taskBudgetRevision || 0}` : null; };
   async function load(force = false) {
     const key = scope();
     if (panel.hidden || !key || (!force && key === shown)) return;
@@ -159,7 +160,7 @@
     panel.hidden = !open;
     if (keep) remember(open ? 'tasks' : 'none');
     if (open) {
-      window.relayAgents?.close(); window.relayGit?.close(); window.relayReviews?.closePanel?.(); window.relayBrief?.close();
+      window.relayAgents?.close(); window.relayGit?.close(); window.relayReviews?.closePanel?.(); window.relayTimeline?.close(); window.relayBrief?.close();
       load();
       if (section === 'limits') openLimits();
     }

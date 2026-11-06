@@ -62,6 +62,7 @@ emit({type:'result',subtype:failed?'error_max_turns':'success',session_id:review
     const close = app.close.bind(app); app.close = async () => { await routes.close(); await close(); };
     apps.push(app);
     const project = app.registry.list()[0], broker = app.registry.broker(project.id), c = broker.get(app.registry.mainConversation(project.id).id);
+    broker.checks.usage = async () => ({ available: false });
     const request = async (route, input) => {
       const res = {};
       try { assert.equal(await routes({ req: { method: input === undefined ? 'GET' : 'POST', input }, res, url: new URL(`http://127.0.0.1/api/reviews${route}?projectId=${project.id}`) }), true); }
@@ -253,7 +254,7 @@ test('an automatic review cycle offers quota handoff instead of silently changin
   const f = await fixture(t, { holdBuild: true, write: { 'app.js': 'export const value = 2;\n' } });
   f.broker.handoff.close();
   f.broker.handoff = new HandoffMonitor(f.broker, {
-    usage: async provider => ({ available: true, windows: [{ usedPercent: provider === 'codex' ? 95 : 10 }] }),
+    usage: async provider => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent: provider === 'codex' ? 95 : 10 }] }),
     account: async () => ({ installed: true, authenticated: true, billingSource: 'subscription' }),
     preferences: () => ({ automatic: true, threshold: 90 }), firstCheckMs: 60000,
   });

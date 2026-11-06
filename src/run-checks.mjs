@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { highest } from './handoff.mjs';
 import { providerUsage } from './providers.mjs';
 import { runSteps } from './recap.mjs';
-import { limitState } from './resume.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
+import { assessQuota } from './task-budget.mjs';
 
 // Checking routed runs with the workspace's own tests (#12, stage 2). With Check with tests on, a routed run that
 // changed files is followed by the workspace's test command, the one marked for checks in the Run panel, never a
@@ -139,10 +138,11 @@ export class RunChecks {
   // Why an automatic retry should wait for the person: the agent has reached, or is close to, its limit.
   async limited(step, threshold) {
     let usage = null;
-    try { usage = await this.usage(step.provider, this.broker.usageOptions(step.provider)); } catch { return null; }
-    if (limitState(usage, step.model).limited === true) return `${names[step.provider]} has reached its limit`;
-    const top = highest(usage, step.model);
-    return top && top.usedPercent >= threshold ? `${names[step.provider]} is at ${Math.round(top.usedPercent)}% of its limit` : null;
+    try { usage = await this.usage(step.provider, this.broker.usageOptions(step.provider)); } catch { return `${names[step.provider]}'s allowance could not be checked`; }
+    const quota = assessQuota(usage, step.model, { threshold });
+    if (quota.state === 'unknown' || quota.state === 'stale') return `${names[step.provider]}'s allowance is ${quota.state}`;
+    if (quota.state === 'exhausted') return `${names[step.provider]} has reached its limit`;
+    return quota.state === 'near' ? `${names[step.provider]} is at ${Math.round(quota.usedPercent)}% of its limit` : null;
   }
 
   retry(c, run, step, command, result) {

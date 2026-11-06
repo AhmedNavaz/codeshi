@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { gitExecutable } from './resolve-binary.mjs';
+import { MutationCoordinator } from './mutation-lock.mjs';
 
 // Staging and committing from the Git panel (#6). The panel's reads turn off hooks, fsmonitor and filter programs, since
 // looking should never run code. A commit is a deliberate action, so these use the person's own Git setup instead, as a
@@ -27,7 +28,7 @@ async function locate(folder) {
   const top = await git(folder.path, ['rev-parse', '--show-toplevel']);
   if (top.status) fail('No Git repository in this folder.', 404);
   const prefix = (await git(folder.path, ['rev-parse', '--show-prefix'])).stdout.trim();
-  return { root: top.stdout.trim(), prefix, scope: prefix || '.' };
+  return { root: fs.realpathSync.native(top.stdout.trim()), prefix, scope: prefix || '.' };
 }
 
 async function changes(root, scope) {
@@ -55,30 +56,40 @@ async function targets(root, scope, paths) {
 }
 
 const busy = new Set();
-async function exclusive(folder, work) {
+let mutations;
+const withGitMutation = (root, operation, work) => (mutations ||= new MutationCoordinator()).withMutation(root, operation, work);
+async function exclusive(folder, operation, work, { withMutation = withGitMutation } = {}) {
   const place = await locate(folder);
   if (busy.has(place.root)) fail('Another Git action is still running in this repository.', 409);
   busy.add(place.root);
-  try { return await work(place); } finally { busy.delete(place.root); }
+  try {
+    // The index belongs to the repository, even when only a nested folder is attached. Hold its real root, so writes
+    // exclude agents, patches, restores and task integration in sibling folders too. Linked worktrees have separate indices.
+    return await withMutation(place.root, operation, async () => {
+      const current = await locate(folder);
+      if (current.root !== place.root || current.prefix !== place.prefix) fail('The repository changed while this Git action was starting. Refresh Git activity and try again.', 409);
+      return work(current);
+    });
+  } finally { busy.delete(place.root); }
 }
 
-export function stageChanges(folder, { paths, all = false } = {}) {
-  return exclusive(folder, async ({ root, scope }) => {
+export function stageChanges(folder, { paths, all = false } = {}, options) {
+  return exclusive(folder, 'Git staging', async ({ root, scope }) => {
     const result = await git(root, ['add', '-A', '--', ...all ? [scope] : await targets(root, scope, paths)]);
     if (result.status) fail(`Git could not stage the changes: ${firstLines(result.stderr)}`, 409);
     return { staged: true };
-  });
+  }, options);
 }
 
-export function unstageChanges(folder, { paths, all = false } = {}) {
-  return exclusive(folder, async ({ root, scope }) => {
+export function unstageChanges(folder, { paths, all = false } = {}, options) {
+  return exclusive(folder, 'Git unstaging', async ({ root, scope }) => {
     const chosen = all ? [scope] : await targets(root, scope, paths);
     // Before the first commit there is nothing to restore from, so the files leave the index instead.
     const head = await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD']);
     const result = await git(root, head.status ? ['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', ...chosen] : ['restore', '--staged', '--', ...chosen]);
     if (result.status) fail(`Git could not unstage the changes: ${firstLines(result.stderr)}`, 409);
     return { unstaged: true };
-  });
+  }, options);
 }
 
 // The person's own name and email, which a commit from Codeshi uses.
@@ -97,8 +108,8 @@ async function hooksInstalled(root) {
 
 // Commits exactly what the panel showed as staged. If anything staged differs from that list, including files staged
 // outside this folder, nothing is committed and the panel shows the current state instead.
-export function commitChanges(folder, { message, expected, skipHooks = false } = {}) {
-  return exclusive(folder, async ({ root, prefix }) => {
+export function commitChanges(folder, { message, expected, skipHooks = false } = {}, options) {
+  return exclusive(folder, 'Git commit', async ({ root, prefix }) => {
     const text = String(message ?? '').trim();
     if (!text) fail('Write a commit message.');
     if (text.length > MESSAGE_LIMIT) fail('The commit message is too long.');
@@ -123,5 +134,5 @@ export function commitChanges(folder, { message, expected, skipHooks = false } =
     const branch = await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
     const [hash, shortHash, subject] = head.stdout.trim().split('\x1f');
     return { commit: { hash, shortHash, subject, branch: branch.status ? null : branch.stdout.trim(), files: staged.length, hooks: !skipHooks } };
-  });
+  }, options);
 }

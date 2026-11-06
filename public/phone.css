@@ -49,6 +49,8 @@ html:has(body.phone), body.phone { position: fixed; inset: 0; overflow: hidden; 
 .bubble { padding: 9px 13px; border-radius: 18px 18px 5px 18px; background: var(--bubble-bg); color: var(--text-strong); white-space: pre-wrap; }
 .m-tag, .m-file { color: var(--muted); font-size: 12px; }
 .m-agent { color: var(--text); }
+/* An agent writes several messages in a row, so a line shows where each starts and the last one is easy to find. */
+.m-agent + .m-agent { padding-top: 16px; border-top: 1px solid var(--border-strong); }
 .m-who { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--muted); font-size: 12.5px; }
 .m-error { display: flex; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--danger-bg); color: var(--danger); font-size: 14px; }
 .m-error .icon { width: 18px; height: 18px; margin-top: 2px; }
@@ -148,6 +150,7 @@ html:has(body.phone), body.phone { position: fixed; inset: 0; overflow: hidden; 
 .round { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; }
 .round.ghost { color: var(--muted); }
 .round.ghost:active { background: var(--hover); }
+.round.unavailable { opacity: .45; }
 .round.listening { background: var(--accent); color: var(--on-accent); animation: pulse 1.6s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .round.listening { animation: none; } }
 .round.small { width: 36px; height: 36px; }

@@ -111,7 +111,7 @@
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
     if (open) {
       window.relayGit?.close();
-      window.relayReviews?.closePanel?.();
+      window.relayReviews?.closePanel?.(); window.relayTimeline?.close();
       window.relayBrief?.close(); window.relayTasks?.close();
       loadPreferences();
       loadLocalRow();

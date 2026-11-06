@@ -13,6 +13,13 @@ const submission = (id, minute, extra = {}, text = 'Build it') => ({ type: 'subm
 const metadata = (minute, value) => ({ type: 'run_metadata', at: at(minute), metadata: value });
 const end = (minute, status = 'complete', errorCategory) => ({ type: 'run_end', at: at(minute), status, ...(errorCategory ? { errorCategory } : {}) });
 
+test('the Claude native adapter receives the remaining API budget without turning it into a token estimate', async () => {
+  let options;
+  async function* queryImpl(input) { options = input.options; yield { type: 'result', subtype: 'success', result: 'Done' }; }
+  await runClaude({ workspace: '/project', prompt: 'Review', mode: 'read', bin: '/fake', maxBudgetUsd: 1.25 }, { queryImpl, event() {}, metadata() {}, approval: async () => false });
+  assert.equal(options.maxBudgetUsd, 1.25);
+});
+
 test('each agent\'s usage has one shape, and what it did not report stays unknown', () => {
   const claude = normalizeUsage('claude', { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 40 });
   assert.deepEqual([claude.input, claude.output, claude.cacheRead, claude.cacheWrite, claude.reasoning], [10, 20, 300, 40, null]);

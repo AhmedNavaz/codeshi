@@ -18,13 +18,14 @@ export class TaskCoordinator {
     Object.assign(this, { main, BrokerClass, acquireFolders, withFolders, tests });
     this.lanes = new Map(); this.closed = false; this.ticking = false; this.mainBusy = false; this.checking = new Map(); this.aborts = new Set();
     // Waiting tasks look again when the main conversation's run begins or ends.
-    main.on('update', () => { const busy = Boolean(main.running); if (busy !== this.mainBusy) { this.mainBusy = busy; this.tickAll(); } });
+    main.on('update', () => { const busy = this.activeWorkers; if (busy !== this.mainBusy) { this.mainBusy = busy; this.tickAll(); } });
     main.admit = c => this.admit(c, null);
   }
   all() { return [...this.main.conversations.values()].flatMap(c => (c.parallelTasks || []).map(task => ({ c, task }))); }
   find(c, id) { const task = (c.parallelTasks || []).find(item => item.id === id); if (!task) throw fail('That task is no longer here.', 404); return task; }
   update(c, task, changes) { this.main.record(c, { type: 'parallel_task_update', id: task.id, changes }); this.main.emit('update', { conversationId: c.id }); }
   get running() { return [...this.lanes.values()].filter(lane => lane.broker.running).length; }
+  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
   get busy() { return this.running > 0 || this.checking.size > 0; }
   get waitingResumes() { return [...this.lanes.values()].reduce((count, lane) => count + (lane.broker.waitingResumes || 0), 0); }
   openLanes() { return [...this.lanes.values()].map(lane => lane.broker); }
@@ -38,7 +39,7 @@ export class TaskCoordinator {
     if (task && !this.available(task)) throw fail(`${task.folderName} is no longer in this workspace, so this task can't run. Its history stays.`);
     if (task && (ENDED.has(task.status) || task.status === 'lost')) throw fail('This task has ended, so it can’t run again. Its history stays. Start a new task to carry on.');
     const home = c || [...this.main.conversations.values()].find(item => item.id === this.main.mainConversationId) || [...this.main.conversations.values()][0];
-    const limit = this.main.budget.policy(home).maxConcurrent, others = (this.main.running ? 1 : 0) + [...this.lanes.entries()].filter(([id, lane]) => id !== task?.id && lane.broker.running).length;
+    const limit = this.main.budget.policy(home).maxConcurrent, others = this.activeWorkers - (task && this.lanes.get(task.id)?.broker.running ? 1 : 0);
     if (others >= limit) throw fail(`${others} ${others === 1 ? 'task is' : 'tasks are'} already running, the most this workspace's task limits allow at once.`);
     if (task) this.syncPolicy(home, task);
   }
@@ -72,7 +73,7 @@ export class TaskCoordinator {
   }
   // How a task would run, and whether it would have to wait for a free slot, for the page to say before it starts.
   preview(c, input) {
-    const { identity, folder, ...plan } = this.plan(c, input), limit = this.main.budget.policy(c).maxConcurrent, running = (this.main.running ? 1 : 0) + this.running;
+    const { identity, folder, ...plan } = this.plan(c, input), limit = this.main.budget.policy(c).maxConcurrent, running = this.activeWorkers;
     return { ...plan, running, limit, full: running >= limit };
   }
 

@@ -32,7 +32,7 @@ export const taskLine = text => {
   return line.length <= TASK_LENGTH ? line : `${line.slice(0, TASK_LENGTH).replace(/\s+\S*$/, '').replace(/[\s,;:.!?-]+$/, '')}…`;
 };
 export const highest = (usage, model) => {
-  const windows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => typeof row.usedPercent === 'number' && windowApplies(row, model));
+  const windows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => !row.disabled && Number.isFinite(row.usedPercent) && windowApplies(row, model));
   return windows.reduce((top, row) => !top || row.usedPercent > top.usedPercent ? row : top, null);
 };
 
@@ -64,14 +64,13 @@ export class HandoffMonitor {
       if (this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider })) continue;
       let usage = null; try { usage = await this.usage(provider, options); } catch {}
       this.observe(c, provider, usage);
-      if (limitState(usage, model).limited === true) continue;
-      const top = highest(usage, model);
-      if (top && top.usedPercent >= threshold) continue;
+      const assessment = assessQuota(usage, model, { threshold });
+      if (assessment.state === 'exhausted' || assessment.state === 'near') continue;
       let account = null; try { account = await this.account(provider, { bin: options.bin, workspace: this.broker.workspace, googleRoot: this.broker.googleRoot }); } catch {}
       if (!account?.installed || account.authenticated === false) continue;
-      const candidate = { provider, model, mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: top?.usedPercent ?? null, quota: assessQuota(usage, model, { threshold }).state };
+      const candidate = { provider, model, mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: assessment.usedPercent, quota: assessment.state, quotaEvidence: assessment };
       // Prefer subscription allowance, then the agent with the most room left.
-      const rank = value => (value.billingSource === 'subscription' ? 0 : 1000) + (value.usedPercent ?? 50);
+      const rank = value => (value.billingSource === 'subscription' ? 0 : 2000) + (value.quota === 'ok' ? value.usedPercent : 1000);
       if (!best || rank(candidate) < rank(best)) best = candidate;
     }
     return best;
@@ -96,11 +95,12 @@ export class HandoffMonitor {
     let usage = null; try { usage = await this.usage(run.provider, this.broker.usageOptions(run.provider)); } catch {}
     this.observe(c, run.provider, usage);
     // The model the run is really using, which is known once it starts even when the agent's default was left selected.
-    const top = highest(usage, c.activeRun?.effectiveModel || c.model);
-    if (!top || top.usedPercent < preferences.threshold) return;
+    const model = c.activeRun?.effectiveModel || c.model || usage?.defaultModel, assessment = assessQuota(usage, model, { threshold: preferences.threshold });
+    const top = highest(usage, model);
+    if (!top || !['near', 'exhausted'].includes(assessment.state)) return;
     const offer = await this.offer(c, run, top);
     if (!offer) return;
-    if (preferences.automatic && !run.automaticReview && offer.to.billingSource === 'subscription') {
+    if (preferences.automatic && !run.automaticReview && offer.to.billingSource === 'subscription' && offer.to.quota === 'ok') {
       try { await this.accept(c, { offerId: offer.id, automatic: true }); return; } catch {}
     }
     this.broker.emit('notify', { conversationId: c.id, kind: 'handoff', title: 'Usage limit is close', body: `${names[run.provider]} has used ${Math.round(top.usedPercent)}% of its limit. Hand off to ${names[offer.to.provider]}?` });
@@ -123,6 +123,8 @@ export class HandoffMonitor {
     if (queueDigest !== undefined && queueDigest !== (offer.queue?.digest ?? null)) await stale('The queued prompts changed since this offer was made.');
     const current = await this.destination(c, run);
     if (!current || current.provider !== offer.to.provider || current.model !== offer.to.model || current.mode !== offer.to.mode || current.approvalPolicy !== offer.to.approvalPolicy || current.billingSource !== offer.to.billingSource) await stale(`${names[offer.to.provider]} is no longer available with the same settings.`);
+    if (automatic && current.quota !== 'ok') await stale(`${names[offer.to.provider]}'s current allowance could not be confirmed.`);
+    if (current.quota !== offer.to.quota) await stale(`${names[offer.to.provider]}'s allowance reading changed.`);
     if (offer.to.billingSource !== 'subscription' && (automatic || billingConfirmed !== true)) throw Object.assign(new Error(`${names[offer.to.provider]} is not billed to a subscription. Confirm its charges separately to hand off.`), { status: 409, offer, billingRequired: true });
 
     run.handoff = offer; c.handoffOffer = null;
@@ -202,7 +204,7 @@ export class HandoffMonitor {
       const limit = `${from} reached its usage limit${resets ? `, which resets ${resets}` : ''}`;
       // The person may have sent something while this was being worked out; theirs goes ahead.
       if (this.closed || this.broker.running || c.lastRun?.id !== run.id) return done(true);
-      if (to?.billingSource === 'subscription') {
+      if (to?.billingSource === 'subscription' && to.quota === 'ok') {
         c.limitSwitching = null;
         // Queued prompts wait for the run that takes over, as after any handoff.
         run.handoff = { atLimit: true };
@@ -217,8 +219,8 @@ export class HandoffMonitor {
       const providers = await this.subscriptionAgents();
       if (this.closed || this.broker.running || c.lastRun?.id !== run.id) return done(true);
       if (!providers.length) return done(false);
-      this.broker.resume.schedule(c, { providers, mode: run.mode, approvalPolicy: run.approvalPolicy, limited: tried });
-      this.broker.message(c, 'system', `${limit}, and no other agent has room, so the task continues at the first reset.`);
+      this.broker.resume.schedule(c, { providers, mode: run.mode, approvalPolicy: run.approvalPolicy, limited: providers, requireQuota: true });
+      this.broker.message(c, 'system', `${limit}, and no other agent has confirmed room, so the task waits for a fresh allowance reading after a reset.`);
       this.broker.emit('notify', { conversationId: c.id, kind: 'waiting', title: 'Waiting for a reset', body: `${from} reached its usage limit and no other agent has room. Codeshi will continue when one does.` });
       return done(true);
     } catch (error) {

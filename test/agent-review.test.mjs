@@ -10,6 +10,8 @@ import { captureReview, parseReviewResult, reviewFreshness, reviewPrompt } from 
 import { gitExecutable } from '../src/resolve-binary.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { ConversationImporter } from '../src/conversation-import.mjs';
+import { continuationRequest } from '../src/context.mjs';
+import { readLedger } from '../src/task-ledger.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-review-')), workspace = path.join(root, 'project'); fs.mkdirSync(workspace);
@@ -23,6 +25,7 @@ function fixture(t) {
     bins[provider] = path.join(root, provider + '.mjs');
     fs.writeFileSync(bins[provider], `#!${process.execPath}\nimport fs from 'node:fs';
 if(process.argv.includes('--version')){console.log('mock 1');process.exit(0);}
+if(process.argv[2]==='auth'){const scenario=JSON.parse(fs.readFileSync(${JSON.stringify(configuration)},'utf8'));console.log(JSON.stringify({loggedIn:true,authMethod:scenario.authMethod??'api_key'}));process.exit(0);}
 let prompt='';for await(const part of process.stdin)prompt+=part;
 const payload=JSON.parse(prompt.split('\\n').at(-1)),scenario=JSON.parse(fs.readFileSync(${JSON.stringify(configuration)},'utf8'));
 fs.appendFileSync(${JSON.stringify(capture)},JSON.stringify({provider:${JSON.stringify(provider)},args:process.argv.slice(2),payload})+'\\n');
@@ -72,6 +75,106 @@ test('background reviews read approved copies while the builder continues, retry
   assert.equal((await api.request('/' + result.body.reviewId)).body.stale, true);
   assert.equal((await api.request('/' + result.body.reviewId + '/stop', {})).status, 200); await job.done;
   assert.equal(api.c.reviews[0].status, 'interrupted'); assert.equal(api.c.lastRun.id, lastRun); assert.equal(api.c.status, 'complete'); assert(!fs.existsSync(job.directory));
+});
+
+test('background review tokens stop the worker against its parent budget and release its reservation', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), app = await f.launch(), api = client(app);
+  api.broker.start(api.c, { text: 'Build', provider: 'codex', requestId: 'build' }); await api.broker.running.done;
+  const taskId = api.c.lastRun.taskId;
+  api.broker.budget.setPolicy(api.c, { maxTokens: 100 });
+  f.scenario({ hang: true });
+  const snapshot = await api.preview(), input = { files: api.files, goal: 'Review', approvedDigest: snapshot.digest, requestId: 'limited-review', background: true };
+  assert.equal((await api.request('/start', input)).status, 202);
+  const job = api.broker.backgroundReview;
+  for (let i = 0; i < 1000 && f.captures().length < 2; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(f.captures().length, 2);
+  assert.equal(job.worker.budget.remainingSpend(job.conversation, 'anything'), null);
+  assert.throws(() => api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'carry-on' }), /allowance is reserved/);
+  const duplicate = await api.request('/start', input); assert.equal(duplicate.body.duplicate, true);
+  job.worker.record(job.conversation, { type: 'run_metadata', metadata: { usage: { input_tokens: 110, output_tokens: 10, partial: true } } });
+  await job.done;
+  const saved = api.c.taskBudgets[taskId];
+  assert.equal(saved.stopped.kind, 'maxTokens'); assert.equal(saved.tokens.input + saved.tokens.output, 120);
+  assert.equal(saved.reviews, 1); assert.equal(Object.keys(saved.active).length, 0);
+  assert.equal(api.c.reviews[0].errorCategory, 'budget'); assert.equal(api.c.reviews[0].status, 'interrupted');
+  assert.equal(api.broker.budget.watches.size, 0); assert.equal(api.broker.budget.timers.size, 0);
+  assert.equal(fs.existsSync(job.directory), false);
+  const ledger = await readLedger(path.join(api.broker.dataDir, `${api.c.id}.jsonl`));
+  assert.equal(ledger.tasks.find(task => task.id === taskId).usage.input, 110);
+  assert.throws(() => api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'retry-over-limit' }), /used 120 tokens/);
+  api.broker.budget.extend(api.c, { taskId, limit: 'maxTokens' });
+  f.scenario({}); api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'allowed-more' }); await api.broker.running.done;
+  assert.equal(api.c.lastRun.taskId, taskId);
+});
+
+test('a quiet background review shares its parent deadline, including policy changes during work', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), app = await f.launch(), api = client(app);
+  api.broker.start(api.c, { text: 'Build', provider: 'codex', requestId: 'build' }); await api.broker.running.done;
+  f.scenario({ hang: true });
+  const snapshot = await api.preview();
+  assert.equal((await api.request('/start', { files: api.files, goal: 'Review', approvedDigest: snapshot.digest, requestId: 'deadline-review', background: true })).status, 202);
+  const job = api.broker.backgroundReview, taskId = api.c.lastRun.taskId;
+  for (let i = 0; i < 1000 && f.captures().length < 2; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(f.captures().length, 2);
+  const used = api.broker.budget.used(api.c.taskBudgets[taskId]).workingMs;
+  api.broker.budget.setPolicy(api.c, { maxWorkingMinutes: (used + 200) / 60000 });
+  await Promise.race([job.done, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Shared deadline did not stop review')), 5000); timer.unref(); })]);
+  assert.equal(api.c.reviews[0].errorCategory, 'budget'); assert.equal(api.c.taskBudgets[taskId].stopped.kind, 'maxWorkingMinutes');
+  assert.equal(api.broker.budget.watches.size, 0);
+});
+
+test('background and foreground reviews share workspace concurrency slots with builder tasks', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), app = await f.launch(), api = client(app);
+  api.broker.budget.setPolicy(api.c, { maxConcurrent: 1 });
+  f.scenario({ hang: true });
+  const snapshot = await api.preview(), input = { files: api.files, goal: 'Review', approvedDigest: snapshot.digest, requestId: 'slot-review', background: true };
+  assert.equal((await api.request('/start', input)).status, 202);
+  const job = api.broker.backgroundReview;
+  assert.throws(() => api.broker.start(api.c, { text: 'New independent task', provider: 'codex', requestId: 'new' }), /already running/);
+  assert.equal((await api.request('/start', { ...input, requestId: 'foreground', background: false })).status, 409);
+  assert.equal(api.broker.tasks.activeWorkers, 1);
+  assert.equal((await api.request('/' + api.c.reviews[0].id + '/stop', {})).status, 200); await job.done;
+  assert.equal(api.broker.tasks.activeWorkers, 0);
+  f.scenario({}); api.broker.start(api.c, { text: 'New independent task', provider: 'codex', requestId: 'new' }); await api.broker.running.done;
+});
+
+for (const authMethod of ['api_key', 'unknown']) test(`a background review requires separate ${authMethod} billing consent`, { skip: scriptCLIs }, async t => {
+  const f = fixture(t), app = await f.launch(), api = client(app);
+  api.broker.start(api.c, { text: 'Build', provider: 'codex', requestId: 'build' }); await api.broker.running.done;
+  const taskId = api.c.lastRun.taskId;
+  api.broker.budget.setPolicy(api.c, { maxSpendUSD: 2 });
+  // The environment override resolves only this fake CLI; removing the configured custom adapter enables the real account check.
+  const previous = process.env.AI_RELAY_CLAUDE_BIN; process.env.AI_RELAY_CLAUDE_BIN = f.bins.claude;
+  t.after(() => { if (previous === undefined) delete process.env.AI_RELAY_CLAUDE_BIN; else process.env.AI_RELAY_CLAUDE_BIN = previous; });
+  delete api.broker.configuredBins.claude;
+  f.scenario({ authMethod, hang: true });
+  const snapshot = await api.preview(), input = { files: api.files, goal: 'Review', approvedDigest: snapshot.digest, requestId: 'unconfirmed', background: true };
+  assert.equal((await api.request('/start', input)).status, 202);
+  await api.broker.backgroundReview.done;
+  assert.equal(api.c.reviews[0].errorCategory, 'permission'); assert.equal(f.captures().length, 1, 'Account probes did not launch a billed turn.');
+  assert.equal(api.c.taskBudgets[taskId].reviews, 0, 'The refused reservation was returned.');
+});
+
+test('a running background review uses the remaining parent spend and stops on a reported overshoot', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), app = await f.launch(), api = client(app);
+  api.broker.start(api.c, { text: 'Build', provider: 'codex', requestId: 'build' }); await api.broker.running.done;
+  const taskId = api.c.lastRun.taskId;
+  api.broker.budget.setPolicy(api.c, { maxSpendUSD: 2 });
+  // Earlier API work on this same task left $1.50. Journal records are used so the cap is durable.
+  const snapshot = await api.preview();
+  api.broker.record(api.c, { type: 'background_review', taskId, review: { id: 'earlier', requestId: 'earlier', snapshot, goal: 'Earlier review', provider: 'claude', background: true, status: 'running', findings: [] } });
+  api.broker.record(api.c, { type: 'review_result', id: 'earlier', result: { status: 'complete', billingSource: 'api', costUSD: 0.5 } });
+  f.scenario({ hang: true });
+  const input = { files: api.files, goal: 'Review', approvedDigest: snapshot.digest, background: true };
+  assert.equal((await api.request('/start', { ...input, requestId: 'confirmed', billingConfirmed: true })).status, 202);
+  const job = api.broker.backgroundReview;
+  for (let i = 0; i < 1000 && f.captures().length < 2; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(f.captures().length, 2);
+  assert.equal(job.worker.budget.remainingSpend(job.conversation, 'local-task-id'), 1.5);
+  job.worker.record(job.conversation, { type: 'run_metadata', metadata: { account: { billingSource: 'api' }, costUSD: 2 } });
+  await job.done;
+  assert.equal(api.c.taskBudgets[taskId].spendUSD, 2.5);
+  assert.equal(api.c.reviews[0].errorCategory, 'budget');
 });
 
 for (const builder of ['codex', 'claude']) test(`${builder} changes are reviewed by the other agent with fresh read-only state, saved findings and an explicit fix draft`, { skip: scriptCLIs }, async t => {

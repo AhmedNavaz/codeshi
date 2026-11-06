@@ -175,7 +175,17 @@ export class RunCheckpoints {
 
   // The two snapshots an undo reverses: a run's own, or an earlier undo's (which redoes the run).
   pair(c, target) {
-    if (!target || !['run', 'rewind'].includes(target.kind) || typeof target.id !== 'string' || !/^[\da-f-]{36}$/.test(target.id)) fail('Choose a run or an undo to reverse.');
+    if (!target || !['run', 'rewind', 'checkpoint'].includes(target.kind) || typeof target.id !== 'string' || !/^[\da-f-]{36}$/.test(target.id)) fail('Choose a run, an undo or a checkpoint.');
+    if (target.kind === 'checkpoint') {
+      if (!['before', 'after'].includes(target.phase)) fail('Choose the checkpoint before or after this step.');
+      const saved = c.snapshots?.[target.id]?.[target.phase], rewind = c.rewinds?.find(item => item.id === target.id);
+      const folders = saved?.folders || rewind?.folders.map(item => ({ folderId: item.folderId, path: item.path, ...item[target.phase] }));
+      if (!folders?.length) fail('This checkpoint is no longer available.', 404);
+      const current = this.folders();
+      if (folders.length !== current.length || folders.some(item => !current.some(folder => folder.id === item.folderId && folder.path === item.path))) fail('The workspace folders changed since this checkpoint. Restore is unavailable.', 409);
+      if (folders.some(item => !item.commit)) fail('This checkpoint did not save every folder. Choose another checkpoint.', 409);
+      return { runId: saved ? target.id : rewind.runId, before: folders, restore: true, checkpointAt: saved?.at || rewind.at, checkpointKind: saved ? 'run' : rewind.target.kind === 'checkpoint' ? 'restore' : 'undo' };
+    }
     if (target.kind === 'run') {
       const saved = c.snapshots?.[target.id];
       if (!saved?.before || !saved?.after) fail('This run has no checkpoint. Runs are saved from this version on, and older checkpoints are let go after 100 runs.', 404);
@@ -222,6 +232,10 @@ export class RunCheckpoints {
 
   async plan(c, target) {
     const pair = this.pair(c, target), current = await this.capture(null), files = [], stores = [];
+    if (pair.restore) {
+      if (current.some(item => !item.commit)) fail('Could not save every current folder. No files can be restored until a recovery checkpoint can be made.', 409);
+      pair.after = current;
+    }
     for (const folder of this.folders()) {
       const was = pair.before.find(item => item.folderId === folder.id), made = pair.after.find(item => item.folderId === folder.id), now = current.find(item => item.folderId === folder.id);
       if (!was?.commit || !made?.commit) continue;
@@ -249,7 +263,7 @@ export class RunCheckpoints {
         if (ACTIONS.includes(file.action) && lines < this.limits.diffTotal) { Object.assign(shown, await this.diff(file.gitDir, file.now, file.result)); lines += shown.diff ? shown.diff.split('\n').length : 0; }
         files.push(shown);
       }
-      return { target, runId: plan.pair.runId, provider: run?.provider || null, local: Boolean(run?.local), prompt: run?.prompt || '', startedAt: run?.startedAt || null, digest: plan.digest, files, unchanged: plan.files.filter(file => file.action === 'unchanged').length };
+      return { target, runId: plan.pair.runId, provider: run?.provider || null, local: Boolean(run?.local), prompt: run?.prompt || '', startedAt: run?.startedAt || null, ...(plan.pair.restore ? { checkpointAt: plan.pair.checkpointAt, checkpointKind: plan.pair.checkpointKind } : {}), digest: plan.digest, files, unchanged: plan.files.filter(file => file.action === 'unchanged').length };
     });
   }
 
@@ -285,9 +299,13 @@ export class RunCheckpoints {
       const order = file => ACTIONS.indexOf(file.action);
       // Removals first: on a case-insensitive disk, a renamed file would otherwise be written and then removed.
       const work = plan.files.filter(file => ACTIONS.includes(file.action)).sort((a, b) => order(a) - order(b));
-      if (!work.length) fail('There is nothing to undo: these files are already as they were, or changed since.', 409);
+      if (!work.length) fail(plan.pair.restore ? 'The saved files already match this checkpoint.' : 'There is nothing to undo: these files are already as they were, or changed since.', 409);
       const id = randomUUID(), folderOf = new Map(this.folders().map(folder => [folder.id, folder])), done = [];
-      for (const store of plan.stores) await git(['update-ref', `refs/throughline/rewinds/${id}/before`, store.now.commit], { gitDir: store.gitDir });
+      const savedStores = plan.pair.restore ? this.folders().map(folder => ({ folder, gitDir: path.join(this.root, `${folder.id}.git`), now: plan.current.find(item => item.folderId === folder.id) })) : plan.stores;
+      for (const store of savedStores) await git(['update-ref', `refs/throughline/rewinds/${id}/before`, store.now.commit], { gitDir: store.gitDir });
+      // Record recovery before the first write. If Codeshi stops mid-restore, Timeline can still restore these files.
+      if (plan.pair.restore) this.broker.record(c, { type: 'rewind', id, target, runId: plan.pair.runId, pending: true,
+        folders: plan.current.map(item => ({ folderId: item.folderId, path: item.path, before: { commit: item.commit, skipped: item.skipped || [] }, after: { commit: null } })), counts: {}, left: [] });
       try {
         for (const file of work) { await this.put(folderOf.get(file.folderId), file.gitDir, file.path, file.result); done.push(file); }
       } catch (error) {
@@ -301,7 +319,7 @@ export class RunCheckpoints {
         for (const file of removed) this.tidy(store.folder, file.path, kept);
       }
       const after = await this.capture(`rewinds/${id}/after`);
-      const folders = plan.stores.map(store => {
+      const folders = savedStores.map(store => {
         const saved = after.find(item => item.folderId === store.folder.id);
         return { folderId: store.folder.id, path: store.folder.path, before: { commit: store.now.commit, ...(store.now.skipped ? { skipped: store.now.skipped } : {}) }, after: { commit: saved?.commit || null, ...(saved?.skipped ? { skipped: saved.skipped } : {}) } };
       });
@@ -309,17 +327,44 @@ export class RunCheckpoints {
       const left = plan.files.filter(file => ['conflict', 'skip'].includes(file.action)).map(({ folderId, path: where, reason }) => ({ folderId, path: where, reason }));
       const run = c.runs?.find(item => item.id === plan.pair.runId);
       this.broker.record(c, { type: 'rewind', id, target, runId: plan.pair.runId, folders, counts, left: left.slice(0, 200) });
-      this.broker.message(c, 'system', note({ redo: target.kind === 'rewind', run, counts, work, left, multi: this.folders().length > 1 }), run?.provider || c.provider);
+      this.broker.message(c, 'system', plan.pair.restore
+        ? `Restored the workspace to the checkpoint ${target.phase} ${plan.pair.checkpointKind === 'run' ? agentName(run) + '’s step' : plan.pair.checkpointKind === 'restore' ? 'a workspace restore' : 'an undo or redo'}. Changed ${plural(work.length, 'file')}.${left.length ? ` Left ${plural(left.length, 'file')} as they are; review the Timeline for details.` : ''} The conversation is kept. Earlier messages describe historical files; inspect the current files before continuing. A recovery checkpoint is available in Timeline.`
+        : note({ redo: target.kind === 'rewind', run, counts, work, left, multi: this.folders().length > 1 }), run?.provider || c.provider);
+      await this.prune(c);
       return { id, counts, left };
     });
   }
 
+  // Public history contains descriptions and targets, never private object-store paths or blob identities.
+  timeline(c) {
+    const entries = [], current = this.folders();
+    const point = (id, phase, folders, at) => {
+      const available = folders?.length === current.length && folders?.length > 0 && folders.every(item => item.commit && current.some(folder => folder.id === item.folderId && folder.path === item.path));
+      return { target: { kind: 'checkpoint', id, phase }, at, available: Boolean(available),
+        ...(!available ? { reason: folders?.some(item => !item.commit) ? 'Not every folder was saved.' : 'Workspace folders changed since this checkpoint.' } : {}) };
+    };
+    for (const [id, saved] of Object.entries(c.snapshots || {})) {
+      const message = c.messages?.find(item => item.runId === id && item.role === 'user');
+      const run = c.runs?.find(item => item.id === id) || c.activeRun?.id === id && c.activeRun || {};
+      entries.push({ id, kind: 'run', runId: id, provider: run.provider || message?.provider || null, local: Boolean(run.local || run.connection === 'local' || message?.connection === 'local'), prompt: run.prompt || message?.text.slice(0, 200) || '',
+        at: saved.before?.at || saved.after?.at, status: run.status || (c.activeRun?.id === id ? 'running' : 'unknown'), files: saved.files ?? null,
+        checkpoints: ['before', 'after'].filter(phase => saved[phase]).map(phase => point(id, phase, saved[phase].folders, saved[phase].at)) });
+    }
+    for (const rewind of c.rewinds || []) entries.push({ id: rewind.id, kind: rewind.target.kind === 'checkpoint' ? 'restore' : 'undo', runId: rewind.runId, at: rewind.at, pending: Boolean(rewind.pending),
+      files: Object.values(rewind.counts || {}).reduce((sum, count) => sum + count, 0), left: rewind.left?.length || 0,
+      checkpoints: ['before', 'after'].filter(phase => phase === 'before' || !rewind.pending).map(phase => point(rewind.id, phase, rewind.folders.map(item => ({ folderId: item.folderId, path: item.path, ...item[phase] })), rewind.at)) });
+    return entries.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  }
+
   // Which runs can be undone or redone, for the conversation view.
   summary(c) {
-    const reverted = new Set((c.rewinds || []).filter(item => item.target.kind === 'rewind').map(item => item.target.id)), result = {};
+    // A whole-workspace restore supersedes earlier undo/redo labels. Their old checkpoints remain in Timeline,
+    // but whether any run can still be undone is determined from the current files when its preview opens.
+    const rewinds = c.rewinds || [], restored = rewinds.findLastIndex(item => item.target.kind === 'checkpoint' && !item.pending), recent = rewinds.slice(restored + 1);
+    const reverted = new Set(recent.filter(item => item.target.kind === 'rewind').map(item => item.target.id)), result = {};
     for (const [runId, saved] of Object.entries(c.snapshots || {})) {
       if (!saved.before || !saved.after || !saved.files) continue;
-      const undo = (c.rewinds || []).findLast(item => item.target.kind === 'run' && item.target.id === runId && !reverted.has(item.id));
+      const undo = recent.findLast(item => item.target.kind === 'run' && item.target.id === runId && !reverted.has(item.id));
       result[runId] = { files: saved.files, ...(undo ? { undone: undo.id } : {}) };
     }
     return result;

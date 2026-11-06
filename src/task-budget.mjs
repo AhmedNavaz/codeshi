@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { looksFailed } from './task-context.mjs';
 import { normalizeUsage } from './task-ledger.mjs';
+import '../public/routing.js';
 
 // One policy for a whole task (#87), however many agents, retries and reviews it takes. Every run starts through the broker,
 // and the broker asks here first, so no caller can go around it. All counters are worked out from journal records, which
@@ -11,7 +12,7 @@ import { normalizeUsage } from './task-ledger.mjs';
 // overshoot a little, and what it really used is shown rather than hidden.
 export const defaultPolicy = () => ({ allowedProviders: null, allowedModels: null, maxConcurrent: 2, maxWorkingMinutes: null, maxTokens: null, maxSpendUSD: null, maxRetries: 3, maxReviews: 5, maxHandoffs: 4, maxRepeatedFailures: 5 });
 const COUNT_LIMITS = ['maxConcurrent', 'maxRetries', 'maxReviews', 'maxHandoffs', 'maxRepeatedFailures'], MEASURED_LIMITS = ['maxWorkingMinutes', 'maxTokens', 'maxSpendUSD'];
-const EXTEND = { maxRetries: 2, maxReviews: 2, maxHandoffs: 2, maxRepeatedFailures: 3 }, TASK_LIMIT = 60, FAILURE_LIMIT = 50, STALE_MS = 15 * 60 * 1000;
+const EXTEND = { maxRetries: 2, maxReviews: 2, maxHandoffs: 2, maxRepeatedFailures: 3 }, TASK_LIMIT = 60, FAILURE_LIMIT = 50;
 const PROVIDER_KEYS = ['codex', 'claude', 'gemini', 'local'], NAMES = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini', local: 'Local models' };
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 16);
@@ -40,17 +41,7 @@ export function validatePolicy(input = {}, current = defaultPolicy()) {
 
 // Each usage limit that applies, on its own: room in one never makes up for another that is full. "stale" and "unknown" say
 // that Codeshi can't tell, which is different from there being room.
-export function assessQuota(usage, model = null, { now = Date.now(), threshold = 90, staleMs = STALE_MS } = {}) {
-  const rows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => typeof row.usedPercent === 'number' && (!row.scope || String(model || '').toLowerCase().includes(String(row.scope).toLowerCase())));
-  if (!rows.length) return { state: 'unknown', windows: [], reason: usage?.reason || 'This agent does not report plan usage here.' };
-  const observedAt = usage.fetchedAt || usage.checkedAt || null, age = observedAt ? now - new Date(observedAt).getTime() : null;
-  const windows = rows.map(row => {
-    const resetPassed = row.resetsAt && new Date(row.resetsAt).getTime() <= now;
-    return { label: row.label, usedPercent: row.usedPercent, resetsAt: row.resetsAt || null, state: resetPassed ? 'stale' : row.usedPercent >= 100 ? 'exhausted' : row.usedPercent >= threshold ? 'near' : 'ok' };
-  });
-  const state = windows.some(row => row.state === 'exhausted') ? 'exhausted' : windows.some(row => row.state === 'stale') || (age !== null && age > staleMs) ? 'stale' : windows.some(row => row.state === 'near') ? 'near' : 'ok';
-  return { state, windows, observedAt: observedAt ? new Date(observedAt).toISOString() : null };
-}
+export const assessQuota = (...args) => globalThis.relayRouting.assessQuota(...args);
 
 const emptyState = taskId => ({ taskId, runs: 0, retries: 0, reviews: 0, handoffs: 0, workingMs: 0, tokens: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }, spendUSD: 0, runsWithoutUsage: 0, failures: {}, active: {}, extra: {}, stopped: null, startedAt: null });
 const newTokens = usage => (usage?.input || 0) + (usage?.output || 0) + (usage?.cacheWrite || 0);
@@ -74,8 +65,10 @@ function addFailure(state, { signature, kind, what, how, provider, runId, at }) 
 
 // Called for every journal record, when a run happens and again when the journal is read at startup, so both always agree.
 export function applyBudgetRecord(c, record) {
+  if (['submission', 'run_end', 'background_review', 'review_budget', 'review_result', 'task_policy', 'task_failure', 'task_budget_stop', 'task_budget_extend'].includes(record.type) || record.type === 'run_metadata' && (record.metadata?.usage || record.metadata?.costUSD !== undefined)) c.taskBudgetRevision = record.seq;
   if (record.type === 'task_policy') { c.taskPolicy = record.policy; return; }
   if (record.type === 'submission') {
+    if (c.taskOfRun?.[record.id]) return;
     const taskId = record.task?.id || record.id, state = stateFor(c, taskId), kind = record.review ? 'review' : record.task?.relation || null;
     const counted = relationOf(kind, record.provider, record.previousProvider || c.budgetLast?.provider);
     state.runs++; if (counted) state[counted]++;
@@ -89,6 +82,16 @@ export function applyBudgetRecord(c, record) {
   }
   const activeState = () => { const taskId = c.budgetActive && c.taskOfRun?.[c.budgetActive]; return taskId ? c.taskBudgets?.[taskId] : null; };
   if (record.type === 'run_process') { const entry = activeState()?.active[c.budgetActive]; if (entry) entry.began = true; return; }
+  if (record.type === 'review_process' || record.type === 'review_budget') {
+    const state = c.taskBudgets?.[c.taskOfRun?.[record.id]], entry = state?.active[record.id];
+    if (!entry?.background) return;
+    if (record.type === 'review_process' || record.began) entry.began = true;
+    const metadata = record.metadata || {};
+    if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage);
+    if (typeof metadata.costUSD === 'number') entry.costUSD = metadata.costUSD;
+    if (metadata.account?.billingSource) entry.billing = metadata.account.billingSource;
+    return;
+  }
   if (record.type === 'run_metadata') {
     const state = activeState(), entry = state?.active[c.budgetActive], metadata = record.metadata || {};
     if (!entry) return;
@@ -102,18 +105,19 @@ export function applyBudgetRecord(c, record) {
     const id = record.type === 'run_end' ? c.budgetActive : record.id, taskId = id && c.taskOfRun?.[id], state = taskId && c.taskBudgets?.[taskId], entry = state?.active[id];
     if (record.type === 'run_end') { c.budgetLast = entry ? { provider: entry.provider } : c.budgetLast; c.budgetActive = null; }
     if (!entry) return;
-    if (record.type === 'review_result') { const result = record.result || {}; if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage); if (typeof result.costUSD === 'number') entry.costUSD = result.costUSD; if (result.billingSource) entry.billing = result.billingSource; entry.began = true; }
+    if (record.type === 'review_result') { const result = record.result || {}; if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage); if (typeof result.costUSD === 'number') entry.costUSD = result.costUSD; if (result.billingSource) entry.billing = result.billingSource; if (result.usage || result.status === 'complete') entry.began = true; }
     delete state.active[id];
     // A run refused before anything started used nothing, so what it reserved goes back.
     if (!entry.began) { state.runs--; if (entry.counted) state[entry.counted]--; return; }
     state.workingMs += Math.max(0, new Date(record.at).getTime() - new Date(entry.startedAt).getTime());
-    if (entry.usage?.reported?.length) { for (const key of ['input', 'output', 'cacheWrite', 'cacheRead']) state.tokens[key] += entry.usage[key] || 0; if (entry.usage.sessionTotal) c.budgetTotals[entry.provider] = entry.usage.sessionTotal; }
+    if (entry.usage?.reported?.length) { for (const key of ['input', 'output', 'cacheWrite', 'cacheRead']) state.tokens[key] += entry.usage[key] || 0; if (entry.usage.sessionTotal && !entry.background) c.budgetTotals[entry.provider] = entry.usage.sessionTotal; }
     else state.runsWithoutUsage++;
     if (entry.billing === 'api' && typeof entry.costUSD === 'number') state.spendUSD += entry.costUSD;
     return;
   }
   if (record.type === 'background_review') {
     const review = record.review || {}, taskId = record.taskId || review.id, state = stateFor(c, taskId);
+    if (c.taskOfRun?.[review.id]) return;
     state.runs++; state.reviews++; state.startedAt ||= record.at;
     state.active[review.id] = { provider: review.provider, startedAt: record.at, counted: 'reviews', began: false, background: true, usage: null, costUSD: null, billing: null };
     c.taskOfRun ||= {}; c.taskOfRun[review.id] = taskId;
@@ -146,10 +150,16 @@ export function classifyStep(text) {
 }
 
 export class TaskBudgets {
-  constructor(broker) { this.broker = broker; this.timers = new Map(); }
+  constructor(broker) { this.broker = broker; this.timers = new Map(); this.watches = new Map(); }
 
   policy(c) { return { ...defaultPolicy(), ...(c.taskPolicy || {}) }; }
-  setPolicy(c, input) { const policy = validatePolicy(input, this.policy(c)); this.broker.record(c, { type: 'task_policy', policy }); return this.view(c); }
+  setPolicy(c, input) {
+    const current = this.policy(c), policy = validatePolicy(input, current);
+    if (MEASURED_LIMITS.some(key => policy[key] !== null && policy[key] !== current[key]) && Object.values(c.taskBudgets || {}).some(state => Object.keys(state.active).length > 1)) throw fail('Wait until only one agent is working on each task before changing its measured limits.', 409);
+    this.broker.record(c, { type: 'task_policy', policy });
+    for (const { run, ...context } of this.watches.values()) if (context.c === c) { this.check(run); this.watch(run, context); }
+    return this.view(c);
+  }
   limits(c, state) { const policy = this.policy(c), limits = { ...policy }; for (const [key, add] of Object.entries(state?.extra || {})) if (typeof limits[key] === 'number') limits[key] += add; return limits; }
   allows(c, provider, model) {
     const { allowedProviders, allowedModels } = this.policy(c);
@@ -182,6 +192,9 @@ export class TaskBudgets {
     if (!state) return null;
     const limits = this.limits(c, state), counted = relationOf(task.relation, key, previousProvider ?? c.lastRun?.provider);
     if (Object.keys(state.active).length >= limits.maxConcurrent) return { limit: 'maxConcurrent', used: Object.keys(state.active).length, allowed: limits.maxConcurrent, message: `This task already has ${limits.maxConcurrent} agents working.` };
+    // No adapter offers a reliable estimate for an entire run. Reserve the remaining measured allowance for one worker,
+    // rather than giving the same remaining tokens/dollars/minutes to a builder and reviewer at once. Other tasks are independent.
+    if (Object.keys(state.active).length && MEASURED_LIMITS.some(key => limits[key] !== null)) return { limit: 'reservation', message: 'This task’s remaining time, token or spending allowance is reserved by its running agent. Wait for it to finish before continuing or reviewing the same task.' };
     if (counted) {
       const limit = { retries: 'maxRetries', reviews: 'maxReviews', handoffs: 'maxHandoffs' }[counted], words = { retries: 'retries', reviews: 'reviews', handoffs: 'handoffs' }[counted];
       if (state[counted] >= limits[limit]) return { limit, used: state[counted], allowed: limits[limit], message: `This task has used its ${limits[limit]} ${words}.` };
@@ -192,7 +205,7 @@ export class TaskBudgets {
     const refused = this.refusal(c, plan);
     if (!refused) return;
     const taskId = plan.task?.id || null;
-    throw Object.assign(new Error(refused.message), { status: 409, category: 'budget', details: { budget: { ...refused, taskId, canExtend: Boolean(plan.task?.relation) && refused.limit !== 'allowed' && refused.limit !== 'maxConcurrent' } } });
+    throw Object.assign(new Error(refused.message), { status: 409, category: 'budget', details: { budget: { ...refused, taskId, canExtend: Boolean(plan.task?.relation) && !['allowed', 'maxConcurrent', 'reservation'].includes(refused.limit) } } });
   }
   extend(c, { taskId, limit }) {
     const state = c.taskBudgets?.[taskId], policy = this.policy(c);
@@ -210,26 +223,28 @@ export class TaskBudgets {
   }
 
   // While a run works: the working-time limit, stopped on time, whatever the agent is doing. A quiet run is left alone otherwise.
-  watch(run) {
-    const { c } = run, state = c.taskBudgets?.[run.taskId], { maxWorkingMinutes } = this.limits(c, state);
+  watch(run, { owner = this.broker, c = run.c, taskId = run.taskId, recordRunId = run.id } = {}) {
+    clearTimeout(this.timers.get(run.id)); this.timers.delete(run.id);
+    if (run.stopped || owner.running !== run) return;
+    this.watches.set(run.id, { run, owner, c, taskId, recordRunId });
+    const state = c.taskBudgets?.[taskId], { maxWorkingMinutes } = this.limits(c, state);
     if (!state || maxWorkingMinutes === null) return;
-    const delay = Math.max(0, maxWorkingMinutes * 60000 - this.used(state).workingMs), timer = setTimeout(() => this.check(run), delay + 50);
+    const delay = Math.max(0, maxWorkingMinutes * 60000 - this.used(state).workingMs) / Math.max(1, Object.keys(state.active).length), timer = setTimeout(() => { this.check(run); this.watch(run, { owner, c, taskId, recordRunId }); }, delay + 50);
     timer.unref(); this.timers.set(run.id, timer);
   }
-  unwatch(run) { clearTimeout(this.timers.get(run.id)); this.timers.delete(run.id); }
+  unwatch(run) { clearTimeout(this.timers.get(run.id)); this.timers.delete(run.id); this.watches.delete(run.id); }
   check(run) {
-    const { c } = run, state = c.taskBudgets?.[run.taskId];
-    if (!state || run.budgetStop || run.ending || this.broker.running !== run) return;
+    const context = this.watches.get(run.id) || { owner: this.broker, c: run.c, taskId: run.taskId }, { owner, c, taskId } = context, state = c.taskBudgets?.[taskId];
+    if (!state || run.budgetStop || run.ending || owner.running !== run) return;
     const over = this.exceeded(c, state);
-    if (over) this.stop(run, over);
+    if (over) this.stop(run, over, context);
   }
   // Saves why, then stops the usual way, so the run's checkpoint is taken and its workers and leases are released.
-  stop(run, over) {
-    const { c } = run;
+  stop(run, over, { owner = this.broker, c = run.c, taskId = run.taskId, recordRunId = run.id } = {}) {
     run.budgetStop = over; run.errorCategory = 'budget';
-    this.broker.record(c, { type: 'task_budget_stop', taskId: run.taskId, runId: run.id, kind: over.limit, used: over.used, allowed: over.allowed });
+    this.broker.record(c, { type: 'task_budget_stop', taskId, runId: recordRunId, kind: over.limit, used: over.used, allowed: over.allowed });
     this.broker.emit('notify', { conversationId: c.id, kind: 'stopped', title: 'Task limit reached', body: over.message });
-    this.broker.stop(c.id);
+    owner.stop(run.c.id);
   }
   // A step as it is saved. The same failure counts across runs and agents, because it is kept on the task.
   observeStep(c, message) {
@@ -246,7 +261,7 @@ export class TaskBudgets {
 
   // The current task for the panel.
   view(c) {
-    const policy = this.policy(c), taskId = c.activeRun?.taskId || c.lastRun?.taskId || c.lastRun?.id, state = taskId ? c.taskBudgets?.[taskId] : null;
+    const policy = this.policy(c), review = c.reviews?.find(item => c.taskOfRun?.[item.id]), taskId = c.activeRun?.taskId || c.lastRun?.taskId || c.lastRun?.id || c.taskOfRun?.[review?.id], state = taskId ? c.taskBudgets?.[taskId] : null;
     if (!state) return { policy, defaults: defaultPolicy(), task: null, quota: this.quota(c) };
     const limits = this.limits(c, state), used = this.used(state), exceeded = this.exceeded(c, state);
     return { policy, defaults: defaultPolicy(), quota: this.quota(c), task: { taskId, limits, runs: state.runs, retries: state.retries, reviews: state.reviews, handoffs: state.handoffs, workingMs: used.workingMs, tokens: used.tokens, cacheRead: state.tokens.cacheRead, spendUSD: used.spendUSD, runsWithoutUsage: state.runsWithoutUsage, active: Object.keys(state.active).length,

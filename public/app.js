@@ -962,7 +962,7 @@
     const time = iso => { const date = new Date(iso), today = date.toDateString() === new Date().toDateString(); return date.toLocaleString(undefined, today ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" }); };
     const agents = resume.providers.map(provider => {
       const status = resume.agents?.[provider];
-      return label(provider) + (status?.limited === false ? " (ready)" : status?.resetsAt ? ` (resets ${time(status.resetsAt)})` : status ? " (checking every 10 min)" : "");
+      return label(provider) + (status?.quota === 'unknown' || status?.quota === 'stale' ? " (waiting for fresh usage)" : status?.limited === false ? " (ready)" : status?.resetsAt ? ` (resets ${time(status.resetsAt)})` : status ? " (checking every 10 min)" : "");
     });
     const list = agents.length > 1 ? `${agents.slice(0, -1).join(", ")} or ${agents.at(-1)}` : agents[0];
     const access = `${resume.mode === "read" ? "Read only" : "Can edit files"} · ${resume.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}`;
@@ -1012,7 +1012,7 @@
       const info = connection(provider);
       // Antigravity has no read-only access and works with one folder, as starting a run checks.
       const unsupported = provider === "gemini" && (state.mode === "read" || foldersFor(project).length > 1);
-      return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usedPercent: window.relayUsage?.usedPercent?.(provider) ?? null, models: window.relayModelPicker?.models?.(provider) || [] };
+      return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usage: window.relayUsage?.snapshot?.(provider), allowedModels: state.conversation?.taskPolicy?.allowedModels?.[provider] || null, models: window.relayModelPicker?.models?.(provider) || [] };
     });
     return window.relayRouting.route({ text, attachments, mode: routing.mode, allowApi: routing.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
   }
@@ -1024,7 +1024,8 @@
     node.classList.toggle("error", Boolean(routed.error));
     if (routed.error) { $("route-choice").textContent = "Auto can’t choose"; $("route-reason").textContent = routed.error; return; }
     $("route-choice").textContent = [label(routed.provider), routed.modelName || "default model", routed.effort ? `${routed.effort[0].toUpperCase()}${routed.effort.slice(1)} effort` : ""].filter(Boolean).join(" · ");
-    $("route-reason").textContent = routed.reason;
+    $("route-reason").textContent = `${routed.reason} · ${window.relayRouting.quotaText(routed.quota)}`;
+    node.title = `Account-wide allowance, shared with other clients. ${routed.quota?.observedAt ? 'Observed ' + new Date(routed.quota.observedAt).toLocaleTimeString() + '. ' : ''}Rechecked before the agent starts. Model tiers remain local heuristics, not measured quality guarantees.`;
     node.setAttribute("aria-label", `Auto will use ${$("route-choice").textContent}: ${routed.reason}. Choose a model yourself instead.`);
   }
   async function setRouting(choice) {
@@ -1808,6 +1809,7 @@
     { label: "Brief: memory and skills every agent gets", run: () => window.relayBrief?.open() },
     { label: "Tasks: what each task used, and its limits", run: () => window.relayTasks?.open() },
     { label: "New task beside this one", run: () => window.relayTaskThreads?.open() },
+    { label: "Timeline: review and restore checkpoints", run: () => window.relayTimeline?.open() },
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", run: () => window.relayTerminal?.open() },
     { label: "Run: your dev servers, tests and scripts", run: () => window.relayPanel?.show("run") },
@@ -1975,8 +1977,8 @@
   // Choosing an action from the ⋯ menu closes it.
   $("header-menu").addEventListener("click", event => { if (event.target?.closest?.("button")) $("header-menu").hidePopover?.(); });
   // The tabs at the top of a side panel switch to the other panel.
-  // The side panel's tabs: Agents, Brief, Tasks and Git, each opened by its own module.
-  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open() };
+  // The side panel's tabs: Agents, Brief, Tasks, Git and Timeline, each opened by its own module.
+  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), timeline: () => window.relayTimeline?.open() };
   const showSidePanel = name => { const panel = $(`${name}-panel`); if (panel?.hidden !== false) sidePanelOpeners[name]?.(); };
   document.querySelectorAll(".panel-tab").forEach(tab => tab.addEventListener("click", () => showSidePanel(tab.dataset.panel)));
   $("route-preview").addEventListener("click", () => window.relayModelPicker?.open());

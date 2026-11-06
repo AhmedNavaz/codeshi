@@ -4,6 +4,21 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-06
+
+### Added
+
+- **Timeline checkpoints and workspace restore** (#20, stage 2). The Timeline side panel lists saved runs by agent and the checkpoints before and after runs, undos and restores. Review the file diff before restoring a saved point, including later edits. Restores save a recovery checkpoint before writing, keep the conversation and add a note for the next agent. Changed previews, unavailable folders and active work block restoration.
+- **Repeat evaluations from saved input pins** (#84). `npm run eval -- run --pin <result.json>` checks fixture snapshots, policy, skill versions and resources, acceptance checks, engine code and runtime before starting an agent. Live repeats still need an explicit budget. Reports keep incompatible experiments and recorded/live results apart, show the actual models, and include wall time alongside agent working time.
+
+### Changed
+
+- **Git-panel writes share task mutation leases** (#88). Stage, unstage and commit hold the selected folder's canonical repository root, blocking conflicting agent runs, patches, restores, imports and task merges in that repository while leaving independent repositories and worktree indices available. Folder membership is rechecked before writing, shutdown waits for commit hooks, and tasks waiting on a Git action retry when its lease is released.
+- **Background reviews share the task's measured limits while they run** (#87). Review usage is saved to the parent journal as it arrives and survives interrupted recovery. A time, token or spend limit reserves the remaining allowance for one worker on that task, so a builder and reviewer cannot both take it. Reviews also occupy workspace concurrency slots. The native Claude API connection receives the parent's remaining spend cap; other connections remain limited by reported usage, with possible overshoot.
+- **Routing checks the selected model's allowance** (#12). Five-hour, weekly and model-group limits are evaluated separately, with stale and unknown readings made explicit. Routed dispatch rechecks usage before starting the agent and saves its evidence in run details. Automatic handoffs and their reset waits, and automatic test retries, require fresh confirmed room; manual Send can proceed with an explicit unknown-usage warning. Model tiers remain local heuristics, without a measured quality guarantee.
+- **Agent messages on the phone are separated by a line**, so it's easy to find where the latest one starts.
+- **The phone's mic stays visible on Same Wi-Fi**, dimmed, and a tap explains why voice needs a secure connection and what to use instead. It used to be hidden there with no explanation.
+
 ## [0.27.1] - 2026-11-06
 
 ### Changed
@@ -480,6 +495,7 @@ First public release.
 - Dark and light themes, keyboard shortcuts and a short setup guide.
 - macOS builds for Apple Silicon and Intel, and a container image for the private-link service.
 
+[0.28.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0
 [0.27.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.27.1
 [0.27.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.27.0
 [0.26.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.26.0

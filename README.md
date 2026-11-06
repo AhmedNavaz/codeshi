@@ -118,7 +118,7 @@ Also included:
 - **Shared skills**, including six optional starters and your own reusable procedures for Claude, Codex and Gemini, carried across handoffs
 - **A task-focused brief**, showing the next agent its task, relevant folders, instructions, changed files and unfinished work; see what it receives in the Brief panel
 - **Task usage and limits**, for working time, reported tokens, API spend and retries across agents, handoffs and reviews; missing usage stays marked as not reported
-- **Undo and redo** for any run, after a preview of every line that changes
+- **Undo, redo and Timeline restore**, to take back any run after a preview of every line that changes, or return the workspace to a saved checkpoint with a recovery point saved first
 - **Files, Terminal, Run and Git** for each workspace: a separate Files browser, shells in tabs or side by side, and each project's dev server, tests and changes in reach
 - **Chat import** from your earlier Claude Code and Codex sessions
 - **Ask a Friend**, for help from another developer with a patch you review
@@ -130,7 +130,7 @@ The [guide](docs/guide.md) describes every feature and its limits.
 
 | | What it brings | Status |
 | --- | --- | --- |
-| **Rewind timeline** | Every checkpoint in one list, and restoring the project to any of them | Next ([#20](https://github.com/AhmedNavaz/codeshi/issues/20)) |
+| **Rewind timeline** | Commits in the timeline, and optionally rewinding the conversation along with the files | Planned ([#20](https://github.com/AhmedNavaz/codeshi/issues/20)) |
 | **Everything in the thread** | GitHub issues, pull requests and failing CI checks as context, then a pull request from the conversation | Planned in stages ([#18](https://github.com/AhmedNavaz/codeshi/issues/18)) |
 | **More agents** | Grok, DeepSeek, Qwen and more, each on your own account | In progress ([#4](https://github.com/AhmedNavaz/codeshi/issues/4)) |
 | **Linux builds** | Codeshi on Linux, alongside macOS and Windows | Help wanted ([#5](https://github.com/AhmedNavaz/codeshi/issues/5)) |

@@ -46,10 +46,15 @@ export function createWorkspaceRoutes({ registry, body, json }) {
       if (req.method !== 'POST') fail('Use POST to stage, unstage or commit.', 405);
       const projectId = url.searchParams.get('projectId');
       if (!projectId) fail('Select a workspace first.');
-      const project = registry.get(projectId), input = await body(req, 64 * 1024);
+      const input = await body(req, 64 * 1024), project = registry.get(projectId);
       const folder = project.folders.find(entry => entry.id === input.folderId);
       if (!folder) fail('That folder is no longer in this workspace.', 404);
-      const result = await gitActions[url.pathname](folder, input);
+      const result = await gitActions[url.pathname](folder, input, { withMutation: (root, operation, work) => registry.withMutation(projectId, operation, () => {
+        // Membership can change during the body upload or asynchronous Git root lookup. Validate again under the lease.
+        const current = registry.get(projectId).folders.find(entry => entry.id === input.folderId);
+        if (!current || current.path !== folder.path) fail('That folder is no longer in this workspace.', 404);
+        return work();
+      }, { workspaces: [root] }) });
       json(res, 200, { ...result, git: await gitActivity(project.folders) }); return true;
     }
     if (!['/api/git', '/api/git/diff'].includes(url.pathname)) return false;

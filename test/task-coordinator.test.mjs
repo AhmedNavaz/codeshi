@@ -11,6 +11,7 @@ import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { applyPlan, folderIdentity, integrationPlan, pathsOverlap, planIsolation, unrestricted } from '../src/task-isolation.mjs';
+import { stageChanges, unstageChanges, commitChanges } from '../src/workspace-commit.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -37,6 +38,7 @@ function setup(t, folders, { tests = null, policy = null } = {}) {
   const mutations = new MutationCoordinator(path.join(root, 'locks'));
   const open = () => { const paths = list.map(folder => folder.path); return new Broker({ workspace: paths[0], workspaceFolders: list, dataDir, bins, tests, handoffPreferences: () => ({ threshold: 0, automatic: false }), acquireMutation: operation => mutations.acquireMany(paths, operation), acquireFolders: (where, operation) => mutations.acquireMany(where, operation), withFolders: (where, operation, work) => mutations.withMutations(where, operation, work) }); };
   const broker = open(), c = broker.get(broker.create().id);
+  broker.checks.usage = async () => ({ available: false });
   if (policy) broker.budget.setPolicy(c, policy);
   t.after(async () => { await env.broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   let number = 0;
@@ -166,6 +168,11 @@ test('a direct task and a run or file operation in the same folder can’t both 
   const a = hold(env, 'a', 'Hold A'); await working(env, a);
   assert.throws(() => env.broker.start(env.c, { text: 'Main work', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }), /busy/, 'The main conversation reaches every folder, so its run waits.');
   await assert.rejects(env.mutations.withMutations([env.folders.a], 'patch', async () => {}), /busy/, 'Patches, undo and imports take the same lease.');
+  const folder = { id: 'a', path: env.folders.a };
+  await assert.rejects(stageChanges(folder, { all: true }), /busy/, 'The Git panel cannot stage a task’s active folder.');
+  await assert.rejects(unstageChanges(folder, { all: true }), /busy/);
+  await assert.rejects(commitChanges(folder, { message: 'While active', expected: [] }), /busy/);
+  await stageChanges({ id: 'b', path: env.folders.b }, { all: true });
   assert.deepEqual(await env.mutations.withMutations([env.folders.b], 'patch', async () => 'done'), 'done', 'Another folder isn’t held.');
   env.release(fs.realpathSync(env.folders.a)); await finished(env, a);
 });

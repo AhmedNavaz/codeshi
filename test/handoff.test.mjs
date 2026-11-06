@@ -27,8 +27,9 @@ function setup(t, { preferences = { threshold: 90, automatic: false }, scenarios
   if (gemini) fs.writeFileSync(bins.gemini, gemini, { mode: 0o700 });
   const settings = { ...preferences }, usage = { codex: 92, claude: 20 }, billing = { claude: 'subscription' }, notices = [];
   const broker = new Broker({ workspace, dataDir, bins, handoffPreferences: () => settings });
-  broker.handoff.usage = async provider => usage[provider] === undefined ? { available: false } : { available: true, windows: [{ id: 'primary', label: '5-hour', usedPercent: usage[provider], resetsAt: new Date(Date.now() + 3600000).toISOString() }] };
+  broker.handoff.usage = async provider => usage[provider] === undefined ? { available: false } : { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', label: '5-hour', usedPercent: usage[provider], resetsAt: new Date(Date.now() + 3600000).toISOString() }] };
   broker.resume.usage = (...args) => broker.handoff.usage(...args);
+  broker.checks.usage = (...args) => broker.handoff.usage(...args);
   // Gemini is not installed in these tests, as its missing binary says.
   broker.handoff.account = async provider => ({ installed: provider !== 'gemini' || Boolean(gemini), authenticated: true, billingSource: billing[provider] || 'subscription' });
   broker.on('notify', notice => notices.push(notice));
@@ -50,7 +51,7 @@ function setup(t, { preferences = { threshold: 90, automatic: false }, scenarios
 
 test('an exhausted window for another model neither blocks an agent nor raises a false alarm', () => {
   // As Antigravity reports them: groups of models, with Gemini 4 Argon out and Flash fine.
-  const usage = { available: true, windows: [
+  const usage = { available: true, checkedAt: new Date().toISOString(), windows: [
     { id: 'weekly', label: 'Weekly · Gemini Models', scopes: ['gemini'], usedPercent: 37, resetsAt: '2026-11-07T14:15:00Z' },
     { id: 'five', label: 'Five Hour · Gemini Models', scopes: ['gemini'], usedPercent: 0, resetsAt: '2026-11-04T19:40:00Z' },
     { id: 'others', label: 'Weekly · Claude and GPT models', scopes: ['claude', 'gpt'], usedPercent: 51 },
@@ -61,14 +62,14 @@ test('an exhausted window for another model neither blocks an agent nor raises a
   assert.deepEqual(limitState(usage, 'gemini-3.8-flash'), { limited: false, resetsAt: null });
   assert.equal(highest(usage, 'gemini-4-argon').id, 'argon', 'A model is still limited by its own window.');
   assert.deepEqual(limitState(usage, 'gemini-4-argon'), { limited: true, resetsAt: '2026-11-07T13:38:00.000Z' });
-  assert.equal(highest({ available: true, windows: [{ id: 'all', scopes: null, usedPercent: 95 }] }, 'anything').id, 'all', 'A window for the whole account covers every model.');
-  assert.equal(highest({ available: true, windows: [{ id: 'opus', scope: 'opus', usedPercent: 95 }] }, 'claude-haiku-5-5'), null, 'A single named model works the same way.');
-  assert.equal(highest({ available: true, windows: [{ id: 'opus', scope: 'opus', usedPercent: 95 }] }, 'claude-opus-5-5').id, 'opus');
+  assert.equal(highest({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'all', scopes: null, usedPercent: 95 }] }, 'anything').id, 'all', 'A window for the whole account covers every model.');
+  assert.equal(highest({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'opus', scope: 'opus', usedPercent: 95 }] }, 'claude-haiku-5-5'), null, 'A single named model works the same way.');
+  assert.equal(highest({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'opus', scope: 'opus', usedPercent: 95 }] }, 'claude-opus-5-5').id, 'opus');
 });
 
 test('with the agent’s default model selected, the offer goes by the model the run is really using', { skip: scriptCLIs }, async t => {
   const env = setup(t), run = await env.start();
-  env.broker.handoff.usage = async provider => provider === 'codex' ? { available: true, windows: [{ id: 'sol', label: 'Weekly · Sol', scope: 'sol', usedPercent: 95 }] } : { available: true, windows: [{ id: 'primary', usedPercent: 10 }] };
+  env.broker.handoff.usage = async provider => provider === 'codex' ? { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'sol', label: 'Weekly · Sol', scope: 'sol', usedPercent: 95 }] } : { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 10 }] };
   await env.broker.handoff.check(run);
   assert.equal(env.c.handoffOffer, null, 'Nothing says this run uses that model yet.');
   env.c.activeRun.effectiveModel = 'gpt-sol';
@@ -220,7 +221,7 @@ test('Claude’s rejected rate limit event continues on another agent, with the 
   const shown = new Date(resetsAt * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
   assert.equal(notes(env.c).at(-1), `Claude reached its usage limit, which resets ${shown}, so Codeshi handed the task to Codex.`);
   const unknown = setup(t, { preferences: allowed });
-  unknown.broker.handoff.usage = async provider => provider === 'codex' ? { available: false } : { available: true, windows: [{ id: 'primary', usedPercent: 20 }] };
+  unknown.broker.handoff.usage = async provider => provider === 'codex' ? { available: false } : { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 20 }] };
   reached(unknown);
   await continued(unknown, 'claude'); await done(unknown);
   assert.equal(notes(unknown.c).at(-1), 'Codex reached its usage limit, so Codeshi handed the task to Claude.', 'With no reset time known, it still reads properly.');
@@ -287,13 +288,13 @@ test('if every agent is out, the wait starts by itself, survives a restart, can 
   assert.deepEqual([...env.c.resume.providers].sort(), ['claude', 'codex']);
   assert.equal(env.c.resume.approvalPolicy, 'auto'); assert.equal(env.c.resume.mode, 'edit');
   assert.deepEqual(errors(env.c), []);
-  assert.match(notes(env.c).at(-1), /^Codex reached its usage limit, which resets .+, and no other agent has room, so the task continues at the first reset\.$/);
+  assert.match(notes(env.c).at(-1), /^Codex reached its usage limit, which resets .+, and no other agent has confirmed room, so the task waits for a fresh allowance reading after a reset\.$/);
   assert.equal(env.notices.at(-1).kind, 'waiting');
   assert.equal(fs.existsSync(path.join(env.dataDir, 'resume-pending')), true, 'The wait is marked so it survives a restart.');
 
   await env.broker.close();
   const reopened = new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins });
-  reopened.resume.usage = async provider => provider === 'claude' ? { available: true, windows: [{ id: 'primary', usedPercent: 10 }] } : { available: true, windows: [{ id: 'primary', usedPercent: 100 }] };
+  reopened.resume.usage = async provider => provider === 'claude' ? { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 10 }] } : { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 100 }] };
   t.after(() => reopened.close());
   const c = reopened.get(env.c.id);
   assert.equal(c.resume?.approvalPolicy, 'auto', 'The wait is still there after a restart.');
@@ -313,34 +314,31 @@ test('a weekly or model-specific limit on the destination counts as no room, eve
   for (const window of [{ id: 'seven_day', label: 'Weekly', usedPercent: 100 }, { id: 'opus', label: 'Weekly · Opus', scope: 'opus', usedPercent: 100 }]) {
     const env = setup(t, { preferences: allowed });
     env.c.models.claude = 'opus';
-    env.broker.handoff.usage = async provider => provider === 'codex' ? { available: true, windows: [{ id: 'primary', usedPercent: 100 }] } : { available: true, windows: [{ id: 'five_hour', label: '5-hour', usedPercent: 5 }, window] };
+    env.broker.handoff.usage = async provider => provider === 'codex' ? { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 100 }] } : { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'five_hour', label: '5-hour', usedPercent: 5 }, window] };
     reached(env);
     await until(() => env.c.resume, `the wait with ${window.id} out`);
     assert.equal(env.requests().length, 1, 'Claude has no room, so it does not start.');
   }
 });
 
-test('a task does not bounce back to an agent that already reached its limit, even when its usage is not reported', { skip: scriptCLIs }, async t => {
-  const env = setup(t, { preferences: allowed, scenarios: { [continuationRequest]: { behavior: 'hold' } } });
-  // Neither agent reports usage, so each looks as if it has room.
+test('automatic fallback waits when allowance is unknown, including agents that have not yet run', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { preferences: allowed });
   env.broker.handoff.usage = async () => ({ available: false });
   reached(env);
-  await continued(env, 'claude');
-  const second = env.broker.running;
-  assert.deepEqual(second.limitChain, ['codex']);
-  env.broker.event(second, { type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour' } });
-  env.release();
   await until(() => env.c.resume, 'the wait');
   assert.deepEqual(env.c.resume.limited, ['codex', 'claude']);
+  assert.equal(env.c.resume.requireQuota, true);
+  env.broker.resume.now = () => Date.now() + 20 * 60000;
+  env.broker.resume.status.clear();
   await env.broker.resume.tick();
-  assert.equal(env.broker.running, null, 'Reporting no usage does not make an agent that just ran out look ready.');
-  assert.equal(env.requests().filter(([agent]) => agent === 'codex').length, 1, 'Codex is not tried again.');
+  assert.equal(env.broker.running, null, 'Unknown usage does not establish that another agent has room.');
+  assert.deepEqual(env.requests().map(([agent]) => agent), ['codex']);
 });
 
 test('something sent while the switch is being worked out goes ahead, and the switch steps aside', { skip: scriptCLIs }, async t => {
   const env = setup(t, { preferences: allowed });
   let open; const gate = new Promise(resolve => { open = resolve; });
-  env.broker.handoff.usage = async () => { await gate; return { available: true, windows: [{ id: 'primary', usedPercent: 10 }] }; };
+  env.broker.handoff.usage = async () => { await gate; return { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 10 }] }; };
   reached(env);
   await until(() => env.c.limitSwitching, 'the switch to begin');
   assert.equal(env.broker.view(env.c).limitSwitching.provider, 'codex', 'The page can say what is happening.');
@@ -392,6 +390,27 @@ test('an unknown destination can still be offered, but not presented as having r
   env.broker.handoff.usage = async provider => provider === 'claude' ? { available: false, reason: 'Not reported' } : real(provider);
   await env.broker.handoff.check(run);
   assert.equal(env.c.handoffOffer.to.quota, 'unknown');
+  env.release(); await run.done;
+});
+
+test('automatic handoff requires fresh confirmed room again when the offer is accepted', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  await env.broker.handoff.check(run);
+  const offer = env.c.handoffOffer;
+  env.broker.handoff.usage = async () => ({ available: false });
+  await assert.rejects(env.broker.handoff.accept(env.c, { offerId: offer.id, automatic: true }), /allowance could not be confirmed/);
+  assert.equal(env.broker.running, run);
+  assert.deepEqual(env.requests().map(([provider]) => provider), ['codex']);
+  assert.equal(env.c.handoffOffer.to.quota, 'unknown');
+  env.release(); await run.done;
+});
+
+test('automatic handoff does not treat stale usage or a missing observation time as room', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { preferences: allowed }), run = await env.start();
+  env.broker.handoff.usage = async provider => ({ available: true, ...(provider === 'codex' ? { checkedAt: new Date().toISOString() } : { checkedAt: new Date(Date.now() - 3600000).toISOString() }), windows: [{ label: '5-hour', usedPercent: provider === 'codex' ? 92 : 5 }] });
+  await env.broker.handoff.check(run);
+  assert.equal(env.broker.running, run);
+  assert.equal(env.c.handoffOffer.to.quota, 'stale');
   env.release(); await run.done;
 });
 

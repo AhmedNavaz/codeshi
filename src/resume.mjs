@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { continuationRequest } from './context.mjs';
+import '../public/routing.js';
 import { providerUsage } from './providers.mjs';
 
 // Resuming after a usage limit (#32). When a run stops on a limit, the conversation can wait for an agent to have room
@@ -27,7 +28,7 @@ export function windowApplies(row, model) {
 }
 
 export function limitState(usage, model = null) {
-  const windows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => windowApplies(row, model));
+  const windows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => !row.disabled && windowApplies(row, model));
   if (!windows.length) return { limited: null, resetsAt: null };
   const full = windows.filter(row => typeof row.usedPercent === 'number' && row.usedPercent >= 100);
   if (!full.length) return { limited: false, resetsAt: null };
@@ -55,14 +56,14 @@ export class ResumeScheduler {
   }
 
   // limited: agents that also reached a limit during this task, which aren't taken as ready just for reporting no usage.
-  schedule(c, { providers, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', billingConfirmed = false, limited = [] } = {}) {
+  schedule(c, { providers, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', billingConfirmed = false, limited = [], requireQuota = false } = {}) {
     if (c.lastRun?.errorCategory !== 'quota' || this.broker.running?.c.id === c.id) throw Object.assign(new Error('Waiting for a reset is available after a run stops on a usage limit.'), { status: 409 });
     const chosen = [...new Set(Array.isArray(providers) ? providers : [])].filter(provider => this.broker.availableProviders().includes(provider));
     if (!chosen.length) throw Object.assign(new Error('Choose at least one connected agent to continue with.'), { status: 400 });
     for (const provider of chosen) this.broker.checkRunSettings(provider, mode, approvalPolicy);
     if (c.resume) this.end(c, 'replaced');
     const at = this.now();
-    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}) };
+    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}), ...(requireQuota ? { requireQuota: true } : {}) };
     this.broker.record(c, { type: 'resume', resume });
     this.status.delete(c.id);
     this.arm(); this.tick();
@@ -119,6 +120,11 @@ export class ResumeScheduler {
         let usage = null;
         try { usage = await this.usage(provider, this.broker.usageOptions(provider)); } catch {}
         state = { ...limitState(usage, model), checkedAt: new Date(now).toISOString() };
+        if (resume.requireQuota) {
+          const quota = globalThis.relayRouting.assessQuota(usage, model, { now, threshold: 95 });
+          state.quota = quota.state;
+          if (quota.state !== 'ok') state.limited = true;
+        }
         // An agent that reports no usage is judged by the limit that stopped it, if it reported one.
         if (state.limited === null && (c.lastRun?.provider === provider || resume.limited?.includes(provider))) {
           const reset = c.lastRun?.provider === provider ? Number(c.lastRun.rateLimit?.resetsAt) * 1000 : NaN;

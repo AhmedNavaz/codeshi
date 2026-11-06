@@ -41,6 +41,22 @@ npm run eval -- delete all
 
 Results are local files in `evals/results/` (`CODESHI_EVAL_RESULTS` moves them), readable only by you and ignored by Git. They hold counts, times and identities, with no prompts, and nothing is sent anywhere. Each records the fixture's commit and hash, the settings, the models that really ran and the check.
 
+### Repeating a pinned experiment
+
+New results include an `experiment` fingerprint covering the repository snapshots, policy, every enabled skill's version and resource-file hashes (including starters), hidden check files and reply-match flags, recorded trace, per-run time limit, engine source and dependency lockfile, Node version and operating system/architecture. Skill instructions and resource contents are not copied into results. `sourceCommit` identifies the Codeshi checkout; the engine hash also detects uncommitted code changes.
+
+Repeat a result using its saved fixture and policy:
+
+```sh
+npm run eval -- run --pin <saved-result.json> --repeat 3
+# A live result still needs explicit consent and a fresh budget:
+npm run eval -- run --pin <saved-live-result.json> --live --max-runs 6 --max-tokens 2000000
+```
+
+Pass a result's path or its filename from the results directory. Policy overrides are refused. If any pinned input changed, the run fails before starting an agent or reading account quota, names the changed inputs, and exits with status 1. Restore the original code, skills and runtime before trying again. Pins verify versions; they do not archive or automatically restore them. Older results without pins cannot be repeated this way.
+
+The provider-reported model and effort are checked after execution too. A changed model alias is marked as a failed repeat, while keeping its measured usage and check outcome. Use explicit model and effort settings for live comparisons; an omitted setting uses the provider's default. Providers can change a model behind an unchanged name, and this cannot make their output deterministic or pin their hosted service. A run with unreported model identity stays separate in reports. A live repeat can spend its new budget even if model drift is only discovered at the end.
+
 ## Reading the results
 
 - **Unknown is not zero.** An agent that doesn't report a value shows as `unknown`, and totals only cover the runs that reported. **Runs without usage** says how many didn't.
@@ -50,6 +66,10 @@ Results are local files in `evals/results/` (`CODESHI_EVAL_RESULTS` moves them),
 - **`rubric`** in each result says what a person should judge that a check can't. Its `verdict` starts empty.
 
 Run enough repeats to see the spread: agents vary from run to run. Don't advertise a saving or a quality gain from a few runs.
+
+Reports pool repeats only when experiment inputs, live/recorded mode and reported model/effort sequences match. Each row shows its experiment ID and actual models. Changed fixtures, skill resources, checks or engine versions stay separate; legacy results without pins remain readable but are not pooled. **Work (ms)** adds agent working intervals. **Wall (ms)** includes setup, quota observations, checks and cleanup as well, so evaluation overhead stays visible. Neither recorded-provider timings nor token counts are evidence of a live efficiency gain.
+
+Reviewers already count in the task ledger. Planning, summaries and retrieval currently use local rules, not model calls; delegated model workers remain planned. When those calls are introduced, they must carry task identities and join the same totals before this suite can claim to measure their overhead. Broader routing cases from the roadmap (stale quota, unsuitable models and concurrent account usage) and longer live comparisons are still outstanding.
 
 ## Measured so far
 

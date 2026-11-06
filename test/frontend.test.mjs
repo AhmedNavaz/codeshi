@@ -1831,8 +1831,8 @@ test('commands are added and edited in a short form, stay with their workspace, 
 const panelFixture = () => ({ ledgerTask: { id: 't1', prompt: 'Add promo codes to checkout', agents: { claude: {}, codex: {} }, workingMs: 150000, runs: 2, handoffs: 1, retries: 0, reviews: 0, status: 'complete', verification: 'passed', usage: { input: 1200, output: 50, cacheRead: 300, cacheWrite: null, reasoning: null, runs: 2, runsWithTokens: 1, partialRuns: 0 } } });
 const emptyUsage = () => ({ input: null, output: null, cacheRead: null, cacheWrite: null, reasoning: null, runs: 1, runsWithTokens: 0, partialRuns: 0 });
 
-test('the side panel has four tabs; each opens its own panel, is remembered, and old links into the Agents panel still land', async () => {
-  const ui = await browser({ insights: true, agentsUI: true, layoutUI: true, wide: true });
+test('the side panel tabs open their own panel, remember the choice, and old links into Agents still land', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, layoutUI: true, rewindUI: true, wide: true });
   await flush();
   assert.equal(ui.$('agents-panel').hidden, false, 'Agents opens first.');
   const show = ui.window.relayUI.showSidePanel;
@@ -1843,8 +1843,16 @@ test('the side panel has four tabs; each opens its own panel, is remembered, and
   assert.deepEqual([ui.$('tasks-panel').hidden, ui.$('brief-panel').hidden], [false, true]);
   show('git'); await flush();
   assert.deepEqual([ui.$('git-panel').hidden, ui.$('tasks-panel').hidden], [false, true]);
+  show('timeline'); await flush();
+  assert.deepEqual([ui.$('timeline-panel').hidden, ui.$('git-panel').hidden], [false, true]);
+  assert.equal(ui.storage.get('throughline:side-panel'), 'timeline');
+  ui.$('toggle-side-panel').click(); await flush();
+  assert.equal(ui.$('timeline-panel').hidden, true);
+  ui.$('toggle-side-panel').click(); await flush();
+  assert.equal(ui.$('timeline-panel').hidden, false);
   ui.window.relayAgents.open('memory'); await flush();
   assert.equal(ui.$('brief-panel').hidden, false, 'Memory now lives in the Brief panel, and older links follow it there.');
+  assert.equal(ui.$('timeline-panel').hidden, true);
   ui.$('toggle-side-panel').click(); await flush();
   assert.equal(ui.$('brief-panel').hidden, true);
   ui.$('toggle-side-panel').click(); await flush();
@@ -2970,7 +2978,7 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
 
   ui.$('message-input').value='Refactor the payment module into services';ui.fire('message-input','input');
   assert.equal(ui.$('route-preview').hidden,false);
-  assert.equal(ui.$('route-choice').textContent,'Codex · Model One · High effort');assert.equal(ui.$('route-reason').textContent,'A complex task (refactoring)');
+  assert.equal(ui.$('route-choice').textContent,'Codex · Model One · High effort');assert.match(ui.$('route-reason').textContent,/^A complex task \(refactoring\) · Plan usage unknown/);
   ui.$('message-input').dispatchEvent(new UIEvent('keydown',{key:'Enter'}));await flush();await flush();
   const sent=ui.requests.filter(request=>request.path.endsWith('/messages')).at(-1).body;
   assert.deepEqual([sent.provider,sent.model,sent.effort,sent.routing],['codex','model-one','high',{mode:'balanced',reason:'A complex task (refactoring)',tier:'deep',escalation:null}],'Model One at high effort is already its strongest, so there is no step up.');
@@ -3004,7 +3012,7 @@ test('routing is chosen in the Agents panel; the model button then shows the mod
 test('the sidebar, side panel and bottom panel resize with keyboard handles; the old Files divider and its saved height are removed',async()=>{
   const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300,workspaces:500})}});
   const root=ui.document.documentElement,handles=ui.document.querySelectorAll('.resize-handle');
-  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel']);
+  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel']);
   assert.equal(JSON.parse(ui.storage.get('throughline:layout')).workspaces,undefined,'An old divider height cannot push tasks down.');
   assert.equal(root.style['--inspector-width'],'720px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel').style.height,'300px','The Run panel’s height carries over to the shared panel.');
   assert.deepEqual(Object.keys(JSON.parse(ui.storage.get('throughline:layout')||'{}')).filter(key=>['terminal','commands'].includes(key)),[]);
@@ -3558,6 +3566,56 @@ test('a run that changed files offers Undo, previews every file before anything 
   Object.assign(conversation, { status: 'running', activeRun: { id: 'other-run', provider: 'codex' } });
   await ui.window.relayUI.refresh(); await flush();
   assert.equal(line().querySelectorAll('button')[0].disabled, true);
+});
+
+test('Timeline lists saved points, previews a restore, and closes it when switching to a parallel task', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, rewindUI: true, moreProjects: true });
+  const id = '11111111-1111-4111-8111-111111111111', target = { kind: 'checkpoint', id, phase: 'after' };
+  const conversation = ui.canonical.get('project-one');
+  const entry = { id, kind: 'run', provider: 'claude', prompt: 'Add the promo field', at: '2026-11-06T08:00:00Z', status: 'complete', files: 1,
+    checkpoints: [{ target: { ...target, phase: 'before' }, available: false, reason: 'Not every folder was saved.' }, { target, available: true }] };
+  let applied = 0;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/checkpoints') return response({ entries: [entry] });
+    if (request.path === '/api/checkpoints/preview') return response({ target, digest: 'restore-digest', provider: 'claude', prompt: entry.prompt, files: [{ folderId: 'frontend', folder: 'Frontend', path: 'promo.js', action: 'restore', diff: '@@ -1 +1 @@\n-later edit\n+checkpoint' }] });
+    if (request.path === '/api/checkpoints/apply') { applied++; assert.deepEqual(request.body, { target, digest: 'restore-digest' }); return response({ id: 'restore' }); }
+    return next();
+  });
+  ui.window.relayUI.showSidePanel('timeline'); await flush();
+  assert.match(ui.$('timeline-content').textContent, /Claude.*Add the promo field.*1 file changed/);
+  const points = () => ui.$('timeline-content').querySelectorAll('button');
+  assert.equal(points()[0].disabled, true);
+  assert.equal(points()[0].title, entry.checkpoints[0].reason);
+  points()[1].click(); await flush();
+  assert.equal(ui.$('rewind-title').textContent, 'Restore this checkpoint?');
+  assert.match(ui.$('rewind-summary').textContent, /replacing later edits.*conversation stays/);
+  assert.match(ui.$('rewind-note').textContent, /recovery checkpoint/);
+  assert.equal(applied, 0);
+  ui.$('confirm-rewind').click(); await flush();
+  assert.equal(applied, 1);
+  points()[1].click(); await flush();
+  assert.equal(ui.$('rewind-dialog').open, true);
+  ui.window.relayUI.getState().taskId = 'parallel';
+  ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  assert.equal(ui.$('rewind-dialog').open, false);
+  assert.match(ui.$('timeline-content').textContent, /main workspace conversation/);
+  assert.equal(applied, 1);
+  ui.window.relayUI.getState().taskId = null;
+  Object.assign(conversation, { status: 'running', activeRun: { id: 'working' }, checkpointRevision: 2 });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(points()[1].disabled, true, 'Restores wait for active work.');
+});
+
+test('Timeline ignores a late history response from the previous workspace', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, rewindUI: true, moreProjects: true });
+  const pending = deferred();
+  ui.setIntercept((request, next) => request.path === '/api/checkpoints' ? request.projectId === 'project-one' ? pending.promise : response({ entries: [] }) : next());
+  ui.window.relayTimeline.open(); await flush();
+  const state = ui.window.relayUI.getState(); state.projectId = 'project-two';
+  ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  pending.resolve(response({ entries: [{ id: 'old', kind: 'run', prompt: 'Stale workspace', checkpoints: [] }] })); await flush();
+  assert.doesNotMatch(ui.$('timeline-content').textContent, /Stale workspace/);
+  assert.match(ui.$('timeline-content').textContent, /No checkpoints yet/);
 });
 
 test('alerts play their sound once, only when allowed, and Settings chooses which sounds play', async () => {

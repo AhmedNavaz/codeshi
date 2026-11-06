@@ -46,3 +46,21 @@
 .rewind-error { margin: 0; padding: 0 20px 10px; color: var(--danger); font-size: 12.5px; }
 .rewind-footer { display: flex; align-items: center; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
 .rewind-note { margin-right: auto; color: var(--muted); font-size: 12px; }
+
+.timeline-panel { overflow: hidden; }
+.timeline-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px 4px; color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.timeline-hint { margin: 4px 18px 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.timeline-content { flex: 1; min-height: 0; overflow: auto; padding: 0 18px 18px; }
+.checkpoint-card { position: relative; margin: 0 0 12px 5px; padding: 0 0 14px 17px; border-left: 1px solid var(--border); }
+.checkpoint-card::before { content: ''; position: absolute; left: -4px; top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.checkpoint-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 5px 12px; font-size: 12px; }
+.checkpoint-heading strong { color: var(--text-strong); font-weight: 600; }
+.checkpoint-heading time, .checkpoint-meta { color: var(--muted); font-size: 11px; }
+.checkpoint-prompt { margin: 7px 0; color: var(--text); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.checkpoint-meta { margin: 5px 0 9px; }
+.checkpoint-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.checkpoint-actions .secondary-button { min-height: 27px; padding: 3px 9px; font-size: 11px; }
+/* Five tabs fit at the smallest inspector width by keeping only the selected label. */
+@container (max-width: 390px) { .panel-tabs .panel-tab:not([aria-selected="true"]) .panel-tab-label { display: none; } }
+@media (max-width: 1100px) { .timeline-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: var(--statusbar-height); width: min(var(--inspector-width, var(--inspector-width-default)), 80vw); box-shadow: var(--shadow-lg); } }
+@media (max-width: 760px) { .timeline-panel { top: 44px; width: min(360px, 100vw); } }
