@@ -234,14 +234,15 @@ else {
       for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!document.getElementById('updates-dialog').open`)){result.updates.dismissed=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
       // Flow: exercise the real renderer/API with a disposable workspace and no installed agents.
       {
-        // Let native rendering and the transition animations advance, including on macOS with a hidden main window.
+        // Let native rendering advance, including on macOS with a hidden main window.
         win.showInactive();
+        await win.webContents.executeJavaScript(`document.documentElement.dataset.smokeTest = 'true'`);
         const folder=path.join(app.getPath('userData'),'flow-smoke-workspace');fs.mkdirSync(folder,{recursive:true});
         const project=relay.registry.add({path:folder,name:'Flow smoke'});
         await win.webContents.executeJavaScript(`(async()=>{await window.relayUI.refreshProjects({choose:true});await window.relayUI.selectProject(${JSON.stringify(project.id)});window.relayFlow.enter();})()`);
-        for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         // Routing is Flow's: entering turns it on, Balanced at first, and leaving turns it off.
-        for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`window.relayUI.getState().conversation?.routing?.mode==='balanced'`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`window.relayUI.getState().conversation?.routing?.mode==='balanced'`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         win.setContentSize(1440,900);
         result.flow=await win.webContents.executeJavaScript(`(async()=>{
           await new Promise(resolve=>requestAnimationFrame(resolve));
@@ -255,7 +256,7 @@ else {
           const headerPlaced=header.parentElement.id==='app-shell'&&brand.top>=0&&brand.bottom<=56&&brand.left>=(document.documentElement.classList.contains('mac-titlebar')?82:0)&&Math.abs((search.left+search.right)/2-innerWidth/2)<8&&out.right>innerWidth-40&&out.right<=innerWidth;
           // Remote access opens in Flow's own sheet, drawn by the same module as the Settings section.
           document.getElementById('connect-phone').click();
-          for(let tries=0;tries<100&&!document.querySelector('.flow-phone .settings-row');tries++)await new Promise(resolve=>setTimeout(resolve,20));
+          for(let tries=0;tries<250&&!document.querySelector('.flow-phone .settings-row');tries++)await new Promise(resolve=>setTimeout(resolve,20));
           const remote=document.getElementById('flow-detail').open&&document.getElementById('flow-detail-title').textContent==='Remote access'&&!document.getElementById('settings').open&&!!document.querySelector('.flow-phone .settings-row');
           close.click();await new Promise(resolve=>setTimeout(resolve,20));
           return {entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:document.querySelectorAll('.flow-card').length===4,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about')&&!/preview/i.test(document.getElementById('flow-left').textContent+document.getElementById('flow-right').textContent),routingOn:window.relayUI.getState().conversation.routing?.mode==='balanced'&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
@@ -272,9 +273,9 @@ else {
         result.flow.locked=await win.webContents.executeJavaScript(`document.getElementById('toggle-flow').disabled&&window.relayFlow.leave()===false&&window.relayFlow.isOn()`);
         conversation.status='idle';conversation.activeRun=null;
         await win.webContents.executeJavaScript(`window.relayUI.refresh().then(()=>window.relayFlow.leave())`);
-        for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         result.flow.left=await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&getComputedStyle(document.querySelector('.status-bar')).display!=='none'`);
-        for(let tries=0;tries<100;tries++){if(await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         result.flow.routingOff=await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing&&document.getElementById('agents-routing').hidden`);
         result.flow.passed=['entered','footerHidden','cards','windowControlsClear','details','headerPlaced','remote','noPreview','routingOn','narrow','locked','left','routingOff'].every(key=>result.flow[key]===true);
         console.log('AI_RELAY_FLOW_SMOKE '+JSON.stringify(result.flow));

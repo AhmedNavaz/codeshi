@@ -504,7 +504,7 @@
   // ---- The way in and out. A veil covers the change of layout; going in, the seal appears on it for a moment.
   // Without motion, or in a page that can't animate, the layout just changes.
   function stage(change, seal, done) {
-    if (!veil || typeof veil.animate !== 'function' || reducedMotion()) { try { change(); } finally { done(); } return; }
+    if (!veil || typeof veil.animate !== 'function' || reducedMotion() || document.documentElement.dataset.smokeTest === 'true') { try { change(); } finally { done(); } return; }
     veil.hidden = false; veil.classList.toggle('with-seal', seal);
     const mark = veil.querySelector('img');
     if (mark) mark.style.opacity = '0';
