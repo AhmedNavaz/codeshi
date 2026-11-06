@@ -1,0 +1,48 @@
+# The Codeshi private-link service on Fly.io. Fly's proxy provides HTTPS and sets
+# X-Forwarded-Proto; the volume keeps requests across restarts and deploys.
+# Steps are in sharing/README.md.
+app = "replace-with-your-app-name"
+# The region for the machine and its volume; `fly platform regions` lists them.
+primary_region = "iad"
+
+[build]
+  image = "ghcr.io/ahmednavaz/throughline-sharing:latest"
+
+[env]
+  HOST = "0.0.0.0"
+  PORT = "4319"
+  SHARING_DATA_DIR = "/data"
+  REQUIRE_HTTPS = "true"
+  # SHARING_CREATE_KEY is a Fly secret, set with `fly secrets set`, never here.
+
+[mounts]
+  source = "sharing_data"
+  destination = "/data"
+  initial_size = "1gb"
+
+[http_service]
+  internal_port = 4319
+  force_https = true
+  # Everything the service keeps is on the volume, so it can stop when idle and
+  # start again on the next request.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+    # A plain request is refused under REQUIRE_HTTPS, so the check sends the
+    # header Fly's proxy adds to real requests.
+    [http_service.checks.headers]
+      X-Forwarded-Proto = "https"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # Every active request is held in memory. Filled to its 100 MiB storage limit,
+  # the service needs more than the default 256 MB.
+  memory = "512mb"

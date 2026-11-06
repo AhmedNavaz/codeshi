@@ -1,0 +1,9 @@
+# HTTPS for the private-link service. Caddy gets a certificate for SHARING_DOMAIN
+# (set in .env) and redirects plain HTTP to HTTPS. Codeshi needs the service at the
+# root of its own hostname, not under a path.
+{$SHARING_DOMAIN} {
+	# Caddy replaces any X-Forwarded-Proto a client sends with the real scheme, which
+	# is what REQUIRE_HTTPS checks. Access logs stay off, as by default: requests
+	# carry capability tokens in their headers.
+	reverse_proxy sharing:4319
+}
