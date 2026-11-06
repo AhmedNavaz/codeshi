@@ -218,7 +218,7 @@ else {
         }finally{preview.close();server.close();}
       }
       if(process.platform==='darwin'&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));
-      result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'`);
+      result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'&&typeof window.WebLinksAddon?.WebLinksAddon==='function'`);
       // The menu bar is Codeshi's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
       const settled=async done=>{for(let tries=0;!done()&&tries<250;tries++)await new Promise(resolve=>setTimeout(resolve,20));return done();};
       const reported=await settled(()=>page!==null);

@@ -8,7 +8,7 @@
   // here belong to the shell, not to the message box.
   const $ = id => document.getElementById(id), api = window.relayUI, panel = $('terminal-panel');
   if (!api || !panel) return;
-  const Terminal = window.Terminal, FitAddon = window.FitAddon?.FitAddon;
+  const Terminal = window.Terminal, FitAddon = window.FitAddon?.FitAddon, WebLinksAddon = window.WebLinksAddon?.WebLinksAddon;
   // Views by session id; each workspace's sessions as the server lists them; and each workspace's open tab and the pane
   // last used in each of its tabs.
   const views = new Map(), lists = new Map(), layouts = new Map();
@@ -52,6 +52,20 @@
     return { ...palettes[light ? 'light' : 'dark'], background: read('--panel-bg') || (light ? '#f4efe6' : '#161513'), foreground: read('--text') || (light ? '#3d362f' : '#d6cec2'), cursor: read('--text-strong') || read('--text'), cursorAccent: read('--panel-bg') || (light ? '#f8f8f8' : '#181818'), selectionBackground: light ? '#add6ff' : '#264f78' };
   }
 
+  // Links in a shell's output open in the browser with a click (#83): addresses it prints, also when they wrap onto the
+  // next line, and links a program marks up itself (OSC 8). Both follow the desktop bridge's rules, checked here too so
+  // a web browser opens the same ones, in a new tab: HTTPS, or HTTP to this computer, with no name or password. One
+  // that can't open says so in the panel. xterm opens a link on any button's release, so a right-click, or a drag that
+  // selects text in a link, is left to do what it does.
+  const opens = url => !url.username && !url.password && (url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)));
+  async function openLink(event, term, uri) {
+    if (event.button !== 0 || term.hasSelection()) return;
+    let url = null; try { url = new URL(uri); } catch { /* Not an address. */ }
+    if (!url || !opens(url)) { message('That link didn’t open. The terminal opens HTTPS links, and HTTP links to localhost, without a name or password.'); return; }
+    try { if (window.relayDesktop?.openExternal) await window.relayDesktop.openExternal(url.href); else window.open(url.href, '_blank', 'noopener,noreferrer'); message(''); }
+    catch (error) { message(`That link didn’t open. ${String(error?.message || error).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')}`); }
+  }
+
   // A workspace's tabs in the order they opened, each with its panes in order.
   const sessions = (id = projectId()) => lists.get(id) || [];
   const layout = (id = projectId()) => { if (!layouts.has(id)) layouts.set(id, { tab: null, focus: new Map() }); return layouts.get(id); };
@@ -91,9 +105,12 @@
     const host = element('div', 'terminal-view');
     host.dataset.projectId = session.projectId; host.dataset.sessionId = session.id; host.hidden = true;
     $('terminal-views').append(host);
-    const term = new Terminal({ cursorBlink: true, fontFamily: (typeof getComputedStyle === 'function' && getComputedStyle(document.documentElement).getPropertyValue('--mono').trim()) || 'Menlo, monospace', fontSize: 13, lineHeight: 1.25, scrollback: 5000, allowProposedApi: false, macOptionIsMeta: false, theme: theme() });
+    // An OSC 8 link's text needn't be its address, so pointing at one shows where it goes. Other schemes reach openLink
+    // too, so a file link says why it stays closed rather than not being a link.
+    const linkHandler = { activate: (event, uri) => openLink(event, term, uri), hover: (event, uri) => { host.title = uri; }, leave: () => { host.title = ''; }, allowNonHttpProtocols: true };
+    const term = new Terminal({ cursorBlink: true, fontFamily: (typeof getComputedStyle === 'function' && getComputedStyle(document.documentElement).getPropertyValue('--mono').trim()) || 'Menlo, monospace', fontSize: 13, lineHeight: 1.25, scrollback: 5000, allowProposedApi: false, macOptionIsMeta: false, linkHandler, theme: theme() });
     const fit = new FitAddon();
-    term.loadAddon(fit); term.open(host);
+    term.loadAddon(fit); if (WebLinksAddon) term.loadAddon(new WebLinksAddon((event, uri) => openLink(event, term, uri))); term.open(host);
     view = { id: session.id, projectId: session.projectId, term, fit, host, stream: null, queue: '', sending: false, resizeTimer: null };
     // The pane last clicked or typed in is the one End and New session act on.
     const use = () => { const current = sessions(view.projectId).find(item => item.id === view.id); if (current && layout(view.projectId).focus.get(current.tabId) !== view.id) { layout(view.projectId).focus.set(current.tabId, view.id); if (view.projectId === projectId()) render(); } };

@@ -68,9 +68,19 @@ function documentFixture(){
 const clone=value=>JSON.parse(JSON.stringify(value));
 const response=(data,status=200)=>({ok:status>=200&&status<300,status,text:async()=>JSON.stringify(data),json:async()=>clone(data)});
 async function flush(){for(let index=0;index<12;index++)await new Promise(resolve=>setImmediate(resolve));}
+// The installed xterm.js and its web links addon, loaded once in a context of their own, for tests that need what xterm
+// itself does with output: its buffer, line wrapping and the links it finds. The fake DOM can't lay a terminal out, so
+// these terminals are never opened; xterm keeps its buffer and finds links without that.
+let xterm=null;
+function realXterm(){
+  if(xterm)return xterm;
+  const context=vm.createContext({window:{},document:{createElement:()=>({getContext:()=>null}),queryCommandSupported:()=>false},MutationObserver:class{observe(){}disconnect(){}},navigator:{userAgent:'node',platform:'MacIntel',language:'en'},performance,URL,console,setTimeout,clearTimeout,queueMicrotask});
+  for(const file of ['@xterm/xterm/lib/xterm.js','@xterm/addon-web-links/lib/addon-web-links.js'])vm.runInContext(fs.readFileSync(new URL('../node_modules/'+file,import.meta.url),'utf8'),context,{filename:file});
+  return xterm={Terminal:context.Terminal,WebLinksAddon:context.WebLinksAddon};
+}
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -215,10 +225,12 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(flowUI)vm.runInContext(fs.readFileSync(new URL('../public/flow.js',import.meta.url),'utf8'),context,{filename:'public/flow.js'});
   if(alertsUI)vm.runInContext(fs.readFileSync(new URL('../public/alerts.js',import.meta.url),'utf8'),context,{filename:'public/alerts.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
-  // A stand-in for xterm.js: it records what the page writes and lets a test type into it.
+  // A stand-in for xterm.js: it records what the page writes and lets a test type into it. With realTerminal, the page
+  // gets the real xterm.js and its web links addon instead (see realXterm).
   if(terminalUI){
-    window.Terminal=class{constructor(options){this.options=options;this.written='';this.cols=80;this.rows=24;this.focused=0;terminals.push(this);}loadAddon(){}open(host){this.host=host;}onData(fn){this.type=fn;}onResize(fn){this.resized=fn;}write(data){this.written+=data;}reset(){this.written='';}focus(){this.focused++;}dispose(){this.disposed=true;}};
-    window.FitAddon={FitAddon:class{fit(){}}};
+    if(realTerminal){const xterm=realXterm();window.Terminal=class extends xterm.Terminal{constructor(options){super(options);terminals.push(this);}open(host){this.host=host;}};window.WebLinksAddon=xterm.WebLinksAddon;}
+    else window.Terminal=class{constructor(options){this.options=options;this.written='';this.cols=80;this.rows=24;this.focused=0;terminals.push(this);}loadAddon(){}open(host){this.host=host;}onData(fn){this.type=fn;}onResize(fn){this.resized=fn;}write(data){this.written+=data;}reset(){this.written='';}focus(){this.focused++;}dispose(){this.disposed=true;}};
+    window.FitAddon={FitAddon:class{activate(){}dispose(){}fit(){}}};
     vm.runInContext(fs.readFileSync(new URL('../public/terminal.js',import.meta.url),'utf8'),context,{filename:'public/terminal.js'});
   }
   // A stand-in for the system's speech synthesis: it records what would be spoken.
@@ -3396,6 +3408,114 @@ test('the terminal opens shells as tabs named after their folders, splits a tab 
   ui.$('terminal-restart').click(); await flush();
   assert.deepEqual(posts.at(-1), ['start', 'project-one', { folderId: 'backend', cols: 80, rows: 24, replace: 'project-one-shell-1' }]);
   assert.deepEqual([tabNames(), first.disposed], [['Backend'], true], 'The new shell takes the ended one’s tab.');
+});
+
+// A shell in the real xterm.js: a test prints to it, finds the links a pointer over a row would find (addresses the web
+// links addon spots, and links a program marked up itself with OSC 8), and clicks them as xterm does.
+async function realShell(options = {}) {
+  const ui = await browser({ terminalUI: true, realTerminal: true, ...options }), inputs = [];
+  ui.setIntercept((request, next) => {
+    if (!request.path.startsWith('/api/terminal')) return next();
+    if (request.path === '/api/terminal') return response({ sessions: [], shell: 'zsh' });
+    if (request.path === '/api/terminal/input') inputs.push(request.body.data);
+    if (request.path === '/api/terminal/start') return response({ id: 'shell-1', projectId: 'project-one', folderId: 'frontend', folderName: 'Frontend', cwd: '/workspace/example/frontend', shell: '/bin/zsh', status: 'running', exitCode: null, signal: null, error: null, startedAt: '2026-11-06T00:00:00.000Z', endedAt: null, cols: request.body.cols, rows: request.body.rows, tabId: 'shell-1', pane: 0, split: null, order: 1 }, 201);
+    return response({ written: 1 });
+  });
+  ui.$('status-terminal').click(); await flush();
+  ui.$('terminal-folders').querySelectorAll('button')[0].click(); await flush();
+  const [term] = ui.terminals, stream = ui.eventSources.find(source => source.url.startsWith('/api/terminal/stream'));
+  const print = text => { stream.dispatchEvent(new UIEvent('data', { data: JSON.stringify({ data: text }) })); return new Promise(resolve => term.write('', resolve)); };
+  const row = text => { const buffer = term.buffer.active; for (let y = 0; y < buffer.length; y++) if (buffer.getLine(y).translateToString(true).includes(text)) return y + 1; throw new Error(`Nothing printed ${text}`); };
+  // xterm asks each of its link providers about the row under the pointer; rows count from 1.
+  const links = (text, below = 0) => [...term._core._linkProviderService.linkProviders].flatMap(provider => { let found = []; provider.provideLinks(row(text) + below, list => { found = list || []; }); return found; });
+  const click = async (link, button = 0) => { link.activate(new UIEvent('mouseup', { button }), link.text); await flush(); };
+  const notice = () => ui.$('terminal-message').hidden ? '' : ui.$('terminal-message').textContent;
+  return { ui, term, inputs, print, row, links, click, notice };
+}
+
+test('links in the terminal open in the browser through the desktop app, also when they wrap or a program marks them up, and one that can’t open says why', async () => {
+  const { ui, term, inputs, print, row, links, click, notice } = await realShell({ desktop: true });
+  const refused = 'That link didn’t open. The terminal opens HTTPS links, and HTTP links to localhost, without a name or password.';
+  await print('  VITE v7.1.0  ready in 312 ms\r\n\r\n  Local:   http://localhost:5173/\r\n');
+  const [local] = links('Local:');
+  assert.equal(local.text, 'http://localhost:5173/');
+  await click(local);
+  assert.deepEqual(ui.externalLinks, ['http://localhost:5173/']);
+  assert.equal(notice(), '');
+
+  // An address longer than the terminal is wide wraps onto the next line and is still one link, from either line.
+  const pull = 'https://github.com/AhmedNavaz/codeshi/pull/new/terminal-links?expand=1&title=Open+links+printed+in+the+terminal';
+  await print(`remote: Create a pull request for 'terminal-links' on GitHub by visiting:\r\nremote:      ${pull}\r\n`);
+  assert.equal(term.buffer.active.getLine(row('remote:      ')).isWrapped, true, 'The address wrapped.');
+  assert.deepEqual(links('remote:      ').map(link => link.text), [pull]);
+  const [continued] = links('remote:      ', 1);
+  assert.equal(continued.text, pull, 'Its second line is the same link.');
+  await click(continued);
+  assert.equal(ui.externalLinks.at(-1), pull);
+
+  // A link a program marks up itself (OSC 8) opens the same way; its text needn't be the address, so pointing at it shows where it goes.
+  await print('\x1b]8;;https://github.com/AhmedNavaz/codeshi/issues/83\x1b\\issue 83\x1b]8;;\x1b\\ and \x1b]8;;file:///etc/hosts\x1b\\hosts\x1b]8;;\x1b\\\r\n');
+  const [issue, hosts] = links('issue 83');
+  assert.deepEqual([issue.text, hosts.text], ['https://github.com/AhmedNavaz/codeshi/issues/83', 'file:///etc/hosts']);
+  issue.hover(new UIEvent('mousemove'), issue.text);
+  assert.equal(term.host.title, 'https://github.com/AhmedNavaz/codeshi/issues/83');
+  issue.leave(new UIEvent('mouseleave'), issue.text);
+  assert.equal(term.host.title, '');
+  await click(issue);
+  assert.equal(ui.externalLinks.at(-1), 'https://github.com/AhmedNavaz/codeshi/issues/83');
+
+  // A link the bridge wouldn't open says why in the panel instead, and the next link that opens clears that.
+  await print('Docs: http://example.com/docs or https://ahmed@github.com/AhmedNavaz or \x1b]8;;https://:secret@github.com/AhmedNavaz\x1b\\the repository\x1b]8;;\x1b\\\r\n');
+  const [secret, plain, named] = links('Docs:');
+  assert.deepEqual([secret.text, plain.text, named.text], ['https://:secret@github.com/AhmedNavaz', 'http://example.com/docs', 'https://ahmed@github.com/AhmedNavaz']);
+  for (const [link, why] of [[hosts, 'A file link stays closed.'], [plain, 'So does plain HTTP to another computer.'], [named, 'And an address with a name in it.'], [secret, 'Or a password.']]) {
+    const opened = ui.externalLinks.length;
+    await click(link);
+    assert.deepEqual([notice(), ui.externalLinks.length], [refused, opened], why);
+    await click(local);
+    assert.deepEqual([notice(), ui.externalLinks.at(-1)], ['', 'http://localhost:5173/']);
+  }
+  const opened = ui.externalLinks.length;
+
+  // When the bridge refuses one anyway, the panel says what it said.
+  ui.window.relayDesktop.openExternal = async () => { throw new Error("Error invoking remote method 'relay:open-external': Error: Only HTTPS or local test links without credentials may open"); };
+  await click(issue);
+  assert.equal(notice(), 'That link didn’t open. Only HTTPS or local test links without credentials may open');
+
+  // A right-click, or a drag that selects text in a link, doesn't open it, and clicking links never types into the shell.
+  ui.window.relayDesktop.openExternal = async url => { ui.externalLinks.push(url); };
+  await click(local, 2);
+  assert.equal(ui.externalLinks.length, opened);
+  term.hasSelection = () => true;
+  await click(local);
+  assert.equal(ui.externalLinks.length, opened);
+  delete term.hasSelection;
+  await click(local);
+  assert.equal(ui.externalLinks.length, opened + 1);
+  assert.deepEqual(inputs, []);
+});
+
+test('in a web browser, a link in the terminal opens in a new tab, under the same rules', async () => {
+  const { ui, print, links, click, notice } = await realShell();
+  const tabs = []; ui.window.open = (...args) => { tabs.push(args); return null; };
+  await print('Serving on http://127.0.0.1:8000/ and http://[::1]:3000/, docs at https://example.com/docs and http://example.com/\r\n');
+  const found = links('Serving');
+  assert.deepEqual(found.map(link => link.text), ['http://127.0.0.1:8000/', 'http://[::1]:3000/', 'https://example.com/docs', 'http://example.com/']);
+  for (const link of found.slice(0, 3)) await click(link);
+  assert.deepEqual(tabs, ['http://127.0.0.1:8000/', 'http://[::1]:3000/', 'https://example.com/docs'].map(url => [url, '_blank', 'noopener,noreferrer']));
+  assert.equal(notice(), '');
+  // Plain HTTP to another computer, another kind of address on this one and a marked-up link that isn't an address stay
+  // closed and say why.
+  await print('Debugger at \x1b]8;;ws://127.0.0.1:9229/\x1b\\ws://127.0.0.1:9229/\x1b]8;;\x1b\\ and \x1b]8;;not an address\x1b\\notes\x1b]8;;\x1b\\\r\n');
+  const closed = [found[3], ...links('Debugger at')];
+  assert.deepEqual(closed.map(link => link.text), ['http://example.com/', 'ws://127.0.0.1:9229/', 'not an address']);
+  for (const link of closed) {
+    const opened = tabs.length;
+    await click(link);
+    assert.deepEqual([notice(), tabs.length], ['That link didn’t open. The terminal opens HTTPS links, and HTTP links to localhost, without a name or password.', opened], link.text);
+    await click(found[0]);
+    assert.equal(notice(), '');
+  }
 });
 
 test('voice input fills the message box as you speak, Esc cancels it, and a run started by voice is summarized aloud', async () => {
