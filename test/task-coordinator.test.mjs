@@ -286,6 +286,38 @@ test('two copies of one repository merge one after the other, each against what 
   assert.deepEqual(['one.txt', 'two.txt'].map(name => fs.readFileSync(path.join(env.folders.a, name), 'utf8')), ['first\n', 'second\n']);
 });
 
+test('where Git converts line endings, a task merges like anywhere else and each file keeps the line endings it has', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-eol-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Git for Windows turns core.autocrlf on by default: files are stored with LF and checked out with CRLF.
+  const repo = path.join(root, 'repo'), crlf = text => text.replace(/\n/g, '\r\n'), seven = 'one\n2\n3\n4\n5\n6\nseven\n', both = 'ONE\n2\n3\n4\n5\n6\nSEVEN\n';
+  fs.mkdirSync(repo); git(repo, 'init', '-q'); git(repo, 'config', 'core.autocrlf', 'true'); git(repo, 'config', 'user.email', 't@t.t'); git(repo, 'config', 'user.name', 't');
+  const put = (folder, files) => { for (const [name, text] of Object.entries(files)) { if (text === null) fs.rmSync(path.join(folder, name)); else fs.writeFileSync(path.join(folder, name), text); } };
+  const read = name => fs.existsSync(path.join(repo, name)) ? fs.readFileSync(path.join(repo, name), 'utf8') : null;
+  put(repo, { 'clean.txt': 'a\n', 'same.txt': 'b\n', 'merge.txt': seven, 'clash.txt': 'x\n', 'lf.txt': 'l\n', 'lf-merge.txt': seven, 'gone.txt': 'g\n', 'drop.txt': 'd\n' });
+  git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'first'); git(repo, 'rm', '-rq', '--cached', '.'); git(repo, 'reset', '-q', '--hard');
+  const base = git(repo, 'rev-parse', 'HEAD').trim();
+  assert.deepEqual([read('merge.txt'), git(repo, 'show', 'HEAD:merge.txt')], [crlf(seven), seven], 'Checked out with CRLF, stored with LF.');
+  // The task's work, committed in its own copy as Codeshi does it.
+  const copy = path.join(root, 'copy'); git(repo, 'worktree', 'add', '-q', '--detach', copy, 'HEAD');
+  put(copy, { 'clean.txt': crlf('A\n'), 'same.txt': crlf('B\n'), 'merge.txt': crlf(seven.replace('one', 'ONE')), 'clash.txt': crlf('theirs\n'), 'lf.txt': crlf('L\n'), 'lf-merge.txt': crlf(seven.replace('one', 'ONE')), 'new.txt': 'new\n', 'gone.txt': null, 'drop.txt': null });
+  git(copy, 'add', '-A'); git(copy, 'commit', '-qm', 'task'); const result = git(copy, 'rev-parse', 'HEAD').trim();
+  // Meanwhile in the folder: the same change, a change elsewhere in two files, one in the same line, one to a file the task
+  // deleted, and two files a tool rewrote with LF, which Git's diff finds unchanged except for the text.
+  put(repo, { 'same.txt': crlf('B\n'), 'merge.txt': crlf(seven.replace('seven', 'SEVEN')), 'clash.txt': crlf('ours\n'), 'drop.txt': crlf('D\n'), 'lf.txt': 'l\n', 'lf-merge.txt': seven.replace('seven', 'SEVEN') });
+  assert.equal(git(repo, 'diff', '--name-only', '--', 'lf.txt', 'clean.txt', 'gone.txt'), '');
+  const plan = integrationPlan({ root: repo, base, result });
+  assert.deepEqual(Object.fromEntries(plan.files.map(file => [file.path, file.status])), { 'clash.txt': 'conflict', 'clean.txt': 'clean', 'drop.txt': 'conflict', 'gone.txt': 'clean', 'lf-merge.txt': 'merged', 'lf.txt': 'clean', 'merge.txt': 'merged', 'new.txt': 'clean', 'same.txt': 'same' });
+  assert.match(plan.files.find(file => file.path === 'clash.txt').reason, /same lines/); assert.match(plan.files.find(file => file.path === 'drop.txt').reason, /The task deleted this file/);
+  put(repo, { 'clash.txt': crlf('x\n'), 'drop.txt': crlf('d\n') });
+  const ready = integrationPlan({ root: repo, base, result });
+  assert.equal(ready.conflicts, 0); applyPlan(repo, ready);
+  assert.deepEqual(Object.fromEntries(plan.files.map(file => [file.path, read(file.path)])), {
+    'clash.txt': crlf('theirs\n'), 'clean.txt': crlf('A\n'), 'drop.txt': null, 'gone.txt': null, 'lf-merge.txt': both, 'lf.txt': 'L\n', 'merge.txt': crlf(both), 'new.txt': crlf('new\n'), 'same.txt': crlf('B\n'),
+  }, 'Each file keeps the line endings it had, and a new one gets what a checkout writes.');
+  git(repo, 'add', '-A');
+  assert.equal(git(repo, 'diff', '--cached', '--name-only', result), 'lf-merge.txt\nmerge.txt\n', 'Git sees the task’s work, with the folder’s own changes on top.');
+});
+
 test('a change outside the task’s folder, a link, or a file changed to a folder is surfaced rather than written', { skip: noSymlinks }, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-plan-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = repository(path.join(root, 'repo'), { 'web/a.js': 'a\n', 'api/b.js': 'b\n', 'web/c.js': 'c\n', 'web/d.js': 'd\n' });
