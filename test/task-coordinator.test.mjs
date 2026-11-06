@@ -133,7 +133,7 @@ test('approvals and questions stay with their task', { skip: scriptCLIs }, async
   env.release(env.folders.a); env.release(env.folders.b); await finished(env, a); await finished(env, b);
 });
 
-test('the same repository under two roots, a nested root and a linked root all take their own copy, and a main run shares too', { skip: noSymlinks }, async t => {
+test('the same repository under two roots, a nested root and a linked root all take their own copy, and a main run shares too', { skip: noSymlinks || scriptCLIs }, async t => {
   const env = setup(t, root => {
     const repo = repository(path.join(root, 'repo'), { 'web/index.js': 'web\n', 'api/index.js': 'api\n', 'web/.mock-scenarios.json': scenarios, 'api/.mock-scenarios.json': scenarios });
     fs.symlinkSync(repo, path.join(root, 'link'));
