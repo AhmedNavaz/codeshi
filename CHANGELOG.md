@@ -4,6 +4,12 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-11-06
+
+### Fixed
+
+- **Packaging smoke tests.** Automated packaging checks for Flow mode now bypass decorative transition animations in headless environments and allow sufficient time for asynchronous network status probes on CI runners.
+
 ## [0.29.0] - 2026-11-06
 
 ### Added
