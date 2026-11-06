@@ -101,13 +101,14 @@ function repositoryInstructions(folders, { provider, primary, known, paths = [] 
   for (const folder of folders) {
     const directories = new Set(['.']);
     for (const file of paths.filter(file => file.folderId === folder.id).slice(0, FILE_LIMIT)) {
-      let directory = path.dirname(file.path);
-      while (directory !== '.' && !path.isAbsolute(directory) && !directory.split(path.sep).includes('..') && !privatePath(directory)) {
-        directories.add(directory); directory = path.dirname(directory);
+      // Forward slashes on every system, as Git reports them, so a file has one name in the brief and in what was delivered.
+      let directory = path.posix.dirname(path.sep === '\\' ? file.path.replaceAll('\\', '/') : file.path);
+      while (directory !== '.' && !path.isAbsolute(directory) && !directory.split('/').includes('..') && !privatePath(directory)) {
+        directories.add(directory); directory = path.posix.dirname(directory);
       }
     }
-    for (const directory of [...directories].sort((a, b) => a.split(path.sep).length - b.split(path.sep).length)) for (const filename of INSTRUCTION_FILES) {
-    const name = directory === '.' ? filename : path.join(directory, filename);
+    for (const directory of [...directories].sort((a, b) => a.split('/').length - b.split('/').length)) for (const filename of INSTRUCTION_FILES) {
+    const name = directory === '.' ? filename : path.posix.join(directory, filename);
     const found = readableFile(folder, name);
     if (!found) continue;
     const bytes = fs.readFileSync(found.file), hash = sha256(bytes), key = folder.id + '\0' + name;

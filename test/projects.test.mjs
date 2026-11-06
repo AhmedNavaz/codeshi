@@ -33,7 +33,8 @@ function setup(t, scenarios = {}) {
   };
   t.after(async () => {
     await Promise.all(registries.map(registry => registry.close()));
-    fs.rmSync(root, { recursive: true, force: true });
+    // Windows can hold a folder for a moment after a process that started in it has gone. Only the promise version retries that.
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   return { root, dataRoot, workspaces, open };
 }
