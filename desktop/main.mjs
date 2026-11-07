@@ -246,8 +246,12 @@ else {
         win.showInactive();
         const folder=path.join(app.getPath('userData'),'flow-smoke-workspace');fs.mkdirSync(folder,{recursive:true});
         const project=relay.registry.add({path:folder,name:'Flow smoke'});
-        await win.webContents.executeJavaScript(`(async()=>{await window.relayUI.refreshProjects({choose:true});await window.relayUI.selectProject(${JSON.stringify(project.id)});window.relayFlow.enter();})()`);
-        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        await win.webContents.executeJavaScript(`(async()=>{await window.relayUI.refreshProjects({choose:true});await window.relayUI.selectProject(${JSON.stringify(project.id)});})()`);
+        smokeStep('flow project');
+        // The view refuses to change while the workspace is still loading, as it does for a person, so keep asking.
+        // A first launch on a slow machine can stay busy for a while.
+        for(let tries=0;tries<1500;tries++){if(await win.webContents.executeJavaScript(`window.relayFlow.isOn()?!window.relayFlow.isLocked():(window.relayFlow.isLocked()||window.relayFlow.enter(),false)`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        smokeStep('flow entered');
         // Routing is Flow's: entering turns it on, Balanced at first, and leaving turns it off.
         for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`window.relayUI.getState().conversation?.routing?.mode==='balanced'`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         win.setContentSize(1440,900);
