@@ -4929,6 +4929,20 @@ test('Flow details use a dismissible sheet and restore the workbench when leavin
   assert.equal(ui.$('agents-panel').parentNode.id, 'app-shell', 'Normal mode still opens the normal panel.');
 });
 
+test('a Flow sheet opened right after another stays open when the first one\'s close event arrives late', async () => {
+  const ui = await flowBrowser();
+  ui.window.relayFlow.enter(); await flush();
+  ui.window.relayAgents.open(); await flush();
+  assert.equal(ui.$('flow-detail').open, true);
+  // Browsers fire this after a task, so it can arrive once the next sheet is already showing.
+  ui.$('flow-detail').dispatchEvent(new UIEvent('close')); await flush();
+  assert.equal(ui.$('flow-detail').open, true, 'The sheet showing now stays open.');
+  assert.equal(ui.$('agents-panel').parentNode.id, 'flow-detail-body');
+  ui.$('flow-detail').close(); await flush();
+  assert.equal(ui.$('flow-detail').open, false, 'Closing the dialog itself still ends the sheet.');
+  assert.equal(ui.$('agents-panel').parentNode.id, 'app-shell');
+});
+
 test('Flow separates its utilities across the rails and excludes shell tools until leaving', async () => {
   const ui = await flowBrowser({ commandsUI: true, terminalUI: true, theme: true });
   const phone = ui.$('connect-phone'), originalParent = phone.parentNode;

@@ -4,7 +4,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
-## [0.31.0] - 2026-11-07
+## [0.31.1] - 2026-11-07
 
 ### Added
 
@@ -21,6 +21,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ### Fixed
 
+- **A Flow sheet could close itself.** Closing one sheet and quickly opening another, such as Agents then Remote access, could shut the new one as well.
 - **False failures from command text.** A command that merely mentioned a word like "error" could count as a failed step, end up as a blocker in the next agent's brief, or add to a task's repeated-failure stop. Runs now use the agent's reported result where there is one, and older saved runs are rechecked against real failure messages.
 - **Task briefs after a refresh.** Your answers to agent questions are kept as decisions, each with its source, and a resumed task no longer repeats its own continuation prompt as a request. Files outside the workspace are left out.
 - **Antigravity could drop out of Auto.** Its model lookup had five seconds for a check that takes about that long, so it was often left out of routing without any message.
@@ -609,4 +610,5 @@ First public release.
 [0.6.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.6.0
 [0.5.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.4.0
+[0.31.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1
 [0.30.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.30.0

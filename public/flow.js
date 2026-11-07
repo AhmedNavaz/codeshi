@@ -558,7 +558,8 @@
   toggle.addEventListener('click', toggleFlow);
   $('flow-detail-close')?.addEventListener('click', closeDetail);
   detail?.addEventListener('cancel', event => { event.preventDefault(); closeDetail(); });
-  detail?.addEventListener('close', () => { if (detailPanel) closeDetail(); });
+  // The close event comes after the dialog has closed, so a sheet opened straight after another may already be showing.
+  detail?.addEventListener('close', () => { if (detailPanel && !detail.open) closeDetail(); });
   detail?.addEventListener('click', event => {
     if (event.target !== detail) return;
     const rect = detail.getBoundingClientRect();

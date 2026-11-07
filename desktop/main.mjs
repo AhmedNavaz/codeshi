@@ -271,12 +271,8 @@ else {
           document.getElementById('connect-phone').click();
           for(let tries=0;tries<250&&!document.querySelector('.flow-phone .settings-row');tries++)await new Promise(resolve=>setTimeout(resolve,20));
           const remote=document.getElementById('flow-detail').open&&document.getElementById('flow-detail-title').textContent==='Remote access'&&!document.getElementById('settings').open&&!!document.querySelector('.flow-phone .settings-row');
-          // If the sheet didn't load, say what it showed and how the app's requests were doing.
-          let remoteDebug=null;
-          if(!remote){
-            const began=performance.now(),answer=await Promise.race([fetch('/api/phone').then(reply=>reply.status).catch(error=>String(error)),new Promise(resolve=>setTimeout(()=>resolve('no answer in 5 s'),5000))]);
-            remoteDebug={open:document.getElementById('flow-detail').open,title:document.getElementById('flow-detail-title').textContent,settings:document.getElementById('settings').open,shown:document.querySelector('.flow-phone')?.textContent?.slice(0,160)??null,answer,answerMs:Math.round(performance.now()-began),hidden:document.hidden,slowest:performance.getEntriesByType('resource').filter(entry=>entry.name.includes('/api/')).sort((a,b)=>b.duration-a.duration).slice(0,6).map(entry=>[new URL(entry.name).pathname,Math.round(entry.startTime),Math.round(entry.duration)])};
-          }
+          // If the sheet didn't load, say what it showed.
+          const remoteDebug=remote?null:{open:document.getElementById('flow-detail').open,title:document.getElementById('flow-detail-title').textContent,settings:document.getElementById('settings').open,shown:document.querySelector('.flow-phone')?.textContent?.slice(0,160)??null,hidden:document.hidden};
           close.click();await new Promise(resolve=>setTimeout(resolve,20));
           return {remoteDebug,entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:document.querySelectorAll('.flow-card').length===4,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about')&&!/preview/i.test(document.getElementById('flow-left').textContent+document.getElementById('flow-right').textContent),routingOn:window.relayUI.getState().conversation.routing?.mode==='balanced'&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
         })()`);
