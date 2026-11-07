@@ -97,7 +97,19 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
     broker.on('update', unattended);
     const limit = setTimeout(() => { run.timedOut = true; if (broker.running === active) broker.stop(c.id); }, runLimitMs);
     active.done.finally(() => { clearTimeout(limit); broker.off('update', unattended); });
-    if (stopAfterFirstEdit) { const watch = () => { if (c.messages.some(message => message.runId === active.id && message.role === 'activity' && /^(File changes|Edit\n|Write\n)/.test(message.text))) { broker.off('update', watch); broker.stop(c.id); } }; broker.on('update', watch); await active.done; broker.off('update', watch); } else await active.done;
+    if (stopAfterFirstEdit) {
+      // Stop ends the agent at once, and a usage line it has just written can be lost on the way. So a turn that reports
+      // usage is stopped only once that usage is recorded, or after three seconds without it, and polling stands in for
+      // update events, which are throttled.
+      const edited = () => c.messages.some(message => message.runId === active.id && message.role === 'activity' && /^(File changes|Edit\n|Write\n)/.test(message.text));
+      let editedAt = null;
+      const poll = setInterval(() => {
+        if (broker.running !== active || !edited()) return;
+        editedAt ||= Date.now();
+        if (stopAfterFirstEdit !== 'after-usage' || c.activeRun?.usageMeasured || Date.now() - editedAt > 3000) { clearInterval(poll); broker.stop(c.id); }
+      }, 20);
+      try { await active.done; } finally { clearInterval(poll); }
+    } else await active.done;
     return true;
   };
   try {
@@ -152,7 +164,7 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
       }
     } else if (fixture.continues) await start(policy.builder, continuationRequest, { fresh: true });
     else {
-      await start(policy.builder, policy.skill ? `/${policy.skill} ${fixture.prompt}` : fixture.prompt, { stopAfterFirstEdit: fixture.stopAfterFirstEdit, mode: fixture.readOnly ? 'read' : 'edit' });
+      await start(policy.builder, policy.skill ? `/${policy.skill} ${fixture.prompt}` : fixture.prompt, { stopAfterFirstEdit: fixture.stopAfterFirstEdit && (fixture.trace?.[0]?.usage ? 'after-usage' : true), mode: fixture.readOnly ? 'read' : 'edit' });
       if (fixture.needsSecondAgent) await start(policy.to || policy.builder, continuationRequest, { fresh: true });
     }
     await broker.checkpoints?.close?.();
