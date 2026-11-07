@@ -33,7 +33,7 @@ Flow-exclusive behavior means discretionary routing, handoff, recovery and futur
 
 | Feature | Normal | Flow |
 | --- | --- | --- |
-| Agent, model and effort | Explicit selection; optional recommendations require acceptance | Automatic routing under Cost Saving, Balanced or Maximum Quality; one-step or pinned overrides |
+| Agent, model and effort | Explicit selection; optional recommendations require acceptance | Automatic routing under Smart, Saver or Ultra ([#128](https://github.com/AhmedNavaz/codeshi/issues/128); shipped today as Cost saving, Balanced and Maximum quality); one-step or pinned overrides |
 | Near-limit handoff | Chat offer naming destination, settings, billing and allowance; accept or decline | Automatic policy-aware handoff within task authorization |
 | Quota failure and reset waits | Manual destination/local choice, or explicitly wait for a selected agent | Choose a suitable allowed alternative; otherwise wait or report the blocker |
 | Queued prompts | Exact user prompts and settings, with edit/reorder/cancel | Same user queue plus clearly identified managed work; do not silently rewrite user prompts |
@@ -64,11 +64,11 @@ Both modes retain context selection and native-compaction visibility, the canoni
 
 ### One selection policy across a task
 
-Initial assignment, near-limit handoff, quota-error fallback, reset resumption, retry, reviewer selection and future subtasks use the same policy in [#12](https://github.com/AhmedNavaz/codeshi/issues/12). Required tools, inputs, context and verified capability come before allowance. Refresh the selected model's applicable five-hour, weekly and model-specific limits, consider concurrent usage and context-transfer overhead, and retain a visible reason and override. More unused allowance cannot make an incompatible model suitable.
+Initial assignment, near-limit handoff, quota-error fallback, reset resumption, retry, reviewer selection and future subtasks use the same policy in [#12](https://github.com/AhmedNavaz/codeshi/issues/12). Required tools, inputs, context and verified capability come before allowance. Refresh the selected model's applicable five-hour, weekly and model-specific limits, consider concurrent usage and context-transfer overhead, value what each window has left by how long it must last so the allowance that resets soonest is spent first ([#128](https://github.com/AhmedNavaz/codeshi/issues/128)), and retain a visible reason and override. More unused allowance cannot make an incompatible model suitable.
 
-- **Cost Saving:** sufficient capability and existing allowance, with restrained switches, retries and reviewers.
-- **Balanced:** match capability and effort to remaining work and escalate when verification justifies it.
-- **Maximum Quality:** stronger suitable reasoning and targeted independent checks, within the same limits; no implied full team or race attempts.
+- **Saver** (today Cost saving): sufficient capability and the least allowance across every connected plan, rated by local rules with no agent call, with restrained switches, retries and reviewers.
+- **Smart** (today Balanced): match capability and effort to the remaining work, from the lightest model to the strongest, and escalate when verification justifies it.
+- **Ultra** (today Maximum quality): the strongest suitable reasoning and targeted independent checks, within the same limits; no implied full team or race attempts.
 
 The shipped handoff selector does not yet apply the full routing policy to destination model and effort. Model-name tiers remain heuristics. Unknown/stale quota or billing cannot authorize automatic work; local/free fallback needs verified capability and adapter/hardware support. With no suitable destination, wait or offer a manual choice.
 
@@ -184,6 +184,7 @@ The tracking umbrella is [#107](https://github.com/AhmedNavaz/codeshi/issues/107
 | Feature | Status | Issue |
 | --- | --- | --- |
 | Normal/Flow execution policy with safe manual takeover | Planned backend foundation for managed Flow; [agreed split](#normal-and-flow-the-agreed-execution-split). The Flow view shipped so far does not enforce this | [backend task policy draft](docs/flow-issue-plan.md#backend-task-policy) |
+| Smart, Saver and Ultra routing modes: the whole model ladder in Smart, no model call in Saver, the strongest models with an independent review in Ultra, and in every mode the allowance that resets soonest spent first | Planned; replaces Cost saving, Balanced and Maximum quality. Extends #12; [mode table below](#adaptive-agent-and-model-routing) | [#128](https://github.com/AhmedNavaz/codeshi/issues/128) |
 | More agents and models, such as Grok, DeepSeek, Qwen and free cloud tiers, on your own accounts | Gemini through Google Antigravity and local models through Ollama have shipped; further agents are next | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | Notarized macOS builds, so downloads open without a security prompt | Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
 | Install with Homebrew: `brew install --cask codeshi` | Depends on #1 | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
@@ -198,8 +199,9 @@ The tracking umbrella is [#107](https://github.com/AhmedNavaz/codeshi/issues/107
 | Portable skills and workflow packs loaded on demand, with visible provider compatibility | First milestone shipped in 0.26.0: a catalog with six optional starters, loaded when a task needs them and kept across a handoff. Agents get skills as instructions; their own skill systems are not used yet | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
 | One task budget across providers, child runs, retries, reviews and handoffs | First milestone shipped in 0.26.0. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) adds live parent accounting and shared deadlines for background reviews, exclusive reservation of remaining measured allowance per task, and review slots in workspace concurrency. In [0.31.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1) routing assessments count toward the task budget. API consent, cancellation and interrupted-usage recovery are covered by simulated-provider tests; real paid API verification remains | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
 | Concurrent prompts for independent workspace folders, with separate output, approvals and Stop controls | First milestone shipped in 0.26.0. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) protects Git-panel stage, unstage and commit with shared repository mutation leases and retries tasks waiting on those actions. Not yet in the recap; tasks still can't use local models, reviews or undo | [#88](https://github.com/AhmedNavaz/codeshi/issues/88) |
-| Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.14.0) as **Routing**; stage 2's retry one step up after failed tests shipped in [0.18.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.18.0) as **Check with tests**. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) added selected-model quota checks, fresh dispatch revalidation and explicit unknown/stale readings across routing, handoff and retries. [0.31.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1) rates each request with a short agent assessment on Send, and reset times now count in the ranking. Verified capabilities and measured selection remain next, followed by free/local fallback and subtask coordination; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
+| Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.14.0) as **Routing**; stage 2's retry one step up after failed tests shipped in [0.18.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.18.0) as **Check with tests**. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) added selected-model quota checks, fresh dispatch revalidation and explicit unknown/stale readings across routing, handoff and retries. [0.31.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1) rates each request with a short agent assessment on Send, and reset times now count in the ranking. Next: the Smart, Saver and Ultra modes, with allowance spent where it resets soonest ([#128](https://github.com/AhmedNavaz/codeshi/issues/128)); verified capabilities, measured selection, free/local fallback and subtask coordination follow; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
 | Open a long workspace chat without a blank wait: show the latest messages first, load older ones on scroll, and keep the full history | Planned | [#124](https://github.com/AhmedNavaz/codeshi/issues/124) |
+| A near-black **Dark** theme, with today's warm dark palette kept as **Graphite** | Planned | [#127](https://github.com/AhmedNavaz/codeshi/issues/127) |
 | Send selected terminal output to the conversation | Needs design | [#71](https://github.com/AhmedNavaz/codeshi/issues/71) |
 | Hands-free voice conversations: say "send", keep talking while the agent works, hear what it did | Needs design; follows voice mode | [#72](https://github.com/AhmedNavaz/codeshi/issues/72) |
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/codeshi/issues/73) |
@@ -220,11 +222,15 @@ Bring the work around the code into the project conversation, so an agent sees w
 
 Extend [smart model and effort selection (#12)](https://github.com/AhmedNavaz/codeshi/issues/12) into Flow’s common execution policy. Automatic selection belongs to Flow; Normal keeps explicit settings and recommendations accepted by the person. Historical shipped behavior below predates this planned mode boundary. For each prompt, Codeshi should choose an eligible agent, model and reasoning effort using the task, project context, required tools, available allowance and the user's budget. Larger requests may be split into subtasks when doing so improves the result enough to justify the extra usage and coordination.
 
+The modes shipped as Cost saving, Balanced and Maximum quality; [#128](https://github.com/AhmedNavaz/codeshi/issues/128) reworks them as follows.
+
 | Mode | Planned behavior |
 | --- | --- |
-| **Cost Saving** | Prioritize suitable free or local options and existing subscription allowances. Use lighter models for straightforward work, limit extra agent runs and reserve stronger reasoning for tasks that need it. |
-| **Balanced** | Match capability and effort to task difficulty, balancing result quality, completion time and usage. Escalate when verification shows the first approach is insufficient. |
-| **Maximum Quality** | Prioritize the strongest suitable models and deeper reasoning, with targeted independent review or multiple agents where useful, while respecting the user's spending limits. |
+| **Smart** (default) | Rate the request with the short agent assessment, then use the whole ladder: the lightest model at low effort for small edits and questions, the strongest at its highest effort for hard work, at the lowest allowance that fits. Escalate when verification shows the first approach is insufficient. |
+| **Saver** | Spend the least allowance across every connected plan, rated by local rules with no agent call. Lighter models at low effort, limited extra runs, and a local model for light work once its capability is verified. |
+| **Ultra** | The strongest suitable model at high effort, with Check with tests and an independent review where a second agent is connected, while respecting the user's limits. It steps down only when no strong model has usable allowance, and says so. |
+
+In every mode, allowance is valued by how long it has to last: a window that resets within the hour is nearly free to spend, a weekly window with days to go is kept for work that needs it, and a handoff goes to the plan that can best afford the rest of the task. Unknown or stale readings still start nothing automatic.
 
 The mode should guide the whole run, including retries, reviews, subtask assignments and quota fallback. Every mode must respect these boundaries:
 
