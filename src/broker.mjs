@@ -1,4 +1,4 @@
-import { isAntigravityACP, antigravityReadOnly, antigravityOneFolder } from './antigravity.mjs';
+import { isAntigravityACP, antigravityReadOnly } from './antigravity.mjs';
 import { fork } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -14,6 +14,7 @@ import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
 import { normalizeUsage, readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
 import { claudeRequestContext, contextReading, restoreAfterCompaction } from './context-state.mjs';
+import { observeReading, observeRunSize, usageWatch } from './usage-watch.mjs';
 import { estimateContext, managedContextVersion, milestoneMemory, observationsFor, rolloverDecision } from './context-rollover.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
@@ -32,6 +33,7 @@ import { PermissionRules } from './permission-rules.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
 import { HandoffMonitor } from './handoff.mjs';
 import { RunChecks } from './run-checks.mjs';
+import { RoutingDispatcher } from './routing-assessment.mjs';
 import { verificationForRun } from './verification.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
@@ -97,7 +99,10 @@ export function routingNote(routing) {
   const step = routing.escalation, text = value => typeof value === 'string' && value.trim() && value.length <= 200 ? value : null;
   // The step up a failed check retries with (#12): the same kind of choice, checked again when the retry starts.
   const escalation = step && typeof step === 'object' && PROVIDERS.includes(step.provider) ? { provider: step.provider, model: text(step.model), modelName: text(step.modelName), effort: EFFORTS.includes(step.effort) ? step.effort : null, ...(TIERS.includes(step.tier) ? { tier: step.tier } : {}) } : null;
-  return { mode: routing.mode, reason: typeof routing.reason === 'string' ? routing.reason.slice(0, 300) : '', ...(TIERS.includes(routing.tier) ? { tier: routing.tier } : {}), ...(escalation ? { escalation } : {}) };
+  const assessed = routing.assessment;
+  const assessment = assessed && typeof assessed.id === 'string' && TIERS.includes(assessed.tier) && ['low', 'medium', 'high'].includes(assessed.effort) && ['agent', 'local', 'fallback'].includes(assessed.source)
+    ? { id: assessed.id.slice(0, 128), tier: assessed.tier, effort: assessed.effort, source: assessed.source, reason: typeof assessed.reason === 'string' ? assessed.reason.slice(0, 300) : '', ...(Number.isFinite(assessed.ms) ? { ms: assessed.ms } : {}) } : null;
+  return { mode: routing.mode, reason: typeof routing.reason === 'string' ? routing.reason.slice(0, 300) : '', ...(TIERS.includes(routing.tier) ? { tier: routing.tier } : {}), ...(assessment ? { assessment } : {}), ...(escalation ? { escalation } : {}) };
 }
 
 // Where each new imported message goes, as the id of the message it follows (null for the start). A run's prompt and replies stay together as one turn,
@@ -132,6 +137,7 @@ export class Broker extends EventEmitter {
     this.bins = Object.fromEntries(PROVIDERS.map(provider => [provider, resolveBinary(provider, { override: bins[provider], googleRoot: this.googleRoot })]));
     this.conversations = new Map();
     this.running = null;
+    this.router = new RoutingDispatcher(this);
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     for (const filename of fs.readdirSync(dataDir).filter(name => /^[\da-f-]{36}\.jsonl$/.test(name))) {
       const id = filename.slice(0, -6);
@@ -150,6 +156,14 @@ export class Broker extends EventEmitter {
       for (const line of lines.filter(Boolean)) this.apply(conversation, JSON.parse(line));
       if (!conversation.createdAt) throw new Error(`Invalid conversation journal: ${filename}`);
       this.conversations.set(id, conversation);
+      if (conversation.routingAssessment) {
+        const previous = conversation.routingAssessment;
+        if (previous.pid && process.platform !== 'win32') {
+          try { process.kill(-previous.pid, 0); if (!reused(previous.pid, previous.pidStart)) throw Object.assign(new Error(`A routing assessor from the previous run may still be active (process group ${previous.pid}). Stop that process group before restarting Codeshi.`), { status: 409 }); }
+          catch (error) { if (!groupGone(error)) throw error; }
+        }
+        this.record(conversation, { type: 'routing_assessment_end', id: previous.id, result: { status: 'interrupted', error: 'Codeshi restarted during task assessment. Send again when ready.' } });
+      }
       if (conversation.activeRun) {
         if (conversation.activeRun.pid && process.platform !== 'win32') {
           try {
@@ -270,9 +284,20 @@ export class Broker extends EventEmitter {
     if (record.type === 'memory_remove') c.memory = (c.memory || []).filter(entry => entry.id !== record.id);
     if (record.type === 'memory_dismiss') c.memoryDismissed = [...(c.memoryDismissed || []), record.key];
     if (record.type === 'skills') { c.skills = record.skills; c.skillDirs = record.dirs; }
-    if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: Object.hasOwn(record, 'observedAt') ? record.observedAt : record.at }; }
+    if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: Object.hasOwn(record, 'observedAt') ? record.observedAt : record.at }; observeReading(c, record.provider, c.quotaReadings[record.provider]); }
     applyBudgetRecord(c, record);
     if (record.type === 'routing') c.routing = record.routing;
+    if (record.type === 'routing_assessment_start') c.routingAssessment = { ...record, startedAt: record.at };
+    if (record.type === 'routing_assessment_metadata' && c.routingAssessment?.id === record.id) Object.assign(c.routingAssessment, record.metadata);
+    if (record.type === 'routing_decision' || record.type === 'routing_assessment_end' && c.routingAssessment?.id === record.id) {
+      const decided = record.type === 'routing_decision' ? record : c.routingAssessment;
+      c.routingRequests ||= {};
+      c.routingRequests[decided.requestId] = { id: decided.id, taskId: decided.taskId, fingerprint: decided.fingerprint, scope: decided.scope, result: record.result };
+      const keys = Object.keys(c.routingRequests);
+      for (const key of keys.slice(0, Math.max(0, keys.length - 100))) delete c.routingRequests[key];
+      if (record.type !== 'routing_decision') c.routingAssessment = null;
+    }
+    if (record.type === 'routing_submission' && c.routingRequests?.[record.requestId]) c.routingRequests[record.requestId].submission = record.submission;
     if (record.type === 'retry_offer') c.retryOffer = record.offer;
     if (record.type === 'retry_offer_end' && c.retryOffer?.id === record.id) c.retryOffer = null;
     if (record.type === 'check') { const run = c.runs?.findLast(item => item.id === record.runId); if (run) run.check = record.check; if (c.lastRun?.id === record.runId) c.lastRun.check = record.check; }
@@ -307,12 +332,17 @@ export class Broker extends EventEmitter {
         c.messages.splice(last, 0, { ...message, seq: record.seq, imported: true });
       }
     }
-    if (record.type === 'message_delta') { const message = c.messages.find(m => m.id === record.id); if (!message) throw new Error('Message delta has no original message.'); message.text += record.text; message.seq = record.seq; if (record.status) message.status = record.status; }
+    if (record.type === 'message_delta') { const message = c.messages.find(m => m.id === record.id); if (!message) throw new Error('Message delta has no original message.'); message.text += record.text; message.seq = record.seq; if (record.status) message.status = record.status; if (record.toolOutcome) message.toolOutcome = record.toolOutcome; }
     if (record.type === 'run_metadata') {
       if (c.activeRun) Object.assign(c.activeRun, record.metadata);
       if (c.activeRun && record.metadata?.usage) c.activeRun.usageMeasured = normalizeUsage(c.activeRun.provider, record.metadata.usage, { previous: c.budgetTotals?.[c.activeRun.provider] });
       const reading = c.activeRun && contextReading(c.activeRun.provider, record.metadata || {}, record.at);
-      if (reading) { c.activeRun.contextUsage = reading; if (c.sessions[c.activeRun.provider]) c.sessions[c.activeRun.provider].contextUsage = reading; }
+      if (reading) {
+        const previous = c.sessions[c.activeRun.provider]?.contextUsage;
+        if (reading.source === 'claude-last-request-input' && previous?.cacheTtlMs && !reading.cacheTtlMs) reading.cacheTtlMs = previous.cacheTtlMs;
+        if (reading.capacity === null && previous?.capacity > 0) reading.capacity = previous.capacity;
+        c.activeRun.contextUsage = reading; if (c.sessions[c.activeRun.provider]) c.sessions[c.activeRun.provider].contextUsage = reading;
+      }
       if (record.metadata?.routingQuota && c.activeRun) { const run = c.runs?.find(item => item.id === c.activeRun.id); if (run) run.routingQuota = record.metadata.routingQuota; }
     }
     if (record.type === 'native_compaction' && c.activeRun?.id === record.runId) {
@@ -390,6 +420,7 @@ export class Broker extends EventEmitter {
       if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at,
         ...(c.lastRun ? { compactions: c.lastRun.compactions, compactionEvents: c.lastRun.compactionEvents, contextUsage: c.lastRun.contextUsage, usageMeasured: c.lastRun.usageMeasured } : {}),
         ...(typeof c.lastRun?.elapsedMs === 'number' ? { elapsedMs: c.lastRun.elapsedMs } : {}) });
+      if (run) observeRunSize(c, run);
     }
     if (record.type === 'automatic_review_phase') {
       for (const run of [c.activeRun, c.lastRun, ...c.runs]) if (run?.id === record.runId && run.automaticReview) Object.assign(run.automaticReview, record.phase);
@@ -409,6 +440,11 @@ export class Broker extends EventEmitter {
     if (!windows.length || this.quotaSeen.get(key) === signature && (!Number.isFinite(time) || time - priorTime < 60000)) return;
     this.quotaSeen.set(key, signature);
     this.record(c, { type: 'quota_observation', provider, observedAt: Number.isFinite(time) ? new Date(time).toISOString() : null, plan: usage.plan || null, windows });
+  }
+  // A reading on each side of a run says what moved during it. Reading a limit uses no allowance, nothing waits for it, and a
+  // reading that can't be had leaves that run's move unknown.
+  readQuota(c, provider, { refresh = false } = {}) {
+    Promise.resolve().then(() => this.checks.usage(provider, { ...this.usageOptions(provider), refresh })).then(usage => this.observeQuota(c, provider, usage)).catch(() => {});
   }
 
   // Project memory (#21): every change comes from the person, through here.
@@ -477,14 +513,15 @@ export class Broker extends EventEmitter {
     return record;
   }
 
-  message(c, role, text, provider, id = randomUUID(), status) {
+  message(c, role, text, provider, id = randomUUID(), status, toolOutcome = null) {
     const existing = c.messages.find(m => m.id === id);
-    if (existing && text.startsWith(existing.text) && text !== existing.text) this.record(c, { type: 'message_delta', id, text: text.slice(existing.text.length), ...(status ? { status } : {}) });
-    else if (existing && (text !== existing.text || (status && status !== existing.status))) this.record(c, { type: 'message_update', id, update: { ...(text !== existing.text ? { text } : {}), ...(status ? { status } : {}) } });
+    const outcome = toolOutcome ? { toolOutcome } : {};
+    if (existing && text.startsWith(existing.text) && text !== existing.text) this.record(c, { type: 'message_delta', id, text: text.slice(existing.text.length), ...(status ? { status } : {}), ...outcome });
+    else if (existing && (text !== existing.text || (status && status !== existing.status) || toolOutcome && JSON.stringify(toolOutcome) !== JSON.stringify(existing.toolOutcome))) this.record(c, { type: 'message_update', id, update: { ...(text !== existing.text ? { text } : {}), ...(status ? { status } : {}), ...outcome } });
     else if (existing) return id;
-    else this.record(c, { type: 'message', message: { id, role, text, provider, status,
+    else this.record(c, { type: 'message', message: { id, role, text, provider, status, ...outcome,
       createdAt: new Date().toISOString(), runId: c.activeRun?.id, ...(c.activeRun?.connection === 'local' ? { connection: 'local' } : {}), ...(c.activeRun?.reviewId ? { reviewId: c.activeRun.reviewId } : {}), model: c.activeRun?.effectiveModel || c.activeRun?.model || null, effort: c.activeRun?.effectiveEffort || c.activeRun?.effort || null } });
-    if (role === 'activity' && c.activeRun?.id) { try { this.budget.observeStep(c, { id, role, text, runId: c.activeRun.id }); } catch (error) { console.error('Codeshi could not count a step:', error.message); } }
+    if (role === 'activity' && c.activeRun?.id) { try { this.budget.observeStep(c, c.messages.find(message => message.id === id)); } catch (error) { console.error('Codeshi could not count a step:', error.message); } }
     return id;
   }
 
@@ -496,9 +533,11 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null } = {}) {
-    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, parallelTasks, asyncQuestions, semanticObservations, contextRollovers, ...visible } = c;
+    const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, asyncQuestions, semanticObservations, contextRollovers, routingRequests, routingAssessment, routingPending, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
-    return { ...visible, contextControl: rolloverDecision(c, c.activeRun?.provider || c.provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() }), cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
+    if (c.routingPending) { visible.status = 'running'; visible.activeRun = c.routingPending; visible.canAddToRun = false; }
+    const contextFor = provider => rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() });
+    return { ...visible, contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
   }
 
   pendingApprovals(c) {
@@ -669,7 +708,9 @@ export class Broker extends EventEmitter {
 
   prompt(c, text, fresh = false) { return prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: fresh || c.sessions[c.provider]?.workspaceSignature !== this.workspaceSignature }).prompt; }
 
-  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null } = {}) {
+  dispatch(c, input, options = {}) { return this.router.start(c, input, options); }
+
+  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null }, { review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null, assessedTask = null, routingEvidence = null } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
     if (local) { if (review || typeof verifyLocal !== 'function') throw Object.assign(new Error('Invalid local run.'), { status: 400 }); provider = 'codex'; model = local.model; transport = 'app-server'; effort = null; fresh = true; }
     checkSettings(provider, mode, approvalPolicy);
@@ -687,7 +728,7 @@ export class Broker extends EventEmitter {
     // Every task in a workspace shares one limit on how many work at once (#88).
     this.admit?.(c);
     // The one place every run starts from, so nothing gets past the task's limits (#87). A request already accepted returned above.
-    const runId = randomUUID(), task = taskIdentity(c, { runId, text, retryOf, review });
+    const runId = randomUUID(), task = assessedTask || taskIdentity(c, { runId, text, retryOf, review });
     this.budget.assertCanStart(c, { task, provider, model, local: Boolean(local) });
     // A task that continues keeps its plan (#92), and a new prompt starts without one.
     const plan = task.relation === 'continuation' ? carriedPlan(c.lastRun) : null;
@@ -705,8 +746,7 @@ export class Broker extends EventEmitter {
     if (provider === 'gemini' && isAntigravityACP(bin) && mode === 'read') throw Object.assign(new Error(antigravityReadOnly), { status: 400, category: 'permission' });
     // Gemini CLI takes its effort from the model, so a level saved under the Antigravity connection doesn't apply and can't stop a run.
     if (provider === 'gemini' && !isAntigravityACP(bin)) effort = null;
-    // The page offers the folders on seeing folderChoice: the message then runs as a task in the one chosen.
-    if (provider === 'gemini' && isAntigravityACP(bin) && this.workspaces.length > 1) throw Object.assign(new Error(antigravityOneFolder), { status: 400, details: { folderChoice: true } });
+    // Antigravity negotiates additional folders with the runtime before any prompt is sent.
     if (provider === 'gemini' && isAgy(bin)) throw Object.assign(new Error(agyUnsupported), { status: 503, category: 'installation' });
     const actualTransport = transportFor(provider, transport, this.configuredBins[provider]);
     if ((provider === 'gemini' && actualTransport !== 'acp') || (provider !== 'gemini' && actualTransport === 'acp') || (provider === 'codex' && actualTransport === 'sdk') || (provider === 'claude' && actualTransport === 'app-server')) throw Object.assign(new Error('This transport does not support the selected provider.'), { status: 400 });
@@ -715,7 +755,7 @@ export class Broker extends EventEmitter {
     const switchedAgent = Boolean(c.lastRun && (c.lastRun.provider !== provider || c.lastRun.connection === 'local'));
     const changedWorkspace = Boolean(c.sessions[provider] && c.sessions[provider].workspaceSignature !== this.workspaceSignature);
     const ordinaryFresh = Boolean(fresh || changedWorkspace || switchedAgent || provider === 'gemini' || !c.sessions[provider]?.id);
-    const decision = rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: routing?.mode || c.routing?.mode || this.contextRouting() });
+    const decision = rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: routing?.mode || c.routing?.mode || this.contextRouting(), model, effort });
     const rollover = !review && !local && decision.rollover
       ? { ...decision, previousSessionId: c.sessions[provider]?.id || null, memory: milestoneMemory(c, { folders: this.workspaceFolders, text }) } : null;
     const resetSession = Boolean(c.sessions[provider] && (changedWorkspace || switchedAgent || fresh || rollover));
@@ -740,7 +780,7 @@ export class Broker extends EventEmitter {
         ...(local ? { local } : {}), ...(review ? { review } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
         ...(automaticReview ? { automaticReview } : {}),
-        message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
+        message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), ...(routing.assessment ? { ratedBy: routing.assessment.source, ...(routing.assessment.ms ? { ratedMs: routing.assessment.ms } : {}) } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
     for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', `Using skill ${skill.name}: ${skill.reason}`, provider);
     // A message sent by hand takes the place of a wait for a reset.
@@ -779,6 +819,7 @@ export class Broker extends EventEmitter {
         this.handoff.unwatch(run); this.budget.unwatch(run);
         if (continuing) c.limitSwitching = { provider };
         this.running = null; this.emit('update', { conversationId: c.id }); finish({ success, error: run.persistenceError });
+        if (!review && run.billingSource === 'subscription') this.readQuota(c, provider, { refresh: true });
         const settle = () => {
           // A run that continued after a reset may wait again if it reached another limit; otherwise say how the run ended.
           let waiting = false;
@@ -803,21 +844,24 @@ export class Broker extends EventEmitter {
       } }
     };
     const launch = async () => {
+      // What routing read seconds ago, for the agent it chose: the same checks below, without reading it all again.
+      const evidence = routingEvidence?.provider === provider && Date.now() - routingEvidence.at < 60000 ? routingEvidence : null;
       try {
         if (local) {
           local = { ...local, ...await verifyLocal() };
           this.record(c, { type: 'run_metadata', metadata: { account: { authenticated: true, authMode: 'local', billingSource: 'local' } } });
         } else if (!this.configuredBins[provider]) {
-          const account = await accountStatus(provider, { bin, workspace: this.workspace, googleRoot: this.googleRoot });
+          const account = evidence?.account || await accountStatus(provider, { bin, workspace: this.workspace, googleRoot: this.googleRoot });
           this.record(c, { type: 'run_metadata', metadata: { account: { authenticated: account.authenticated, authMode: account.authMode, billingSource: account.billingSource } } });
           if (account.authenticated === false) throw Object.assign(new Error('Sign in through the provider’s supported authentication flow before running.'), { category: 'authentication' });
           run.billingSource = account.billingSource;
           if (account.billingSource !== 'subscription' && !billingConfirmed) throw Object.assign(new Error(`Billing source is ${account.billingSource}. Explicitly confirm this provider run before it may consume usage.`), { category: 'permission' });
         }
         if (routing && !review && !local) {
-          let usage = null, timer;
+          let usage = evidence?.usage || null, timer;
           try {
-            usage = await Promise.race([this.checks.usage(provider, this.usageOptions(provider)), new Promise(resolve => { timer = setTimeout(() => resolve(null), 6000); })]);
+            // A check the routing step already started is reused rather than repeated.
+            usage ||= await Promise.race([this.checks.usage(provider, { ...this.usageOptions(provider), refresh: !routingEvidence }), new Promise(resolve => { timer = setTimeout(() => resolve(null), 6000); })]);
           } catch { /* Unavailable stays unknown, with no assumed capacity. */ }
           finally { clearTimeout(timer); }
           if (run.stopped) return complete(null, null, new Error('Run stopped.'));
@@ -827,7 +871,7 @@ export class Broker extends EventEmitter {
           if (['near', 'exhausted', 'stale'].includes(quota.state)) throw Object.assign(new Error(`Routing paused before starting ${provider}: ${globalThis.relayRouting.quotaText(quota)}. Refresh plan usage or choose a model manually.`), { category: 'routing' });
           // Unknown usage remains explicit. Send is a manual request, unlike a background retry or automatic handoff,
           // which require confirmed allowance. The selected agent/model never changes during this final check.
-        }
+        } else if (!review && !local && run.billingSource === 'subscription') this.readQuota(c, provider);
         if (!review) await this.checkpoints.before(c, run);
         if (run.stopped) return complete(null, null, new Error('Run stopped.'));
         const command = commandFor(provider, { mode, approvalPolicy, sessionId, bin, workspace: this.workspace, workspaces: this.workspaces, effort });
@@ -977,7 +1021,8 @@ export class Broker extends EventEmitter {
         }
       }
       if (item.type === 'command_execution') {
-        this.message(c, 'activity', clip(`$ ${item.command}\n${item.aggregated_output || ''}`), provider, id);
+        this.message(c, 'activity', clip(`$ ${item.command}\n${item.aggregated_output || ''}`), provider, id, undefined,
+          { status: event.type === 'item.completed' ? 'completed' : 'running', ...(typeof item.exit_code === 'number' ? { exitCode: item.exit_code } : {}), isError: item.status === 'failed' || item.status === 'declined' });
         // In Read only, a blocked command looks like a network or disk fault, so the run says what stopped it, once.
         if (event.type === 'item.completed' && provider === 'codex' && run.mode === 'read' && !run.review && !run.blockExplained && blockedBySandbox(item.aggregated_output)) {
           run.blockExplained = true;
@@ -1017,7 +1062,7 @@ export class Broker extends EventEmitter {
       if (text) this.message(c, 'assistant', text, provider, id, 'complete');
       for (const tool of content.filter(block => block.type === 'tool_use')) {
         run.tools.set(tool.id, tool.name);
-        this.message(c, 'activity', clip(`${tool.name}\n${toolInput(tool.name, tool.input)}`), provider, `${run.id}:tool:${tool.id}`);
+        this.message(c, 'activity', clip(`${tool.name}\n${toolInput(tool.name, tool.input)}`), provider, `${run.id}:tool:${tool.id}`, undefined, { status: 'running' });
       }
     }
     if (event.type === 'user' && Array.isArray(event.message?.content)) {
@@ -1025,7 +1070,7 @@ export class Broker extends EventEmitter {
         const id = `${run.id}:tool:${tool.tool_use_id}`;
         const existing = c.messages.find(m => m.id === id);
         const content = typeof tool.content === 'string' ? tool.content : JSON.stringify(tool.content || []);
-        this.message(c, 'activity', clip(`${existing?.text || run.tools.get(tool.tool_use_id) || 'Tool result'}\n${content}`), provider, id);
+        this.message(c, 'activity', clip(`${existing?.text || run.tools.get(tool.tool_use_id) || 'Tool result'}\n${content}`), provider, id, undefined, { status: 'completed', isError: tool.is_error === true });
       }
     }
     if (event.type === 'system' && event.subtype === 'init' && event.model) this.record(c, { type: 'run_metadata', metadata: { effectiveModel: event.model } });

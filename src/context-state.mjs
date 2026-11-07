@@ -5,7 +5,8 @@ export function contextReading(provider, metadata, observedAt) {
   if (metadata.contextUsage) {
     const raw = metadata.contextUsage;
     return { used: count(raw.used), capacity: count(raw.capacity), ...(count(raw.lastRequestInput) !== null ? { lastRequestInput: raw.lastRequestInput } : {}), estimated: raw.estimated === true,
-      source: raw.source, windowKind: raw.windowKind || 'model', observedAt, model: raw.model || null };
+      source: raw.source, windowKind: raw.windowKind || 'model', observedAt, model: raw.model || null,
+      ...(count(raw.cacheTtlMs) !== null ? { cacheTtlMs: raw.cacheTtlMs } : {}) };
   }
   const usage = metadata.usage;
   if (!usage) return null;
@@ -21,8 +22,11 @@ export function contextReading(provider, metadata, observedAt) {
 export function claudeRequestContext(usage) {
   const fields = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
   if (!usage || fields.some(key => count(usage[key]) === null)) return null;
+  const creation = usage.cache_creation;
+  // Prefer the TTL actually reported for this request, including when subscription overage changes it.
+  const cacheTtlMs = creation?.ephemeral_5m_input_tokens > 0 ? 300000 : creation?.ephemeral_1h_input_tokens > 0 ? 3600000 : null;
   return { used: null, lastRequestInput: fields.reduce((sum, key) => sum + usage[key], 0),
-    source: 'claude-last-request-input', estimated: true, windowKind: 'model' };
+    source: 'claude-last-request-input', estimated: false, windowKind: 'model', ...(cacheTtlMs ? { cacheTtlMs } : {}) };
 }
 
 // Reconstruct the bounded task envelope after a native compaction, while continuing the same native session. This does

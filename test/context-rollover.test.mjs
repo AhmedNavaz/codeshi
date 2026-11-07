@@ -54,6 +54,110 @@ test('Claude request readings require all input counters and never use cumulativ
   assert.equal(claudeRequestContext({ modelUsage: { model: { inputTokens: 2000000 } } }), null);
 });
 
+test('automatic targets preserve recent context, expire at the reported TTL, and never change fixed limits', () => {
+  const now = Date.parse('2026-11-07T12:00:00Z');
+  for (const provider of ['claude', 'codex']) {
+    const c = conversation(null); c.sessions = { [provider]: { id: 'native', managedContextVersion: 1,
+      contextUsage: { ...snapshot(78690), observedAt: new Date(now - 60000).toISOString() } } };
+    let decision = rolloverDecision(c, provider, { now });
+    assert.equal(decision.cacheWarm, true); assert.equal(decision.thresholdTokens, 120000); assert.equal(decision.rollover, false);
+    for (const [mode, target] of [['saving', 80000], ['balanced', 120000], ['quality', 150000]]) {
+      assert.equal(rolloverDecision(c, provider, { now, routingMode: mode }).thresholdTokens, target);
+    }
+    assert.equal(rolloverDecision(c, provider, { now, normalLimit: 50000 }).thresholdTokens, 50000);
+    assert.equal(rolloverDecision(c, provider, { now, normalLimit: 50000 }).adaptive, false);
+    assert.equal(rolloverDecision(c, provider, { now, normalLimit: 'off' }).rollover, false);
+    c.lastRun = { provider, model: 'model-a', effort: 'low' };
+    assert.equal(rolloverDecision(c, provider, { now, model: 'model-a', effort: 'low' }).cacheWarm, true);
+    assert.equal(rolloverDecision(c, provider, { now, model: 'model-b', effort: 'low' }).cacheWarm, false);
+    assert.equal(rolloverDecision(c, provider, { now, model: 'model-a', effort: 'high' }).cacheWarm, false);
+    c.lastRun = null;
+    c.sessions[provider].contextUsage.observedAt = new Date(now - 300000).toISOString();
+    decision = rolloverDecision(c, provider, { now });
+    assert.equal(decision.cacheWarm, false); assert.equal(decision.thresholdTokens, 75000); assert.equal(decision.rollover, true);
+    c.sessions[provider].contextUsage.cacheTtlMs = 3600000;
+    assert.equal(rolloverDecision(c, provider, { now }).rollover, false);
+    c.sessions[provider].contextUsage.observedAt = new Date(now - 3600000).toISOString();
+    assert.equal(rolloverDecision(c, provider, { now }).rollover, true);
+    c.sessions[provider].contextUsage.observedAt = 'invalid';
+    assert.equal(rolloverDecision(c, provider, { now }).cacheWarm, false);
+    c.sessions[provider].contextUsage.observedAt = new Date(now + 1).toISOString();
+    assert.equal(rolloverDecision(c, provider, { now }).cacheWarm, false);
+  }
+  const reading = claudeRequestContext({ input_tokens: 2, cache_read_input_tokens: 70000, cache_creation_input_tokens: 1000,
+    cache_creation: { ephemeral_1h_input_tokens: 1000, ephemeral_5m_input_tokens: 0 } });
+  assert.equal(reading.cacheTtlMs, 3600000); assert.equal(reading.estimated, false);
+  const c = conversation(null); c.sessions = { claude: { contextUsage: { ...reading, observedAt: new Date(now).toISOString() } } };
+  assert.equal(rolloverDecision(c, 'claude', { now }).source, 'claude-last-request-input');
+  assert.equal(rolloverDecision(c, 'claude', { now }).estimated, false);
+});
+
+test('brief observations require command results, ignore successful diagnostics, and keep recent user answers', () => {
+  const observe = (text, toolOutcome) => observationsFor({ messages: [] }, { type: 'message', message: { id: 'tool', role: 'activity', text, ...(toolOutcome ? { toolOutcome } : {}) } });
+  for (const text of [
+    'Bash\n' + JSON.stringify({ command: 'python3 -c "try: pass; except Exception: pass"' }),
+    'Bash\nBash\n' + JSON.stringify({ command: 'cat script-containing-error.mjs' }),
+    '$ npm test\n{"error":""}\n# fail 0',
+    '$ cat example.txt\nError: this is an example',
+  ]) {
+    assert.equal(observe(text, { status: 'completed', exitCode: 0 }).some(item => item.type === 'blocker_discovery'), false);
+  }
+  assert.equal(observe('$ npm test\nError: working', { status: 'running' }).length, 0);
+  assert.equal(observe('$ command\n', { status: 'completed', exitCode: 2 })[0].type, 'blocker_discovery');
+  assert.equal(observe('Bash\n{"command":"make"}\ncompile stopped', { status: 'completed', isError: true })[0].type, 'blocker_discovery');
+  assert.equal(observe('$ command\nfatal: bad revision')[0].type, 'blocker_discovery');
+  assert.equal(observe('$ command\nThe source contains an exception handler').length, 0);
+  assert.equal(observe('$ npm test\nAnswered:\nDeploy? → Yes\n# fail 0').some(item => item.type === 'decision'), false);
+  const folders = [{ id: 'app', path: os.tmpdir() }];
+  const messages = [{ id: 'old', seq: 1, role: 'activity', text: '$ cat script\nThe error handler' },
+    { id: 'answer', seq: 2, role: 'activity', text: 'Answered:\nWhich library? → Luxon\nToken? → (hidden)' },
+    ...Array.from({ length: 210 }, (_, i) => ({ id: `log-${i}`, seq: i + 3, role: 'activity', text: '$ date\nToday' })),
+    { id: 'decision', seq: 214, role: 'user', text: 'Decision: use UTC' }];
+  const c = { ...conversation(null), messages, semanticObservations: [{ id: 'old:blocker', messageId: 'old', type: 'blocker_discovery', text: 'OLD FALSE BLOCKER' }] };
+  const memory = milestoneMemory(c, { folders, text: continuationRequest });
+  assert.deepEqual(memory.decisions.map(item => item.text), ['Decision: use UTC', 'Which library? → Luxon']);
+  assert.deepEqual(memory.decisions.map(item => item.source), ['user-quote', 'user-answer']);
+  assert.equal(memory.observations.some(item => item.type === 'blocker_discovery'), false);
+  assert.equal(JSON.stringify(memory).includes('(hidden)'), false);
+  assert.equal(JSON.stringify(memory).includes('OLD FALSE BLOCKER'), false);
+});
+
+test('native outcomes persist through streamed updates and replay without inventing blockers', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-outcomes-'));
+  const options = { workspace: root, dataDir: path.join(root, 'data') };
+  let broker = new Broker(options), c = broker.get(broker.create().id);
+  t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  broker.record(c, { type: 'run_start', id: 'r', provider: 'codex' });
+  const run = { id: 'r', c, provider: 'codex', mode: 'edit', tools: new Map(), approvals: new Map(), steers: new Map() };
+  const command = { id: 'cmd', type: 'command_execution', command: 'cat example', aggregated_output: 'Error: an example' };
+  broker.event(run, { type: 'item.started', item: command });
+  broker.event(run, { type: 'item.completed', item: { ...command, exit_code: 0 } });
+  const message = c.messages.find(item => item.id === 'r:cmd');
+  assert.equal(message.toolOutcome.exitCode, 0);
+  assert.equal(observationsFor(c, { type: 'message', message }).length, 0);
+  broker.event(run, { type: 'item.completed', item: { ...command, id: 'bad', aggregated_output: '', exit_code: 7 } });
+  assert(c.semanticObservations.some(item => item.type === 'blocker_discovery' && /Exit code 7/.test(item.text)));
+  broker.record(c, { type: 'run_end', status: 'complete' });
+  const id = c.id; await broker.close(); broker = new Broker(options); c = broker.get(id);
+  assert.equal(c.messages.find(item => item.id === 'r:cmd').toolOutcome.exitCode, 0);
+  const memory = milestoneMemory(c, { folders: [{ id: 'app', path: root }], text: continuationRequest });
+  assert.equal(memory.observations.filter(item => item.type === 'blocker_discovery').length, 1);
+  assert.equal(memory.observations.some(item => Object.hasOwn(item, 'id') || Object.hasOwn(item, 'runId') || Object.hasOwn(item, 'provider')), false);
+});
+
+test('the brief leaves old task failures and external scratch files behind while retaining sourced decisions', () => {
+  const c = { ...conversation(null), lastRun: { id: 'current', taskId: 'task' }, runs: [{ id: 'current', taskId: 'task' }], messages: [
+    { id: 'old', seq: 1, role: 'activity', runId: 'old-task', text: '$ command\nfatal: obsolete failure' },
+    { id: 'answer', seq: 2, role: 'activity', runId: 'old-task', text: 'Answered:\nCurrency? → EUR' },
+    { id: 'scratch', seq: 3, role: 'activity', runId: 'current', text: 'Write\n{"file_path":"/external/scratch.mjs"}' },
+    { id: 'change', seq: 4, role: 'activity', runId: 'current', text: 'Write\n{"file_path":"/workspace/source.mjs"}' },
+    { id: 'failed', seq: 5, role: 'activity', runId: 'current', text: '$ command\nfatal: current failure' },
+  ] };
+  const memory = milestoneMemory(c, { folders: [{ id: 'app', path: '/workspace' }], text: continuationRequest });
+  assert.deepEqual(memory.decisions, [{ text: 'Currency? → EUR', source: 'user-answer', messageId: 'answer' }]);
+  assert.deepEqual(memory.observations.map(item => item.messageId), ['failed', 'change']);
+});
+
 test('managed sessions fall back to recorded context growth, and native compaction invalidates that estimate', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-context-estimate-'));
   const broker = new Broker({ workspace: root, dataDir: path.join(root, 'data') }), c = broker.get(broker.create().id);
@@ -128,7 +232,11 @@ test('manual compaction preserves history and budgets, persists a pending fresh 
   broker.message(c, 'user', 'Decision: preserve the public API. Acceptance: return EUR 1.50.');
   broker.record(c, { type: 'session', provider: 'codex', id: 'old-native' });
   const original = c.messages[0].text;
+  assert.equal(broker.view(c).contextControl.hasSession, true);
+  assert.equal(broker.view(c).contextControl.pending, false);
   broker.compactContext(c, { provider: 'codex' });
+  assert.equal(broker.view(c).contextControl.hasSession, false);
+  assert.equal(broker.view(c).contextControl.pending, true);
   assert.equal(c.sessions.codex, undefined);
   assert.equal(c.messages[0].text, original);
   assert.equal(c.messages.at(-1).contextMilestone, true);

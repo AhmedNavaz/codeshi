@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { looksFailed } from './task-context.mjs';
+import { commandOutcome } from './tool-outcomes.mjs';
 import { normalizeUsage } from './task-ledger.mjs';
 import '../public/routing.js';
 
@@ -65,6 +65,11 @@ function addFailure(state, { signature, kind, what, how, provider, runId, at }) 
 
 // Called for every journal record, when a run happens and again when the journal is read at startup, so both always agree.
 export function applyBudgetRecord(c, record) {
+  // Assessments share the task's measured budget, without counting as a review or a handoff. Reuse the auxiliary-run
+  // accounting path so reported usage, partial results and interrupted runs have the same semantics as reviewers.
+  if (record.type === 'routing_assessment_start') record = { ...record, type: 'background_review', review: { id: record.id, provider: record.provider, model: record.model, assessment: true } };
+  else if (record.type === 'routing_assessment_metadata') record = { ...record, type: 'review_budget', began: record.metadata?.began };
+  else if (record.type === 'routing_assessment_end') record = { ...record, type: 'review_result' };
   if (['submission', 'run_end', 'background_review', 'review_budget', 'review_result', 'task_policy', 'task_failure', 'task_budget_stop', 'task_budget_extend'].includes(record.type) || record.type === 'run_metadata' && (record.metadata?.usage || record.metadata?.costUSD !== undefined)) c.taskBudgetRevision = record.seq;
   if (record.type === 'task_policy') { c.taskPolicy = record.policy; return; }
   if (record.type === 'submission') {
@@ -86,7 +91,7 @@ export function applyBudgetRecord(c, record) {
   if (record.type === 'review_process' || record.type === 'review_budget') {
     const state = c.taskBudgets?.[c.taskOfRun?.[record.id]], entry = state?.active[record.id];
     if (!entry?.background) return;
-    if (record.type === 'review_process' || record.began) entry.began = true;
+    if (record.type === 'review_process' || record.began || record.metadata?.effectiveModel || record.metadata?.usage) entry.began = true;
     const metadata = record.metadata || {};
     if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage);
     if (entry.usage?.source === 'claude-model-usage-total') entry.costUSD = entry.usage.costEstimateUSD;
@@ -122,12 +127,16 @@ export function applyBudgetRecord(c, record) {
   if (record.type === 'background_review') {
     const review = record.review || {}, taskId = record.taskId || review.id, state = stateFor(c, taskId);
     if (c.taskOfRun?.[review.id]) return;
-    state.runs++; state.reviews++; state.startedAt ||= record.at;
-    state.active[review.id] = { provider: review.provider, startedAt: record.at, counted: 'reviews', began: false, background: true, usage: null, costUSD: null, billing: null };
+    state.runs++; if (!review.assessment) state.reviews++; state.startedAt ||= record.at;
+    state.active[review.id] = { provider: review.provider, startedAt: record.at, counted: review.assessment ? null : 'reviews', began: false, background: true, usage: null, costUSD: null, billing: record.billingSource || null };
     c.taskOfRun ||= {}; c.taskOfRun[review.id] = taskId;
     return;
   }
-  if (record.type === 'task_failure') { const state = c.taskBudgets?.[record.taskId]; if (state) addFailure(state, { ...record }); return; }
+  if (record.type === 'task_failure') {
+    // Old versions also counted words in command inputs. Recheck their diagnostics when replaying the journal.
+    if (record.kind === 'command' && !record.toolOutcome && !commandOutcome({ text: `$ ${record.what}\n${record.how}` })?.failed) return;
+    const state = c.taskBudgets?.[record.taskId]; if (state) addFailure(state, { ...record }); return;
+  }
   if (record.type === 'check' && record.check?.status === 'failed') {
     const taskId = c.taskOfRun?.[record.runId], state = taskId && c.taskBudgets?.[taskId];
     if (state) addFailure(state, { signature: hash(`check\0${record.check.command}\0${record.check.exitCode}`), kind: 'check', what: `Tests: ${record.check.command || 'test command'}`, how: `Exit code ${record.check.exitCode ?? 'unknown'}`, provider: null, runId: record.runId, at: record.at });
@@ -140,17 +149,17 @@ export function applyBudgetRecord(c, record) {
 // What a step says about the work: a command that failed, or an edit, identified so the same one can be recognized again.
 // Numbers and timings are ignored, since they differ between otherwise identical failures.
 const normalize = text => String(text).toLowerCase().replace(/\b[\da-f]{7,}\b/g, '#').replace(/\d+(?:\.\d+)?/g, '#').replace(/\s+/g, ' ').trim();
-export function classifyStep(text) {
-  const value = String(text || ''), lines = value.split('\n');
+export function classifyStep(input) {
+  const message = typeof input === 'string' ? { text: input } : input;
+  const value = String(message?.text || ''), lines = value.split('\n');
   if (/^(?:Edit|MultiEdit)$/.test(lines[0]) && lines[1]) return { kind: 'edit', signature: hash(`edit\0${lines[1]}`), what: `The same edit: ${(() => { try { return JSON.parse(lines[1]).file_path || 'a file'; } catch { return 'a file'; } })()}`, how: 'Made again with the same change' };
-  let what = null, output = '';
-  if (lines[0].startsWith('$ ')) { what = lines[0].slice(2); output = lines.slice(1).join('\n'); }
-  else if (/^(?:Bash|run_shell_command|shell|execute)$/.test(lines[0]) && lines[1]) { try { what = JSON.parse(lines[1]).command || null; } catch { /* Cut short in the journal. */ } output = lines.slice(2).join('\n'); }
-  if (!what || !output.trim() || !looksFailed(output)) return null;
+  const outcome = commandOutcome(message);
+  if (!outcome?.failed) return null;
+  const { command: what, output } = outcome;
   // Agents wrap the same command differently, so the shell around it doesn't count: otherwise changing agents would reset the count.
   const command = String(what).replace(/^(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/, '$2').trim();
-  const tail = output.trim().split('\n').slice(-3).join(' ');
-  return { kind: 'command', signature: hash(`command\0${normalize(command)}\0${normalize(tail)}`), what: command.slice(0, 200), how: tail.slice(-300) };
+  const tail = output.trim().split('\n').slice(-3).join(' ') || `Exit code ${outcome.exitCode ?? 'unknown'}`;
+  return { kind: 'command', signature: hash(`command\0${normalize(command)}\0${normalize(tail)}`), what: command.slice(0, 200), how: tail.slice(-300), ...(message.toolOutcome ? { toolOutcome: message.toolOutcome } : {}) };
 }
 
 export class TaskBudgets {
@@ -254,7 +263,7 @@ export class TaskBudgets {
   observeStep(c, message) {
     const run = this.broker.running;
     if (!run || run.c !== c || run.review || message.role !== 'activity' || message.runId !== run.id) return;
-    const step = classifyStep(message.text);
+    const step = classifyStep(message);
     if (!step) return;
     run.countedSteps ||= new Set();
     if (run.countedSteps.has(message.id)) return;
@@ -265,7 +274,7 @@ export class TaskBudgets {
 
   // The current task for the panel.
   view(c) {
-    const policy = this.policy(c), review = c.reviews?.find(item => c.taskOfRun?.[item.id]), taskId = c.activeRun?.taskId || c.lastRun?.taskId || c.lastRun?.id || c.taskOfRun?.[review?.id], state = taskId ? c.taskBudgets?.[taskId] : null;
+    const policy = this.policy(c), review = c.reviews?.find(item => c.taskOfRun?.[item.id]), taskId = c.routingPending?.taskId || c.activeRun?.taskId || c.lastRun?.taskId || c.lastRun?.id || c.taskOfRun?.[review?.id], state = taskId ? c.taskBudgets?.[taskId] : null;
     if (!state) return { policy, defaults: defaultPolicy(), task: null, quota: this.quota(c) };
     const limits = this.limits(c, state), used = this.used(state), exceeded = this.exceeded(c, state);
     return { policy, defaults: defaultPolicy(), quota: this.quota(c), task: { taskId, limits, runs: state.runs, retries: state.retries, reviews: state.reviews, handoffs: state.handoffs, workingMs: used.workingMs, tokens: used.tokens, cacheRead: state.tokens.cacheRead, spendUSD: used.spendUSD, runsWithoutUsage: state.runsWithoutUsage, active: Object.keys(state.active).length,

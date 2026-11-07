@@ -216,6 +216,16 @@ test('a task beside a running main conversation takes its own copy, and is merge
 
 test('a queued prompt can start as a task beside the main run, keeping its settings, and stays queued when the task can’t start', { skip: scriptCLIs }, async t => {
   const env = setup(t, root => ({ a: repository(path.join(root, 'a')) }));
+  env.broker.tasks.BrokerClass = class extends Broker {
+    constructor(options) {
+      super(options);
+      this.availableProviders = () => ['claude'];
+      this.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
+      this.handoff.models = async () => ({ models: [{ id: 'claude-haiku', displayName: 'Haiku' }] });
+      this.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] });
+      this.router.worker = async () => JSON.stringify({ tier: 'light', effort: 'low', reason: 'A scoped read-only task.' });
+    }
+  };
   env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
   const main = env.broker.running;
   await until(() => env.captured(fs.realpathSync(env.folders.a)).length, 'the main run');
@@ -232,6 +242,7 @@ test('a queued prompt can start as a task beside the main run, keeping its setti
   await working(env, task);
   assert.equal(env.task(task.id).mode, 'worktree', 'Beside the main run, it takes its own copy.');
   env.release(env.task(task.id).scopePath); await finished(env, task);
+  assert.equal(env.lane(task.id).c.lastRun.routing.assessment.source, 'agent', 'A routed queued prompt is assessed when its task lane starts.');
   env.release(fs.realpathSync(env.folders.a)); await main.done;
 });
 

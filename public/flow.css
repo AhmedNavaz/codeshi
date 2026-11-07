@@ -136,6 +136,9 @@
 .flow-plan[data-level="low"] .flow-meter::after { background: var(--warning); }
 .flow-plan[data-level="critical"] .flow-meter::after { background: var(--danger); }
 .flow-plan-when { color: var(--faint); font-size: 11.5px; }
+.flow-plan-secondary { color: var(--faint); font-size: 11.5px; }
+.flow-plan-secondary[data-level="low"] { color: var(--warning); }
+.flow-plan-secondary[data-level="critical"] { color: var(--danger); }
 
 .flow-steps, .flow-queue, .flow-runs { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
 .flow-step { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); }

@@ -508,6 +508,11 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .continuation > span:first-child, .connection-notice > span:first-child, .running-notice > span:first-child { display: inline-flex; align-items: center; gap: 7px; flex: 1; min-width: 0; color: var(--muted); }
 .continuation > span:first-child::before, .connection-notice > span:first-child::before { content: ""; flex: none; width: 14px; height: 14px; background: var(--warning); -webkit-mask: var(--icon-alert) center / contain no-repeat; mask: var(--icon-alert) center / contain no-repeat; }
 .connection-notice-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.usage-notice[hidden] { display: none; }
+.usage-notice { flex-wrap: nowrap; }
+.usage-notice > span:first-child { align-items: flex-start; overflow-wrap: anywhere; }
+.usage-notice > span:first-child::before { margin-top: 3px; }
+.usage-notice .usage-notice-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 12px; background: none; color: var(--muted); }
 /* An agent that works in one folder, in a workspace with several: the message waits while a folder is chosen. */
 .folder-ask { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-height: 30px; padding: 0 2px; color: var(--text); font-size: 12.5px; line-height: 1.5; }
 .folder-ask[hidden] { display: none; }
@@ -541,33 +546,43 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .composer textarea { display: block; width: 100%; min-height: 64px; max-height: 200px; padding: 12px 14px 4px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 14px; line-height: 1.55; }
 .composer textarea::placeholder { color: var(--faint); }
 .composer textarea:focus-visible { outline: none; }
-/* Context belongs to the message box. Its ring measures the signal toward the next refresh target. */
+/* The compact icon stays quiet until a refresh matters. Readings live in its details. */
 .composer-input { position: relative; }
-.composer .composer-input textarea { padding-right: 44px; }
-.context-compact { position: absolute; top: 8px; right: 9px; display: grid; place-items: center; width: 28px; height: 28px; padding: 5px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); }
-.context-compact:hover:enabled { background: var(--hover); color: var(--text-strong); }
-.context-compact:disabled { opacity: 1; }
-.context-meter { position: relative; display: grid; place-items: center; width: 18px; height: 18px; --context-progress: 0; }
-.context-meter svg { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke-width: 2; }
-.context-meter-track { stroke: var(--border-strong); }
-.context-meter-fill { stroke: var(--muted); stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: calc(100 - var(--context-progress)); transform: rotate(-90deg); transform-origin: center; transition: stroke-dashoffset .25s ease; }
-.context-compact[data-meter-state="unknown"] .context-meter-track { stroke-dasharray: 2 3; }
-.context-compact:not([data-meter-state="known"]) .context-meter-fill { visibility: hidden; }
-.context-compact[data-refresh-due="true"], .context-compact[data-near-limit="true"] { color: var(--warning); }
-.context-compact[data-near-limit="true"] .context-meter-fill { stroke: var(--warning); }
-.context-compact[data-meter-state="off"], .context-compact[data-meter-state="fresh"] { color: var(--faint); }
-.context-compact[data-meter-state="ready"] .context-meter::after { content: ""; width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
-.context-confirm { width: min(400px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--bg); color: var(--text); box-shadow: var(--shadow-lg); }
-.context-confirm::backdrop { background: color-mix(in srgb, var(--bg) 65%, transparent); backdrop-filter: blur(5px); }
-.context-confirm h2 { margin: 0 0 12px; color: var(--text-strong); font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
-.context-confirm p, .context-confirm li { font-size: 12.5px; line-height: 1.6; }
-.context-confirm p { margin: 0; }
-.context-confirm ul { margin: 14px 0; padding-left: 18px; }
-.context-confirm li + li { margin-top: 5px; }
+.composer-input:has(.context-compact:not([hidden])) textarea { padding-right: 52px; }
+.context-compact { position: absolute; top: 8px; right: 9px; display: grid; place-items: center; width: 32px; height: 32px; padding: 7px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--muted); }
+.context-compact > .icon { width: 16px; height: 16px; }
+.context-compact .context-compact-check { display: none; }
+.context-compact:hover:enabled, .context-compact:focus-visible { background: var(--hover); color: var(--text-strong); border-color: var(--border-strong); }
+.context-compact[data-meter-state="near"] { color: var(--text); }
+.context-compact[data-meter-state="near"]::after { content: ""; position: absolute; top: 4px; right: 4px; width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+.context-compact:is([data-meter-state="ready"], [data-meter-state="due"]) { background: var(--success-bg); color: var(--success); }
+.context-compact:is([data-meter-state="ready"], [data-meter-state="due"]) .context-compact-glyph { display: none; }
+.context-compact:is([data-meter-state="ready"], [data-meter-state="due"]) .context-compact-check { display: block; }
+.context-compact:is([data-meter-state="preparing"], [data-meter-state="native"]) { background: var(--hover); color: var(--text); }
+.context-compact:is([data-meter-state="preparing"], [data-meter-state="native"]) .context-compact-glyph { animation: context-compact-breathe 1.8s ease-in-out infinite; }
+@keyframes context-compact-breathe { 50% { opacity: .5; transform: scale(.85); } }
+.context-confirm { width: min(430px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
+.context-confirm::backdrop { background: var(--backdrop); backdrop-filter: blur(4px); }
+.context-confirm-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.context-confirm-icon { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-raised); color: var(--muted); }
+.context-confirm-icon .icon { width: 20px; height: 20px; }
+.context-confirm-agent { display: block; margin-bottom: 3px; font-size: 11px; color: var(--muted); }
+.context-confirm h2 { margin: 0; color: var(--text-strong); font-size: 17px; line-height: 1.3; font-weight: 600; letter-spacing: -.02em; }
+.context-reading { display: grid; gap: 9px; margin-bottom: 18px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
+.context-reading-line { display: flex; justify-content: space-between; gap: 16px; font-size: 11px; color: var(--muted); }
+.context-reading-line strong { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.context-meter { display: block; height: 4px; overflow: hidden; border-radius: 3px; background: var(--border); --context-progress: 0; }
+.context-meter > span { display: block; width: calc(var(--context-progress) * 1%); height: 100%; border-radius: inherit; background: var(--muted); transition: width .2s ease; }
+.context-confirm p { margin: 0; font-size: 12.5px; line-height: 1.65; }
+.context-confirm .context-confirm-continuity { margin: 14px 0; }
 .context-confirm-note { color: var(--muted); }
 .context-confirm footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 22px; }
-.context-confirm footer button { border-radius: 10px; }
-@media (prefers-reduced-motion: reduce) { .context-meter-fill { transition: none; } }
+.context-confirm footer button { border-radius: 8px; height: 32px; }
+@media (prefers-reduced-motion: reduce) {
+  .context-meter > span { transition: none; }
+  .context-compact .context-compact-glyph { animation: none; }
+}
+
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 8px; }
 .composer { container: composer / inline-size; }
 .composer-toolbar { flex-wrap: nowrap; }
@@ -1047,16 +1062,7 @@ button.commit-hash:hover { text-decoration: underline; }
 /* A retry after failed tests (#12). */
 .retry-icon { background: var(--danger); -webkit-mask-image: var(--icon-alert); mask-image: var(--icon-alert); }
 
-/* Auto (#12): before sending, one quiet line says which agent, model and effort will take the message, and why. */
-.route-preview { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; margin: 0 0 6px; padding: 4px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-size: 12.5px; text-align: left; cursor: pointer; transition: background .12s; }
-.route-preview:hover { background: var(--hover); }
-.route-icon { flex: none; width: 13px; height: 13px; background: var(--link); -webkit-mask: var(--icon-auto) center / contain no-repeat; mask: var(--icon-auto) center / contain no-repeat; }
-.route-choice { flex: none; max-width: 55%; overflow: hidden; color: var(--text-strong); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.route-reason { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.route-change { flex: none; color: var(--faint); opacity: 0; transition: opacity .12s; }
-.route-preview:hover .route-change, .route-preview:focus-visible .route-change { opacity: 1; }
-.route-preview.error .route-icon { background: var(--warning); }
-.route-preview.error .route-reason { color: var(--warning); white-space: normal; }
+/* Auto (#12): under a sent message, which agent, model and effort took it. */
 .message-routing { margin-top: 3px; color: var(--faint); font-size: 11.5px; }
 
 /* Resize handles: a thin, invisible strip that shows a line on hover, while dragging and when focused. */
@@ -1094,11 +1100,11 @@ button.commit-hash:hover { text-decoration: underline; }
 .agents-section.flash { background: var(--hover); border-radius: 8px; }
 #agents-routing-note { padding: 16px 2px; }
 #agents-routing-note .agents-hint { margin: 0; line-height: 1.6; }
-/* Plan usage: one button per agent. A connected agent shows what its tightest limit has left, as a bar, with which
-   limit it is and when it resets underneath; any other agent shows its state on one line. */
+/* Plan usage: five-hour allowance leads when reported; a separate line keeps the other limiting window visible. */
 .agent-accounts { display: grid; gap: 2px; margin: 0 -8px; }
 .agents-usage .provider-status { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; grid-template-areas: "icon name value"; align-items: center; column-gap: 9px; row-gap: 5px; width: 100%; min-width: 0; height: auto; padding: 7px 8px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .agents-usage .provider-status:has(.usage-meter:not([hidden])) { grid-template-areas: "icon name value" ". bar bar" ". caption caption"; }
+.agents-usage .provider-status:has(.usage-secondary) { grid-template-areas: "icon name value" ". bar bar" ". caption caption" ". other other"; }
 .agents-usage div.provider-status { cursor: default; }
 .agents-usage .provider-status[hidden] { display: none; }
 .agent-icon.local { -webkit-mask-image: var(--icon-terminal); mask-image: var(--icon-terminal); }
@@ -1126,6 +1132,9 @@ button.commit-hash:hover { text-decoration: underline; }
 .usage-meter[data-level="low"] .usage-bar::after { background: var(--warning); }
 .usage-meter[data-level="critical"] .usage-bar::after { background: var(--danger); }
 .agents-usage .usage-caption { grid-area: caption; min-width: 0; overflow: hidden; color: var(--faint); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.agents-usage .usage-secondary { grid-area: other; min-width: 0; color: var(--faint); font-size: 11.5px; line-height: 1.4; white-space: normal; }
+.agents-usage .usage-secondary[data-level="low"] { color: var(--warning); }
+.agents-usage .usage-secondary[data-level="critical"] { color: var(--danger); }
 .agents-body { overflow-x: hidden; }
 .agents-section h3 { margin: 0 0 4px; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
 .agents-hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }

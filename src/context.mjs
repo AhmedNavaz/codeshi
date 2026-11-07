@@ -130,9 +130,9 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
       if (seenSteps.has(source[index].text)) { repeatedSteps++; continue; }
       seenSteps.add(source[index].text); steps.push(index);
     }
-    for (const index of [...steps.filter(at => looksFailed(source[at].text)), ...steps.filter(at => !looksFailed(source[at].text))]) {
+    for (const index of [...steps.filter(at => looksFailed(source[at])), ...steps.filter(at => !looksFailed(source[at]))]) {
       if (beforeActivity - remaining >= activityBudget) break;
-      add(index, Math.min(looksFailed(source[index].text) ? 2400 : 1200, activityBudget - (beforeActivity - remaining)));
+      add(index, Math.min(looksFailed(source[index]) ? 2400 : 1200, activityBudget - (beforeActivity - remaining)));
     }
     leftOutOfScope = source.filter(hidden).length;
   } else {

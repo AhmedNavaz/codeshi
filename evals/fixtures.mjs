@@ -97,7 +97,7 @@ export const fixtures = [
     id: 'long-thread', title: 'Decisions survive successive tasks and switching back',
     folders: { shop: { 'money.mjs': '// Money helpers.\n', 'receipt.mjs': '// Receipt helpers.\n' }, ops: { 'limit.mjs': 'export const limit = 10;\n' } },
     history: ({ ops }) => [
-      { role: 'user', text: 'Shop conventions: formatPrice uses EUR by default, currency code first, two decimal places with toFixed(2). Receipt entries are joined with a semicolon. Do not use Intl: it previously produced comma decimals. Blocker: tax calculation is awaiting a decision; leave tax out.' },
+      { role: 'user', text: 'Shop conventions: formatPrice uses EUR by default, currency code first, two decimal places with toFixed(2). Receipt entries are joined with a semicolon without spaces. Do not use Intl: it previously produced comma decimals. Blocker: tax calculation is awaiting a decision; leave tax out.' },
       ...Array.from({ length: 200 }, (_, index) => ({ role: 'activity', text: `$ tail -n 500 ${ops}/deploy.log\nold-deploy-${index} ${'restart successful; '.repeat(50)}` })),
       { role: 'assistant', text: 'Deployment investigation finished. Shop conventions and the unresolved tax decision still apply.' },
     ],

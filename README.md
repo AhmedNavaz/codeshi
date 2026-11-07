@@ -74,7 +74,7 @@ Keep working in your editor or browser. On a Mac, the menu bar shows what every 
 <td width="50%" valign="top">
 <img src="docs/features/routing.jpg" alt="Routing in the Agents panel, set to Balanced among Cost saving and Maximum quality, and its choice above the message box: Claude with Opus 5.5 for a complex refactoring task">
 <h3>Routing</h3>
-<p>In Flow, picks the agent, model and effort for each message, from a light model for a typo to the strongest for a refactor, and shows its choice before you send. It stays on your subscriptions unless you allow API billing.</p>
+<p>In Flow, picks the agent, model and effort for each message, from a light model for a typo to the strongest for a refactor, and shows its choice with each message you send. It stays on your subscriptions unless you allow API billing.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/features/recap.jpg" alt="The While you were away recap: a finished task, a usage limit, a reset to wait for, uncommitted changes and an approval waiting">

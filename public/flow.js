@@ -14,7 +14,6 @@
   const button = (cls, text, handler) => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
   const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
   const clip = (text, length) => { const value = String(text || '').replace(/\s+/g, ' ').trim(); return value.length > length ? value.slice(0, length - 1) + '…' : value; };
-  const lower = text => text ? text.charAt(0).toLowerCase() + text.slice(1) : '';
   const agentNames = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
   const agentName = (provider, local = false) => local ? 'The local model' : agentNames[provider] || 'The agent';
   // The same three answers as the Agents panel, said in terms of what happens rather than which model does it. Flow
@@ -221,22 +220,13 @@
     return [option.does, ...extras].join(' ');
   }
   const draft = () => ({ text: $('message-input')?.value.trim() || '', files: window.relayFiles?.ids?.().length || 0 });
-  // "go to Claude, Sonnet, low effort: a short fix", or why Codeshi can't choose.
-  function routeWords(routed) {
-    if (!routed) return null;
-    if (routed.error) return { error: `Codeshi can’t choose yet. ${routed.error}` };
-    const model = routed.modelName || 'its default model';
-    return { words: `go to ${agentNames[routed.provider] || 'an agent'}, ${model}${routed.effort ? `, ${routed.effort} effort` : ''}: ${lower(routed.reason || '')}` };
-  }
   function nextLine() {
     const state = api.getState(), c = state.conversation;
-    if (api.isRunning()) { const run = c?.activeRun; return `${agentName(run?.provider, run?.connection === 'local')} is working on it now.`; }
+    if (api.isRunning()) { const run = c?.activeRun; return run?.purpose === 'routing' ? 'Assessing the task before choosing an agent, model and effort.' : `${agentName(run?.provider, run?.connection === 'local')} is working on it now.`; }
     if (c?.resume) return 'Waiting for a usage limit to reset, then it carries on.';
     if (routing()) {
-      const { text, files } = draft();
-      if (!text && !files) return 'Type a message to see who would take it.';
-      const route = routeWords(api.routeFor(text, files));
-      return route?.error || (route ? `It would ${route.words}.` : 'Codeshi would pick the agent, model and effort.');
+      const { text, files } = draft(), error = (text || files) && api.routeFor(text, files)?.error;
+      return error ? `Codeshi can’t choose yet. ${error}` : 'Codeshi picks the agent, model and effort when you send.';
     }
     const model = state.model ? window.relayModelPicker?.modelName?.(state.provider, state.model) || state.model : null;
     return `Your next message goes to ${agentNames[state.provider] || 'the agent'}${model ? `, ${model}` : ''}.`;
@@ -289,22 +279,15 @@
     testingDescription.title = 'Applies to new turns in every workspace. Running agents keep their starting setting. Required checks and selected build/review workflows still apply.';
   }
 
-  // What's left on your plans: each connected agent's tightest limit in plain words. Readings come from the agents'
-  // own accounts, as in Plan usage; nothing here is a guess.
+  // The same model-aware five-hour headline and secondary allowance shown in Agents.
   const resetWords = value => { const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return ''; return 'resets ' + at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
-  function periodWords(label) {
-    const [period, ...scope] = String(label || '').split(' · ');
-    const words = /hour/i.test(period) ? 'for the next few hours' : /^weekly$/i.test(period) ? 'this week' : /^daily$/i.test(period) ? 'today' : period.toLowerCase();
-    return scope.length ? `${words} for ${scope.join(' · ')}` : words;
-  }
   const remaining = row => Math.max(0, Math.min(100, Math.round(100 - row.usedPercent)));
   const level = percent => percent <= 10 ? 'critical' : percent <= 25 ? 'low' : 'ok';
   function planRows() {
     const state = api.getState();
     return ['codex', 'claude', 'gemini'].filter(provider => state.accounts?.[provider]?.authenticated === true).map(provider => {
-      const usage = window.relayUsage?.snapshot?.(provider), windows = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => Number.isFinite(row.usedPercent) && !row.disabled);
-      const tightest = windows.reduce((low, row) => !low || row.usedPercent > low.usedPercent ? row : low, null);
-      return { provider, reported: usage?.available !== false, tightest, others: windows.length - (tightest ? 1 : 0) };
+      const usage = window.relayUsage?.snapshot?.(provider), summary = window.relayUsage?.summary?.(provider);
+      return { provider, reported: usage?.available !== false, primary: summary?.primary || null, secondary: summary?.secondary || null, warning: summary?.warning || null };
     });
   }
   function renderPlans(card) {
@@ -323,17 +306,21 @@
       const item = node('li', 'flow-plan'), head = node('div', 'flow-plan-head'), icon = node('i', `agent-icon ${row.provider}`);
       item.dataset.provider = row.provider; icon.setAttribute('aria-hidden', 'true');
       head.append(icon, node('strong', undefined, agentNames[row.provider]));
-      if (!row.tightest) {
+      if (!row.primary) {
         head.append(node('span', 'flow-plan-value', row.reported ? 'No reading yet' : 'Not reported'));
         item.append(head);
         if (window.relayUsage?.load) item.append(button('flow-button', 'Check now', () => window.relayUsage.load(row.provider)));
       } else {
-        const percent = remaining(row.tightest);
+        const percent = remaining(row.primary);
         item.dataset.level = level(percent);
         head.append(node('span', 'flow-plan-value', `${percent}% left`));
-        const meter = node('div', 'flow-meter'); meter.style.setProperty('--left', `${percent}%`); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', `${percent}% of ${agentNames[row.provider]}’s allowance left ${periodWords(row.tightest.label)}`);
-        const reset = resetWords(row.tightest.resetsAt);
-        item.append(head, meter, node('span', 'flow-plan-when', `${periodWords(row.tightest.label)}${reset ? ` · ${reset}` : ''}${row.others ? ` · ${plural(row.others, 'other limit')}` : ''}`));
+        const meter = node('div', 'flow-meter'); meter.style.setProperty('--left', `${percent}%`); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', `${percent}% of ${agentNames[row.provider]}’s ${row.primary.label} allowance left`);
+        const reset = resetWords(row.primary.resetsAt);
+        item.append(head, meter, node('span', 'flow-plan-when', `${row.primary.label} limit${reset ? ` · ${reset}` : ''}`));
+        if (row.secondary) {
+          const otherReset = resetWords(row.secondary.resetsAt), other = node('span', 'flow-plan-secondary', `${row.secondary.label} · ${remaining(row.secondary)}% left${otherReset ? ` · ${otherReset}` : ''}`);
+          other.dataset.level = level(remaining(row.secondary)); item.append(other);
+        }
       }
       list.append(item);
     }
@@ -458,7 +445,7 @@
   function chipText(id) {
     const state = api.getState();
     if (id === 'working') return modes.find(item => item.mode === routing()?.mode)?.name || 'Routing';
-    if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.tightest ? `${agentNames[row.provider]} ${remaining(row.tightest)}% left` : 'Plans'; }
+    if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
     if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || []; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }
     const total = changedRuns().filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0);
     return total ? `${plural(total, 'file')} changed` : 'Files';

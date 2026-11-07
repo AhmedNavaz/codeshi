@@ -13,6 +13,14 @@ const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
 const changes = [{ path: 'src/checkout.js', kind: 'modify' }];
 const step = { provider: 'codex', model: 'gpt-codex', modelName: 'GPT Codex', effort: 'high', tier: 'deep' };
 
+// A routed Send rates its request before it starts. Here only the mock Codex is connected, and the rating is a stand-in.
+function connectMock(broker) {
+  broker.availableProviders = () => ['codex'];
+  broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
+  broker.handoff.models = async () => ({ data: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
+  broker.router.worker = async () => JSON.stringify({ tier: 'light', effort: 'low', reason: 'A small change.' });
+}
+
 // A workspace with a mock Codex, and a stand-in for the saved Test command that ends as each scenario says.
 function setup(t, results = []) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-checks-'));
@@ -41,6 +49,7 @@ function setup(t, results = []) {
     open(usedPercent = 10, verificationCadence = () => 'as-needed') {
       const broker = new Broker({ workspace, dataDir, bins: { codex: bin }, tests, verificationCadence });
       broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent }] });
+      connectMock(broker);
       broker.on('notify', notice => notices.push(notice));
       brokers.push(broker); return broker;
     },
@@ -215,6 +224,9 @@ test('through the app, the Test command saved in Project commands checks a route
   t.after(async () => { await app.close({ force: true }); fs.rmSync(root, { recursive: true, force: true }); });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const project = app.registry.list()[0], id = app.registry.mainConversation(project.id).id;
+  connectMock(app.registry.broker(project.id));
+  const usedNothing = { available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent: 10 }] };
+  app.registry.broker(project.id).checks.usage = async () => usedNothing;
   const post = async (route, body) => { const response = await fetch(`http://127.0.0.1:${app.server.address().port}${route}?projectId=${project.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
   assert.equal((await post('/api/commands/save', { name: 'Tests', folderId: project.folders[0].id, directory: '', command: `"${process.execPath}" -e "process.stdout.write('31 passing')"`, test: true })).status, 200);
   assert.deepEqual((await post(`/api/conversations/${id}/routing`, { mode: 'quality', check: true })).body.routing, { mode: 'quality', allowApi: false, check: true });

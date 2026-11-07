@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { gitExecutable } from './resolve-binary.mjs';
 import { workspaceGit } from './workspace-git.mjs';
+import { commandOutcome } from './tool-outcomes.mjs';
 
 // Task-scoped context (#85): the facts a fresh agent needs to pick a task up, worked out locally from the saved
 // conversation and the folders as they are now. No model is called, and nothing is kept outside the journal.
@@ -181,7 +182,7 @@ function relevantFiles(words, folders) {
 }
 
 // A step that looks like it went wrong. Only a hint, since agents write steps as plain text: the brief calls these evidence.
-export const looksFailed = text => /\b(?:error|failed|failure|fatal|exception|traceback|denied|not found|cannot|could not|exit code [1-9]|\d+ failing)\b/i.test(String(text || '').slice(-1500));
+export const looksFailed = value => commandOutcome(typeof value === 'string' ? { text: value } : value)?.failed === true;
 
 export function failedAttempts(messages, runs) {
   const seen = new Set(), result = [];
@@ -192,7 +193,7 @@ export function failedAttempts(messages, runs) {
     if (message.role === 'error') { result.push({ agent: message.provider || null, what: 'The run stopped', how: text.split('\n')[0].slice(0, 300), source: 'run', messageId: message.id }); continue; }
     if (message.role !== 'activity' || !/^(?:\$ |Bash\n|run_shell_command\n|shell\n|execute\n)/.test(text)) continue;
     const lines = text.split('\n'), output = lines.slice(lines[0].startsWith('$ ') ? 1 : 2).join('\n');
-    if (!output.trim() || !looksFailed(output)) continue;
+    if (!looksFailed(message)) continue;
     let what = lines[0].replace(/^\$ /, '');
     if (!lines[0].startsWith('$ ')) { try { what = JSON.parse(lines[1]).command || what; } catch { /* Keep the tool's name. */ } }
     what = String(what).slice(0, 200);

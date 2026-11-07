@@ -10,3 +10,7 @@ if (!process.env.AI_RELAY_MUTATIONS_DIR) {
   process.env.AI_RELAY_MUTATIONS_DIR = folder;
   process.on('exit', () => fs.rmSync(folder, { recursive: true, force: true }));
 }
+
+// A routed Send considers every agent it can find, so a test could otherwise reach the ones installed on this machine and
+// spend real allowance on them. A test that needs an agent names its own stand-in, which takes precedence over these.
+for (const provider of ['CODEX', 'CLAUDE', 'GEMINI']) process.env[`AI_RELAY_${provider}_BIN`] ||= path.join(os.tmpdir(), `codeshi-test-no-${provider.toLowerCase()}`);

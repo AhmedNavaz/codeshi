@@ -153,7 +153,9 @@ export class TaskCoordinator {
       lane.broker.budget.setPolicy(conversation, this.main.budget.policy(c));
       if (task.includeHistory) for (const message of c.messages.filter(item => ['user', 'assistant'].includes(item.role) && item.text?.trim() && !item.reviewId).slice(-20)) lane.broker.record(conversation, { type: 'message', message: { id: randomUUID(), role: message.role, text: message.text, provider: message.provider, status: 'complete', createdAt: message.createdAt } });
     }
-    lane.broker.start(lane.c, { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` });
+    const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` };
+    if (task.routing) lane.broker.dispatch(lane.c, input).catch(error => { this.update(c, task, { status: 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
+    else lane.broker.start(lane.c, input);
     this.sync(c, task);
   }
   // Opens a task's lane. It only ever holds the task's own folder, so reopening it after a crash can't widen what it reaches.
@@ -175,8 +177,10 @@ export class TaskCoordinator {
     const lane = this.lanes.get(task.id);
     if (!lane?.c || this.closed || ENDED.has(task.status) || ['detached', 'lost', 'blocked'].includes(task.status)) return;
     const status = lane.broker.running ? 'running' : STOPPED[lane.c.status] || (lane.c.status === 'running' ? 'running' : task.status);
-    if (status === task.status) return;
-    this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), provider: lane.c.lastRun?.provider || lane.c.activeRun?.provider || task.provider });
+    const selected = lane.c.activeRun || (status !== 'running' ? lane.c.lastRun : null);
+    const provider = selected?.provider || task.provider, model = selected ? selected.model ?? null : task.model, effort = selected ? selected.effort ?? null : task.effort;
+    if (status === task.status && provider === task.provider && model === task.model && effort === task.effort) return;
+    this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), provider, model, effort, ...(selected?.routing ? { routing: selected.routing } : {}) });
     if (status !== 'running') setImmediate(() => this.tick(c));
   }
   // After a restart. Whatever a lane was doing ended with the app, so its run is marked interrupted by its own journal, and

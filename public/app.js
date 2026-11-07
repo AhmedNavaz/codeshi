@@ -751,7 +751,8 @@
     if (user && message.routing) {
       const choice = message.routing, model = choice.model ? window.relayModelPicker?.modelName?.(message.provider, choice.model) || choice.model : "default model";
       const note = element("div", "message-routing", `Auto · ${[label(message.provider), model, choice.effort ? `${choice.effort} effort` : ""].filter(Boolean).join(" · ")}`);
-      note.title = `${window.relayRouting?.modeNames?.[choice.mode] || "Auto"}: ${choice.reason || ""}`;
+      const rated = { agent: `Rated by an agent${choice.ratedMs ? ` in ${(choice.ratedMs / 1000).toFixed(1)} s` : ""}`, local: "Continued from the last rating, with no agent call", fallback: "Estimated locally because no agent could rate it in time" }[choice.ratedBy];
+      note.title = `${window.relayRouting?.modeNames?.[choice.mode] || "Auto"}: ${choice.reason || ""}${rated ? ` · ${rated}` : ""}`;
       row.append(note);
     }
     row.append(actions);
@@ -975,9 +976,8 @@
     try { await post(endpoint(id, "queue"), body, projectId); await refresh(); return true; }
     catch (error) { showNotice(error.message); return false; }
   }
-  // Gemini on the Antigravity connection works in one folder at a time (#116). In a workspace with several, the message waits
-  // while a folder is chosen, then runs as a task there with the agent, model and access chosen; nothing is sent until then.
-  function oneFolderOnly(provider) { const account = state.accounts[provider]; return provider === "gemini" && (account?.authMode === "google-oauth" || account?.source === "antigravity-acp"); }
+  // Only runtimes that report no additional-folder support need the one-folder task fallback (#116).
+  function oneFolderOnly(provider) { const account = state.accounts[provider]; return provider === "gemini" && (account?.authMode === "google-oauth" || account?.source === "antigravity-acp") && account?.capabilities?.additionalDirectories === false; }
   function askFolder(submission) { state.folderAsk = { ...submission, projectId: state.projectId }; renderFolderAsk(); $("folder-ask-choices").querySelector?.("button")?.focus?.(); }
   function clearFolderAsk() { if (!state.folderAsk) return; state.folderAsk = null; renderFolderAsk(); }
   function renderFolderAsk() {
@@ -1037,7 +1037,7 @@
     }
     state.pending = null; renderControls();
   }
-  // Auto (#12): Codeshi picks the agent, model and effort for each message, shown before it is sent.
+  // Auto (#12): Codeshi picks the agent, model and effort for each message when it is sent.
   const autoRouting = () => !state.localSelections[state.projectId] && state.conversation?.routing ? state.conversation.routing : null;
   // With a mode given, says what that mode would do with the text before it is chosen (Flow mode, #107).
   function routeFor(text, attachments = 0, mode = null) {
@@ -1045,23 +1045,15 @@
     const project = state.projects.find(item => item.id === state.projectId);
     const candidates = ["codex", "claude", "gemini"].map(provider => {
       const info = connection(provider);
-      // Antigravity has no read-only access and works with one folder, as starting a run checks.
-      const unsupported = provider === "gemini" && (state.mode === "read" || foldersFor(project).length > 1);
+      const antigravity = info.account?.authMode === "google-oauth" || info.account?.source === "antigravity-acp";
+      const folderCount = state.taskId || state.taskDraft ? 1 : foldersFor(project).length;
+      const unsupportedRead = state.mode === "read" && (antigravity || info.account?.capabilities?.readOnly === "unavailable");
+      const unsupportedFolders = antigravity ? folderCount > 1 && info.account?.capabilities?.additionalDirectories !== true : folderCount > 6;
+      const unsupported = provider === "gemini" && (unsupportedRead || unsupportedFolders);
       return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usage: window.relayUsage?.snapshot?.(provider), allowedModels: state.conversation?.taskPolicy?.allowedModels?.[provider] || null, models: window.relayModelPicker?.models?.(provider) || [] };
     });
-    return window.relayRouting.route({ text, attachments, mode: mode || routing.mode, allowApi: routing?.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
-  }
-  function renderRoute() {
-    const node = $("route-preview"); if (!node) return;
-    const text = ui.input.value.trim(), files = window.relayFiles?.ids().length || 0;
-    const routed = !isRunning() && !state.conversation?.resume && (text || files) ? routeFor(text, files) : null;
-    node.hidden = !routed; if (!routed) return;
-    node.classList.toggle("error", Boolean(routed.error));
-    if (routed.error) { $("route-choice").textContent = "Auto can’t choose"; $("route-reason").textContent = routed.error; return; }
-    $("route-choice").textContent = [label(routed.provider), routed.modelName || "default model", routed.effort ? `${routed.effort[0].toUpperCase()}${routed.effort.slice(1)} effort` : ""].filter(Boolean).join(" · ");
-    $("route-reason").textContent = `${routed.reason} · ${window.relayRouting.quotaText(routed.quota)}`;
-    node.title = `Account-wide allowance, shared with other clients. ${routed.quota?.observedAt ? 'Observed ' + new Date(routed.quota.observedAt).toLocaleTimeString() + '. ' : ''}Rechecked before the agent starts. Model tiers remain local heuristics, not measured quality guarantees.`;
-    node.setAttribute("aria-label", `Auto will use ${$("route-choice").textContent}: ${routed.reason}. Choose a model yourself instead.`);
+    const previousRequest = state.conversation?.messages?.findLast(message => message.role === 'user' && !message.reviewId && !message.steer)?.text || state.conversation?.context?.goal || '';
+    return window.relayRouting.route({ text, attachments, context: previousRequest, mode: mode || routing.mode, allowApi: routing?.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
   }
   async function setRouting(choice) {
     if (!state.conversation) await ensureCanonicalConversation();
@@ -1247,39 +1239,111 @@
     finally { state.pending = null; renderControls(); }
   }
 
-  function renderContextMeter() {
-    const c = state.conversation, context = c?.contextControl, button = $('compact-context'), meter = $('context-meter');
+  function compactContextState() {
+    const c = state.conversation, context = c?.contextControl;
+    const provider = c?.activeRun?.provider || state.provider;
     const target = context?.thresholdTokens, used = context?.used;
-    const available = c && !state.taskDraft;
-    const provider = c?.activeRun?.provider || c?.provider || state.provider;
     const local = c?.activeRun?.connection === 'local' || !isRunning() && state.localSelections[state.projectId];
-    const measured = available && Number.isFinite(used) && used >= 0 && Number.isFinite(target) && target > 0;
-    let kind = 'unknown', description = 'Context reading unavailable. A context signal is needed to show progress toward automatic refresh.', percent = null;
-    if (!available) description = 'Context reading unavailable until this chat has an agent session.';
-    else if (state.pending === 'compact') { kind = 'preparing'; description = 'Scheduling a context refresh for the next send.'; }
-    else if (context?.pending) { kind = 'ready'; description = 'Refresh scheduled. The next message to this agent starts a fresh session.'; }
-    else if (local || provider === 'gemini') { kind = 'fresh'; description = 'This agent starts a fresh session each turn.'; }
-    else if (context?.legacy) { description = 'This older agent session will refresh automatically on your next message. Context size is unavailable.'; }
-    else if (context && target === null) { kind = 'off'; description = 'Automatic context refresh is off. You can still compact manually.'; }
-    else if (measured) {
-      kind = 'known'; percent = Math.min(100, Math.floor(100 * used / target));
-      description = `${context.estimated ? 'Estimated context signal' : 'Reported context'}: ${used.toLocaleString()} of ${target.toLocaleString()} tokens. ${percent}% toward automatic refresh; ${100 - percent}% left (${Math.max(0, target - used).toLocaleString()} tokens).`;
-      if (context.rollover) description += ' The next send refreshes agent memory.';
-    } else if (Number.isFinite(target) && target > 0) description = `Context reading unavailable. Automatic refresh target: ${target.toLocaleString()} tokens.`;
+    const measured = Number.isFinite(used) && used >= 0;
+    const visible = Boolean(c && !state.taskDraft && !local && provider !== 'gemini' && (context?.hasSession || context?.pending || context?.legacy || context?.hasSession !== false && measured));
+    const native = isRunning() && c?.activeRun?.phase === 'compacting';
+    const due = Boolean(context?.rollover || context?.legacy);
+    const near = measured && Number.isFinite(target) && target > 0 && used >= target * .85;
+    const kind = native ? 'native' : state.pending === 'compact' ? 'preparing' : context?.pending ? 'ready' : due ? 'due' : near ? 'near' : context && target === null ? 'off' : measured ? 'known' : 'unknown';
+    const status = { native: 'Organizing context', preparing: 'Scheduling refresh…', ready: 'Refresh scheduled', due: 'Refresh on next send', near: 'Refresh soon' }[kind] || '';
+    const readingLabel = context?.source === 'claude-last-request-input' ? 'Last request input' : context?.source === 'last-request-input-lower-bound' ? 'Last request input (lower bound)' : context?.estimated ? 'Estimated context' : 'Reported context';
+    const percent = measured && target > 0 && !['native', 'preparing', 'ready'].includes(kind) ? Math.min(100, Math.floor(100 * used / target)) : null;
+    const busy = !state.ready || state.pending || state.loading || state.projectSaving || state.settingsPending || isRunning() || isOtherRunning() || c?.resume || c?.limitSwitching;
+    return { context, provider, target, used, visible, kind, status, measured, readingLabel, percent, canRefresh: visible && !busy && !due && !context?.pending };
+  }
+
+  function renderContextMeter() {
+    const view = compactContextState(), button = $('compact-context'), meter = $('context-meter');
+    const { context, provider, target, used, visible, kind, measured, readingLabel, percent } = view;
+    button.hidden = !visible;
+    button.disabled = !visible || !state.ready || state.loading || state.projectSaving;
     button.dataset.meterState = kind;
-    button.dataset.refreshDue = String(Boolean(available && context?.rollover));
-    button.dataset.nearLimit = String(Boolean(measured && used >= target * .85 && kind === 'known'));
-    button.setAttribute('aria-busy', String(state.pending === 'compact'));
-    button.title = `Compact context — ${description} Chat history stays intact.${button.disabled ? ' Manual compact is available when the chat is idle.' : ' Click to review what will happen.'}`;
-    button.setAttribute('aria-label', `Compact context. ${description}`);
+    button.dataset.refreshDue = String(['ready', 'due'].includes(kind));
+    button.dataset.nearLimit = String(kind === 'near');
+    button.setAttribute('aria-busy', String(['preparing', 'native'].includes(kind)));
+    const description = view.status || (kind === 'off' ? 'Automatic refresh is off' : kind === 'known' ? 'Current context' : 'Context size unavailable');
+    button.title = `Compact context · ${label(provider)} · ${description}. View context and refresh options.`;
+    button.setAttribute('aria-label', button.title);
+    const dialog = $('compact-confirmation');
+    if (!dialog.open) return;
+    if (!compactScopeMatches(compactIntent)) {
+      $('compact-confirm-description').textContent = 'The chat or agent changed. Close this panel and open context again.';
+      $('compact-confirm').disabled = true; return;
+    }
+    $('compact-confirm-agent').textContent = `${label(provider)} · Agent context`;
+    $('compact-confirm-title').textContent = { native: 'Organizing context', preparing: 'Scheduling refresh…', ready: 'Refresh scheduled', due: 'Refresh on next send', near: 'Context is getting longer', off: 'Automatic refresh is off', known: 'Current context', unknown: 'Context size unavailable' }[kind];
+    $('compact-context-reading').hidden = !measured || ['native', 'preparing', 'ready'].includes(kind);
+    $('compact-reading-label').textContent = readingLabel;
+    $('compact-reading-value').textContent = measured ? `${used.toLocaleString()} tokens` : '';
+    $('compact-target-line').hidden = !(target > 0);
+    $('compact-target-value').textContent = target > 0 ? `${target.toLocaleString()} tokens` : '';
+    meter.hidden = percent === null;
     meter.style.setProperty('--context-progress', String(percent ?? 0));
-    meter.setAttribute('role', percent === null ? 'img' : 'meter');
-    meter.setAttribute('aria-label', percent === null ? description : 'Context toward automatic refresh');
     for (const name of ['aria-valuemin', 'aria-valuemax', 'aria-valuenow', 'aria-valuetext']) meter.removeAttribute(name);
     if (percent !== null) {
       meter.setAttribute('aria-valuemin', '0'); meter.setAttribute('aria-valuemax', '100'); meter.setAttribute('aria-valuenow', String(percent));
-      meter.setAttribute('aria-valuetext', description);
+      meter.setAttribute('aria-valuetext', `${percent}% of the automatic refresh target. ${readingLabel}: ${used.toLocaleString()} tokens. This is not the model’s context capacity.`);
     }
+    const next = `Codeshi will refresh ${label(provider)}’s working context with your next message.`;
+    const manual = `You can prepare a refresh for your next message to ${label(provider)}.`;
+    $('compact-confirm-description').textContent = kind === 'native' ? `${label(provider)} is organizing its working context.`
+      : ['ready', 'preparing'].includes(kind) ? next
+      : kind === 'due' ? `Codeshi will refresh automatically with your next message to ${label(provider)}.`
+      : kind === 'near' ? 'Codeshi handles refresh automatically. You can keep working.'
+      : kind === 'known' ? `You can keep working with the current context. ${manual}`
+      : kind === 'off' ? `You control when to refresh. ${manual}`
+      : `You can keep working. ${manual}`;
+    const note = ['ready', 'due', 'preparing'].includes(kind) ? 'No action needed. The refresh takes effect when this agent next receives a message.'
+      : isRunning() || isOtherRunning() ? 'Your current run keeps its context. Manual refresh is available when agents finish.'
+      : state.conversation?.resume || state.conversation?.limitSwitching ? 'Finish or cancel the reset wait before scheduling a manual refresh.'
+      : 'Scheduling a refresh makes no model call. It takes effect on your next send to this agent.';
+    $('compact-confirm-note').textContent = note + (autoRouting() ? ` Flow may choose another agent; this refresh applies only to ${label(provider)}.` : '')
+      + (context?.cacheWarm && context?.adaptive && !['ready', 'due', 'native'].includes(kind) ? ' Recent activity allows a higher refresh target to keep useful context longer.' : '')
+      + (!window.relayFlow?.isOn?.() ? ' Change the refresh limit in Settings → General → Context limit.' : '');
+    $('compact-confirm').hidden = ['ready', 'due', 'preparing', 'native'].includes(kind);
+    $('compact-confirm').disabled = !view.canRefresh;
+    $('compact-cancel').textContent = view.canRefresh ? 'Not now' : 'Close';
+  }
+
+  // After a prompt, one short line when that run used a lot or more than usual, and the one thing worth doing about it, if any.
+  const tokenCount = value => value >= 1e6 ? `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M` : `${Math.round(value / 1000)}K`;
+  const usageNoticeKey = id => `ai-relay:usage-notice:${id}`;
+  function usageNoticeText({ provider, tokens, usual, partial, notice }) {
+    const agent = label(provider), size = `${partial ? 'at least ' : ''}${tokenCount(tokens)} tokens`, parts = [];
+    const move = notice.moves.find(item => item.near) || notice.moves.toSorted((a, b) => b.points - a.points)[0];
+    const limit = move && `${move.label.toLowerCase()} allowance ${move.near ? `reached ${Math.round(move.to)}%` : `went from ${Math.round(move.from)}% to ${Math.round(move.to)}%`}`;
+    if (notice.heavy) parts.push(`This run used ${size}, ${usual ? `about ${Math.round(tokens / usual)}× your usual for ${agent}` : 'a lot for one run'}.${limit ? ` ${usual ? 'Its' : `${agent}’s`} ${limit}.` : ''}`);
+    else if (limit) parts.push(`${agent}’s ${limit}${move.near ? '' : ' while this ran'}.`);
+    const { used, state: context } = notice.context;
+    if (context === 'due') parts.push(`${used === null ? 'Context' : `Context reached ${tokenCount(used)} and`} refreshes on your next message to ${agent}.`);
+    else if (context === 'scheduled') parts.push(`A context refresh is set for your next message to ${agent}.`);
+    else if (context === 'large') parts.push(`Context is ${tokenCount(used)}, and each step re-reads it.`);
+    return parts.join(' ');
+  }
+  function renderUsageNotice() {
+    const c = state.conversation, watch = c?.usageWatch, notice = watch?.notice, box = $('usage-notice');
+    box.hidden = !notice || Boolean(state.taskDraft) || isRunning() || storedRead(usageNoticeKey(c.id)) === watch.runId;
+    if (box.hidden) return;
+    $('usage-notice-text').textContent = usageNoticeText(watch);
+    box.title = notice.moves.length ? 'Limits count all use of this account, including other apps.' : '';
+    // Compact acts on the selected agent, so it is only offered while that is the agent this is about.
+    const action = notice.action === 'compact' && watch.provider === state.provider ? 'compact' : notice.action === 'saving' && autoRouting() ? 'saving' : null, button = $('usage-notice-action');
+    button.hidden = !action; button.dataset.action = action || '';
+    button.textContent = action === 'compact' ? 'Compact' : 'Use Cost saving';
+    button.title = action === 'compact' ? 'Review what compacting does. It makes no model call.' : 'From your next message, Flow favors lighter models and agents with allowance left.';
+    button.disabled = !state.ready || Boolean(state.pending) || state.loading;
+  }
+  async function usageNoticeAction() {
+    if ($('usage-notice-action').dataset.action === 'compact') { compactCurrentContext(); return; }
+    const routing = autoRouting();
+    if (!routing) return;
+    try { await setRouting({ mode: 'saving', allowApi: routing.allowApi === true, check: routing.check === true }); announce('Flow now uses Cost saving.'); }
+    catch (error) { showNotice(error.message); }
   }
 
   function renderControls() {
@@ -1317,14 +1381,11 @@
     $("queue-button").disabled = !state.ready || busy || Boolean(state.localSelections[state.projectId]) || window.relayFiles?.uploading() || !ui.input.value.trim();
     ui.send.hidden = running;
     ui.send.disabled = !state.ready || busy || otherRunning || (ui.input.value.trim() !== '/compact' && !state.localSelections[state.projectId] && selectedConnection.blocked) || window.relayFiles?.uploading() || (!ui.input.value.trim() && !window.relayFiles?.ids().length);
-    $('compact-context').disabled = !state.ready || busy || state.settingsPending > 0 || running || otherRunning || !state.conversation || Boolean(state.taskDraft || state.conversation?.resume || state.conversation?.limitSwitching);
-    const context = state.conversation?.contextControl, notice = $('context-limit-notice');
     renderContextMeter();
-    notice.hidden = running || !(context?.legacy || context?.near) || !context.thresholdTokens;
-    notice.textContent = context?.legacy ? 'This older agent session will refresh automatically on your next message. Your chat history stays intact.' : context?.near ? `${context.estimated ? 'Estimated context signal' : 'Reported context'}: ${context.used.toLocaleString()} tokens · limit ${context.thresholdTokens.toLocaleString()}. ${context.rollover ? 'The next message starts a fresh session with a memory brief.' : 'A fresh session will be used when the limit is reached.'}` : '';
+    renderUsageNotice();
     ui.send.firstElementChild.textContent = state.pending === "send" ? "Sending…" : "Send";
     ui.stop.hidden = !running;
-    ui.stop.disabled = busy;
+    ui.stop.disabled = Boolean(state.routingStopPending) || busy && state.conversation?.activeRun?.purpose !== 'routing';
     ui.stop.lastChild.textContent = state.pending === "stop" ? " Stopping…" : " Stop";
     ui.otherRunning.hidden = !otherRunning;
     // A narrow composer shows these pickers as icons, so each names its current choice on hover.
@@ -1364,7 +1425,7 @@
     $("resume-cancel").hidden = Boolean(switching) && !resume;
     if (resume) $("resume-waiting-text").textContent = resumeText(resume);
     else if (switching) $("resume-waiting-text").textContent = `${label(switching.provider)} reached its usage limit. Finding an agent with room…`;
-    renderQueue(); renderHandoff(); renderRetry(); renderPlan(); renderRoute();
+    renderQueue(); renderHandoff(); renderRetry(); renderPlan();
     const hasMessages = Boolean(state.conversation?.messages?.length);
     ui.title.textContent=state.loading&&state.projectId?'Opening workspace…':currentProject()?.name||'Codeshi';
     // With the sidebar hidden, the top bar names the open workspace; clicking it shows the sidebar again.
@@ -1383,6 +1444,7 @@
     if(resume && !running)status='Waiting for reset';
     if(switching && !running)status='Handing off…';
     if(state.pending==='stop')status='Stopping…';else if(state.pending==='send'||state.pending==='continue')status='Sending…';
+    if (run?.purpose === 'routing') status = state.routingStopPending ? 'Stopping…' : 'Assessing task…';
     ui.state.lastElementChild.textContent=status;
     ui.state.dataset.status=running?(approvals?'approval':'running'):resume||switching?'waiting':incomplete?'stopped':!state.localSelections[state.projectId] && selectedConnection.blocked?'setup':'ready';
     renderConnectionNotice();
@@ -1541,12 +1603,12 @@
   }
   const compactScopeMatches = intent => intent && sameProject(intent.projectId, intent.version) && state.conversation?.id === intent.id && state.provider === intent.provider && !state.taskDraft;
   function compactCurrentContext({ command = false } = {}) {
-    if (!canCompactContext()) return false;
+    if (!state.ready || state.loading || state.projectSaving) return false;
+    if (!compactContextState().visible) { showNotice('This agent has no session to compact. Your next message already starts with fresh context.'); return false; }
     const dialog = $('compact-confirmation');
     if (dialog.open) return false;
     compactIntent = { projectId: state.projectId, version: state.projectVersion, id: state.conversation.id, provider: state.provider, command, draft: ui.input.value };
-    $('compact-confirm-description').textContent = `The next message sent to ${label(state.provider)} will start a fresh session with a short task brief built from your saved chat and current project files.`;
-    dialog.showModal(); $('compact-cancel').focus();
+    dialog.showModal(); renderContextMeter(); $('compact-cancel').focus();
     return true;
   }
   async function confirmCompactContext() {
@@ -1555,6 +1617,7 @@
       $('compact-confirmation').close(); showNotice('The chat or agent changed. Review compact context again before confirming.'); return;
     }
     if (!canCompactContext()) { $('compact-confirmation').close(); return; }
+    if (!compactContextState().canRefresh) { renderContextMeter(); return; }
     $('compact-confirmation').close();
     state.pending = 'compact'; render();
     try {
@@ -1578,7 +1641,7 @@
     }
     if (window.relayFiles?.uploading()) return;
     if (state.pending || state.loading || state.projectSaving || isRunning() || isOtherRunning() || !state.ready || (!state.localSelections[state.projectId] && !(autoRouting() && !continuing) && connection(state.provider).blocked) || (!continuing && !text)) return;
-    // Under Auto the message goes to the agent, model and effort shown before sending.
+    // A local estimate, so a message nothing could take stops here. The server rates the task and makes the final choice.
     const routed = continuing ? null : routeFor(text, attachments.length);
     if (routed?.error) { showNotice(routed.error); return; }
     const provider = routed?.provider || state.provider, model = routed ? routed.model : state.model, effort = routed ? routed.effort : state.effort;
@@ -1617,6 +1680,7 @@
       if (!state.conversation) await ensureCanonicalConversation();
       const id = state.conversation.id;
       state.retrySubmission.key = JSON.stringify([state.projectId,id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
+      let accepted;
       if (localChoice) {
         if (!state.retrySubmission.localContext) {
           const catalog = await api('/api/local-models', {}, projectId);
@@ -1625,7 +1689,7 @@
           state.retrySubmission.localContext = catalog.context;
         }
         await post('/api/local-models/start', { model:localChoice.model, digest:localChoice.digest, task:continuing ? 'Continue the unfinished task from the saved conversation. Inspect current files first.' : text, ...(continuing ? { continuing:true } : {}), attachments, requestId, context:state.retrySubmission.localContext }, projectId);
-      } else await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
+      } else accepted = await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
       state.retrySubmission = null;
       window.relayAutomaticReview?.accepted(projectId, automaticReview);
       if (!continuing) window.relayFiles?.accepted(projectId, attachments);
@@ -1636,11 +1700,11 @@
         resizeInput();
       }
       state.conversation.status = "running";
-      if (!localChoice) state.conversation.provider = provider;
+      if (!localChoice) state.conversation.provider = accepted?.provider || provider;
       state.conversation.mode = mode;
       state.conversation.approvalPolicy = approvalPolicy;
       if (state.status) state.status.runningConversationId = id;
-      announce(`${localChoice ? "Local · Ollama" : label(provider)} is working.`);
+      announce(`${localChoice ? "Local · Ollama" : label(accepted?.provider || provider)} is working.`);
       await refresh();
       render(true);
     } catch (error) {
@@ -1656,6 +1720,14 @@
   }
 
   async function stop() {
+    if (state.conversation?.activeRun?.purpose === 'routing') {
+      if (state.routingStopPending) return;
+      state.routingStopPending = true; render();
+      try { await post(endpoint(state.conversation.id, 'stop')); announce('Stopping the routing assessment. Your draft stays saved.'); }
+      catch (error) { showNotice(error.message); }
+      finally { state.routingStopPending = false; render(); }
+      return;
+    }
     if (!isRunning() || state.pending || state.projectSaving) return;
     state.pending = "stop";
     const projectId = state.projectId;
@@ -1963,7 +2035,7 @@
     const { actionsOnly, text } = commandQuery();
     const workspaces = actionsOnly ? [] : state.projects.filter(project => project.name.toLowerCase().includes(text)).slice(0, 6).map(project => ({ group: "Workspaces", label: project.name, detail: project.id === state.projectId ? "Open" : "", run: () => { selectProject(project.id); ui.input.focus(); } }));
     const files = actionsOnly || commandFiles.query !== text ? [] : commandFiles.files.slice(0, 10).map(file => ({ group: "Files", label: file.path.split("/").pop(), detail: [state.projects.length > 1 ? file.projectName : "", file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : file.folderName].filter(Boolean).join(" · "), run: () => openFound(file) }));
-    const actions = commandActions.filter(action => !action.workbench || !window.relayFlow?.isOn?.()).filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled))
+    const actions = commandActions.filter(action => !action.workbench || !window.relayFlow?.isOn?.()).filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled && (action.id !== 'compact-context' || !$(action.id).hidden)))
       .map(action => ({ group: "Actions", label: action.label, detail: "", run: action.run || (() => $(action.id).click()) }));
     return [...workspaces, ...files, ...actions];
   }
@@ -2092,9 +2164,15 @@
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !event.isComposing) { closeWorkspaceMenu(); if (!ui.projectPanel.hidden) toggleProjectForm(false); if (!ui.folderPanel.hidden) toggleFolderForm(false); } });
   ui.form.addEventListener("submit", (event) => { event.preventDefault(); if (!$("queue-button").hidden) queuePrompt(); else run(); });
   $('compact-context').addEventListener('click', () => compactCurrentContext());
+  $('usage-notice-action').addEventListener('click', usageNoticeAction);
+  $('usage-notice-dismiss').addEventListener('click', () => { const c = state.conversation; if (c?.usageWatch) storedWrite(usageNoticeKey(c.id), c.usageWatch.runId); renderUsageNotice(); ui.input.focus(); });
   $('compact-cancel').addEventListener('click', () => $('compact-confirmation').close());
   $('compact-confirm').addEventListener('click', confirmCompactContext);
-  $('compact-confirmation').addEventListener('close', () => { if (!$('compact-confirmation').open) compactIntent = null; });
+  $('compact-confirmation').addEventListener('close', () => {
+    if ($('compact-confirmation').open) return;
+    const command = compactIntent?.command; compactIntent = null;
+    if (command || $('compact-context').hidden) ui.input.focus(); else $('compact-context').focus();
+  });
   $("queue-button").addEventListener("click", queuePrompt);
   $("handoff-accept").addEventListener("click", () => answerHandoff(true));
   $("handoff-dismiss").addEventListener("click", () => answerHandoff(false));
@@ -2113,7 +2191,6 @@
   const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), timeline: () => window.relayTimeline?.open() };
   const showSidePanel = name => { const panel = $(`${name}-panel`); if (panel?.hidden !== false) sidePanelOpeners[name]?.(); };
   document.querySelectorAll(".panel-tab").forEach(tab => tab.addEventListener("click", () => showSidePanel(tab.dataset.panel)));
-  $("route-preview").addEventListener("click", () => window.relayModelPicker?.open());
   $("run-plan-toggle").addEventListener("click", () => {
     const list = $("run-plan-list"); list.hidden = !list.hidden;
     $("run-plan-toggle").setAttribute("aria-expanded", String(!list.hidden));

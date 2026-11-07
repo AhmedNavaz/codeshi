@@ -128,7 +128,10 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
     runs.set(id, entry);
     return entry;
   };
-  for (const record of records) {
+  for (let record of records) {
+    if (record.type === 'routing_assessment_start') record = { ...record, type: 'background_review', review: { id: record.id, provider: record.provider, model: record.model, effort: record.effort, assessment: true } };
+    else if (record.type === 'routing_assessment_metadata') record = { ...record, type: 'review_budget' };
+    else if (record.type === 'routing_assessment_end') record = { ...record, type: 'review_result' };
     if (record.type === 'submission') {
       active = open(record.id, record, record.review ? { relation: 'review' } : {});
       // An agent's session total carries over only into a run that resumed that session.
@@ -173,7 +176,7 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       if (entry) entry.filesChanged = record.files ?? null;
     } else if (record.type === 'background_review') {
       const review = record.review || {};
-      runs.set(review.id, newEntry(review.id, { provider: review.provider, model: review.model, at: record.at, mode: 'read' }, { relation: 'review', taskId: record.taskId || last?.taskId || review.id, parentRunId: record.parentRunId || last?.runId || null }));
+      runs.set(review.id, newEntry(review.id, { provider: review.provider, model: review.model, effort: review.effort, at: record.at, mode: 'read' }, { relation: review.assessment ? 'assessment' : 'review', taskId: record.taskId || last?.taskId || review.id, parentRunId: record.parentRunId || last?.runId || null, billingSource: record.billingSource || 'unknown' }));
     } else if (record.type === 'review_budget') {
       const entry = runs.get(record.id), metadata = record.metadata || {};
       if (!entry || entry.status !== 'running') continue;
@@ -210,7 +213,7 @@ export function summarizeTasks(runs) {
   const grouped = new Map();
   for (const run of runs) { if (!grouped.has(run.taskId)) grouped.set(run.taskId, []); grouped.get(run.taskId).push(run); }
   return [...grouped].map(([id, list]) => {
-    const builders = list.filter(run => run.relation !== 'review'), first = builders[0] || list[0], final = builders.at(-1) || list.at(-1);
+    const builders = list.filter(run => !['review', 'assessment'].includes(run.relation)), first = builders[0] || list[0], final = builders.at(-1) || list.at(-1);
     const checks = list.filter(run => run.check && !['running', 'interrupted'].includes(run.check.status)), latest = checks.at(-1)?.check || null;
     const agents = {};
     for (const run of list) {

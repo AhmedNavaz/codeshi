@@ -96,8 +96,7 @@
     if (!handoff) api().api('/api/handoff-preferences').then(value => { handoff = value; offer.value = String(value.threshold); offer.disabled = false; automatic.checked = value.automatic === true; automatic.disabled = value.threshold === 0; }).catch(() => {});
     }
     if (window.relayFlow?.isOn?.()) {
-      const target = { saving: 40000, balanced: 75000, quality: 120000 }[api().getState().conversation?.routing?.mode || 'balanced'];
-      kit.row(work, { label: 'Context refresh', description: `Flow starts a fresh native session before the next turn at ${target.toLocaleString()} context tokens, or earlier for a smaller reported window. Chat history stays complete.`, keywords: 'context compact compaction token memory limit' });
+      kit.row(work, { label: 'Context refresh', description: 'Flow adapts the refresh target to the routing mode, recent provider activity and reported model window. Recent sessions keep more context to avoid unnecessary restarts. Refresh happens between turns and chat history stays complete.', keywords: 'context compact compaction token memory limit' });
     } else {
       let savedLimit = 'auto';
       const custom = node('input', undefined, 'settings-select'); custom.type = 'number'; custom.min = '8000'; custom.max = '1000000'; custom.step = '1000'; custom.value = '75000'; custom.id = 'settings-context-custom'; custom.setAttribute('aria-label', 'Custom context token limit'); custom.hidden = true;
@@ -112,7 +111,7 @@
       const customRow = kit.row(work, { label: 'Custom context limit', description: '8,000–1,000,000 tokens. Takes effect on the next turn.', control: custom }); customRow.hidden = true;
       custom.addEventListener('change', () => save(Number(custom.value)));
       api().api('/api/preferences').then(value => { savedLimit = value.contextLimit ?? 'auto'; limit.value = typeof savedLimit === 'number' && ![50000, 100000, 150000].includes(savedLimit) ? 'custom' : String(savedLimit); custom.hidden = limit.value !== 'custom'; customRow.hidden = custom.hidden; if (typeof savedLimit === 'number') custom.value = String(savedLimit); limit.disabled = false; }).catch(() => {});
-      kit.note(work.parentNode, 'Auto targets 75,000 tokens, capped at 75% of a smaller reported window. Older unmeasured sessions refresh once on the next send. Recorded chat activity supplies a labeled estimate when native readings are missing. Codex last-request input is labeled as an estimate signal, not total context. Refreshes happen between turns; in-run growth remains owned by the native agent. Use Compact context or /compact for a manual refresh without a model call.');
+      kit.note(work.parentNode, 'Auto targets 120,000 tokens after recent provider activity and 75,000 after a longer pause, capped at 75% of the reported model window. Cache lifetime uses provider reports when available and otherwise a conservative five-minute estimate; cache hits are not guaranteed. Custom limits stay fixed. Older unmeasured sessions refresh once. Recorded activity supplies a labeled byte estimate when native readings are missing. Native agents manage compaction during a run. Compact context or /compact schedules a manual refresh without a model call.');
     }
     const testing = kit.group(host, 'Testing');
     let savedCadence = 'as-needed';

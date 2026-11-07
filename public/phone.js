@@ -653,8 +653,7 @@
     const { provider, mode, approvalPolicy } = S.settings, auto = routing();
     const parts = [];
     if (auto) {
-      const choice = input.value.trim() ? routeFor(input.value.trim(), attachments().length) : null;
-      parts.push(`Routing${choice && !choice.error ? ` → ${name(choice.provider)}${choice.modelName ? ` ${choice.modelName}` : ''}` : ` · ${window.relayRouting?.modeNames?.[auto.mode] || 'Auto'}`}`);
+      parts.push(`Routing · ${window.relayRouting?.modeNames?.[auto.mode] || 'Auto'}`);
     } else parts.push(S.settings.model ? modelName(chosenRow() || { id: S.settings.model }) : name(provider));
     if (!auto && S.settings.effort) parts.push(EFFORT_NAMES[S.settings.effort] || S.settings.effort);
     parts.push(mode === 'read' ? 'Read only' : approvalPolicy === 'auto' ? 'Full auto' : 'Asks first');

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { GeminiClient } from './acp-client.mjs';
-import { isAntigravityACP, antigravityInvocation, antigravityRelay, configureAntigravitySession, antigravityAccount, verifyAntigravity } from './antigravity.mjs';
+import { isAntigravityACP, antigravityInvocation, antigravityRelay, antigravitySessionParams, configureAntigravitySession, antigravityAccount, verifyAntigravity } from './antigravity.mjs';
 import { probeCli } from './cli-probe.mjs';
 import { withBinaryPath } from './resolve-binary.mjs';
 import { readWorkspaceFile, writeWorkspaceFile } from './workspace-files.mjs';
@@ -32,7 +32,7 @@ export function geminiInvocation(config, { env = process.env, platform = process
   try {
     fs.chmodSync(temporary, 0o700);
     const policy = path.join(temporary, 'access.toml'), settings = path.join(temporary, 'settings.json');
-    fs.writeFileSync(policy, `[[rule]]\ntoolName = "*"\ndecision = "${config.mode === 'read' ? 'deny' : 'ask_user'}"\npriority = 998\n\n[[rule]]\ntoolName = ${JSON.stringify(reads)}\ndecision = "allow"\npriority = 999\n`, { mode: 0o600 });
+    fs.writeFileSync(policy, `[[rule]]\ntoolName = "*"\ndecision = "${config.mode === 'read' ? 'deny' : 'ask_user'}"\npriority = 998\n${config.routingAssessment ? '' : `\n[[rule]]\ntoolName = ${JSON.stringify(reads)}\ndecision = "allow"\npriority = 999\n`}`, { mode: 0o600 });
     fs.writeFileSync(settings, JSON.stringify({ policyPaths: [], adminPolicyPaths: [policy], tools: { core: [...reads, ...(config.mode === 'read' ? [] : edits)], sandbox: false }, hooksConfig: { enabled: false }, admin: { mcp: { enabled: false }, extensions: { enabled: false }, skills: { enabled: false } }, telemetry: { enabled: false }, experimental: { autoMemory: false } }), { mode: 0o600 });
     const args = ['--acp', '--approval-mode', 'default', '--admin-policy', policy, '--extensions', 'none'];
     if (config.model) args.push('--model', config.model);
@@ -114,7 +114,8 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
     if (initialized.protocolVersion !== 1) throw new Error('Unsupported Gemini ACP protocol version.');
     if (antigravity) verifyAntigravity(initialized);
     if (cancelled()) throw new Error('Gemini run cancelled.');
-    const session = await client.request('session/new', { cwd: config.workspace, mcpServers: [] }, 60000); sessionId = session.sessionId;
+    const params = antigravity ? antigravitySessionParams(initialized, config) : { cwd: config.workspace, mcpServers: [] };
+    const session = await client.request('session/new', params, 60000); sessionId = session.sessionId;
     if (typeof sessionId !== 'string' || !sessionId) throw new Error('Invalid Gemini ACP session.');
     if (antigravity) await configureAntigravitySession(client, session, config);
     if (!antigravity && config.model && session.models?.currentModelId !== config.model) throw new Error('Gemini did not select the requested model. No prompt was sent.');

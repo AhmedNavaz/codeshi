@@ -82,19 +82,23 @@ export class PromptQueue {
   }
 
   // Starts the next prompt when the workspace is free: nothing running, no wait for a reset, and the queue not paused.
-  tick(c) {
+  async tick(c) {
     const broker = this.broker;
     if (this.closed || !c.queue.length || c.queuePaused || broker.running || c.resume || this.held.has(c.id) || c.runs.some(run => ['building', 'reviewing'].includes(run.automaticReview?.status))) return;
     const item = c.queue[0];
+    const digest = queueDigest(item);
+    this.held.add(c.id);
     try {
-      const { runId } = broker.start(c, { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, requestId: `queue-${item.id}` }, { queued: item.id });
+      const input = { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, requestId: `queue-${item.id}` };
+      const options = { queued: item.id, verifyRouting: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || !current || queueDigest(current) !== digest) throw Object.assign(new Error('The queued prompt changed or the queue was paused during assessment.'), { status: 409 }); } };
+      const { runId } = item.routing ? await broker.dispatch(c, input, options) : broker.start(c, input, options);
       broker.record(c, { type: 'queue_started', id: item.id, runId });
       broker.emit('update', { conversationId: c.id });
     } catch (error) {
       if (error.status === 409 && broker.running) return;
       this.pause(c, `The next prompt could not start: ${error.message}`);
       broker.emit('notify', { conversationId: c.id, kind: 'stopped', title: 'Queue paused', body: 'The next queued prompt could not start. Open the workspace to see why.' });
-    }
+    } finally { this.held.delete(c.id); }
   }
 
   // After a run: carry on when it finished, wait for a reset when it reached a limit, and pause otherwise.

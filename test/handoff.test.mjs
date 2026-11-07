@@ -7,7 +7,7 @@ import test from 'node:test';
 import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest } from '../src/context.mjs';
-import { highest, taskLine } from '../src/handoff.mjs';
+import { HandoffMonitor, highest, taskLine } from '../src/handoff.mjs';
 import { limitState } from '../src/resume.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
@@ -70,6 +70,33 @@ test('an exhausted window for another model neither blocks an agent nor raises a
   assert.equal(highest({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'all', scopes: null, usedPercent: 95 }] }, 'anything').id, 'all', 'A window for the whole account covers every model.');
   assert.equal(highest({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'opus', scope: 'opus', usedPercent: 95 }] }, 'claude-haiku-5-5'), null, 'A single named model works the same way.');
   assert.equal(highest({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'opus', scope: 'opus', usedPercent: 95 }] }, 'claude-opus-5-5').id, 'opus');
+});
+
+test('handoff checks Antigravity additional-folder support in Normal and Flow and preserves the CLI folder limit', async () => {
+  const account = { installed: true, authenticated: true, billingSource: 'subscription', source: 'antigravity-acp', capabilities: { additionalDirectories: true } };
+  const broker = { workspace: '/first', workspaces: ['/first', '/second'], availableProviders: () => ['codex', 'gemini'], usageOptions: () => ({}), observeQuota() {}, budget: { refusal: () => null } };
+  const handoff = new HandoffMonitor(broker, {
+    account: async () => account,
+    models: async () => ({ models: [{ id: 'gemini-3.8-flash', displayName: 'Gemini Flash', isDefault: true }] }),
+    usage: async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'all', scopes: null, usedPercent: 10 }] }),
+  });
+  const c = { models: {}, messages: [{ role: 'user', runId: 'run', text: 'Update the files in both folders' }] };
+  for (const routing of [null, { mode: 'balanced' }]) {
+    const run = { id: 'run', taskId: 'run', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing };
+    account.capabilities.additionalDirectories = true;
+    assert.equal((await handoff.destination(c, run)).provider, 'gemini');
+    account.capabilities.additionalDirectories = false;
+    assert.equal(await handoff.destination(c, run), null);
+    delete account.capabilities.additionalDirectories;
+    assert.equal(await handoff.destination(c, run), null, 'Automatic moves require confirmed folder support.');
+    account.capabilities.additionalDirectories = true;
+    assert.equal(await handoff.destination(c, { ...run, mode: 'read' }), null);
+  }
+  account.source = 'gemini-cli';
+  broker.workspaces = Array.from({ length: 6 }, (_, i) => '/' + i);
+  assert.equal((await handoff.destination(c, { id: 'run', taskId: 'run', provider: 'codex', mode: 'edit' })).provider, 'gemini');
+  broker.workspaces.push('/extra');
+  assert.equal(await handoff.destination(c, { id: 'run', taskId: 'run', provider: 'codex', mode: 'edit' }), null);
 });
 
 test('with the agent’s default model selected, the offer goes by the model the run is really using', { skip: scriptCLIs }, async t => {

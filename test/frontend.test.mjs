@@ -609,14 +609,29 @@ test('signing out hides cached Gemini quota and discards a late reading from tha
   ui.state().accounts.gemini.authenticated=true;ui.window.dispatchEvent(new UIEvent('relay-state'));await flush();assert.match(ui.$('gemini-usage').textContent,/37% left/);assert.equal(calls,2);
 });
 
-test('plan usage shows remaining percent for both agents and the selected model',async()=>{
-  const windows={codex:{provider:'codex',available:true,windows:[{id:'primary',label:'5-hour',usedPercent:80,resetsAt:null},{id:'secondary',label:'Weekly',usedPercent:18,resetsAt:null}]},claude:{provider:'claude',available:true,windows:[{id:'five_hour',label:'5-hour',usedPercent:20,resetsAt:null},{id:'seven_day_opus',label:'Weekly · Opus',usedPercent:95,resetsAt:null,scope:'opus'}]}};
+test('plan usage leads with five-hour allowance and shows weekly limits separately for the selected model',async()=>{
+  const windows={codex:{provider:'codex',available:true,windows:[{id:'primary',label:'5-hour',usedPercent:20,resetsAt:null},{id:'secondary',label:'Weekly',usedPercent:62,resetsAt:null}]},claude:{provider:'claude',available:true,windows:[{id:'five_hour',label:'5-hour',usedPercent:20,resetsAt:null},{id:'seven_day_opus',label:'Weekly · Opus',usedPercent:95,resetsAt:null,scope:'opus'}]}};
   const ui=await browser({insights:true,usage:windows});await ui.window.relayUI.refreshAccounts({force:true});await flush();
-  assert.equal(ui.$('codex-usage').hidden,false);assert.match(ui.$('codex-usage').textContent,/^20% left5-hour limit$/,'Limits are named in words, not abbreviations.');assert.doesNotMatch(ui.$('codex-usage').textContent,/82%/,'Plan usage shows only the tightest window; the card lists all of them.');assert.match(ui.$('claude-usage').textContent,/80% left.*5-hour limit/);
-  assert.equal(ui.$('codex-usage').querySelector('.usage-bar').style['--left'],'20%','A bar shows what is left.');assert.doesNotMatch(ui.$('claude-usage').textContent,/Opus/,'Model-specific limits appear only for that model.');
-  assert.equal(ui.$('usage-chip').textContent,'5-hour · 20% left');assert.match(ui.$('usage-chip').className,/\blow\b/);
-  ui.$('select-claude').click();await flush();ui.state().model='claude-opus';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('usage-chip').textContent,'Opus · 5% left');assert.match(ui.$('usage-chip').className,/critical/);
+  assert.equal(ui.$('codex-usage').hidden,false);assert.equal(ui.$('codex-usage').querySelector('.usage-value').textContent,'80% left','The weekly window never replaces a reported five-hour headline.');assert.equal(ui.$('codex-usage').querySelector('.usage-caption').textContent,'5-hour limit');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary').textContent,'Weekly · 38% left');assert.match(ui.$('claude-usage').textContent,/80% left.*5-hour limit/);
+  assert.equal(ui.$('codex-usage').querySelector('.usage-bar').style['--left'],'80%','The bar corresponds to the five-hour reading.');assert.doesNotMatch(ui.$('claude-usage').textContent,/Opus/,'Model-specific limits appear only for that model.');
+  assert.equal(ui.$('usage-chip').textContent,'5-hour · 80% left');assert.match(ui.$('usage-chip').title,/Weekly: 38% left/,'All limits remain in the details.');assert.equal(ui.window.relayUsage.usedPercent('codex'),62,'Routing keeps the most restrictive allowance.');
+  ui.$('select-claude').click();await flush();ui.state().model='claude-opus';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('usage-chip').textContent,'5-hour · 80% left · Weekly · Opus · 5% left');assert.match(ui.$('usage-chip').className,/critical/,'The weekly warning remains visible beside the five-hour allowance.');
+  assert.equal(ui.$('claude-usage').querySelector('.usage-value').textContent,'80% left');assert.equal(ui.$('claude-usage').querySelector('.usage-secondary').dataset.level,'critical');
+  ui.state().model='claude-sonnet';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('usage-chip').textContent,'5-hour · 80% left','Switching models removes an unrelated weekly warning.');
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue)$/.test(request.path)).length,0,'Reading usage never starts inference.');
+});
+
+test('plan usage keeps exhausted weekly warnings and falls back to the periods actually reported',async()=>{
+  const usage={codex:{available:true,checkedAt:new Date().toISOString(),windows:[{id:'primary',label:'5-hour',usedPercent:5},{id:'weekly',label:'Weekly',usedPercent:100}]}};
+  const ui=await browser({insights:true,usage});await ui.window.relayUI.refreshAccounts({force:true});await flush();
+  assert.equal(ui.$('usage-chip').textContent,'5-hour · 95% left · Weekly · 0% left');assert.match(ui.$('usage-chip').className,/critical/);
+  assert.equal(ui.window.relayRouting.assessQuota(ui.window.relayUsage.snapshot('codex')).state,'exhausted','A full weekly limit still blocks automatic routing.');
+  usage.codex.windows=[{id:'weekly',label:'Weekly',usedPercent:60}];await ui.window.relayUsage.load('codex');await flush();
+  assert.equal(ui.$('usage-chip').textContent,'Weekly · 40% left');assert.equal(ui.$('codex-usage').querySelector('.usage-caption').textContent,'Weekly limit');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary'),null,'Missing five-hour data never becomes an invented allowance.');
+  usage.codex.windows=[{id:'weekly',label:'Weekly',usedPercent:85},{id:'five',label:'5-hour',usedPercent:80}];await ui.window.relayUsage.load('codex');await flush();
+  assert.equal(ui.$('usage-chip').textContent,'5-hour · 20% left · Weekly · 15% left');assert.match(ui.$('usage-chip').className,/\blow\b/,'Both low allowances keep a warning.');
+  usage.codex={available:false,reason:'Usage unavailable',windows:usage.codex.windows};await ui.window.relayUsage.load('codex');await flush();
+  assert.equal(ui.$('usage-chip').hidden,true);assert.equal(ui.$('codex-usage').hidden,true,'Unavailable data does not reuse the last five-hour reading.');
 });
 
 test('separate Claude and Codex chats merge by time into the current workspace after review, without inference',async()=>{
@@ -2699,34 +2714,50 @@ test('run context readings distinguish consumption, envelope estimates and persi
   const text = ui.$('run-metrics').textContent;
   assert.match(text, /This run: 200 fresh input/);
   assert.match(text, /Session total: 900,000/);
-  assert.match(text, /Native context usage: not reported/);
-  assert.match(text, /Last model request: 12,000 input tokens/);
+  assert.doesNotMatch(text, /Native context usage: not reported/);
+  assert.match(text, /Last request input: 12,000 tokens \(provider reported; lower bound for context\)/);
   assert.match(text, /Native compactions: 2 observed/);
-  assert.match(text, /Text envelope: ≈1,500 tokens \(byte estimate\)/);
+  assert.match(text, /Codeshi message: ≈1,500 tokens \(byte estimate; excludes native history, tools and system instructions\)/);
   assert.match(text, /Task context restored after native compaction/);
   assert.doesNotMatch(text, /900,000 \/ 200,000|450%/);
+  c.lastRun.provider = 'claude';
+  c.lastRun.contextUsage = { lastRequestInput: 78690, source: 'claude-last-request-input', estimated: false };
+  await ui.window.relayUI.refresh();
+  assert.match(ui.$('run-metrics').textContent, /Last request input: 78,690 tokens \(provider reported\)/);
+  assert.doesNotMatch(ui.$('run-metrics').textContent, /not reported|full context usage unavailable|lower bound/);
 });
 
 test('Compact context and /compact preserve the draft and never submit model work', async () => {
   const ui = await browser(), c = ui.canonical.get('project-one');
+  c.contextControl = { hasSession: true, used: 20000, thresholdTokens: 75000 };
+  await ui.window.relayUI.refresh();
   ui.setIntercept((request, next) => {
-    if (/\/compact$/.test(request.path)) { c.messages.push({ id: 'compact-fixture', role: 'system', text: 'Context refresh scheduled for your next send.', contextMilestone: true }); return response(c); }
+    if (/\/compact$/.test(request.path)) { c.contextControl = { hasSession: false, pending: true, rollover: true }; return response(c); }
     return next();
   });
   ui.$('message-input').value = 'Keep this draft';
   ui.$('compact-context').click(); await flush();
   assert.equal(ui.$('compact-confirmation').open, true);
-  assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false, 'Opening the explanation starts no work.');
-  assert.match(ui.$('compact-confirm-description').textContent, /next message sent to Codex.*fresh session.*task brief/);
+  assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false, 'Inspection starts no work.');
+  assert.match(ui.$('compact-confirm-description').textContent, /keep working.*prepare a refresh.*next message to Codex/);
   assert.equal(ui.document.activeElement, ui.$('compact-cancel'));
   ui.$('compact-confirm').click(); await flush();
   assert.equal(ui.$('compact-confirmation').open, false);
   assert.equal(ui.$('message-input').value, 'Keep this draft');
-  assert(ui.requests.some(request => /\/compact$/.test(request.path)));
-  assert.equal(ui.requests.some(request => /\/(messages|continue|queue|steer)$/.test(request.path)), false);
-  ui.$('message-input').value = '/compact'; ui.fire('message-input', 'input'); ui.$('composer').dispatchEvent(new UIEvent('submit')); await flush();
-  assert.equal(ui.$('message-input').value, '/compact');
   assert.equal(ui.requests.filter(request => /\/compact$/.test(request.path)).length, 1);
+  assert.equal(ui.requests.some(request => /\/(messages|continue|queue|steer)$/.test(request.path)), false);
+  ui.$('compact-context').click(); await flush();
+  assert.equal(ui.$('compact-confirm-title').textContent, 'Refresh scheduled');
+  assert.equal(ui.$('compact-confirm').hidden, true);
+  assert.equal(ui.$('compact-confirm').disabled, true);
+  assert.equal(ui.$('context-meter').hidden, true, 'A scheduled refresh does not display a stale reading.');
+  ui.$('compact-confirm').click(); await flush();
+  assert.equal(ui.requests.filter(request => /\/compact$/.test(request.path)).length, 1, 'Inspecting a scheduled refresh cannot request it again.');
+  ui.$('compact-cancel').click();
+  c.contextControl = { hasSession: true, used: 10000, thresholdTokens: 75000 };
+  await ui.window.relayUI.refresh();
+  ui.$('message-input').value = '/compact'; ui.fire('message-input', 'input'); ui.fire('composer', 'submit'); await flush();
+  assert.equal(ui.$('message-input').value, '/compact');
   ui.$('compact-confirm').click(); await flush();
   assert.equal(ui.$('message-input').value, '');
   assert.equal(ui.requests.filter(request => /\/compact$/.test(request.path)).length, 2);
@@ -2738,82 +2769,221 @@ test('Compact context and /compact preserve the draft and never submit model wor
   assert.equal(ui.$('message-input').value, '/compact');
 });
 
-test('the typing box exposes compact context and explains automatic upgrades without inventing occupancy', async () => {
+test('the usage notice says what a run used and offers only what helps next, in normal and Flow', async () => {
+  const watch = (notice, more = {}) => ({ runId: 'run-big', provider: 'codex', tokens: 10726923, usual: 1800000, samples: 30, partial: false, moves: [], notice: { heavy: true, moves: [], context: { used: 318000, state: 'due' }, action: null, ...notice }, ...more });
+  const ui = await browser(), c = ui.canonical.get('project-one'), box = ui.$('usage-notice'), text = ui.$('usage-notice-text'), action = ui.$('usage-notice-action');
+  const show = async (value, extra = {}) => { Object.assign(c, { usageWatch: value, ...extra }); await ui.window.relayUI.refresh(); };
+
+  await ui.window.relayUI.refresh();
+  assert.equal(box.hidden, true, 'Nothing to say, nothing shown.');
+
+  await show(watch());
+  assert.equal(box.hidden, false);
+  assert.equal(text.textContent, 'This run used 10.7M tokens, about 6× your usual for Codex. Context reached 318K and refreshes on your next message to Codex.');
+  assert.equal(action.hidden, true, 'The refresh is already coming, so nothing needs pressing.');
+
+  await show(watch({ context: { used: 90000, state: 'large' }, action: 'compact' }));
+  assert.match(text.textContent, /Context is 90K, and each step re-reads it\.$/);
+  assert.equal(action.hidden, false);
+  assert.equal(action.textContent, 'Compact');
+  action.click(); await flush();
+  assert.equal(ui.$('compact-confirmation').open, false, 'The compact panel needs a session to act on.');
+  c.contextControl = { hasSession: true, used: 90000, thresholdTokens: 120000 };
+  await ui.window.relayUI.refresh();
+  action.click(); await flush();
+  assert.equal(ui.$('compact-confirmation').open, true);
+  assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false, 'Opening it starts nothing.');
+  ui.$('compact-confirmation').close();
+
+  await show(watch({ context: { used: 90000, state: 'large' }, action: 'compact' }, { provider: 'claude' }));
+  assert.equal(action.hidden, true, 'Compact acts on the selected agent, which is not the one this is about.');
+  assert.match(text.textContent, /your usual for Claude/);
+
+  await show(watch({ heavy: false, context: { used: 12000, state: 'small' }, moves: [{ label: '5-hour', from: 34, to: 52, points: 18, near: false }, { label: 'Weekly', from: 20, to: 23, points: 3, near: false }] }));
+  assert.equal(text.textContent, 'Codex’s 5-hour allowance went from 34% to 52% while this ran.');
+  assert.match(box.title, /all use of this account/, 'A limit reading is never presented as what the run alone cost.');
+
+  await show(watch({ heavy: false, context: { used: null, state: 'small' }, moves: [{ label: 'Weekly', from: 79, to: 81, points: 2, near: true }] }));
+  assert.equal(text.textContent, 'Codex’s weekly allowance reached 81%.');
+
+  await show(watch({ moves: [{ label: '5-hour', from: 19, to: 71, points: 52, near: false }] }));
+  assert.equal(text.textContent, 'This run used 10.7M tokens, about 6× your usual for Codex. Its 5-hour allowance went from 19% to 71%. Context reached 318K and refreshes on your next message to Codex.');
+
+  await show(watch({ moves: [{ label: '5-hour', from: 19, to: 71, points: 52, near: false }], context: { used: null, state: 'small' } }, { tokens: 24000000, usual: null }));
+  assert.equal(text.textContent, 'This run used 24M tokens, a lot for one run. Codex’s 5-hour allowance went from 19% to 71%.');
+
+  await show(watch({ context: { used: null, state: 'scheduled' } }, { tokens: 24000000, usual: null, partial: true }));
+  assert.equal(text.textContent, 'This run used at least 24M tokens, a lot for one run. A context refresh is set for your next message to Codex.');
+
+  await show(watch(), { status: 'running', activeRun: { id: 'next', provider: 'codex', startedAt: new Date().toISOString() } });
+  assert.equal(box.hidden, true, 'A new run replaces it.');
+  await show(watch(), { status: 'complete', activeRun: null });
+  assert.equal(box.hidden, false);
+
+  ui.$('usage-notice-dismiss').click(); await flush();
+  assert.equal(box.hidden, true);
+  assert.equal(ui.document.activeElement, ui.$('message-input'));
+  await ui.window.relayUI.refresh();
+  assert.equal(box.hidden, true, 'Dismissing it stays dismissed for that run.');
+  await show(watch({}, { runId: 'run-later' }));
+  assert.equal(box.hidden, false, 'A later run can still speak up.');
+});
+
+test('in Flow the usage notice can switch to Cost saving, keeping the other routing choices', async () => {
+  const ui = await browser({ flowUI: true, layoutUI: true }), c = ui.canonical.get('project-one'), choices = [];
+  ui.setIntercept((request, next) => {
+    if (request.path.endsWith('/routing')) { choices.push(request.body); c.routing = request.body; c.usageWatch.notice.action = null; return response(c); }
+    return next();
+  });
+  c.routing = { mode: 'balanced', allowApi: true, check: true };
+  c.usageWatch = { runId: 'run-big', provider: 'codex', tokens: 10726923, usual: 1800000, samples: 30, partial: false, moves: [], notice: { heavy: true, moves: [], context: { used: 318000, state: 'due' }, action: 'saving' } };
+  await ui.window.relayUI.refresh();
+  const action = ui.$('usage-notice-action');
+  assert.equal(ui.$('usage-notice').hidden, false);
+  assert.equal(action.textContent, 'Use Cost saving');
+  action.click(); await flush();
+  assert.deepEqual(choices.at(-1), { mode: 'saving', allowApi: true, check: true });
+  assert.equal(action.hidden, true, 'Once it is on, there is nothing left to offer.');
+  assert.equal(ui.$('usage-notice').hidden, false, 'What the run used is still worth reading.');
+});
+
+test('run details keep the total, what is usual and how each limit moved', async () => {
+  const ui = await browser({ insights: true }), c = ui.canonical.get('project-one');
+  c.lastRun = { id: 'run-big', provider: 'claude', status: 'complete', startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), usageMeasured: { input: 108, cacheRead: 10408077, cacheWrite: 318388, output: 350 } };
+  c.usageWatch = { runId: 'run-big', provider: 'claude', tokens: 10726923, usual: 1800000, samples: 30, partial: false, moves: [{ label: '5-hour', from: 34, to: 52, points: 18, near: false }], notice: null };
+  await ui.window.relayUI.refresh();
+  const metrics = ui.$('run-metrics').textContent;
+  assert.match(metrics, new RegExp(`Total: ${(10726923).toLocaleString()} tokens · usual for Claude: about ${(1800000).toLocaleString()} a run, from your last 30 runs`));
+  assert.match(metrics, /5-hour allowance: 34% → 52% while this ran · account-wide, including other clients/);
+});
+
+test('the compact control stays icon-only in every state and explains automatic refresh in both modes', async () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-  assert.match(html, /<div class="composer-input">\s*<label[^>]*for="message-input"[\s\S]*?<textarea[^>]*id="message-input"[\s\S]*?<button[^>]*id="compact-context"[^>]*aria-label="Compact context"/);
   assert.equal([...html.matchAll(/id="compact-context"/g)].length, 1);
-  assert.doesNotMatch(html, /context-meter-value/, 'The small ring has no visible percentage or status glyph.');
+  const control = html.match(/<button id="compact-context"[^>]*>([\s\S]*?)<\/button>/)[1];
+  assert.match(control, /class="icon context-compact-glyph"/);
+  assert.match(control, /class="icon context-compact-check"/);
+  assert.equal(control.replace(/<[^>]*>/g, '').trim(), '', 'The composer control never displays a status label.');
+  assert.doesNotMatch(html, /context-meter-track|context-limit-notice/, 'There is no ambiguous composer ring or duplicate warning.');
+  const panel = html.match(/<dialog id="compact-confirmation"[^>]*>([\s\S]*?)<\/dialog>/)[1];
+  assert.match(panel, /Your chat and draft stay saved/);
+  assert.match(panel, /task brief.*decisions, recent work and project files/);
+  assert.doesNotMatch(panel, /Older details|leave the agent’s active context/);
   const ui = await browser({ flowUI: true, layoutUI: true }), c = ui.canonical.get('project-one');
-  c.contextControl = { legacy: true, near: false, used: null, thresholdTokens: 75000, rollover: true };
+  c.contextControl = { hasSession: true, used: 20000, thresholdTokens: 75000 };
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('compact-context').dataset.meterState, 'known');
+  assert.match(ui.$('compact-context').getAttribute('aria-label'), /Current context/);
+  assert.equal(ui.$('compact-context').getAttribute('aria-busy'), 'false');
   for (const flow of [false, true]) {
+    c.contextControl = { hasSession: true, legacy: true, used: null, thresholdTokens: 75000, rollover: true };
     if (flow) ui.window.relayFlow.enter();
     await ui.window.relayUI.refresh(); await flush();
     assert.equal(ui.$('compact-context').hidden, false);
     assert.equal(ui.$('compact-context').disabled, false);
-    assert.equal(ui.$('compact-context').dataset.refreshDue, 'true');
-    assert.equal(ui.$('context-limit-notice').hidden, false);
-    assert.match(ui.$('context-limit-notice').textContent, /older agent session will refresh automatically.*chat history stays intact/);
-    assert.doesNotMatch(ui.$('context-limit-notice').textContent, /null|tokens|2,000,000/);
+    assert.equal(ui.$('compact-context').dataset.meterState, 'due');
+    assert.match(ui.$('compact-context').getAttribute('aria-label'), /Refresh on next send/);
+    ui.$('compact-context').click(); await flush();
+    assert.match(ui.$('compact-confirm-description').textContent, /refresh automatically.*next message to Codex/);
+    if (flow) assert.doesNotMatch(ui.$('compact-confirm-note').textContent, /Settings → General → Context limit/);
+    else assert.match(ui.$('compact-confirm-note').textContent, /Change the refresh limit in Settings → General → Context limit/);
+    assert.equal(ui.$('compact-confirm').hidden, true, 'An automatic refresh needs no redundant manual action.');
+    assert.equal(ui.$('compact-context-reading').hidden, true);
+    ui.$('compact-cancel').click();
   }
 });
 
-test('the compact ring shows progress to the refresh target, updates live, and resets with a new signal', async () => {
+test('compact details label the refresh signal honestly and update during work without interrupting it', async () => {
   const ui = await browser(), c = ui.canonical.get('project-one');
-  c.contextControl = { used: 37500, thresholdTokens: 75000, estimated: true };
+  c.contextControl = { hasSession: true, used: 37500, thresholdTokens: 75000, estimated: true };
   await ui.window.relayUI.refresh();
   const button = ui.$('compact-context'), meter = ui.$('context-meter');
-  assert.equal(meter.style['--context-progress'], '50');
-  assert.equal(meter.getAttribute('role'), 'meter');
+  button.click(); await flush();
   assert.equal(meter.getAttribute('aria-valuenow'), '50');
-  assert.match(button.title, /Estimated context signal: 37,500 of 75,000 tokens.*50% left \(37,500 tokens\)/);
+  assert.match(meter.getAttribute('aria-valuetext'), /50% of the automatic refresh target.*not the model/);
+  assert.equal(ui.$('compact-reading-label').textContent, 'Estimated context');
+  assert.equal(ui.$('compact-reading-value').textContent, '37,500 tokens');
+  Object.assign(c.contextControl, { source: 'claude-last-request-input', estimated: false, cacheWarm: true, adaptive: true, thresholdTokens: 120000 });
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('compact-reading-label').textContent, 'Last request input');
+  assert.equal(ui.$('compact-target-value').textContent, '120,000 tokens');
+  assert.match(ui.$('compact-confirm-note').textContent, /Recent activity allows a higher refresh target/);
+  c.contextControl.adaptive = false;
+  await ui.window.relayUI.refresh();
+  assert.doesNotMatch(ui.$('compact-confirm-note').textContent, /Recent activity/);
   ui.$('message-input').value = 'Keep this draft';
-  c.status = 'running'; c.activeRun = { id: 'meter-run', provider: 'codex', startedAt: new Date().toISOString() };
-  c.contextControl.used = 71250;
+  c.status = 'running'; c.activeRun = { id: 'context-run', provider: 'codex', startedAt: new Date().toISOString() };
+  Object.assign(c.contextControl, { thresholdTokens: 75000, used: 71250 });
   await ui.window.relayUI.refresh();
   assert.equal(button.dataset.nearLimit, 'true');
-  assert.equal(button.disabled, true, 'The live meter remains visible while manual compact is unavailable.');
+  assert.equal(button.dataset.meterState, 'near');
+  assert.match(button.getAttribute('aria-label'), /Refresh soon/);
+  assert.equal(button.disabled, false, 'Context can be inspected during work.');
+  assert.equal(ui.$('compact-confirm').disabled, true, 'A running agent cannot be reset.');
+  assert.match(ui.$('compact-confirm-note').textContent, /current run keeps its context/);
   assert.equal(ui.$('message-input').value, 'Keep this draft');
+  c.activeRun.phase = 'compacting';
+  await ui.window.relayUI.refresh();
+  assert.equal(button.dataset.meterState, 'native');
+  assert.match(button.getAttribute('aria-label'), /Organizing context/);
+  assert.equal(button.getAttribute('aria-busy'), 'true');
+  assert.equal(meter.hidden, true);
+  assert.equal(ui.$('compact-confirm').hidden, true);
   c.status = 'complete'; c.activeRun = null;
-  c.contextControl = { used: 90000, thresholdTokens: 75000, rollover: true };
+  c.contextControl = { hasSession: true, used: 90000, thresholdTokens: 75000, rollover: true };
   await ui.window.relayUI.refresh();
   assert.equal(meter.getAttribute('aria-valuenow'), '100');
-  assert.match(button.title, /0% left \(0 tokens\).*next send refreshes agent memory/);
-  c.contextControl = { used: 1000, thresholdTokens: 75000, estimated: true };
+  assert.equal(ui.$('compact-confirm').hidden, true);
+  c.contextControl = { hasSession: true, used: 1000, thresholdTokens: 75000, estimated: true };
   await ui.window.relayUI.refresh();
   assert.equal(meter.getAttribute('aria-valuenow'), '1');
-  assert.equal(button.dataset.refreshDue, 'false');
-  assert.equal(button.dataset.nearLimit, 'false');
+  assert.equal(button.dataset.meterState, 'known');
+  assert.equal(button.getAttribute('aria-busy'), 'false');
+  assert.equal(ui.$('compact-confirm').disabled, false, 'A new session restores the optional manual action.');
 });
 
-test('the compact ring distinguishes unavailable readings, disabled automation and a prepared refresh', async () => {
+test('compact context hides redundant actions for fresh agents and handles unknown readings or automation off', async () => {
   const ui = await browser(), c = ui.canonical.get('project-one');
   const button = ui.$('compact-context'), meter = ui.$('context-meter');
-  for (const context of [{ used: null, thresholdTokens: 75000 }, { used: -1, thresholdTokens: 75000 }]) {
-    c.contextControl = context; await ui.window.relayUI.refresh();
-    assert.equal(button.dataset.meterState, 'unknown');
-    assert.equal(meter.getAttribute('role'), 'img');
+  c.contextControl = { hasSession: false, used: null, thresholdTokens: 75000 };
+  await ui.window.relayUI.refresh();
+  assert.equal(button.hidden, true);
+  ui.$('message-input').value = '/compact'; ui.fire('composer', 'submit'); await flush();
+  assert.equal(ui.$('compact-confirmation').open, false);
+  assert.match(ui.$('notice-text').textContent, /no session to compact/);
+  for (const used of [null, -1]) {
+    c.contextControl = { hasSession: true, used, thresholdTokens: 75000 }; await ui.window.relayUI.refresh();
+    button.click(); await flush();
+    assert.equal(button.hidden, false);
+    assert.equal(meter.hidden, true);
     assert.equal(meter.getAttribute('aria-valuenow'), null);
-    assert.match(button.title, /Context reading unavailable.*75,000 tokens/);
+    assert.equal(ui.$('compact-context-reading').hidden, true);
+    assert.equal(ui.$('compact-confirm-title').textContent, 'Context size unavailable');
+    ui.$('compact-cancel').click();
   }
-  c.contextControl = { used: 90000, thresholdTokens: null };
+  c.contextControl = { hasSession: true, used: 90000, thresholdTokens: null };
   await ui.window.relayUI.refresh();
-  assert.match(button.title, /Automatic context refresh is off/);
-  c.contextControl = { used: 90000, thresholdTokens: 75000, pending: true, rollover: true };
-  await ui.window.relayUI.refresh();
-  assert.equal(button.dataset.meterState, 'ready');
-  assert.equal(meter.getAttribute('aria-valuenow'), null, 'Prepared refreshes do not display a stale occupancy percentage.');
-  assert.match(button.title, /Refresh scheduled.*next message to this agent starts a fresh session/);
-  c.provider = 'gemini'; c.contextControl = { used: 5000, thresholdTokens: 75000 };
-  await ui.window.relayUI.refresh();
-  assert.equal(button.dataset.meterState, 'fresh');
-  assert.match(button.title, /fresh session each turn/);
+  button.click(); await flush();
+  assert.equal(ui.$('compact-confirm-title').textContent, 'Automatic refresh is off');
+  assert.equal(ui.$('compact-confirm').disabled, false);
+  assert.equal(ui.$('compact-target-line').hidden, true);
+  ui.$('compact-cancel').click();
+  for (const provider of ['gemini', 'codex']) {
+    c.provider = provider;
+    if (provider === 'codex') ui.state().localSelections['project-one'] = { model: 'local-test' };
+    await ui.window.relayUI.refresh();
+    assert.equal(button.hidden, true, 'Agents that start fresh each turn do not offer redundant compaction.');
+  }
 });
 
 test('compact confirmation can be cancelled and refuses a changed chat or a newly busy agent', async () => {
   const ui = await browser(), c = ui.canonical.get('project-one');
+  c.contextControl = { hasSession: true };
+  await ui.window.relayUI.refresh();
   ui.$('message-input').value = '/compact'; ui.fire('composer', 'submit'); await flush();
   ui.$('compact-cancel').click(); await flush();
   assert.equal(ui.$('message-input').value, '/compact');
+  assert.equal(ui.document.activeElement, ui.$('message-input'));
   assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false);
   ui.$('compact-context').click(); await flush();
   ui.state().provider = 'claude';
@@ -2824,13 +2994,18 @@ test('compact confirmation can be cancelled and refuses a changed chat or a newl
   ui.$('compact-context').click(); await flush();
   c.status = 'running'; c.activeRun = { id: 'started-elsewhere', provider: 'codex', startedAt: new Date().toISOString() };
   await ui.window.relayUI.refresh();
+  assert.equal(ui.$('compact-confirm').disabled, true);
   ui.$('compact-confirm').click(); await flush();
   assert.equal(ui.requests.some(request => /\/compact$/.test(request.path)), false);
-  assert.match(ui.$('notice-text').textContent, /Finish or stop/);
+  ui.$('compact-cancel').click();
+  ui.$('compact-context').click(); await flush();
+  assert.equal(ui.$('compact-confirmation').open, true, 'Inspection is still available while running.');
 });
 
 test('a failed confirmed refresh preserves the draft and reports the error', async () => {
-  const ui = await browser();
+  const ui = await browser(), c = ui.canonical.get('project-one');
+  c.contextControl = { hasSession: true };
+  await ui.window.relayUI.refresh();
   ui.setIntercept((request, next) => /\/compact$/.test(request.path) ? response({ error: 'The journal could not be saved.' }, 503) : next());
   ui.$('message-input').value = '/compact'; ui.fire('composer', 'submit'); await flush();
   ui.$('compact-confirm').click(); await flush();
@@ -2851,8 +3026,12 @@ test('Normal context settings save custom limits and the near-limit indicator la
   ui.window.relaySettings.close();
   c.contextControl = { near: true, used: 65000, thresholdTokens: 64000, estimated: true, rollover: true };
   await ui.window.relayUI.refresh();
-  assert.equal(ui.$('context-limit-notice').hidden, false);
-  assert.match(ui.$('context-limit-notice').textContent, /Estimated context signal: 65,000 tokens.*next message starts a fresh session/);
+  assert.equal(ui.$('compact-context').dataset.meterState, 'due');
+  assert.match(ui.$('compact-context').getAttribute('aria-label'), /Refresh on next send/);
+  ui.$('compact-context').click(); await flush();
+  assert.equal(ui.$('compact-reading-label').textContent, 'Estimated context');
+  assert.equal(ui.$('compact-target-value').textContent, '64,000 tokens');
+  assert.equal(ui.$('compact-reading-value').textContent, '65,000 tokens');
 });
 
 test('after a usage limit the task can wait for a reset without raising access, shows the wait and can cancel it', async () => {
@@ -3133,7 +3312,7 @@ test('the task plan keeps its list open during progress and closes it for anothe
   assert.equal(ui.$('run-plan').hidden,true,'An empty plan has no blank card.');
 });
 
-test('routing is chosen in the Agents panel’s Routing section, which Flow shows; the model button then shows the mode and opens it, and what will run is shown before sending',async()=>{
+test('routing is chosen in the Agents panel’s Routing section, which Flow shows; the model button then shows the mode, and the agent is chosen on Send',async()=>{
   const ui=await browser({modelPickerUI:true,agentsUI:true,insights:true}),conversation=ui.canonical.get('project-one'),choices=[],handoff=[];let preferences={threshold:90,automatic:false};
   ui.setIntercept((request,next)=>{
     if(request.path.endsWith('/routing')){choices.push(request.body);conversation.routing=request.body.mode?{mode:request.body.mode,allowApi:request.body.allowApi===true,check:request.body.check===true}:null;return response(conversation);}
@@ -3159,8 +3338,7 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   assert.equal(ui.$('agents-panel').hidden,false,'The model button opens Routing while it is on.');
 
   ui.$('message-input').value='Refactor the payment module into services';ui.fire('message-input','input');
-  assert.equal(ui.$('route-preview').hidden,false);
-  assert.equal(ui.$('route-choice').textContent,'Codex · Model One · High effort');assert.match(ui.$('route-reason').textContent,/^A complex task \(refactoring\) · Plan usage unknown/);
+  assert.equal(ui.$('route-preview'),null,'The agent is chosen on Send, so nothing above the box guesses at it.');
   ui.$('message-input').dispatchEvent(new UIEvent('keydown',{key:'Enter'}));await flush();await flush();
   const sent=ui.requests.filter(request=>request.path.endsWith('/messages')).at(-1).body;
   assert.deepEqual([sent.provider,sent.model,sent.effort,sent.routing],['codex','model-one','high',{mode:'balanced',reason:'A complex task (refactoring)',tier:'deep',escalation:null}],'Model One at high effort is already its strongest, so there is no step up.');
@@ -3191,6 +3369,29 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   assert.deepEqual(choices.at(-1),{mode:null});assert.equal(ui.$('picked-agent').textContent,'Codex','Choosing an agent yourself turns routing off.');
   ui.$('open-git').click();await flush();
   assert.equal(ui.$('agents-panel').hidden,true,'Git and Agents share the side panel.');
+});
+
+test('routing assessment keeps Stop available while Send waits and preserves the draft when cancelled', async () => {
+  const ui = await browser({ modelPickerUI: true, insights: true }), chat = ui.canonical.get('project-one');
+  chat.routing = { mode: 'balanced' }; let finishSend;
+  ui.setIntercept((request, next) => {
+    if (request.path.endsWith('/messages')) {
+      chat.status = 'running'; chat.activeRun = { id: 'assessment', purpose: 'routing', phase: 'routing', provider: 'codex', startedAt: new Date().toISOString() };
+      return new Promise(resolve => { finishSend = resolve; });
+    }
+    if (request.path.endsWith('/stop')) { chat.status = 'idle'; chat.activeRun = null; finishSend(response({ error: 'Routing assessment stopped. Your draft is saved.' }, 409)); return response({ stopped: true }); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('message-input').value = 'Do the task we discussed'; ui.fire('message-input', 'input');
+  ui.$('message-input').dispatchEvent(new UIEvent('keydown', { key: 'Enter' })); await flush();
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('stop-button').hidden, false); assert.equal(ui.$('stop-button').disabled, false);
+  assert.equal(ui.$('run-action').textContent, 'Assessing task');
+  ui.$('stop-button').click(); await flush(); await flush();
+  assert.equal(ui.$('message-input').value, 'Do the task we discussed');
+  assert.match(ui.$('notice-text').textContent, /assessment stopped/);
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/messages')).length, 1);
 });
 
 test('the sidebar, side panel and bottom panel resize with keyboard handles; the old Files divider and its saved height are removed',async()=>{
@@ -4508,6 +4709,30 @@ test('Accounts connects through the provider flow, preserves a draft and shows f
 const flowBrowser = options => browser({ insights: true, agentsUI: true, layoutUI: true, rewindUI: true, flowUI: true, modelPickerUI: true, ...options });
 const flowText = (ui, id) => ui.$(`flow-card-${id}`).textContent.replace(/\s+/g, ' ');
 
+test('Flow leaves limits to the cards: the message box shows none until the normal view returns', async () => {
+  const ui = await flowBrowser({ usage: { codex: { provider: 'codex', available: true, windows: [{ id: 'primary', label: '5-hour', usedPercent: 20, resetsAt: null }] } } });
+  await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
+  assert.equal(ui.$('usage-chip').hidden, false); assert.match(ui.$('usage-chip').textContent, /80% left/);
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(ui.$('usage-chip').hidden, true, 'The agent is not known until Send.');
+  ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  assert.equal(ui.$('usage-chip').hidden, true, 'It stays hidden as usage updates.');
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(ui.$('usage-chip').hidden, false);
+});
+
+test('a sent message says how its agent was chosen, so slow or wrong ratings can be spotted', async () => {
+  const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), base = { mode: 'balanced', reason: 'A focused change', tier: 'standard', model: 'model-one', effort: 'medium' };
+  const message = (id, routing) => ({ id, role: 'user', text: id, provider: 'codex', runId: id, routing: { ...base, ...routing }, createdAt: new Date().toISOString() });
+  chat.status = 'complete'; chat.messages.push(message('rated', { ratedBy: 'agent', ratedMs: 3140 }), message('continued', { ratedBy: 'local' }), message('estimated', { ratedBy: 'fallback' }), message('older', {}));
+  await ui.window.relayUI.refresh(); await flush();
+  const titles = ui.$('messages').querySelectorAll('.message-routing').map(note => note.title);
+  assert.match(titles[0], /^Balanced: A focused change · Rated by an agent in 3\.1 s$/);
+  assert.match(titles[1], /Continued from the last rating, with no agent call$/);
+  assert.match(titles[2], /Estimated locally because no agent could rate it in time$/);
+  assert.equal(titles[3], 'Balanced: A focused change', 'Older messages have nothing to add.');
+});
+
 test('Flow retains observed native compaction counts after the run completes', async () => {
   const ui = await flowBrowser(), c = ui.canonical.get('project-one');
   ui.window.relayFlow.enter(); await flush();
@@ -4547,6 +4772,25 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
   assert.equal(none.$('app-shell').classList.contains('flow'), false); assert.equal(none.$('toggle-flow').disabled, true); assert.equal(none.window.relayFlow.toggle(), false);
 });
 
+test('Flow plan usage follows the selected model and keeps weekly exhaustion visible beside five-hour allowance', async () => {
+  const ui = await flowBrowser({ wide: true, usage: { claude: { available: true, windows: [
+    { id: 'five', label: '5-hour', usedPercent: 20 },
+    { id: 'weekly', label: 'Weekly', usedPercent: 40 },
+    { id: 'opus', label: 'Weekly · Opus', scope: 'opus', usedPercent: 100 },
+  ] } } });
+  await ui.window.relayUI.refreshAccounts(); await flush();
+  await ui.window.relayUI.selectAgentModel('claude', 'claude-sonnet'); await flush();
+  ui.window.relayFlow.enter(); await flush();
+  assert.match(flowText(ui, 'plans'), /Claude\s*80% left\s*5-hour limit\s*Weekly · 60% left/);
+  assert.doesNotMatch(flowText(ui, 'plans'), /Opus/, 'Another model’s weekly limit does not replace this model’s allowance.');
+  const chat = ui.canonical.get('project-one'); chat.models.claude = chat.model = 'claude-opus';
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(flowText(ui, 'plans'), /Claude\s*80% left\s*5-hour limit\s*Weekly · Opus · 0% left/);
+  const claude = ui.$('flow-card-plans').querySelectorAll('.flow-plan').find(row => row.dataset.provider === 'claude');
+  assert.equal(claude.querySelector('.flow-plan-secondary').dataset.level, 'critical');
+  assert.match(ui.$('flow-strip').textContent, /Claude · 5-hour · 80% left · Weekly · Opus · 0% left/, 'The narrow layout also names both periods.');
+});
+
 test('Flow cards say in plain words how routing and handoff work, what is left, what is next and what changed', async () => {
   const later = hours => new Date(Date.now() + hours * 3600e3).toISOString();
   const ui = await flowBrowser({ usage: { claude: { available: true, windows: [{ id: 'five', label: '5-hour', usedPercent: 38, resetsAt: later(2) }, { id: 'week', label: 'Weekly', usedPercent: 62, resetsAt: later(50) }] }, codex: { available: true, windows: [{ id: 'week', label: 'Weekly', usedPercent: 92, resetsAt: later(30) }] } } });
@@ -4566,8 +4810,8 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   assert.doesNotMatch(working, /Near a limit/, 'Handoff follows the mode; there is no separate line for it.');
   assert.equal(ui.$('flow-card-working').querySelectorAll('[role="radio"]').every(radio => radio.disabled), true, 'The mode waits while a run works.');
   const plans = flowText(ui, 'plans');
-  assert.match(plans, /Claude\s*38% left\s*this week · resets/, 'The tightest limit, in words: the weekly one here.');
-  assert.match(plans, /1 other limit/); assert.match(plans, /Codex\s*8% left/);
+  assert.match(plans, /Claude\s*62% left\s*5-hour limit · resets/, 'Five-hour allowance leads, even when the weekly allowance is lower.');
+  assert.match(plans, /Weekly · 38% left · resets/); assert.match(plans, /Codex\s*8% left\s*Weekly limit · resets/, 'A weekly-only account keeps its reported period.');
   assert.equal(ui.$('flow-card-plans').querySelectorAll('.flow-plan').map(item => item.dataset.level).join(','), 'critical,ok', 'Codex, then Claude, as in Plan usage.');
   const next = flowText(ui, 'next');
   assert.match(next, /1 of 3 done\./); assert.match(next, /Read the code.*Write the tests.*Fix the bug/); assert.match(next, /Then · 1 queued message\s*Then write the docs for it/);
@@ -4581,7 +4825,7 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   Object.assign(chat, { status: 'complete', activeRun: null, lastRun: { id: 'run-3', provider: 'codex', status: 'complete', plan: chat.activeRun.plan } });
   ui.setIntercept((request, next) => request.path === '/api/checkpoints/preview' ? response({ digest: 'd', files: [], run: {}, runId: request.body.target.id }) : next());
   await ui.window.relayUI.refresh(); await flush();
-  assert.match(flowText(ui, 'working'), /Next message\s*Type a message to see who would take it\./);
+  assert.match(flowText(ui, 'working'), /Next message\s*Codeshi picks the agent, model and effort when you send\./);
   assert.equal(ui.$('flow-status-text').textContent, 'Done'); assert.equal(ui.$('flow-status').dataset.live, 'false');
   assert.doesNotMatch(flowText(ui, 'next'), /Read the code/, 'A finished plan is not what’s next.'); assert.match(flowText(ui, 'next'), /Then · 1 queued message/);
   const undo = ui.$('flow-card-files').querySelectorAll('.flow-run-action').find(action => action.textContent === 'Undo');
@@ -4596,13 +4840,13 @@ test('Flow turns routing on, keeps mode changes in Agent settings, and turns rou
   assert.equal(chat.routing, undefined, 'The normal view has no routing.');
   ui.window.relayFlow.enter(); await flush();
   assert.deepEqual(chat.routing, { mode: 'balanced', allowApi: false, check: false }, 'Entering Flow turns routing on, Balanced at first.');
-  assert.match(flowText(ui, 'working'), /Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit\..*Next message\s*Type a message to see who would take it\./);
+  assert.match(flowText(ui, 'working'), /Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit\..*Next message\s*Codeshi picks the agent, model and effort when you send\./);
   const card = ui.$('flow-card-working');
   assert.equal(card.querySelector('.flow-change'), null);
   assert.equal(card.querySelectorAll('[role="radio"]').length, 0, 'Routing controls live in Agent settings.');
   assert.doesNotMatch(card.textContent, /Change how it works|Change…/);
   ui.$('message-input').value = 'Rename the variable in app.js'; ui.fire('message-input', 'input'); await flush();
-  assert.match(flowText(ui, 'working'), /Next message\s*It would go to (Codex|Claude), /);
+  assert.match(flowText(ui, 'working'), /Next message\s*Codeshi picks the agent, model and effort when you send\./, 'A draft changes nothing: the choice is made on Send.');
   ui.findButton('Agent settings').click(); await flush();
   assert.equal(ui.$('agents-routing').hidden, false); assert.equal(ui.$('agents-routing-note').hidden, true); assert.equal(ui.$('agents-handoff').hidden, true);
   assert.deepEqual(ui.$('routing-options').querySelectorAll('.routing-option').map(row => row.dataset.mode), ['saving', 'balanced', 'quality']);
@@ -4904,10 +5148,10 @@ test('Remote access in Flow opens a Flow sheet with the pairing controls instead
   assert.match(ui.$('settings-content').textContent, /Same-Wi-Fi access is on/, 'Settings still has the section.');
 });
 
-// Gemini on the Antigravity connection works in one folder at a time (#116): with several, the message waits for a choice.
-test('Gemini on the Antigravity connection in a workspace with several folders asks which folder, then runs the message as a task there', async () => {
+// Older Antigravity runtimes still use the folder-task fallback (#116).
+test('Gemini without additional-folder support asks which folder, then runs the message as a task there', async () => {
   const ui = await browser({ providers: { gemini: { available: true } }, agentsUI: true }), chat = ui.canonical.get('project-one'), posted = [];
-  let account = { installed: true, available: true, authenticated: true, authMode: 'google-oauth', source: 'antigravity-acp', billingSource: 'subscription', usage: 'unknown' };
+  let account = { installed: true, available: true, authenticated: true, authMode: 'google-oauth', source: 'antigravity-acp', capabilities: { additionalDirectories: false }, billingSource: 'subscription', usage: 'unknown' };
   ui.setIntercept((request, next) => {
     if (request.path === '/api/providers/gemini/account') return response(account);
     if (request.path === '/api/tasks') { posted.push(request.body); const task = { id: 'dddddddd-0000-4000-8000-000000000004', title: request.body.text, folderName: 'Backend', folderId: request.body.folderId, status: 'running', mode: 'direct', approvals: 0, conversationId: 'lane-backend', hasWorktree: false }; chat.parallelTasks = [task]; return response(task, 202); }
@@ -4953,6 +5197,46 @@ test('Gemini on the Antigravity connection in a workspace with several folders a
   ui.fire('composer', 'submit'); await flush();
   assert.equal(ui.$('folder-ask').hidden, true);
   assert.equal(ui.requests.filter(request => request.method === 'POST' && /\/messages$/.test(request.path) && request.body.provider === 'codex').length, 1);
+});
+
+test('Antigravity with additional-folder support sends in the workspace chat and remains eligible for Flow routing', async () => {
+  const ui = await browser({ providers: { gemini: { available: true } }, agentsUI: true, flowUI: true, layoutUI: true }), chat = ui.canonical.get('project-one');
+  const account = { installed: true, available: true, authenticated: true, authMode: 'google-oauth', source: 'antigravity-acp', capabilities: { additionalDirectories: true, readOnly: 'unavailable' }, billingSource: 'subscription', usage: 'unknown' };
+  ui.setIntercept((request, next) => request.path === '/api/providers/gemini/account' ? response(account) : next());
+  await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
+  ui.$('select-gemini').click(); await flush();
+  ui.$('message-input').value = 'Update the shared API in both folders'; ui.fire('message-input', 'input');
+  ui.fire('composer', 'submit'); await flush();
+  assert.equal(ui.$('folder-ask').hidden, true);
+  assert.equal(ui.requests.filter(request => request.method === 'POST' && /\/messages$/.test(request.path) && request.body.provider === 'gemini').length, 1);
+  assert.equal(ui.requests.some(request => request.path === '/api/tasks'), false);
+  assert.equal(ui.state().taskId, null, 'The conversation stays in the workspace chat.');
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(ui.window.relayFlow.isOn(), true);
+  let candidates;
+  ui.window.relayRouting = { route(input) { candidates = input.candidates; return { error: 'Inspect candidates only' }; } };
+  chat.routing = { mode: 'balanced' };
+  await ui.window.relayUI.refresh();
+  ui.$('message-input').value = 'Update both folders'; ui.window.relayUI.routeFor('Update both folders');
+  assert.equal(candidates.find(row => row.provider === 'gemini').eligible, true);
+  account.capabilities.additionalDirectories = false;
+  await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
+  ui.window.relayUI.routeFor('Update both folders');
+  assert.equal(candidates.find(row => row.provider === 'gemini').eligible, false, 'A runtime without support stays out of multi-folder routing.');
+  account.capabilities.additionalDirectories = true;
+  await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
+  ui.state().mode = 'read'; ui.window.relayUI.routeFor('Update both folders');
+  assert.equal(candidates.find(row => row.provider === 'gemini').eligible, false, 'Antigravity still has no verified read-only connection.');
+  account.source = 'gemini-cli'; account.authMode = 'native-cli'; account.capabilities = { readOnly: 'restricted-tools' };
+  await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
+  ui.window.relayUI.routeFor('Update both folders');
+  assert.equal(candidates.find(row => row.provider === 'gemini').eligible, true, 'Gemini CLI can use multiple folders in read-only mode.');
+  const project = ui.state().projects.find(project => project.id === 'project-one');
+  const original = project.folders;
+  project.folders = Array.from({ length: 7 }, (_, i) => ({ id: 'folder-' + i, name: 'folder-' + i, path: '/folder-' + i, available: true }));
+  ui.window.relayUI.routeFor('Update both folders');
+  assert.equal(candidates.find(row => row.provider === 'gemini').eligible, false, 'The CLI connection keeps its six-folder limit.');
+  project.folders = original;
 });
 
 test('Flow explains Review first and deferred automatic tests without treating them as verified', async () => {

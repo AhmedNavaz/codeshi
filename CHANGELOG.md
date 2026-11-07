@@ -4,6 +4,29 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-07
+
+### Added
+
+- **Usage notices after each prompt, in Normal and Flow.** With no model call, Codeshi compares each run with that agent's usual size and reads plan limits on each side of it. If the run was unusually large, or a limit moved a lot, one line above the message box says so. It offers Compact or Cost saving when those would help, and says when a context refresh is already coming. Repeats are held back, and run details now keep each run's total, its agent's usual and how limits moved.
+
+### Changed
+
+- **Task assessment before routing.** On Send, a short read-only agent assessment chooses model and reasoning effort from the prompt and recent task context, typically in about three seconds on the smallest model available, with no tools, plugins or skills. A bare go-ahead carries on with the last rating and no agent call. Final selection uses every applicable quota window and considers remaining allowance, reset times and continuity; a slow agent check no longer holds up Send. Assessment usage shares the task budget. Stop and changed settings prevent execution; if no agent can rate a request in time, Codeshi estimates locally and sends it, never to a light model. The note under a sent message shows how it was rated. Routed queued prompts and folder tasks follow the same path.
+- **A quieter message box in Flow.** The estimate line above the box is gone, and limits stay on the cards, because the agent isn't chosen until you send.
+- **Light work reaches Codex's small models.** Routing now recognises a small model from its catalog description when its name doesn't say, as with Luna.
+- **Context refresh keeps recent work longer.** After recent provider requests, the Auto target rises to 120,000 tokens in Normal and Balanced, 80,000 in Cost saving and 160,000 in Maximum quality, because a session that was just used may still be cached. After a longer pause, or a change of model or effort, the targets stay at 75,000, 40,000 and 120,000. Custom Normal limits stay fixed, targets are still capped at 75% of a reported model window, and none of this guarantees a cache hit.
+- **The Compact context button.** It's now an icon, quiet in normal use, with a dot near the target and a check once a refresh is arranged. It opens the agent's context details, including during a run, and explains what carries over before you confirm. Manual refresh stays available only when agents are idle.
+- **Clearer run details.** Context readings, the last request's input and Codeshi's own message size have plainer labels, and a run being rated shows as **Assessing task**.
+
+### Fixed
+
+- **False failures from command text.** A command that merely mentioned a word like "error" could count as a failed step, end up as a blocker in the next agent's brief, or add to a task's repeated-failure stop. Runs now use the agent's reported result where there is one, and older saved runs are rechecked against real failure messages.
+- **Task briefs after a refresh.** Your answers to agent questions are kept as decisions, each with its source, and a resumed task no longer repeats its own continuation prompt as a request. Files outside the workspace are left out.
+- **Antigravity could drop out of Auto.** Its model lookup had five seconds for a check that takes about that long, so it was often left out of routing without any message.
+- **Five-hour plan usage.** Agents, Flow and the message box keep the reported five-hour allowance as their main reading. The next most restrictive limit appears separately in Agents and Flow, and low weekly or model-specific allowance stays visible as a warning in the message box. Accounts without a five-hour reading keep the period their provider reports.
+- **Gemini across workspace folders** (#116). The Antigravity connection now passes additional attached folders through the runtime's advertised ACP capability, so supported runs stay in the workspace chat with their shared history. Flow routing and handoff can choose Gemini for these workspaces. Runtimes without support keep the one-folder task option. Text-file requests remain bounded to the attached folders, and checkpoints and Undo include changes from each folder.
+
 ## [0.30.0] - 2026-11-07
 
 ### Added

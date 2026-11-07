@@ -1,6 +1,6 @@
-// Auto (#12): picks the agent, model and reasoning effort for each message. It uses simple local rules, never a model
-// call, so it is instant, free and predictable, and the choice is shown before anything is sent. The page sends the
-// exact choice it showed, and the person can always pick a model themselves instead.
+// Auto (#12): on Send, a local check settles what needs no reading (triage), a short agent assessment rates the rest, and
+// the final choice uses that difficulty, the supported model/effort levels and account-wide quota evidence. Manual choices
+// skip all of it. classify is the local estimate the page uses before Send, and the fallback when an assessment fails.
 //
 // Loaded as a plain script in the page and as a module in tests: the page reads window.relayRouting, tests globalThis.
 (root => {
@@ -58,8 +58,12 @@
   const questionStart = /^(what|where|which|who|when|how (do|does|can|to)|is|are|does|do|can|could|explain|show me|list)\b/;
 
   // How demanding a message looks: light, standard or deep, with a short reason.
-  function classify(text, { attachments = 0 } = {}) {
+  function classify(text, { attachments = 0, context = null } = {}) {
     const value = String(text || '').trim(), lower = value.toLowerCase();
+    if (context && value.length <= 400 && /^(?:yes\b|ok(?:ay)?\b|go ahead\b|do (?:it|that|this)\b|continue\b|carry on\b|(?:now )?(?:implement|fix|finish) (?:it|that|this|the above)\b|(?:also|and|then)\b)/i.test(value) && !lightSignals.test(lower)) {
+      const previous = classify(String(context).slice(-4000), { attachments });
+      return { ...previous, reason: `continuing ${previous.reason}` };
+    }
     const steps = (value.match(/^\s*(\d+[.)]|[-*•])\s+\S/gm) || []).length;
     const paths = new Set(lower.match(/[\w.-]+\/[\w./-]+|\b[\w-]+\.(js|mjs|ts|tsx|jsx|py|rb|go|rs|java|kt|swift|css|html|json|md|yml|yaml|sql)\b/g) || []).size;
     for (const [pattern, name] of deepSignals) if (pattern.test(lower)) return { tier: 'deep', reason: `a complex task (${name})` };
@@ -71,12 +75,25 @@
     return { tier: 'standard', reason: 'a focused change' };
   }
 
-  // A model's tier from its name: mini, haiku, flash and lite models are light; opus, pro, max and ultra are deep.
+  // What Send can settle without asking an agent. Judging a request takes a model: keyword rules agreed with an agent on
+  // barely half of real prompts. So this covers only what needs no judging, a bare go-ahead that carries on work already
+  // rated, and anything else returns null. A go-ahead after light work is assessed too: what it approves may be bigger.
+  const agreement = 'yes|yep|yeah|yup|sure';
+  const filler = `${agreement}|ok|okay|please|now|then`;
+  const proceed = 'go|go ahead|go on|go for it|do it|do that|do this|do so|do them|do both|continue|carry on|keep going|proceed|start|start it|implement it|implement that|implement this|fix it|fix that|fix this|fix them|fix both|finish it|finish that|apply it|apply that';
+  const goAhead = new RegExp(`^(?:(?:(?:${filler})[\\s,.!;-]+)*(?:${proceed})(?:[\\s,.!;-]+(?:${filler}))*|(?:${agreement})(?:[\\s,.!;-]+(?:please|now))?)[\\s,.!]*$`);
+  function triage(text, { attachments = 0, previous = null } = {}) {
+    if (attachments || !previous || !['standard', 'deep'].includes(previous.tier) || !goAhead.test(String(text || '').trim().toLowerCase())) return null;
+    return { tier: previous.tier, effort: ['low', 'medium', 'high'].includes(previous.effort) ? previous.effort : previous.tier === 'deep' ? 'high' : 'medium', reason: 'Continuing the same task', source: 'local' };
+  }
+
+  // A model's tier from its name: mini, haiku, flash and lite models are light; opus, pro, max and ultra are deep. A name
+  // that says neither may still say what it is for in its catalog description, as "Fast and affordable" does.
   function modelTier(row) {
     const name = `${row.id || row.model || row.value || ''} ${row.displayName || row.name || ''}`.toLowerCase();
     if (/\b(mini|nano|haiku|lite|flash|fast|small|spark)\b/.test(name)) return 'light';
     if (/\b(opus|pro|max|ultra|heavy)\b/.test(name)) return 'deep';
-    return 'standard';
+    return /\b(fast|fastest|affordable|cheap|cheapest)\b/.test(String(row.description || '').toLowerCase()) ? 'light' : 'standard';
   }
   const modelId = row => row.id || row.model || row.value || '';
   const effortsOf = row => (row?.supportedEffortLevels || row?.supportedReasoningEfforts?.map(level => level.reasoningEffort) || []).filter(level => EFFORTS.includes(level)).sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
@@ -126,10 +143,11 @@
   // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
   // limit is skipped, and the agent that did the last run is preferred, so the conversation keeps its native session.
-  function route({ text, attachments = 0, mode = 'balanced', candidates = [], current = null, allowApi = false, quotaThreshold = 95 }) {
+  function route({ text, attachments = 0, context = null, assessment = null, mode = 'balanced', candidates = [], current = null, allowApi = false, quotaThreshold = 95, now = Date.now() }) {
     if (!MODES.includes(mode)) mode = 'balanced';
-    const task = classify(text, { attachments });
-    const [tier, wantedEffort] = plan[mode][task.tier];
+    const task = assessment && TIERS.includes(assessment.tier) && typeof assessment.reason === 'string' ? assessment : classify(text, { attachments, context });
+    const [tier, baseEffort] = plan[mode][task.tier];
+    const wantedEffort = mode === 'balanced' && ['low', 'medium', 'high'].includes(task.effort) && EFFORTS.indexOf(task.effort) > EFFORTS.indexOf(baseEffort) ? task.effort : baseEffort;
     const skipped = [];
     const pool = candidates.flatMap(candidate => {
       if (!candidate.eligible) return [];
@@ -140,20 +158,28 @@
       // Try equivalent-tier models before ruling out the agent; never downgrade solely to escape a model's limit.
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
       const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && modelId(row) !== 'default' && !row.hidden && distance(row) === distance(preferred))] : [null];
-      const choices = options.map(model => ({ ...candidate, selectedModel: model, quota: assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold }) }));
+      const choices = options.map(model => ({ ...candidate, selectedModel: model, quota: assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now }) }));
       const usable = choices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
-      const selected = usable.find(row => row.quota.state === 'ok') || usable[0];
-      if (!selected) { skipped.push(`${agentNames[candidate.provider]}: ${quotaText(choices[0].quota)}`); return []; }
-      return [selected];
+      if (!usable.length) { skipped.push(`${agentNames[candidate.provider]}: ${quotaText(choices[0].quota)}`); return []; }
+      return usable;
     });
     if (!pool.length) return { error: `Auto found no connected agent within your rules${skipped.length ? ` (${skipped.join('; ')})` : ''}. Refresh plan usage or choose a model yourself. API-billed agents need separate consent.`, task, mode };
     // The agent is chosen by allowance and continuity, not by model names: each agent's own strongest model serves
     // complex work, so a vendor is never preferred just because its model is called "pro" or "opus".
+    // Use the reset of the constraining window, never a short-window reset that hides a tighter weekly/model limit.
+    // This is a bounded preference for usable allowance that expires sooner, not a prediction of task duration or tokens.
+    const resetBonus = candidate => {
+      const rows = candidate.quota.windows.filter(row => row.usedPercent >= candidate.quota.usedPercent - 5);
+      if (!rows.length || rows.some(row => !Number.isFinite(Date.parse(row.resetsAt)))) return 0;
+      const hours = Math.max(...rows.map(row => (Date.parse(row.resetsAt) - now) / 3600000));
+      return hours > 0 ? 20 / (1 + hours / 6) : 0;
+    };
     const score = candidate => {
       if (candidate.quota.state !== 'ok') return 1000 - (candidate.provider === current ? 15 : 0);
       const used = candidate.quota.usedPercent;
       const usage = mode === 'saving' ? used : mode === 'balanced' ? (used >= 80 ? 100 + used : used / 4) : (used >= 90 ? 100 + used : 0);
-      return usage - (candidate.provider === current ? 15 : 0);
+      const headroom = mode === 'saving' ? 0 : Math.max(0, used - 70) * (task.tier === 'deep' ? 2 : 0);
+      return usage + headroom - resetBonus(candidate) - (candidate.provider === current ? 15 : 0);
     };
     const order = ['codex', 'claude', 'gemini'];
     const chosen = [...pool].sort((a, b) => score(a) - score(b) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
@@ -162,21 +188,21 @@
     if (current && chosen.provider !== current) {
       const before = candidates.find(candidate => candidate.provider === current);
       const previous = pool.find(candidate => candidate.provider === current);
-      why.push(!before?.eligible || !previous ? `${agentNames[current]} isn’t available under your rules` : previous.quota.usedPercent >= 80 ? `${agentNames[current]} is at ${Math.round(previous.quota.usedPercent)}% of its limit` : previous.quota.state !== 'ok' ? `${agentNames[current]} has no confirmed allowance` : `${agentNames[chosen.provider]} has more allowance left`);
+      why.push(!before?.eligible || !previous ? `${agentNames[current]} isn’t available under your rules` : previous.quota.usedPercent >= 80 ? `${agentNames[current]} is at ${Math.round(previous.quota.usedPercent)}% of its limit` : previous.quota.state !== 'ok' ? `${agentNames[current]} has no confirmed allowance` : resetBonus(chosen) > resetBonus(previous) + 10 ? `${agentNames[chosen.provider]}'s usable allowance resets sooner` : task.tier === 'deep' ? `${agentNames[chosen.provider]} has more room for demanding work` : `${agentNames[chosen.provider]} has more allowance left`);
     }
     const choice = { provider: chosen.provider, model: model ? modelId(model) : null, modelName: model ? (model.displayName || model.name || modelId(model)) : null, effort, tier: task.tier, mode, reason: why.join(' · ') };
-    return { ...choice, quota: chosen.quota, escalation: escalate(chosen.provider, chosen.models, choice) };
+    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
 
   // The same choice when the agent is already decided: a queued prompt that moved at a handoff is routed again for the
   // agent that took over (#93). Null when that agent lists no models, so the caller keeps its own choice.
-  function routeTo(provider, rows, { text, attachments = 0, mode = 'balanced' }) {
+  function routeTo(provider, rows, { text, attachments = 0, assessment = null, mode = 'balanced' }) {
     if (!MODES.includes(mode)) mode = 'balanced';
-    const task = classify(text, { attachments }), [tier, wantedEffort] = plan[mode][task.tier], model = pickModel(rows, tier);
+    const task = assessment && TIERS.includes(assessment.tier) ? assessment : classify(text, { attachments }), [tier, wantedEffort] = plan[mode][task.tier], model = pickModel(rows, tier);
     if (!model) return null;
     const choice = { provider, model: modelId(model), modelName: model.displayName || model.name || modelId(model), effort: pickEffort(effortsOf(model), wantedEffort), tier: task.tier, mode, reason: task.reason[0].toUpperCase() + task.reason.slice(1) };
     return { ...choice, escalation: escalate(provider, rows, choice) };
   }
 
-  root.relayRouting = { MODES, modeNames, handoffThresholds, classify, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies };
+  root.relayRouting = { MODES, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies };
 })(typeof window === 'undefined' ? globalThis : window);

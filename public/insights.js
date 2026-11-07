@@ -104,7 +104,7 @@
     // An agent waiting only on its questions is waiting for your answer, not your approval.
     const asking = Boolean(c.pendingApprovals?.length) && c.pendingApprovals.every(item => item.kind === 'question');
     const quiet = running && !c.pendingApprovals?.length && silence > 30000;
-    const phaseLabel = { starting: 'Starting agent', working: 'Working', reasoning: 'Reasoning', responding: 'Writing response', tool: 'Running tools', compacting: 'Organizing context', approval: asking ? 'Waiting for your answer' : 'Waiting for approval' }[phase] || 'Working';
+    const phaseLabel = { routing: 'Assessing task', starting: 'Starting agent', working: 'Working', reasoning: 'Reasoning', responding: 'Writing response', tool: 'Running tools', compacting: 'Organizing context', approval: asking ? 'Waiting for your answer' : 'Waiting for approval' }[phase] || 'Working';
     $('run-phase').textContent = running ? state.streamConnected === false ? 'Reconnecting to app' : quiet ? 'Waiting for provider' : phaseLabel : run.status === 'complete' ? 'Completed' : run.errorCategory === 'quota' ? 'Usage limit reached' : 'Run stopped';
     $('run-phase').className = `run-phase sr-only ${running ? quiet ? 'quiet' : phase === 'approval' ? 'approval' : 'active' : run.status === 'complete' ? 'complete' : 'quiet'}`;
     // A finished run states its duration in the action text.
@@ -119,7 +119,7 @@
       if (state.streamConnected === false) actionText = 'Reconnecting to the app';
       else if (c.pendingApprovals?.length) actionText = asking ? 'Waiting for your answer' : 'Waiting for your approval';
       else if (quiet) actionText = `Waiting for ${agent}`;
-      else actionText = { starting: `Starting ${agent}`, reasoning: 'Thinking', responding: 'Writing', compacting: 'Organizing context' }[phase] || 'Working';
+      else actionText = { routing: 'Assessing task', starting: `Starting ${agent}`, reasoning: 'Thinking', responding: 'Writing', compacting: 'Organizing context' }[phase] || 'Working';
     } else if (run.status === 'complete') actionText = c.taskResult ? taskLine(c.taskResult) : `Completed in ${Number.isFinite(elapsed) ? duration(elapsed) : 'recorded duration'}`;
     else actionText = run.errorCategory === 'quota' ? 'Usage limit reached' : 'Run stopped';
     $('run-action').textContent = actionText;
@@ -135,6 +135,9 @@
       const fields = [[measured.input, 'fresh input'], [measured.cacheRead, 'cache read'], [measured.cacheWrite, 'cache write'], [measured.output, 'output']];
       metrics.push(`This run${measured.partial ? ' (partial)' : ''}: ${fields.map(([value, label]) => `${typeof value === 'number' ? value.toLocaleString() : 'unknown'} ${label}`).join(' · ')} tokens`);
     }
+    const watch = !running && c.usageWatch?.runId === run.id ? c.usageWatch : null;
+    if (typeof watch?.tokens === 'number') metrics.push(`Total: ${watch.tokens.toLocaleString()} tokens${watch.usual ? ` · usual for ${agent}: about ${watch.usual.toLocaleString()} a run, from your last ${watch.samples} runs` : ''}`);
+    for (const move of watch?.moves || []) metrics.push(`${move.label} allowance: ${Math.round(move.from)}% → ${Math.round(move.to)}% while this ran · account-wide, including other clients`);
     const usage = run.usage?.total || run.usage, output = usage?.outputTokens ?? usage?.output_tokens;
     const input = usage?.inputTokens ?? (typeof usage?.input_tokens === 'number' ? usage.input_tokens + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0) : undefined);
     const total = measured?.sessionTotal;
@@ -145,8 +148,8 @@
     }
     const native = run.contextUsage || (typeof usage?.used === 'number' ? { used: usage.used, capacity: usage.size } : null);
     if (typeof native?.used === 'number') metrics.push(`Native context${native.estimated ? ' (provider estimate)' : ''}: ${native.used.toLocaleString()}${typeof native.capacity === 'number' ? ' / ' + native.capacity.toLocaleString() : ''} context tokens${native.observedAt ? ' · observed ' + date(native.observedAt) : ''}`);
-    else if (native || run.context) metrics.push(`Native context usage: not reported${typeof native?.capacity === 'number' ? ` · capacity ${native.capacity.toLocaleString()} tokens` : ''}`);
-    if (typeof native?.lastRequestInput === 'number') metrics.push(`Last model request: ${native.lastRequestInput.toLocaleString()} input tokens · full context usage unavailable`);
+    else if (typeof native?.lastRequestInput !== 'number' && (native || run.context)) metrics.push(`Context reading unavailable${typeof native?.capacity === 'number' ? ` · capacity ${native.capacity.toLocaleString()} tokens` : ''}`);
+    if (typeof native?.lastRequestInput === 'number') metrics.push(`Last request input: ${native.lastRequestInput.toLocaleString()} tokens (provider reported${run.provider === 'codex' ? '; lower bound for context' : ''})`);
     if (native?.windowKind === 'compaction-policy-or-model') metrics.push('The reported window may be a compaction-policy window');
     if (run.compactions > 0) metrics.push(`Native compactions: ${run.compactions} observed${run.compactionEvents?.length ? ' · last observed ' + date(run.compactionEvents.at(-1).observedAt) : ''}`);
     const handed = run.context;
@@ -155,7 +158,7 @@
       if (handed.sessionReason === 'cross-agent-handoff') metrics.push('Cross-agent handoff');
       if (handed.rollover) metrics.push(`Context refreshed by Codeshi · ${handed.rollover.reason === 'manual' ? 'requested manually' : handed.rollover.reason === 'legacy-session' ? 'older session refreshed automatically' : `threshold ${handed.rollover.thresholdTokens.toLocaleString()} tokens`} · full chat history preserved`);
       if (handed.restoredAfterCompaction) metrics.push('Task context restored after native compaction · same native session');
-      if (typeof handed.size?.estimatedTokens === 'number') metrics.push(`Text envelope: ≈${handed.size.estimatedTokens.toLocaleString()} tokens (byte estimate)`);
+      if (typeof handed.size?.estimatedTokens === 'number') metrics.push(`Codeshi message: ≈${handed.size.estimatedTokens.toLocaleString()} tokens (byte estimate; excludes native history, tools and system instructions)`);
       if (Number.isSafeInteger(handed.includedMessages)) metrics.push(`${handed.includedMessages} history messages included · ${handed.omittedMessages || 0} omitted`);
       if (handed.shortenedMessages) metrics.push(`${handed.shortenedMessages} history excerpts`);
       if (handed.compactedActivityMessages) metrics.push(`${handed.compactedActivityMessages} tool logs excerpted by Codeshi`);
@@ -362,7 +365,7 @@
   }
   $('close-diff').addEventListener('click', () => diffDialog.close());
 
-  // Plan usage for both agents: status bar meters, plus a composer chip for the selected agent and model.
+  // Plan usage: a five-hour headline where reported, plus other applicable limits for the selected model.
   const usage = {}, usageLoading = {}, usageAttempted = {}, usageErrors = {}, usageRequests = {};
   let usageProvider = null, usageAnchor = null;
   const usagePopover = $('usage-dialog');
@@ -370,9 +373,8 @@
   const remaining = row => Math.max(0, Math.min(100, Math.round(100 - row.usedPercent)));
   const usageLevel = percent => percent <= 10 ? 'critical' : percent <= 25 ? 'low' : 'ok';
   // Limits in plain words. A provider names a limit by its period, and by what it is for when it covers only some
-  // models: "5-hour", "Weekly · Opus", "Weekly · Gemini Argon". The composer chip keeps what it is for, or the period.
+  // models: "5-hour", "Weekly · Opus", "Weekly · Gemini Argon". Keep the period visible in the composer too.
   const limitParts = label => { const [period, ...scope] = String(label || '').split(' · '); return { period, scope: scope.join(' · ') }; };
-  const shortLabel = label => { const { period, scope } = limitParts(label); return scope || period; };
   function limitName(label) {
     const { period, scope } = limitParts(label), name = /^(?:\d+-hour|Weekly|Daily|Current)$/.test(period) ? `${period} limit` : period;
     return scope ? `${name} for ${scope}` : name;
@@ -388,29 +390,44 @@
     if (provider === 'gemini' && (!model || model === 'default')) model = String(result.defaultModel || '').toLowerCase();
     return (result.windows || []).filter(row => Number.isFinite(row.usedPercent) && !row.disabled && (Array.isArray(row.scopes) ? row.scopes.some(scope => model.includes(scope)) : !row.scope || (model && model.includes(row.scope))));
   }
+  function usageSummary(provider) {
+    const rows = usageWindows(provider), tightest = windows => windows.reduce((low, row) => !low || row.usedPercent > low.usedPercent ? row : low, null);
+    const primary = tightest(rows.filter(row => limitParts(row.label).period === '5-hour')) || tightest(rows);
+    const secondary = tightest(rows.filter(row => row !== primary));
+    return { rows, primary, secondary, warning: secondary && remaining(secondary) <= 25 ? secondary : null };
+  }
   function renderUsage() {
     const state = api.getState();
     // The agent that's really working, which can differ from the one selected for the next message (#98).
     const active = state.conversation?.status === 'running' ? state.conversation.activeRun : null, workingOn = active ? active.connection === 'local' ? 'local' : active.provider : null;
     if ($('ollama-working')) $('ollama-working').hidden = workingOn !== 'local';
     for (const provider of ['codex', 'claude', 'gemini']) {
-      const meter = $(`${provider}-usage`), rows = usageWindows(provider);
+      const meter = $(`${provider}-usage`), { rows, primary, secondary } = usageSummary(provider);
       if ($(`${provider}-working`)) $(`${provider}-working`).hidden = workingOn !== provider;
       meter.closest('.provider-status')?.classList.toggle('selected', state.provider === provider);
-      const tightest = rows.reduce((low, row) => !low || remaining(row) < remaining(low) ? row : low, null);
-      meter.hidden = !tightest; meter.replaceChildren();
-      if (tightest) {
-        // The tightest limit: what is left, as a bar, and which limit it is and when it resets.
-        const bar = el('i', undefined, 'usage-bar'); bar.style.setProperty('--left', `${remaining(tightest)}%`);
-        const reset = resetLabel(tightest.resetsAt);
-        meter.dataset.level = usageLevel(remaining(tightest)); meter.append(el('span', `${remaining(tightest)}% left`, 'usage-value'), bar, el('span', `${limitName(tightest.label)}${reset ? ` · ${reset}` : ''}`, 'usage-caption'));
+      meter.hidden = !primary; meter.replaceChildren();
+      if (primary) {
+        const bar = el('i', undefined, 'usage-bar'); bar.style.setProperty('--left', `${remaining(primary)}%`);
+        const reset = resetLabel(primary.resetsAt);
+        meter.dataset.level = usageLevel(remaining(primary)); meter.append(el('span', `${remaining(primary)}% left`, 'usage-value'), bar, el('span', `${limitName(primary.label)}${reset ? ` · ${reset}` : ''}`, 'usage-caption'));
+        if (secondary) {
+          const other = el('span', `${secondary.label} · ${remaining(secondary)}% left${resetLabel(secondary.resetsAt) ? ` · ${resetLabel(secondary.resetsAt)}` : ''}`, 'usage-secondary');
+          other.dataset.level = usageLevel(remaining(secondary)); meter.append(other);
+        }
       }
       const row = $(`${provider}-status`), connected = api.getState().accounts?.[provider]?.authenticated === true;
       row.title = rows.length ? `${name(provider)}: ${rows.map(describeWindow).join('. ')}. Select for all its limits.` : connected ? `${name(provider)}: select for its plan usage` : `Set up ${name(provider)} in Settings`;
     }
-    const chip = $('usage-chip'), rows = usageWindows(state.provider), tightest = rows.reduce((low, row) => !low || remaining(row) < remaining(low) ? row : low, null);
-    chip.hidden = !tightest;
-    if (tightest) { chip.className = 'usage-chip ' + usageLevel(remaining(tightest)); chip.replaceChildren(el('span', `${shortLabel(tightest.label)} · `, 'usage-chip-label'), el('span', `${remaining(tightest)}% left`)); chip.title = `${name(state.provider)} plan usage. ${rows.map(describeWindow).join('. ')}.`; }
+    // In Flow the agent isn't known until Send, and each agent's limits are on the cards beside the conversation.
+    const chip = $('usage-chip'), { rows, primary, warning } = usageSummary(state.provider);
+    chip.hidden = !primary || window.relayFlow?.isOn?.() === true;
+    if (primary) {
+      const { period, scope } = limitParts(primary.label);
+      chip.className = 'usage-chip ' + usageLevel(Math.min(remaining(primary), warning ? remaining(warning) : 100));
+      chip.replaceChildren(el('span', `${period} · `, 'usage-chip-period'), ...(scope ? [el('span', `${scope} · `, 'usage-chip-label')] : []), el('span', `${remaining(primary)}% left`));
+      if (warning) chip.append(el('span', ` · ${warning.label} · ${remaining(warning)}% left`, 'usage-chip-warning'));
+      chip.title = `${name(state.provider)} plan usage. ${rows.map(describeWindow).join('. ')}.`;
+    }
   }
   async function loadUsage(provider, refresh = false) {
     if (usageLoading[provider] || api.getState().accounts?.[provider]?.authenticated !== true) return;
@@ -487,7 +504,7 @@
     const rows = (result.windows || []).filter(row => Number.isFinite(row.usedPercent) && !row.disabled && !row.scope && !row.scopes);
     return rows.length ? Math.max(...rows.map(row => row.usedPercent)) : null;
   };
-  window.relayUsage = { open: openUsage, usedPercent, snapshot: provider => api.getState().accounts?.[provider]?.authenticated === true ? usage[provider] || null : null, load: provider => loadUsage(provider, true) };
+  window.relayUsage = { open: openUsage, usedPercent, summary: usageSummary, snapshot: provider => api.getState().accounts?.[provider]?.authenticated === true ? usage[provider] || null : null, load: provider => loadUsage(provider, true) };
   for (const trigger of [$('codex-status'), $('claude-status'), $('gemini-status'), $('usage-chip')]) { trigger.setAttribute('aria-controls','usage-dialog'); trigger.setAttribute('aria-haspopup','dialog'); trigger.setAttribute('aria-expanded','false'); }
   usagePopover.addEventListener('toggle',() => { if (!usageIsOpen()) usageAnchor?.setAttribute('aria-expanded','false'); });
   $('close-usage').addEventListener('click',()=>closeUsage(true));
@@ -495,6 +512,7 @@
   document.addEventListener('scroll',positionUsage,true); window.addEventListener('resize',positionUsage);
   $('refresh-usage').addEventListener('click',()=>{ if (usageProvider) loadUsage(usageProvider,true); });
   setInterval(renderUsageDetails,60000);
+  window.addEventListener('relay-flow', renderUsage);
   $('refresh-git').addEventListener('click', loadGit); $('git-repository').addEventListener('change', () => { api.selectFolder?.($('git-repository').value); renderGit(); });
   $('git-changes-tab').addEventListener('click', () => { gitView = 'changes'; renderGit(); }); $('git-commits-tab').addEventListener('click', () => { gitView = 'commits'; renderGit(); });
 

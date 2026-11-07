@@ -7,7 +7,7 @@ import { scriptCLIs } from './platform.mjs';
 import '../public/routing.js';
 import { Broker } from '../src/broker.mjs';
 
-const { classify, modelTier, route, escalate } = globalThis.relayRouting;
+const { classify, modelTier, route, escalate, triage } = globalThis.relayRouting;
 const levels = (...values) => values.map(reasoningEffort => ({ reasoningEffort }));
 const models = {
   codex: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high', 'xhigh') }, { id: 'gpt-codex-mini', displayName: 'GPT Codex Mini', supportedReasoningEfforts: levels('low', 'medium') }],
@@ -27,6 +27,31 @@ test('requests are classified by simple local rules: small edits and quick quest
   assert.deepEqual(['GPT Codex Mini', 'Haiku', 'Gemini Flash', 'Sonnet', 'GPT Codex', 'Opus', 'Gemini Pro'].map(displayName => modelTier({ displayName })), ['light', 'light', 'light', 'standard', 'standard', 'deep', 'deep']);
 });
 
+test('Send settles only a bare go-ahead on its own: anything that needs judging goes to an agent', () => {
+  const deep = { tier: 'deep', effort: 'high' }, standard = { tier: 'standard', effort: 'medium' };
+  for (const text of ['yes', 'Yes, do it', 'okay do it then', 'Do it', 'continue', 'go ahead please', 'OK, proceed.', 'fix it']) assert.deepEqual(triage(text, { previous: deep }), { tier: 'deep', effort: 'high', reason: 'Continuing the same task', source: 'local' }, text);
+  assert.equal(triage('continue', { previous: standard }).tier, 'standard');
+  // Words that merely sound like a go-ahead, and a go-ahead with more in it.
+  for (const text of ['ok', 'thanks', 'great', 'yes but also add a test', 'continue with the migration', 'now do #92, #93, #94', 'okay then go ahead with firebase approach now', 'fix the login bug', 'why?', '']) assert.equal(triage(text, { previous: deep }), null, text);
+  assert.equal(triage('do it', {}), null, 'There is nothing to carry on.');
+  assert.equal(triage('do it', { previous: { tier: 'light', effort: 'low' } }), null, 'What it approves may be bigger than the light work before it.');
+  assert.equal(triage('do it', { previous: deep, attachments: 1 }), null, 'An attachment may change the task.');
+});
+
+test('a model named for neither end is placed by its catalog description, and this reaches the light choice', () => {
+  const catalog = [
+    { id: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol', description: 'Latest workhorse model for coding and everyday work.', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high') },
+    { id: 'gpt-6-astra', displayName: 'GPT-6-Astra', description: 'Frontier intelligence for the most demanding work.', supportedReasoningEfforts: levels('low', 'medium', 'high') },
+    { id: 'gpt-6-luna', displayName: 'GPT-6-Luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: levels('low', 'medium') },
+    { id: 'gpt-5.6-luna', displayName: 'GPT-5.6-Luna', description: 'Older fast and efficient model.', supportedReasoningEfforts: levels('low') },
+  ];
+  assert.deepEqual(catalog.map(modelTier), ['standard', 'standard', 'light', 'light']);
+  assert.equal(modelTier({ id: 'sonnet', displayName: 'Sonnet 5.5', description: 'Most efficient for simpler tasks' }), 'standard', 'Efficient is not the same as small.');
+  assert.equal(modelTier({ id: 'opus', displayName: 'Opus 5.5', description: 'Fast for its size' }), 'deep', 'A name that says what it is wins.');
+  const pick = tier => route({ text: 'x', assessment: { tier, effort: 'low', reason: 'rated' }, mode: 'balanced', candidates: [{ provider: 'codex', eligible: true, billingSource: 'subscription', models: catalog, usage: { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] } }] }).model;
+  assert.equal(pick('light'), 'gpt-6-luna'); assert.equal(pick('standard'), 'gpt-6.1-sol'); assert.equal(pick('deep'), 'gpt-6.1-sol', 'Stronger models stay as they were.');
+});
+
 test('each mode matches the model and effort to the task, within the levels each model supports', () => {
   const pick = (text, mode, current = 'claude') => { const { provider, model, effort } = route({ text, mode, candidates: agents(), current }); return [provider, model, effort]; };
   assert.deepEqual(pick('Fix the typo in the README', 'balanced'), ['claude', 'haiku', null], 'Haiku reports no effort levels, so the agent decides.');
@@ -39,6 +64,26 @@ test('each mode matches the model and effort to the task, within the levels each
   const routed = route({ text: 'Refactor the payment module', mode: 'balanced', candidates: agents(), current: 'claude' });
   assert.equal(routed.reason, 'A complex task (refactoring)'); assert.equal(routed.modelName, 'Opus');
   assert.deepEqual(route({ text: 'Add a test', mode: 'balanced', candidates: agents({ claude: { models: [] } }), current: 'claude' }).model, null, 'Without a model list, the agent’s default.');
+});
+
+test('short follow-ups inherit task difficulty for the estimate, and assessed meaning overrides keyword guesses', () => {
+  assert.equal(classify('Do it', { context: 'Refactor the worker pool to avoid deadlocks.' }).tier, 'deep');
+  assert.equal(classify('Fix a typo', { context: 'Refactor the worker pool to avoid deadlocks.' }).tier, 'light', 'A separate small edit stays small.');
+  const choice = route({ text: 'Rename the variable', assessment: { tier: 'deep', effort: 'high', reason: 'The name is part of a public serialization contract.' }, candidates: agents(), current: 'claude' });
+  assert.equal(choice.model, 'opus'); assert.equal(choice.effort, 'high'); assert.match(choice.reason, /serialization contract/);
+});
+
+test('reset timing ranks usable allowance without masking weekly exhaustion or assuming a reset happened', () => {
+  const now = Date.now(), reading = (hours, weeklyUsed = 30, shortHours = hours) => ({ available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(now + shortHours * 3600000).toISOString() }, { label: 'Weekly', usedPercent: weeklyUsed, resetsAt: new Date(now + hours * 3600000).toISOString() }] });
+  const candidates = agents({ codex: { usage: reading(150) }, claude: { usage: reading(0.1) } });
+  const chosen = route({ text: 'Add a button', candidates, current: 'codex', now });
+  assert.equal(chosen.provider, 'claude'); assert.match(chosen.reason, /resets sooner/);
+  candidates[1].usage = reading(150, 30, 0.1);
+  assert.equal(route({ text: 'Add a button', candidates, current: 'codex', now }).provider, 'codex', 'An early five-hour reset cannot outweigh the tighter weekly window.');
+  candidates[1].usage = reading(0.1, 100);
+  assert.equal(route({ text: 'Add a button', candidates, current: 'codex', now }).provider, 'codex', 'Even an imminent reset does not make exhausted usage available.');
+  candidates[1].usage = reading(-0.1, 30);
+  assert.equal(route({ text: 'Add a button', candidates, current: 'codex', now }).provider, 'codex', 'A passed reset requires a fresh observation.');
 });
 
 test('Auto keeps the agent that did the last run, moves away from one near its limit, and only uses API billing when allowed', () => {

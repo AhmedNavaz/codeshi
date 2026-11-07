@@ -37,12 +37,19 @@ export function localCodexConfig(local) {
     model_context_window: Math.min(local.contextWindow || 32768, 65536) };
 }
 const toml = value => typeof value === 'object' && value !== null ? '{' + Object.entries(value).map(([key, entry]) => JSON.stringify(key) + '=' + toml(entry)).join(',') + '}' : JSON.stringify(value);
+// A routing assessment reads one short brief and returns JSON. On a real account, plugins, skills and the coding-agent
+// instructions made that 20,000 input tokens and five seconds of thread setup, so its one process starts without them.
+// Codex ignores a name it doesn't know; a version that refused one fails the assessment, and Send uses the local estimate.
+const ASSESSOR_INSTRUCTIONS = 'You rate coding requests for a router. Reply with only one JSON object. Never perform the request.';
+const ASSESSOR_DISABLED_FEATURES = ['apps', 'browser_use', 'browser_use_external', 'code_mode_host', 'computer_use', 'goals', 'guardian_approval', 'image_generation', 'in_app_browser', 'multi_agent', 'plugins', 'remote_plugin', 'shell_snapshot', 'shell_tool', 'skill_mcp_dependency_install', 'skill_search', 'sleep_tool', 'tool_suggest', 'unified_exec', 'view_image', 'worktrees', 'workspace_dependencies'];
+const ASSESSOR_CONFIG = ['skills.include_instructions=false', 'include_permissions_instructions=false', 'include_apps_instructions=false', 'include_collaboration_mode_instructions=false', 'include_environment_context=false', 'include_apply_patch_tool=false', 'project_doc_max_bytes=0'];
 export class CodexClient extends EventEmitter {
-  constructor({ bin, cwd = os.homedir(), spawnImpl = spawn, local, reviewSnapshot } = {}) {
+  constructor({ bin, cwd = os.homedir(), spawnImpl = spawn, local, reviewSnapshot, routingAssessment } = {}) {
     super();
     this.pending = new Map(); this.counter = 0; this.closed = false;
     const args = ['-c', 'features.hooks=false', '-c', 'notify=[]'];
     if (reviewSnapshot) args.push('-c', 'mcp_servers={}', '-c', 'web_search="disabled"');
+    if (routingAssessment) for (const setting of [...ASSESSOR_DISABLED_FEATURES.map(feature => `features.${feature}=false`), ...ASSESSOR_CONFIG]) args.push('-c', setting);
     if (local) for (const [key, value] of Object.entries(localCodexConfig(local))) args.push('-c', key + '=' + toml(value));
     const env = withBinaryPath(bin, { ...process.env });
     if (local) for (const key of Object.keys(env)) if (/^(?:OPENAI|CODEX_API|OLLAMA|ANTHROPIC)_/.test(key)) delete env[key];
@@ -89,9 +96,10 @@ export class CodexClient extends EventEmitter {
 }
 
 export async function runCodex(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, clientFactory = options => new CodexClient(options), verifyLocal = verifyLocalModel }) {
+  if (config.routingAssessment) { if (config.mode !== 'read' || config.sessionId) throw new Error('Routing assessments require read-only access and a fresh session.'); config = { ...config, reviewSnapshot: true }; }
   if (config.reviewSnapshot && (config.mode !== 'read' || config.sessionId)) throw new Error('Snapshot reviews require read-only access and a fresh native session.');
   if (config.local) config.local = { ...config.local, ...await verifyLocal(config.local.model, config.local.digest, { endpoint: config.local.endpoint }) };
-  const client = clientFactory({ bin: config.bin, cwd: config.workspace, ...(config.local ? { local: config.local } : {}), ...(config.reviewSnapshot ? { reviewSnapshot: true } : {}) });
+  const client = clientFactory({ bin: config.bin, cwd: config.workspace, ...(config.local ? { local: config.local } : {}), ...(config.reviewSnapshot ? { reviewSnapshot: true } : {}), ...(config.routingAssessment ? { routingAssessment: true } : {}) });
   let threadId, turnId, resolveEnd, rejectEnd, compactionId = null, compactionNumber = 0;
   const ended = new Promise((resolve, reject) => { resolveEnd = resolve; rejectEnd = reject; });
   // Initialization failures may happen before awaiting the terminal promise.
@@ -130,7 +138,7 @@ export async function runCodex(config, { event, approval, question = null, metad
         if (item?.type === 'reasoning') event({ type: 'relay.progress', phase: 'reasoning' });
         if (item?.type === 'commandExecution' || item?.type === 'fileChange') event({ type: 'relay.progress', phase: message.method === 'item/started' ? 'tool' : 'working' });
         if (item?.type === 'agentMessage') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'agent_message' } });
-        if (item?.type === 'commandExecution') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'command_execution', aggregated_output: item.aggregatedOutput || '' } });
+        if (item?.type === 'commandExecution') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'command_execution', aggregated_output: item.aggregatedOutput || '', exit_code: item.exitCode ?? item.exit_code } });
         if (item?.type === 'fileChange') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'file_change' } });
       }
       if (message.method === 'error') event(p.willRetry ? { type: 'error', message: p.error?.message || 'Retrying connection' } : { type: 'turn.failed', error: p.error });
@@ -159,7 +167,7 @@ export async function runCodex(config, { event, approval, question = null, metad
     // only asks for that after a command has failed, and it can report an outage instead. Any request would be approved
     // and then run outside the sandbox altogether, so this allows less than asking does.
     const network = config.mode !== 'read' && config.approvalPolicy === 'auto';
-    const options = { cwd: config.workspace, approvalPolicy: config.mode === 'read' ? 'never' : 'on-request', approvalsReviewer: 'user', sandbox: config.mode === 'read' ? 'read-only' : 'workspace-write', config: { 'sandbox_workspace_write.writable_roots': config.mode === 'read' ? [] : roots, 'sandbox_workspace_write.network_access': network, ...(selectedEffort ? { model_reasoning_effort: selectedEffort } : {}), ...(config.local ? localCodexConfig(config.local) : {}), ...(config.reviewSnapshot ? { mcp_servers: {}, web_search: 'disabled' } : {}) }, ...(selectedModel ? { model: selectedModel } : {}), ...(config.local ? { modelProvider: 'throughline_ollama' } : {}), ...(config.local || config.reviewSnapshot ? { ephemeral: true } : {}) };
+    const options = { cwd: config.workspace, approvalPolicy: config.mode === 'read' ? 'never' : 'on-request', approvalsReviewer: 'user', sandbox: config.mode === 'read' ? 'read-only' : 'workspace-write', config: { 'sandbox_workspace_write.writable_roots': config.mode === 'read' ? [] : roots, 'sandbox_workspace_write.network_access': network, ...(selectedEffort ? { model_reasoning_effort: selectedEffort } : {}), ...(config.local ? localCodexConfig(config.local) : {}), ...(config.reviewSnapshot ? { mcp_servers: {}, web_search: 'disabled' } : {}) }, ...(selectedModel ? { model: selectedModel } : {}), ...(config.local ? { modelProvider: 'throughline_ollama' } : {}), ...(config.local || config.reviewSnapshot ? { ephemeral: true } : {}), ...(config.routingAssessment ? { baseInstructions: ASSESSOR_INSTRUCTIONS, developerInstructions: '' } : {}) };
     if (config.local && (!selectedModel || config.sessionId)) throw new Error('Local runs require an explicit model and a fresh session.');
     // Codex keeps its plan for the run with its plan tool, shown as a to-do list. A Codex that doesn't know the
     // setting refuses it, so the thread then starts without it.
@@ -173,7 +181,7 @@ export async function runCodex(config, { event, approval, question = null, metad
     event({ type: 'thread.started', thread_id: threadId });
     metadata({ effectiveModel: started.model || started.thread.model || selectedModel || 'unknown', transport: 'app-server', effectiveEffort: started.reasoningEffort || selectedEffort || null, ...(config.local ? { connection: 'local', account: { authenticated: true, authMode: 'local', billingSource: 'local' } } : {}) });
     const turn = await client.request('turn/start', { threadId, ...(selectedEffort ? { effort: selectedEffort } : {}), input: [{ type: 'text', text: config.prompt }, ...(config.images || []).flatMap(image => [{ type: 'text', text: 'Attached image: ' + image.name }, { type: 'localImage', path: image.path }])], cwd: config.workspace,
-      approvalPolicy: options.approvalPolicy, approvalsReviewer: 'user', sandboxPolicy: config.mode === 'read' ? { type: 'readOnly', networkAccess: false } : { type: 'workspaceWrite', writableRoots: roots, networkAccess: network }, ...(selectedModel ? { model: selectedModel } : {}) });
+      approvalPolicy: options.approvalPolicy, approvalsReviewer: 'user', sandboxPolicy: config.mode === 'read' ? { type: 'readOnly', networkAccess: false } : { type: 'workspaceWrite', writableRoots: roots, networkAccess: network }, ...(selectedModel ? { model: selectedModel } : {}), ...(config.routingAssessment ? { outputSchema: config.outputSchema } : {}) });
     turnId = turn.turn.id;
     // A note the person adds while Codex works joins this same turn; it fails once the turn has finished.
     if (!config.reviewSnapshot) steerable(async text => { await client.request('turn/steer', { threadId, expectedTurnId: turnId, input: [{ type: 'text', text }] }, 10000); });
@@ -188,6 +196,7 @@ export async function runCodex(config, { event, approval, question = null, metad
 export const claudeWaits = { settleMs: 5000, backgroundMs: 125 * 60_000 };
 
 export async function runClaude(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, queryImpl, waits = claudeWaits } = {}) {
+  if (config.routingAssessment) { if (config.mode !== 'read' || config.sessionId) throw new Error('Routing assessments require read-only access and a fresh session.'); config = { ...config, reviewSnapshot: true }; question = null; }
   const query = queryImpl || (await import('@anthropic-ai/claude-agent-sdk')).query;
   const controller = new AbortController();
   const timer = setInterval(() => { if (cancelled()) controller.abort(); }, 100);
@@ -249,7 +258,8 @@ export async function runClaude(config, { event, approval, question = null, meta
       // TodoWrite only keeps Claude's own to-do list, shown as the run's plan; it reads and changes nothing. With
       // AskUserQuestion Claude can ask you to choose between options; asking changes nothing either, so read-only runs
       // keep it, and only a background review, which nobody answers, goes without.
-      tools: [...(config.mode === 'read' ? ['Read', 'Glob', 'Grep', 'TodoWrite'] : ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'TodoWrite']), ...(question && !config.reviewSnapshot ? ['AskUserQuestion'] : [])],
+      tools: config.routingAssessment ? [] : [...(config.mode === 'read' ? ['Read', 'Glob', 'Grep', 'TodoWrite'] : ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'TodoWrite']), ...(question && !config.reviewSnapshot ? ['AskUserQuestion'] : [])],
+      ...(config.routingAssessment ? { maxTurns: 1, persistSession: false } : {}),
       includePartialMessages: true, ...(config.effort ? { effort: config.effort } : {}), abortController: controller, ...(config.sessionId ? { resume: config.sessionId } : {}), model: config.model || 'default',
       canUseTool: async (toolName, input, options) => {
         const answer = await decide(toolName, input, options);
@@ -258,6 +268,7 @@ export async function runClaude(config, { event, approval, question = null, meta
       },
     } });
     async function decide(toolName, input, options) {
+      if (config.routingAssessment) return { behavior: 'deny', message: 'Routing assessment does not use tools.' };
       if (toolName === 'TodoWrite') return { behavior: 'allow', updatedInput: input };
       // The questions wait in Codeshi like an approval; the answers go back with them, and skipping tells Claude to decide.
       if (toolName === 'AskUserQuestion') {
@@ -342,7 +353,7 @@ export async function accountStatus(provider, { bin = resolveBinary(provider), w
   if (!bin) return { ...base, ...(provider === 'gemini' ? { message: geminiSetup } : {}) };
   if (provider === 'gemini' && isAntigravityACP(bin)) {
     const { models, ...status } = await sharedGoogleMetadata({ bin, googleRoot, refresh });
-    return { ...base, ...status, capabilities: { ...base.capabilities, readOnly: 'unavailable', hooks: 'Antigravity manages native hooks and workspace trust. Codeshi does not grant workspace-trust questions automatically.' }, message: 'Google Antigravity connection. Sign in with Google to use the models and allowance available to your account. Coding uses native approvals; read-only work uses Codex or Claude.' };
+    return { ...base, ...status, capabilities: { ...base.capabilities, ...status.capabilities, readOnly: 'unavailable', hooks: 'Antigravity manages native hooks and workspace trust. Codeshi does not grant workspace-trust questions automatically.' }, message: 'Google Antigravity connection. Sign in with Google to use the models and allowance available to your account. Coding uses native approvals; read-only work uses Codex or Claude.' };
   }
   const version = await probeCli(bin, ['--version'], 4000);
   // An installed CLI that answers too slowly is unverified, not missing.

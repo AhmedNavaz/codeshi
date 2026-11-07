@@ -20,7 +20,7 @@ import fs from 'node:fs';import readline from 'node:readline';
 if(process.argv.includes('--version')){console.log('budget-fixture 1');process.exit(0);}
 const send=value=>console.log(JSON.stringify(value)),threadId='t';
 const finish=()=>{send({method:'item/completed',params:{threadId,item:{id:'a',type:'agentMessage',text:'Done'}}});send({method:'turn/completed',params:{threadId,turn:{status:'completed'}}});};
-const fail=id=>send({method:'item/completed',params:{threadId,item:{id,type:'commandExecution',command:'npm test',aggregatedOutput:'Error: the same failure at line 12\\nfailed'}}});
+const fail=id=>send({method:'item/completed',params:{threadId,item:{id,type:'commandExecution',command:'npm test',exitCode:1,aggregatedOutput:'Error: the same failure at line 12\\nfailed'}}});
 readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);
 if(m.method==='initialize')send({id:m.id,result:{}});
 if(m.method==='model/list')send({id:m.id,result:{data:[]}});
@@ -41,7 +41,7 @@ let prompt='';for await(const part of process.stdin)prompt+=part;
 fs.appendFileSync(${JSON.stringify(prompts)},JSON.stringify(prompt)+'\\n');
 const emit=value=>console.log(JSON.stringify(value));
 emit({type:'assistant',message:{id:'step',content:[{type:'tool_use',id:'failure',name:'Bash',input:{command:'npm test'}}]}});
-emit({type:'user',message:{content:[{type:'tool_result',tool_use_id:'failure',content:'Error: the same failure at line 12\\nfailed'}]}});
+emit({type:'user',message:{content:[{type:'tool_result',tool_use_id:'failure',is_error:true,content:'Error: the same failure at line 12\\nfailed'}]}});
 emit({type:'assistant',message:{id:'answer',content:[{type:'text',text:'Done'}]}});
 emit({type:'result',subtype:'success',result:'Done'});
 `, { mode: 0o700 });

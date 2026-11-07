@@ -63,13 +63,19 @@ export class HandoffMonitor {
     const mode = run?.routing?.mode;
     return mode && FLOW_HANDOFF[mode] ? { threshold: FLOW_HANDOFF[mode], automatic: true, mode } : this.preferences();
   }
-  async modelRows(provider) {
+  async modelRows(provider, limitMs = 5000) {
     let timer;
     try {
-      const result = await Promise.race([this.models(provider, this.broker.usageOptions(provider)), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Model lookup timed out.')), 5000); timer.unref?.(); })]);
+      const result = await Promise.race([this.models(provider, this.broker.usageOptions(provider)), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Model lookup timed out.')), limitMs); timer.unref?.(); })]);
       const rows = result?.models || result?.data || result || [];
       return Array.isArray(rows) ? rows : [];
     } finally { clearTimeout(timer); }
+  }
+  supportsWorkspace(provider, account, run) {
+    if (provider !== 'gemini') return true;
+    return account.source === 'antigravity-acp' || account.authMode === 'google-oauth'
+      ? run.mode !== 'read' && (this.broker.workspaces.length <= 1 || account.capabilities?.additionalDirectories === true)
+      : this.broker.workspaces.length <= 6;
   }
   async routedDestination(c, run, exclude) {
     const candidates = [], { mode, threshold } = this.policy(run);
@@ -83,7 +89,7 @@ export class HandoffMonitor {
         account = await this.account(provider, { bin: options.bin, workspace: this.broker.workspace, googleRoot: this.broker.googleRoot });
         // Automatic moves need subscription billing and a runtime that can see this workspace's folders.
         if (!account?.installed || account.authenticated === false || account.billingSource !== 'subscription' ||
-          provider === 'gemini' && account.source === 'antigravity-acp' && this.broker.workspaces.length > 1) continue;
+          !this.supportsWorkspace(provider, account, run)) continue;
         usage = await this.usage(provider, options);
         this.observe(c, provider, usage);
         models = await this.modelRows(provider);
@@ -93,7 +99,7 @@ export class HandoffMonitor {
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, ...(models.length ? { allowedModels } : {}) });
     }
-    const choice = globalThis.relayRouting.route({ text: request?.text || '', attachments: request?.attachments?.length || 0, mode, candidates, quotaThreshold: threshold });
+    const choice = globalThis.relayRouting.route({ text: request?.text || '', attachments: request?.attachments?.length || 0, assessment: run.routing?.assessment || null, mode, candidates, quotaThreshold: threshold });
     if (choice.error || choice.quota.state !== 'ok') return null;
     const { quota, ...routing } = choice;
     return { provider: choice.provider, model: choice.model, effort: choice.effort, routing, mode: run.mode, approvalPolicy: run.approvalPolicy,
@@ -112,7 +118,7 @@ export class HandoffMonitor {
       const assessment = assessQuota(usage, model, { threshold });
       if (assessment.state === 'exhausted' || assessment.state === 'near') continue;
       let account = null; try { account = await this.account(provider, { bin: options.bin, workspace: this.broker.workspace, googleRoot: this.broker.googleRoot }); } catch {}
-      if (!account?.installed || account.authenticated === false) continue;
+      if (!account?.installed || account.authenticated === false || !this.supportsWorkspace(provider, account, run)) continue;
       const candidate = { provider, model, mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: assessment.usedPercent, quota: assessment.state, quotaEvidence: assessment };
       // Prefer subscription allowance, then the agent with the most room left.
       const rank = value => (value.billingSource === 'subscription' ? 0 : 2000) + (value.quota === 'ok' ? value.usedPercent : 1000);

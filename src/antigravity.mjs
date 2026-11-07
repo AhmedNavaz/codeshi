@@ -7,12 +7,18 @@ import { googleRelay, relayEnvironment } from './google-relay.mjs';
 
 export const isAntigravityACP = bin => /^(?:agy_acp_server(?:\.par|\.exe)?|antigravity-acp)$/i.test(path.basename(bin || ''));
 export const antigravityReadOnly = 'Antigravity does not expose a verified read-only mode through this connection. Choose Edit with approvals, or use Codex or Claude for read-only work.';
-// The runtime's session takes one working directory, so a workspace with several folders runs it as a task in one of them.
-export const antigravityOneFolder = 'This Antigravity connection works in one project folder at a time. Run the message as a task in one folder, or choose Codex or Claude for the whole workspace.';
+// Older runtimes without additionalDirectories can still work as a task in one folder.
+export const antigravityOneFolder = 'This Antigravity runtime does not support additional workspace folders. Reinstall the Google connection in Settings, run the message as a task in one folder, or choose Codex or Claude for the whole workspace.';
+export const antigravityCapabilities = initialized => ({ additionalDirectories: Boolean(initialized.agentCapabilities?.sessionCapabilities?.additionalDirectories) });
+export function antigravitySessionParams(initialized, { workspace, workspaces = [] }) {
+  const cwd = path.resolve(workspace);
+  const additionalDirectories = [...new Set(workspaces.map(folder => path.resolve(folder)))].filter(folder => folder !== cwd);
+  if (additionalDirectories.length && !antigravityCapabilities(initialized).additionalDirectories) throw Object.assign(new Error(antigravityOneFolder), { details: { folderChoice: true } });
+  return { cwd, mcpServers: [], ...(additionalDirectories.length ? { additionalDirectories } : {}) };
+}
 export const defaultGoogleRoot = () => path.join(os.homedir(), '.local/share/throughline/google');
 export function antigravityInvocation(config) {
   if (config.mode === 'read') throw new Error(antigravityReadOnly);
-  if ((config.workspaces || []).some(folder => path.resolve(folder) !== path.resolve(config.workspace))) throw new Error(antigravityOneFolder);
   const profile = path.join(config.googleRoot || defaultGoogleRoot(), 'profile');
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
   const env = { ...withBinaryPath(config.bin), GEMINI_HOME: profile, ANTIGRAVITY_HARNESS_PATH: path.join(path.dirname(config.bin), process.platform === 'win32' ? 'localharness_external.exe' : 'localharness_external') };
@@ -65,15 +71,16 @@ export async function googleMetadata(options, clientFactory = options => new Gem
   try {
     const initialized = await initializeAntigravity(client);
     verifyAntigravity(initialized);
+    const capabilities = antigravityCapabilities(initialized);
     try {
       const session = await client.request('session/new', { cwd, mcpServers: [] }, 15000);
       const model = session.configOptions?.find(option => option.id === 'model');
       const effort = session.configOptions?.find(option => ['thinking_level', 'thought_level'].includes(option.id));
       const models = leaves(model?.options).filter(row => typeof row.value === 'string').map(row => ({ id: row.value, model: row.value, displayName: row.name || row.value, description: row.description || '', isDefault: row.value === model.currentValue, supportedReasoningEfforts: leaves(effort?.options).map(row => ({ reasoningEffort: row.value, description: row.name || row.value })) }));
-      return { installed: true, available: true, version: initialized.agentInfo.version, ...antigravityAccount(session), models, source: 'antigravity-acp', manualSelection: false };
+      return { installed: true, available: true, version: initialized.agentInfo.version, ...antigravityAccount(session), models, capabilities, source: 'antigravity-acp', manualSelection: false };
     } catch (error) {
       if (!/authenticat|sign.?in|login/i.test(error.message)) throw googleConnectionError(error, log());
-      return { installed: true, available: true, version: initialized.agentInfo.version, authenticated: false, authMode: 'google-oauth', billingSource: 'unknown', models: [], source: 'antigravity-acp', manualSelection: false, message: 'Sign in with Google to see the models available to your Antigravity account.' };
+      return { installed: true, available: true, version: initialized.agentInfo.version, authenticated: false, authMode: 'google-oauth', billingSource: 'unknown', models: [], capabilities, source: 'antigravity-acp', manualSelection: false, message: 'Sign in with Google to see the models available to your Antigravity account.' };
     }
   } catch (error) { throw googleConnectionError(error, log()); }
   finally { client.close(); }
