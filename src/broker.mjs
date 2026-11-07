@@ -1050,6 +1050,7 @@ export class Broker extends EventEmitter {
       return;
     }
     if (event.type === 'relay.delta') { const id = `${run.id}:${event.id}`; const existing = c.messages.find(m => m.id === id); this.message(c, 'assistant', (existing?.text || '') + event.text, provider, id, 'streaming'); return; }
+    if (event.type === 'relay.notice') { this.message(c, 'activity', clip(event.text), provider); return; }
     if (provider === 'codex' || provider === 'gemini') {
       if (!run.review && !run.local && event.type === 'thread.started' && event.thread_id) this.record(c, { type: 'session', provider, id: event.thread_id, workspaceSignature: run.workspaceSignature || this.workspaceSignature, managedContextVersion: c.activeRun?.context?.sessionMode === 'fresh' ? managedContextVersion : c.sessions[provider]?.managedContextVersion });
       if (event.type === 'turn.completed') run.terminalSuccess = true;
@@ -1080,7 +1081,12 @@ export class Broker extends EventEmitter {
         }
       }
       if (item.type === 'file_change') this.message(c, 'activity', `File changes: ${JSON.stringify(fileChanges(item.changes))}`, provider, id);
-      if (['mcp_tool_call', 'web_search'].includes(item.type)) this.message(c, 'activity', clip(`${item.type}: ${item.tool || item.query || ''}\n${JSON.stringify(item.result || item.arguments || '')}`), provider, id);
+      if (['mcp_tool_call', 'web_search'].includes(item.type)) this.message(c, 'activity', clip(`${item.type}: ${item.tool || item.query || ''}\n${typeof item.result === 'string' && item.result ? item.result : JSON.stringify(item.result || item.arguments || '')}`), provider, id);
+      // Codex refuses a connector call in Read only without asking, in words that don't name the setting.
+      if (item.type === 'mcp_tool_call' && event.type === 'item.completed' && provider === 'codex' && run.mode === 'read' && !run.review && !run.blockExplained && /approval policy is never/i.test(item.error?.message || '')) {
+        run.blockExplained = true;
+        this.message(c, 'activity', 'Blocked by Read only: switch to Can edit files to let Codex use connectors and MCP tools.', provider);
+      }
       return;
     }
     if (event.type === 'rate_limit_event') {

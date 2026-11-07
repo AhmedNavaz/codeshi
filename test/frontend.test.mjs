@@ -581,6 +581,19 @@ test('a failed Approve or Deny is shown on the page, and a request that is no lo
   assert.equal(ui.$('notice-text').textContent,'Local server error.');assert.equal(cards().length,1);assert.equal(choice('Deny').disabled,false);assert.equal(ui.$('workbench-error').hidden,true);
 });
 
+test('a connector request says who it reaches and what it will do, and a parameter is never read as a command or a file (#111)',async()=>{
+  const ui=await browser({workbench:true}),conversation=ui.canonical.get('project-one');
+  conversation.status='running';conversation.activeRun={provider:'codex'};
+  conversation.pendingApprovals=[{id:'tool',runId:'run-one',provider:'codex',kind:'mcpServer/elicitation/request',connector:'GitHub',title:'create_issue',details:'repository_full_name: me/repo\ncommand: rm -rf /'},{id:'bare',runId:'run-one',provider:'codex',kind:'mcpServer/elicitation/request',connector:'Notes',title:'clear',details:''},{id:'access',runId:'run-one',provider:'codex',kind:'item/permissions/requestApproval',title:'Network access',details:'Reason: Needs to fetch'}];
+  await ui.window.relayUI.refresh();await flush();
+  const [tool,bare,access]=ui.$('pending-approvals').querySelectorAll('article');
+  assert.equal(tool.querySelector('h3').textContent,'Codex wants to use GitHub');assert.equal(tool.querySelector('.approval-title').textContent,'create_issue');
+  assert.match(tool.querySelector('.approval-details').textContent,/repository_full_name: me\/repo/);assert.equal(tool.querySelector('.approval-command'),null,'It does not read as a shell command.');
+  assert.deepEqual(tool.querySelectorAll('button').filter(button=>['Approve','Deny'].includes(button.textContent)).map(button=>button.textContent).sort(),['Approve','Deny']);assert.equal(tool.querySelector('.approval-more'),null,'A tool call can only be allowed once.');
+  assert.equal(bare.querySelector('.approval-details'),null,'No empty box without parameters.');assert.doesNotMatch(bare.textContent,/Requested action/,'The protocol\'s method name is not shown.');
+  assert.equal(access.querySelector('h3').textContent,'Codex wants more access');assert.equal(access.querySelector('.approval-title').textContent,'Network access');assert.match(access.querySelector('.approval-details').textContent,/Needs to fetch/);
+});
+
 test('shipped markup has one conversation header and retains distinct primary controls',()=>{
   const html=fs.readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
   const tags=[...html.matchAll(/<([\w-]+)\b[^>]*\bid="([^"]+)"[^>]*>/g)];
@@ -4422,6 +4435,16 @@ async function askedUI(question = agentQuestion()) {
   const key = (target, value) => card.dispatchEvent(new UIEvent('keydown', { key: value, target }));
   return { ui, card, answers, choice, own, button, key };
 }
+
+
+test('a question with a link opens it through the desktop app and shows who it goes to (#111)', async () => {
+  const opened = [], { ui, card } = await askedUI({ id: 'ask-1', kind: 'question', runId: 'run-one', provider: 'codex', questions: [{ id: 'confirm', header: 'codex_apps', question: 'Sign in to GitHub to continue', multiple: false, other: false, secret: false, link: 'https://example.com/sign-in?token=one-time', options: [{ label: 'Done', description: '', recommended: false }, { label: 'Cancel', description: '', recommended: false }] }] });
+  ui.window.relayDesktop = { openExternal: async url => { opened.push(url); } };
+  const open = card.querySelector('.question-link');
+  assert.equal(open.textContent, 'Open example.com', 'The label shows the address, not its one-time token.');
+  open.click(); await flush();
+  assert.deepEqual(opened, ['https://example.com/sign-in?token=one-time']);
+});
 
 test('a Codex async question preserves selections when work finishes and adds its answer beside an existing draft', async () => {
   const question = { ...agentQuestion(), provider: 'codex', blocking: false };

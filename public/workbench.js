@@ -276,9 +276,12 @@
       const command = item.command || item.input?.command, target = item.input?.file_path || item.input?.path, files = item.kind?.includes('fileChange') || target;
       const card = node('article', undefined, 'approval-card'), head = node('header'), mark = node('span', undefined, 'approval-icon'); mark.setAttribute('aria-hidden', 'true');
       card.dataset.approvalId = item.id; card.tabIndex = -1;
-      head.append(mark, node('h3', `${providerName(item.provider)} ${command ? 'wants to run a command' : files ? 'wants to change files' : 'needs your permission'}`)); card.append(head);
+      const access = item.kind === 'item/permissions/requestApproval', specific = item.connector || access;
+      head.append(mark, node('h3', `${providerName(item.provider)} ${command ? 'wants to run a command' : item.connector ? `wants to use ${item.connector}` : access ? 'wants more access' : files ? 'wants to change files' : 'needs your permission'}`)); card.append(head);
       if (item.title && item.title !== command) card.append(node('p', item.title, 'approval-title'));
-      if (command) output(card, command).classList.add('approval-command'); else if (target) card.append(node('p', target, 'approval-target')); else card.append(node('p', files ? 'Review the requested file changes before continuing.' : `Requested action: ${item.kind || 'tool use'}`, 'approval-title'));
+      // A tool's own parameters say what it will do, so they're shown before you decide.
+      if (specific) { if (item.details) output(card, item.details).classList.add('approval-details'); }
+      else if (command) output(card, command).classList.add('approval-command'); else if (target) card.append(node('p', target, 'approval-target')); else card.append(node('p', files ? 'Review the requested file changes before continuing.' : `Requested action: ${item.kind || 'tool use'}`, 'approval-title'));
       const choices = [['Approve', true, 'primary'], ['Deny', false]].map(([text, allow, cls]) => { const choice = node('button', text, cls); choice.type = 'button'; choice.addEventListener('click', () => answer(choices, state.conversation.id, item, allow)); return choice; });
       const footer = node('div', undefined, 'approval-footer'); card.append(footer);
       // An action with an exact scope can also be allowed for the rest of the run or remembered for the workspace.

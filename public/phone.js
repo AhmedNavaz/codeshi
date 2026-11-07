@@ -408,11 +408,13 @@
     const command = item.command || item.input?.command, target = item.input?.file_path || item.input?.path, files = item.kind?.includes?.('fileChange') || target;
     const article = card('card-need');
     const head = node('header', 'card-head');
-    head.append(glyph(item.provider), node('h2', '', `${name(item.provider)} ${command ? 'wants to run a command' : files ? 'wants to change files' : 'needs your permission'}`));
+    const access = item.kind === 'item/permissions/requestApproval';
+    head.append(glyph(item.provider), node('h2', '', `${name(item.provider)} ${command ? 'wants to run a command' : item.connector ? `wants to use ${item.connector}` : access ? 'wants more access' : files ? 'wants to change files' : 'needs your permission'}`));
     if (total > 1) head.append(node('span', 'count', `1 of ${total}`));
     article.append(head);
     if (item.title && item.title !== command) article.append(node('p', 'card-text', item.title));
-    if (command) article.append(node('pre', 'card-code', command));
+    if (item.connector || access) { if (item.details) article.append(node('pre', 'card-code', item.details)); }
+    else if (command) article.append(node('pre', 'card-code', command));
     else if (target) article.append(node('p', 'card-code', target));
     else if (!item.title) article.append(node('p', 'card-text', files ? 'Review the requested file changes before continuing.' : `Requested action: ${item.kind || 'tool use'}`));
     if (item.input && !command) { const more = node('details', 'card-more'); more.append(node('summary', '', 'Full request'), node('pre', 'card-code', JSON.stringify(item.input, null, 2))); article.append(more); }
@@ -454,6 +456,8 @@
       title.textContent = question.header || `${name(item.provider)} has a question`;
       count.textContent = questions.length > 1 ? `${index + 1} of ${questions.length}` : '';
       body.replaceChildren(node('p', 'card-text strong', question.question));
+      // Finishing something in a browser, such as a connector's sign-in: the address shows who it goes to.
+      if (question.link) { const link = node('a', 'card-link', `Open ${new URL(question.link).host}`); link.href = question.link; link.target = '_blank'; link.rel = 'noopener noreferrer'; body.append(link); }
       for (const option of question.options || []) {
         const choice = button('', () => {
           if (question.multiple) { if (answer.picked.has(option.label)) answer.picked.delete(option.label); else answer.picked.add(option.label); }

@@ -18,6 +18,13 @@
     if (question.header && !tabs) legend.append(node('span', question.header, 'question-header'));
     legend.append(node('span', question.question, 'question-text'));
     field.append(legend);
+    // Finishing something in a browser, such as a connector's sign-in: the address shows who it goes to.
+    if (question.link) {
+      const open = button(`Open ${new URL(question.link).host}`, 'question-link');
+      open.title = question.link;
+      open.addEventListener('click', async () => { try { if (window.relayDesktop) await window.relayDesktop.openExternal(question.link); else window.open(question.link, '_blank', 'noopener,noreferrer'); } catch (error) { api().showNotice(error.message || 'The link could not be opened.'); } });
+      field.append(open);
+    }
     if (question.multiple) field.append(node('p', 'Choose all that apply.', 'question-hint'));
     const type = question.multiple ? 'checkbox' : 'radio', name = `question-${cardId}-${index}`, choices = [];
     question.options.forEach((option, position) => {

@@ -9,6 +9,14 @@ const RECOMMENDED = /\s*\(recommended\)\s*$/i;
 const text = (value, max) => (typeof value === 'string' ? value : '').trim().slice(0, max);
 const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
 
+// A link a question may offer: the rule the desktop app opens links by, HTTPS or a local address, with no credentials.
+export function webLink(value) {
+  try {
+    const url = new URL(value);
+    return !url.username && !url.password && (url.protocol === 'https:' || url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) ? url.href : '';
+  } catch { return ''; }
+}
+
 // What the person sees: only text, cut to size, and only questions that say something.
 export function cleanQuestions(list) {
   return (Array.isArray(list) ? list : []).slice(0, LIMITS.questions).map((item, index) => {
@@ -19,7 +27,8 @@ export function cleanQuestions(list) {
       seen.add(label);
       options.push({ label, description: text(option?.description, LIMITS.description), recommended: RECOMMENDED.test(label) });
     }
-    return { id: text(item?.id, LIMITS.id) || `q${index + 1}`, header: text(item?.header, LIMITS.header), question: text(item?.question, LIMITS.question), options, multiple: item?.multiple === true && options.length > 1, other: item?.other === true || !options.length, secret: item?.secret === true };
+    const link = webLink(item?.link);
+    return { id: text(item?.id, LIMITS.id) || `q${index + 1}`, header: text(item?.header, LIMITS.header), question: text(item?.question, LIMITS.question), options, multiple: item?.multiple === true && options.length > 1, other: item?.other === true || !options.length, secret: item?.secret === true, ...(link ? { link } : {}) };
   }).filter(item => item.question);
 }
 

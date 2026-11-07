@@ -10,6 +10,7 @@ import { probeCli } from './cli-probe.mjs';
 import { resolveBinary, withBinaryPath } from './resolve-binary.mjs';
 import { localEndpoint, verifyLocalModel } from './local-models.mjs';
 import { claudeQuestions, claudeAnswers, codexQuestions, codexAnswers } from './agent-questions.mjs';
+import { isToolApproval, toolApprovalRequest, toolApprovalAnswer, isToolApprovalQuestion, toolQuestionRequest, toolQuestionAnswer, permissionsRequest, permissionsAnswer, elicitationQuestions, elicitationCancelled, cannotShow, toolCallOutcome } from './codex-requests.mjs';
 import { claudePlanName, readClaudeProfile } from './claude-plan.mjs';
 
 export function classifyError(error) {
@@ -112,6 +113,21 @@ export async function runCodex(config, { event, approval, question = null, metad
         if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) {
           const allow = config.mode === 'read' ? false : await approval({ id: String(message.id), kind: message.method, ...p });
           client.send({ id: message.id, result: { decision: allow ? 'accept' : 'decline' } });
+        } else if (message.method === 'mcpServer/elicitation/request' && isToolApproval(p)) {
+          // Running a connector or MCP tool is an approval like a command, so it follows the run's policy.
+          const allow = config.mode === 'read' ? false : await approval(toolApprovalRequest(message.id, p));
+          client.send({ id: message.id, result: toolApprovalAnswer(allow) });
+        } else if (message.method === 'mcpServer/elicitation/request') {
+          const form = question && !config.reviewSnapshot && config.mode !== 'read' ? elicitationQuestions(p) : null;
+          const result = form ? form.respond(await question({ id: String(message.id), questions: form.questions })) : null;
+          if (!result && !config.reviewSnapshot) event({ type: 'relay.notice', text: cannotShow(p) });
+          client.send({ id: message.id, result: result || elicitationCancelled() });
+        } else if (message.method === 'item/permissions/requestApproval') {
+          const allow = config.mode === 'read' ? false : await approval(permissionsRequest(message.id, p));
+          client.send({ id: message.id, result: permissionsAnswer(p, allow) });
+        } else if (message.method === 'item/tool/requestUserInput' && isToolApprovalQuestion(p)) {
+          const allow = config.mode === 'read' ? false : await approval(toolQuestionRequest(message.id, p));
+          client.send({ id: message.id, result: toolQuestionAnswer(p, allow) });
         } else if (message.method === 'item/tool/requestUserInput' && question && !config.reviewSnapshot) {
           // Codex asks you to choose: the question waits in Codeshi like an approval, and skipping it sends no answers.
           const questions = codexQuestions(p), answers = questions.length ? await question({ id: String(message.id), questions }) : null;
@@ -140,6 +156,7 @@ export async function runCodex(config, { event, approval, question = null, metad
         if (item?.type === 'agentMessage') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'agent_message' } });
         if (item?.type === 'commandExecution') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'command_execution', aggregated_output: item.aggregatedOutput || '', exit_code: item.exitCode ?? item.exit_code } });
         if (item?.type === 'fileChange') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'file_change' } });
+        if (item?.type === 'mcpToolCall') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { id: item.id, type: 'mcp_tool_call', tool: item.tool, status: item.status, error: item.error || null, result: toolCallOutcome(item) } });
       }
       if (message.method === 'error') event(p.willRetry ? { type: 'error', message: p.error?.message || 'Retrying connection' } : { type: 'turn.failed', error: p.error });
       if (message.method === 'turn/completed') {

@@ -5,7 +5,8 @@ import path from 'node:path';
 export function requestSummary(request = {}) {
   let command = request.command ?? request.input?.command;
   if (Array.isArray(command)) command = command.length === 3 && ['-c', '-lc'].includes(command[1]) ? command[2] : command.join(' ');
-  return String(command || request.reason || request.title || 'A change outside the sandbox').split('\n')[0].slice(0, 200);
+  const tool = request.connector && request.title ? `${request.connector}: ${request.title}` : null;
+  return String(command || tool || request.reason || request.title || 'A change outside the sandbox').split('\n')[0].slice(0, 200);
 }
 
 // What a command prints when a read-only sandbox stopped it. It reads like a network or disk fault, not like a setting.

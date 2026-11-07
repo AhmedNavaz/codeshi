@@ -10,6 +10,8 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ### Fixed
 
+- **Connectors and MCP tools in Codex** (#111). A GitHub connector write, or any tool Codex asks to run, no longer fails with `user rejected MCP tool call` when nobody rejected it. It now follows the run's access: Full auto-approval runs it and notes it in the timeline, and Ask before changes shows who it reaches and what it will do, then Approve or Deny. A denial ends with that call and is not remembered. Read only says it blocked the call.
+- **What an MCP server asks of you, in Codex** (#111). A sign-in or a form now shows as a question, with a link that names its address, and waits for you even in Full auto-approval. Anything Codeshi can't show is cancelled with a note that says so. A request for more access also gets a real answer instead of a silent refusal.
 - **Long workspace chat opening and paging** (#124). Opening a workspace with thousands of messages no longer stalls or hangs the app. The conversation opens immediately on its latest messages, with older history loaded in pages as you scroll up while preserving scroll position. Search across unloaded history, jumping to past runs or messages, live message streaming, and export continue to cover the full conversation history.
 
 ## [0.31.1] - 2026-11-07
