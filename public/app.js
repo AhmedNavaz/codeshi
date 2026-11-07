@@ -301,11 +301,23 @@
     return Number.isNaN(date.getTime()) ? "" : timeFormat.format(date);
   }
   // Assistant replies use a small Markdown subset, built as DOM nodes so provider text is never parsed as HTML.
+  // A web address opens in the browser. Agents also link local files, which a chat can't open, so those read as their name.
+  function renderLink(parent, label, target) {
+    let web = false;
+    try { web = ["http:", "https:"].includes(new URL(target).protocol); } catch { /* A relative path. */ }
+    const host = web ? element("a", "message-link") : element("span");
+    host.title = target;
+    if (web) { host.href = target; host.rel = "noopener noreferrer"; host.addEventListener("click", event => { event.preventDefault(); openExternal(target); }); }
+    renderInline(host, label);
+    parent.append(host);
+  }
   function renderInline(parent, text) {
     let last = 0;
-    for (const match of text.matchAll(/`([^`\n]+)`|\*\*([^*\n]+)\*\*/g)) {
+    for (const match of text.matchAll(/\[([^\]\n]+)\]\(([^()\s]+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*/g)) {
       if (match.index > last) parent.append(document.createTextNode(text.slice(last, match.index)));
-      parent.append(match[1] !== undefined ? element("code", "", match[1]) : element("strong", "", match[2]));
+      if (match[1] !== undefined) renderLink(parent, match[1], match[2]);
+      else if (match[3] !== undefined) parent.append(element("code", "", match[3]));
+      else { const strong = element("strong"); renderInline(strong, match[4]); parent.append(strong); }
       last = match.index + match[0].length;
     }
     if (last < text.length) parent.append(document.createTextNode(text.slice(last)));

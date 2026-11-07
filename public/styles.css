@@ -283,6 +283,7 @@ summary::-webkit-details-marker { display: none; }
 .message-copy { margin: -1px -4px -1px 0; }
 .clipboard-buffer { position: fixed; top: 0; left: -9999px; opacity: 0; }
 .message-text code { padding: 1px 5px; border-radius: 4px; background: var(--code-inline-bg); font: 12.5px/1.6 var(--mono); }
+.message-link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .message-text pre code { padding: 0; background: none; }
 .message-text pre code { color: var(--syntax-text); }
 .tok-keyword, .tok-tag { color: var(--syntax-keyword); }

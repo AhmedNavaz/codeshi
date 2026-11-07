@@ -24,6 +24,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 - **Ask before changes, with Gemini.** Safe read-only commands such as `git status` no longer ask, and a command can now be allowed for the run or remembered, because the approval rules can read Gemini's commands. One edit asks once instead of twice, and the card names the file instead of `Run client_edit_file?`.
 - **A failed read no longer fails a Gemini run.** Reading a folder, a missing file or a very large one is now an error Gemini handles, instead of marking the whole run as denied when it ends. A path outside the workspace is still reported.
 - **No stray `skills` folder from Gemini.** The Antigravity runtime adds `skills/system/run-workflow` to the folder it runs in, where it can end up in a commit. Codeshi now removes it after each run, but never a copy that was already there or anything else in that folder.
+- **Links in replies.** A link no longer shows as raw `[text](address)`. A web address opens in your browser, and a link to a local file reads as its name.
 
 ## [0.31.1] - 2026-11-07
 

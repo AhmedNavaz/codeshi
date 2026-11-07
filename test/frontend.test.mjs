@@ -2599,6 +2599,19 @@ test('jump to latest goes straight there from far away, and scrolls smoothly fro
   assert.equal(scroll.scrollTop, 200);
 });
 
+test('a link in a reply opens web addresses in the browser and reads as its name otherwise, never as raw markdown', async () => {
+  const ui = await browser({ setup: true });
+  ui.canonical.get('project-one').messages.push({ id: 'linked', runId: 'run-1', role: 'assistant', provider: 'gemini', text: 'Finished [#113](https://github.com/o/r/issues/113), see [notes.txt](file:///private/tmp/notes.txt) and **[bold](file:///b.txt)**.' });
+  await ui.window.relayUI.refresh();
+  const reply = ui.$('message-linked'), links = reply.querySelectorAll('a');
+  assert.equal(reply.textContent.includes(']('), false);
+  assert.deepEqual(links.map(link => [link.textContent, link.href]), [['#113', 'https://github.com/o/r/issues/113']]);
+  assert.match(reply.textContent, /see notes\.txt and bold/);
+  const opened = []; ui.window.relayDesktop = { ...ui.window.relayDesktop, openExternal: url => opened.push(url) };
+  let prevented = false; links[0].dispatchEvent({ type: 'click', preventDefault() { prevented = true; } });
+  assert.deepEqual([opened, prevented], [['https://github.com/o/r/issues/113'], true], 'A link never navigates the app itself.');
+});
+
 test('user prompts read as bubbles distinct from labelled agent replies and stay pinned above the turn they started', async () => {
   const ui = await browser({ setup: true });
   const chat = ui.canonical.get('project-one');
