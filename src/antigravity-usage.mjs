@@ -21,7 +21,7 @@ export function parseGoogleQuota(report) {
     const bucket = /^\s{2,}-\s+\*\*([^*]+):\*\*\s+(.+)$/.exec(line);
     if (!group || !bucket || windows.length >= 100) continue;
     const title = bucket[1].trim(), value = bucket[2].trim();
-    const row = { id: 'google-' + windows.length, label: `${title.replace(/\s+(?:Limit\s+)?Remaining$/i, '')} · ${group}`, group, scopes: scopesFor(group), resetsAt: null };
+    const row = { id: 'google-' + windows.length, label: `${title.replace(/\s+(?:Limit\s+)?Remaining$/i, '').replace(/^Five Hour$/i, '5-hour')} · ${group}`, group, scopes: scopesFor(group), resetsAt: null };
     const percent = /^(\d+(?:\.\d+)?)% remaining(?: \(resets ([^)]+)\))?$/.exec(value);
     const amount = /^([\d,]+) units remaining(?: \(resets ([^)]+)\))?$/.exec(value);
     if (percent && Number(percent[1]) >= 0 && Number(percent[1]) <= 100) row.usedPercent = 100 - Number(percent[1]);

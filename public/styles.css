@@ -590,22 +590,21 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 8px; }
 .composer { container: composer / inline-size; }
 .composer-toolbar { flex-wrap: nowrap; }
-.composer-controls { display: flex; align-items: center; flex: 1 1 auto; flex-wrap: nowrap; gap: 2px; min-width: 0; }
+/* Controls move to another line instead of shrinking until they overlap. */
+.composer-controls { display: flex; align-items: center; flex: 1 1 auto; flex-wrap: wrap; gap: 2px; min-width: 0; }
 .composer-controls > * { flex: 0 1 auto; min-width: 0; }
 .composer-controls .picker select { min-width: 0; }
 .composer-actions { flex: none; }
-@container composer (max-width: 860px) { #picked-agent, .usage-chip-label { display: none; } }
+/* Narrow: every control shares the lines with Send, so the toolbar stays low. */
+@container composer (max-width: 560px) { .composer-toolbar { flex-wrap: wrap; justify-content: flex-start; gap: 2px; } .composer-controls { display: contents; } }
+@container composer (max-width: 860px) { #picked-agent { display: none; } }
 @container composer (max-width: 700px) { #effort-button-label { display: none; } }
-@container composer (max-width: 540px) { .usage-chip { display: none; } }
 @container composer (max-width: 690px) { .composer-controls .picker.mode-control select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
-@container composer (max-width: 640px) { .composer-controls .picker:is(.approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
-/* During a run, Stop and Queue take the place of Send; with the usage chip as well, the pickers turn into icons sooner. */
+@container composer (max-width: 600px) { .composer-controls .picker:is(.approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
 /* During a run Stop and Queue (and Add to run) take the place of Send. The pickers can't change during a run, so they
    show as icons; Add to run loses its label only when space is short. */
 .composer:has(#stop-button:not([hidden])) .composer-controls .picker:is(.mode-control, .approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; }
 @container composer (max-width: 660px) { .composer:has(#steer-button:not([hidden])) .steer-label { display: none; } .composer:has(#steer-button:not([hidden])) .steer-button { padding: 0 9px; } }
-@container composer (max-width: 760px) { .composer:has(#stop-button:not([hidden])):has(#usage-chip:not([hidden])) .composer-controls .picker.mode-control select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
-@container composer (max-width: 660px) { .composer:has(#stop-button:not([hidden])):has(#usage-chip:not([hidden])) .composer-controls .picker:is(.approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } .composer:has(#stop-button:not([hidden])):has(#usage-chip:not([hidden])) .usage-chip-label { display: none; } }
 .composer-controls .picker select option { color: var(--text); }
 .provider-selector { display: inline-flex; gap: 2px; margin-right: 4px; padding: 2px; border-radius: var(--radius); background: var(--chip-bg); }
 .provider-button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 12px; }
@@ -647,10 +646,6 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .refresh-button { width: 24px; height: 24px; margin-left: -2px; }
 .refresh-button .icon { width: 14px; height: 14px; }
 .composer-actions { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
-.usage-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border: 0; border-radius: 11px; background: var(--chip-bg); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.usage-chip:hover { color: var(--text); }
-.usage-chip.low { background: var(--warning-bg); color: var(--warning); }
-.usage-chip.critical { background: var(--danger-bg); color: var(--danger); }
 .send-button { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--on-accent); transition: background .12s; }
 .send-button:hover:enabled { background: var(--accent-strong); }
 .send-button:disabled { opacity: 1; background: var(--chip-bg); color: var(--faint); }
@@ -981,7 +976,7 @@ button.commit-hash:hover { text-decoration: underline; }
   .composer-toolbar { align-items: flex-end; }
   .picker select { max-width: 180px; }
   .git-panel { top: 44px; width: min(360px, 100vw); }
-  .status-bar .provider-state, .usage-label, .usage-chip { display: none; }
+  .status-bar .provider-state, .usage-label { display: none; }
   .diff-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); }
   .diff-line { grid-template-columns: 36px 36px 16px minmax(0, 1fr); }
   .import-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); }
@@ -1111,7 +1106,8 @@ button.commit-hash:hover { text-decoration: underline; }
 .agent-accounts { display: grid; gap: 2px; margin: 0 -8px; }
 .agents-usage .provider-status { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; grid-template-areas: "icon name value"; align-items: center; column-gap: 9px; row-gap: 5px; width: 100%; min-width: 0; height: auto; padding: 7px 8px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .agents-usage .provider-status:has(.usage-meter:not([hidden])) { grid-template-areas: "icon name value" ". bar bar" ". caption caption"; }
-.agents-usage .provider-status:has(.usage-secondary) { grid-template-areas: "icon name value" ". bar bar" ". caption caption" ". other other"; }
+/* :has() takes its argument's specificity, so this needs two classes to outrank the rule above. A grid-area with no matching area adds a column. */
+.agents-usage .provider-status:has(.usage-meter .usage-secondary) { grid-template-areas: "icon name value" ". bar bar" ". caption caption" ". other other"; }
 .agents-usage div.provider-status { cursor: default; }
 .agents-usage .provider-status[hidden] { display: none; }
 .agent-icon.local { -webkit-mask-image: var(--icon-terminal); mask-image: var(--icon-terminal); }

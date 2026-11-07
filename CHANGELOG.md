@@ -11,6 +11,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 ### Changed
 
 - **Gemini keeps its session between messages.** Every message used to open a new Antigravity session with only a summary of the chat, so Gemini started each one by reading the files and the issue again. It now continues its own session, as Claude and Codex do, and starts a fresh one with a task brief when you switch agents, change the workspace folders, refresh the context or reach the context limit. If the runtime no longer has the saved session, that message stops and says so, and the next one starts over. Each Gemini run now also records the tokens its turns used, next to the context the session holds.
+- **No limits in the message box.** The usage chip is gone from Normal as well as Flow, leaving its room to the options there. Limits are in **Plan usage** in the **Agents** panel, and on Flow's cards.
 
 ### Fixed
 
@@ -25,6 +26,9 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 - **A failed read no longer fails a Gemini run.** Reading a folder, a missing file or a very large one is now an error Gemini handles, instead of marking the whole run as denied when it ends. A path outside the workspace is still reported.
 - **No stray `skills` folder from Gemini.** The Antigravity runtime adds `skills/system/run-workflow` to the folder it runs in, where it can end up in a commit. Codeshi now removes it after each run, but never a copy that was already there or anything else in that folder.
 - **Links in replies.** A link no longer shows as raw `[text](address)`. A web address opens in your browser, and a link to a local file reads as its name.
+- **Plan usage rows.** When an agent also showed a weekly limit, the row broke: its bar shrank, its reset time was cut off, the weekly line sat to one side and Gemini's name disappeared.
+- **Gemini's 5-hour limit.** Google's "Five Hour" now reads as **5-hour** and leads Gemini's row, as it does for the other agents.
+- **Message box options in a narrow layout.** Options now move to a second line instead of shrinking until they overlap or disappear. **Permissions** also keeps its label down to a narrower width.
 
 ## [0.31.1] - 2026-11-07
 

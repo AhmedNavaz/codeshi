@@ -665,7 +665,7 @@ test('Gemini quota uses the reported default model and shows absolute and disabl
   const windows={gemini:{available:true,source:'antigravity-acp',defaultModel:'gemini-argon',windows:[{id:'flash',label:'5-hour · Flash',usedPercent:20,scopes:['flash']},{id:'argon',label:'Weekly · Argon',usedPercent:100,scopes:['argon']},{id:'units',label:'Daily · Gemini',remainingAmount:1200,scopes:['gemini']},{id:'disabled',label:'Weekly · Other',disabled:true,scopes:[]}]}};
   const ui=await browser({insights:true,workbench:true,providers:{gemini:{available:true}},authenticated:{codex:true,claude:true,gemini:true},billingSource:{codex:'subscription',claude:'subscription',gemini:'subscription'},usage:windows});await ui.window.relayUI.refreshAccounts({force:true});await flush();
   ui.$('select-gemini').click();await flush();assert.match(ui.$('gemini-usage').textContent,/0% left.*Weekly limit for Argon/,'A limit for some models says which.');assert.doesNotMatch(ui.$('gemini-usage').textContent,/80%/);
-  ui.state().model='gemini-flash';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.match(ui.$('usage-chip').textContent,/80% left/);
+  ui.state().model='gemini-flash';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.match(ui.$('gemini-usage').textContent,/80% left/);
   ui.window.relayUsage.open('gemini');await flush();const content=ui.$('usage-details');assert.match(content.textContent,/1,200 units left/);assert.match(content.textContent,/Disabled/);assert.equal(content.querySelectorAll('.usage-track').length,2);
   ui.state().model=null;ui.state().usage.gemini.defaultModel=null;ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('gemini-usage').hidden,true,'An unknown provider default never assumes Flash.');
   ui.$('relay-settings').click();await flush();assert.match(ui.$('settings-content').textContent,/1,200 units left/);assert.match(ui.$('settings-content').textContent,/Disabled/);assert.doesNotMatch(ui.$('settings-content').textContent,/NaN/);
@@ -688,24 +688,24 @@ test('plan usage leads with five-hour allowance and shows weekly limits separate
   const ui=await browser({insights:true,usage:windows});await ui.window.relayUI.refreshAccounts({force:true});await flush();
   assert.equal(ui.$('codex-usage').hidden,false);assert.equal(ui.$('codex-usage').querySelector('.usage-value').textContent,'80% left','The weekly window never replaces a reported five-hour headline.');assert.equal(ui.$('codex-usage').querySelector('.usage-caption').textContent,'5-hour limit');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary').textContent,'Weekly · 38% left');assert.match(ui.$('claude-usage').textContent,/80% left.*5-hour limit/);
   assert.equal(ui.$('codex-usage').querySelector('.usage-bar').style['--left'],'80%','The bar corresponds to the five-hour reading.');assert.doesNotMatch(ui.$('claude-usage').textContent,/Opus/,'Model-specific limits appear only for that model.');
-  assert.equal(ui.$('usage-chip').textContent,'5-hour · 80% left');assert.match(ui.$('usage-chip').title,/Weekly: 38% left/,'All limits remain in the details.');assert.equal(ui.window.relayUsage.usedPercent('codex'),62,'Routing keeps the most restrictive allowance.');
-  ui.$('select-claude').click();await flush();ui.state().model='claude-opus';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('usage-chip').textContent,'5-hour · 80% left · Weekly · Opus · 5% left');assert.match(ui.$('usage-chip').className,/critical/,'The weekly warning remains visible beside the five-hour allowance.');
+  assert.match(ui.$('codex-status').title,/Weekly: 38% left/,'All limits remain in the details.');assert.equal(ui.window.relayUsage.usedPercent('codex'),62,'Routing keeps the most restrictive allowance.');
+  ui.$('select-claude').click();await flush();ui.state().model='claude-opus';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('claude-usage').querySelector('.usage-secondary').textContent,'Weekly · Opus · 5% left','The weekly warning remains visible beside the five-hour allowance.');
   assert.equal(ui.$('claude-usage').querySelector('.usage-value').textContent,'80% left');assert.equal(ui.$('claude-usage').querySelector('.usage-secondary').dataset.level,'critical');
-  ui.state().model='claude-sonnet';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('usage-chip').textContent,'5-hour · 80% left','Switching models removes an unrelated weekly warning.');
+  ui.state().model='claude-sonnet';ui.window.dispatchEvent(new UIEvent('relay-state'));assert.equal(ui.$('claude-usage').querySelector('.usage-secondary'),null,'Switching models removes an unrelated weekly warning.');
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue)$/.test(request.path)).length,0,'Reading usage never starts inference.');
 });
 
 test('plan usage keeps exhausted weekly warnings and falls back to the periods actually reported',async()=>{
   const usage={codex:{available:true,checkedAt:new Date().toISOString(),windows:[{id:'primary',label:'5-hour',usedPercent:5},{id:'weekly',label:'Weekly',usedPercent:100}]}};
   const ui=await browser({insights:true,usage});await ui.window.relayUI.refreshAccounts({force:true});await flush();
-  assert.equal(ui.$('usage-chip').textContent,'5-hour · 95% left · Weekly · 0% left');assert.match(ui.$('usage-chip').className,/critical/);
+  assert.equal(ui.$('codex-usage').querySelector('.usage-value').textContent,'95% left');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary').textContent,'Weekly · 0% left');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary').dataset.level,'critical');
   assert.equal(ui.window.relayRouting.assessQuota(ui.window.relayUsage.snapshot('codex')).state,'exhausted','A full weekly limit still blocks automatic routing.');
   usage.codex.windows=[{id:'weekly',label:'Weekly',usedPercent:60}];await ui.window.relayUsage.load('codex');await flush();
-  assert.equal(ui.$('usage-chip').textContent,'Weekly · 40% left');assert.equal(ui.$('codex-usage').querySelector('.usage-caption').textContent,'Weekly limit');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary'),null,'Missing five-hour data never becomes an invented allowance.');
+  assert.equal(ui.$('codex-usage').querySelector('.usage-value').textContent,'40% left');assert.equal(ui.$('codex-usage').querySelector('.usage-caption').textContent,'Weekly limit');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary'),null,'Missing five-hour data never becomes an invented allowance.');
   usage.codex.windows=[{id:'weekly',label:'Weekly',usedPercent:85},{id:'five',label:'5-hour',usedPercent:80}];await ui.window.relayUsage.load('codex');await flush();
-  assert.equal(ui.$('usage-chip').textContent,'5-hour · 20% left · Weekly · 15% left');assert.match(ui.$('usage-chip').className,/\blow\b/,'Both low allowances keep a warning.');
+  assert.equal(ui.$('codex-usage').querySelector('.usage-value').textContent,'20% left');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary').textContent,'Weekly · 15% left');assert.equal(ui.$('codex-usage').querySelector('.usage-secondary').dataset.level,'low','Both low allowances keep a warning.');
   usage.codex={available:false,reason:'Usage unavailable',windows:usage.codex.windows};await ui.window.relayUsage.load('codex');await flush();
-  assert.equal(ui.$('usage-chip').hidden,true);assert.equal(ui.$('codex-usage').hidden,true,'Unavailable data does not reuse the last five-hour reading.');
+  assert.equal(ui.$('codex-usage').hidden,true,'Unavailable data does not reuse the last five-hour reading.');
 });
 
 test('separate Claude and Codex chats merge by time into the current workspace after review, without inference',async()=>{
@@ -1279,9 +1279,9 @@ test('usage opens beside its agent, switches providers in place and closes on Es
   assert.equal(card.style.left,'80px');assert.ok(Number.parseFloat(card.style.top)+390<772,'The card stays above its footer meter.');
   ui.$('claude-status').click();await flush();assert.deepEqual([...ui.$('usage-details').children].map(section=>section.dataset.provider),['claude']);assert.equal(ui.$('codex-status').getAttribute('aria-expanded'),'false');
   ui.$('claude-status').click();await flush();assert.equal(card.matches(':popover-open'),false);
-  ui.$('usage-chip').bounds={left:1190,top:700,bottom:726,right:1270,width:80,height:26};ui.$('usage-chip').click();await flush();assert.ok(Number.parseFloat(card.style.left)+340<=1280-12,'Composer usage stays inside the window.');
-  assert.deepEqual([...ui.$('usage-details').children].map(section=>section.dataset.provider),[ui.state().provider],'The composer chip shows only the selected agent.');
-  ui.document.dispatchEvent(new UIEvent('keydown',{key:'Escape'}));assert.equal(card.matches(':popover-open'),false);assert.equal(ui.document.activeElement,ui.$('usage-chip'));
+  ui.$('codex-status').bounds={left:1190,top:700,bottom:726,right:1270,width:80,height:26};ui.$('codex-status').click();await flush();assert.ok(Number.parseFloat(card.style.left)+340<=1280-12,'The card stays inside the window.');
+  assert.deepEqual([...ui.$('usage-details').children].map(section=>section.dataset.provider),['codex'],'The card shows only the agent that opened it.');
+  ui.document.dispatchEvent(new UIEvent('keydown',{key:'Escape'}));assert.equal(card.matches(':popover-open'),false);assert.equal(ui.document.activeElement,ui.$('codex-status'));
   const opened=[];ui.window.relaySettings={open:tab=>opened.push(tab)};ui.$('gemini-status').click();await flush();
   assert.deepEqual(opened,['accounts'],'An agent that isn’t connected opens its setup, never usage.');assert.equal(card.matches(':popover-open'),false);
 });
@@ -4830,16 +4830,26 @@ test('Accounts connects through the provider flow, preserves a draft and shows f
 const flowBrowser = options => browser({ insights: true, agentsUI: true, layoutUI: true, rewindUI: true, flowUI: true, modelPickerUI: true, ...options });
 const flowText = (ui, id) => ui.$(`flow-card-${id}`).textContent.replace(/\s+/g, ' ');
 
-test('Flow leaves limits to the cards: the message box shows none until the normal view returns', async () => {
+test('limits stay out of the message box, in Normal and Flow, and stay in Plan usage', async () => {
+  for (const file of ['index.html', 'insights.js', 'styles.css']) assert.doesNotMatch(fs.readFileSync(new URL(`../public/${file}`, import.meta.url), 'utf8'), /usage-chip/, `${file} has no usage chip.`);
   const ui = await flowBrowser({ usage: { codex: { provider: 'codex', available: true, windows: [{ id: 'primary', label: '5-hour', usedPercent: 20, resetsAt: null }] } } });
   await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
-  assert.equal(ui.$('usage-chip').hidden, false); assert.match(ui.$('usage-chip').textContent, /80% left/);
+  assert.match(ui.$('codex-usage').textContent, /80% left/);
   ui.window.relayFlow.enter(); await flush();
-  assert.equal(ui.$('usage-chip').hidden, true, 'The agent is not known until Send.');
-  ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
-  assert.equal(ui.$('usage-chip').hidden, true, 'It stays hidden as usage updates.');
-  ui.window.relayFlow.leave(); await flush();
-  assert.equal(ui.$('usage-chip').hidden, false);
+  assert.match(ui.$('codex-usage').textContent, /80% left/, 'Flow reads the same limits for its cards.');
+});
+
+test('message box controls move to another line instead of shrinking until they overlap', () => {
+  const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.composer-controls \{[^}]*flex-wrap: wrap/);
+  assert.match(css, /@container composer \(max-width: 560px\) \{ \.composer-toolbar \{ flex-wrap: wrap;[^}]*\} \.composer-controls \{ display: contents; \} \}/, 'Narrow, the controls share lines with Send.');
+});
+
+test('a limit that has its own line keeps it, instead of adding a column that squeezes the row', () => {
+  const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+  // :has() takes the specificity of its argument, so source order alone can't let this rule win.
+  assert.match(css, /\.agents-usage \.provider-status:has\(\.usage-meter \.usage-secondary\) \{ grid-template-areas:[^}]*"\. other other"/);
+  assert.match(css, /\.agents-usage \.provider-status:has\(\.usage-meter:not\(\[hidden\]\)\) \{ grid-template-areas: "icon name value" "\. bar bar" "\. caption caption"; \}/, 'The rule it has to outrank.');
 });
 
 test('a sent message says how its agent was chosen, so slow or wrong ratings can be spotted', async () => {

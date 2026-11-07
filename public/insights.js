@@ -373,7 +373,7 @@
   const remaining = row => Math.max(0, Math.min(100, Math.round(100 - row.usedPercent)));
   const usageLevel = percent => percent <= 10 ? 'critical' : percent <= 25 ? 'low' : 'ok';
   // Limits in plain words. A provider names a limit by its period, and by what it is for when it covers only some
-  // models: "5-hour", "Weekly · Opus", "Weekly · Gemini Argon". Keep the period visible in the composer too.
+  // models: "5-hour", "Weekly · Opus", "Weekly · Gemini Argon".
   const limitParts = label => { const [period, ...scope] = String(label || '').split(' · '); return { period, scope: scope.join(' · ') }; };
   function limitName(label) {
     const { period, scope } = limitParts(label), name = /^(?:\d+-hour|Weekly|Daily|Current)$/.test(period) ? `${period} limit` : period;
@@ -418,16 +418,6 @@
       const row = $(`${provider}-status`), connected = api.getState().accounts?.[provider]?.authenticated === true;
       row.title = rows.length ? `${name(provider)}: ${rows.map(describeWindow).join('. ')}. Select for all its limits.` : connected ? `${name(provider)}: select for its plan usage` : `Set up ${name(provider)} in Settings`;
     }
-    // In Flow the agent isn't known until Send, and each agent's limits are on the cards beside the conversation.
-    const chip = $('usage-chip'), { rows, primary, warning } = usageSummary(state.provider);
-    chip.hidden = !primary || window.relayFlow?.isOn?.() === true;
-    if (primary) {
-      const { period, scope } = limitParts(primary.label);
-      chip.className = 'usage-chip ' + usageLevel(Math.min(remaining(primary), warning ? remaining(warning) : 100));
-      chip.replaceChildren(el('span', `${period} · `, 'usage-chip-period'), ...(scope ? [el('span', `${scope} · `, 'usage-chip-label')] : []), el('span', `${remaining(primary)}% left`));
-      if (warning) chip.append(el('span', ` · ${warning.label} · ${remaining(warning)}% left`, 'usage-chip-warning'));
-      chip.title = `${name(state.provider)} plan usage. ${rows.map(describeWindow).join('. ')}.`;
-    }
   }
   async function loadUsage(provider, refresh = false) {
     if (usageLoading[provider] || api.getState().accounts?.[provider]?.authenticated !== true) return;
@@ -437,7 +427,6 @@
     catch (error) { if (request === usageRequests[provider]) usageErrors[provider] = error.message; }
     finally { if (request === usageRequests[provider]) { usageLoading[provider] = false; renderUsage(); renderUsageDetails(); } }
   }
-  $('usage-chip').addEventListener('click', () => openUsage(api.getState().provider, $('usage-chip')));
   function resetCountdown(value) {
     const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return 'Reset time not reported';
     const minutes = Math.ceil((at.getTime() - Date.now()) / 60000);
@@ -445,7 +434,7 @@
     const days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60), mins = minutes % 60;
     return 'Resets in ' + [days ? days + 'd' : '', hours ? hours + 'h' : '', mins ? mins + 'm' : ''].filter(Boolean).join(' ');
   }
-  // The card shows only the agent whose meter or chip opened it.
+  // The card shows only the agent whose row opened it.
   function renderUsageDetails() {
     if (!usageProvider || !usageIsOpen()) return;
     const state = api.getState(), provider = usageProvider, account = state.accounts?.[provider], result = usage[provider], plan = result?.plan || account?.planType || account?.subscriptionType;
@@ -491,7 +480,7 @@
     if (restoreFocus) usageAnchor?.focus();
   }
   function openUsage(provider, anchor) {
-    const row = $(`${provider}-status`), nextAnchor = anchor || (row && !row.closest?.('[hidden]') ? row : $('usage-chip') && !$('usage-chip').hidden ? $('usage-chip') : $('relay-settings'));
+    const row = $(`${provider}-status`), nextAnchor = anchor || (row && !row.closest?.('[hidden]') ? row : $('relay-settings'));
     if (usageIsOpen() && provider === usageProvider && nextAnchor === usageAnchor) { closeUsage(); return; }
     usageAnchor?.setAttribute('aria-expanded','false'); usageProvider = provider; usageAnchor = nextAnchor;
     usageAnchor.setAttribute('aria-expanded','true');
@@ -505,7 +494,7 @@
     return rows.length ? Math.max(...rows.map(row => row.usedPercent)) : null;
   };
   window.relayUsage = { open: openUsage, usedPercent, summary: usageSummary, snapshot: provider => api.getState().accounts?.[provider]?.authenticated === true ? usage[provider] || null : null, load: provider => loadUsage(provider, true) };
-  for (const trigger of [$('codex-status'), $('claude-status'), $('gemini-status'), $('usage-chip')]) { trigger.setAttribute('aria-controls','usage-dialog'); trigger.setAttribute('aria-haspopup','dialog'); trigger.setAttribute('aria-expanded','false'); }
+  for (const trigger of [$('codex-status'), $('claude-status'), $('gemini-status')]) { trigger.setAttribute('aria-controls','usage-dialog'); trigger.setAttribute('aria-haspopup','dialog'); trigger.setAttribute('aria-expanded','false'); }
   usagePopover.addEventListener('toggle',() => { if (!usageIsOpen()) usageAnchor?.setAttribute('aria-expanded','false'); });
   $('close-usage').addEventListener('click',()=>closeUsage(true));
   document.addEventListener('keydown',event=>{if(event.key==='Escape' && usageIsOpen()){event.preventDefault();closeUsage(true);}});

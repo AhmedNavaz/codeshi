@@ -45,6 +45,10 @@ test('native Google quota uses reported remaining percentages and buckets instea
   ]);
   assert.equal(result.windows[0].resetsAt, '2026-11-01T12:00:00.000Z'); assert.equal(result.windows[1].resetsAt, null);
 });
+test('Google spelling out the five-hour limit still reads as 5-hour, which leads an agent\'s row', () => {
+  const { windows } = parseGoogleQuota('### Quota Limits\n- **Gemini Models**\n  - **Five Hour Limit Remaining:** 99% remaining\n  - **Weekly Limit Remaining:** 100% remaining\n');
+  assert.deepEqual(windows.map(row => row.label), ['5-hour · Gemini Models', 'Weekly · Gemini Models']);
+});
 test('missing, malformed and token-only reports never create quota estimates', () => {
   for (const value of [null, '', '### Session Usage\n- **Session total:** 900 tokens', '### Quota Limits\n- data not available yet', '### Quota Limits\n- Unable to retrieve quota status (network)', '### Quota Limits\n- **Gemini Flash**\n  - **Weekly:** 999% remaining']) {
     const result = parseGoogleQuota(value); assert.equal(result.available, false); assert.deepEqual(result.windows, []);
