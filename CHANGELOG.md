@@ -4,6 +4,8 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-07
+
 ### Added
 
 - **Choose model and effort for each queued message** (#113). Model and effort pickers remain active while a run is working, applying to the prompt being queued without changing the active run. Queued messages display their model, reasoning effort, and routing details. Both model and effort can be edited directly on queued messages before they start, on desktop and phone. Changing the model of a routed message turns it into a manual choice.
@@ -636,5 +638,6 @@ First public release.
 [0.6.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.6.0
 [0.5.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.4.0
+[0.32.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0
 [0.31.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1
 [0.30.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.30.0
