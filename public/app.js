@@ -1134,14 +1134,60 @@
     $("prompt-queue-list").replaceChildren(...queue.map((item, index) => {
       const row = element("li", "prompt-queue-item"), body = element("div", "prompt-queue-body");
       const model = item.model ? window.relayModelPicker?.modelName?.(item.provider, item.model) || item.model : "";
-      const meta = `${label(item.provider)}${model ? ` · ${model}` : ""} · ${item.mode === "read" ? "Read only" : "Can edit files"} · ${item.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}${item.attachments?.length ? ` · ${item.attachments.length} attachment${item.attachments.length === 1 ? "" : "s"}` : ""}${item.movedFrom ? ` · Moved from ${label(item.movedFrom)}` : ""}`;
+      const effort = item.effort ? `${item.effort} effort` : "";
+      const reason = item.routing?.reason ? ` · ${item.routing.reason}` : "";
+      const meta = `${label(item.provider)}${model ? ` · ${model}` : ""}${effort ? ` · ${effort}` : ""}${reason} · ${item.mode === "read" ? "Read only" : "Can edit files"} · ${item.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}${item.attachments?.length ? ` · ${item.attachments.length} attachment${item.attachments.length === 1 ? "" : "s"}` : ""}${item.movedFrom ? ` · Moved from ${label(item.movedFrom)}` : ""}`;
       if (state.queueEditing === item.id) {
         const editor = element("textarea", "prompt-queue-editor"); editor.value = item.text; editor.rows = 3; editor.setAttribute("aria-label", "Edit queued message");
+        const controls = element("div", "prompt-queue-edit-controls");
+        const modelSelect = element("select", "prompt-queue-select prompt-queue-model"); modelSelect.setAttribute("aria-label", "Model");
+        const effortSelect = element("select", "prompt-queue-select prompt-queue-effort"); effortSelect.setAttribute("aria-label", "Reasoning effort");
+        const models = window.relayModelPicker?.models?.(item.provider) || []; if (!models.length) window.relayModelPicker?.preload?.()?.then?.(() => { state.queueSignature = null; renderQueue(); });
+        const baseOpt = element("option", "", `Let ${label(item.provider)} choose`); baseOpt.value = ""; modelSelect.append(baseOpt);
+        for (const row of models.filter(row => row.value !== "default")) {
+          const opt = element("option", "", row.displayName || row.name || row.id || row.value);
+          opt.value = row.id || row.model || row.value;
+          modelSelect.append(opt);
+        }
+        if (item.model && !models.some(row => (row.id || row.model || row.value) === item.model)) {
+          const opt = element("option", "", item.model); opt.value = item.model; modelSelect.append(opt);
+        }
+        modelSelect.value = item.model || "";
+        const updateEffortOptions = () => {
+          const chosen = modelSelect.value;
+          const selected = models.find(row => (row.id || row.model || row.value) === chosen) || (!chosen && models.find(row => row.isDefault || row.value === "default"));
+          const supported = (selected?.supportedEffortLevels || selected?.supportedReasoningEfforts?.map(r => r.reasoningEffort) || []).filter(Boolean);
+          effortSelect.replaceChildren();
+          const defOpt = element("option", "", selected?.defaultReasoningEffort ? `Default (${selected.defaultReasoningEffort})` : "Provider default"); defOpt.value = "";
+          effortSelect.append(defOpt);
+          for (const eff of supported) {
+            const opt = element("option", "", eff === "xhigh" ? "X-High" : eff[0].toUpperCase() + eff.slice(1));
+            opt.value = eff;
+            effortSelect.append(opt);
+          }
+          if (item.effort && !supported.includes(item.effort) && chosen === (item.model || "")) {
+            const opt = element("option", "", (item.effort === "xhigh" ? "X-High" : item.effort[0].toUpperCase() + item.effort.slice(1)) + " (saved)");
+            opt.value = item.effort;
+            effortSelect.append(opt);
+          }
+          effortSelect.disabled = !supported.length;
+          effortSelect.value = supported.includes(item.effort) && chosen === (item.model || "") ? item.effort : (chosen === (item.model || "") && item.effort ? item.effort : "");
+        };
+        updateEffortOptions();
+        modelSelect.addEventListener("change", updateEffortOptions);
+        controls.append(modelSelect, effortSelect);
         const save = element("button", "pill-button", "Save"), cancel = element("button", "pill-button", "Cancel"); save.type = cancel.type = "button";
-        save.addEventListener("click", async () => { if (await queueAction({ action: "update", id: item.id, text: editor.value })) { state.queueEditing = null; renderQueue(); } });
+        save.addEventListener("click", async () => {
+          const payload = { action: "update", id: item.id, text: editor.value };
+          const newModel = modelSelect.value || null;
+          const newEffort = effortSelect.value || null;
+          if (newModel !== (item.model || null)) payload.model = newModel;
+          if (newEffort !== (item.effort || null)) payload.effort = newEffort;
+          if (await queueAction(payload)) { state.queueEditing = null; renderQueue(); }
+        });
         cancel.addEventListener("click", () => { state.queueEditing = null; renderQueue(); });
         const buttons = element("div", "prompt-queue-edit-actions"); buttons.append(save, cancel);
-        body.append(editor, buttons);
+        body.append(editor, controls, buttons);
       } else body.append(element("p", "prompt-queue-text", item.text), element("span", "prompt-queue-meta", meta));
       // A task's own queue stays a queue: tasks start from the main conversation.
       const folders = state.taskId || state.taskDraft ? [] : foldersFor(currentProject()), folderName = folder => folder.displayName || folder.name;
@@ -2422,7 +2468,7 @@
     },
     async setModel(model) { return window.relayUI.setConfiguration({ model, effort: null }); },
     async setConfiguration({model = state.model, effort = null}) {
-      if (!state.ready || state.pending || state.settingsPending || isRunning()) throw new Error('Finish the current run before changing the model or effort.');
+      if (!state.ready || state.pending || state.settingsPending) throw new Error('Finish the current settings update before changing the model or effort.');
       model = model?.trim() || null;
       if (state.taskDraft) { state.model = model || ''; state.effort = effort; render(); window.dispatchEvent(new CustomEvent('relay-state')); return; }
       const projectId = state.projectId, version = state.projectVersion, conversationId = state.conversation?.id, provider = state.provider;

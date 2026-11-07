@@ -980,7 +980,7 @@ test('import dialog filters conversations by agent using dropdown selector',asyn
 
 test('run indicators distinguish reasoning, quiet providers, approvals, and real token counts',async()=>{
   const ui=await browser({insights:true}),c=ui.canonical.get('project-one');c.status='running';c.activeRun={provider:'codex',phase:'reasoning',startedAt:new Date(Date.now()-50000).toISOString(),lastEventAt:new Date().toISOString(),effectiveModel:'model-one',effort:'high',usage:{total:{inputTokens:100,outputTokens:20}}};await ui.window.relayUI.refresh();
-  assert.equal(ui.$('run-phase').textContent,'Reasoning');assert.equal(ui.$('run-action').textContent,'Thinking');assert.equal(ui.$('run-detail').textContent,'');assert.match(ui.$('run-metrics').textContent,/100 input tokens/);assert.equal(ui.$('model-select').disabled,true);
+  assert.equal(ui.$('run-phase').textContent,'Reasoning');assert.equal(ui.$('run-action').textContent,'Thinking');assert.equal(ui.$('run-detail').textContent,'');assert.match(ui.$('run-metrics').textContent,/100 input tokens/);assert.equal(ui.$('model-select').disabled,false);
   c.activeRun.lastEventAt=new Date(Date.now()-40000).toISOString();await ui.window.relayUI.refresh();assert.equal(ui.$('run-phase').textContent,'Waiting for provider');assert.equal(ui.$('run-action').textContent,'Waiting for Codex');assert.match(ui.$('run-detail').textContent,/No activity from Codex for 40s/);assert.doesNotMatch(ui.$('run-detail').textContent,/stuck/i);
   c.pendingApprovals=[{id:'approval'}];await ui.window.relayUI.refresh();assert.equal(ui.$('run-phase').textContent,'Waiting for approval');assert.equal(ui.$('run-action').textContent,'Waiting for your approval');
 });
@@ -3195,31 +3195,55 @@ test('a workspace waiting for approval shows its count in the sidebar, and openi
 });
 
 test('while work runs, a message joins the queue with the current settings, and the queue can be reordered, edited, removed and resumed',async()=>{
-  const ui=await browser(),conversation=ui.canonical.get('project-one'),actions=[];
+  const ui=await browser({modelPickerUI:true,insights:true}),conversation=ui.canonical.get('project-one'),actions=[];
   ui.setIntercept((request,next)=>{
     if(!request.path.endsWith('/queue'))return next();
     const body=request.body;actions.push(body);
-    if(body.action==='add')conversation.queue=[...(conversation.queue||[]),{id:'q'+(conversation.queue||[]).length,text:body.text,provider:body.provider,model:body.model,mode:body.mode,approvalPolicy:body.approvalPolicy,attachments:[]}];
+    if(body.action==='add')conversation.queue=[...(conversation.queue||[]),{id:'q'+(conversation.queue||[]).length,text:body.text,provider:body.provider,model:body.model,effort:body.effort,mode:body.mode,approvalPolicy:body.approvalPolicy,attachments:[],...(body.routing?{routing:body.routing}:{})}];
+    if(body.action==='update'){
+      conversation.queue=conversation.queue.map(item=>{
+        if(item.id!==body.id)return item;
+        const updated={...item,text:body.text};
+        if('model' in body)updated.model=body.model;
+        if('effort' in body)updated.effort=body.effort;
+        if(item.routing && body.model!==undefined && body.model!==item.model)delete updated.routing;
+        return updated;
+      });
+    }
     if(body.action==='remove')conversation.queue=conversation.queue.filter(item=>item.id!==body.id);
     if(body.action==='resume')conversation.queuePaused=null;
     return response(conversation);
   });
   conversation.status='running';conversation.activeRun={id:'run-one',provider:'codex'};await ui.window.relayUI.refresh();
   assert.equal(ui.$('queue-button').hidden,false);assert.equal(ui.$('send-button').hidden,true);assert.match(ui.$('message-input').placeholder,/queue/);
+  assert.equal(ui.$('model-picker-button').disabled,false,'Model picker button is usable while running');
+  assert.equal(ui.$('model-select').disabled,false,'Model select is usable while running');
+  await ui.window.relayModelPicker.preload(); await flush();
+  await ui.window.relayUI.setConfiguration({model:'model-one',effort:'high'});
   ui.$('message-input').value='Then update the changelog';ui.fire('message-input','input');
   ui.$('message-input').dispatchEvent(new UIEvent('keydown',{key:'Enter'}));await flush();await flush();
-  assert.equal(actions[0].action,'add');assert.equal(actions[0].text,'Then update the changelog');assert.equal(actions[0].provider,'codex');assert.equal(actions[0].mode,ui.state().mode);
+  assert.equal(actions[0].action,'add');assert.equal(actions[0].text,'Then update the changelog');assert.equal(actions[0].provider,'codex');assert.equal(actions[0].model,'model-one');assert.equal(actions[0].effort,'high');assert.equal(actions[0].mode,ui.state().mode);
   assert.equal(ui.$('message-input').value,'','The message box clears once the prompt is queued.');
   assert.equal(ui.requests.filter(request=>request.path.endsWith('/messages')).length,0,'Nothing is sent while the run works.');
   conversation.queue.push({id:'q1',text:'And run the tests',provider:'claude',mode:'read',approvalPolicy:'ask',attachments:[]});await ui.window.relayUI.refresh();
   assert.equal(ui.$('prompt-queue').hidden,false);assert.match(ui.$('prompt-queue-title').textContent,/Up next · 2/);
-  const items=ui.$('prompt-queue-list').querySelectorAll('li');assert.equal(items.length,2);assert.match(items[1].textContent,/Claude · Read only · asks before changes/);
+  const items=ui.$('prompt-queue-list').querySelectorAll('li');assert.equal(items.length,2);
+  assert.match(items[0].textContent,/Codex · Model One · high effort · Can edit files/,'Queue row shows model and effort level');
+  assert.match(items[1].textContent,/Claude · Read only · asks before changes/);
   assert.equal(items[0].querySelector('.queue-up').disabled,true,'The first prompt cannot move up.');
   items[1].querySelector('.queue-up').click();await flush();assert.deepEqual(actions.at(-1),{action:'move',id:'q1',index:0});
   ui.$('prompt-queue-list').querySelectorAll('li')[0].querySelector('.queue-edit').click();
   const editor=ui.$('prompt-queue-list').querySelector('textarea');editor.value='Then update the changelog for 0.14';
+  const modelSelect=ui.$('prompt-queue-list').querySelector('.prompt-queue-model');
+  const effortSelect=ui.$('prompt-queue-list').querySelector('.prompt-queue-effort');
+  assert.equal(modelSelect.value,'model-one');
+  assert.equal(effortSelect.value,'high');
+  modelSelect.value='model-two';
+  modelSelect.dispatchEvent(new UIEvent('change'));
+  assert.equal(effortSelect.disabled,false);
+  effortSelect.value='low';
   ui.$('prompt-queue-list').querySelectorAll('button').find(button=>button.textContent==='Save').click();await flush();
-  assert.deepEqual(actions.at(-1),{action:'update',id:'q0',text:'Then update the changelog for 0.14'});
+  assert.deepEqual(actions.at(-1),{action:'update',id:'q0',text:'Then update the changelog for 0.14',model:'model-two',effort:'low'});
   ui.$('prompt-queue-list').querySelectorAll('li')[1].querySelector('.queue-remove').click();await flush();assert.equal(actions.at(-1).action,'remove');
   conversation.queuePaused={reason:'You stopped the run.'};await ui.window.relayUI.refresh();
   assert.equal(ui.$('prompt-queue-paused').hidden,false);assert.match(ui.$('prompt-queue-paused').textContent,/You stopped the run/);assert.equal(ui.$('prompt-queue-toggle').textContent,'Resume queue');

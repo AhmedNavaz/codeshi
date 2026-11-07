@@ -306,7 +306,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'parallel_task') c.parallelTasks = [...(c.parallelTasks || []), record.task];
     if (record.type === 'parallel_task_update') { const task = c.parallelTasks?.find(item => item.id === record.id); if (task) Object.assign(task, record.changes); }
     if (record.type === 'queue_add') c.queue = [...c.queue, record.item];
-    if (record.type === 'queue_update') c.queue = c.queue.map(item => item.id === record.id ? { ...item, text: record.text } : item);
+    if (record.type === 'queue_update') c.queue = c.queue.map(item => { if (item.id !== record.id) return item; const updated = { ...item }; if (record.text !== undefined) updated.text = record.text; if ('model' in record) updated.model = record.model; if ('effort' in record) updated.effort = record.effort; if (record.clearRouting) delete updated.routing; return updated; });
     if (record.type === 'queue_move') { const item = c.queue.find(entry => entry.id === record.id); if (item) { const rest = c.queue.filter(entry => entry !== item); rest.splice(record.index, 0, item); c.queue = rest; } }
     if (record.type === 'queue_remove' || record.type === 'queue_started') c.queue = c.queue.filter(item => item.id !== record.id);
     // One record, so a restart finds each prompt with one owner: moved or not, never both (#93).
@@ -611,7 +611,7 @@ export class Broker extends EventEmitter {
   settings(c, { provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', effort = c.efforts[provider]?.[model || 'default'] ?? null }) {
     checkSettings(provider, mode, approvalPolicy);
     this.validateSelection(model, transport, effort);
-    if (c.activeRun) throw Object.assign(new Error('Stop the current run before switching assistants.'), { status: 409 });
+    if (c.activeRun && (provider !== c.provider || mode !== c.mode || approvalPolicy !== (c.approvalPolicy || 'ask'))) throw Object.assign(new Error('Stop the current run before switching assistants.'), { status: 409 });
     this.record(c, { type: 'settings', provider, mode, approvalPolicy, model, transport, effort });
     return this.view(c);
   }

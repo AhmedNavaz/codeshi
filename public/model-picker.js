@@ -42,7 +42,7 @@
     $('picked-model').textContent = auto ? window.relayRouting?.modeNames[auto.mode] || 'Auto' : local?.model || (state.model ? modelName(selectedRow(state.provider) || { id: state.model }) : 'Default');
     $('picked-agent-icon').className = 'agent-icon ' + (auto ? 'auto' : actual === 'local' ? 'codex' : actual);
     trigger.classList.toggle('routing', Boolean(auto));
-    trigger.disabled = !state.ready || !state.projectId || Boolean(state.pending || state.settingsPending || api.isRunning());
+    trigger.disabled = !state.ready || !state.projectId || Boolean(state.pending || state.settingsPending);
     trigger.setAttribute('aria-label', auto ? `Routing: ${$('picked-model').textContent}. Change it in the Agents panel.` : `Choose agent and model. Current: ${names[actual]}, ${$('picked-model').textContent}`);
     trigger.title = auto ? 'Routing picks the agent, model and effort for each message. Click to change it.' : '';
     if (local) {
@@ -88,7 +88,7 @@
     choice.setAttribute('aria-pressed', String(selected));
     choice.dataset.nav = 'true';
     choice.title = row.description && row.description !== modelId(row) ? row.description : modelId(row) || row.description || '';
-    choice.disabled = saving;
+    const busyAgent = api.isRunning() && provider !== (state.localSelections?.[scope] ? 'local' : state.provider); choice.disabled = Boolean(saving || busyAgent); if (busyAgent) choice.title = 'Stop the current run before switching assistants.';
     const check = node('span', undefined, 'picker-row-check'); check.setAttribute('aria-hidden', 'true');
     choice.append(node('span', modelName(row), 'picker-row-name'), node('span', row.tag || '', 'picker-row-tag'), check);
     choice.addEventListener('click', () => choose(provider, row));
@@ -330,5 +330,6 @@
     models: provider => cache.get(api.getState().projectId + ':' + provider)?.models || [],
     // The model's display name when the agent has reported it.
     modelName: (provider, id) => id ? modelName((cache.get(api.getState().projectId + ':' + provider)?.models || []).find(row => modelId(row) === id) || { id }) : '',
+    preload: (projectId = api.getState().projectId) => preloadAll(projectId),
   };
 })();

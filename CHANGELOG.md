@@ -4,6 +4,10 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Added
+
+- **Choose model and effort for each queued message** (#113). Model and effort pickers remain active while a run is working, applying to the prompt being queued without changing the active run. Queued messages display their model, reasoning effort, and routing details. Both model and effort can be edited directly on queued messages before they start, on desktop and phone. Changing the model of a routed message turns it into a manual choice.
+
 ### Fixed
 
 - **Long workspace chat opening and paging** (#124). Opening a workspace with thousands of messages no longer stalls or hangs the app. The conversation opens immediately on its latest messages, with older history loaded in pages as you scroll up while preserving scroll position. Search across unloaded history, jumping to past runs or messages, live message streaming, and export continue to cover the full conversation history.

@@ -92,3 +92,40 @@ test('the queue has a limit, refuses settings a run would refuse, and stale edit
   const running = broker.running; env.release(); await running.done;
   assert.equal(c.queue.length, QUEUE_LIMIT, 'A paused queue does not start the next prompt.');
 });
+
+test('choosing and editing model and effort for queued prompts survives restarts and applies to the run', { skip: scriptCLIs }, async t => {
+  const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
+  broker.start(c, { text: 'Hold the workspace', provider: 'codex', mode: 'edit', model: 'initial-model', effort: 'low' });
+  assert.equal(c.activeRun.model, 'initial-model');
+  assert.equal(c.activeRun.effort, 'low');
+
+  broker.settings(c, { model: 'next-model', effort: 'high' });
+  assert.equal(c.activeRun.model, 'initial-model');
+  assert.equal(c.activeRun.effort, 'low');
+  assert.equal(c.model, 'next-model');
+  assert.equal(c.effort, 'high');
+
+  const q1 = add(broker, c, 'First queued with routing', { model: 'routed-model', effort: 'medium', routing: { mode: 'balanced', reason: 'Initial routing reason', tier: 'standard' } }).queue[0].id;
+  assert.equal(c.queue[0].model, 'routed-model');
+  assert.equal(c.queue[0].effort, 'medium');
+  assert.equal(c.queue[0].routing.reason, 'Initial routing reason');
+
+  broker.queueAction(c, { action: 'update', id: q1, text: 'First queued, edited model', model: 'manual-model', effort: 'high' });
+  assert.equal(c.queue[0].model, 'manual-model');
+  assert.equal(c.queue[0].effort, 'high');
+  assert.equal(c.queue[0].routing, undefined, 'Changing model clears routing so reason is no longer shown');
+
+  assert.throws(() => broker.queueAction(c, { action: 'update', id: q1, effort: 'unsupported-effort' }), /supported reasoning effort/);
+
+  await broker.close();
+  const reopened = env.open(), again = reopened.get(c.id);
+  assert.equal(again.queue[0].model, 'manual-model');
+  assert.equal(again.queue[0].effort, 'high');
+  assert.equal(again.queue[0].routing, undefined);
+
+  env.release();
+  reopened.queueAction(again, { action: 'resume' });
+  await idle(reopened, again);
+  assert.equal(again.lastRun.model, 'manual-model');
+  assert.equal(again.lastRun.effort, 'high');
+});

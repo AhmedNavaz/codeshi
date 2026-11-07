@@ -1003,7 +1003,7 @@
   let showAllModels = false;
   function runSheet(host) {
     const locked = isRunning(), auto = routing(), { provider, model, effort, mode, approvalPolicy } = S.settings;
-    if (locked) host.append(node('p', 'sheet-note', 'Locked while this run is working. Stop it to change these.'));
+    if (locked) host.append(node('p', 'sheet-note', 'Agent and access are locked while this run is working. Model and effort apply to queued messages.'));
     const access = () => {
       host.append(segmented('Access', [['read', 'Read only'], ['ask', 'Asks first'], ['auto', 'Full auto']], mode === 'read' ? 'read' : approvalPolicy, value => changeSettings(value === 'read' ? { mode: 'read', approvalPolicy: 'ask' } : { mode: 'edit', approvalPolicy: value }), locked));
       if (mode !== 'read' && approvalPolicy === 'auto') host.append(node('p', 'sheet-note warn', 'The agent acts without asking, so requests won’t come to this phone.'));
@@ -1033,7 +1033,7 @@
       const visible = showAllModels ? all : all.filter((row, index) => index < 3 || modelId(row) === model);
       for (const row of visible) {
         const selected = modelId(row) === (model || ''), choice = button('', () => { if (!selected) changeSettings({ model: modelId(row) }); }, 'row row-model');
-        choice.setAttribute('aria-pressed', String(selected)); choice.disabled = locked;
+        choice.setAttribute('aria-pressed', String(selected));
         choice.append(node('span', 'row-title', modelName(row)));
         if (selected) choice.append(icon('check'));
         models.append(choice);
@@ -1044,7 +1044,7 @@
 
       // With no model chosen, the levels are those of the agent's default model, as on the desktop.
       const reported = S.models[provider]?.rows || [], levels = effortsOf(reported.find(row => [row.id, row.model, row.value, row.resolvedModel].includes(model)) || (!model && reported.find(row => row.isDefault || row.value === 'default')));
-      if (levels.length) host.append(segmented('Effort', [['', 'Default'], ...levels.map(level => [level, EFFORT_NAMES[level] || level])], effort || '', value => changeSettings({ effort: value || null }), locked));
+      if (levels.length) host.append(segmented('Effort', [['', 'Default'], ...levels.map(level => [level, EFFORT_NAMES[level] || level])], effort || '', value => changeSettings({ effort: value || null })));
     } else access();
     if (!auto && charged(provider)) host.append(node('p', 'sheet-note warn', `${name(provider)} ${S.accounts[provider].billingSource === 'api' ? 'bills your API account' : 'could not confirm its billing'}. You’ll be asked before each message.`));
   }
@@ -1054,6 +1054,7 @@
     loadStatus(); loadModels(S.settings.provider);
   });
 
+  let editingQueueId = null;
   // What's queued to run next.
   function queueSheet(host) {
     const queue = S.c?.queue || [], paused = S.c?.queuePaused;
@@ -1063,17 +1064,88 @@
       host.append(note);
     }
     if (!queue.length) { host.append(node('p', 'sheet-text', 'Nothing is queued.')); return; }
+    for (const item of queue) loadModels(item.provider);
     queue.forEach((item, index) => {
-      const row = node('div', 'queue-row'), text = node('div', 'queue-text');
-      text.append(node('p', '', item.text), node('small', '', [name(item.provider), item.mode === 'read' ? 'Read only' : item.approvalPolicy === 'auto' ? 'Full auto' : 'Asks first'].join(' · ')));
-      row.append(text);
-      if (index) { const top = button('', () => attempt(async () => { await api(endpoint('queue'), { body: { action: 'move', id: item.id, index: 0 } }); await refreshConversation(); drawSheet(); }), 'round ghost small'); top.setAttribute('aria-label', 'Move to the top of the queue'); top.append(icon('send')); row.append(top); }
-      const remove = button('', () => attempt(async () => { await api(endpoint('queue'), { body: { action: 'remove', id: item.id } }); await refreshConversation(); if (!(S.c?.queue || []).length) closeSheet(); else drawSheet(); }), 'round ghost small');
-      remove.setAttribute('aria-label', `Remove from the queue: ${item.text.slice(0, 60)}`); remove.append(icon('close')); row.append(remove);
+      const row = node('div', 'queue-row');
+      if (editingQueueId === item.id) {
+        const form = node('div', 'queue-edit-form');
+        const textarea = node('textarea', 'queue-edit-input');
+        textarea.value = item.text;
+        textarea.rows = 3;
+        textarea.setAttribute('aria-label', 'Edit queued message');
+
+        const controls = node('div', 'queue-edit-controls');
+        const mSelect = node('select', 'phone-select queue-model-select');
+        mSelect.setAttribute('aria-label', 'Model');
+        const eSelect = node('select', 'phone-select queue-effort-select');
+        eSelect.setAttribute('aria-label', 'Reasoning effort');
+
+        const pModels = modelRows(item.provider);
+        const baseOpt = node('option', '', `Let ${name(item.provider)} choose`); baseOpt.value = ''; mSelect.append(baseOpt);
+        for (const r of pModels) {
+          const opt = node('option', '', modelName(r)); opt.value = modelId(r); mSelect.append(opt);
+        }
+        if (item.model && !pModels.some(r => modelId(r) === item.model)) {
+          const opt = node('option', '', item.model); opt.value = item.model; mSelect.append(opt);
+        }
+        mSelect.value = item.model || '';
+
+        const updateEfforts = () => {
+          const chosen = mSelect.value;
+          const selected = pModels.find(r => modelId(r) === chosen) || (!chosen && (S.models[item.provider]?.rows || []).find(r => r.isDefault || r.value === 'default'));
+          const supported = effortsOf(selected);
+          eSelect.replaceChildren();
+          const defOpt = node('option', '', 'Default'); defOpt.value = ''; eSelect.append(defOpt);
+          for (const eff of supported) {
+            const opt = node('option', '', EFFORT_NAMES[eff] || eff); opt.value = eff; eSelect.append(opt);
+          }
+          if (item.effort && !supported.includes(item.effort) && chosen === (item.model || '')) {
+            const opt = node('option', '', `${EFFORT_NAMES[item.effort] || item.effort} (saved)`); opt.value = item.effort; eSelect.append(opt);
+          }
+          eSelect.disabled = !supported.length;
+          eSelect.value = supported.includes(item.effort) && chosen === (item.model || '') ? item.effort : (chosen === (item.model || '') && item.effort ? item.effort : '');
+        };
+        updateEfforts();
+        mSelect.addEventListener('change', updateEfforts);
+        controls.append(mSelect, eSelect);
+
+        const actions = node('div', 'queue-edit-actions');
+        const save = button('Save', () => attempt(async () => {
+          const payload = { action: 'update', id: item.id, text: textarea.value };
+          const newModel = mSelect.value || null;
+          const newEffort = eSelect.value || null;
+          if (newModel !== (item.model || null)) payload.model = newModel;
+          if (newEffort !== (item.effort || null)) payload.effort = newEffort;
+          await api(endpoint('queue'), { body: payload });
+          editingQueueId = null;
+          await refreshConversation();
+          drawSheet();
+        }), 'choice');
+        const cancel = button('Cancel', () => { editingQueueId = null; drawSheet(); }, 'choice');
+        actions.append(save, cancel);
+        form.append(textarea, controls, actions);
+        row.append(form);
+      } else {
+        const text = node('div', 'queue-text');
+        const mName = item.model ? modelName(modelRows(item.provider).find(row => modelId(row) === item.model) || { id: item.model }) : '';
+        const effortLabel = item.effort ? `${item.effort} effort` : '';
+        const reason = item.routing?.reason || '';
+        const meta = [name(item.provider), mName, effortLabel, reason, item.mode === 'read' ? 'Read only' : item.approvalPolicy === 'auto' ? 'Full auto' : 'Asks first', item.movedFrom ? `Moved from ${name(item.movedFrom)}` : ''].filter(Boolean).join(' · ');
+        text.append(node('p', '', item.text), node('small', '', meta));
+        row.append(text);
+        if (index) { const top = button('', () => attempt(async () => { await api(endpoint('queue'), { body: { action: 'move', id: item.id, index: 0 } }); await refreshConversation(); drawSheet(); }), 'round ghost small'); top.setAttribute('aria-label', 'Move to the top of the queue'); top.append(icon('send')); row.append(top); }
+        const edit = button('', () => { editingQueueId = item.id; drawSheet(); }, 'round ghost small');
+        edit.setAttribute('aria-label', `Edit queued message: ${item.text.slice(0, 60)}`); edit.append(icon('pencil')); row.append(edit);
+        const remove = button('', () => attempt(async () => { await api(endpoint('queue'), { body: { action: 'remove', id: item.id } }); await refreshConversation(); if (!(S.c?.queue || []).length) closeSheet(); else drawSheet(); }), 'round ghost small');
+        remove.setAttribute('aria-label', `Remove from the queue: ${item.text.slice(0, 60)}`); remove.append(icon('close')); row.append(remove);
+      }
       host.append(row);
     });
   }
-  $('up-next').addEventListener('click', () => openSheet('Up next', queueSheet, () => JSON.stringify([S.c?.queue?.map(item => item.id), S.c?.queuePaused])));
+  $('up-next').addEventListener('click', () => {
+    editingQueueId = null;
+    openSheet('Up next', queueSheet, () => JSON.stringify([S.c?.queue?.map(item => [item.id, item.text, item.model, item.effort, item.routing]), S.c?.queuePaused, editingQueueId]));
+  });
 
   // ---- Drawing.
   function render() {

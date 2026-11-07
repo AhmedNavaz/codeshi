@@ -45,7 +45,7 @@
       $('effort-select').value = state.effort || '';
       $('effort-select').dataset.supported = String(efforts.length > 0);
     }
-    const locked = !state.ready || state.pending || state.settingsPending || state.conversation?.status === 'running';
+    const locked = !state.ready || state.pending || state.settingsPending;
     $('model-select').disabled = Boolean(locked || loadingModels[provider]);
     $('save-custom-model').disabled = Boolean(locked);
     $('custom-model-input').disabled = Boolean(locked);

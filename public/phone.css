@@ -227,6 +227,12 @@ html:has(body.phone), body.phone { position: fixed; inset: 0; overflow: hidden; 
 .choice strong { color: var(--text-strong); font-weight: 500; }
 .choice span { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .queue-row { display: flex; align-items: flex-start; gap: 2px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.queue-edit-form { width: 100%; display: grid; gap: 8px; padding: 4px 0; }
+.queue-edit-input { width: 100%; min-height: 60px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-input); color: var(--text-strong); font: 14px var(--font); resize: vertical; }
+.queue-edit-controls { display: flex; flex-wrap: wrap; gap: 6px; }
+.phone-select { padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-input); color: var(--text-strong); font: 13px var(--font); max-width: 100%; }
+.queue-edit-actions { display: flex; gap: 6px; }
+.queue-edit-actions .choice { min-height: 36px; width: auto; padding: 6px 16px; }
 .queue-row:last-child { border-bottom: 0; }
 .queue-text { flex: 1; min-width: 0; padding-right: 6px; }
 .queue-text p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; margin: 0 0 2px; overflow: hidden; color: var(--text-strong); font-size: 14.5px; overflow-wrap: anywhere; }

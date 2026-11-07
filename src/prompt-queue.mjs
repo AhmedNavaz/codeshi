@@ -57,10 +57,14 @@ export class PromptQueue {
       const routing = routingNote(input.routing);
       broker.record(c, { type: 'queue_add', item: { id: randomUUID(), text, provider, model, effort, mode, approvalPolicy, attachments, billingConfirmed: input.billingConfirmed === true, ...(routing ? { routing } : {}), createdAt: new Date().toISOString() } });
     } else if (action === 'update') {
-      this.item(c, input.id);
-      const text = typeof input.text === 'string' ? input.text.trim() : '';
+      const item = this.item(c, input.id);
+      const text = typeof input.text === 'string' ? input.text.trim() : item.text;
       if (!text || text.length > 100000) throw Object.assign(new Error('Enter a message between 1 and 100,000 characters.'), { status: 400 });
-      broker.record(c, { type: 'queue_update', id: input.id, text });
+      const model = input.model !== undefined ? (input.model || null) : item.model;
+      const effort = input.effort !== undefined ? (input.effort || null) : item.effort;
+      broker.validateSelection(model, 'auto', effort);
+      const clearRouting = Boolean(item.routing && (input.clearRouting || (input.model !== undefined && input.model !== item.model)));
+      broker.record(c, { type: 'queue_update', id: input.id, text, ...(input.model !== undefined ? { model } : {}), ...(input.effort !== undefined ? { effort } : {}), ...(clearRouting ? { clearRouting: true } : {}) });
     } else if (action === 'move') {
       this.item(c, input.id);
       const index = Number(input.index);
