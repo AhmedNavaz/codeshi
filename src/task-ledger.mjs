@@ -70,6 +70,11 @@ export function normalizeUsage(provider, raw, { previous = null } = {}) {
     tokens = { input: input === null || cacheRead === null || input < cacheRead ? null : input - cacheRead, output: since('output'), cacheRead, cacheWrite: since('cacheWrite'), reasoning: since('reasoning') };
     // The last request is a separate provider reading, not a session total or a measurement of the entire native context.
     context = { size: number(raw.modelContextWindow), lastRequest: raw.last && Object.keys(raw.last).length ? raw.last : null };
+  } else if (typeof raw.inputTokens === 'number' || typeof raw.outputTokens === 'number') {
+    // The run's own turns, as the ACP prompt result reports them. Input already leaves out what was read from cache.
+    source = 'acp-prompt-usage';
+    coverage = { scope: 'main-agent-turn', excluded: ['separate-subagent-and-auxiliary-calls'] };
+    tokens = { input: number(raw.inputTokens), output: number(raw.outputTokens), cacheRead: number(raw.cachedReadTokens), cacheWrite: number(raw.cachedWriteTokens), reasoning: number(raw.thoughtTokens) };
   } else if (typeof raw.used === 'number') {
     // The context the session is holding, which is not what the run used, so its tokens stay unknown.
     source = 'acp-context';

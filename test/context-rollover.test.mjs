@@ -32,6 +32,11 @@ test('Flow targets follow routing modes and reported model capacity; totals neve
   assert.equal(rolloverDecision(c, 'codex').rollover, true, 'An unmeasured old session is refreshed without treating its totals as occupancy.');
   c.sessions.codex.managedContextVersion = 1;
   assert.equal(rolloverDecision(c, 'codex').rollover, false, 'Cumulative usage alone is not a context reading.');
+  // Gemini's session is continued too now, so its runtime's context reading counts against the same targets.
+  const gemini = { ...conversation(null), provider: 'gemini', routing: { mode: 'balanced' }, sessions: { gemini: { id: 'google-session', managedContextVersion: 1, contextUsage: { ...snapshot(75000, 1048576), source: 'acp-usage' } } } };
+  assert.deepEqual([rolloverDecision(gemini, 'gemini').thresholdTokens, rolloverDecision(gemini, 'gemini').rollover], [75000, true]);
+  gemini.sessions.gemini.contextUsage.used = 20000;
+  assert.equal(rolloverDecision(gemini, 'gemini').rollover, false);
   c.sessions.codex.contextUsage = { lastRequestInput: 90000, capacity: 200000 };
   assert.equal(rolloverDecision(c, 'codex').source, 'last-request-input-lower-bound');
   assert.equal(rolloverDecision(c, 'codex').estimated, true);

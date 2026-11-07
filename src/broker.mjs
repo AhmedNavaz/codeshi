@@ -398,6 +398,7 @@ export class Broker extends EventEmitter {
       workspaceSignature: record.workspaceSignature,
       };
     }
+    if (record.type === 'session_lost' && c.sessions[record.provider]?.id === record.id) delete c.sessions[record.provider];
     if (record.type === 'checkpoint' && c.sessions[record.provider]) {
       c.sessions[record.provider].cursor = record.seq;
       if (c.lastRun?.context?.restoredAfterCompaction && !c.lastRun.compactions) c.sessions[record.provider].needsContextRefresh = false;
@@ -804,13 +805,13 @@ export class Broker extends EventEmitter {
     // Reconstruct from the canonical journal whenever membership changes.
     const switchedAgent = Boolean(c.lastRun && (c.lastRun.provider !== provider || c.lastRun.connection === 'local'));
     const changedWorkspace = Boolean(c.sessions[provider] && c.sessions[provider].workspaceSignature !== this.workspaceSignature);
-    const ordinaryFresh = Boolean(fresh || changedWorkspace || switchedAgent || provider === 'gemini' || !c.sessions[provider]?.id);
+    const ordinaryFresh = Boolean(fresh || changedWorkspace || switchedAgent || !c.sessions[provider]?.id);
     const decision = rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: routing?.mode || c.routing?.mode || this.contextRouting(), model, effort });
     const rollover = !review && !local && decision.rollover
       ? { ...decision, previousSessionId: c.sessions[provider]?.id || null, memory: milestoneMemory(c, { folders: this.workspaceFolders, text }) } : null;
     const resetSession = Boolean(c.sessions[provider] && (changedWorkspace || switchedAgent || fresh || rollover));
     const effectiveFresh = ordinaryFresh || Boolean(rollover);
-    const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : provider === 'gemini' ? 'provider-fresh-session' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
+    const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     const sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
     const verification = verificationForRun(this.verificationCadence(), { retryOf, automaticReview });
     const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
@@ -958,7 +959,11 @@ export class Broker extends EventEmitter {
             if (message.type === 'event') this.event(run, message.event);
             if (message.type === 'metadata') { this.record(c, { type: 'run_metadata', metadata: message.metadata }); if (message.metadata?.usage || typeof message.metadata?.costUSD === 'number') this.budget.check(run); }
             if (message.type === 'steer-result') { run.steers.get(message.id)?.(message); run.steers.delete(message.id); }
-            if (message.type === 'failure') { run.failed = true; run.errorCategory = message.category; run.stderr = clip(run.stderr + '\n' + message.message); }
+            if (message.type === 'failure') {
+              run.failed = true; run.errorCategory = message.category; run.stderr = clip(run.stderr + '\n' + message.message);
+              // A saved session the agent can no longer continue: the next message starts a fresh one with a task brief.
+              if (message.category === 'session' && sessionId && c.sessions[provider]?.id === sessionId) this.record(c, { type: 'session_lost', provider, id: sessionId });
+            }
             if (message.type === 'approval') {
               if (review && !['Read', 'Glob', 'Grep'].includes(message.request.kind)) { run.child.send({ type: 'approval-result', id: message.request.id, allow: false }); return; }
               if (run.approvalPolicy === 'auto') {
@@ -1023,8 +1028,8 @@ export class Broker extends EventEmitter {
   }
 
   event(run, event) {
-    const phase = event.type === 'thread.started' || event.type === 'system' && event.subtype === 'init' ? 'working' : event.item?.type === 'reasoning' ? 'reasoning' : event.type === 'relay.progress' ? event.phase : event.type === 'relay.delta' ? 'responding' : event.type === 'stream_event' && event.event?.delta?.type === 'text_delta' ? 'responding' : ['command_execution', 'file_change', 'mcp_tool_call', 'web_search'].includes(event.item?.type) ? (event.type === 'item.started' ? 'tool' : 'working') : event.type === 'assistant' && event.message?.content?.some(block => block.type === 'tool_use') ? 'tool' : null;
-    const toolIds = [...(event.item && ['command_execution', 'file_change', 'mcp_tool_call', 'web_search'].includes(event.item.type) && event.item.id ? [event.item.id] : []), ...(event.type === 'assistant' ? (event.message?.content || []).filter(block => block.type === 'tool_use').map(block => block.id) : [])];
+    const phase = event.type === 'thread.started' || event.type === 'system' && event.subtype === 'init' ? 'working' : event.item?.type === 'reasoning' ? 'reasoning' : event.type === 'relay.progress' ? event.phase : event.type === 'relay.delta' ? 'responding' : event.type === 'stream_event' && event.event?.delta?.type === 'text_delta' ? 'responding' : ['command_execution', 'file_change', 'mcp_tool_call', 'web_search', 'agent_tool'].includes(event.item?.type) ? (event.type === 'item.started' ? 'tool' : 'working') : event.type === 'assistant' && event.message?.content?.some(block => block.type === 'tool_use') ? 'tool' : null;
+    const toolIds = [...(event.item && ['command_execution', 'file_change', 'mcp_tool_call', 'web_search', 'agent_tool'].includes(event.item.type) && event.item.id ? [event.item.id] : []), ...(event.type === 'assistant' ? (event.message?.content || []).filter(block => block.type === 'tool_use').map(block => block.id) : [])];
     run.seenTools ||= new Set();
     for (const id of toolIds) if (!run.seenTools.has(id)) { run.seenTools.add(id); if (run.c.activeRun) run.c.activeRun.toolCount = run.seenTools.size; }
     this.touch(run, phase);
@@ -1081,6 +1086,8 @@ export class Broker extends EventEmitter {
         }
       }
       if (item.type === 'file_change') this.message(c, 'activity', `File changes: ${JSON.stringify(fileChanges(item.changes))}`, provider, id);
+      // Saved as Claude's steps are: the tool's name, its input as one line of JSON, then its result.
+      if (item.type === 'agent_tool') this.message(c, 'activity', clip(`${item.name}\n${toolInput(item.name, item.input)}${item.result ? `\n${item.result}` : ''}`), provider, id, undefined, { status: event.type === 'item.completed' ? 'completed' : 'running', isError: item.failed === true });
       if (['mcp_tool_call', 'web_search'].includes(item.type)) this.message(c, 'activity', clip(`${item.type}: ${item.tool || item.query || ''}\n${typeof item.result === 'string' && item.result ? item.result : JSON.stringify(item.result || item.arguments || '')}`), provider, id);
       // Codex refuses a connector call in Read only without asking, in words that don't name the setting.
       if (item.type === 'mcp_tool_call' && event.type === 'item.completed' && provider === 'codex' && run.mode === 'read' && !run.review && !run.blockExplained && /approval policy is never/i.test(item.error?.message || '')) {

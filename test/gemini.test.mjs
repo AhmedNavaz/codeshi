@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { scriptCLIs, noSymlinks } from './platform.mjs';
-import { GeminiClient, geminiInvocation, runGemini } from '../src/gemini.mjs';
+import { GeminiClient, geminiInvocation, promptUsage, runGemini } from '../src/gemini.mjs';
 import { Broker } from '../src/broker.mjs';
 import { accountStatus, listModels, providerUsage } from '../src/providers.mjs';
 import { exportConversation, readConversationPackage } from '../src/conversation-export.mjs';
@@ -37,18 +37,24 @@ test('Gemini invocation enforces read/edit policy without changing user settings
 });
 
 class Client extends EventEmitter {
-  requests = []; replies = []; pending = new Map();
+  requests = []; replies = []; pending = new Map(); sessionId = 'fresh-session'; capabilities = { promptCapabilities: { image: true } };
   constructor(script = async () => {}, model = 'chosen-model', stopReason = 'end_turn') { super(); Object.assign(this, { script, model, stopReason }); }
   async request(method, params) {
     this.requests.push({ method, params });
-    if (method === 'initialize') return { protocolVersion: 1, agentCapabilities: { promptCapabilities: { image: true } } };
+    if (method === 'initialize') return { protocolVersion: 1, agentCapabilities: this.capabilities };
     if (method === 'session/new') return { sessionId: 'fresh-session', models: { currentModelId: this.model } };
-    if (method === 'session/prompt') { await this.script(this); return { stopReason: this.stopReason }; }
+    if (['session/resume', 'session/load'].includes(method)) {
+      if (this.lost) throw new Error('Session not found in the current GEMINI_HOME');
+      this.sessionId = params.sessionId;
+      if (method === 'session/load') for (const [role, text] of [['user', 'Earlier request'], ['agent', 'Earlier reply']]) this.update({ sessionUpdate: `${role}_message_chunk`, content: { type: 'text', text } });
+      return { models: { currentModelId: this.model } };
+    }
+    if (method === 'session/prompt') { await this.script(this); return { stopReason: this.stopReason, ...(this.usage ? { usage: this.usage } : {}) }; }
     throw new Error('Unexpected method: ' + method);
   }
   send(message) { this.replies.push(message); this.pending.get(message.id)?.(message); this.pending.delete(message.id); }
-  rpc(method, params, id = this.requests.length + this.replies.length + 10) { return new Promise(resolve => { this.pending.set(id, resolve); this.emit('message', { jsonrpc: '2.0', id, method, params: { sessionId: 'fresh-session', ...params } }); }); }
-  update(update) { this.emit('message', { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'fresh-session', update } }); }
+  rpc(method, params, id = this.requests.length + this.replies.length + 10) { return new Promise(resolve => { this.pending.set(id, resolve); this.emit('message', { jsonrpc: '2.0', id, method, params: { sessionId: this.sessionId, ...params } }); }); }
+  update(update) { this.emit('message', { jsonrpc: '2.0', method: 'session/update', params: { sessionId: this.sessionId, update } }); }
   close() { this.closed = true; }
   fail(error) { throw error; }
 }
@@ -71,6 +77,38 @@ test('Gemini streams replies and tool activity, reports actual model, and permit
   assert.equal(events.at(-1).type, 'turn.completed'); assert(events.some(event => event.type === 'relay.delta' && event.text === 'Gemini result'));
   assert(!JSON.stringify(events).includes('Private chain of thought')); assert.equal(metadata[0].effectiveModel, 'chosen-model');
   assert.deepEqual(client.requests.map(r => r.method), ['initialize', 'session/new', 'session/prompt']); assert(client.closed);
+});
+
+test('Gemini continues a saved session when the runtime can, skips the replayed history, and says when it cannot continue one', async () => {
+  const reply = async c => { c.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Continued' } }); };
+  // The runtime's own resume keeps the session as it is, and the turn's usage is reported for the run.
+  const resumed = new Client(reply); resumed.capabilities = { loadSession: true, sessionCapabilities: { resume: {} } };
+  resumed.usage = { totalTokens: 130, inputTokens: 100, outputTokens: 20, thoughtTokens: 10, cachedReadTokens: 60, cachedWriteTokens: 0 };
+  const { events, metadata } = await run(resumed, { sessionId: 'saved-session' });
+  assert.deepEqual(resumed.requests.map(r => r.method), ['initialize', 'session/resume', 'session/prompt']);
+  assert.deepEqual(resumed.requests[1].params, { sessionId: 'saved-session', cwd: '/project', mcpServers: [] }); assert.equal(resumed.requests[2].params.sessionId, 'saved-session');
+  assert.deepEqual(events.find(event => event.type === 'thread.started'), { type: 'thread.started', thread_id: 'saved-session' });
+  assert.deepEqual(events.filter(event => event.type === 'item.completed').map(event => event.item.text), ['Continued']); assert.equal(events.at(-1).type, 'turn.completed');
+  assert.deepEqual(metadata.find(entry => entry.usage).usage, { inputTokens: 100, outputTokens: 20, thoughtTokens: 10, cachedReadTokens: 60, cachedWriteTokens: 0 });
+  // The standard load replays the saved messages first; the chat already has them.
+  const loaded = new Client(reply); loaded.capabilities = { loadSession: true };
+  const replay = await run(loaded, { sessionId: 'saved-session' });
+  assert.equal(loaded.requests[1].method, 'session/load');
+  assert.deepEqual(replay.events.filter(event => event.type === 'item.completed').map(event => event.item.text), ['Continued']); assert(!JSON.stringify(replay.events).includes('Earlier reply'));
+  // A new session is remembered only when the runtime could continue it later.
+  const fresh = new Client(); fresh.capabilities = { sessionCapabilities: { resume: {} } };
+  assert.deepEqual((await run(fresh)).events.find(event => event.type === 'thread.started'), { type: 'thread.started', thread_id: 'fresh-session' });
+  assert(!(await run(new Client())).events.some(event => event.type === 'thread.started'));
+  // A session the runtime no longer has, or a runtime that can't continue any, fails the run before any prompt and says what happens next.
+  const lost = new Client(); lost.capabilities = { sessionCapabilities: { resume: {} } }; lost.lost = true;
+  await assert.rejects(run(lost, { sessionId: 'saved-session' }), error => /could not continue its saved session: Session not found in the current GEMINI_HOME\. The next message starts a fresh session with a task brief\./.test(error.message) && error.category === 'session');
+  assert(!lost.requests.some(r => r.method === 'session/prompt'));
+  const unable = new Client();
+  await assert.rejects(run(unable, { sessionId: 'saved-session' }), error => /cannot continue a saved session/.test(error.message) && error.category === 'session');
+  assert.deepEqual(unable.requests.map(r => r.method), ['initialize']);
+  // Usage is added up over a run's turns, and a count any turn left out stays unknown.
+  assert.deepEqual(promptUsage([{ inputTokens: 100, outputTokens: 20, thoughtTokens: 10, cachedReadTokens: 60, cachedWriteTokens: 0 }, { inputTokens: 50, outputTokens: 5 }]), { inputTokens: 150, outputTokens: 25, thoughtTokens: null, cachedReadTokens: null, cachedWriteTokens: null });
+  assert.equal(promptUsage([undefined, { stopReason: 'end_turn' }]), null);
 });
 
 test('Gemini rejects read-only writes, denied approvals and persistent-only permission offers', async () => {

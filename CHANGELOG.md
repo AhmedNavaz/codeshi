@@ -8,11 +8,22 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 - **Choose model and effort for each queued message** (#113). Model and effort pickers remain active while a run is working, applying to the prompt being queued without changing the active run. Queued messages display their model, reasoning effort, and routing details. Both model and effort can be edited directly on queued messages before they start, on desktop and phone. Changing the model of a routed message turns it into a manual choice.
 
+### Changed
+
+- **Gemini keeps its session between messages.** Every message used to open a new Antigravity session with only a summary of the chat, so Gemini started each one by reading the files and the issue again. It now continues its own session, as Claude and Codex do, and starts a fresh one with a task brief when you switch agents, change the workspace folders, refresh the context or reach the context limit. If the runtime no longer has the saved session, that message stops and says so, and the next one starts over. Each Gemini run now also records the tokens its turns used, next to the context the session holds.
+
 ### Fixed
 
 - **Connectors and MCP tools in Codex** (#111). A GitHub connector write, or any tool Codex asks to run, no longer fails with `user rejected MCP tool call` when nobody rejected it. It now follows the run's access: Full auto-approval runs it and notes it in the timeline, and Ask before changes shows who it reaches and what it will do, then Approve or Deny. A denial ends with that call and is not remembered. Read only says it blocked the call.
 - **What an MCP server asks of you, in Codex** (#111). A sign-in or a form now shows as a question, with a link that names its address, and waits for you even in Full auto-approval. Anything Codeshi can't show is cancelled with a note that says so. A request for more access also gets a real answer instead of a silent refusal.
 - **Long workspace chat opening and paging** (#124). Opening a workspace with thousands of messages no longer stalls or hangs the app. The conversation opens immediately on its latest messages, with older history loaded in pages as you scroll up while preserving scroll position. Search across unloaded history, jumping to past runs or messages, live message streaming, and export continue to cover the full conversation history.
+- **Gemini's messages stay apart and in order.** Everything Gemini wrote in a run used to join into one block, at the point it first spoke, so later text sat above the steps it came after. Each message now appears where it happened.
+- **Gemini's steps show what happened.** Steps were labelled only "Tool", with `Running view_file` as their description and no result. Commands now show their output and exit code, reads name the file, edits show their diff, and web searches show their query and answer, as with Claude and Codex. Task records and handoff briefs now see Gemini's file changes and failed commands.
+- **Long Gemini runs no longer stop at 30 minutes.** A run ended exactly 30 minutes in however busy it was, with `Gemini protocol timed out`. It now ends only after 15 minutes of silence, and a running command or an unanswered approval doesn't count. Stop still ends a run at any time.
+- **Gemini's commands find your tools.** Opened from Finder, Gemini couldn't find `node`, `npm`, `gh` or anything else you installed, and spent turns working around it. Its commands now also search your Node version manager folders, Homebrew, Volta, Bun and pnpm.
+- **Ask before changes, with Gemini.** Safe read-only commands such as `git status` no longer ask, and a command can now be allowed for the run or remembered, because the approval rules can read Gemini's commands. One edit asks once instead of twice, and the card names the file instead of `Run client_edit_file?`.
+- **A failed read no longer fails a Gemini run.** Reading a folder, a missing file or a very large one is now an error Gemini handles, instead of marking the whole run as denied when it ends. A path outside the workspace is still reported.
+- **No stray `skills` folder from Gemini.** The Antigravity runtime adds `skills/system/run-workflow` to the folder it runs in, where it can end up in a commit. Codeshi now removes it after each run, but never a copy that was already there or anything else in that folder.
 
 ## [0.31.1] - 2026-11-07
 

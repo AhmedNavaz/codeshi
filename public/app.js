@@ -532,7 +532,7 @@
       return step("tool", name, summary.split("\n")[0].slice(0, 200), result || (Object.keys(input).length ? JSON.stringify(input, null, 2) : ""));
     }
     const remote = text.match(/^(mcp_tool_call|web_search): ?(.*)(?:\n([\s\S]*))?$/);
-    if (remote) return { kind: "tool", icon: remote[1] === "web_search" ? "web" : "tool", verb: remote[1] === "web_search" ? "Search the web" : "Tool", detail: remote[2], output: (remote[3] || "").replace(/^""$/, "").trim(), raw: text };
+    if (remote) return { kind: "tool", icon: remote[1] === "web_search" ? "web" : "tool", verb: remote[1] === "web_search" ? "Search the web" : "Tool", detail: remote[2], output: (remote[3] || "").replace(/^(?:""|\[\])$/, "").trim(), raw: text };
     // Full auto-approval allows every request, so its notes add nothing to the timeline.
     if (/^Tool .* auto-approved by policy\.?$/.test(text)) return { kind: "approval", skip: true, raw: text };
     // Codex asks only for what its sandbox blocks, so what Full auto-approval allowed for it stays in the timeline.

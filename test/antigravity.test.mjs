@@ -20,7 +20,7 @@ class Client extends EventEmitter {
     this.requests.push({ method, params });
     if (method === 'initialize') return this.initialized || initialized;
     if (method === 'session/new') { if (this.signedOut) throw new Error('Authentication required'); return this.state; }
-    if (method === 'session/set_config_option') { this.state.configOptions.find(row => row.id === params.configId).currentValue = params.value; return { configOptions: this.state.configOptions }; }
+    if (method === 'session/set_config_option') { if (params.sessionId !== this.state.sessionId) throw new Error('Invalid params'); this.state.configOptions.find(row => row.id === params.configId).currentValue = params.value; return { configOptions: this.state.configOptions }; }
     if (method === 'authenticate') { this.emit('diagnostic', 'Open https://accounts.google.com/o/oauth2/auth?client_id=official-client\n'); return this.authentication; }
     if (method === 'session/prompt') { await this.prompt?.(); this.emit('message', { method: 'session/update', params: { sessionId: this.state.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Completed' } } } }); return { stopReason: 'end_turn' }; }
     throw new Error('Unexpected method: ' + method);
@@ -175,6 +175,58 @@ if(m.id===102&&m.result){send({method:'session/update',params:{sessionId:session
   await broker.checkpoints.apply(restored, preview.target, preview.digest);
   for (const folder of folders) assert.equal(fs.readFileSync(path.join(folder.path, 'same.txt'), 'utf8'), folder.id);
   assert.equal(fs.readFileSync(path.join(root, 'outside.txt'), 'utf8'), 'Unrelated work');
+});
+
+test('the Antigravity worker continues its own session between messages, and starts over when the runtime no longer has it', { skip: scriptCLIs }, async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-google-session-'))), bin = googleRuntimePath(root), protocol = path.join(root, 'protocol.mjs'), log = path.join(root, 'log.jsonl'), lost = path.join(root, 'lost'), workspace = path.join(root, 'workspace');
+  fs.mkdirSync(path.dirname(bin), { recursive: true }); fs.mkdirSync(workspace);
+  const resumable = { ...initialized, agentCapabilities: { ...initialized.agentCapabilities, loadSession: true, sessionCapabilities: { additionalDirectories: {}, resume: {} } } };
+  fs.writeFileSync(protocol, `#!${process.execPath}
+import readline from 'node:readline';
+import fs from 'node:fs';
+const initialized=${JSON.stringify(resumable)},session=${JSON.stringify(session())},send=m=>console.log(JSON.stringify({jsonrpc:'2.0',...m})),log=m=>fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(m)+'\\n');
+const opened=()=>{try{return fs.readFileSync(${JSON.stringify(log)},'utf8').split('\\n').filter(l=>l.includes('"session/new"')).length;}catch{return 0;}};
+for await(const line of readline.createInterface({input:process.stdin})){const m=JSON.parse(line);
+if(m.method==='initialize')send({id:m.id,result:initialized});
+if(m.method==='session/new'){session.sessionId='google-session-'+(opened()+1);log({method:m.method,params:m.params});send({id:m.id,result:session});}
+if(m.method==='session/resume'){log({method:m.method,params:m.params});if(fs.existsSync(${JSON.stringify(lost)})){send({id:m.id,error:{code:-32000,message:'Session not found in the current GEMINI_HOME'}});continue;}session.sessionId=m.params.sessionId;const {sessionId,...rest}=session;send({id:m.id,result:rest});}
+if(m.method==='session/set_config_option'){if(m.params.sessionId!==session.sessionId){send({id:m.id,error:{code:-32602,message:'Invalid params'}});continue;}session.configOptions.find(o=>o.id===m.params.configId).currentValue=m.params.value;send({id:m.id,result:{configOptions:session.configOptions}});}
+if(m.method==='session/prompt'){log({method:m.method,sessionId:m.params.sessionId,prompt:m.params.prompt[0].text});send({method:'session/update',params:{sessionId:session.sessionId,update:{sessionUpdate:'usage_update',used:13550,size:1048576}}});send({method:'session/update',params:{sessionId:session.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Done with '+m.params.sessionId}}}});send({id:m.id,result:{stopReason:'end_turn',usage:{totalTokens:130,inputTokens:100,outputTokens:20,thoughtTokens:10,cachedReadTokens:60,cachedWriteTokens:0}}});}}
+`, { mode: 0o700 });
+  fs.symlinkSync(protocol, bin);
+  const open = () => new Broker({ workspace, dataDir: path.join(root, 'journal'), googleRoot: root, bins: { gemini: bin } });
+  let broker = open(); t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const c = broker.get(broker.create().id);
+  const send = async (text, options = {}) => { broker.start(c, { text, provider: 'gemini', mode: 'edit', model: 'native-alternative', effort: 'medium', requestId: text.toLowerCase().replace(/\s+/g, '-'), ...options }); await broker.running.done; await broker.checkpoints.idle(); };
+  const logged = () => fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const envelope = entry => JSON.parse(entry.prompt.slice(entry.prompt.indexOf('\n') + 1));
+  await send('First task');
+  assert.equal(c.status, 'complete'); assert.equal(c.sessions.gemini.id, 'google-session-1'); assert.equal(c.lastRun.context.sessionMode, 'fresh');
+  assert.deepEqual([c.lastRun.usageMeasured.input, c.lastRun.usageMeasured.output, c.lastRun.usageMeasured.reasoning], [100, 20, 10], 'The turn\'s own usage is recorded.');
+  assert.deepEqual([c.lastRun.contextUsage.used, c.lastRun.contextUsage.capacity], [13550, 1048576], 'The runtime\'s context reading is kept apart from usage.');
+  await send('Second task', { effort: 'high' });
+  assert.equal(c.status, 'complete'); assert.equal(c.sessions.gemini.id, 'google-session-1');
+  assert.deepEqual([c.lastRun.context.sessionMode, c.lastRun.context.sessionReason, c.lastRun.effectiveEffort], ['resumed', 'same-agent-continuation', 'high']);
+  const second = logged().filter(entry => entry.method === 'session/resume' || entry.method === 'session/prompt');
+  assert.deepEqual(second.at(-2), { method: 'session/resume', params: { sessionId: 'google-session-1', cwd: workspace, mcpServers: [] } });
+  assert.equal(second.at(-1).sessionId, 'google-session-1');
+  const continued = envelope(second.at(-1));
+  assert.equal(continued.continuation.sessionMode, 'resumed'); assert.equal(continued.currentRequest, 'Second task');
+  assert(!continued.context.some(item => item.text === 'First task'), 'The session already holds the first task.');
+  assert(c.messages.some(message => message.text === 'Done with google-session-1' && message.runId === c.lastRun.id));
+  // The runtime no longer has the session: the run fails, says so, and the next message starts over with a task brief.
+  fs.writeFileSync(lost, '');
+  await send('Third task');
+  assert.equal(c.status, 'incomplete'); assert.equal(c.lastRun.errorCategory, 'session'); assert.equal(c.sessions.gemini, undefined);
+  assert(c.messages.some(message => message.role === 'error' && /could not continue its saved session: Session not found in the current GEMINI_HOME\. The next message starts a fresh session with a task brief\./.test(message.text)));
+  assert(!logged().some(entry => entry.method === 'session/prompt' && entry.prompt.includes('Third task')), 'Nothing was sent to a session that was not there.');
+  fs.rmSync(lost);
+  await send('Fourth task');
+  assert.equal(c.status, 'complete'); assert.equal(c.sessions.gemini.id, 'google-session-2'); assert.equal(c.lastRun.context.sessionMode, 'fresh');
+  const fourth = envelope(logged().findLast(entry => entry.method === 'session/prompt'));
+  assert(fourth.context.some(item => item.text === 'First task'), 'A fresh session gets the shared history again.');
+  await broker.close(); broker = open();
+  assert.equal(broker.get(c.id).sessions.gemini.id, 'google-session-2', 'The session survives a restart.');
 });
 
 test('a Google network failure is reported as one, not as the runtime’s bare internal error', async t => {

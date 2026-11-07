@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { GeminiClient } from './acp-client.mjs';
-import { isAntigravityACP, antigravityInvocation, antigravityRelay, antigravitySessionParams, configureAntigravitySession, antigravityAccount, verifyAntigravity } from './antigravity.mjs';
+import { acpApprovalRequest, acpToolItem, allowedWrites, writeKey } from './acp-tools.mjs';
+import { isAntigravityACP, antigravityInvocation, antigravityRelay, antigravitySessionParams, configureAntigravitySession, antigravityAccount, verifyAntigravity, removeRuntimeSkill } from './antigravity.mjs';
 import { probeCli } from './cli-probe.mjs';
 import { withBinaryPath } from './resolve-binary.mjs';
 import { readWorkspaceFile, writeWorkspaceFile } from './workspace-files.mjs';
@@ -13,6 +14,21 @@ const edits = ['write_file', 'replace', 'run_shell_command'];
 export const isAgy = bin => Boolean(bin && /^(?:agy|antigravity)(?:\.exe)?$/i.test(path.basename(bin)));
 export const agyUnsupported = 'Antigravity CLI does not expose interactive tool approvals to this connection. Use Google Antigravity ACP from Settings for Google sign-in, or the native terminal.';
 export const geminiSetup = 'Connect Gemini with Google Antigravity in Settings: install the official connection, then sign in with Google. Available models and usage limits come from your Google account. Gemini CLI remains an advanced option for API-key and enterprise connections.';
+// How long an agent may say nothing, with no command running and nothing waiting for the person, before its run ends.
+const promptSilence = 15 * 60 * 1000;
+// Reading a file that's missing, a folder or too large is an ordinary tool error: the agent is told and carries on. A path
+// the safety checks refuse (a symlink, or outside the workspace) is still reported at the end of the run.
+const ordinaryReadFailure = /^(?:Cannot access selected file|File parent is not a directory|Only regular text files|Binary or oversized files|Files must contain valid UTF-8)/;
+// How a runtime continues a saved session: its own resume keeps the session as it is, while the standard load first
+// replays every saved message. Nothing, when it can only start new sessions.
+export const sessionResume = initialized => initialized.agentCapabilities?.sessionCapabilities?.resume ? 'session/resume' : initialized.agentCapabilities?.loadSession ? 'session/load' : null;
+// What the run's turns used, added up. Input counts only what was not read from cache, as Codex's does.
+export function promptUsage(turns) {
+  const reported = turns.filter(usage => usage && typeof usage === 'object' && ['inputTokens', 'outputTokens'].some(key => typeof usage[key] === 'number'));
+  if (!reported.length) return null;
+  const sum = key => reported.every(usage => typeof usage[key] === 'number') ? reported.reduce((total, usage) => total + usage[key], 0) : null;
+  return { inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), thoughtTokens: sum('thoughtTokens'), cachedReadTokens: sum('cachedReadTokens'), cachedWriteTokens: sum('cachedWriteTokens') };
+}
 
 // Antigravity headless mode may soft-deny tools and still exit successfully.
 // Never replace Codeshi approvals with pre-approved native write permissions.
@@ -60,12 +76,17 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
   const version = antigravity ? null : await probe(config.bin, ['--version'], 5000), match = version?.stdout?.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
   if (!antigravity && (version.status !== 0 || !match || +match[1] === 0 && +match[2] < 66)) throw new Error('Gemini CLI 0.66.0 or newer is required. ' + geminiSetup);
   const options = antigravity ? antigravityInvocation({ ...config, relay: await antigravityRelay(config, { commands: true }) }) : invocation(config);
+  const removeSkill = antigravity ? removeRuntimeSkill(config.workspace) : () => {};
   let client;
   try { client = clientFactory({ bin: config.bin, cwd: config.workspace, ...options }); }
   catch (error) { options.cleanup(); throw error; }
-  let sessionId, response = '', segment = 0, steering = false, denied = false, deniedReason = '';
-  const tools = new Map();
+  let sessionId, response = '', segment = 0, steering = false, denied = false, deniedReason = '', asking = 0, loading = false;
+  const tools = new Map(), approvedWrites = new Set();
   const timer = setInterval(() => { if (cancelled()) { if (sessionId) client.send({ method: 'session/cancel', params: { sessionId } }); client.close(); } }, 100);
+  // Text before a tool is finished: what comes after it is a new message, below the tool, not more of the same one.
+  const finishText = () => { if (!response) return; event({ type: 'item.completed', item: { id: segment ? `response-${segment}` : 'response', type: 'agent_message', text: response } }); response = ''; segment++; };
+  const syncSilence = () => client.pauseSilence?.(asking > 0 || [...tools.values()].some(tool => tool.kind === 'execute' && !['completed', 'failed'].includes(tool.status)));
+  const ask = async request => { asking++; syncSilence(); try { return await approval(request); } finally { asking--; syncSilence(); } };
   client.on('message', async message => {
     const p = message.params || {};
     try {
@@ -76,32 +97,40 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
           const once = p.options?.find(option => option.kind === 'allow_once');
           const tool = p.toolCall || {};
           if (antigravity && /^interaction_/.test(tool.toolCallId || '')) throw new Error('Antigravity needs an interactive answer. Continue in its native client; Codeshi did not choose an answer for you.');
-          const allow = !cancelled() && config.mode !== 'read' && once && await approval({ id: String(message.id), kind: tool.kind || 'tool', title: tool.title, input: tool.rawInput || { action: tool.title }, toolCall: tool });
+          const allow = !cancelled() && config.mode !== 'read' && once && await ask({ id: String(message.id), ...acpApprovalRequest(tool), toolCall: tool });
           if (!allow || cancelled()) { denied = true; result = { outcome: { outcome: 'cancelled' } }; }
-          else result = { outcome: { outcome: 'selected', optionId: once.optionId } };
+          else { for (const key of allowedWrites(tool)) approvedWrites.add(key); result = { outcome: { outcome: 'selected', optionId: once.optionId } }; }
         } else if (message.method === 'fs/read_text_file') {
-          const file = geminiFile(config, p.path), saved = readWorkspaceFile(file.root, file.relative);
+          const file = geminiFile(config, p.path);
+          let saved;
+          try { saved = readWorkspaceFile(file.root, file.relative); }
+          catch (error) { if (!ordinaryReadFailure.test(error.message)) throw error; client.send({ id: message.id, error: { code: -32000, message: error.message } }); return; }
           const line = p.line ?? 1, limit = p.limit;
           if (!Number.isInteger(line) || line < 1 || limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new Error('Invalid Gemini file line range.');
           result = { content: saved.content.split('\n').slice(line - 1, limit === undefined ? undefined : line - 1 + limit).join('\n') };
         } else if (message.method === 'fs/write_text_file') {
           if (config.mode === 'read' || cancelled()) throw new Error('Write permission denied in read-only mode.');
           const file = geminiFile(config, p.path), before = readWorkspaceFile(file.root, file.relative, { allowMissing: true });
-          const allow = await approval({ id: String(message.id), kind: 'write_file', input: { path: p.path, content: p.content } });
+          const allow = approvedWrites.delete(writeKey(p.path, p.content)) || await ask({ id: String(message.id), kind: 'write_file', input: { path: p.path, content: p.content } });
           if (!allow || cancelled()) { denied = true; throw new Error('Write permission denied.'); }
           writeWorkspaceFile(file.root, file.relative, p.content, { expectedHash: before.sha256 }); result = {};
         } else throw new Error('This Gemini interaction is unsupported by Codeshi.');
         client.send({ id: message.id, result }); return;
       }
-      if (message.method !== 'session/update') return;
+      // While a saved session loads, the runtime replays what it holds: messages and steps Codeshi already has.
+      if (message.method !== 'session/update' || loading) return;
       const update = p.update || {};
       // Text after the prompt was stopped for a note is the runtime's notice that it was cancelled, not a reply.
       if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && !steering) { response += update.content.text; event({ type: 'relay.delta', id: segment ? `response-${segment}` : 'response', text: update.content.text }); }
       if (update.sessionUpdate === 'plan' && Array.isArray(update.entries)) event({ type: 'relay.plan', steps: update.entries.map(entry => ({ text: entry.content, status: entry.status === 'completed' ? 'done' : entry.status === 'in_progress' ? 'active' : 'pending' })) });
       if (update.sessionUpdate === 'agent_thought_chunk') event({ type: 'relay.progress', phase: 'reasoning' });
       if (['tool_call', 'tool_call_update'].includes(update.sessionUpdate)) {
-        const tool = { ...tools.get(update.toolCallId), ...update }; tools.set(tool.toolCallId, tool);
-        event({ type: ['completed', 'failed'].includes(tool.status) ? 'item.completed' : 'item.started', item: { id: tool.toolCallId, type: 'mcp_tool_call', tool: tool.title || tool.kind || 'Gemini tool', result: tool.content || [] } });
+        const tool = { ...tools.get(update.toolCallId), ...update };
+        // A command that outlasts its wait moves to the background, and the agent speaks again when it ends, with no new tool between.
+        if (!tools.has(update.toolCallId) || tool.kind === 'execute' && ['completed', 'failed'].includes(tool.status)) finishText();
+        tools.set(tool.toolCallId, tool);
+        event({ type: ['completed', 'failed'].includes(tool.status) ? 'item.completed' : 'item.started', item: acpToolItem(tool) });
+        syncSilence();
       }
       if (update.sessionUpdate === 'usage_update') metadata({ usage: { used: update.used, size: update.size, cost: update.cost } });
     } catch (error) {
@@ -115,8 +144,22 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
     if (antigravity) verifyAntigravity(initialized);
     if (cancelled()) throw new Error('Gemini run cancelled.');
     const params = antigravity ? antigravitySessionParams(initialized, config) : { cwd: config.workspace, mcpServers: [] };
-    const session = await client.request('session/new', params, 60000); sessionId = session.sessionId;
-    if (typeof sessionId !== 'string' || !sessionId) throw new Error('Invalid Gemini ACP session.');
+    const resume = sessionResume(initialized);
+    let session;
+    if (config.sessionId) {
+      // The prompt continues this session, so a session that can't be continued is a failed run, not a quiet new start.
+      if (!resume) throw Object.assign(new Error('This Gemini runtime cannot continue a saved session. The next message starts a fresh session with a task brief.'), { category: 'session' });
+      sessionId = config.sessionId; loading = resume === 'session/load';
+      // The reply describes the session without naming it.
+      try { session = { ...await client.request(resume, { sessionId, ...params }, 60000, { silence: true }), sessionId }; }
+      catch (error) { throw Object.assign(new Error(`Gemini could not continue its saved session: ${error.message.replace(/\.?$/, '.')} The next message starts a fresh session with a task brief.`), { category: 'session' }); }
+      finally { loading = false; }
+    } else {
+      session = await client.request('session/new', params, 60000); sessionId = session.sessionId;
+      if (typeof sessionId !== 'string' || !sessionId) throw new Error('Invalid Gemini ACP session.');
+    }
+    // Only a session the runtime can continue is worth remembering.
+    if (resume) event({ type: 'thread.started', thread_id: sessionId });
     if (antigravity) await configureAntigravitySession(client, session, config);
     if (!antigravity && config.model && session.models?.currentModelId !== config.model) throw new Error('Gemini did not select the requested model. No prompt was sent.');
     const images = config.images || [];
@@ -129,18 +172,19 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
     const notes = [];
     steerable(async text => { notes.push(text); if (!steering) { steering = true; client.send({ method: 'session/cancel', params: { sessionId } }); } });
     let prompt = [{ type: 'text', text: config.prompt }, ...images.map(image => ({ type: 'image', mimeType: image.mime, data: image.data }))], result;
+    const turns = [];
     while (true) {
-      result = await client.request('session/prompt', { sessionId, prompt }, 30 * 60 * 1000);
-      steering = false;
+      result = await client.request('session/prompt', { sessionId, prompt }, promptSilence, { silence: true });
+      steering = false; turns.push(result.usage);
       if (!notes.length || cancelled()) break;
-      if (response) event({ type: 'item.completed', item: { id: segment ? `response-${segment}` : 'response', type: 'agent_message', text: response } });
-      response = ''; segment++;
-      prompt = [{ type: 'text', text: `While you were working, the person added this to the current task:\n\n${notes.splice(0).join('\n\n')}\n\nTake it into account and carry on with the task from where you stopped.` }];
+      finishText();
+      prompt =[{ type: 'text', text: `While you were working, the person added this to the current task:\n\n${notes.splice(0).join('\n\n')}\n\nTake it into account and carry on with the task from where you stopped.` }];
     }
     steerable(null);
+    const usage = promptUsage(turns); if (usage) metadata({ usage });
     if (result.stopReason !== 'end_turn' || cancelled()) throw new Error('Gemini turn did not complete: ' + (result.stopReason || 'unknown'));
     if (denied) throw new Error('Gemini requested an action that was denied or unsupported. Some work may be incomplete.' + (deniedReason ? ' ' + deniedReason : ''));
-    if (response) event({ type: 'item.completed', item: { id: segment ? `response-${segment}` : 'response', type: 'agent_message', text: response } });
+    finishText();
     event({ type: 'turn.completed' });
-  } finally { steerable(null); clearInterval(timer); client.close(); options.cleanup(); }
+  } finally { steerable(null); clearInterval(timer); client.close(); options.cleanup(); removeSkill(); }
 }

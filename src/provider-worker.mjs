@@ -50,7 +50,7 @@ process.on('message', async message => {
     };
     await (config.transport === 'acp' ? runGemini(config, callbacks) : config.transport === 'app-server' ? runCodex(config, callbacks) : runClaude(config, callbacks));
     await sendLast({ type: 'adapter-complete' });
-  } catch (error) { await sendLast({ type: 'failure', message: error.message, category: classifyError(error) }); process.exitCode = 1; }
+  } catch (error) { await sendLast({ type: 'failure', message: error.message, category: error.category || classifyError(error) }); process.exitCode = 1; }
   finally { if (config.transport !== 'cli') { finished = true; process.disconnect(); } }
 });
 setTimeout(() => { if (!running) process.exit(1); }, 10000).unref();

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { GeminiClient } from './acp-client.mjs';
-import { withBinaryPath } from './resolve-binary.mjs';
+import { commandEnvironment, withBinaryPath } from './resolve-binary.mjs';
 import { googleRelay, relayEnvironment } from './google-relay.mjs';
 
 export const isAntigravityACP = bin => /^(?:agy_acp_server(?:\.par|\.exe)?|antigravity-acp)$/i.test(path.basename(bin || ''));
@@ -21,10 +21,27 @@ export function antigravityInvocation(config) {
   if (config.mode === 'read') throw new Error(antigravityReadOnly);
   const profile = path.join(config.googleRoot || defaultGoogleRoot(), 'profile');
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
-  const env = { ...withBinaryPath(config.bin), GEMINI_HOME: profile, ANTIGRAVITY_HARNESS_PATH: path.join(path.dirname(config.bin), process.platform === 'win32' ? 'localharness_external.exe' : 'localharness_external') };
+  // The runtime starts the agent's commands without a login shell, so they see only this PATH. An app opened from Finder
+  // has a minimal one, without node, gh or anything else the person installed.
+  const env = { ...withBinaryPath(config.bin, commandEnvironment()), GEMINI_HOME: profile, ANTIGRAVITY_HARNESS_PATH: path.join(path.dirname(config.bin), process.platform === 'win32' ? 'localharness_external.exe' : 'localharness_external') };
   // This connection uses personal Google OAuth. Never fall back to ambient API billing.
   for (const key of Object.keys(env)) if (/^(?:GEMINI_API_KEY|GOOGLE_API_KEY|GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_GENAI_USE_VERTEXAI|AGY_|ANTIGRAVITY_API)/.test(key)) delete env[key];
   return { args: process.platform === 'linux' ? ['--uid='] : [], env: relayEnvironment(env, config.relay), cleanup() {} };
+}
+// The runtime copies one of its own skills into the folder it runs in, where it shows as an untracked folder and a commit
+// can pick it up. Returns what removes that copy after a run: only if this run added it, only that file, and a folder only
+// once nothing else is left in it. A project's own skills folder is never touched.
+export function removeRuntimeSkill(workspace) {
+  const skills = path.join(workspace, 'skills'), folder = path.join(skills, 'system', 'run-workflow'), file = path.join(folder, 'SKILL.md');
+  if (fs.existsSync(file)) return () => {};
+  return () => {
+    try {
+      const text = fs.readFileSync(file, 'utf8');
+      if (!/^name: run-workflow$/m.test(text) || !/^\s*namespace: system$/m.test(text)) return;
+      fs.rmSync(file);
+      for (const directory of [folder, path.dirname(folder), skills]) fs.rmdirSync(directory);
+    } catch { /* Absent, or a folder that still holds something else. */ }
+  };
 }
 // The relay is a convenience: without it the runtime connects directly, as it would on its own.
 export const antigravityRelay = (options, { commands = false } = {}) => options.relay !== undefined ? Promise.resolve(options.relay) : googleRelay({ commands }).catch(() => null);

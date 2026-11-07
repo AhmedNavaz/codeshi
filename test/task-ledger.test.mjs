@@ -31,6 +31,9 @@ test('each agent\'s usage has one shape, and what it did not report stays unknow
   const gemini = normalizeUsage('gemini', { used: 5000, size: 100000 });
   assert.deepEqual([gemini.input, gemini.output, gemini.reported], [null, null, []], 'Context held is not tokens used.');
   assert.deepEqual(gemini.context, { used: 5000, size: 100000 });
+  const turns = normalizeUsage('gemini', { inputTokens: 100, outputTokens: 20, thoughtTokens: 10, cachedReadTokens: 60, cachedWriteTokens: null });
+  assert.deepEqual([turns.source, turns.input, turns.output, turns.reasoning, turns.cacheRead, turns.cacheWrite], ['acp-prompt-usage', 100, 20, 10, 60, null], 'What the run\'s own turns used.');
+  assert.deepEqual(turns.reported, ['input', 'output', 'cacheRead', 'reasoning']);
   assert.equal(normalizeUsage('gemini', null), null);
 });
 

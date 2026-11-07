@@ -5,12 +5,13 @@ import { EventEmitter } from 'node:events';
 // outstanding requests on malformed output, timeout, exit or cancellation.
 export class GeminiClient extends EventEmitter {
   constructor({ bin, cwd, args, env, spawnImpl = spawn }) {
-    super(); this.pending = new Map(); this.counter = 0; this.closed = false;
+    super(); this.pending = new Map(); this.counter = 0; this.closed = false; this.silencePaused = false;
     this.child = spawnImpl(bin, args, { cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     let buffer = '', diagnostic = '';
     this.child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-8000); this.emit('diagnostic', diagnostic); });
     this.child.stdout.setEncoding('utf8');
     this.child.stdout.on('data', chunk => {
+      this.restartSilence();
       buffer += chunk;
       if (buffer.length > 8 * 1024 * 1024) { this.fail(new Error('Oversized Gemini protocol event.')); return; }
       let newline;
@@ -34,14 +35,22 @@ export class GeminiClient extends EventEmitter {
     this.child.on('close', (code, signal) => this.fail(new Error(diagnostic || `Gemini ACP closed (${code ?? signal}).`)));
   }
   send(message) { if (!this.closed) this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n'); }
-  request(method, params = {}, timeout = 30000) {
+  // With `silence`, the timeout measures how long the agent has said nothing rather than how long the request has taken:
+  // a turn can run for hours and still be working.
+  request(method, params = {}, timeout = 30000, { silence = false } = {}) {
     if (this.closed) return Promise.reject(new Error('Gemini ACP is closed.'));
     const id = ++this.counter;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Gemini protocol timed out: ' + method)); this.close(); }, timeout);
-      this.pending.set(id, { resolve, reject, timer }); this.send({ id, method, params });
+      const reason = silence ? `no activity for ${Math.round(timeout / 60000)} minutes while nothing was running or waiting for you.` : method;
+      const expire = () => { this.pending.delete(id); reject(new Error('Gemini protocol timed out: ' + reason)); this.close(); };
+      const entry = { resolve, reject, timer: setTimeout(expire, timeout) };
+      if (silence) entry.restart = () => { clearTimeout(entry.timer); entry.timer = this.silencePaused ? null : setTimeout(expire, timeout); };
+      this.pending.set(id, entry); this.send({ id, method, params });
     });
   }
+  restartSilence() { for (const request of this.pending.values()) request.restart?.(); }
+  // A long command or an unanswered approval is silent by nature, so neither counts against the agent.
+  pauseSilence(paused) { if (paused === this.silencePaused) return; this.silencePaused = paused; this.restartSilence(); }
   fail(error) {
     for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(error); }
     this.pending.clear(); this.close();

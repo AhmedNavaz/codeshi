@@ -37,12 +37,12 @@ export function rolloverDecision(c, provider, { normalLimit = 'auto', routingMod
   const source = useJournal ? 'journal-size-estimate' : typeof reading?.used === 'number' ? reading.source : used !== null ? reading.source === 'claude-last-request-input' ? reading.source : 'last-request-input-lower-bound' : 'unreported';
   // Upgrade old sessions on their next dispatch when no usable signal exists. This is a one-time migration, not a
   // claim that their cumulative token allowance is their current context. An explicit Off choice remains respected.
-  const legacy = Boolean(provider !== 'gemini' && session && !session.managedContextVersion && used === null && thresholdTokens !== null);
+  const legacy = Boolean(session && !session.managedContextVersion && used === null && thresholdTokens !== null);
   const pending = c.contextRollovers?.[provider]?.pending === true;
   return { pending, hasSession: Boolean(session), mode: flow ? routingMode : 'normal', adaptive: flow || normalLimit === 'auto', thresholdTokens, used, source, cacheWarm, observedAt: useJournal ? session.contextEstimate.observedAt : reading?.observedAt || null,
     estimated: useJournal || reading?.estimated === true || source === 'last-request-input-lower-bound', legacy,
     near: used !== null && thresholdTokens !== null && used >= thresholdTokens * 0.85,
-    rollover: pending || legacy || provider !== 'gemini' && Boolean(session && used !== null && thresholdTokens !== null && used >= thresholdTokens),
+    rollover: pending || legacy || Boolean(session && used !== null && thresholdTokens !== null && used >= thresholdTokens),
     reason: pending ? c.contextRollovers[provider].reason : legacy ? 'legacy-session' : 'threshold' };
 }
 
