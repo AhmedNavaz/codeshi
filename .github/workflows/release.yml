@@ -1,9 +1,11 @@
 name: Release
 
-# Push a tag such as v0.4.0 (matching package.json) to build, test and publish a release.
+# Push a tag such as v0.4.0 (matching package.json) to build, test and publish a release. A tag can't be moved, so run
+# this by hand first: without a tag it builds, tests and smoke-tests every app, and publishes nothing.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,6 +16,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
+      # One Mac's failure shouldn't hide the other's result.
+      fail-fast: false
       matrix:
         include:
           - runner: macos-latest
@@ -29,6 +33,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: npm ci
       - run: npm test
@@ -70,6 +75,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: npm ci
       # The runner's own temporary folder has a short 8.3 name (RUNNER~1), which Codeshi reports in its long form.
@@ -86,7 +92,11 @@ jobs:
       - name: Zip the app
         shell: pwsh
         run: |
-          Rename-Item dist/Codeshi-win32-x64 Codeshi
+          # Windows can hold the folder for a moment after the smoke test's app has gone.
+          foreach ($try in 1..30) {
+            try { Rename-Item dist/Codeshi-win32-x64 Codeshi -ErrorAction Stop; break }
+            catch { if ($try -eq 30) { throw }; Start-Sleep -Seconds 2 }
+          }
           Compress-Archive -Path dist/Codeshi -DestinationPath "Codeshi-$($env:GITHUB_REF_NAME.Substring(1))-windows-x64.zip"
       - uses: actions/upload-artifact@v7
         with:
@@ -96,6 +106,7 @@ jobs:
 
   sharing-image:
     name: Private-link service image
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -140,6 +151,7 @@ jobs:
 
   release:
     name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [desktop, windows, sharing-image]
     runs-on: ubuntu-latest
     permissions:

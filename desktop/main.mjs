@@ -251,7 +251,9 @@ else {
         // The view refuses to change while the workspace is still loading, as it does for a person, so keep asking.
         // A first launch on a slow machine can stay busy for a while.
         for(let tries=0;tries<1500;tries++){if(await win.webContents.executeJavaScript(`window.relayFlow.isOn()?!window.relayFlow.isLocked():(window.relayFlow.isLocked()||window.relayFlow.enter(),false)`))break;await new Promise(resolve=>setTimeout(resolve,20));}
-        smokeStep('flow entered');
+        // If it never entered, say what it was waiting for.
+        const entry=await win.webContents.executeJavaScript(`(()=>{const s=window.relayUI.getState(),c=s.conversation;return {on:window.relayFlow.isOn(),locked:window.relayFlow.isLocked(),ready:s.ready,loading:s.loading,pending:s.pending,settingsPending:s.settingsPending,taskDraft:Boolean(s.taskDraft),activity:s.status?.workspaceActivity,running:s.status?.runningConversationId,status:c?.status,queue:c?.queue?.length,notice:document.querySelector('#notice,.notice')?.textContent||null};})()`);
+        smokeStep('flow entered '+entry.on);
         // Routing is Flow's: entering turns it on, Balanced at first, and leaving turns it off.
         for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`window.relayUI.getState().conversation?.routing?.mode==='balanced'`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         win.setContentSize(1440,900);
@@ -290,7 +292,7 @@ else {
         result.flow.routingOff=await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing&&document.getElementById('agents-routing').hidden`);
         result.flow.passed=['entered','footerHidden','cards','windowControlsClear','details','headerPlaced','remote','noPreview','routingOn','narrow','locked','left','routingOff'].every(key=>result.flow[key]===true);
         console.log('AI_RELAY_FLOW_SMOKE '+JSON.stringify(result.flow));
-        if(!result.flow.passed)throw Error('Flow smoke check failed: '+JSON.stringify(result.flow));
+        if(!result.flow.passed)throw Error('Flow smoke check failed: '+JSON.stringify({...result.flow,entry}));
       }
       if(!result.isolated||!result.bridge||!result.launchBridge||!result.updateBridge||!result.terminal||!result.terminalUI||!result.voiceUI||result.speech===false||result.statusItem===false||result.overlay===false||!result.preview||!result.keepAwakeBridge||!result.usagePopover||!result.ui||!result.configuration||!result.models||!result.modelPicker||!result.permissions||!result.geminiImports||!result.git||!result.imports||!result.setupHeader||!result.review||!result.local||!result.updates.open||!result.updates.notes||!result.updates.dismissed||!['File','Edit','View','Agent','Workspace','Window','Help'].every(label=>result.menu.labels.includes(label))||!result.menu.reported||!result.menu.ticked||result.menu.theme!=='light')throw Error('Desktop smoke check failed: '+JSON.stringify(result));
       console.log('AI_RELAY_DESKTOP_SMOKE '+JSON.stringify(result));app.quit();
