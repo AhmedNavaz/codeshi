@@ -38,7 +38,10 @@ function setup(t, { preferences = { threshold: 90, automatic: false }, scenarios
   };
   broker.handoff.models = async provider => ({ models: fixtureModels[provider] || [] });
   broker.on('notify', notice => notices.push(notice));
-  t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  // Everything a test reopens closes before the folder goes: a late checkpoint write would break the removal.
+  const opened = new Set([broker]);
+  t.reopened = next => { opened.add(next); return next; };
+  t.after(async () => { for (const open of opened) await open.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const c = broker.get(broker.create().id);
   return {
     broker, c, settings, usage, billing, notices, workspace, dataDir, bins,
@@ -345,7 +348,7 @@ test('if every agent is out, the wait starts by itself, survives a restart, can 
   await env.broker.close();
   const reopened = new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins });
   reopened.resume.usage = async provider => provider === 'claude' ? { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 10 }] } : { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 100 }] };
-  t.after(() => reopened.close());
+  t.reopened(reopened);
   const c = reopened.get(env.c.id);
   assert.equal(c.resume?.approvalPolicy, 'auto', 'The wait is still there after a restart.');
   // It checks by itself after the restart, and continues on the first agent with room.
@@ -499,7 +502,7 @@ test('a moved prompt keeps its place, can be reordered before and after, and the
   await env.broker.running.done;
   await env.broker.close();
   const reopened = new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins });
-  t.after(() => reopened.close());
+  t.reopened(reopened);
   const c = reopened.get(env.c.id);
   assert.deepEqual(c.queue.map(item => [item.text, item.provider, item.movedFrom]), [['Second', 'claude', 'codex'], ['Third', 'claude', 'codex'], ['First', 'claude', 'codex']]);
 });
@@ -630,7 +633,7 @@ test('after a stop between the move and the next prompt, each prompt has one own
   await env.broker.close();
   const count = () => fs.existsSync(path.join(env.workspace, '.mock-captures.jsonl')) ? captures(env).filter(entry => entry.context.currentRequest === sent.text).length : 0, before = count();
   const reopened = new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins });
-  t.after(() => reopened.close());
+  t.reopened(reopened);
   const c = reopened.get(env.c.id);
   assert.deepEqual(c.queue.map(item => [item.text, item.provider]), [['Moved, not sent', 'claude']], 'One owner: the moved prompt waits for the new agent, and the uncertain one has left the queue.');
   assert(c.messages.some(message => message.role === 'system' && /was being sent when Codeshi stopped, so it wasn't sent again: “Sent, outcome unknown”/.test(message.text)));
@@ -671,7 +674,7 @@ test('a plan goes with the task at a handoff, with each step’s status and the 
   assert.deepEqual(env.c.lastRun.plan.steps, planned, 'An agent that reports no plan leaves it as it was.');
   await env.broker.close();
   const reopened = new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins });
-  t.after(() => reopened.close());
+  t.reopened(reopened);
   assert.deepEqual(reopened.get(env.c.id).lastRun.plan.steps, planned, 'It survives a restart.');
   assert.deepEqual(reopened.get(env.c.id).lastRun.plan.carriedFrom.provider, 'codex');
 });
