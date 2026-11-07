@@ -187,7 +187,7 @@ test('Antigravity’s commands get the person’s tools on PATH, not the app’s
   t.after(() => { process.env.PATH = saved; if (relay === undefined) delete process.env.AI_RELAY_TEST_VALUE; fs.rmSync(root, { recursive: true, force: true }); });
   process.env.PATH = '/usr/bin:/bin:/usr/sbin:/sbin'; process.env.AI_RELAY_TEST_VALUE = 'private';
   const { env } = antigravityInvocation({ bin: path.join(root, 'agy_acp_server.par'), googleRoot: root, mode: 'edit', relay: null });
-  const entries = env.PATH.split(path.delimiter);
+  const entries = (env.PATH ?? env.Path).split(path.delimiter); // Windows keeps the key the process started with, Path.
   assert.equal(entries[0], root, 'The runtime’s folder comes first.');
   if (process.platform !== 'win32') for (const folder of ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin']) assert(entries.includes(folder), folder);
   assert.equal(env.AI_RELAY_TEST_VALUE, undefined, 'Codeshi’s own settings stay out of the agent’s commands.');
