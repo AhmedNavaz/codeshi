@@ -244,9 +244,32 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       }
       if(req.method==='GET'&&url.pathname==='/api/conversation'){
         // ?tail=N is the short form for a phone: the latest messages and only what its page reads.
-        const shape=view=>url.searchParams.has('tail')?phoneConversation(view,Number(url.searchParams.get('tail'))):view,since=url.searchParams.has('since')?Number(url.searchParams.get('since')):null;
-        if(url.searchParams.get('task')){const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);return json(res,200,shape(broker.tasks.view(c,url.searchParams.get('task'),{since})));}
-        return json(res,200,shape(registry.mainConversation(selectedProjectId(url),{since})));
+        const shape=view=>url.searchParams.has('tail')?phoneConversation(view,Number(url.searchParams.get('tail'))):view;
+        const since=url.searchParams.has('since')?Number(url.searchParams.get('since')):null;
+        const limit=url.searchParams.has('limit')?Number(url.searchParams.get('limit')):null;
+        const before=url.searchParams.get('before')||null;
+        const toRun=url.searchParams.get('toRun')||null;
+        const toMessage=url.searchParams.get('toMessage')||null;
+        const options={since,limit,before,toRun,toMessage};
+        if(url.searchParams.get('task')){const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);return json(res,200,shape(broker.tasks.view(c,url.searchParams.get('task'),options)));}
+        return json(res,200,shape(registry.mainConversation(selectedProjectId(url),options)));
+      }
+      if(req.method==='GET'&&url.pathname==='/api/conversation/search'){
+        const projectId=selectedProjectId(url),broker=registry.broker(projectId);
+        const task=url.searchParams.get('task');
+        const mainConv=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);
+        const c=task?broker.tasks.find(mainConv,task):mainConv;
+        const target=task?broker.tasks.lane(c,task)?.c||c:c;
+        const q=(url.searchParams.get('q')||'').toLowerCase().trim();
+        if(!q)return json(res,200,{query:q,matches:[]});
+        const matches=[];
+        for(let i=0;i<target.messages.length;i++){
+          const m=target.messages[i];
+          if(m.text&&m.text.toLowerCase().includes(q)){
+            matches.push({index:i,id:m.id,role:m.role,runId:m.runId||null,text:m.text.slice(0,120)});
+          }
+        }
+        return json(res,200,{query:q,total:target.messages.length,matches});
       }
       if (await commandRoutes.route({ req, res, url })) return;
       if (await terminalRoutes.route({ req, res, url })) return;

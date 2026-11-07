@@ -4,6 +4,10 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Fixed
+
+- **Long workspace chat opening and paging** (#124). Opening a workspace with thousands of messages no longer stalls or hangs the app. The conversation opens immediately on its latest messages, with older history loaded in pages as you scroll up while preserving scroll position. Search across unloaded history, jumping to past runs or messages, live message streaming, and export continue to cover the full conversation history.
+
 ## [0.31.1] - 2026-11-07
 
 ### Added

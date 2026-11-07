@@ -532,12 +532,62 @@ export class Broker extends EventEmitter {
   }
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
-  view(c, { since = null } = {}) {
+  view(c, { since = null, limit = null, before = null, toRun = null, toMessage = null } = {}) {
     const { sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, asyncQuestions, semanticObservations, contextRollovers, routingRequests, routingAssessment, routingPending, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     if (c.routingPending) { visible.status = 'running'; visible.activeRun = c.routingPending; visible.canAddToRun = false; }
     const contextFor = provider => rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() });
-    return { ...visible, contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(changed ? { messageCount: c.messages.length } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: (changed || c.messages).map(({ seq, ...m }) => m) };
+
+    let messages = changed || c.messages;
+    let earlier = undefined;
+    let messageCount = changed ? c.messages.length : undefined;
+
+    if (!changed && (toRun || toMessage || (Number.isInteger(Number(limit)) && Number(limit) > 0))) {
+      let end = c.messages.length;
+      if (before) {
+        const idx = c.messages.findIndex(m => m.id === before);
+        if (idx !== -1) end = idx;
+      }
+      if (toRun) {
+        const idx = c.messages.findIndex(m => m.runId === toRun);
+        if (idx !== -1) {
+          let start = idx;
+          while (start > 0 && !(c.messages[start].role === 'user' && !c.messages[start].steer)) start--;
+          earlier = start;
+          messages = c.messages.slice(start, end);
+          messageCount = c.messages.length;
+        } else if (Number.isInteger(Number(limit)) && Number(limit) > 0) {
+          const lim = Number(limit);
+          const start = Math.max(0, end - lim);
+          earlier = start;
+          messages = c.messages.slice(start, end);
+          messageCount = c.messages.length;
+        }
+      } else if (toMessage) {
+        const idx = c.messages.findIndex(m => m.id === toMessage);
+        if (idx !== -1) {
+          let start = idx;
+          while (start > 0 && !(c.messages[start].role === 'user' && !c.messages[start].steer)) start--;
+          earlier = start;
+          messages = c.messages.slice(start, end);
+          messageCount = c.messages.length;
+        } else if (Number.isInteger(Number(limit)) && Number(limit) > 0) {
+          const lim = Number(limit);
+          const start = Math.max(0, end - lim);
+          earlier = start;
+          messages = c.messages.slice(start, end);
+          messageCount = c.messages.length;
+        }
+      } else {
+        const lim = Number(limit);
+        const start = Math.max(0, end - lim);
+        earlier = start;
+        messages = c.messages.slice(start, end);
+        messageCount = c.messages.length;
+      }
+    }
+
+    return { ...visible, contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(messageCount !== undefined ? { messageCount } : {}), ...(earlier !== undefined ? { earlier } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: messages.map(({ seq, ...m }) => m) };
   }
 
   pendingApprovals(c) {

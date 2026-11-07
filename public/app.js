@@ -699,8 +699,12 @@
       const jumpRun = element("button", "message-action message-jump-run", "Activity");
       jumpRun.type = "button";
       jumpRun.title = "Jump to this run's activity";
-      jumpRun.addEventListener("click", () => {
-        const node = ui.messages.querySelector(`div[data-run-id="${message.runId}"]`);
+      jumpRun.addEventListener("click", async () => {
+        let node = ui.messages.querySelector(`div[data-run-id="${message.runId}"]`);
+        if (!node && state.conversation?.earlier > 0) {
+          await loadToRun(message.runId);
+          node = ui.messages.querySelector(`div[data-run-id="${message.runId}"]`);
+        }
         if (!node) return;
         node.scrollIntoView({ behavior: "smooth", block: "center" });
         node.classList.add("activity-highlight");
@@ -814,6 +818,14 @@
     };
     const rootKids = [], turns = new Map(), footer = $("transcript-footer"), progress = $("run-progress");
     let footerHost = rootKids;
+    if (c?.earlier > 0) {
+      const banner = element("div", "messages-earlier");
+      const button = element("button", "text-link messages-load-earlier", `Load earlier messages (${c.earlier} older)`);
+      button.type = "button";
+      button.addEventListener("click", () => loadEarlierMessages());
+      banner.append(button);
+      rootKids.push(banner);
+    }
     segments.forEach((segment, segmentIndex) => {
       const last = segmentIndex === segments.length - 1, first = messages[segment.from];
       const turnKey = segment.loose ? "loose" : String(first.id || segment.from), saved = drawn.turns.get(turnKey);
@@ -1462,11 +1474,132 @@
     ui.input.style.overflowY = needed > 200 ? "auto" : "hidden";
   }
 
+  let loadingEarlier = false;
+  async function loadEarlierMessages() {
+    const c = state.conversation;
+    if (!c || !c.earlier || loadingEarlier) return false;
+    const firstMsg = c.messages?.[0];
+    if (!firstMsg) return false;
+    loadingEarlier = true;
+    const projectId = state.projectId, task = state.taskId;
+    const base = '/api/conversation' + (task ? `?task=${encodeURIComponent(task)}&` : '?');
+    try {
+      const older = await api(`${base}before=${encodeURIComponent(firstMsg.id)}&limit=80`, {}, projectId);
+      if (state.projectId !== projectId || (state.taskId || null) !== (task || null)) return false;
+      if (older.messages?.length) {
+        const oldScrollHeight = ui.scroll.scrollHeight;
+        const oldScrollTop = ui.scroll.scrollTop;
+        const newIds = new Set(older.messages.map(m => m.id));
+        const kept = c.messages.filter(m => !newIds.has(m.id));
+        c.messages = [...older.messages, ...kept];
+        c.earlier = older.earlier !== undefined ? older.earlier : Math.max(0, (c.earlier || 0) - older.messages.length);
+        renderMessages();
+        const heightDiff = ui.scroll.scrollHeight - oldScrollHeight;
+        ui.scroll.scrollTop = oldScrollTop + heightDiff;
+        window.dispatchEvent(new CustomEvent('relay-state'));
+        return true;
+      } else {
+        c.earlier = 0;
+        renderMessages();
+      }
+    } catch {
+      // Preserve scroll position on error
+    } finally {
+      loadingEarlier = false;
+    }
+    return false;
+  }
+
+  async function loadToRun(runId) {
+    const c = state.conversation;
+    if (!c || !runId) return false;
+    if (ui.messages.querySelector(`div[data-run-id="${runId}"]`)) return true;
+    const projectId = state.projectId, task = state.taskId;
+    const base = '/api/conversation' + (task ? `?task=${encodeURIComponent(task)}&` : '?');
+    try {
+      const older = await api(`${base}toRun=${encodeURIComponent(runId)}`, {}, projectId);
+      if (state.projectId !== projectId || (state.taskId || null) !== (task || null)) return false;
+      if (older.messages?.length) {
+        const oldScrollHeight = ui.scroll.scrollHeight;
+        const oldScrollTop = ui.scroll.scrollTop;
+        const newIds = new Set(older.messages.map(m => m.id));
+        const kept = c.messages.filter(m => !newIds.has(m.id));
+        c.messages = [...older.messages, ...kept];
+        c.earlier = older.earlier !== undefined ? older.earlier : 0;
+        renderMessages();
+        const heightDiff = ui.scroll.scrollHeight - oldScrollHeight;
+        ui.scroll.scrollTop = oldScrollTop + heightDiff;
+        window.dispatchEvent(new CustomEvent('relay-state'));
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
+  async function loadToMessage(messageId) {
+    const c = state.conversation;
+    if (!c || !messageId) return false;
+    if (c.messages.some(m => m.id === messageId)) return true;
+    const projectId = state.projectId, task = state.taskId;
+    const base = '/api/conversation' + (task ? `?task=${encodeURIComponent(task)}&` : '?');
+    try {
+      const older = await api(`${base}toMessage=${encodeURIComponent(messageId)}`, {}, projectId);
+      if (state.projectId !== projectId || (state.taskId || null) !== (task || null)) return false;
+      if (older.messages?.length) {
+        const oldScrollHeight = ui.scroll.scrollHeight;
+        const oldScrollTop = ui.scroll.scrollTop;
+        const newIds = new Set(older.messages.map(m => m.id));
+        const kept = c.messages.filter(m => !newIds.has(m.id));
+        c.messages = [...older.messages, ...kept];
+        c.earlier = older.earlier !== undefined ? older.earlier : 0;
+        renderMessages();
+        const heightDiff = ui.scroll.scrollHeight - oldScrollHeight;
+        ui.scroll.scrollTop = oldScrollTop + heightDiff;
+        window.dispatchEvent(new CustomEvent('relay-state'));
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
+  async function jumpToRun(runId) {
+    if (!runId) return false;
+    let node = ui.messages.querySelector(`div[data-run-id="${runId}"]`);
+    if (!node && state.conversation?.earlier > 0) {
+      await loadToRun(runId);
+      node = ui.messages.querySelector(`div[data-run-id="${runId}"]`);
+    }
+    if (!node) return false;
+    node.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    node.classList.add("activity-highlight");
+    setTimeout(() => node.classList.remove("activity-highlight"), 2000);
+    return true;
+  }
+
+  async function jumpToMessage(messageId) {
+    if (!messageId) return false;
+    let node = ui.messages.querySelector(`#message-${messageId}`) || ui.messages.querySelector(`[data-message-id="${messageId}"]`);
+    if (!node && state.conversation?.earlier > 0) {
+      await loadToMessage(messageId);
+      node = ui.messages.querySelector(`#message-${messageId}`) || ui.messages.querySelector(`[data-message-id="${messageId}"]`);
+    }
+    if (!node) return false;
+    node.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    node.classList.add("message-highlight");
+    setTimeout(() => node.classList.remove("message-highlight"), 2000);
+    return true;
+  }
+
   // A message that did not change keeps its object, which is how drawing tells what changed (see renderMessages).
   function keepMessageObjects(previous, conversation) {
     if (!previous || previous.id !== conversation.id) return conversation;
     const known = new Map(previous.messages.map(message => [message.id, message]));
     conversation.messages = conversation.messages.map(message => { const old = known.get(message.id); return old && old !== message && JSON.stringify(old) === JSON.stringify(message) ? old : message; });
+    if (conversation.earlier === undefined && previous.earlier !== undefined) conversation.earlier = previous.earlier;
     return conversation;
   }
   // A long conversation is many megabytes, so an update asks only for the messages changed since the copy it has.
@@ -1475,15 +1608,17 @@
     if (state.taskDraft) { const update = await api('/api/conversation' + (Number.isSafeInteger(state.draftCursor) ? `?since=${state.draftCursor}` : ''), {}, projectId); state.draftCursor = update.cursor; return update; }
     const known = state.conversation;
     const task = state.taskId, base = '/api/conversation' + (task ? `?task=${encodeURIComponent(task)}` : '');
-    const update = await api(base + (Number.isSafeInteger(known?.cursor) ? `${task ? '&' : '?'}since=${known.cursor}` : ''), {}, projectId);
-    if (update.messageCount === undefined) return update;
+    const hasCursor = Number.isSafeInteger(known?.cursor);
+    const update = await api(base + (hasCursor ? `${task ? '&' : '?'}since=${known.cursor}` : `${task ? '&' : '?'}limit=80`), {}, projectId);
+    if (!hasCursor || update.messageCount === undefined) return update;
     let messages = null;
     if (known?.id === update.id) {
       const at = new Map(known.messages.map((message, index) => [message.id, index]));
       messages = [...known.messages];
       for (const message of update.messages) { const index = at.get(message.id); if (index === undefined) messages.push(message); else messages[index] = message; }
     }
-    return messages?.length === update.messageCount ? { ...update, messages } : api(base, {}, projectId);
+    const earlier = known?.id === update.id ? (known.earlier || 0) : (update.earlier || 0);
+    return (earlier + (messages?.length || 0)) === update.messageCount ? { ...update, messages, earlier } : api(base + (task ? '&' : '?') + 'limit=80', {}, projectId);
   }
   // A task about to start: nothing in the middle but the composer, so it has the same agents, models and access as anywhere.
   // Nothing is saved until it's sent, and choices made here stay here, so the main conversation's settings don't change.
@@ -1530,7 +1665,7 @@
     if (!state.projectId || !state.ready) throw new Error('Choose an available workspace first.');
     if (state.conversation) return state.conversation;
     const projectId = state.projectId, version = state.projectVersion;
-    const conversation = await api('/api/conversation',{},projectId);
+    const conversation = await api('/api/conversation?limit=80',{},projectId);
     if (!sameProject(projectId,version)) throw new Error('The workspace changed while opening its chat.');
     applyConversation(conversation); restoreDraft(); render(); return conversation;
   }
@@ -1764,7 +1899,7 @@
     ui.addProject.setAttribute("aria-expanded", "false");
     render(true);
     try {
-      const [status, conversation] = await Promise.all([api('/api/status',{},id),api('/api/conversation',{},id)]);
+      const [status, conversation] = await Promise.all([api('/api/status',{},id),api('/api/conversation?limit=80',{},id)]);
       if (!sameProject(id,version)) return;
       state.status = status; applyConversation(conversation);
       state.ready = true; state.loading = false; restoreDraft();
@@ -2132,6 +2267,9 @@
     else if (/^[1-9]$/.test(event.key) && !event.shiftKey) run("workspace", Number(event.key));
   });
   ui.scroll.addEventListener("scroll", updateJump, { passive: true });
+  ui.scroll.addEventListener("scroll", () => {
+    if (ui.scroll.scrollTop < 120 && state.conversation?.earlier > 0) loadEarlierMessages();
+  }, { passive: true });
   // Status, permission requests and Continue appear under the latest turn without a new message; a reader at the end keeps seeing them.
   let following = true;
   ui.scroll.addEventListener("scroll", () => { following = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 110; }, { passive: true });
@@ -2253,6 +2391,7 @@
   window.addEventListener('relay-billing',()=>{renderStatus();renderControls();});
   window.addEventListener("beforeunload", saveDraft);
   window.relayUI = {
+    jumpToRun, jumpToMessage, loadEarlierMessages, loadToRun, loadToMessage,
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
     commands, isRunning, filteredProjects, setRouting, routeFor, showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,

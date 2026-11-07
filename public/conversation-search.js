@@ -32,6 +32,11 @@
   }
   function search(query) {
     const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'), found = [];
+    const state = api?.getState?.();
+    if (state && state.messagesSignature !== signature) {
+      signature = state.messagesSignature;
+      text = null;
+    }
     text ||= runs();
     for (const run of text) {
       // Matches come in order, so one pass over the run's text nodes maps every match to its start and end nodes.
@@ -87,15 +92,80 @@
     const settle = () => { if (frames-- <= 0 || matches[current] !== range) return; reveal(); requestAnimationFrame(settle); };
     requestAnimationFrame(settle);
   }
+  let searchGeneration = 0;
+  let searchingUnloaded = false;
+  let lastUnloadedQuery = null;
+  async function checkUnloadedSearch(query, generation) {
+    if (!query || !api?.getState || searchingUnloaded || lastUnloadedQuery === query) return;
+    const state = api.getState();
+    if (!state.conversation?.earlier) return;
+    lastUnloadedQuery = query;
+    searchingUnloaded = true;
+    const task = state.taskId;
+    const queryParams = `q=${encodeURIComponent(query)}${task ? `&task=${encodeURIComponent(task)}` : ""}`;
+    try {
+      const res = await api.api(`/api/conversation/search?${queryParams}`, {}, state.projectId);
+      if (generation !== searchGeneration) return;
+      if (res?.matches?.length) {
+        if (!matches.length && api.loadToMessage) {
+          const target = res.matches.at(-1);
+          await api.loadToMessage(target.id);
+          if (generation === searchGeneration) {
+            text = null;
+            find(false);
+          }
+        }
+      }
+    } catch {
+      // Ignore background search errors
+    } finally {
+      searchingUnloaded = false;
+    }
+  }
+
   function find(keep = false) {
     const previous = current;
-    matches = input.value.trim() ? search(input.value) : [];
+    const query = input.value.trim();
+    if (query !== lastUnloadedQuery) lastUnloadedQuery = null;
+    const state = api?.getState?.();
+    if (state && state.messagesSignature !== signature) {
+      signature = state.messagesSignature;
+      text = null;
+    }
+    matches = query ? search(query) : [];
     if (all) { all.clear(); for (const range of matches) all.add(range); }
     // A re-render keeps the current match and the scroll position; a new query starts from what is in view.
     if (keep && previous >= 0) show(Math.min(previous, matches.length - 1), false);
     else show(matches.length ? nearest() : -1, !keep);
+    if (query && !matches.length && state?.conversation?.earlier && !searchingUnloaded) {
+      const gen = ++searchGeneration;
+      checkUnloadedSearch(query, gen);
+    }
   }
-  function move(step) { if (matches.length) show((current + step + matches.length) % matches.length); }
+  async function move(step) {
+    if (!matches.length) return;
+    if (step === -1 && current === 0 && api?.getState?.()?.conversation?.earlier) {
+      const gen = ++searchGeneration;
+      const state = api.getState();
+      const task = state.taskId;
+      const queryParams = `q=${encodeURIComponent(input.value.trim())}${task ? `&task=${encodeURIComponent(task)}` : ""}`;
+      try {
+        const res = await api.api(`/api/conversation/search?${queryParams}`, {}, state.projectId);
+        if (gen !== searchGeneration) return;
+        const firstLoaded = state.conversation.messages?.[0];
+        const earlierMatches = res?.matches?.filter(m => !firstLoaded || m.index < state.conversation.earlier);
+        if (earlierMatches?.length && api.loadToMessage) {
+          await api.loadToMessage(earlierMatches.at(-1).id);
+          if (gen === searchGeneration) {
+            text = null;
+            find(false);
+            return;
+          }
+        }
+      } catch {}
+    }
+    show((current + step + matches.length) % matches.length);
+  }
   function open() {
     const opening = bar.hidden;
     bar.hidden = false; input.focus(); input.select();
@@ -104,7 +174,7 @@
     find();
   }
   function close(focusComposer = true) {
-    bar.hidden = true; matches = []; current = -1; text = null; count.textContent = '';
+    bar.hidden = true; matches = []; current = -1; text = null; lastUnloadedQuery = null; count.textContent = '';
     if (supported) { CSS.highlights.delete('conversation-search'); CSS.highlights.delete('conversation-search-current'); all.clear(); active.clear(); }
     if (focusComposer) $('message-input').focus();
   }

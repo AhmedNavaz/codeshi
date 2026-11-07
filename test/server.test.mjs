@@ -595,3 +595,51 @@ test('alerts tell the page which sound to play, as chosen per moment, and sound 
   await f.app.close(); const next = await f.launch();
   assert.deepEqual(next.app.getNotificationPreferences().sound, { ...defaults, on: true, finished: false, volume: 40 }, 'Sound settings are kept across restarts.');
 });
+
+test('conversation paging with limit and before, and search across full history', async t => {
+  const f = await fixture(t);
+  const broker = f.app.broker;
+  const initial = await (await fetch(`${f.url}/api/conversation`)).json();
+  const c = broker.get(initial.id);
+
+  // Populate 120 messages
+  for (let i = 0; i < 120; i++) {
+    broker.record(c, {
+      type: 'message',
+      message: {
+        id: `msg-${i}`,
+        role: i % 10 === 0 ? 'user' : 'assistant',
+        text: i === 15 ? 'Secret needle in history' : `Message number ${i}`,
+        createdAt: new Date(Date.now() + i * 1000).toISOString()
+      }
+    });
+  }
+
+  // Request latest 20
+  const latestRes = await fetch(`${f.url}/api/conversation?limit=20`);
+  assert.equal(latestRes.status, 200);
+  const latest = await latestRes.json();
+  assert.equal(latest.messages.length, 20);
+  assert.equal(latest.earlier, 100);
+  assert.equal(latest.messageCount, 120);
+  assert.equal(latest.messages[0].id, 'msg-100');
+  assert.equal(latest.messages.at(-1).id, 'msg-119');
+
+  // Request 20 before msg-100
+  const olderRes = await fetch(`${f.url}/api/conversation?before=msg-100&limit=20`);
+  assert.equal(olderRes.status, 200);
+  const older = await olderRes.json();
+  assert.equal(older.messages.length, 20);
+  assert.equal(older.earlier, 80);
+  assert.equal(older.messages[0].id, 'msg-80');
+  assert.equal(older.messages.at(-1).id, 'msg-99');
+
+  // Search across full history
+  const searchRes = await fetch(`${f.url}/api/conversation/search?q=needle`);
+  assert.equal(searchRes.status, 200);
+  const searchData = await searchRes.json();
+  assert.equal(searchData.matches.length, 1);
+  assert.equal(searchData.matches[0].id, 'msg-15');
+  assert.equal(searchData.matches[0].index, 15);
+  assert.match(searchData.matches[0].text, /Secret needle in history/);
+});

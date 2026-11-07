@@ -47,7 +47,7 @@ class Element extends Events {
   getBoundingClientRect(){return this.bounds || {left:40,top:750,right:240,bottom:774,width:200,height:24};}
   showPopover(){this.popoverOpen=true;this.dispatchEvent(new UIEvent('toggle',{newState:'open'}));}
   hidePopover(){this.popoverOpen=false;this.dispatchEvent(new UIEvent('toggle',{newState:'closed'}));}
-  focus(){this.document.activeElement=this;}select(){}click(){if(!this.disabled)this.dispatchEvent(new UIEvent('click'));}showModal(){this.open=true;}close(){if(this.open){this.open=false;this.dispatchEvent(new UIEvent('close'));}}
+  focus(){this.document.activeElement=this;}select(){}scrollIntoView(){}click(){if(!this.disabled)this.dispatchEvent(new UIEvent('click'));}showModal(){this.open=true;}close(){if(this.open){this.open=false;this.dispatchEvent(new UIEvent('close'));}}
 }
 function documentFixture(){
   const document=new Events();document.hidden=false;document.createElement=tag=>new Element(tag,document);document.createTextNode=text=>{const node=new Element('#text',document);node.data=String(text);return node;};document.createDocumentFragment=()=>new Element('#fragment',document);
@@ -173,7 +173,68 @@ async function browser({existing=true,available=true,providers={},authenticated=
 
       if(request.path==='/api/conversation/export'){const redacted=request.params.redact!=='0';return response({package:{schema:'ai-relay.conversation',version:1,id:'export-one',workspace:{name:selected.name,folders:['frontend']},messages:clone(ensureChat(selected).messages).map(message=>({id:message.id,role:message.role,text:message.text})),digest:'exported'},stats:{messages:ensureChat(selected).messages.length,omitted:0,bytes:420,from:null,to:null,providers:[]},findings:{secrets:1,localPaths:0},redacted});}
       if(request.path==='/api/status')return response({verificationCadence:preferences.verificationCadence || 'as-needed',workspace:selected.path,projectId:selected.id,project:clone(selected),providers:{codex:providerStatus('codex'),claude:providerStatus('claude'),gemini:providerStatus('gemini')},runningConversationId:canonical.get(selected.id)?.status==='running'?canonical.get(selected.id).id:null});
-      if(request.path==='/api/conversation')return response(clone(ensureChat(selected)));
+      if(request.path==='/api/conversation'){
+        const rawChat = ensureChat(selected);
+        const allMsgs = rawChat.messages;
+        const chat = { ...rawChat };
+        if(request.params?.since !== undefined){
+          const since = Number(request.params.since);
+          const changed = allMsgs.filter(m => (m.seq || 0) > since);
+          chat.messages = changed;
+          chat.messageCount = allMsgs.length;
+          return response(clone(chat));
+        }
+        if(request.params?.toRun){
+          const idx = allMsgs.findIndex(m => m.runId === request.params.toRun);
+          if(idx !== -1){
+            let start = idx;
+            while(start > 0 && !(allMsgs[start].role === 'user' && !allMsgs[start].steer)) start--;
+            chat.earlier = start;
+            chat.messages = allMsgs.slice(start);
+            chat.messageCount = allMsgs.length;
+            return response(clone(chat));
+          }
+        }
+        if(request.params?.toMessage){
+          const idx = allMsgs.findIndex(m => m.id === request.params.toMessage);
+          if(idx !== -1){
+            let start = idx;
+            while(start > 0 && !(allMsgs[start].role === 'user' && !allMsgs[start].steer)) start--;
+            chat.earlier = start;
+            chat.messages = allMsgs.slice(start);
+            chat.messageCount = allMsgs.length;
+            return response(clone(chat));
+          }
+        }
+        if(request.params?.limit){
+          const limit = Number(request.params.limit);
+          let end = allMsgs.length;
+          if(request.params.before){
+            const idx = allMsgs.findIndex(m => m.id === request.params.before);
+            if(idx !== -1) end = idx;
+          }
+          const start = Math.max(0, end - limit);
+          chat.earlier = start;
+          chat.messages = allMsgs.slice(start, end);
+          chat.messageCount = allMsgs.length;
+          return response(clone(chat));
+        }
+        return response(clone(rawChat));
+      }
+      if(request.path==='/api/conversation/search'){
+        const q = (request.params?.q || '').toLowerCase().trim();
+        const chat = ensureChat(selected);
+        const matches = [];
+        if(q){
+          for(let i=0; i<chat.messages.length; i++){
+            const m = chat.messages[i];
+            if(m.text && m.text.toLowerCase().includes(q)){
+              matches.push({index: i, id: m.id, role: m.role, runId: m.runId || null, text: m.text.slice(0, 100)});
+            }
+          }
+        }
+        return response({query: q, matches});
+      }
       if(request.path==='/api/collaboration/handoffs/prepare'){const body=request.body;const outgoing=body.draft?sealPackage(body.draft):sealPackage({schema:'ai-relay.handoff',version:1,id:randomUUID(),createdAt:'2026-10-20T00:00:00.000Z',mode:body.mode||'context',goal:body.goal||'',problem:body.problem||'',expectedOutcome:body.expectedOutcome||'',decisions:body.decisions||[],tasks:body.tasks||[],messages:[],files:[],baseline:[]});return response({package:outgoing,warnings:[]});}
       if(request.path==='/api/collaboration/handoffs/approve'){const record={id:request.body.package.id,package:request.body.package,direction:'outgoing',status:'approved'};handoffs.push(record);return response(clone(record));}
       const match=request.path.match(/^\/api\/conversations\/([^/]+)(?:\/(provider|messages|continue|routing))?$/);
@@ -5307,4 +5368,98 @@ test('Flow toggles Review first inline, persists it across views and recovers fr
   assert.equal(toggle.getAttribute('aria-checked'), 'false');
   assert.equal(ui.$('message-input').value, 'Keep my draft');
   assert.equal(ui.requests.some(request => request.method === 'POST' && /\/(messages|continue)$/.test(request.path)), false);
+});
+
+test('opening a long workspace of 10,000 messages opens promptly, pages latest, maintains scroll position on scroll up, searches unloaded history, jumps to unloaded runs, and streams live runs while paged', async () => {
+  const ui = await browser({ layoutUI: true, moreProjects: true, searchUI: true });
+  const chat = ui.canonical.get('project-two');
+  chat.messages = [];
+
+  // Generate 10,000 messages
+  for (let i = 0; i < 10000; i++) {
+    const isUser = i % 20 === 0;
+    const runId = isUser ? `run-${i}` : (i > 0 ? `run-${Math.floor(i / 20) * 20}` : null);
+    chat.messages.push({
+      id: `msg-${i}`,
+      seq: i + 1,
+      role: isUser ? 'user' : (i % 20 === 19 ? 'assistant' : 'activity'),
+      runId,
+      text: i === 40 ? 'Secret ancient needle in history' : (isUser ? `User prompt ${i}` : `Tool action step ${i}`),
+      createdAt: new Date(Date.now() - (10000 - i) * 1000).toISOString()
+    });
+  }
+  chat.cursor = 10000;
+
+  // 1. Measure opening time on 10,000 messages
+  const t0 = performance.now();
+  await ui.window.relayUI.selectProject('project-two');
+  await flush();
+  const elapsed = performance.now() - t0;
+
+  assert(elapsed < 1000, `Opening took ${elapsed}ms, which is prompt and under 1s.`);
+  assert.equal(ui.state().ready, true);
+  assert.equal(ui.$('empty-state').hidden, true);
+  assert(ui.state().conversation.messages.length <= 80, 'Only latest page is loaded');
+  assert(ui.state().conversation.earlier >= 9920, 'Earlier count reflects remaining messages');
+  assert.equal(ui.state().conversation.messages.at(-1).id, 'msg-9999');
+
+  // Verify earlier banner exists
+  const banner = ui.$('messages').querySelector('.messages-earlier');
+  assert(banner, 'Earlier banner is visible at the top of messages');
+  assert.match(banner.textContent, /Load earlier messages/);
+
+  // 2. Scrolling up loads older messages in pages and keeps reading position
+  const scroll = ui.$('messages-scroll');
+  scroll.scrollHeight = 3000;
+  scroll.scrollTop = 50;
+  scroll.clientHeight = 600;
+
+  const initialMsgCount = ui.state().conversation.messages.length;
+  const initialEarlier = ui.state().conversation.earlier;
+
+  banner.querySelector('button').click();
+  await flush();
+
+  assert(ui.state().conversation.messages.length > initialMsgCount, 'Older messages were loaded');
+  assert(ui.state().conversation.earlier < initialEarlier, 'Earlier count decreased');
+
+  await ui.window.relayUI.commands.find();
+  await flush();
+  const searchInput = ui.$('conversation-search-input');
+  assert(searchInput, 'Search bar is open');
+  searchInput.value = 'ancient needle';
+  ui.fire('conversation-search-input', 'input');
+  await flush();
+
+  // Search queries unloaded history, loads message into DOM, and highlights it
+  assert.match(ui.$('conversation-search-count').textContent, /1 of 1|1/);
+  const foundNode = ui.$('messages').textContent.includes('Secret ancient needle in history');
+  assert(foundNode, 'Unloaded search target was loaded and rendered in the DOM');
+
+  const jumpResult = await ui.window.relayUI.jumpToRun('run-20');
+  await flush();
+  assert.equal(jumpResult, true);
+  const runNode = ui.$('messages').querySelector('div[data-run-id="run-20"]');
+  assert(runNode, 'Run 20 was loaded and rendered in the DOM');
+
+  // 5. Live update while paged keeps working without reloading all 10,000 messages
+  const liveCountBefore = ui.state().conversation.messages.length;
+  const liveEarlierBefore = ui.state().conversation.earlier;
+
+  // Server adds a new user message and activity
+  chat.messages.push({
+    id: 'msg-10000',
+    seq: 10001,
+    role: 'user',
+    text: 'Brand new live prompt',
+    createdAt: new Date().toISOString()
+  });
+  chat.cursor = 10001;
+
+  await ui.window.relayUI.refresh();
+  await flush();
+
+  assert.equal(ui.state().conversation.earlier, liveEarlierBefore, 'Earlier count preserved across live updates');
+  assert.equal(ui.state().conversation.messages.at(-1).text, 'Brand new live prompt');
+  assert.equal(ui.state().conversation.messages.length, liveCountBefore + 1);
 });

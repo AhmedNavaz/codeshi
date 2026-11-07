@@ -141,7 +141,11 @@
       const when = new Date(entry.at);
       head.append(node('strong', title), node('time', Number.isNaN(when.getTime()) ? 'Time unavailable' : when.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })));
       item.append(head);
-      if (entry.prompt) item.append(node('p', entry.prompt, 'checkpoint-prompt'));
+      if (entry.prompt) {
+        const promptEl = node('p', entry.prompt, 'checkpoint-prompt');
+        promptEl.addEventListener('click', () => api.jumpToRun?.(entry.runId || entry.id));
+        item.append(promptEl);
+      }
       item.append(node('p', [entry.kind === 'run' ? entry.status === 'running' ? 'Working' : entry.status === 'complete' ? 'Finished' : entry.status === 'unknown' ? 'Status unavailable' : 'Stopped' : '', entry.files === null ? 'File count unavailable' : `${plural(entry.files, 'file')} changed`, entry.left ? `${entry.left} left as they are` : ''].filter(Boolean).join(' · '), 'checkpoint-meta'));
       const actions = node('div', undefined, 'checkpoint-actions');
       for (const point of entry.checkpoints) {
