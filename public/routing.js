@@ -363,6 +363,27 @@
     return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
 
+  // Who plans an orchestrated message: the deepest work each mode allows, under the same allowance rules as any message.
+  // Cost saving plans with a standard model rather than its lightest, since a weak plan costs more runs than it saves.
+  // A planning run is read-only, so tests never retry it.
+  function planner(options) {
+    const routed = route({ ...options, tier: 'deep' });
+    return routed.error ? routed : { ...routed, reason: 'Plans the steps', escalation: null };
+  }
+
+  // A plan step (Orchestrate) is routed by the tier it was planned with, which then counts instead of how its text reads.
+  const planned = { light: 'a small step, as planned', standard: 'a focused step, as planned', deep: 'a complex step, as planned' };
+  const plannedStep = tier => TIERS.includes(tier) ? { tier, reason: planned[tier] } : null;
+
+  // Who plans an orchestrated message: the deepest work each mode allows, under the same allowance rules as any message.
+  // A planning run is read-only, so it never escalates and tests never retry it.
+  function planner(options) {
+    const routed = route({ ...options, assessment: { tier: 'deep', reason: 'plans the steps' } });
+    if (routed.error) return routed;
+    const { assessment, ...choice } = routed;
+    return { ...choice, reason: 'Plans the steps', escalation: null };
+  }
+
   // The same choice when the agent is already decided: a queued prompt that moved at a handoff is routed again for the
   // agent that took over (#93). Null when that agent lists no models, so the caller keeps its own choice.
   function routeTo(provider, rows, { text, attachments = 0, assessment = null, mode = 'smart' }) {
@@ -440,5 +461,5 @@
     return results;
   }
 
-  root.relayRouting = { MODES, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, escalate, assessQuota, adaptiveThreshold, quotaText, windowApplies, windowSpendability, bindingWindow, replay };
+  root.relayRouting = { MODES, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);

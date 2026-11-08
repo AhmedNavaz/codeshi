@@ -398,16 +398,26 @@
     return { steps: run?.plan?.steps || [], held: Boolean(held), running, run };
   }
   const currentStep = steps => steps.find(step => step.status === 'active') || steps.find(step => step.status === 'pending') || null;
+  // An Orchestrate plan that is being made or waits for approval holds the queue, so What's next leads with it.
+  function waitingPlan() {
+    const plan = window.relayOrchestration?.waiting?.();
+    if (!plan) return null;
+    const count = plan.steps?.length || 0;
+    if (plan.status === 'planning') return { chip: 'Planning', text: `${agentName(plan.planner?.provider)} is planning the steps. The plan opens above the message box.` };
+    if (plan.status === 'draft') return { chip: 'Plan waiting', text: count ? `A plan of ${plural(count, 'step')} is waiting above the message box. Nothing from it runs until you approve it.` : 'An empty plan is waiting above the message box. Add its steps there.' };
+    return { chip: 'Plan not ready', text: 'The plan isn’t ready. Plan again or write the steps yourself, above the message box.' };
+  }
   function renderNext(card) {
     const state = api.getState(), c = state.conversation, { steps, held, running, run } = planFor(), queue = c?.queue || [], tasks = c?.parallelTasks || [];
-    const folders = state.projects?.find(project => project.id === state.projectId)?.folders || [];
-    const signature = JSON.stringify([steps, held, running, queue, c?.queuePaused, state.projectId, state.taskId, state.taskDraft, folders, tasks.map(task => [task.id, task.title, task.status, task.conversationId, task.folderName])]);
+    const folders = state.projects?.find(project => project.id === state.projectId)?.folders || [], plan = waitingPlan();
+    const signature = JSON.stringify([plan, steps, held, running, queue, c?.queuePaused, state.projectId, state.taskId, state.taskDraft, folders, tasks.map(task => [task.id, task.title, task.status, task.conversationId, task.folderName])]);
     if (signature === card.signature) return;
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
     const selectTask = id => window.relayTaskThreads.select(id).catch(error => api.showNotice?.(error.message));
     const others = tasks.filter(task => task.purpose !== 'project-review' && task.id !== state.taskId && !['integrated', 'kept', 'discarded', 'cancelled', 'lost', 'detached'].includes(task.status) && (task.conversationId || task.status === 'waiting'));
-    if (!steps.length && !queue.length) body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : running ? `${agentName(run?.provider, run?.connection === 'local')} is working. Its plan appears here as it makes one.` : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
+    if (plan) body.append(node('p', 'flow-lead flow-plan-waiting', plan.text));
+    else if (!steps.length && !queue.length) body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : running ? `${agentName(run?.provider, run?.connection === 'local')} is working. Its plan appears here as it makes one.` : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
     if (steps.length) {
       const done = steps.filter(step => step.status === 'done').length, current = currentStep(steps);
       body.append(node('p', 'flow-lead', done === steps.length ? 'All steps done.' : `${done} of ${steps.length} done${held ? ' · stopped' : ''}.`));
@@ -422,7 +432,7 @@
       body.append(list);
     }
     if (queue.length) {
-      body.append(node('h3', 'flow-subhead', `Then · ${plural(queue.length, 'queued message')}${c.queuePaused ? ' · paused' : ''}`));
+      body.append(node('h3', 'flow-subhead', `Then · ${plural(queue.length, 'queued message')}${plan ? ' · waiting for the plan' : c.queuePaused ? ' · paused' : ''}`));
       const list = node('ol', 'flow-queue');
       for (const item of queue.slice(0, 5)) list.append(node('li', 'flow-queue-item', clip(item.text, 110)));
       if (queue.length > 5) list.append(node('li', 'flow-queue-more', `and ${queue.length - 5} more`));
@@ -534,7 +544,7 @@
     if (id === 'preview') return window.relayProjectReview?.label() || 'Run and review your project';
     if (id === 'working') return modes.find(item => item.mode === canonicalMode(routing()?.mode))?.name || 'Routing';
     if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
-    if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || []; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }
+    if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || [], plan = waitingPlan(); if (plan) return plan.chip; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }
     const total = changedRuns().filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0);
     return total ? `${plural(total, 'file')} changed` : 'Files';
   }

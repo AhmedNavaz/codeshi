@@ -9,6 +9,7 @@ import { processStart } from './mutation-lock.mjs';
 import { usualWindowSpend } from './usage-watch.mjs';
 import { RoutingReferences } from './routing-references.mjs';
 import '../public/routing.js';
+import { checkPlanning } from './orchestration.mjs';
 
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -147,9 +148,10 @@ export class RoutingDispatcher {
     return providers.flatMap(provider => {
       const reading = this.readings.get(provider);
       if (!reading || reading.bin !== broker.usageOptions(provider).bin) return [];
+      // A planning run (Orchestrate) is read-only whatever access the page sends, and Antigravity has no read-only mode.
       const { account, usage, models, bin, at } = reading, antigravity = isAntigravityACP(bin);
       broker.observeQuota(c, provider, usage);
-      const eligible = account?.installed !== false && account?.authenticated !== false && (provider !== 'gemini' || (input.mode !== 'read' || !antigravity) && (!multiple || (antigravity ? account?.capabilities?.additionalDirectories === true : broker.workspaces.length <= 6)));
+      const eligible = account?.installed !== false && account?.authenticated !== false && (provider !== 'gemini' || ((input.mode !== 'read' && input.orchestrate !== true) || !antigravity) && (!multiple || (antigravity ? account?.capabilities?.additionalDirectories === true : broker.workspaces.length <= 6)));
       const usualSpend = usualWindowSpend(c, provider);
       return [{ provider, models, usage, eligible: eligible && (!policy.allowedProviders || policy.allowedProviders.includes(provider)), account, bin, readAt: at, billingSource: account?.billingSource || 'unknown', allowedModels: policy.allowedModels?.[provider], ...(usualSpend ? { usualSpend } : {}) }];
     });
@@ -265,6 +267,8 @@ export class RoutingDispatcher {
     if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 100000) throw fail('Enter a message between 1 and 100,000 characters.', 400);
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId)) throw fail('Invalid request ID.', 400);
     broker.checkRunSettings(input.provider || c.provider, input.mode || c.mode, input.approvalPolicy || c.approvalPolicy || 'ask');
+    const planning = input.orchestrate === true;
+    if (planning) checkPlanning(broker, input);
     const routingMode = globalThis.relayRouting.normalizeMode(input.routing.mode);
     if (!routingMode) throw fail('Choose Smart, Saver or Ultra.', 400);
     broker.attachments.select(input.attachments || []);
@@ -294,7 +298,8 @@ export class RoutingDispatcher {
       };
       const attachments = input.attachments?.length || 0;
       const previousText = c.messages.findLast(message => message.role === 'user' && !message.reviewId && !message.steer)?.text || c.context?.goal || '';
-      let assessment = globalThis.relayRouting.triage(input.text, { attachments, previous: c.lastRun?.routing?.assessment });
+      // Planning (Orchestrate, #12) gets the deepest work the mode allows, so there is nothing to rate.
+      let assessment = planning ? { tier: 'deep', effort: TIER_EFFORT.deep, reason: 'plans the steps', source: 'plan' } : globalThis.relayRouting.triage(input.text, { attachments, previous: c.lastRun?.routing?.assessment });
       if (!assessment) {
         if (routingMode === 'saver' || policy.override && (!policy.overrideUsed || policy.override.scope === 'pinned')) {
           // Saver (#128): local rules only, no agent call; light and standard models at low effort.
@@ -350,7 +355,7 @@ export class RoutingDispatcher {
       broker.record(c, { type: 'routing_decision', id, taskId, requestId: input.requestId, fingerprint, scope, result });
       broker.running = null; delete c.routingPending;
       // Assessment usage belongs to the task it rated. Without one, the run takes its task the usual way.
-      const submission = broker.start(c, { ...input, provider: choice.provider, model: choice.model, effort: choice.effort, routing: { mode: choice.mode, reason: choice.reason, tier: choice.tier, ...(choice.plannedHandoff ? { plannedHandoff: true } : {}), assessment: { id, ...assessment }, escalation: choice.escalation } }, { ...options, execution, assessedTask: { id: taskId, parentRunId: run.assessorStarted ? id : null, relation: run.assessorStarted ? 'assessed' : null }, routingEvidence: { provider: row.provider, account: row.account, usage: row.usage, at: row.readAt } });
+      const submission = broker.start(c, { ...input, provider: choice.provider, model: choice.model, effort: choice.effort, routing: { mode: choice.mode, reason: choice.reason, tier: choice.tier, ...(choice.plannedHandoff ? { plannedHandoff: true } : {}), assessment: { id, ...assessment }, escalation: planning ? null : choice.escalation } }, { ...options, execution, assessedTask: { id: taskId, parentRunId: run.assessorStarted ? id : null, relation: run.assessorStarted ? 'assessed' : null }, routingEvidence: { provider: row.provider, account: row.account, usage: row.usage, at: row.readAt } });
       const accepted = { ...submission, provider: choice.provider, model: choice.model, effort: choice.effort };
       broker.record(c, { type: 'routing_submission', requestId: input.requestId, submission: accepted });
       return accepted;

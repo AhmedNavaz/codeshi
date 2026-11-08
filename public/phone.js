@@ -309,6 +309,14 @@
     element.addEventListener('click', event => { if (event.target.closest('a, button')) return; if (element.scrollHeight > element.clientHeight + 1 || element.classList.contains('open')) element.classList.toggle('open'); });
     return element;
   }
+  // A planner's reply (Orchestrate) reads as the plan it proposed. Plans are approved in Flow on the computer.
+  function planText(message) {
+    const plan = S.c?.plans?.find(item => item.id === message.orchestrationId);
+    if (!plan) return 'The planner’s response.';
+    if (plan.status === 'planning') return 'Planning the steps…';
+    if (plan.steps) return `Proposed a plan of ${plan.steps} step${plan.steps === 1 ? '' : 's'}: ${plan.summary}${plan.status === 'draft' ? ' Review and approve it in Flow on your computer.' : ''}`;
+    return `${plan.summary}${['unstructured', 'failed', 'interrupted'].includes(plan.status) ? ' Plan again or write the steps yourself in Flow on your computer.' : ''}`.trim();
+  }
   function messageRow(message, showAgent) {
     if (message.role === 'user') {
       const row = node('div', 'm m-user'), bubble = foldable(node('div', 'bubble', message.text));
@@ -320,13 +328,17 @@
     if (message.role === 'assistant') {
       const row = node('div', 'm m-agent');
       if (showAgent) { const tag = node('div', 'm-who'); tag.append(glyph(message.provider), name(message.provider)); row.append(tag); }
-      row.append(markdown(message.text));
+      row.append(message.orchestrationId ? node('p', 'm-plan', planText(message)) : markdown(message.text));
       return row;
     }
     // Stopping is something you did, not something that went wrong.
     if (message.role === 'error' && /^Stopped\b/.test(message.text)) return node('div', 'm m-note', message.text);
     if (message.role === 'error') { const row = node('div', 'm m-error'); row.append(icon('alert'), node('span', '', message.text)); return row; }
     return foldable(node('div', 'm m-note', message.text));
+  }
+  // What a row is drawn from: a planner's reply is drawn from its plan, so it's redrawn when the plan changes.
+  function rowKey(message, showAgent) {
+    return `${message.role}\n${showAgent}\n${message.text}${message.orchestrationId && message.role === 'assistant' ? `\n${planText(message)}` : ''}`;
   }
   function renderFeed() {
     const c = S.c, draft = Boolean(S.draft);
@@ -337,7 +349,7 @@
       if (message.role === 'user' && (message.continuation || /^\s*Continue the unfinished task from this shared conversation/i.test(message.text || ''))) continue;
       const showAgent = message.role === 'assistant' && message.provider !== before;
       if (message.role === 'assistant') before = message.provider;
-      const key = `${message.role}\n${showAgent}\n${message.text}`;
+      const key = rowKey(message, showAgent);
       let row = rows.get(message.id);
       if (!row || row.key !== key) {
         const element = messageRow(message, showAgent);
@@ -549,7 +561,8 @@
     return line;
   }
   function canContinue() {
-    const c = S.c; if (!c?.id || S.draft || isRunning() || c.resume || c.limitSwitching || c.lastRun?.purpose === 'review') return false;
+    // A review or a planning run is never continued: continuing would do the work with the conversation's own access.
+    const c = S.c; if (!c?.id || S.draft || isRunning() || c.resume || c.limitSwitching || ['review', 'plan'].includes(c.lastRun?.purpose)) return false;
     return ['incomplete', 'interrupted'].includes(c.status) || S.messages.at(-1)?.role === 'error';
   }
   async function continueRun(provider, control) {

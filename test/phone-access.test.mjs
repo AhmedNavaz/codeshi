@@ -312,3 +312,48 @@ test('same-Wi-Fi access distinguishes activeNow from allowed, moves a session to
   await f.access.manage({ action: 'allow', id: pendingDevice.id });
   assert.equal(f.access.status().devices.length, 1, 'Re-pairing replaces the previous connection for the same browser/phone.');
 });
+
+test('a phone shows a planner’s reply as the plan it proposed, says where to approve it, and offers no Continue after planning', () => {
+  const steps = [{ id: 's1', title: 'Add the route' }, { id: 's2', title: 'Show the items' }];
+  const view = { id: 'c', status: 'complete', lastRun: { id: 'plan-1', provider: 'codex', purpose: 'plan', status: 'complete' },
+    orchestrations: [{ id: 'plan-1', goal: 'Add a list', status: 'draft', summary: 'Route, then page.', steps, review: true, revision: 1, planner: { provider: 'codex' } }, { id: 'plan-0', goal: 'Older', status: 'superseded', summary: 'Earlier.', steps: [], revision: 1 }],
+    messages: [{ id: 'u', role: 'user', text: 'Add a list', provider: 'codex', runId: 'plan-1', orchestrationId: 'plan-1' }, { id: 'a', role: 'assistant', text: JSON.stringify({ summary: 'Route, then page.', steps }), provider: 'codex', runId: 'plan-1', orchestrationId: 'plan-1' }] };
+  const out = phoneConversation(view);
+  assert.deepEqual(out.messages.map(message => message.orchestrationId), ['plan-1', 'plan-1']);
+  assert.deepEqual(out.plans, [{ id: 'plan-1', status: 'draft', summary: 'Route, then page.', steps: 2 }, { id: 'plan-0', status: 'superseded', summary: 'Earlier.', steps: 0 }], 'Only what the phone shows, not the steps themselves.');
+  assert.equal(out.lastRun.purpose, 'plan');
+  assert.equal(phoneConversation({ id: 'd', messages: [] }).plans, undefined);
+  assert.equal(phoneConversation({ id: 'e', messages: [], orchestrations: [{ id: 'p', status: 'failed', summary: 'x'.repeat(1200), steps: [] }] }).plans[0].summary, `${'x'.repeat(1000)}…`, 'A long summary is clipped for the phone.');
+
+  // The page draws the planner's reply from its plan, not the raw JSON.
+  const source = fs.readFileSync(new URL('../public/phone.js', import.meta.url), 'utf8');
+  const block = name => { const start = source.indexOf(`  function ${name}(`); assert.notEqual(start, -1, name); return source.slice(start, source.indexOf('\n  }\n', start) + 4); };
+  const node = (tag, cls = '', text = '') => { const element = { tag, cls, text, children: [], append(...items) { element.children.push(...items); } }; return element; };
+  const S = { c: out, draft: null, messages: out.messages };
+  const context = { S, node, foldable: element => element, markdown: text => node('div', 'md', text), glyph: () => node('i'), name: provider => provider[0].toUpperCase() + provider.slice(1), icon: () => node('svg'), isRunning: () => false };
+  vm.createContext(context);
+  vm.runInContext(`${block('planText')}${block('messageRow')}${block('rowKey')}${block('canContinue')}this.messageRow = messageRow; this.rowKey = rowKey; this.canContinue = canContinue; this.planText = planText;`, context);
+  const reply = () => context.messageRow(out.messages[1], true).children.find(child => child.cls === 'm-plan')?.text;
+  assert.equal(reply(), 'Proposed a plan of 2 steps: Route, then page. Review and approve it in Flow on your computer.');
+  // The feed redraws a row when its key changes: for a planner's reply, also when only its plan does.
+  const drafted = context.rowKey(out.messages[1], true), asked = context.rowKey(out.messages[0], false);
+  out.plans[0].steps = 1;
+  assert.equal(reply(), 'Proposed a plan of 1 step: Route, then page. Review and approve it in Flow on your computer.');
+  assert.notEqual(context.rowKey(out.messages[1], true), drafted, 'The reply is redrawn when its plan changes.');
+  assert.equal(context.rowKey(out.messages[0], false), asked, 'The message it planned is not.');
+  out.plans[0].steps = 2;
+  assert.equal(context.messageRow(out.messages[0], false).children[0].text, 'Add a list', 'The message it planned reads as written.');
+  out.plans[0].status = 'planning';
+  assert.equal(reply(), 'Planning the steps…');
+  Object.assign(out.plans[0], { status: 'unstructured', summary: 'The planner’s reply could not be read as a plan.', steps: 0 });
+  assert.equal(reply(), 'The planner’s reply could not be read as a plan. Plan again or write the steps yourself in Flow on your computer.');
+  Object.assign(out.plans[0], { status: 'superseded', summary: 'Route, then page.', steps: 2 });
+  assert.equal(reply(), 'Proposed a plan of 2 steps: Route, then page.', 'A plan that was replaced has nothing to approve.');
+  out.plans = [];
+  assert.equal(reply(), 'The planner’s response.');
+  // A planning run is never continued from the phone either: continuing would do the work with the conversation's own access.
+  out.status = 'incomplete';
+  assert.equal(context.canContinue(), false);
+  out.lastRun.purpose = undefined;
+  assert.equal(context.canContinue(), true, 'An ordinary run that stopped can be continued.');
+});

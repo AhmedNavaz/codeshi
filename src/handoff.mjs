@@ -46,7 +46,8 @@ export class HandoffMonitor {
   }
 
   watch(run) {
-    if (this.closed || run.review || run.local) return;
+    // Planning never hands off (#12): it is planned again, by whichever agent routing then picks.
+    if (this.closed || run.review || run.local || run.orchestrate) return;
     const schedule = delay => { const timer = setTimeout(async () => { await this.check(run).catch(() => {}); if (this.broker.running === run) schedule(this.checkMs); }, delay); timer.unref(); this.timers.set(run.id, timer); };
     schedule(this.firstCheckMs);
   }
@@ -247,11 +248,11 @@ export class HandoffMonitor {
   }
 
   // Whether a run that reaches a limit continues by itself: only if allowed in advance, and not for a run the person
-  // stopped, a review, a local model, a build-then-review sequence, or a run that continued after a reset, which waits
-  // again under its own rules.
+  // stopped, a review, a planning run, a local model, a build-then-review sequence, or a run that continued after a
+  // reset, which waits again under its own rules.
   atLimit(run) {
     const { threshold, automatic } = this.policy(run);
-    return automatic === true && threshold > 0 && !this.closed && !run.stopped && !run.handoff && !run.review && !run.local && !run.automaticReview && !run.resume;
+    return automatic === true && threshold > 0 && !this.closed && !run.stopped && !run.handoff && !run.review && !run.orchestrate && !run.local && !run.automaticReview && !run.resume;
   }
 
   // Connected agents billed to a subscription, the only ones a task goes to without asking.

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { routingNote } from './broker.mjs';
+import { openPlan } from './orchestration.mjs';
 import { isAntigravityACP } from './antigravity.mjs';
 import { resolveBinary } from './resolve-binary.mjs';
 
@@ -97,7 +98,8 @@ export class PromptQueue {
   // Starts the next prompt when the workspace is free: nothing running, no wait for a reset, and the queue not paused.
   async tick(c) {
     const broker = this.broker;
-    if (this.closed || !c.queue.length || c.queuePaused || broker.running || c.resume || this.held.has(c.id) || c.runs.some(run => ['building', 'reviewing'].includes(run.automaticReview?.status))) return;
+    // An open plan holds the queue until it is approved or put away (#12); a message sent by hand still goes ahead.
+    if (this.closed || !c.queue.length || c.queuePaused || broker.running || c.resume || this.held.has(c.id) || openPlan(c) || c.runs.some(run => ['building', 'reviewing'].includes(run.automaticReview?.status))) return;
     const item = c.queue[0];
     const digest = queueDigest(item);
     this.held.add(c.id);
@@ -117,7 +119,8 @@ export class PromptQueue {
   // After a run: carry on when it finished, wait for a reset when it reached a limit, and pause otherwise.
   runEnded(c, run, status) {
     // A handoff stops a run on purpose and continues the task, so the queue waits for that run instead of pausing.
-    if (run.review || run.handoff || !c.queue.length || c.queuePaused) return;
+    // A planning run leads to a plan, which holds the queue; it never waits for a reset with planning's read-only access.
+    if (run.review || run.orchestrate || run.handoff || !c.queue.length || c.queuePaused) return;
     if (status === 'complete') { setTimeout(() => this.tick(c), 0); return; }
     if (run.errorCategory === 'quota') {
       if (!c.resume) {

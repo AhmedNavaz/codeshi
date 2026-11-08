@@ -5,8 +5,8 @@
 const CHAT = new Set(['user', 'assistant', 'error', 'system']);
 const FIELDS = ['id', 'title', 'status', 'provider', 'model', 'effort', 'mode', 'approvalPolicy', 'models', 'efforts', 'routing', 'taskPolicy', 'pendingApprovals', 'canAddToRun', 'queue', 'queuePaused', 'handoffOffer', 'retryOffer', 'resume', 'limitSwitching', 'parallelTasks', 'task', 'cursor'];
 const RUN_FIELDS = ['id', 'provider', 'model', 'mode', 'approvalPolicy', 'phase', 'purpose', 'startedAt', 'endedAt', 'status', 'errorCategory'];
-const MESSAGE_FIELDS = ['id', 'role', 'provider', 'runId', 'createdAt', 'steer', 'attachments'];
-const STEP_LENGTH = 2000, MESSAGE_LENGTH = 60000;
+const MESSAGE_FIELDS = ['id', 'role', 'provider', 'runId', 'createdAt', 'steer', 'attachments', 'orchestrationId'];
+const STEP_LENGTH = 2000, MESSAGE_LENGTH = 60000, PLAN_SUMMARY_LENGTH = 1000;
 export const PHONE_MESSAGES = 40;
 
 const pick = (from, fields) => { const out = {}; for (const field of fields) if (from?.[field] !== undefined) out[field] = from[field]; return out; };
@@ -27,5 +27,7 @@ export function phoneConversation(view, limit = PHONE_MESSAGES) {
     ...(delta ? {} : { earlier: chat.length - shown.length }),
     step: step ? { id: step.id, runId: step.runId || null, text: clip(step.text, STEP_LENGTH) } : null,
     messages: shown.map(message => ({ ...pick(message, MESSAGE_FIELDS), text: clip(message.text, MESSAGE_LENGTH) })),
+    // Orchestrate plans, for the line that stands in for a planner's reply: what it proposed and whether it waits for approval.
+    ...(view.orchestrations ? { plans: view.orchestrations.map(plan => ({ id: plan.id, status: plan.status, summary: clip(plan.summary || '', PLAN_SUMMARY_LENGTH), steps: plan.steps?.length || 0 })) } : {}),
   };
 }
