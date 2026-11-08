@@ -233,7 +233,8 @@ test('a subscription run is read on both sides without being held up, and the mo
   const before = process.env.AI_RELAY_CODEX_BIN;
   process.env.AI_RELAY_CODEX_BIN = subscriptionCodex(root);
   const broker = new Broker({ workspace, dataDir: path.join(root, 'data') }), c = broker.get(broker.create().id);
-  t.after(() => { broker.close?.(); if (before === undefined) delete process.env.AI_RELAY_CODEX_BIN; else process.env.AI_RELAY_CODEX_BIN = before; fs.rmSync(root, { recursive: true, force: true }); });
+  // Closing stops the run and waits for it, so nothing is still writing in the folder when it is removed.
+  t.after(async () => { await broker.close(); if (before === undefined) delete process.env.AI_RELAY_CODEX_BIN; else process.env.AI_RELAY_CODEX_BIN = before; fs.rmSync(root, { recursive: true, force: true }); });
   await broker.dispatch(c, { text: 'Do the work', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
   const deadline = Date.now() + 15000;
   while (!broker.view(c).usageWatch?.moves?.length && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
