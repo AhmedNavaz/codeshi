@@ -4,7 +4,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
-## [0.34.0] - 2026-11-08
+## [0.34.1] - 2026-11-08
 
 ### Added
 
@@ -15,6 +15,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 - **Codex JSON-RPC framing on long messages and Unicode separators** (#133). Delimit Codex app-server protocol frames strictly on newline characters rather than relying on readline line breaks, preventing unterminated string and unexpected token syntax errors when streaming long replies or multi-chunk messages.
 - **Desktop Flow smoke test.** Ensure Flow layout validation accounts for explicit routing mode delegation.
+- **Release builds could not get Electron** (#138). Packaging fetched Electron's checksum file from GitHub in a single request, and GitHub's downloads answered with gateway timeouts for a morning, so no build of 0.34.0 could be published. Packaging now verifies Electron against the checksums the electron package itself ships, tries GitHub again with growing pauses when a download fails or stalls, and gets the file from the npmmirror.com mirror when GitHub keeps failing, still checked against those checksums.
 
 ## [0.33.1] - 2026-11-08
 
@@ -669,7 +670,7 @@ First public release.
 [0.6.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.6.0
 [0.5.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.4.0
-[0.34.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.34.0
+[0.34.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.34.1
 [0.33.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.1
 [0.33.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0
 [0.32.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0
