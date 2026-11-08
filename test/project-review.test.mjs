@@ -126,6 +126,21 @@ test('review maps validate folder identity, dependency order, commands and loopb
   ]) { const next = structuredClone(raw); change(next); assert.throws(() => validateReviewPlan(next, f.project)); }
 });
 
+test('long or many prerequisites are shortened for the card instead of failing the launch map', t => {
+  const f = fixture(t), raw = f.plan([f.task()]);
+  const mongo = `MongoDB running on 127.0.0.1:27017 (already running locally; backend APP_ENV=local reads the bizbaydev database from it)${', with a seeded admin user'.repeat(6)}`;
+  raw.profiles[0].prerequisites = ['node', '  npm  ', ' ', mongo, ...Array.from({ length: 9 }, (_, index) => `Tool ${index + 1}`)];
+  const [profile] = f.write(raw).profiles;
+  assert.equal(profile.prerequisites.length, 10, 'At most ten lines, as the agent is asked.');
+  assert.deepEqual(profile.prerequisites.slice(0, 2), ['node', 'npm']);
+  assert.equal(profile.prerequisites[2].length, 200); assert.equal(profile.prerequisites[2], `${mongo.slice(0, 199)}…`);
+  assert.deepEqual(profile.prerequisites.slice(3), ['Tool 1', 'Tool 2', 'Tool 3', 'Tool 4', 'Tool 5', 'Tool 6', '3 more in .codeshi/preview.json']);
+  assert.equal(JSON.parse(fs.readFileSync(f.filename, 'utf8')).profiles[0].prerequisites[3], mongo, 'The map itself keeps what the agent wrote.');
+  // It is still a list of text.
+  for (const value of [{}, 'node', [{ name: 'node' }], [42]]) { const next = structuredClone(raw); next.profiles[0].prerequisites = value; assert.throws(() => validateReviewPlan(next, f.project), /prerequisite/i); }
+  assert.match(preparationPrompt(f.project), /At most 10 prerequisites per profile, each one line under 120 characters/);
+});
+
 test('review exposes multiple destinations from existing maps and validates explicit destinations', t => {
   const f = fixture(t);
   const services = ['website', 'admin'].map((id, index) => ({ ...f.task(id), kind: 'service', ready: { url: `http://localhost:${38001 + index}` } }));
