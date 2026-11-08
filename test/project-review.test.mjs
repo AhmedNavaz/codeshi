@@ -187,16 +187,21 @@ test('failed setup blocks dependent services and keeps its output', async t => {
   assert.match(run.steps[0].session.output, /missing prerequisite/); assert.equal(run.steps[0].session.exitCode, 3);
 });
 
-test('occupied ports are rejected before any setup executes, leaving the unrelated server alive', async t => {
+test('an occupied port blocks only its own service, leaves unrelated steps running, and never touches the external server', async t => {
   const f = fixture(t), external = http.createServer((req, res) => res.end('not ours'));
   external.listen(0, '127.0.0.1'); await once(external, 'listening'); t.after(() => new Promise(resolve => external.close(resolve)));
   const port = external.address().port;
   launch(f, f.plan([f.task(), { ...f.task('web'), kind: 'service', dependsOn: ['setup'], ready: { port } }]));
   await f.review.runs.get(f.project.id).done;
-  assert.match(f.review.state(f.project.id).run.error, /already in use/);
-  assert.match(f.review.state(f.project.id).run.error, new RegExp(String(port)));
-  assert.equal(f.commands.sessions.size, 0);
-  assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'not ours');
+  const run = f.review.state(f.project.id).run;
+  assert.equal(run.status, 'blocked');
+  const conflict = run.conflicts.find(item => item.service === 'web');
+  assert.ok(conflict, 'The conflicting service is reported.');
+  assert.equal(conflict.port, port);
+  assert.equal(conflict.adoptable, false, 'A TCP-only readiness port cannot be verified, so it is not attachable.');
+  assert.equal(run.steps.find(step => step.id === 'web').status, 'blocked');
+  assert.equal(run.steps.find(step => step.id === 'setup').status, 'done', 'The unrelated setup task still runs.');
+  assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), 'not ours', 'The unowned server is never adopted or killed.');
 });
 
 test('Stop cancels readiness waits and never dispatches dependent steps', async t => {
@@ -247,4 +252,48 @@ test('prepared review plans extract json across markdown fences, conversational 
   assert.deepEqual(parsePreparedReviewPlan('```json\n{"version":1,"profiles":[{"id":"dev","name":"Dev","services":[],},],}\n```'), valid);
   assert.throws(() => parsePreparedReviewPlan('The launch map cannot be created because MongoDB is missing.'), /did not return a valid launch map JSON: "The launch map cannot be created/);
   assert.throws(() => parsePreparedReviewPlan(''), /empty response/);
+});
+
+test('prerequisites are truncated and capped instead of failing the launch map', t => {
+  const f = fixture(t);
+  const prerequisites = [...Array(12)].map((_, i) => `Requirement ${i}`);
+  prerequisites[0] = 'x'.repeat(200);
+  prerequisites.push('   ', 42); // blanks and non-strings are dropped, not rejected
+  const raw = f.plan([{ ...f.task('web'), kind: 'service', ready: { url: 'http://localhost:38001' } }]);
+  raw.profiles[0].prerequisites = prerequisites;
+  const saved = validateReviewPlan(raw, f.project).profiles[0].prerequisites;
+  assert.equal(saved.length, 10, 'At most ten prerequisites are kept.');
+  assert.ok(saved.every(item => typeof item === 'string' && item.trim() && item.length <= 120), 'Each prerequisite is a non-empty string capped at 120 characters.');
+  assert.ok(saved[0].endsWith('…'), 'An over-long prerequisite is truncated with an ellipsis.');
+});
+
+test('attaching treats a healthy running service as ready without starting or stopping it', async t => {
+  const f = fixture(t), external = http.createServer((req, res) => res.end('external ok'));
+  external.listen(0, '127.0.0.1'); await once(external, 'listening'); t.after(() => new Promise(resolve => external.close(resolve)));
+  const url = `http://127.0.0.1:${external.address().port}`;
+  const web = { ...f.task('web'), kind: 'service', ready: { url } };
+  const after = { ...f.task('after'), dependsOn: ['web'] };
+  const raw = f.plan([web, after]);
+
+  // Without opting in, the busy port blocks the service and its dependents but marks it attachable.
+  launch(f, raw);
+  await f.review.runs.get(f.project.id).done;
+  let run = f.review.state(f.project.id).run;
+  assert.equal(run.status, 'blocked');
+  assert.equal(run.conflicts.find(item => item.service === 'web').adoptable, true);
+  assert.equal(run.steps.find(step => step.id === 'after').status, 'blocked', 'Dependents of a blocked service wait.');
+  assert.equal(f.commands.sessions.size, 0, 'A blocked service is never spawned.');
+
+  // Opting in attaches to the running server: dependents run, and it is neither spawned nor killed.
+  const saved = readReviewPlan(f.project);
+  assert.throws(() => f.review.start(f.project.id, { revision: saved.revision, profileId: 'dev', adopt: ['missing'] }), /Attach only to services/);
+  f.review.start(f.project.id, { revision: saved.revision, profileId: 'dev', adopt: ['web'] });
+  await f.review.runs.get(f.project.id).done;
+  run = f.review.state(f.project.id).run;
+  assert.equal(run.status, 'ready');
+  assert.equal(run.steps.find(step => step.id === 'web').status, 'adopted');
+  assert.equal(run.steps.find(step => step.id === 'after').status, 'done', 'Dependents run against the adopted service.');
+  assert.equal(await (await fetch(url)).text(), 'external ok', 'The adopted server keeps running, untouched.');
+  await f.review.stop(f.project.id, run.id);
+  assert.equal(await (await fetch(url)).text(), 'external ok', 'Stopping the review never kills the adopted server.');
 });
