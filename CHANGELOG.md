@@ -4,6 +4,30 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-08
+
+### Added
+
+- **Run and review projects from Flow.** A Review your app card presents an agent-maintained launch map across attached folders, with named profiles, prerequisites, service dependencies and readiness checks. Start or stop the saved profile, inspect output and open the desktop preview to point at changes. Launch-map preparation, edits and startup diagnosis run in the background through the selected Flow routing mode, with a preparing indicator and the main chat left free; preparing a map never starts it.
+
+- **Task usage by role** (#84). Tasks and local evaluation exports separate whole builder, read-only, routing assessment and reviewer calls, with time, measured tokens and missing-field coverage. Failed assessments remain in totals. A recorded `routing-assessment` evaluation runs the real assessor and builder against the small-edit baseline’s repository and hidden checks; rated evaluations reserve both invocations before dispatch. This is accounting verification, with no claim of live efficiency gains.
+
+- **Model restrictions in Task limits** (#87). Set allowed model IDs for each agent, including local models, in the limits dialog. Empty allows all models for that agent.
+
+- **Repeated context refreshes are measured and explained** (#85). Each fresh native session now records its seed, Codeshi's own first message in bytes and estimated tokens, and the turns it has had, shown in the context details as **Task brief at session start**, apart from the provider's reading, cached input and cumulative usage. A bounded refresh history per agent keeps the replaced session's seed and turn count. When a fresh session is due for another refresh within two turns, the details say why from those records: the brief alone was most of the target, the model's reported window caps the target, or the agent's own reads and tool output grew the session within one turn. Explanations built on an estimated reading say so. No model call is made.
+
+### Fixed
+
+- **Prompt queue layout clipping and visible pause controls** (#140). Bounded `.transcript-footer` and `#prompt-queue` with `min-width: 0` and container-width constraints so long pause error messages and multi-field routing metadata wrap or truncate cleanly with full title tooltips instead of blowing out horizontal layout tracks. Kept `#prompt-queue-toggle` ("Resume queue" / "Pause") and item action controls anchored and visible with `flex-shrink: 0`.
+
+- **Named macOS bundle icon.** Package the fallback icon as `Codeshi.icns` alongside the layered icon, replacing the generic Electron resource name to help system menus refresh older cached artwork.
+
+- **Unknown task usage no longer becomes reusable allowance** (#87). Missing API costs and partial token reports remain explicit across restarts and block further work under the affected limit until the person reviews it. Increasing a cap cannot fill in missing usage. Tasks shows native versus reported spend checks and measured overshoot; background reviews and routing assessments retain enforcement details in the parent journal and usage export. Local model restrictions are enforced even when every provider is allowed.
+
+- **Smart rates referenced issues and plans before choosing a model.** Requests such as “do #85” now retrieve bounded GitHub issue requirements and recent comments, or explicitly named local plan excerpts, for the assessment. Issue lookups reuse a one-minute cache; missing references stay explicit and cannot receive a light task rating. Saver keeps its local-only assessment.
+
+- **Flow turns routing on.** Entering Flow turns routing on again, with the mode that workspace last used in Flow or Smart, and leaving Flow turns it off. Since 0.34.1 Flow could open with routing **Off**, which Flow has no way to change except Agent settings.
+
 ## [0.35.0] - 2026-11-08
 
 ### Added
