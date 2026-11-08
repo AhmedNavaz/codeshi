@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { apiInterceptorScript, captureRect, cleanElement, createPreview, isPreviewURL, pickText, previewURL, sourceLocation, sourceScript } from '../desktop/preview.mjs';
+import { INSPECTOR_WIDTH, apiInterceptorScript, captureRect, cleanElement, createPreview, isPreviewURL, pickText, previewURL, sourceLocation, sourceScript } from '../desktop/preview.mjs';
 
 test('the preview opens only local addresses, without credentials', () => {
   assert.equal(previewURL(' http://localhost:5173/checkout '), 'http://localhost:5173/checkout');
@@ -185,4 +185,87 @@ test('api calls captured in preview page reach the toolbar with method, url, req
   assert.equal(forwarded[1].response.body, '{"id":1,"name":"test"}');
   assert.equal(forwarded[1].trigger.text, 'Create User');
   preview.dispose();
+});
+
+// Electron stand-ins for the inspector tests: each view keeps its bounds and its web contents' handlers.
+function inspectorWindow({ platform } = {}) {
+  const handlers = {}, events = {}, views = [], added = [], sent = [];
+  const size = { width: 1180, height: 820 };
+  const contents = () => ({ url: '', handlers: {}, isDestroyed: () => false, setWindowOpenHandler() {}, on(name, handler) { this.handlers[name] = handler; }, once() {}, loadFile() {}, send: (channel, value) => sent.push([channel, value]), focus() {}, isLoading: () => false, navigationHistory: { canGoBack: () => false, canGoForward: () => false }, async loadURL(url) { this.url = url; }, getURL() { return this.url; }, getTitle: () => '', executeJavaScript: async () => {} });
+  class View { constructor() { this.webContents = contents(); this.bounds = null; views.push(this); } setBounds(value) { this.bounds = value; } }
+  class Window { constructor() { this.contentView = { addChildView: view => added.push(view) }; } getContentBounds() { return { ...size }; } on(name, handler) { events[name] = handler; } show() {} focus() {} setTitle() {} close() {} destroy() {} isDestroyed() { return false; } }
+  const session = { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} }) };
+  const preview = createPreview({ BaseWindow: Window, WebContentsView: View, session, ipcMain: { on: (channel, handler) => { handlers[channel] = handler; }, off() {} }, shell: { openExternal() {} }, root: '/app', ...platform ? { platform } : {} });
+  const act = (view, action) => handlers['preview:toolbar']({ sender: view.webContents }, action);
+  return { preview, views, added, sent, events, size, act };
+}
+
+test('the Stack and API inspector opens on the right of the page, which keeps its full height', async () => {
+  const w = inspectorWindow();
+  await w.preview.open({ projectId: 'p1', url: 'http://localhost:3000/' });
+  const [toolbar, page] = w.views, shown = () => [toolbar.bounds, page.bounds];
+  assert.deepEqual(shown(), [{ x: 0, y: 0, width: 1180, height: 44 }, { x: 0, y: 44, width: 1180, height: 776 }]);
+  assert.deepEqual(w.added, [toolbar, page], 'The page sits above the toolbar’s view, so the inspector behind it never covers the page.');
+  w.act(toolbar, 'show-inspector');
+  assert.deepEqual(shown(), [{ x: 0, y: 0, width: 1180, height: 820 }, { x: 0, y: 44, width: 800, height: 776 }], 'The page gives up width, never height.');
+  w.act(page, 'hide-inspector');
+  assert.equal(page.bounds.width, 800, 'Only the toolbar opens and closes it.');
+  Object.assign(w.size, { width: 1440, height: 900 }); w.events.resize();
+  assert.deepEqual(shown(), [{ x: 0, y: 0, width: 1440, height: 900 }, { x: 0, y: 44, width: 1000, height: 856 }], 'A wide window gives it more room.');
+  Object.assign(w.size, { width: 480, height: 320 }); w.events.resize();
+  assert.deepEqual(page.bounds, { x: 0, y: 44, width: 240, height: 276 }, 'In the narrowest window the page keeps 240 px.');
+  w.act(toolbar, 'hide-inspector');
+  assert.deepEqual(shown(), [{ x: 0, y: 0, width: 480, height: 44 }, { x: 0, y: 44, width: 480, height: 276 }]);
+  w.act(toolbar, 'show-inspector');
+  await w.preview.open({ projectId: 'p1', url: 'http://localhost:3000/orders' });
+  assert.equal(page.bounds.width, 240, 'Opening another address keeps the inspector as the toolbar shows it.');
+  w.events.closed();
+  await w.preview.open({ projectId: 'p1', url: 'http://localhost:3000/' });
+  assert.deepEqual([w.views[2].bounds.height, w.views[3].bounds.width], [44, 480], 'A new window starts with it closed, as its new toolbar does.');
+  w.preview.dispose();
+  // The toolbar draws the inspector at the width the window leaves it: its CSS follows the same rule.
+  const html = fs.readFileSync(new URL('../desktop/preview-toolbar.html', import.meta.url), 'utf8'), { narrow, wide, wideFrom, pageMin } = INSPECTOR_WIDTH;
+  assert.deepEqual([narrow, wide, wideFrom, pageMin], [380, 440, 1280, 240]);
+  assert(html.includes(`width: min(${narrow}px, calc(100vw - ${pageMin}px));`), 'The inspector’s width in the toolbar’s CSS matches the page’s bounds.');
+  assert(html.includes(`@media (min-width: ${wideFrom}px) { #drawer { width: ${wide}px; } }`));
+});
+
+test('⇧⌘I, or Ctrl+Shift+I, shows or hides the inspector from the page or the toolbar, and the page never sees it', async () => {
+  const key = { type: 'keyDown', code: 'KeyI', key: 'I', shift: true, alt: false, control: false, meta: false, isAutoRepeat: false };
+  for (const [platform, own, other] of [['darwin', { meta: true }, { control: true }], ['win32', { control: true }, { meta: true }], ['linux', { control: true }, { meta: true }]]) {
+    const w = inspectorWindow({ platform });
+    await w.preview.open({ url: 'http://localhost:3000/' });
+    const press = (view, input) => { let prevented = false; w.sent.length = 0; view.webContents.handlers['before-input-event']({ preventDefault: () => { prevented = true; } }, { ...key, ...input }); return [prevented, w.sent.filter(([channel]) => channel === 'preview:toggle-inspector').length]; };
+    const [toolbar, page] = w.views;
+    assert.deepEqual(press(page, own), [true, 1], `${platform}: from the page, which never gets the keys.`);
+    assert.deepEqual(press(toolbar, own), [true, 1], `${platform}: from the toolbar.`);
+    for (const input of [other, { ...own, alt: true }, { ...own, shift: false }, { ...own, isAutoRepeat: true }, { ...own, type: 'keyUp' }, { ...own, code: 'KeyJ' }]) assert.deepEqual(press(page, input), [false, 0], `${platform}: ${JSON.stringify(input)} reaches the page.`);
+    w.preview.dispose();
+  }
+});
+
+test('the toolbar switches between Stack and APIs in one inspector, and the shortcut brings back the last one', () => {
+  const html = fs.readFileSync(new URL('../desktop/preview-toolbar.html', import.meta.url), 'utf8'), script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const nodes = new Map(), listeners = new Map(), acts = [], windowListeners = {};
+  const element = (id = '') => ({ id, hidden: false, attributes: {}, children: [], dataset: {}, style: {}, value: '', textContent: '', className: '', title: '', setAttribute(name, value) { this.attributes[name] = value; }, addEventListener(type, handler) { if (id) listeners.set(`${id}:${type}`, handler); }, append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; }, select() {}, blur() {} });
+  const node = id => { if (!nodes.has(id)) nodes.set(id, element(id)); return nodes.get(id); };
+  let toggle = null, apiCall = null;
+  const bridge = { act: action => acts.push(action), onState() {}, onPicked() {}, onError() {}, onEdit() {}, onStack() {}, onApiCall: callback => { apiCall = callback; }, onToggleInspector: callback => { toggle = callback; } };
+  new Function('document', 'window', 'setTimeout', 'clearTimeout', script)({ getElementById: node, createElement: () => element(), createTextNode: value => ({ textContent: value }) }, { relayPreview: bridge, navigator: { platform: 'MacIntel' }, addEventListener: (type, handler) => { windowListeners[type] = handler; } }, () => 0, () => {});
+  const click = id => listeners.get(`${id}:click`)();
+  const showing = () => node('drawer').hidden ? null : [node('stack-panel').hidden ? 'apis' : 'stack', node('stack-btn').attributes['aria-pressed'], node('apis-btn').attributes['aria-pressed']];
+  click('stack-btn'); assert.deepEqual(showing(), ['stack', 'true', 'false']);
+  click('apis-btn'); assert.deepEqual(showing(), ['apis', 'false', 'true'], 'The other button switches the panel in place.');
+  click('apis-btn'); assert.equal(showing(), null, 'Its own button closes it.');
+  assert.deepEqual(acts.splice(0), ['show-inspector', 'show-inspector', 'hide-inspector']);
+  assert.equal(typeof toggle, 'function', 'The toolbar hears the shortcut.');
+  toggle(); assert.deepEqual(showing(), ['apis', 'false', 'true'], 'The shortcut brings back the last panel.');
+  toggle(); assert.equal(showing(), null);
+  click('stack-btn'); windowListeners.keydown({ key: 'Escape' }); assert.equal(showing(), null, 'Esc closes it.');
+  assert.deepEqual(acts, ['show-inspector', 'hide-inspector', 'show-inspector', 'hide-inspector']);
+  assert.match(node('stack-btn').title, /⇧⌘I/); assert.match(node('apis-btn').title, /⇧⌘I/);
+  // The API status line in the bar opens the call; it never closes an inspector already showing APIs.
+  apiCall({ id: 'c1', method: 'GET', url: 'http://localhost:3000/api/orders', status: 200, statusText: 'OK', duration: 4, request: {}, response: {} });
+  node('status').onclick(); assert.deepEqual(showing(), ['apis', 'false', 'true']);
+  node('status').onclick(); assert.deepEqual(showing(), ['apis', 'false', 'true'], 'A second click keeps it open.');
 });

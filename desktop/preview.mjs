@@ -10,6 +10,14 @@ import path from 'node:path';
 // described in a sentence the person reads before sending. The helpers are pure, for tests; createPreview needs
 // Electron's classes.
 export const PREVIEW_PARTITION = 'persist:throughline-preview';
+// The Stack and API inspector (#143) sits to the right of the page, under the toolbar's bar, so the page keeps its
+// full height. It is 380 px, 440 px in a window at least 1280 px wide, and always leaves the page 240 px. The toolbar's
+// CSS draws it by the same rule, so keep the two in step.
+export const INSPECTOR_WIDTH = Object.freeze({ narrow: 380, wide: 440, wideFrom: 1280, pageMin: 240 });
+export function inspectorWidth(width) {
+  const { narrow, wide, wideFrom, pageMin } = INSPECTOR_WIDTH;
+  return Math.max(0, Math.min(width >= wideFrom ? wide : narrow, width - pageMin));
+}
 const LOOPBACK = ['localhost', '127.0.0.1', '[::1]'];
 const clip = (value, max) => { const text = String(value ?? '').replace(/\s+/g, ' ').trim(); return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text; };
 
@@ -220,8 +228,8 @@ export function apiInterceptorScript() {
   })()`;
 }
 
-export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#1c1a18', captureWait = 1500 }) {
-  let win = null, toolbar = null, page = null, projectId = null, workspace = '', picking = false, pickCount = 0, capture = 'none', currentToolbarHeight = toolbarHeight, lastStack = null;
+export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#1c1a18', captureWait = 1500, platform = process.platform }) {
+  let win = null, toolbar = null, page = null, projectId = null, workspace = '', picking = false, pickCount = 0, capture = 'none', inspector = false, lastStack = null;
   const apiCalls = [];
   const previewSession = session.fromPartition(PREVIEW_PARTITION);
   previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -241,22 +249,32 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     if (lastStack) toToolbar('preview:stack', lastStack);
     if (win && !win.isDestroyed()) { let host = ''; try { host = new URL(value.url).host; } catch { /* Not loaded yet. */ } win.setTitle(host ? `Preview · ${host}` : 'Preview'); }
   }
+  // With the inspector open, the toolbar's view fills the window behind the page, and the page gives up width on the
+  // right for it, never height.
   function layout() {
     if (!win || win.isDestroyed()) return;
-    const { width, height } = win.getContentBounds();
-    toolbar.setBounds({ x: 0, y: 0, width, height: currentToolbarHeight });
-    page.setBounds({ x: 0, y: currentToolbarHeight, width, height: Math.max(0, height - currentToolbarHeight) });
+    const { width, height } = win.getContentBounds(), side = inspector ? inspectorWidth(width) : 0;
+    toolbar.setBounds({ x: 0, y: 0, width, height: side ? height : toolbarHeight });
+    page.setBounds({ x: 0, y: toolbarHeight, width: width - side, height: Math.max(0, height - toolbarHeight) });
   }
+  // ⇧⌘I, or Ctrl+Shift+I, shows or hides the inspector from either view. The page never sees those keys.
+  const mac = platform === 'darwin';
+  const toggleKey = input => input?.type === 'keyDown' && !input.isAutoRepeat && input.code === 'KeyI' && input.shift && !input.alt && (mac ? input.meta && !input.control : input.control && !input.meta);
+  const onKey = (event, input) => { if (!toggleKey(input)) return; event.preventDefault(); toToolbar('preview:toggle-inspector'); };
   function create() {
     win = new BaseWindow({ width: 1180, height: 820, minWidth: 480, minHeight: 320, title: 'Preview', backgroundColor: background() });
     toolbar = new WebContentsView({ webPreferences: { preload: path.join(root, 'desktop', 'preview-toolbar-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
     page = new WebContentsView({ webPreferences: { partition: PREVIEW_PARTITION, preload: path.join(root, 'desktop', 'preview-page-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false } });
-    win.contentView.addChildView(page); win.contentView.addChildView(toolbar);
+    inspector = false;
+    // The page goes above the toolbar's view, which fills the window behind it while the inspector is open.
+    win.contentView.addChildView(toolbar); win.contentView.addChildView(page);
+    toolbar.webContents.on('before-input-event', onKey);
     toolbar.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     toolbar.webContents.on('will-navigate', event => event.preventDefault());
     toolbar.webContents.loadFile(path.join(root, 'desktop', 'preview-toolbar.html'));
     toolbar.webContents.once('did-finish-load', sync);
     const contents = page.webContents;
+    contents.on('before-input-event', onKey);
     const injectInterceptor = () => { if (alive(page)) page.webContents.executeJavaScript(apiInterceptorScript()).catch(() => {}); };
     contents.on('did-start-navigation', injectInterceptor);
     contents.on('did-finish-load', injectInterceptor);
@@ -272,7 +290,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   }
   async function open({ projectId: id = null, url, workspace: name = '' }) {
     const href = previewURL(url);
-    projectId = id; workspace = String(name || '').slice(0, 120); picking = false; currentToolbarHeight = toolbarHeight;
+    projectId = id; workspace = String(name || '').slice(0, 120); picking = false;
     if (!win || win.isDestroyed()) create();
     win.show(); win.focus();
     await page.webContents.loadURL(href).catch(() => {});
@@ -320,8 +338,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     else if (action === 'open-external' && isPreviewURL(contents.getURL())) shell.openExternal(contents.getURL());
     else if (action === 'navigate') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch (error) { toToolbar('preview:error', error.message); } }
     else if (action === 'focus-app') onPick({ projectId, focus: true });
-    else if (action === 'expand-drawer') { currentToolbarHeight = Math.max(toolbarHeight, Math.min(600, Number(value?.height) || 320)); layout(); }
-    else if (action === 'collapse-drawer') { currentToolbarHeight = toolbarHeight; layout(); }
+    else if (action === 'show-inspector' || action === 'hide-inspector') { inspector = action === 'show-inspector'; layout(); }
     else if (action === 'navigate-preview') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch {} }
   };
   const onPicked = (event, pick) => { if (!own(event, page) || !picking) return; picking = false; sync(); finish(pick).catch(error => toToolbar('preview:error', `The element could not be picked: ${error.message}`)); };
