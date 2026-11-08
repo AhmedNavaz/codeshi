@@ -4,6 +4,18 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-08
+
+### Added
+
+- **Adaptive quota thresholds and autonomous Flow handoffs** (#135). Replaced static 90% quota thresholds with spendability-aware capacity evaluation considering window duration, reset cadence, and expected task workload. In Flow mode, handoffs execute autonomously under the task execution policy without surfacing manual suggestion cards, while Normal mode preserves interactive offers.
+- **Flow mode card polish and multi-window glance** (#136). Unclipped extra task button titles in What's next with an active pulse indicator for in-flight tasks, cleaned status copy, highlighted the currently executing agent on the plans and status cards, and added an overlay glance view for all rate-limit windows.
+- **Task budget diagnostic probe detection and retry resets** (#137). Read-only commands and diagnostic network probes (such as `curl`, ping, non-mutating `gh` and `git` queries) no longer increment the repeated-failure stop counter on non-zero exits. Stopped tasks can be reset and retried via explicit user prompts ("retry", "dismiss and retry") or the "Dismiss and retry" / "Extend budget" actions.
+
+### Fixed
+
+- **Smart routing quota freshness on first Send** (#134). Bounded joining and refreshing of in-flight account and plan usage probes before rejecting stale readings, avoiding spurious 'no connected agent' errors when usage cache entries age out.
+
 ## [0.34.1] - 2026-11-08
 
 ### Added
@@ -670,6 +682,7 @@ First public release.
 [0.6.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.6.0
 [0.5.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.4.0
+[0.35.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.35.0
 [0.34.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.34.1
 [0.33.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.1
 [0.33.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0
