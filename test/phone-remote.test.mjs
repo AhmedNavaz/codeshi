@@ -47,8 +47,9 @@ async function fixture(t, overrides = {}) {
     const box = await seal(key, room, 'request', request);
     await firebase.request(`rooms/${room}/request`, 'PUT', { uid, box });
     await wait(() => firebase.values.get(`rooms/${room}/out`));
+    // Each reply is opened into its own entry: an older reply that finishes opening late can't replace a newer one.
     let result;
-    await wait(() => { const out = firebase.values.get(`rooms/${room}/out`); if (out !== result?.out) { result = { out, promise: open(key, room, 'out', out) }; result.promise.then(value => { result.value = value; }); } return result?.value?.id === request.id; });
+    await wait(() => { const out = firebase.values.get(`rooms/${room}/out`); if (out !== result?.out) { const entry = { out }; result = entry; open(key, room, 'out', out).then(value => { entry.value = value; }); } return result?.value?.id === request.id; });
     return { value: result.value, request, box };
   }
   return { access, firebase, calls, state, room, key, send };
@@ -393,8 +394,8 @@ test('away-from-home sessions last a week, survive a Codeshi restart, distinguis
       const out = firebase.values.get(`rooms/${targetRoom}/out`);
       if (!out) return false;
       if (out !== result?.out) {
-        result = { out, promise: open(targetKey, targetRoom, 'out', out) };
-        result.promise.then(v => { result.value = v; });
+        const entry = { out }; result = entry;
+        open(targetKey, targetRoom, 'out', out).then(v => { entry.value = v; });
       }
       return result?.value?.id === request.id;
     });
