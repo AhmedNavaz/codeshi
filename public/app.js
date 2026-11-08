@@ -68,15 +68,28 @@
     ui.workspaceToggle.setAttribute("aria-expanded", "false");
     ui.workspaceToggle.closest(".sidebar").classList.remove("workspaces-open");
   }
-  function showNotice(message, retry = null, actionLabel = "Retry") {
+  function showNotice(message, retry = null, actionLabel = "Retry", actions = []) {
     if (state.stopping) return;
     ui.noticeText.textContent = message;
     state.noticeRetry = retry;
     ui.retry.hidden = !retry;
     ui.retry.textContent = actionLabel;
+    ui.notice.querySelectorAll(".notice-action-btn").forEach(el => el.remove());
+    if (Array.isArray(actions) && actions.length) {
+      for (const act of actions) {
+        const btn = element("button", "notice-action-btn", act.label);
+        btn.type = "button";
+        btn.addEventListener("click", () => { hideNotice(); act.run(); });
+        ui.notice.insertBefore(btn, ui.retry);
+      }
+    }
     ui.notice.hidden = false;
   }
-  function hideNotice() { ui.notice.hidden = true; state.noticeRetry = null; }
+  function hideNotice() {
+    ui.notice.hidden = true;
+    state.noticeRetry = null;
+    ui.notice.querySelectorAll(".notice-action-btn").forEach(el => el.remove());
+  }
   function projectBusy() { return Boolean(state.pending || state.settingsPending || state.projectSaving); }
   function currentProject() { return state.projects.find((project) => project.id === state.projectId); }
   function sameProject(id, version) { return state.projectId === id && state.projectVersion === version; }
@@ -301,23 +314,262 @@
     return Number.isNaN(date.getTime()) ? "" : timeFormat.format(date);
   }
   // Assistant replies use a small Markdown subset, built as DOM nodes so provider text is never parsed as HTML.
-  // A web address opens in the browser. Agents also link local files, which a chat can't open, so those read as their name.
+  // A web address opens in the browser; a file reference opens in the preview, and changed files in a step open their diff (#109).
+  const FILE_EXTENSIONS = new Set(["js", "mjs", "cjs", "jsx", "ts", "tsx", "json", "jsonc", "md", "mdx", "txt", "css", "scss", "less", "html", "htm", "xml", "svg", "vue", "svelte", "py", "rb", "go", "rs", "java", "c", "h", "cc", "cpp", "hpp", "cs", "swift", "kt", "dart", "php", "sh", "bash", "zsh", "yml", "yaml", "toml", "ini", "cfg", "conf", "sql", "graphql", "prisma", "proto", "lock", "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "avif", "pdf", "wasm"]);
+  const FILE_NAMES = new Set(["dockerfile", "makefile", ".gitignore", ".env"]);
+  function activate(node, fn) {
+    node.setAttribute("role", "button");
+    node.setAttribute("tabindex", "0");
+    node.addEventListener("click", event => { event.preventDefault(); event.stopPropagation?.(); fn(); });
+    node.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation?.(); fn(); } });
+  }
+  function splitLineSuffix(input) {
+    let path = String(input || "").trim(), line = null, endLine = null;
+    const hash = path.match(/^(.*?)#L?(\d+)(?:-(?:L)?(\d+))?(?:C\d+)?$/i);
+    if (hash && hash[1]) { path = hash[1]; line = Number(hash[2]); endLine = Number(hash[3] || hash[2]); }
+    else {
+      const colon = path.match(/^(.*?):(\d+)(?::\d+|-(\d+))?$/);
+      if (colon && colon[1] && !/^[A-Za-z]$/.test(colon[1])) { path = colon[1]; line = Number(colon[2]); endLine = Number(colon[3] || colon[2]); }
+    }
+    return path ? { kind: "file", path, line, endLine } : null;
+  }
+  function parseReferenceTarget(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return null;
+    if (/^https?:\/\//i.test(text)) {
+      try { const url = new URL(text); if (["http:", "https:"].includes(url.protocol)) return { kind: "web", url: text }; } catch { return { kind: "invalid", raw: text }; }
+    }
+    if (/^file:/i.test(text)) {
+      try {
+        const url = new URL(text);
+        let path = decodeURIComponent(url.pathname || "");
+        if (/^\/[A-Za-z]:[\\/]/.test(path)) path = path.slice(1);
+        const hash = (url.hash || "").match(/^#L?(\d+)(?:-(?:L)?(\d+))?(?:C\d+)?$/i);
+        if (hash) return { kind: "file", path, line: Number(hash[1]), endLine: Number(hash[2] || hash[1]) };
+        return splitLineSuffix(path) || { kind: "invalid", raw: text };
+      } catch { return { kind: "invalid", raw: text }; }
+    }
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]{1,31}:/.test(text) && !/^[A-Za-z]:[\\/]/.test(text) && !/^[^:/\\]+:\d+(?::\d+|-\d+)?$/.test(text)) return { kind: "unsupported", raw: text };
+    return splitLineSuffix(text);
+  }
+  function isFileReference(value) {
+    const parsed = parseReferenceTarget(value);
+    if (!parsed || parsed.kind !== "file" || !parsed.path) return false;
+    const path = parsed.path;
+    if (/[<>"'`|?*;$&()[\]{}=]/.test(path) || path.startsWith("-") || path.includes("..") || path.includes("//") || (/\s/.test(path) && !path.includes("/") && !/^file:/i.test(String(value || "")))) return false;
+    const base = (path.split(/[\\/]/).pop() || "").toLowerCase();
+    if (!base) return false;
+    if (FILE_NAMES.has(base)) return true;
+    const dot = base.lastIndexOf(".");
+    return dot > 0 && FILE_EXTENSIONS.has(base.slice(dot + 1));
+  }
+  function resolveWorkspaceCandidates(filePath) {
+    const project = (state.status?.project?.id === state.projectId ? state.status.project : null) || currentProject(), folders = foldersFor(project), raw = String(filePath || "").trim();
+    if (!project || !folders.length) return { kind: "no-project" };
+    if (!raw) return { kind: "directory", path: raw };
+    if (raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)) {
+      const norm = raw.replace(/\\/g, "/").replace(/\/+$/, "");
+      const matches = folders.map(folder => ({ folder, root: String(folder.path || "").replace(/\\/g, "/").replace(/\/+$/, "") }))
+        .filter(item => item.root && (norm === item.root || norm.startsWith(item.root + "/")))
+        .sort((a, b) => b.root.length - a.root.length);
+      if (!matches.length) return { kind: "outside", path: raw };
+      const { folder, root } = matches[0];
+      if (norm === root) return { kind: "directory", path: raw };
+      const relative = norm.slice(root.length + 1);
+      if (!relative || relative.split("/").some(part => !part || part === "." || part === "..")) return { kind: "outside", path: raw };
+      if (folder.available === false) return { kind: "unavailable", folder };
+      return { kind: "exact", folder, relative };
+    }
+    let rel = raw.replace(/\\/g, "/");
+    while (rel.startsWith("./")) rel = rel.slice(2);
+    if (!rel || rel.endsWith("/")) return { kind: "directory", path: raw };
+    const parts = rel.split("/");
+    if (parts.some(part => !part || part === "." || part === "..")) return { kind: "outside", path: raw };
+    if (parts.length === 1 && folders.some(folder => [folder.displayName, folder.name, folder.id].some(name => name && name.toLowerCase() === rel.toLowerCase()))) {
+      return { kind: "directory", path: raw };
+    }
+    let named = [];
+    if (parts.length > 1) {
+      const prefix = parts[0], exact = folders.filter(folder => folder.displayName === prefix || folder.name === prefix || folder.id === prefix);
+      named = exact.length ? exact : folders.filter(folder => [folder.displayName, folder.name, folder.id].some(name => name && name.toLowerCase() === prefix.toLowerCase()));
+      if (named.length === 1) {
+        const folder = named[0], rest = parts.slice(1).join("/");
+        if (folder.available === false) return { kind: "unavailable", folder };
+        return { kind: "exact", folder, relative: rest, ...(folders.length === 1 && rel !== rest ? { fallbackRelative: rel } : {}) };
+      }
+    }
+    const targetFolders = named.length > 1 ? named : folders, targetRelative = named.length > 1 ? parts.slice(1).join("/") : rel;
+    const availableFolders = targetFolders.filter(folder => folder.available !== false);
+    if (!availableFolders.length) return { kind: "unavailable", folder: targetFolders[0] };
+    if (availableFolders.length === 1 && targetFolders.length === 1) return { kind: "exact", folder: availableFolders[0], relative: targetRelative };
+    return { kind: "probe", folders: availableFolders, relative: targetRelative };
+  }
+  function reportResolutionProblem(resolved) {
+    if (resolved.kind === "no-project") showNotice("Choose a workspace first.");
+    else if (resolved.kind === "outside") showNotice(`Only files inside this workspace can be opened (${resolved.path}).`);
+    else if (resolved.kind === "directory") showNotice("That link points to a folder, not a file.");
+    else if (resolved.kind === "unavailable") showNotice(`${resolved.folder.displayName || resolved.folder.name} is not available on this computer.`);
+  }
+  function isFolderReference(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return true;
+    try { if (["http:", "https:"].includes(new URL(text).protocol)) return false; } catch { /* Relative path. */ }
+    const parsed = parseReferenceTarget(text);
+    if (!parsed) return true;
+    if (parsed.kind === "unsupported") return false;
+    if (parsed.kind !== "file") return true;
+    const cleanPath = (parsed.path || "").replace(/\\/g, "/");
+    if (!cleanPath || cleanPath.endsWith("/")) return true;
+    const resolved = resolveWorkspaceCandidates(cleanPath);
+    if (resolved.kind === "directory") return true;
+    const project = (state.status?.project?.id === state.projectId ? state.status.project : null) || currentProject();
+    const folders = foldersFor(project);
+    const norm = cleanPath.replace(/\/+$/, "");
+    if (folders.some(folder => {
+      const root = String(folder.path || "").replace(/\\/g, "/").replace(/\/+$/, "");
+      return root && (norm === root || norm.toLowerCase() === root.toLowerCase());
+    })) return true;
+    if (folders.some(folder => [folder.displayName, folder.name, folder.id].some(name => name && (norm === name || norm.toLowerCase() === name.toLowerCase())))) return true;
+    return !isFileReference(text);
+  }
+  function showPreviewFallback(folder, relative, file, line, endLine = line) {
+    if (window.relayFiles?.showPreviewAt) { window.relayFiles.showPreviewAt(folder, relative, file, line, endLine); return; }
+    $("file-preview-name").textContent = file.name || relative.split("/").pop();
+    $("file-preview-path").textContent = (folder.displayName || folder.name) + " / " + relative;
+    const content = $("file-preview-content"), source = element("pre", "file-source"), lines = String(file.text || "").split("\n");
+    lines.forEach((text, index) => { const row = element("span", "source-line"); row.append(element("span", "line-number", String(index + 1)), element("code", "", text || " ")); source.append(row); });
+    content.replaceChildren(source);
+    $("file-preview").hidden = false; document.body.classList.add("file-preview-open");
+    if (Number.isSafeInteger(line) && line >= 1) {
+      const rows = content.querySelectorAll(".source-line"), finish = Number.isSafeInteger(endLine) && endLine >= line ? endLine : line;
+      for (let index = line; index <= finish; index++) rows[index - 1]?.classList.add("review-line");
+      rows[line - 1]?.scrollIntoView({ block: "center" });
+    }
+  }
+  async function openWorkspaceFile(folder, relative, line, endLine, fallbackRelative = null) {
+    const projectId = state.projectId;
+    try {
+      const file = await api(`/api/files/preview?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}`, {}, projectId);
+      if (projectId === state.projectId) showPreviewFallback(folder, relative, file, line, endLine);
+      return true;
+    } catch (error) {
+      if (fallbackRelative && fallbackRelative !== relative) return openWorkspaceFile(folder, fallbackRelative, line, endLine, null);
+      if (projectId === state.projectId) showNotice(error.message);
+      return false;
+    }
+  }
+  async function probeWorkspaceFiles(folders, relative, line, endLine) {
+    const projectId = state.projectId;
+    const results = await Promise.all(folders.map(async folder => {
+      try { return { folder, file: await api(`/api/files/preview?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}`, {}, projectId) }; }
+      catch (error) { return { folder, error }; }
+    }));
+    if (projectId !== state.projectId) return false;
+    const found = results.filter(item => item.file);
+    if (found.length > 1) {
+      // The same path is in several folders; the folder buttons on the notice open the one meant, instead of guessing.
+      const actions = found.map(item => ({
+        label: item.folder.displayName || item.folder.name,
+        run: () => showPreviewFallback(item.folder, relative, item.file, line, endLine)
+      }));
+      showNotice(`${relative} is in ${found.length} workspace folders. Open it from:`, null, "Retry", actions);
+      return false;
+    }
+    if (found.length === 1) {
+      showPreviewFallback(found[0].folder, relative, found[0].file, line, endLine);
+      return true;
+    }
+    showNotice(results[0]?.error?.message || `Could not find ${relative} in this workspace.`);
+    return false;
+  }
+  async function openReference(raw) {
+    if (isFolderReference(raw)) return;
+    const parsed = parseReferenceTarget(raw);
+    if (!parsed || parsed.kind === "invalid") { showNotice("That link could not be opened."); return; }
+    if (parsed.kind === "web") { openExternal(parsed.url); return; }
+    if (parsed.kind === "unsupported") { showNotice("Only web addresses and files in this workspace can be opened from a reply."); return; }
+    const resolved = resolveWorkspaceCandidates(parsed.path);
+    if (resolved.kind === "exact") { await openWorkspaceFile(resolved.folder, resolved.relative, parsed.line, parsed.endLine, resolved.fallbackRelative); return; }
+    if (resolved.kind === "probe") { await probeWorkspaceFiles(resolved.folders, resolved.relative, parsed.line, parsed.endLine); return; }
+    reportResolutionProblem(resolved);
+  }
+  function showDiffFallback(folder, result) {
+    if (window.relayGit?.showDiff) { window.relayGit.showDiff(folder, result); return; }
+    $("diff-title").textContent = result.path;
+    $("diff-meta").replaceChildren(`${folder.displayName || folder.name} · Changed`);
+    $("diff-content").replaceChildren(element("pre", "diff-lines", result.diff || ""));
+    if (!$("diff-dialog").open) $("diff-dialog").showModal();
+  }
+  async function openActivityFile(file) {
+    const resolved = resolveWorkspaceCandidates(file.path);
+    if (resolved.kind !== "exact" && resolved.kind !== "probe") { reportResolutionProblem(resolved); return; }
+    const projectId = state.projectId, folders = resolved.kind === "exact" ? [resolved.folder] : resolved.folders, relative = resolved.relative;
+    const diffs = await Promise.all(folders.map(async folder => {
+      try { return { folder, result: await api(`/api/git/diff?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}`, {}, projectId) }; }
+      catch (error) { return { folder, error }; }
+    }));
+    if (projectId !== state.projectId) return;
+    const found = diffs.filter(item => item.result);
+    if (found.length > 1) {
+      const actions = found.map(item => ({
+        label: item.folder.displayName || item.folder.name,
+        run: () => showDiffFallback(item.folder, item.result)
+      }));
+      showNotice(`${relative} has uncommitted changes in ${found.length} workspace folders. Show the changes from:`, null, "Retry", actions);
+      return;
+    }
+    if (found.length === 1) { showDiffFallback(found[0].folder, found[0].result); return; }
+    if (file.change === "delete") { showNotice(`${relative} was deleted and has no current uncommitted changes.`); return; }
+    if (resolved.kind === "exact") await openWorkspaceFile(resolved.folder, relative, null, null, resolved.fallbackRelative);
+    else await probeWorkspaceFiles(folders, relative, null, null);
+  }
+  function splitPlainUrl(raw) {
+    let url = raw, trailing = "";
+    while (url.length) {
+      const last = url.at(-1);
+      if (/[.,;:!?'"`]/.test(last)) { trailing = last + trailing; url = url.slice(0, -1); continue; }
+      if (last === ")" && (url.match(/\(/g)?.length || 0) < (url.match(/\)/g)?.length || 0)) { trailing = last + trailing; url = url.slice(0, -1); continue; }
+      if (last === "]" && (url.match(/\[/g)?.length || 0) < (url.match(/\]/g)?.length || 0)) { trailing = last + trailing; url = url.slice(0, -1); continue; }
+      break;
+    }
+    return { url, trailing };
+  }
   function renderLink(parent, label, target) {
+    const clean = String(target || "").trim();
     let web = false;
-    try { web = ["http:", "https:"].includes(new URL(target).protocol); } catch { /* A relative path. */ }
-    const host = web ? element("a", "message-link") : element("span");
-    host.title = target;
-    if (web) { host.href = target; host.rel = "noopener noreferrer"; host.addEventListener("click", event => { event.preventDefault(); openExternal(target); }); }
-    renderInline(host, label);
+    try { web = ["http:", "https:"].includes(new URL(clean).protocol); } catch { /* A relative path. */ }
+    if (!web && isFolderReference(clean)) {
+      const host = element("span");
+      host.title = clean;
+      renderInline(host, label, true);
+      parent.append(host);
+      return;
+    }
+    const host = web ? element("a", "message-link") : element("span", "message-link message-file-link");
+    host.title = clean;
+    if (web) { host.href = clean; host.rel = "noopener noreferrer"; host.addEventListener("click", event => { event.preventDefault(); openExternal(clean); }); }
+    else activate(host, () => openReference(clean));
+    renderInline(host, label, true);
     parent.append(host);
   }
-  function renderInline(parent, text) {
+  function renderInline(parent, text, inLink = false) {
     let last = 0;
-    for (const match of text.matchAll(/\[([^\]\n]+)\]\(([^()\s]+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*/g)) {
+    for (const match of text.matchAll(/\[([^\]\n]+)\]\(((?:[^()\n]|\([^()\n]*\))+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|(?<![\w/])(https?:\/\/[^\s<>"]+)/g)) {
       if (match.index > last) parent.append(document.createTextNode(text.slice(last, match.index)));
       if (match[1] !== undefined) renderLink(parent, match[1], match[2]);
-      else if (match[3] !== undefined) parent.append(element("code", "", match[3]));
-      else { const strong = element("strong"); renderInline(strong, match[4]); parent.append(strong); }
+      else if (match[3] !== undefined) {
+        const code = element("code", "", match[3]);
+        if (!inLink && isFileReference(match[3]) && !isFolderReference(match[3])) { code.classList.add("message-file-link"); code.title = match[3]; activate(code, () => openReference(match[3])); }
+        parent.append(code);
+      } else if (match[4] !== undefined) { const strong = element("strong"); renderInline(strong, match[4], inLink); parent.append(strong); }
+      else if (match[5] !== undefined) {
+        if (inLink) parent.append(document.createTextNode(match[5]));
+        else {
+          const { url, trailing } = splitPlainUrl(match[5]);
+          if (url) renderLink(parent, url, url);
+          if (trailing) parent.append(document.createTextNode(trailing));
+        }
+      }
       last = match.index + match[0].length;
     }
     if (last < text.length) parent.append(document.createTextNode(text.slice(last)));
@@ -605,6 +857,7 @@
       if (split >= 0) name.append(element("span", "activity-file-directory", path.slice(0, split + 1)));
       name.append(element("span", "activity-file-name", path.slice(split + 1)));
       name.dataset.change = file.change; name.title = `${CHANGES[file.change] || "Changed"}: ${file.path}`;
+      if (!isFolderReference(file.path)) activate(name, () => openActivityFile(file));
       row.append(name);
       if (file.change !== "update") row.append(element("span", "sr-only", `(${(CHANGES[file.change] || "Changed").toLowerCase()})`));
       if (file.added > 0 || file.removed > 0) {
@@ -655,7 +908,8 @@
     toggle.title = open ? "Hide details" : "Show details";
     toggle.setAttribute("aria-expanded", String(open));
     toggle.setAttribute("aria-controls", outputId);
-    toggle.addEventListener("click", () => {
+    toggle.addEventListener("click", event => {
+      if (event?.target?.closest?.(".activity-file")) return;
       const opening = output.hidden;
       output.hidden = !opening;
       entry.classList.toggle("open", opening);
@@ -777,7 +1031,9 @@
   // The way back to the end also says when a handoff offer is waiting there, out of view.
   function updateJump() { $("jump-latest").hidden = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 240; $("jump-latest-text").textContent = state.conversation?.handoffOffer && isRunning() ? "Handoff offer below" : "Jump to latest"; }
   // Turns out of view have only an estimated height, so the end can move once the last ones are drawn; this stays with it for a few frames.
+  let scrollingToLatest = false;
   function scrollToLatest(frames = 8) {
+    scrollingToLatest = frames > 0;
     ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump();
     if (frames > 0) requestAnimationFrame(() => scrollToLatest(frames - 1));
   }
@@ -973,8 +1229,8 @@
     for (const entry of turns.values()) if (entry.node) syncChildren(entry.node, entry.kids);
     drawn.turns = turns;
     syncChildren(ui.messages, rootKids);
-    if (forceScroll) requestAnimationFrame(() => scrollToLatest());
-    else if (nearBottom) requestAnimationFrame(() => { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); });
+    if (forceScroll) scrollToLatest();
+    else if (nearBottom) { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); requestAnimationFrame(() => { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); }); }
     else { ui.scroll.scrollTop = oldTop; updateJump(); }
   }
 
@@ -1262,7 +1518,7 @@
     $("handoff-accept").textContent = state.pending === "handoff" ? "Handing off…" : "Hand off";
     $("handoff-dismiss").disabled = Boolean(state.pending);
   }
-  // A retry one step up after failed tests, when routing asks first (#12): Cost saving, or an agent near its limit.
+  // A retry one step up after failed tests, when routing asks first (#12): Saver, or an agent near its limit.
   function renderRetry() {
     const offer = state.conversation?.retryOffer, section = $("retry-offer");
     if (!section) return;
@@ -1402,9 +1658,9 @@
     $('usage-notice-text').textContent = usageNoticeText(watch);
     box.title = notice.moves.length ? 'Limits count all use of this account, including other apps.' : '';
     // Compact acts on the selected agent, so it is only offered while that is the agent this is about.
-    const action = notice.action === 'compact' && watch.provider === state.provider ? 'compact' : notice.action === 'saving' && autoRouting() ? 'saving' : null, button = $('usage-notice-action');
+    const action = notice.action === 'compact' && watch.provider === state.provider ? 'compact' : ['saver', 'saving'].includes(notice.action) && autoRouting() ? 'saver' : null, button = $('usage-notice-action');
     button.hidden = !action; button.dataset.action = action || '';
-    button.textContent = action === 'compact' ? 'Compact' : 'Use Cost saving';
+    button.textContent = action === 'compact' ? 'Compact' : 'Use Saver';
     button.title = action === 'compact' ? 'Review what compacting does. It makes no model call.' : 'From your next message, Flow favors lighter models and agents with allowance left.';
     button.disabled = !state.ready || Boolean(state.pending) || state.loading;
   }
@@ -1412,7 +1668,7 @@
     if ($('usage-notice-action').dataset.action === 'compact') { compactCurrentContext(); return; }
     const routing = autoRouting();
     if (!routing) return;
-    try { await setRouting({ mode: 'saving', allowApi: routing.allowApi === true, check: routing.check === true }); announce('Flow now uses Cost saving.'); }
+    try { await setRouting({ mode: 'saver', allowApi: routing.allowApi === true, check: routing.check === true }); announce('Flow now uses Saver.'); }
     catch (error) { showNotice(error.message); }
   }
 
@@ -1655,6 +1911,11 @@
   // A message that did not change keeps its object, which is how drawing tells what changed (see renderMessages).
   function keepMessageObjects(previous, conversation) {
     if (!previous || previous.id !== conversation.id) return conversation;
+    if (conversation.earlier === undefined && previous.earlier > 0 && conversation.messages.length >= previous.earlier) {
+      conversation.messageCount ??= conversation.messages.length;
+      conversation.messages = conversation.messages.slice(previous.earlier);
+      conversation.earlier = previous.earlier;
+    }
     const known = new Map(previous.messages.map(message => [message.id, message]));
     conversation.messages = conversation.messages.map(message => { const old = known.get(message.id); return old && old !== message && JSON.stringify(old) === JSON.stringify(message) ? old : message; });
     if (conversation.earlier === undefined && previous.earlier !== undefined) conversation.earlier = previous.earlier;
@@ -1778,7 +2039,8 @@
     renderWorkspaceList();
     state.settingsPromise = state.settingsPromise.catch(() => {}).then(async () => {
       try {
-        const conversation = await post(endpoint(id, "provider"), { provider, mode, approvalPolicy }, projectId);
+        const limit = state.conversation?.earlier > 0 ? `?limit=${Math.max(80, state.conversation.messages?.length || 80)}` : "";
+        const conversation = await post(endpoint(id, "provider") + limit, { provider, mode, approvalPolicy }, projectId);
         if (sameProject(projectId, projectVersion) && state.conversation?.id === id && revision === state.settingsRevision) applyConversation(conversation, { adoptSettings: false });
       } catch (error) {
         if (sameProject(projectId, projectVersion)) showNotice(`Could not save the assistant selection. ${error.message}`, () => changeSettings(provider, mode, approvalPolicy));
@@ -1814,7 +2076,8 @@
     $('compact-confirmation').close();
     state.pending = 'compact'; render();
     try {
-      const result = await post(endpoint(intent.id, 'compact'), { provider: intent.provider }, intent.projectId);
+      const limit = state.conversation?.earlier > 0 ? `?limit=${Math.max(80, (state.conversation.messages?.length || 80) + 1)}` : "";
+      const result = await post(endpoint(intent.id, 'compact') + limit, { provider: intent.provider }, intent.projectId);
       if (compactScopeMatches(intent)) {
         applyConversation(result, { adoptSettings: false });
         if (intent.command && ui.input.value === intent.draft) { ui.input.value = ''; storedWrite(draftKey(), ''); resizeInput(); }
@@ -1956,16 +2219,17 @@
     ui.projectPanel.hidden = true; ui.folderPanel.hidden = true;
     ui.addProject.setAttribute("aria-expanded", "false");
     render(true);
+    let loaded = false;
     try {
       const [status, conversation] = await Promise.all([api('/api/status',{},id),api('/api/conversation?limit=80',{},id)]);
       if (!sameProject(id,version)) return;
       state.status = status; applyConversation(conversation);
-      state.ready = true; state.loading = false; restoreDraft();
+      state.ready = true; state.loading = false; restoreDraft(); loaded = true;
       if (sameProject(id, version)) { render(true); announce(`Opened project ${currentProject()?.name || "workspace"}.`); }
     } catch (error) {
       if (sameProject(id, version)) showNotice(error.message, () => selectProject(id));
     } finally {
-      if (sameProject(id, version)) { state.loading = false; render(); }
+      if (sameProject(id, version) && !loaded) { state.loading = false; render(); }
     }
   }
 
@@ -2326,7 +2590,7 @@
   });
   ui.scroll.addEventListener("scroll", updateJump, { passive: true });
   ui.scroll.addEventListener("scroll", () => {
-    if (ui.scroll.scrollTop < 120 && state.conversation?.earlier > 0) loadEarlierMessages();
+    if (!scrollingToLatest && ui.scroll.scrollTop < 120 && state.conversation?.earlier > 0) loadEarlierMessages();
   }, { passive: true });
   // Status, permission requests and Continue appear under the latest turn without a new message; a reader at the end keeps seeing them.
   let following = true;
@@ -2486,7 +2750,8 @@
       const projectId = state.projectId, version = state.projectVersion, conversationId = state.conversation?.id, provider = state.provider;
       const revision = ++state.settingsRevision;
       state.settingsPending++; render();
-      const operation = state.settingsPromise.catch(() => {}).then(() => post(endpoint(conversationId,'provider'), {provider,mode:state.mode,approvalPolicy:state.approvalPolicy,model,effort},projectId));
+      const limit = state.conversation?.earlier > 0 ? `?limit=${Math.max(80, state.conversation.messages?.length || 80)}` : "";
+      const operation = state.settingsPromise.catch(() => {}).then(() => post(endpoint(conversationId,'provider') + limit, {provider,mode:state.mode,approvalPolicy:state.approvalPolicy,model,effort},projectId));
       state.settingsPromise = operation;
       try {
         const conversation = await operation;

@@ -642,4 +642,19 @@ test('conversation paging with limit and before, and search across full history'
   assert.equal(searchData.matches[0].id, 'msg-15');
   assert.equal(searchData.matches[0].index, 15);
   assert.match(searchData.matches[0].text, /Secret needle in history/);
+
+  // Settings and routing mutations respect ?limit= so paged views never receive the full history
+  const [project] = await (await fetch(`${f.url}/api/projects`)).json();
+  assert.equal(f.app.registry.mainConversationId(project.id), initial.id);
+  assert.equal('messageById' in latest, false, 'Internal index never leaks into conversation views');
+
+  const providerPaged = await (await post(`${f.url}/api/conversations/${initial.id}/provider?projectId=${project.id}&limit=20`, { provider: 'claude', mode: 'edit' })).json();
+  assert.equal(providerPaged.provider, 'claude');
+  assert.equal(providerPaged.messages.length, 20);
+  assert.equal(providerPaged.earlier, 100);
+
+  const routingPaged = await (await post(`${f.url}/api/conversations/${initial.id}/routing?projectId=${project.id}&limit=20`, { mode: 'smart' })).json();
+  assert.equal(routingPaged.routing.mode, 'smart');
+  assert.equal(routingPaged.messages.length, 20);
+  assert.equal(routingPaged.earlier, 100);
 });

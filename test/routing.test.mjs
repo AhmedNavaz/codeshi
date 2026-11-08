@@ -7,7 +7,7 @@ import { scriptCLIs } from './platform.mjs';
 import '../public/routing.js';
 import { Broker } from '../src/broker.mjs';
 
-const { classify, modelTier, route, escalate, triage } = globalThis.relayRouting;
+const { classify, modelTier, route, escalate, triage, replay } = globalThis.relayRouting;
 const levels = (...values) => values.map(reasoningEffort => ({ reasoningEffort }));
 const models = {
   codex: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high', 'xhigh') }, { id: 'gpt-codex-mini', displayName: 'GPT Codex Mini', supportedReasoningEfforts: levels('low', 'medium') }],
@@ -48,22 +48,29 @@ test('a model named for neither end is placed by its catalog description, and th
   assert.deepEqual(catalog.map(modelTier), ['standard', 'standard', 'light', 'light']);
   assert.equal(modelTier({ id: 'sonnet', displayName: 'Sonnet 5.5', description: 'Most efficient for simpler tasks' }), 'standard', 'Efficient is not the same as small.');
   assert.equal(modelTier({ id: 'opus', displayName: 'Opus 5.5', description: 'Fast for its size' }), 'deep', 'A name that says what it is wins.');
-  const pick = tier => route({ text: 'x', assessment: { tier, effort: 'low', reason: 'rated' }, mode: 'balanced', candidates: [{ provider: 'codex', eligible: true, billingSource: 'subscription', models: catalog, usage: { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] } }] }).model;
+  const pick = tier => route({ text: 'x', assessment: { tier, effort: 'low', reason: 'rated' }, mode: 'smart', candidates: [{ provider: 'codex', eligible: true, billingSource: 'subscription', models: catalog, usage: { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] } }] }).model;
   assert.equal(pick('light'), 'gpt-6-luna'); assert.equal(pick('standard'), 'gpt-6.1-sol'); assert.equal(pick('deep'), 'gpt-6.1-sol', 'Stronger models stay as they were.');
 });
 
-test('each mode matches the model and effort to the task, within the levels each model supports', () => {
+test('Smart, Saver and Ultra match the model and effort to the task, within the levels each model supports', () => {
   const pick = (text, mode, current = 'claude') => { const { provider, model, effort } = route({ text, mode, candidates: agents(), current }); return [provider, model, effort]; };
-  assert.deepEqual(pick('Fix the typo in the README', 'balanced'), ['claude', 'haiku', null], 'Haiku reports no effort levels, so the agent decides.');
-  assert.deepEqual(pick('Add a loading spinner to the checkout button', 'balanced'), ['claude', 'sonnet', 'medium']);
-  assert.deepEqual(pick('Refactor the payment module', 'balanced'), ['claude', 'opus', 'high']);
-  assert.deepEqual(pick('Refactor the payment module', 'quality'), ['claude', 'opus', 'max'], 'Maximum quality takes the highest level for complex work.');
-  assert.deepEqual(pick('Refactor the payment module', 'saving'), ['claude', 'sonnet', 'medium'], 'Cost saving keeps the strongest model for later.');
-  assert.deepEqual(pick('Add a loading spinner to the checkout button', 'quality', 'codex'), ['codex', 'gpt-codex', 'high'], 'Without a deeper Codex model, the default with more effort.');
-  assert.deepEqual(pick('Fix the typo in the README', 'saving', 'codex'), ['codex', 'gpt-codex-mini', 'low']);
-  const routed = route({ text: 'Refactor the payment module', mode: 'balanced', candidates: agents(), current: 'claude' });
+  assert.deepEqual(pick('Fix the typo in the README', 'smart'), ['claude', 'haiku', null], 'Haiku reports no effort levels, so the agent decides.');
+  assert.deepEqual(pick('Add a loading spinner to the checkout button', 'smart'), ['claude', 'sonnet', 'medium']);
+  assert.deepEqual(pick('Refactor the payment module', 'smart'), ['claude', 'opus', 'high']);
+  assert.deepEqual(pick('Fix the typo in the README', 'ultra'), ['claude', 'opus', 'high'], 'Ultra starts with the strongest models first.');
+  assert.deepEqual(pick('Add a loading spinner to the checkout button', 'ultra'), ['claude', 'opus', 'high']);
+  assert.deepEqual(pick('Refactor the payment module', 'ultra'), ['claude', 'opus', 'max'], 'Ultra takes the highest level for complex work.');
+  assert.deepEqual(pick('Refactor the payment module', 'saver'), ['claude', 'sonnet', 'low'], 'Saver uses light and standard models at low effort.');
+  assert.deepEqual(pick('Add a loading spinner to the checkout button', 'saver'), ['claude', 'sonnet', 'low']);
+  assert.deepEqual(pick('Add a loading spinner to the checkout button', 'ultra', 'codex'), ['codex', 'gpt-codex', 'high'], 'Without a deeper Codex model, the default with more effort.');
+  assert.deepEqual(pick('Fix the typo in the README', 'saver', 'codex'), ['codex', 'gpt-codex-mini', 'low']);
+  // Saved conversations with legacy mode IDs map cleanly to Saver, Smart and Ultra.
+  assert.equal(route({ text: 'Refactor the payment module', mode: 'saving', candidates: agents(), current: 'claude' }).mode, 'saver');
+  assert.equal(route({ text: 'Refactor the payment module', mode: 'balanced', candidates: agents(), current: 'claude' }).mode, 'smart');
+  assert.equal(route({ text: 'Refactor the payment module', mode: 'quality', candidates: agents(), current: 'claude' }).mode, 'ultra');
+  const routed = route({ text: 'Refactor the payment module', mode: 'smart', candidates: agents(), current: 'claude' });
   assert.equal(routed.reason, 'A complex task (refactoring)'); assert.equal(routed.modelName, 'Opus');
-  assert.deepEqual(route({ text: 'Add a test', mode: 'balanced', candidates: agents({ claude: { models: [] } }), current: 'claude' }).model, null, 'Without a model list, the agent’s default.');
+  assert.deepEqual(route({ text: 'Add a test', mode: 'smart', candidates: agents({ claude: { models: [] } }), current: 'claude' }).model, null, 'Without a model list, the agent’s default.');
 });
 
 test('short follow-ups inherit task difficulty for the estimate, and assessed meaning overrides keyword guesses', () => {
@@ -73,11 +80,24 @@ test('short follow-ups inherit task difficulty for the estimate, and assessed me
   assert.equal(choice.model, 'opus'); assert.equal(choice.effort, 'high'); assert.match(choice.reason, /serialization contract/);
 });
 
-test('reset timing ranks usable allowance without masking weekly exhaustion or assuming a reset happened', () => {
-  const now = Date.now(), reading = (hours, weeklyUsed = 30, shortHours = hours) => ({ available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(now + shortHours * 3600000).toISOString() }, { label: 'Weekly', usedPercent: weeklyUsed, resetsAt: new Date(now + hours * 3600000).toISOString() }] });
+test('allowance is spent where it resets soonest, without masking weekly exhaustion or assuming a reset happened', () => {
+  const now = Date.parse('2026-11-08T12:00:00Z'); // Sunday noon UTC -> Monday is +18h, Friday is +114h
+  const reading = (hours, weeklyUsed = 30, shortHours = hours) => ({ available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(now + shortHours * 3600000).toISOString() }, { label: 'Weekly', usedPercent: weeklyUsed, resetsAt: new Date(now + hours * 3600000).toISOString() }] });
   const candidates = agents({ codex: { usage: reading(150) }, claude: { usage: reading(0.1) } });
   const chosen = route({ text: 'Add a button', candidates, current: 'codex', now });
   assert.equal(chosen.provider, 'claude'); assert.match(chosen.reason, /resets sooner/);
+  // Claude with 19% of its week left resetting Monday is chosen before Codex with 23% left that must last until Friday.
+  const weekChoice = route({
+    text: 'Add a button',
+    now,
+    current: 'codex',
+    candidates: agents({
+      codex: { usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: 'Weekly', usedPercent: 77, resetsAt: new Date(now + 114 * 3600000).toISOString() }] } },
+      claude: { usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: 'Weekly', usedPercent: 81, resetsAt: new Date(now + 18 * 3600000).toISOString() }] } },
+    }),
+  });
+  assert.equal(weekChoice.provider, 'claude');
+  assert.match(weekChoice.reason, /Claude has 19% of its week left and resets Monday; Codex is kept for later in the week/);
   candidates[1].usage = reading(150, 30, 0.1);
   assert.equal(route({ text: 'Add a button', candidates, current: 'codex', now }).provider, 'codex', 'An early five-hour reset cannot outweigh the tighter weekly window.');
   candidates[1].usage = reading(0.1, 100);
@@ -86,20 +106,53 @@ test('reset timing ranks usable allowance without masking weekly exhaustion or a
   assert.equal(route({ text: 'Add a button', candidates, current: 'codex', now }).provider, 'codex', 'A passed reset requires a fresh observation.');
 });
 
-test('Auto keeps the agent that did the last run, moves away from one near its limit, and only uses API billing when allowed', () => {
+test('Auto keeps the agent that did the last run while continuity is worth its price, moves away when tight, and only uses API billing when allowed', () => {
   const text = 'Add a loading spinner to the checkout button';
-  assert.equal(route({ text, mode: 'balanced', candidates: agents(), current: 'codex' }).provider, 'codex', 'The conversation keeps its agent.');
-  const busy = route({ text, mode: 'balanced', candidates: agents({ codex: { usedPercent: 85 } }), current: 'codex' });
+  assert.equal(route({ text, mode: 'smart', candidates: agents(), current: 'codex' }).provider, 'codex', 'The conversation keeps its agent.');
+  assert.equal(route({ text, mode: 'smart', candidates: agents({ codex: { usedPercent: 30 } }), current: 'codex' }).provider, 'codex', 'Continuity keeps the current agent across small differences.');
+  const busy = route({ text, mode: 'smart', candidates: agents({ codex: { usedPercent: 85 } }), current: 'codex' });
   assert.equal(busy.provider, 'claude'); assert.match(busy.reason, /Codex is at 85% of its limit/);
-  assert.equal(route({ text, mode: 'quality', candidates: agents({ codex: { usedPercent: 85 } }), current: 'codex' }).provider, 'codex', 'Maximum quality stays until 90%.');
-  assert.equal(route({ text, mode: 'saving', candidates: agents({ codex: { usedPercent: 60 } }), current: 'codex' }).provider, 'claude', 'Cost saving goes where the most allowance is left.');
-  assert.equal(route({ text, mode: 'quality', candidates: agents({ codex: { usedPercent: 96 } }), current: 'codex' }).provider, 'claude', 'An agent at 95% is never chosen.');
+  assert.equal(route({ text, mode: 'saver', candidates: agents({ codex: { usedPercent: 60 } }), current: 'codex' }).provider, 'claude', 'Continuity has a price at Send when another agent has much more allowance left.');
+  assert.equal(route({ text, mode: 'ultra', candidates: agents({ codex: { usedPercent: 96 } }), current: 'codex' }).provider, 'claude', 'An agent at 95% is never chosen.');
 
   const api = agents({ claude: { billingSource: 'api' }, codex: { eligible: false } });
-  const refused = route({ text, mode: 'balanced', candidates: api, current: 'claude' });
+  const refused = route({ text, mode: 'smart', candidates: api, current: 'claude' });
   assert.match(refused.error, /no connected agent within your rules \(Claude isn’t billed to a subscription\)/);
-  assert.equal(route({ text, mode: 'balanced', candidates: api, current: 'claude', allowApi: true }).provider, 'claude');
-  assert.match(route({ text, mode: 'balanced', candidates: agents({ claude: { billingSource: 'unknown' } }), current: 'claude' }).reason, /Claude isn’t available under your rules/, 'Unknown billing is not treated as free.');
+  assert.equal(route({ text, mode: 'smart', candidates: api, current: 'claude', allowApi: true }).provider, 'claude');
+  assert.match(route({ text, mode: 'smart', candidates: agents({ claude: { billingSource: 'unknown' } }), current: 'claude' }).reason, /Claude isn’t available under your rules/, 'Unknown billing is not treated as free.');
+});
+
+test('before a standard or deep task starts, usual run spend is compared with the binding window', () => {
+  const now = Date.parse('2026-11-08T12:00:00Z');
+  const text = 'Refactor the payment module';
+  // Codex has 12% left (with 4h to reset) and usually spends 20% on a deep run -> selects Claude instead.
+  const switched = route({
+    text,
+    mode: 'smart',
+    now,
+    current: 'codex',
+    candidates: agents({
+      codex: { usualSpend: { short: 20 }, usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 88, resetsAt: new Date(now + 4 * 3600000).toISOString() }] } },
+      claude: { usualSpend: { short: 15 }, usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 30, resetsAt: new Date(now + 4 * 3600000).toISOString() }] } },
+    }),
+  });
+  assert.equal(switched.provider, 'claude');
+  assert.match(switched.reason, /Codex has 12% left and usually spends ~20% on a deep run/);
+
+  // When the current agent's window resets soon (within the hour), it can start with a handoff planned.
+  const planned = route({
+    text,
+    mode: 'smart',
+    now,
+    current: 'codex',
+    candidates: agents({
+      codex: { usualSpend: { short: 20 }, usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 88, resetsAt: new Date(now + 1800000).toISOString() }] } },
+      claude: { eligible: false },
+    }),
+  });
+  assert.equal(planned.provider, 'codex');
+  assert.equal(planned.plannedHandoff, true);
+  assert.match(planned.reason, /handoff is planned/);
 });
 
 test('a retry after failed tests goes one step up with the same agent: a stronger model, or more effort on the strongest', () => {
@@ -111,20 +164,45 @@ test('a retry after failed tests goes one step up with the same agent: a stronge
   assert.deepEqual(step('codex', 'gpt-codex-mini', 'low'), ['codex', 'gpt-codex', 'medium', 'standard']);
   assert.deepEqual(step('codex', 'gpt-codex', 'high'), ['codex', 'gpt-codex', 'xhigh', 'standard'], 'Without a deeper Codex model, more effort.');
   assert.equal(escalate('claude', [], { model: null, effort: null }), null, 'Without a model list there is nothing to step up to.');
-  assert.deepEqual(route({ text: 'Add a loading spinner to the checkout button', mode: 'balanced', candidates: agents(), current: 'claude' }).escalation, { provider: 'claude', model: 'opus', modelName: 'Opus', effort: 'high', tier: 'deep' }, 'Each choice carries its step up.');
+  assert.deepEqual(route({ text: 'Add a loading spinner to the checkout button', mode: 'smart', candidates: agents(), current: 'claude' }).escalation, { provider: 'claude', model: 'opus', modelName: 'Opus', effort: 'high', tier: 'deep' }, 'Each choice carries its step up.');
 });
 
-test('routing evaluates the chosen model against every applicable quota window before choosing its agent', () => {
+test('weekly and model-specific windows count separately: an exhausted Opus window steps down to Sonnet when needed, never Haiku for deep work', () => {
   const usage = windows => ({ available: true, checkedAt: new Date().toISOString(), windows });
   const candidates = agents({ claude: { usage: usage([{ label: '5-hour', usedPercent: 5 }, { label: 'Opus weekly', scopes: ['opus'], usedPercent: 100 }]) } });
   const deep = route({ text: 'Refactor the payment module', current: 'claude', candidates });
-  assert.equal(deep.provider, 'codex', 'A fresh five-hour window cannot hide the chosen Opus model’s weekly exhaustion.');
+  assert.equal(deep.provider, 'codex', 'When another agent has full-tier room, it is chosen over stepping down.');
   const light = route({ text: 'Fix the typo', current: 'claude', candidates });
   assert.equal(light.model, 'haiku', 'Opus exhaustion does not block Haiku.');
-  const onlyClaude = route({ text: 'Refactor the payment module', current: 'claude', candidates: candidates.filter(row => row.provider === 'claude') });
-  assert(onlyClaude.error, 'Do not pick Haiku for deep work merely to escape Opus’s limit.');
+  const onlyClaude = route({ text: 'Refactor the payment module', mode: 'ultra', current: 'claude', candidates: candidates.filter(row => row.provider === 'claude') });
+  assert.equal(onlyClaude.model, 'sonnet', 'An exhausted Opus weekly window leaves Claude usable at the next tier down.');
+  assert.equal(onlyClaude.steppedDown, true);
+  assert.match(onlyClaude.reason, /Opus has no usable allowance.*stepping down one tier to Sonnet/);
+  const haikuOnlyClaude = route({ text: 'Refactor the payment module', current: 'claude', candidates: [{ ...candidates[1], models: models.claude.filter(row => row.id !== 'sonnet') }] });
+  assert(haikuOnlyClaude.error, 'Do not pick Haiku for deep work merely to escape Opus’s limit.');
   const allowed = route({ text: 'Fix the typo', current: 'claude', candidates: agents({ claude: { allowedModels: ['sonnet'] } }) });
   assert.equal(allowed.model, 'sonnet', 'Model restrictions are applied before selection, not only when starting.');
+});
+
+test('replay compares Smart, Saver and Ultra across a prompt sequence with recorded usage readings', () => {
+  const now = Date.parse('2026-11-08T12:00:00Z');
+  const candidates = agents({
+    codex: { usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 20, resetsAt: new Date(now + 2 * 3600000).toISOString() }, { label: 'Weekly', usedPercent: 40, resetsAt: new Date(now + 96 * 3600000).toISOString() }] } },
+    claude: { usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 15, resetsAt: new Date(now + 4 * 3600000).toISOString() }, { label: 'Weekly', usedPercent: 25, resetsAt: new Date(now + 24 * 3600000).toISOString() }] } },
+  });
+  const prompts = [
+    'Fix the typo in the README',
+    'Add a loading spinner to the checkout button',
+    'Yes, do it',
+    'Refactor the payment module into separate services',
+  ];
+  const compared = replay(prompts, { candidates, current: 'claude', now });
+  assert.equal(compared.saver.assessmentCalls, 0, 'Saver makes no agent assessment calls on Send.');
+  assert.equal(compared.smart.assessmentCalls, 3, 'Bare go-ahead after standard work is settled locally.');
+  assert.equal(compared.ultra.assessmentCalls, 3);
+  assert.equal(compared.saver.choices[0].model, 'haiku');
+  assert.equal(compared.ultra.choices[0].model, 'opus');
+  assert(compared.saver.remaining.claude['Weekly'] > compared.ultra.remaining.claude['Weekly'], 'Saver leaves more weekly allowance at the end of the sequence.');
 });
 
 test('unknown and stale readings are not capacity, and matching model groups and observation times are preserved', () => {
@@ -154,16 +232,16 @@ test('a fresh backend reading can stop a routed dispatch before any agent starts
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const c = broker.get(broker.create().id); let reads = 0;
   broker.checks.usage = async (_provider, options) => { reads++; assert.equal(options.refresh, true); return { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 5 }, { label: 'Weekly', scopes: ['gpt-codex'], usedPercent: 100 }] }; };
-  broker.start(c, { text: 'Add a test', provider: 'codex', model: 'gpt-codex', routing: { mode: 'balanced', reason: 'A focused change' } });
+  broker.start(c, { text: 'Add a test', provider: 'codex', model: 'gpt-codex', routing: { mode: 'smart', reason: 'A focused change' } });
   await broker.running.done;
   assert.equal(reads, 1);
   assert.equal(fs.existsSync(path.join(workspace, '.mock-captures.jsonl')), false);
   assert.equal(c.lastRun.routingQuota.state, 'exhausted');
-  assert.equal(c.runs[0].routingQuota.windows[1].label, 'Weekly');
+  assert.equal(c.lastRun.routingQuota.windows[1].label, 'Weekly');
   assert.match(c.messages.at(-1).text, /Routing paused before starting/);
-  const replay = new Broker({ workspace, dataDir, bins: { codex: bin } });
-  try { assert.deepEqual(replay.get(c.id).lastRun.routingQuota, c.lastRun.routingQuota); }
-  finally { await replay.close(); }
+  const replayBroker = new Broker({ workspace, dataDir, bins: { codex: bin } });
+  try { assert.deepEqual(replayBroker.get(c.id).lastRun.routingQuota, c.lastRun.routingQuota); }
+  finally { await replayBroker.close(); }
 });
 
 test('quota observations keep model groups, real observation times and refreshes without assigning unknown times', async t => {
@@ -193,21 +271,22 @@ test('the broker saves the Auto mode with the workspace and records what Auto ch
   broker.checks.usage = async () => ({ available: false });
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const c = broker.get(broker.create().id);
-  assert.throws(() => broker.setRouting(c, { mode: 'fastest' }), /Cost saving, Balanced or Maximum quality/);
+  assert.throws(() => broker.setRouting(c, { mode: 'fastest' }), /Choose Smart, Saver or Ultra/);
   broker.setRouting(c, { mode: 'saving', allowApi: true });
+  assert.equal(c.routing.mode, 'saver', 'Legacy mode IDs normalize to Saver, Smart and Ultra.');
   await assert.rejects(async () => broker.start(c, { text: 'Hello', provider: 'codex', routing: { mode: 'cheap' } }), /Invalid automatic agent choice/);
-  broker.start(c, { text: 'Fix the typo in the README', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', routing: { mode: 'saving', reason: 'A small, well-defined change', tier: 'light', extra: 'ignored' } });
+  broker.start(c, { text: 'Fix the typo in the README', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light', extra: 'ignored' } });
   await broker.running.done;
   const prompt = c.messages.find(message => message.role === 'user');
-  assert.deepEqual(prompt.routing, { mode: 'saving', reason: 'A small, well-defined change', tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
-  assert.deepEqual(c.lastRun.routing, { mode: 'saving', reason: 'A small, well-defined change', tier: 'light' });
+  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
+  assert.deepEqual(c.lastRun.routing, { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' });
   broker.queueAction(c, { action: 'pause' });
-  broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'saving', reason: 'A small, well-defined change', tier: 'light' } });
-  assert.equal(c.queue[0].routing.mode, 'saving', 'A queued prompt keeps the choice shown when it was queued.');
+  broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' } });
+  assert.equal(c.queue[0].routing.mode, 'saver', 'A queued prompt keeps the choice shown when it was queued.');
   await broker.close();
   broker = new Broker({ workspace, dataDir: path.join(root, 'data'), bins: { codex: bin } });
   broker.checks.usage = async () => ({ available: false });
-  assert.deepEqual(broker.get(c.id).routing, { mode: 'saving', allowApi: true, check: false }, 'The mode survives a restart.');
+  assert.deepEqual(broker.get(c.id).routing, { mode: 'saver', allowApi: true, check: false }, 'The mode survives a restart.');
   broker.setRouting(broker.get(c.id), { mode: null });
   assert.equal(broker.get(c.id).routing, null);
 });

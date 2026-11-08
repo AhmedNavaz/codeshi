@@ -14,7 +14,14 @@ export function runTokens(usage) {
   if (!usage || !Number.isFinite(usage.input) && !Number.isFinite(usage.cacheRead)) return null;
   return [usage.input, usage.cacheRead, usage.cacheWrite, usage.output].reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
 }
-const percentile = (values, share) => [...values].sort((a, b) => a - b)[Math.floor(share * values.length)];
+const percentile = (values, share) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (share === 0.5 && sorted.length % 2 === 0 && sorted.length > 0) {
+    const mid = sorted.length / 2;
+    return Math.round((sorted[mid - 1] + sorted[mid]) / 2 * 100) / 100;
+  }
+  return sorted[Math.floor(share * values.length)];
+};
 
 // Called for each finished run, live and when a journal is read, so both agree. Each agent keeps its own history: their
 // counts aren't comparable, and an agent used less often would otherwise fall out of the conversation's recent runs.
@@ -40,7 +47,7 @@ export function observeReading(c, provider, reading) {
 
 // A reading just before the run and one just after, for the limits that apply to every model. Anything else can't say what
 // moved during this run: a reset between them, or a reading from long before it started.
-function limitMoves(readings, run) {
+function limitMoves(readings, run, { includeScoped = false } = {}) {
   const at = reading => Date.parse(reading.observedAt), started = Date.parse(run.startedAt), ended = Date.parse(run.endedAt);
   const before = readings.findLast(reading => at(reading) <= Math.min(started + START_GRACE_MS, ended) && started - at(reading) <= START_MAX_AGE_MS);
   // An unchanged reading isn't saved again within a minute, so the one that ended the run can be the last one before it ended.
@@ -48,13 +55,41 @@ function limitMoves(readings, run) {
   if (!before || !after || at(after) <= at(before)) return { after: null, moves: [] };
   const moves = [];
   for (const row of after.windows) {
-    const start = before.windows.find(item => item.id === row.id);
-    if (!start || row.scope || row.scopes) continue;
+    const start = before.windows.find(item => (item.id || item.label) === (row.id || row.label));
+    if (!start || (!includeScoped && (row.scope || row.scopes))) continue;
     if (row.resetsAt && start.resetsAt && Math.abs(Date.parse(row.resetsAt) - Date.parse(start.resetsAt)) > SAME_WINDOW_MS) continue;
     const points = row.usedPercent - start.usedPercent;
     if (points > 0) moves.push({ id: row.id, label: row.label || row.id, from: start.usedPercent, to: row.usedPercent, points, resetsAt: row.resetsAt || null, near: start.usedPercent < NEAR_PERCENT && row.usedPercent >= NEAR_PERCENT });
   }
   return { after, moves };
+}
+
+// What the agent usually spends on a run in each quota window, worked out from recorded per-run window moves (#128).
+export function usualWindowSpend(c, provider) {
+  const readings = (c?.quotaHistory?.[provider] || []).filter(reading => Number.isFinite(Date.parse(reading.observedAt))).sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt));
+  const runs = (c?.runs || []).filter(item => item.provider === provider && !item.local && item.endedAt && (!item.status || item.status === 'complete'));
+  if (!readings.length || !runs.length) return null;
+  const byWindowList = {}, byTierList = { standard: [], deep: [] }, shortList = [], weeklyList = [];
+  const seen = runs.map(item => limitMoves(readings, item, { includeScoped: true }));
+  runs.forEach((item, index) => {
+    const { after, moves } = seen[index];
+    if (after && seen[index + 1]?.after === after) return;
+    const tier = item.routing?.tier === 'deep' ? 'deep' : 'standard';
+    for (const move of moves) {
+      const key = move.id || move.label || 'Plan limit';
+      (byWindowList[key] ||= []).push(move.points);
+      if (move.label && move.label !== key) (byWindowList[move.label] ||= []).push(move.points);
+      byTierList[tier].push(move.points);
+      if (/week|7[- ]?d/i.test(`${move.label || ''} ${move.id || ''}`)) weeklyList.push(move.points);
+      else shortList.push(move.points);
+    }
+  });
+  const byWindow = Object.fromEntries(Object.entries(byWindowList).filter(([, list]) => list.length).map(([key, list]) => [key, percentile(list, .5)]));
+  const byTier = Object.fromEntries(Object.entries(byTierList).filter(([, list]) => list.length).map(([key, list]) => [key, percentile(list, .5)]));
+  const short = shortList.length ? percentile(shortList, .5) : null;
+  const weekly = weeklyList.length ? percentile(weeklyList, .5) : null;
+  if (!Object.keys(byWindow).length && !short && !weekly) return null;
+  return { byWindow, byTier, ...(short !== null ? { short } : {}), ...(weekly !== null ? { weekly } : {}) };
 }
 
 // One limit filling up over several runs is one thing to say: the first large move, then only when it reaches the near mark
@@ -85,7 +120,7 @@ function nextStep(c, run, decision) {
   const used = Number.isFinite(decision?.used) ? decision.used : null;
   const state = decision?.pending ? 'scheduled' : decision?.rollover ? 'due' : decision?.hasSession && run.provider !== 'gemini' && used >= COMPACT_MIN_TOKENS ? 'large' : 'small';
   const mode = c.routing?.mode;
-  return { context: { used, state }, action: state === 'large' ? 'compact' : mode && mode !== 'saving' ? 'saving' : null };
+  return { context: { used, state }, action: state === 'large' ? 'compact' : mode && mode !== 'saver' && mode !== 'saving' ? 'saver' : null };
 }
 
 export function usageWatch(c, decision) {

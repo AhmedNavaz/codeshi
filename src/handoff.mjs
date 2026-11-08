@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { assessQuota } from './task-budget.mjs';
 import { continuationRequest } from './context.mjs';
 import { accountStatus, listModels, providerUsage } from './providers.mjs';
+import { usualWindowSpend } from './usage-watch.mjs';
 import '../public/routing.js';
 import { limitState, windowApplies } from './resume.mjs';
 
@@ -23,7 +24,7 @@ import { limitState, windowApplies } from './resume.mjs';
 // usage rarely reaches the limit between checks.
 export const HANDOFF_FIRST_CHECK_MS = 10000;
 export const HANDOFF_CHECK_MS = 60000;
-// Where a Flow run hands off, by routing mode: the share of a limit used before the task moves to another agent (#107).
+// Where a Flow run hands off, by routing mode: the share of a limit used before the task moves to another agent (#107, #128).
 export const FLOW_HANDOFF = globalThis.relayRouting.handoffThresholds;
 const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -57,10 +58,10 @@ export class HandoffMonitor {
   // A reading that can't be saved must never get in the way of a handoff.
   observe(c, provider, usage) { try { this.broker.observeQuota(c, provider, usage); } catch (error) { console.error('Codeshi could not save a usage reading:', error.message); } }
 
-  // In Flow a routed run hands off by its mode, with no separate setting (#107): Cost saving moves the task on early,
-  // Maximum quality holds the strongest model longest, and all three move without asking. Other runs use Settings.
+  // In Flow a routed run hands off by its mode, with no separate setting (#107, #128): Saver moves the task on early,
+  // Ultra holds the strongest model longest, and all three move without asking. Other runs use Settings.
   policy(run) {
-    const mode = run?.routing?.mode;
+    const mode = globalThis.relayRouting.normalizeMode(run?.routing?.mode) || run?.routing?.mode;
     return mode && FLOW_HANDOFF[mode] ? { threshold: FLOW_HANDOFF[mode], automatic: true, mode } : this.preferences();
   }
   async modelRows(provider, limitMs = 5000) {
@@ -97,11 +98,12 @@ export class HandoffMonitor {
       const allowed = model => !this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider });
       const allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
-      candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, ...(models.length ? { allowedModels } : {}) });
+      const usualSpend = usualWindowSpend(c, provider);
+      candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
     }
     const choice = globalThis.relayRouting.route({ text: request?.text || '', attachments: request?.attachments?.length || 0, assessment: run.routing?.assessment || null, mode, candidates, quotaThreshold: threshold });
     if (choice.error || choice.quota.state !== 'ok') return null;
-    const { quota, ...routing } = choice;
+    const { quota, bindingWindow, ...routing } = choice;
     return { provider: choice.provider, model: choice.model, effort: choice.effort, routing, mode: run.mode, approvalPolicy: run.approvalPolicy,
       billingSource: 'subscription', usedPercent: quota.usedPercent, quota: quota.state, quotaEvidence: quota };
   }
@@ -119,11 +121,14 @@ export class HandoffMonitor {
       if (assessment.state === 'exhausted' || assessment.state === 'near') continue;
       let account = null; try { account = await this.account(provider, { bin: options.bin, workspace: this.broker.workspace, googleRoot: this.broker.googleRoot }); } catch {}
       if (!account?.installed || account.authenticated === false || !this.supportsWorkspace(provider, account, run)) continue;
-      const candidate = { provider, model, mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: assessment.usedPercent, quota: assessment.state, quotaEvidence: assessment };
-      // Prefer subscription allowance, then the agent with the most room left.
-      const rank = value => (value.billingSource === 'subscription' ? 0 : 2000) + (value.quota === 'ok' ? value.usedPercent : 1000);
+      const binding = globalThis.relayRouting.bindingWindow(assessment);
+      const spendability = binding ? binding.spendability : Math.max(0, 100 - (assessment.usedPercent ?? 100));
+      const candidate = { provider, model, mode: run.mode, approvalPolicy: run.approvalPolicy, billingSource: account.billingSource || 'unknown', usedPercent: assessment.usedPercent, quota: assessment.state, quotaEvidence: assessment, spendability };
+      // Prefer subscription allowance, then the agent with the highest spendability.
+      const rank = value => (value.billingSource === 'subscription' ? 0 : 2000) + (value.quota === 'ok' ? 1000 - value.spendability : 1000);
       if (!best || rank(candidate) < rank(best)) best = candidate;
     }
+    if (best) delete best.spendability;
     return best;
   }
 

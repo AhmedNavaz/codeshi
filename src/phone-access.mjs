@@ -13,7 +13,7 @@ const privateIP = address => {
 export const phoneInterfaces = () => Object.entries(os.networkInterfaces()).flatMap(([name, addresses]) =>
   (addresses || []).filter(row => !row.internal && row.family === 'IPv4' && privateIP(row.address)).map(row => ({ name, address: row.address })));
 const same = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
-const COOKIE = 'codeshi_phone', FIVE_MINUTES = 5 * 60_000, SESSION = 12 * 60 * 60_000;
+const COOKIE = 'codeshi_phone', FIVE_MINUTES = 5 * 60_000, SESSION = 12 * 60 * 60_000, ACTIVE_WINDOW = 45_000;
 const publicDir = new URL('../public/', import.meta.url);
 
 // A separate, explicitly enabled listener. The desktop server remains on loopback. Credentials and device grants
@@ -23,17 +23,38 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
   let server = null, address = null, invite = null, transition = Promise.resolve();
   const devices = new Map(), sockets = new Set(), attempts = new Map();
   const base = () => server?.listening ? `http://${address}:${server.address().port}` : null;
-  function remove(device) { devices.delete(device.token); for (const socket of device.sockets) socket.destroy(); }
+  const isActiveNow = device => device.state === 'active' && device.activeNow !== false && Boolean(device.streams?.size > 0 || (device.lastSeenAt && now() - device.lastSeenAt < ACTIVE_WINDOW));
+  function remove(device) {
+    devices.delete(device.token);
+    for (const socket of device.sockets) socket.destroy();
+    for (const socket of device.streams || []) socket.destroy();
+  }
   function expire() {
     if (invite && now() >= invite.expiresAt) invite = null;
-    for (const device of devices.values()) if (now() >= device.expiresAt) remove(device);
+    for (const device of devices.values()) {
+      if (now() >= device.expiresAt) remove(device);
+      else if (device.handover && now() >= device.handover.expiresAt) device.handover = null;
+    }
     for (const [ip, attempt] of attempts) if (now() - attempt.at >= 60_000) attempts.delete(ip);
+  }
+  function evictStaleIfNeeded(preferredName = null, deviceId = null) {
+    if (deviceId) {
+      for (const other of [...devices.values()]) if (other.state === 'pending' && other.deviceId === deviceId) remove(other);
+    }
+    if (devices.size < 5) return;
+    const candidate = [...devices.values()].find(row => row.state === 'pending')
+      || (preferredName && [...devices.values()].find(row => row.state === 'active' && row.name === preferredName && !isActiveNow(row)))
+      || [...devices.values()].filter(row => row.state === 'active' && !isActiveNow(row) && (row.activeNow === false || row.lastSeenAt)).sort((a, b) => (a.lastSeenAt || 0) - (b.lastSeenAt || 0))[0];
+    if (candidate) remove(candidate);
   }
   function status() {
     expire();
     return { enabled: Boolean(base()), address, url: base(), interfaces: interfaces(),
       invite: invite ? { code: invite.code, url: `${base()}/#pair=${invite.secret}`, qr: invite.qr, expiresAt: invite.expiresAt } : null,
-      devices: [...devices.values()].map(({ id, name, code, state, expiresAt }) => ({ id, name, code, state, expiresAt })), ...(remote ? { remote: remote.status() } : {}) };
+      devices: [...devices.values()].map(device => ({
+        id: device.id, name: device.name, code: device.code, state: device.state, expiresAt: device.expiresAt,
+        lastSeenAt: device.lastSeenAt || null, activeNow: isActiveNow(device),
+      })), ...(remote ? { remote: remote.status() } : {}) };
   }
   const credential = req => {
     const token = String(req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
@@ -72,22 +93,57 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
         attempt.count++; attempts.set(peer, attempt);
         if (attempt.count > 5 || [...attempts.values()].reduce((sum, row) => sum + row.count, 0) > 20) fail('Too many pairing attempts. Try again in a minute.', 429);
         const input = await read(req);
+        const name = typeof input.name === 'string' && input.name.trim() ? input.name.trim().slice(0, 60) : 'Phone browser';
+        const deviceId = typeof input.deviceId === 'string' && /^[A-Za-z0-9_.:-]{8,128}$/.test(input.deviceId) ? input.deviceId : null;
+        const handoverTarget = [...devices.values()].find(row => row.state === 'active' && row.handover && now() < row.handover.expiresAt && (same(input.code, row.handover.code) || same(input.code, row.handover.secret)));
+        if (handoverTarget) {
+          devices.delete(handoverTarget.token);
+          for (const socket of handoverTarget.sockets) socket.destroy();
+          for (const socket of handoverTarget.streams || []) socket.destroy();
+          handoverTarget.sockets.clear();
+          handoverTarget.streams?.clear();
+          handoverTarget.token = randomBytes(32).toString('hex');
+          handoverTarget.handover = null;
+          if (typeof input.name === 'string' && input.name.trim()) handoverTarget.name = name;
+          if (deviceId) handoverTarget.deviceId = deviceId;
+          handoverTarget.lastSeenAt = now();
+          handoverTarget.activeNow = true;
+          devices.set(handoverTarget.token, handoverTarget);
+          const maxAge = Math.max(1, Math.floor((handoverTarget.expiresAt - now()) / 1000));
+          res.setHeader('Set-Cookie', `${COOKIE}=${handoverTarget.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`);
+          return json(res, 200, { state: handoverTarget.state, code: handoverTarget.code, expiresAt: handoverTarget.expiresAt });
+        }
         if (!invite || !(same(input.code, invite.code) || same(input.code, invite.secret))) {
           if (invite && ++invite.failures >= 5) invite = null;
           fail('This code expired or does not match. Get a new code on the computer.', 403);
         }
+        evictStaleIfNeeded(name, deviceId);
         if (devices.size >= 5) fail('Remove a device on the computer before pairing another.', 409);
         invite = null;
-        const device = { token: randomBytes(32).toString('hex'), id: randomBytes(16).toString('hex'), name: typeof input.name === 'string' && input.name.trim() ? input.name.trim().slice(0, 60) : 'Phone browser', code: String(randomInt(100000, 1000000)), state: 'pending', expiresAt: now() + FIVE_MINUTES, sockets: new Set() };
+        const device = { token: randomBytes(32).toString('hex'), id: randomBytes(16).toString('hex'), name, deviceId, code: String(randomInt(100000, 1000000)), state: 'pending', expiresAt: now() + FIVE_MINUTES, lastSeenAt: null, activeNow: false, sockets: new Set(), streams: new Set() };
         devices.set(device.token, device);
         // HTTP on a trusted LAN: HttpOnly and Strict protect browser requests; this is not encrypted transport.
         res.setHeader('Set-Cookie', `${COOKIE}=${device.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION / 1000}`);
         return json(res, 202, { state: device.state, code: device.code });
       }
       const device = credential(req);
-      if (req.method === 'GET' && url.pathname === '/phone/session') return json(res, device ? 200 : 401, device ? { state: device.state, code: device.code, expiresAt: device.expiresAt } : { error: 'Pair this browser from the computer again.' });
+      if (req.method === 'GET' && url.pathname === '/phone/session') {
+        if (device) {
+          if (url.searchParams.get('active') === '0') device.activeNow = false;
+          else if (device.state === 'active') { device.lastSeenAt = now(); device.activeNow = true; }
+          return json(res, 200, { state: device.state, code: device.code, expiresAt: device.expiresAt });
+        }
+        const pairedElsewhere = [...devices.values()].some(row => row.state === 'active');
+        return json(res, 401, {
+          error: pairedElsewhere
+            ? 'This browser isn’t paired yet. Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) has its own connection. Move the connection from the paired browser, or scan a new QR code on the computer.'
+            : 'Pair this browser from the computer again.',
+          pairedElsewhere,
+        });
+      }
       if (req.method === 'POST' && url.pathname === '/phone/logout') {
         device?.sockets.delete(req.socket);
+        device?.streams?.delete(req.socket);
         if (device) remove(device);
         res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
         return json(res, 200, { disconnected: true });
@@ -96,10 +152,21 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
         if (req.method === 'GET' && url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(fs.readFileSync(new URL('phone-pair.html', publicDir))); }
         return json(res, 401, { error: device ? 'Approve this phone on the computer first.' : 'Pair this browser from the computer again.' });
       }
+      if (req.method === 'POST' && url.pathname === '/phone/handover') {
+        const next = { code: String(randomInt(10000000, 100000000)), secret: randomBytes(32).toString('hex'), expiresAt: Math.min(device.expiresAt, now() + FIVE_MINUTES) };
+        device.handover = next;
+        device.lastSeenAt = now(); device.activeNow = true;
+        return json(res, 200, { url: `${base()}/#pair=${next.secret}`, code: next.code, expiresAt: next.expiresAt });
+      }
       // The native speech helper listens to the computer's microphone, not the phone's. Phone users can use their
       // keyboard's dictation without starting or stopping a microphone on a different device.
       if (url.pathname === '/api/voice' && req.method === 'GET') return json(res, 200, { supported: false });
       if (url.pathname.startsWith('/api/voice/')) fail('Use your phone keyboard’s dictation for voice input.', 403);
+      device.lastSeenAt = now(); device.activeNow = true;
+      if (url.pathname === '/api/events') {
+        device.streams.add(req.socket);
+        req.socket.once('close', () => { device.streams.delete(req.socket); device.lastSeenAt = now(); });
+      }
       if (!device.sockets.has(req.socket)) { device.sockets.add(req.socket); req.socket.once('close', () => device.sockets.delete(req.socket)); }
       const target = local();
       req.headers.host = `127.0.0.1:${target.port}`;
@@ -148,7 +215,15 @@ export function createPhoneAccess({ handle, local, interfaces = phoneInterfaces,
     }
     const device = [...devices.values()].find(row => row.id === input.id);
     if (!device) fail('This device request expired or was removed.', 404);
-    if (input.action === 'allow' && device.state === 'pending') { device.state = 'active'; device.expiresAt = now() + SESSION; }
+    if (input.action === 'allow' && device.state === 'pending') {
+      for (const other of [...devices.values()]) {
+        if (other.id === device.id) continue;
+        const sameDevice = Boolean(device.deviceId && other.deviceId === device.deviceId);
+        const staleSameName = other.name === device.name && (other.state === 'pending' || (other.state === 'active' && !isActiveNow(other) && (other.activeNow === false || other.lastSeenAt)));
+        if (sameDevice || staleSameName) remove(other);
+      }
+      device.state = 'active'; device.expiresAt = now() + SESSION; device.lastSeenAt = now(); device.activeNow = true;
+    }
     else if (['deny', 'revoke'].includes(input.action)) remove(device);
     else fail('Choose a pending phone or remove a connected one.');
     return status();

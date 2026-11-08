@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // The Agents panel holds two settings: Routing (Auto, #12), which chooses the agent, model and effort for each
+  // The Agents panel holds two settings: Routing (Auto, #12, #128), which chooses the agent, model and effort for each
   // message and belongs to Flow (#107), so its section shows there and the normal view says so instead; and Handoff
   // (#17), which moves a running task to another agent before a usage limit. While routing is on, the model button in
   // the message box shows the mode and opens Routing here. One side panel shows at a time; the last one chosen is
@@ -10,9 +10,9 @@
   const PANEL_KEY = 'throughline:side-panel';
   // Three modes: Flow always routes, so there is no manual one; leaving Flow is how you choose by hand again.
   const options = [
-    { mode: 'saving', name: 'Cost saving', hint: 'Lighter models; prefers the agent with the most allowance left.' },
-    { mode: 'balanced', name: 'Balanced', hint: 'Matches the model and effort to each message.' },
-    { mode: 'quality', name: 'Maximum quality', hint: 'Strongest model and highest effort for every message.' },
+    { mode: 'saver', name: 'Saver', hint: 'Local rules only; uses light and standard models at low effort and spends allowance where it resets soonest.' },
+    { mode: 'smart', name: 'Smart', hint: 'Matches the model and effort to each message, and spends allowance where it resets soonest.' },
+    { mode: 'ultra', name: 'Ultra', hint: 'Strongest models and deepest effort first; steps down one tier only when needed.' },
   ];
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const routing = () => api.getState().conversation?.routing || null;
@@ -27,11 +27,11 @@
     finally { busy = false; render(); }
   }
 
-  // The four answers to "who answers each message", as radio rows with a line on what each does.
+  // The answers to "who answers each message", as radio rows with a line on what each does.
   function renderOptions(host) {
-    const current = routing(), locked = busy || !api.getState().projectId || api.isRunning();
+    const current = routing(), currentMode = window.relayRouting?.normalizeMode?.(current?.mode) || current?.mode || null, locked = busy || !api.getState().projectId || api.isRunning();
     host.replaceChildren(...options.map(option => {
-      const selected = (current?.mode || null) === option.mode, row = node('button', 'routing-option');
+      const selected = currentMode === option.mode, row = node('button', 'routing-option');
       row.type = 'button'; row.disabled = locked;
       row.setAttribute('role', 'radio'); row.setAttribute('aria-checked', String(selected));
       row.dataset.mode = option.mode;

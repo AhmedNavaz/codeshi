@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isAntigravityACP } from './antigravity.mjs';
 import { processStart } from './mutation-lock.mjs';
+import { usualWindowSpend } from './usage-watch.mjs';
 import '../public/routing.js';
 
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
@@ -130,7 +131,8 @@ export class RoutingDispatcher {
       const { account, usage, models, bin, at } = reading, antigravity = isAntigravityACP(bin);
       broker.observeQuota(c, provider, usage);
       const eligible = account?.installed !== false && account?.authenticated !== false && (provider !== 'gemini' || (input.mode !== 'read' || !antigravity) && (!multiple || (antigravity ? account?.capabilities?.additionalDirectories === true : broker.workspaces.length <= 6)));
-      return [{ provider, models, usage, eligible: eligible && (!policy.allowedProviders || policy.allowedProviders.includes(provider)), account, bin, readAt: at, billingSource: account?.billingSource || 'unknown', allowedModels: policy.allowedModels?.[provider] }];
+      const usualSpend = usualWindowSpend(c, provider);
+      return [{ provider, models, usage, eligible: eligible && (!policy.allowedProviders || policy.allowedProviders.includes(provider)), account, bin, readAt: at, billingSource: account?.billingSource || 'unknown', allowedModels: policy.allowedModels?.[provider], ...(usualSpend ? { usualSpend } : {}) }];
     });
   }
 
@@ -168,7 +170,7 @@ export class RoutingDispatcher {
   // one in time: rating a request should not stand between you and your work. Stop and a reached task limit still end Send.
   async assess(c, input, run, checks, { id, taskId, fingerprint, scope, began, guard }) {
     const broker = this.broker, allowApi = (c.routing?.allowApi === true || input.routing.allowApi === true) && input.billingConfirmed === true;
-    const pick = candidates => globalThis.relayRouting.route({ text: 'Fix a typo', mode: 'saving', candidates, allowApi });
+    const pick = candidates => globalThis.relayRouting.route({ text: 'Fix a typo', mode: 'saver', candidates, allowApi });
     const usable = choice => !choice.error && choice.quota.state === 'ok';
     // Only an agent read during this Send, so billing consent rests on a current account. Antigravity can't enforce
     // read-only access. Measured on the same brief, Claude's smallest model took about half the time of Codex's smallest
@@ -220,10 +222,11 @@ export class RoutingDispatcher {
     if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 100000) throw fail('Enter a message between 1 and 100,000 characters.', 400);
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId)) throw fail('Invalid request ID.', 400);
     broker.checkRunSettings(input.provider || c.provider, input.mode || c.mode, input.approvalPolicy || c.approvalPolicy || 'ask');
-    if (!globalThis.relayRouting.MODES.includes(input.routing.mode)) throw fail('Choose Cost saving, Balanced or Maximum quality.', 400);
+    const routingMode = globalThis.relayRouting.normalizeMode(input.routing.mode);
+    if (!routingMode) throw fail('Choose Smart, Saver or Ultra.', 400);
     broker.attachments.select(input.attachments || []);
     broker.admit?.(c);
-    input = { ...input, mode: input.mode || c.mode, approvalPolicy: input.approvalPolicy || c.approvalPolicy || 'ask' };
+    input = { ...input, mode: input.mode || c.mode, approvalPolicy: input.approvalPolicy || c.approvalPolicy || 'ask', routing: { ...input.routing, mode: routingMode } };
     const scopeNow = () => hash([broker.workspaceSignature, c.context, c.taskPolicy, c.routing, c.settingsRevision, input.mode, input.approvalPolicy]), scope = scopeNow();
     const taskId = saved?.taskId || randomUUID(), id = randomUUID(), began = Date.now();
     let finish;
@@ -241,15 +244,21 @@ export class RoutingDispatcher {
         options.verifyRouting?.();
       };
       const attachments = input.attachments?.length || 0;
+      const previousText = c.messages.findLast(message => message.role === 'user' && !message.reviewId && !message.steer)?.text || c.context?.goal || '';
       let assessment = globalThis.relayRouting.triage(input.text, { attachments, previous: c.lastRun?.routing?.assessment });
       if (!assessment) {
-        const rated = await this.assess(c, input, run, checks, { id, taskId, fingerprint, scope, began, guard });
-        if (rated) assessment = rated;
-        else {
-          // The local estimate, which rates too low about one time in nine, so it never sends a request to a light model.
-          const previous = c.messages.findLast(message => message.role === 'user' && !message.reviewId && !message.steer)?.text || c.context?.goal || '';
-          const estimate = globalThis.relayRouting.classify(input.text, { attachments, context: previous }), tier = estimate.tier === 'light' ? 'standard' : estimate.tier;
-          assessment = { tier, effort: TIER_EFFORT[tier], reason: estimate.reason, source: 'fallback' };
+        if (routingMode === 'saver') {
+          // Saver (#128): local rules only, no agent call; light and standard models at low effort.
+          const estimate = globalThis.relayRouting.classify(input.text, { attachments, context: previousText });
+          assessment = { tier: estimate.tier, effort: 'low', reason: estimate.reason, source: 'local' };
+        } else {
+          const rated = await this.assess(c, input, run, checks, { id, taskId, fingerprint, scope, began, guard });
+          if (rated) assessment = rated;
+          else {
+            // The local estimate, which rates too low about one time in nine, so it never sends a request to a light model.
+            const estimate = globalThis.relayRouting.classify(input.text, { attachments, context: previousText }), tier = estimate.tier === 'light' ? 'standard' : estimate.tier;
+            assessment = { tier, effort: TIER_EFFORT[tier], reason: estimate.reason, source: 'fallback' };
+          }
         }
       }
       await checks;
@@ -260,7 +269,7 @@ export class RoutingDispatcher {
       // An explicitly previewed build/review workflow binds its builder and model. Respect that concrete choice while
       // assessing effort, rather than silently invalidating the review consent by switching to another builder.
       if (input.automaticReview) candidates = candidates.filter(row => row.provider === input.provider).map(row => ({ ...row, models: input.model ? row.models.filter(model => (model.id || model.model || model.value) === input.model) : [], ...(input.model ? { allowedModels: [input.model] } : {}) }));
-      const choice = globalThis.relayRouting.route({ text: input.text, attachments, assessment, mode: input.routing.mode, candidates, current: c.lastRun?.provider || c.provider, allowApi });
+      const choice = globalThis.relayRouting.route({ text: input.text, attachments, assessment, mode: routingMode, candidates, current: c.lastRun?.provider || c.provider, allowApi });
       if (choice.error) throw fail(choice.error);
       if (choice.quota.state !== 'ok') throw fail('Auto could not confirm fresh allowance for the assessed task. Refresh plan usage or choose a model yourself.');
       const row = candidates.find(item => item.provider === choice.provider);
@@ -269,7 +278,7 @@ export class RoutingDispatcher {
       broker.record(c, { type: 'routing_decision', id, taskId, requestId: input.requestId, fingerprint, scope, result });
       broker.running = null; delete c.routingPending;
       // Assessment usage belongs to the task it rated. Without one, the run takes its task the usual way.
-      const submission = broker.start(c, { ...input, provider: choice.provider, model: choice.model, effort: choice.effort, routing: { mode: choice.mode, reason: choice.reason, tier: choice.tier, assessment: { id, ...assessment }, escalation: choice.escalation } }, { ...options, ...(run.assessorStarted ? { assessedTask: { id: taskId, parentRunId: id, relation: 'assessed' } } : {}), routingEvidence: { provider: row.provider, account: row.account, usage: row.usage, at: row.readAt } });
+      const submission = broker.start(c, { ...input, provider: choice.provider, model: choice.model, effort: choice.effort, routing: { mode: choice.mode, reason: choice.reason, tier: choice.tier, ...(choice.plannedHandoff ? { plannedHandoff: true } : {}), assessment: { id, ...assessment }, escalation: choice.escalation } }, { ...options, ...(run.assessorStarted ? { assessedTask: { id: taskId, parentRunId: id, relation: 'assessed' } } : {}), routingEvidence: { provider: row.provider, account: row.account, usage: row.usage, at: row.readAt } });
       const accepted = { ...submission, provider: choice.provider, model: choice.model, effort: choice.effort };
       broker.record(c, { type: 'routing_submission', requestId: input.requestId, submission: accepted });
       return accepted;

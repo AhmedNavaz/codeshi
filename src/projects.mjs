@@ -276,17 +276,17 @@ export class ProjectRegistry extends EventEmitter {
     const rawCreate = broker.create.bind(broker); const rawList = broker.list.bind(broker);
     broker._createConversation = rawCreate;
     broker.create = () => this.mainConversation(entry.id);
-    broker.list = (options = {}) => { this.mainConversation(entry.id); return rawList().filter(conversation => options.archived ? conversation.id !== broker.mainConversationId : conversation.id === broker.mainConversationId); };
+    broker.list = (options = {}) => { this.mainConversationId(entry.id); return rawList().filter(conversation => options.archived ? conversation.id !== broker.mainConversationId : conversation.id === broker.mainConversationId); };
     broker.archivedConversations = () => broker.list({ archived: true });
     const update = ({ conversationId }) => this.emit('update', { projectId: entry.id, conversationId }); broker.on('update', update);
     // Notifications name the workspace, so the desktop app can say where work happened and open it.
     const notify = notice => this.emit('notify', { ...notice, projectId: entry.id, projectName: this.entry(entry.id)?.name || entry.name }); broker.on('notify', notify);
     this.brokers.set(entry.id, { broker, unlock, update, notify });
-    try { this.mainConversation(entry.id); } catch (error) { broker.off('update', update); broker.off('notify', notify); this.brokers.delete(entry.id); throw error; }
+    try { this.mainConversationId(entry.id); } catch (error) { broker.off('update', update); broker.off('notify', notify); this.brokers.delete(entry.id); throw error; }
     return broker;
   }
 
-  mainConversation(id, options) {
+  mainConversationId(id) {
     this.assertOpen(); const broker = this.broker(id); let changed = false;
     const conversationId = withFileGuard(this.filename, () => {
       this.reload(); const entry = this.entry(id);
@@ -298,6 +298,11 @@ export class ProjectRegistry extends EventEmitter {
     });
     broker.mainConversationId = conversationId;
     if (changed) this.emit('projects', { projectId: id });
+    return conversationId;
+  }
+
+  mainConversation(id, options) {
+    const broker = this.broker(id), conversationId = this.mainConversationId(id);
     return broker.view(broker.get(conversationId), options);
   }
 

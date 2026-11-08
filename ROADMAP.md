@@ -183,13 +183,16 @@ The tracking umbrella is [#107](https://github.com/AhmedNavaz/codeshi/issues/107
 | Codex connectors and MCP tools run under the run's access, and what an MCP server asks shows as a question ([#111](https://github.com/AhmedNavaz/codeshi/issues/111)) | [0.32.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0) |
 | Open a long workspace chat on its latest messages and load older ones as you scroll ([#124](https://github.com/AhmedNavaz/codeshi/issues/124)) | [0.32.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0) |
 | Links in replies open in the browser; limits stay in Plan usage; the message box options keep to the screen in a narrow layout | [0.32.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0) |
+| Smart, Saver and Ultra routing modes, spending allowance where it resets soonest, with local Saver rules and Ultra review passes ([#128](https://github.com/AhmedNavaz/codeshi/issues/128)) | [0.33.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0) |
+| Clickable response links, inline file references with line numbers, and activity diff viewer links ([#109](https://github.com/AhmedNavaz/codeshi/issues/109)) | [0.33.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0) |
+| Remote access multi-browser transfer, week-long connection persistence, and active status tracking ([#114](https://github.com/AhmedNavaz/codeshi/issues/114)) | [0.33.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0) |
+| Interactive Gemini multiple-choice question resolution directly in Codeshi question cards | [0.33.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0) |
 
 ## Now
 
 | Feature | Status | Issue |
 | --- | --- | --- |
 | Normal/Flow execution policy with safe manual takeover | Planned backend foundation for managed Flow; [agreed split](#normal-and-flow-the-agreed-execution-split). The Flow view shipped so far does not enforce this | [backend task policy draft](docs/flow-issue-plan.md#backend-task-policy) |
-| Smart, Saver and Ultra routing modes: the whole model ladder in Smart, no model call in Saver, the strongest models with an independent review in Ultra, and in every mode the allowance that resets soonest spent first | Planned; replaces Cost saving, Balanced and Maximum quality. Extends #12; [mode table below](#adaptive-agent-and-model-routing) | [#128](https://github.com/AhmedNavaz/codeshi/issues/128) |
 | More agents and models, such as Grok, DeepSeek, Qwen and free cloud tiers, on your own accounts | Gemini through Google Antigravity and local models through Ollama have shipped; further agents are next | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | Notarized macOS builds, so downloads open without a security prompt | Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
 | Install with Homebrew: `brew install --cask codeshi` | Depends on #1 | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
@@ -204,8 +207,10 @@ The tracking umbrella is [#107](https://github.com/AhmedNavaz/codeshi/issues/107
 | Portable skills and workflow packs loaded on demand, with visible provider compatibility | First milestone shipped in 0.26.0: a catalog with six optional starters, loaded when a task needs them and kept across a handoff. Agents get skills as instructions; their own skill systems are not used yet | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
 | One task budget across providers, child runs, retries, reviews and handoffs | First milestone shipped in 0.26.0. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) adds live parent accounting and shared deadlines for background reviews, exclusive reservation of remaining measured allowance per task, and review slots in workspace concurrency. In [0.31.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1) routing assessments count toward the task budget. API consent, cancellation and interrupted-usage recovery are covered by simulated-provider tests; real paid API verification remains | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
 | Concurrent prompts for independent workspace folders, with separate output, approvals and Stop controls | First milestone shipped in 0.26.0. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) protects Git-panel stage, unstage and commit with shared repository mutation leases and retries tasks waiting on those actions. Not yet in the recap; tasks still can't use local models, reviews or undo | [#88](https://github.com/AhmedNavaz/codeshi/issues/88) |
-| Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.14.0) as **Routing**; stage 2's retry one step up after failed tests shipped in [0.18.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.18.0) as **Check with tests**. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) added selected-model quota checks, fresh dispatch revalidation and explicit unknown/stale readings across routing, handoff and retries. [0.31.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1) rates each request with a short agent assessment on Send, and reset times now count in the ranking. Next: the Smart, Saver and Ultra modes, with allowance spent where it resets soonest ([#128](https://github.com/AhmedNavaz/codeshi/issues/128)); verified capabilities, measured selection, free/local fallback and subtask coordination follow; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
-| A near-black **Dark** theme, with today's warm dark palette kept as **Graphite** | Planned | [#127](https://github.com/AhmedNavaz/codeshi/issues/127) |
+| Adaptive agent, model and effort selection with Cost Saving, Balanced and Maximum Quality modes | Stage 1, routing whole requests, shipped in [0.14.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.14.0) as **Routing**; stage 2's retry one step up after failed tests shipped in [0.18.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.18.0) as **Check with tests**. [0.28.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.28.0) added selected-model quota checks, fresh dispatch revalidation and explicit unknown/stale readings across routing, handoff and retries. [0.31.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1) rates each request with a short agent assessment on Send, and reset times now count in the ranking. Shipped in 0.33.0: the Smart, Saver and Ultra modes, with allowance spent where it resets soonest ([#128](https://github.com/AhmedNavaz/codeshi/issues/128)); verified capabilities, measured selection, free/local fallback and subtask coordination follow; [scope and stages below](#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
+| A near-black **Dark** theme (keeping Graphite and Light), UI typography scale, non-clipping workspace indicators, and visual polish | Planned | [#127](https://github.com/AhmedNavaz/codeshi/issues/127) |
+| Onboarding redesign: workspace-first setup, followed by Normal vs Flow mode choice with clear visual comparison | Planned | [#129](https://github.com/AhmedNavaz/codeshi/issues/129) |
+| Reorganize Settings into structured categories and fix UI/UX inconsistencies across the app | Planned | [#130](https://github.com/AhmedNavaz/codeshi/issues/130) |
 | Send selected terminal output to the conversation | Needs design | [#71](https://github.com/AhmedNavaz/codeshi/issues/71) |
 | Hands-free voice conversations: say "send", keep talking while the agent works, hear what it did | Needs design; follows voice mode | [#72](https://github.com/AhmedNavaz/codeshi/issues/72) |
 | Voice input on Windows | Planned, help wanted | [#73](https://github.com/AhmedNavaz/codeshi/issues/73) |
@@ -226,7 +231,7 @@ Bring the work around the code into the project conversation, so an agent sees w
 
 Extend [smart model and effort selection (#12)](https://github.com/AhmedNavaz/codeshi/issues/12) into Flow’s common execution policy. Automatic selection belongs to Flow; Normal keeps explicit settings and recommendations accepted by the person. Historical shipped behavior below predates this planned mode boundary. For each prompt, Codeshi should choose an eligible agent, model and reasoning effort using the task, project context, required tools, available allowance and the user's budget. Larger requests may be split into subtasks when doing so improves the result enough to justify the extra usage and coordination.
 
-The modes shipped as Cost saving, Balanced and Maximum quality; [#128](https://github.com/AhmedNavaz/codeshi/issues/128) reworks them as follows.
+The modes shipped as Cost saving, Balanced and Maximum quality, and were replaced in 0.33.0 ([#128](https://github.com/AhmedNavaz/codeshi/issues/128)) by the following:
 
 | Mode | Planned behavior |
 | --- | --- |
@@ -261,6 +266,24 @@ Deliver in stages:
 3. **Coordinate subtasks.** Assign work across agents with shared project context, explicit ownership of edits, bounded review cycles and one consolidated result. Parallel execution must avoid conflicting workspace changes. The [concurrent task proposal](docs/core-roadmap.md#concurrent-folder-tasks) supplies isolation and recovery; [specialist workflows](docs/core-roadmap.md#specialist-team-workflows) add contracts, dependencies and verification under one shared task budget.
 
 Evaluate routing with representative coding tasks, tracking completion quality, allowance consumed, API charges where applicable, elapsed time and retry count. Compare against a manually chosen single agent before claiming savings or quality improvements.
+
+### Onboarding and execution mode selection
+
+Redesign the first-run onboarding experience ([#129](https://github.com/AhmedNavaz/codeshi/issues/129)) so users start directly with their project codebase and make an informed choice between Codeshi's two execution styles:
+1. **Workspace and folder setup first.** Rather than confronting new users with accounts, API credentials, or permissions before they have loaded a project, onboarding prompts the user to create or name their workspace and select project folder(s) upfront.
+2. **Normal vs Flow mode selection with clear comparison.** Present a visually engaging side-by-side card comparing the two core operating styles:
+   - **Normal Mode (Full Control):** Complete manual orchestration. Select exact agents, models, and reasoning effort; build and inspect queued prompts; full access to terminal, git panel, side panels, and tool logs.
+   - **Flow Mode (Outcome-Driven):** Minimal cognitive overhead. Describe the outcome and let Codeshi autonomously route (Smart, Saver, Ultra), perform quota handoffs, and manage verification, surrounded by floating plain-language status cards.
+   - Transparently list key differences and benefits so beginners and power users immediately understand which mode fits their workflow.
+3. **Persistent preference and easy toggling.** The chosen style sets the workspace's default layout, while clearly explaining that users can switch between Normal and Flow at any point with one click in the status bar or Settings.
+
+### Interface polish, typography scale and settings structure
+
+Enhance legibility, visual hierarchy, and navigation across the desktop interface ([#127](https://github.com/AhmedNavaz/codeshi/issues/127), [#130](https://github.com/AhmedNavaz/codeshi/issues/130)):
+1. **Typography scale upgrade.** Increase micro-font sizes across cramped UI areas: sidebar workspace items, task metrics, status bar controls, and secondary chips (scaling up from 10–11px to readable 12.5–14px).
+2. **Non-clipping workspace indicators.** Resolve horizontal crowding in compact sidebars (220–250px) where titles, running status dots, folder counts, and action buttons collide. Implement flexible two-line layouts or adaptive badge indicators that prevent truncation.
+3. **Categorized settings navigation.** Break up the overloaded General tab into specialized sections (General, Appearance & Typography, AI Agents & Accounts, Routing & Budgets, Testing & Verification, Phone & Remote Access, Voice, Alerts, and Updates & Diagnostics).
+4. **App-wide UI/UX consistency.** Standardize button sizes, dialog headers, padding, and theme contrast tokens across all panels and dialogs.
 
 ## Later
 

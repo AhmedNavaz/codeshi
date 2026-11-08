@@ -64,12 +64,12 @@ export function createLocalRoutes({ registry, body, json, catalog = localCatalog
     if (!url.pathname.startsWith('/api/local-models')) return false;
     if (url.pathname === '/api/local-models' && req.method === 'GET') {
       const result = await catalog({ bin: resolveBinary('codex', { override: registry.bins.codex }) }), projectId = url.searchParams.get('projectId');
-      if (projectId) { const broker = registry.broker(projectId), c = broker.get(registry.mainConversation(projectId).id); result.context = { conversationId: c.id, workspaceSignature: broker.workspaceSignature, mode: c.mode }; }
+      if (projectId) { const broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId)); result.context = { conversationId: c.id, workspaceSignature: broker.workspaceSignature, mode: c.mode }; }
       json(res, 200, result); return true;
     }
     if (url.pathname !== '/api/local-models/start' || req.method !== 'POST') throw fail('Use GET for local models or POST to start a local run.', 405);
     const projectId = url.searchParams.get('projectId'); if (!projectId) throw fail('Choose a workspace before continuing locally.');
-    const input = await body(req), broker = registry.broker(projectId), conversation = broker.get(registry.mainConversation(projectId).id);
+    const input = await body(req), broker = registry.broker(projectId), conversation = broker.get(registry.mainConversationId(projectId));
     if (input.context?.conversationId !== conversation.id || input.context?.workspaceSignature !== broker.workspaceSignature || input.context?.mode !== conversation.mode) throw fail('The workspace or access mode changed. Reopen Continue locally before starting.', 409);
     const local = validateLocalSelection(input.model, input.digest);
     json(res, 202, broker.start(conversation, { text: input.continuing === true ? continuationRequest : input.task, attachments: input.attachments || [], requestId: input.requestId }, { local, verifyLocal: () => verify(local.model, local.digest) }));

@@ -4,8 +4,8 @@ import { privatePath, revisionOf, selectFolders, runFolders, outOfScope } from '
 import { contextReading } from './context-state.mjs';
 import { commandOutcome } from './tool-outcomes.mjs';
 
-export const contextTargets = { saving: 40000, balanced: 75000, quality: 120000 };
-export const warmContextTargets = { saving: 80000, balanced: 120000, quality: 160000 };
+export const contextTargets = { saver: 40000, smart: 75000, ultra: 120000, saving: 40000, balanced: 75000, quality: 120000 };
+export const warmContextTargets = { saver: 80000, smart: 120000, ultra: 160000, saving: 80000, balanced: 120000, quality: 160000 };
 export const managedContextVersion = 1;
 export function validateContextLimit(value) {
   if (['off', 'auto'].includes(value)) return value;
@@ -13,6 +13,15 @@ export function validateContextLimit(value) {
   throw Object.assign(new Error('Choose Off, Auto, or a context limit from 8,000 to 1,000,000 tokens.'), { status: 400 });
 }
 export const contextLimit = config => { try { return validateContextLimit(config.contextLimit ?? 'auto'); } catch { return 'auto'; } };
+
+export function findMessage(c, id) {
+  if (!c?.messages || !id) return undefined;
+  if (c.messageById instanceof Map) {
+    const hit = c.messageById.get(id);
+    if (hit) return hit;
+  }
+  return c.messages.find(message => message.id === id);
+}
 
 // Session totals measure consumption, not occupancy. Codex's last request input is a labeled lower-bound signal;
 // a native compaction invalidates that snapshot. Rollover only happens before another turn, never during a tool run.
@@ -28,7 +37,7 @@ export function rolloverDecision(c, provider, { normalLimit = 'auto', routingMod
   const sameSelection = !previous || (previous.model ?? null) === model && (previous.effort ?? null) === effort;
   const cacheWarm = Boolean(session && sameSelection && reading?.source !== 'native-compaction' && age >= 0 && age < (reading?.cacheTtlMs || 300000));
   const targets = cacheWarm ? warmContextTargets : contextTargets;
-  const target = flow ? targets[routingMode] : normalLimit === 'auto' ? targets.balanced : normalLimit === 'off' ? null : normalLimit;
+  const target = flow ? targets[routingMode] : normalLimit === 'auto' ? targets.smart : normalLimit === 'off' ? null : normalLimit;
   const thresholdTokens = target === null ? null : capacity ? Math.min(target, Math.floor(capacity * 0.75)) : target;
   const reported = typeof reading?.used === 'number' ? reading.used : typeof reading?.lastRequestInput === 'number' ? reading.lastRequestInput : null;
   const journal = session?.contextEstimate ? (session.contextEstimate.baseTokens || 0) + Math.ceil(session.contextEstimate.bytes / 4) : null;
@@ -63,9 +72,10 @@ export function estimateContext(c, record, previousBytes = 0) {
   } else if (record.type === 'submission') {
     estimate.bytes += record.context?.bytes || 0; estimate.observedAt = record.at;
   } else if (['message', 'message_delta', 'message_update'].includes(record.type)) {
-    const message = record.type === 'message' ? record.message : c.messages.find(item => item.id === record.id);
+    const message = record.type === 'message' ? record.message : findMessage(c, record.id);
     if (message?.runId !== run.id || message.contextMilestone) return;
-    estimate.bytes += Math.max(0, Buffer.byteLength(message.text || '') - previousBytes); estimate.observedAt = record.at;
+    const deltaBytes = record.type === 'message_delta' ? Buffer.byteLength(record.text || '') : Math.max(0, Buffer.byteLength(message.text || '') - previousBytes);
+    estimate.bytes += deltaBytes; estimate.observedAt = record.at;
   }
 }
 
@@ -77,7 +87,7 @@ const identity = text => createHash('sha256').update(text).digest('hex').slice(0
 export function observationsFor(c, record) {
   if (record.type === 'check' && ['passed', 'failed'].includes(record.check?.status)) return [{ id: `check:${record.runId}`, type: 'test_result', runId: record.runId,
     status: record.check.status, text: short(record.check.command || 'Project checks'), source: 'run-check', verified: record.check.status === 'passed' }];
-  const message = ['message', 'submission'].includes(record.type) ? record.message : record.type === 'message_update' || record.type === 'message_delta' && record.toolOutcome ? c.messages.find(item => item.id === record.id) : null;
+  const message = ['message', 'submission'].includes(record.type) ? record.message : record.type === 'message_update' || record.type === 'message_delta' && record.toolOutcome ? findMessage(c, record.id) : null;
   if (!message?.text || message.contextMilestone) return [];
   const base = { messageId: message.id, runId: message.runId || null, provider: message.provider || null };
   if (['user', 'activity'].includes(message.role) && !message.imported && !message.reviewId && !message.retry && message.text.startsWith('Answered:\n')) return message.text.split('\n').slice(1).filter(line => line.includes(' → ') && !line.endsWith(' → (hidden)')).slice(0, 8).map((line, index) => ({

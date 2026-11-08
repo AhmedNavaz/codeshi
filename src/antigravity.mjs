@@ -4,12 +4,37 @@ import path from 'node:path';
 import { GeminiClient } from './acp-client.mjs';
 import { commandEnvironment, withBinaryPath } from './resolve-binary.mjs';
 import { googleRelay, relayEnvironment } from './google-relay.mjs';
+import { cleanQuestions } from './agent-questions.mjs';
 
 export const isAntigravityACP = bin => /^(?:agy_acp_server(?:\.par|\.exe)?|antigravity-acp)$/i.test(path.basename(bin || ''));
 export const antigravityReadOnly = 'Antigravity does not expose a verified read-only mode through this connection. Choose Edit with approvals, or use Codex or Claude for read-only work.';
 // Older runtimes without additionalDirectories can still work as a task in one folder.
 export const antigravityOneFolder = 'This Antigravity runtime does not support additional workspace folders. Reinstall the Google connection in Settings, run the message as a task in one folder, or choose Codex or Claude for the whole workspace.';
 export const antigravityCapabilities = initialized => ({ additionalDirectories: Boolean(initialized.agentCapabilities?.sessionCapabilities?.additionalDirectories) });
+// Antigravity sends fixed-choice questions through the permission RPC. Every option is an answer, regardless of
+// its permission kind; only the person's selected label may choose its native optionId. ACP cannot take free text.
+export function antigravityQuestion({ toolCall, options }) {
+  if (!Array.isArray(options) || !options.length) return null;
+  const ids = new Set();
+  for (const option of options) {
+    if (typeof option?.optionId !== 'string' || !option.optionId.trim() || ids.has(option.optionId)) return null;
+    ids.add(option.optionId);
+  }
+  const labels = options.map(option => typeof option.name === 'string' && option.name.trim() || option.optionId);
+  const makeQuestions = numbered => cleanQuestions([{ id: toolCall?.toolCallId, header: 'Question', question: toolCall?.title || 'Choose an option.', options: labels.map((label, index) => ({ label: numbered ? `${index + 1}. ${label}` : label })), other: false }]);
+  let questions = makeQuestions(false);
+  // Labels are bounded and deduplicated by the shared UI. Keep choices distinct even when their names collide.
+  if (questions[0]?.options.length !== options.length) questions = makeQuestions(true);
+  if (questions[0]?.options.length !== options.length) return null;
+  return {
+    questions,
+    respond(answers) {
+      const label = Array.isArray(answers) && answers.length === 1 && Array.isArray(answers[0]) && answers[0].length === 1 ? answers[0][0] : null;
+      const index = questions[0].options.findIndex(option => option.label === label);
+      return { outcome: index < 0 ? { outcome: 'cancelled' } : { outcome: 'selected', optionId: options[index].optionId } };
+    },
+  };
+}
 export function antigravitySessionParams(initialized, { workspace, workspaces = [] }) {
   const cwd = path.resolve(workspace);
   const additionalDirectories = [...new Set(workspaces.map(folder => path.resolve(folder)))].filter(folder => folder !== cwd);

@@ -90,6 +90,65 @@ Settings owns app-wide preferences and account connections, while the composer a
 
 The deferred scripts in `index.html` load the core API before its features, and history before setup can announce readiness. New scripts and styles also need an entry in the server's explicit static-asset allowlist. Interface tests exercise the actual scripts; HTTP tests check that the page's scripts and styles are served.
 
+## Orchestration engine architecture
+
+Under the surface, Codeshi coordinates multiple independent AI coding tools through five interconnected engine systems:
+
+```mermaid
+flowchart TD
+  subgraph Ingestion["1. Ingestion & Routing"]
+    Prompt["User prompt"] --> Assess["Routing assessment (src/routing-assessment.mjs)"]
+    Assess --> Spend["Spendability & limits watch (src/usage-watch.mjs)"]
+    Spend --> Tier["Tier selection: Saver · Smart · Ultra"]
+  end
+
+  subgraph Orchestration["2. Execution & State Safety"]
+    Tier --> Broker["Conversation broker (src/broker.mjs)"]
+    Broker --> Leases["Mutation leases (src/mutation-lock.mjs)"]
+    Broker --> Checkpoints["Git checkpoints (src/checkpoints.mjs)"]
+    Broker --> Worker["Provider worker (src/provider-worker.mjs)"]
+    Worker --> Adapter["Protocol adapters (src/providers.mjs)"]
+  end
+
+  subgraph Handoff["3. Context & Multi-Agent Handoff"]
+    Worker --> Watcher["Turn monitor & quota detection"]
+    Watcher --> Brief["Lossless brief synthesis (src/task-context.mjs)"]
+    Brief --> Next["Handoff to next agent (src/handoff.mjs)"]
+  end
+
+  subgraph Verification["4. Autonomous Verification"]
+    Adapter --> Runner["Test suite execution (src/run-checks.mjs)"]
+    Runner --> Reviewer["Cross-agent review (src/agent-review.mjs)"]
+  end
+```
+
+### 1. Unified agent protocol normalization
+Claude Code, OpenAI Codex, and Google Antigravity (ACP) use incompatible execution models (Claude Agent SDK vs. JSON-RPC tool loops vs. ACP protocol streams). `src/providers.mjs` and `src/provider-worker.mjs` normalize these into a unified event contract:
+- **Event normalization**: Run lifecycle events (`start`, `step`, `output`, `tool_call`, `tool_result`, `diff`, `complete`, `error`) and approval gates are abstracted away from vendor-specific CLI payloads.
+- **Worker process isolation**: Agent invocations execute in an isolated worker process. Process crashes, out-of-memory errors, or runaway tool loops cannot take down the desktop server or corrupt local journals.
+- **Tool harness virtualization**: The local engine enforces permission policies, shell execution boundaries, and workspace directory sandboxing directly, rather than relying on third-party CLIs to guard local files.
+
+### 2. Lossless context rollover and multi-agent handoffs
+Switching between models or maintaining long conversations often causes context amnesia or token bloat. Codeshi avoids lossy AI chat summarization:
+- **Task brief distillation (`src/task-context.mjs`, `src/context-rollover.mjs`)**: Codeshi synthesizes an intent-first envelope containing the initial task goal, substantive user instructions, active git modifications, unblocked tasks, and decision history.
+- **Provider-agnostic handoffs (`src/handoff.mjs`)**: When an agent hits a token ceiling or quota limit, the incoming agent receives an authoritative brief with historical evidence clearly separated from instructions. The incoming agent inspects real files rather than trusting hallucinated chat summaries.
+
+### 3. Shadow Git checkpoints and mutation leases
+Concurrent agent executions and background tasks can overwrite each other without strict synchronization:
+- **Filesystem mutation leases (`src/mutation-lock.mjs`)**: Any coding or review run must acquire a tracked mutation lease for the target workspace folders, preventing conflicting edits between parallel runs.
+- **Private Git checkpoints (`src/checkpoints.mjs`)**: Before and after every tool execution or run, Codeshi snapshots directory states in a private Git object store. This powers previewed undo/redo, timeline scrubbing, and risk-free rollback of failed agent edits.
+- **Worktree task isolation (`src/task-isolation.mjs`)**: Side-by-side tasks run in dedicated Git worktrees, allowing multiple agents to code concurrently without working-tree collisions, followed by interactive conflict-checked integration.
+
+### 4. Smart spendability routing
+Codeshi's routing engine (`src/routing-assessment.mjs`, `src/usage-watch.mjs`) selects the optimal agent, model, and reasoning effort:
+- **Rule & heuristic assessment**: Scores prompt complexity (typo vs. isolated bug vs. architectural refactor), affected files, and context depth.
+- **Live spendability tracking**: Monitors reset windows and quota burn rates across accounts, dynamically choosing between **Saver** (local rules, quota conservation), **Smart** (balanced model & effort matching), and **Ultra** (maximum reasoning models with deep passes).
+
+### 5. Autonomous verification and review loops
+Reliability requires checking agent work before human review:
+- **Automated test execution (`src/run-checks.mjs`)**: Executes targeted test commands upon task completion, capturing regressions.
+- **Independent cross-agent reviews (`src/agent-review.mjs`, `src/automatic-review.mjs`)**: In Ultra mode or explicit review configurations, a second model reviews the first model's diffs in a sandboxed, read-only session, reporting structured findings with file line links before notifying the user.
+
 ## State and operations
 
 Each workspace has a stable ID, attached folder records and one permanent conversation ID in `projects.json`. Conversation events live in per-workspace JSONL journals; reopening a workspace replays those events. Preferences live in `settings.json`. Electron keeps this data under its user-data directory; browser-only development uses `.data/` by default. CLI credentials remain managed by the installed agents. The guide describes the user-facing storage and migration behavior.

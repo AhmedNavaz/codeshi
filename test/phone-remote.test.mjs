@@ -357,3 +357,119 @@ test('the hosted phone bootstrap pairs, unlocks only after approval, and carries
   document.hidden = false; document.dispatchEvent(new Event('visibilitychange')); assert.equal(watched(), 1);
   events.close(); window.dispatchEvent(new Event('pagehide'));
 });
+
+test('away-from-home sessions last a week, survive a Codeshi restart, distinguish activeNow from allowed, move across browsers, and replace stale pairings (#114)', async t => {
+  const rules = fs.readFileSync(new URL('../remote/database.rules.json', import.meta.url), 'utf8');
+  assert.match(rules, /now \+ 604800000/, 'Firebase database rules allow up to a 1-week Away from home session.');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-remote-persist-'));
+  const storeFile = path.join(dir, 'phone-firebase-auth.json');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(storeFile, JSON.stringify({ uid: 'computer', refreshToken: 'computer-refresh' }), { mode: 0o600 });
+
+  let clock = Date.now();
+  const firebase = new MemoryFirebase(), calls = [];
+  const makeAccess = () => createRemotePhoneAccess({
+    config, storeFile, now: () => clock, clientFactory: () => firebase,
+    local: () => ({ port: 5555, accessToken: 'private-desktop-token' }),
+    handle: async (req, res) => {
+      calls.push({ path: req.url, method: req.method });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    },
+  });
+
+  let access = makeAccess();
+  t.after(() => access.close());
+  const started = await access.manage({ action: 'start' });
+  const [room, secret] = new URLSearchParams(new URL(started.invite.url).hash.slice(1)).get('remote').split('.');
+  const key = await roomKey(secret);
+  const sendTo = async (targetRoom, targetKey, value, uid = 'phone-1') => {
+    const request = { id: token(16), at: clock, ...value };
+    const box = await seal(targetKey, targetRoom, 'request', request);
+    await firebase.request(`rooms/${targetRoom}/request`, 'PUT', { uid, box });
+    let result;
+    await wait(() => {
+      const out = firebase.values.get(`rooms/${targetRoom}/out`);
+      if (!out) return false;
+      if (out !== result?.out) {
+        result = { out, promise: open(targetKey, targetRoom, 'out', out) };
+        result.promise.then(v => { result.value = v; });
+      }
+      return result?.value?.id === request.id;
+    });
+    return result.value;
+  };
+
+  await sendTo(room, key, { kind: 'pair', name: 'My iPhone', code: '654321', deviceId: 'device-one-abcd1234' });
+  const allowed = await access.manage({ action: 'allow', id: room });
+  assert.equal(allowed.devices.length, 1);
+  assert.equal(allowed.devices[0].expiresAt - clock, 7 * 24 * 60 * 60_000, 'Approved Away from home session lasts 1 week.');
+  assert.equal(allowed.devices[0].activeNow, true);
+  assert.equal(allowed.devices[0].lastSeenAt, clock);
+
+  // Hiding the phone tab marks activeNow false while keeping the phone allowed.
+  await sendTo(room, key, { kind: 'session', active: false });
+  assert.equal(access.status().devices[0].activeNow, false);
+  assert.equal(access.status().devices[0].state, 'active');
+
+  // Sending an API request marks activeNow true again; 60s of inactivity marks activeNow false.
+  await sendTo(room, key, { kind: 'api', method: 'GET', path: '/api/projects' });
+  assert.equal(access.status().devices[0].activeNow, true);
+  clock += 60_000;
+  assert.equal(access.status().devices[0].activeNow, false);
+  assert.equal(access.status().devices[0].state, 'active');
+
+  // Create an unapproved invite, then restart Codeshi: the unapproved invite is removed, while the active phone survives.
+  const withInvite = await access.manage({ action: 'invite' });
+  const [unapprovedRoom] = new URLSearchParams(new URL(withInvite.invite.url).hash.slice(1)).get('remote').split('.');
+  assert.equal(firebase.values.has(`rooms/${unapprovedRoom}/meta`), true);
+
+  await access.close();
+  assert.equal(firebase.values.has(`rooms/${unapprovedRoom}/meta`), false, 'Unapproved invites are cleaned up on shutdown.');
+  assert.equal(firebase.values.has(`rooms/${room}/meta`), true, 'Approved remote rooms remain in Firebase across a Codeshi restart.');
+  const savedStore = JSON.parse(fs.readFileSync(storeFile, 'utf8'));
+  assert.equal(savedStore.uid, 'computer');
+  assert.equal(savedStore.enabled, true);
+  assert.equal(savedStore.rooms.length, 1);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(storeFile).mode & 0o777, 0o600);
+
+  access = makeAccess();
+  assert.equal(access.status().enabled, true);
+  assert.equal(access.status().devices.length, 1);
+  await wait(() => (firebase.watches.get(`rooms/${room}/request`)?.size || 0) > 0);
+  const afterRestart = await sendTo(room, key, { kind: 'api', method: 'GET', path: '/api/projects' });
+  assert.equal(afterRestart.status, 200, 'Previously paired phone works after a Codeshi restart without scanning a new QR code.');
+  assert.equal(access.status().devices[0].activeNow, true);
+
+  // Move the allowed session to another browser on the phone (e.g. from QR scanner to Safari) without computer re-approval.
+  const handover = await sendTo(room, key, { kind: 'handover' });
+  assert.equal(handover.status, 200);
+  const [nextRoom, nextSecret] = new URLSearchParams(new URL(handover.body.url).hash.slice(1)).get('remote').split('.');
+  const nextKey = await roomKey(nextSecret);
+  const moved = await sendTo(nextRoom, nextKey, { kind: 'pair', name: 'My iPhone', code: '111222', deviceId: 'device-safari-12345678' }, 'phone-safari');
+  assert.equal(moved.state, 'active', 'Handover activates the new browser immediately without computer re-approval.');
+  assert.equal(access.status().devices.length, 1);
+  assert.equal(access.status().devices[0].id, nextRoom);
+  assert.equal(firebase.values.has(`rooms/${room}/meta`), false, 'The old browser room is removed when handed over.');
+  const safariCall = await sendTo(nextRoom, nextKey, { kind: 'api', method: 'GET', path: '/api/projects' }, 'phone-safari');
+  assert.equal(safariCall.status, 200);
+
+  // Re-pairing from the same browser (matching deviceId) or after closing replaces the previous entry instead of duplicating.
+  const repairInvite = await access.manage({ action: 'invite' });
+  const [repairRoom, repairSecret] = new URLSearchParams(new URL(repairInvite.invite.url).hash.slice(1)).get('remote').split('.');
+  const repairKey = await roomKey(repairSecret);
+  await sendTo(repairRoom, repairKey, { kind: 'pair', name: 'My iPhone', code: '333444', deviceId: 'device-safari-12345678' }, 'phone-safari-2');
+  await access.manage({ action: 'allow', id: repairRoom });
+  assert.equal(access.status().devices.length, 1, 'Re-pairing the same browser replaces its previous connection.');
+  assert.equal(access.status().devices[0].id, repairRoom);
+
+  // Turning off remote access removes the room and clears saved rooms so a restart stays off.
+  await access.manage({ action: 'stop' });
+  assert.equal(access.status().enabled, false);
+  assert.equal(access.status().devices.length, 0);
+  await access.close();
+  access = makeAccess();
+  assert.equal(access.status().enabled, false);
+  assert.equal(access.status().devices.length, 0);
+});

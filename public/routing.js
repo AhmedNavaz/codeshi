@@ -1,13 +1,16 @@
-// Auto (#12): on Send, a local check settles what needs no reading (triage), a short agent assessment rates the rest, and
-// the final choice uses that difficulty, the supported model/effort levels and account-wide quota evidence. Manual choices
-// skip all of it. classify is the local estimate the page uses before Send, and the fallback when an assessment fails.
+// Auto (#12, #128): Smart, Saver and Ultra routing modes, spending allowance where it resets soonest.
+// On Send, Saver uses local rules with light and standard models at low effort; Smart and Ultra run a short agent
+// assessment (after local triage settles bare go-aheads) and choose by task need, model/effort support and window
+// spendability. Manual choices skip all of it.
 //
 // Loaded as a plain script in the page and as a module in tests: the page reads window.relayRouting, tests globalThis.
 (root => {
   'use strict';
-  const MODES = ['saving', 'balanced', 'quality'];
-  const modeNames = { saving: 'Cost saving', balanced: 'Balanced', quality: 'Maximum quality' };
-  const handoffThresholds = Object.freeze({ saving: 80, balanced: 90, quality: 95 });
+  const MODES = ['saver', 'smart', 'ultra'];
+  const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
+  const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
+  const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
+  const handoffThresholds = Object.freeze({ saver: 80, smart: 90, ultra: 95, saving: 80, balanced: 90, quality: 95 });
   const agentNames = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
   const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
   const TIERS = ['light', 'standard', 'deep'];
@@ -30,7 +33,7 @@
     const windows = rows.map(row => {
       const usedPercent = Number.isFinite(row.usedPercent) && row.usedPercent >= 0 ? row.usedPercent : null;
       const resetPassed = row.resetsAt && Date.parse(row.resetsAt) <= now;
-      return { label: row.label || row.id || 'Plan limit', usedPercent, resetsAt: row.resetsAt || null,
+      return { id: row.id || null, label: row.label || row.id || 'Plan limit', usedPercent, resetsAt: row.resetsAt || null,
         ...(row.scope ? { scope: row.scope } : {}), ...(Array.isArray(row.scopes) ? { scopes: row.scopes } : {}),
         state: old || resetPassed ? 'stale' : usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : usedPercent >= threshold ? 'near' : 'ok' };
     });
@@ -42,10 +45,49 @@
   const quotaText = quota => !quota || ['unknown', 'stale'].includes(quota.state) ? `Plan usage ${quota?.state || 'unknown'}${quota?.reason ? ': ' + quota.reason : ''}`
     : quota.windows.map(row => `${row.label}: ${Math.round(row.usedPercent)}% used`).join('; ');
 
+  // Values remaining allowance in a window by how long it has to last (#128). Allowance resetting within the hour is
+  // nearly free to spend; weekly allowance with days to go is preserved. The tightest (binding) window on an agent
+  // decides, so an early 5-hour reset never outweighs a tighter weekly window on the same agent.
+  function windowPeriodHours(row) {
+    const label = `${row?.label || ''} ${row?.id || ''}`;
+    if (/week|7[- ]?d/i.test(label)) return 168;
+    if (/day|24[- ]?h|daily/i.test(label)) return 24;
+    return 5;
+  }
+  function windowSpendability(row, now = Date.now()) {
+    const usedPercent = Number.isFinite(row?.usedPercent) ? row.usedPercent : 100;
+    const remaining = Math.max(0, 100 - usedPercent);
+    const resetMs = row?.resetsAt ? Date.parse(row.resetsAt) : NaN;
+    const hasReset = Number.isFinite(resetMs) && resetMs > now;
+    const hoursLeft = hasReset ? Math.max(0.1, (resetMs - now) / 3600000) : null;
+    const periodHours = windowPeriodHours(row);
+    const fraction = hasReset ? Math.min(1, Math.max(0.05, hoursLeft / periodHours)) : 1;
+    const daysLeft = hasReset ? hoursLeft / 24 : 0;
+    const denom = hasReset ? 0.25 + 0.75 * fraction + 0.25 * daysLeft : 1;
+    const spendability = remaining > 0 ? remaining / denom : 0;
+    return { ...row, usedPercent, remaining, hoursLeft, periodHours, spendability };
+  }
+  function bindingWindow(quota, now = Date.now()) {
+    if (!quota?.windows?.length) return null;
+    return quota.windows.map(row => windowSpendability(row, now)).reduce((tightest, row) => {
+      if (!tightest) return row;
+      if (Math.abs(row.spendability - tightest.spendability) > 1e-6) return row.spendability < tightest.spendability ? row : tightest;
+      return row.usedPercent > tightest.usedPercent ? row : tightest;
+    }, null);
+  }
+  function resetDayName(resetsAt, now = Date.now()) {
+    const ms = resetsAt ? Date.parse(resetsAt) : NaN;
+    if (!Number.isFinite(ms) || ms <= now) return null;
+    const hours = (ms - now) / 3600000;
+    if (hours < 1) return `in ${Math.max(1, Math.round(hours * 60))}m`;
+    if (hours < 6) return `in ${Math.round(hours)}h`;
+    return new Date(ms).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+  }
+
   // Work that needs the strongest reasoning, named so the reason can say what was recognised.
   const deepSignals = [
     [/\barchitect(ure|ural)?\b|\bsystem design\b|\bdesign (a|the|an) (new )?(system|service|api|schema)\b/, 'architecture'],
-    [/\brefactor(ing)?\b|\brestructur(e|ing)\b|\brewrite\b/, 'refactoring'],
+    [/\brefactor(ing)?\b|\brestructur(e|ing)?\b|\brewrite\b/, 'refactoring'],
     [/\bmigrat(e|ion|ing)\b|\bupgrade\b.*\b(framework|version|major)\b/, 'a migration'],
     [/\brace condition|\bdeadlock|\bconcurren(cy|t)\b|\bthread[- ]safe/, 'concurrency'],
     [/\bmemory leak|\bperformance\b|\boptimi[sz](e|ation)\b|\bslow(ness)?\b|\blatency\b/, 'performance'],
@@ -98,11 +140,14 @@
   const modelId = row => row.id || row.model || row.value || '';
   const effortsOf = row => (row?.supportedEffortLevels || row?.supportedReasoningEfforts?.map(level => level.reasoningEffort) || []).filter(level => EFFORTS.includes(level)).sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
 
-  // The model tier and effort each mode uses for each kind of task.
+  // The model tier and effort each mode uses for each kind of task (#128):
+  // - Saver: light and standard models at low effort.
+  // - Smart: whole ladder from light/low through standard/medium to deep/high.
+  // - Ultra: strongest models first, stepping down one tier only when no strong model has usable allowance.
   const plan = {
-    saving: { light: ['light', 'low'], standard: ['standard', 'low'], deep: ['standard', 'medium'] },
-    balanced: { light: ['light', 'low'], standard: ['standard', 'medium'], deep: ['deep', 'high'] },
-    quality: { light: ['standard', 'medium'], standard: ['deep', 'high'], deep: ['deep', 'highest'] },
+    saver: { light: ['light', 'low'], standard: ['standard', 'low'], deep: ['standard', 'low'] },
+    smart: { light: ['light', 'low'], standard: ['standard', 'medium'], deep: ['deep', 'high'] },
+    ultra: { light: ['deep', 'high'], standard: ['deep', 'high'], deep: ['deep', 'highest'] },
   };
 
   // The agent's model closest to the wanted tier, preferring its default within a tier.
@@ -140,14 +185,36 @@
     return null;
   }
 
-  // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels }].
+  // What a candidate usually spends on a standard or deep run in a given window (#128).
+  function usualForWindow(candidate, row, tier) {
+    const raw = candidate?.usualSpend ?? candidate?.usualPercent;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+    if (!raw || typeof raw !== 'object') return null;
+    const key = row?.id || row?.label || '';
+    const isWeekly = /week|7[- ]?d/i.test(`${row?.label || ''} ${row?.id || ''}`);
+    const value = raw.byWindow?.[key] ?? raw.byWindow?.[row?.label] ?? raw[key] ?? (isWeekly ? raw.weekly : raw.short) ?? raw.byTier?.[tier] ?? raw.usual ?? raw.percent ?? null;
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+  }
+  function checkUsualRoom(candidate, quota, tier, now) {
+    if (!['standard', 'deep'].includes(tier) || !quota?.windows?.length) return null;
+    for (const raw of quota.windows) {
+      const row = windowSpendability(raw, now);
+      const usual = usualForWindow(candidate, row, tier);
+      if (usual !== null && row.remaining < usual) {
+        return { window: row, remaining: row.remaining, usual, resetsSoon: row.hoursLeft !== null && row.hoursLeft <= 2 };
+      }
+    }
+    return null;
+  }
+
+  // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels, usualSpend }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
-  // limit is skipped, and the agent that did the last run is preferred, so the conversation keeps its native session.
-  function route({ text, attachments = 0, context = null, assessment = null, mode = 'balanced', candidates = [], current = null, allowApi = false, quotaThreshold = 95, now = Date.now() }) {
-    if (!MODES.includes(mode)) mode = 'balanced';
+  // limit is skipped, and allowance is spent where it resets soonest while respecting continuity.
+  function route({ text, attachments = 0, context = null, assessment = null, mode = 'smart', candidates = [], current = null, allowApi = false, quotaThreshold = 95, now = Date.now() }) {
+    mode = normalizeMode(mode) || 'smart';
     const task = assessment && TIERS.includes(assessment.tier) && typeof assessment.reason === 'string' ? assessment : classify(text, { attachments, context });
     const [tier, baseEffort] = plan[mode][task.tier];
-    const wantedEffort = mode === 'balanced' && ['low', 'medium', 'high'].includes(task.effort) && EFFORTS.indexOf(task.effort) > EFFORTS.indexOf(baseEffort) ? task.effort : baseEffort;
+    const wantedEffort = mode === 'smart' && ['low', 'medium', 'high'].includes(task.effort) && EFFORTS.indexOf(task.effort) > EFFORTS.indexOf(baseEffort) ? task.effort : baseEffort;
     const skipped = [];
     const pool = candidates.flatMap(candidate => {
       if (!candidate.eligible) return [];
@@ -155,54 +222,194 @@
       const rows = (candidate.models || []).filter(row => !candidate.allowedModels || candidate.allowedModels.includes(modelId(row)));
       const preferred = pickModel(rows, tier);
       if (candidate.allowedModels && !preferred) { skipped.push(`${agentNames[candidate.provider]} has no model allowed by task limits`); return []; }
-      // Try equivalent-tier models before ruling out the agent; never downgrade solely to escape a model's limit.
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
       const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && modelId(row) !== 'default' && !row.hidden && distance(row) === distance(preferred))] : [null];
-      const choices = options.map(model => ({ ...candidate, selectedModel: model, quota: assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now }) }));
+      const decorate = (model, steppedDown = false, steppedDownFrom = null, steppedDownQuota = null) => {
+        const quota = assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now });
+        const binding = bindingWindow(quota, now);
+        const shortRoom = checkUsualRoom(candidate, quota, task.tier, now);
+        return { ...candidate, selectedModel: model, quota, bindingWindow: binding, shortRoom, steppedDown, steppedDownFrom, steppedDownQuota };
+      };
+      const choices = options.map(model => decorate(model));
       const usable = choices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
-      if (!usable.length) { skipped.push(`${agentNames[candidate.provider]}: ${quotaText(choices[0].quota)}`); return []; }
-      return usable;
+      if (usable.length) return usable;
+      // Weekly and model-specific windows count separately (#128): an exhausted Opus weekly window leaves Claude
+      // usable at the next tier down (never light for deep work), and Ultra steps down one tier when needed.
+      if (preferred) {
+        const preferredTierIndex = TIERS.indexOf(modelTier(preferred));
+        const nextTier = preferredTierIndex > 0 ? TIERS[preferredTierIndex - 1] : null;
+        if (nextTier && !(task.tier === 'deep' && nextTier === 'light')) {
+          const fallbackRows = rows.filter(row => modelId(row) && modelId(row) !== 'default' && !row.hidden && modelTier(row) === nextTier);
+          const fallbackPreferred = pickModel(fallbackRows, nextTier);
+          if (fallbackPreferred) {
+            const fallbackOptions = [fallbackPreferred, ...fallbackRows.filter(row => row !== fallbackPreferred)];
+            const fallbackChoices = fallbackOptions.map(model => decorate(model, true, preferred, choices[0].quota));
+            const fallbackUsable = fallbackChoices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
+            if (fallbackUsable.length) return fallbackUsable;
+          }
+        }
+      }
+      skipped.push(`${agentNames[candidate.provider]}: ${quotaText(choices[0].quota)}`);
+      return [];
     });
     if (!pool.length) return { error: `Auto found no connected agent within your rules${skipped.length ? ` (${skipped.join('; ')})` : ''}. Refresh plan usage or choose a model yourself. API-billed agents need separate consent.`, task, mode };
-    // The agent is chosen by allowance and continuity, not by model names: each agent's own strongest model serves
-    // complex work, so a vendor is never preferred just because its model is called "pro" or "opus".
-    // Use the reset of the constraining window, never a short-window reset that hides a tighter weekly/model limit.
-    // This is a bounded preference for usable allowance that expires sooner, not a prediction of task duration or tokens.
-    const resetBonus = candidate => {
-      const rows = candidate.quota.windows.filter(row => row.usedPercent >= candidate.quota.usedPercent - 5);
-      if (!rows.length || rows.some(row => !Number.isFinite(Date.parse(row.resetsAt)))) return 0;
-      const hours = Math.max(...rows.map(row => (Date.parse(row.resetsAt) - now) / 3600000));
-      return hours > 0 ? 20 / (1 + hours / 6) : 0;
+
+    // Rank by binding window spendability, continuity, full-tier availability and usual-run headroom (#128).
+    const spendabilityOf = candidate => candidate.bindingWindow ? candidate.bindingWindow.spendability : Math.max(0, 100 - (candidate.quota.usedPercent ?? 100));
+    const continuityBonus = candidate => {
+      if (candidate.provider !== current) return 0;
+      if (candidate.quota.state !== 'ok') return 15;
+      if ((candidate.quota.usedPercent ?? 0) >= 80) return 0;
+      if (candidate.shortRoom && !candidate.shortRoom.resetsSoon) return 0;
+      const base = spendabilityOf(candidate);
+      return Math.min(15, Math.max(4, base * 0.35));
     };
     const score = candidate => {
-      if (candidate.quota.state !== 'ok') return 1000 - (candidate.provider === current ? 15 : 0);
-      const used = candidate.quota.usedPercent;
-      const usage = mode === 'saving' ? used : mode === 'balanced' ? (used >= 80 ? 100 + used : used / 4) : (used >= 90 ? 100 + used : 0);
-      const headroom = mode === 'saving' ? 0 : Math.max(0, used - 70) * (task.tier === 'deep' ? 2 : 0);
-      return usage + headroom - resetBonus(candidate) - (candidate.provider === current ? 15 : 0);
+      if (candidate.quota.state !== 'ok') return -1000 + continuityBonus(candidate);
+      const stepPenalty = candidate.steppedDown ? 400 : 0;
+      const roomPenalty = candidate.shortRoom && !candidate.shortRoom.resetsSoon ? 200 : 0;
+      return spendabilityOf(candidate) + continuityBonus(candidate) - stepPenalty - roomPenalty;
     };
     const order = ['codex', 'claude', 'gemini'];
-    const chosen = [...pool].sort((a, b) => score(a) - score(b) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
+    const chosen = [...pool].sort((a, b) => score(b) - score(a) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
     const model = chosen.selectedModel, effort = pickEffort(effortsOf(model), wantedEffort);
+    const plannedHandoff = Boolean(chosen.shortRoom);
     const why = [task.reason[0].toUpperCase() + task.reason.slice(1)];
+
+    // Explain stepping down one tier when a strong model's allowance was unavailable.
+    if (chosen.steppedDown && chosen.steppedDownFrom && model) {
+      const fromName = chosen.steppedDownFrom.displayName || chosen.steppedDownFrom.name || modelId(chosen.steppedDownFrom);
+      const toName = model.displayName || model.name || modelId(model);
+      why.push(`${fromName} has no usable allowance (${quotaText(chosen.steppedDownQuota)}), so stepping down one tier to ${toName}`);
+    }
+
+    // Explain the allowance / reset-timing logic in words (#128).
+    const others = pool.filter(item => item.provider !== chosen.provider && item.quota.state === 'ok');
+    const previous = current && chosen.provider !== current ? pool.find(item => item.provider === current) : null;
+    const moreRemainingOther = others.find(item => (item.bindingWindow?.remaining ?? 0) > (chosen.bindingWindow?.remaining ?? 100));
+    const compared = previous || moreRemainingOther || null;
+    const explainAllowance = (target, other) => {
+      const wTarget = target.bindingWindow, wOther = other?.bindingWindow;
+      if (wTarget && wOther && wTarget.hoursLeft !== null && wOther.hoursLeft !== null && wTarget.hoursLeft + 6 < wOther.hoursLeft) {
+        if (wTarget.hoursLeft < 2) return `${agentNames[target.provider]}'s usable allowance resets sooner`;
+        const day = resetDayName(wTarget.resetsAt, now);
+        if (/week|7[- ]?d/i.test(wTarget.label || '')) {
+          return `${agentNames[target.provider]} has ${Math.round(wTarget.remaining)}% of its week left and resets ${day}; ${agentNames[other.provider]} is kept for later in the week`;
+        }
+        return `${agentNames[target.provider]}'s usable allowance resets sooner (${day})`;
+      }
+      return null;
+    };
+
     if (current && chosen.provider !== current) {
       const before = candidates.find(candidate => candidate.provider === current);
-      const previous = pool.find(candidate => candidate.provider === current);
-      why.push(!before?.eligible || !previous ? `${agentNames[current]} isn’t available under your rules` : previous.quota.usedPercent >= 80 ? `${agentNames[current]} is at ${Math.round(previous.quota.usedPercent)}% of its limit` : previous.quota.state !== 'ok' ? `${agentNames[current]} has no confirmed allowance` : resetBonus(chosen) > resetBonus(previous) + 10 ? `${agentNames[chosen.provider]}'s usable allowance resets sooner` : task.tier === 'deep' ? `${agentNames[chosen.provider]} has more room for demanding work` : `${agentNames[chosen.provider]} has more allowance left`);
+      const allowanceNote = previous ? explainAllowance(chosen, previous) : null;
+      if (!before?.eligible || !previous) why.push(`${agentNames[current]} isn’t available under your rules`);
+      else if (previous.shortRoom && !previous.shortRoom.resetsSoon) why.push(`${agentNames[current]} has ${Math.round(previous.shortRoom.remaining)}% left and usually spends ~${Math.round(previous.shortRoom.usual)}% on a ${task.tier} run`);
+      else if (allowanceNote) why.push(allowanceNote);
+      else if (previous.quota.usedPercent >= 80) why.push(`${agentNames[current]} is at ${Math.round(previous.quota.usedPercent)}% of its limit`);
+      else if (previous.quota.state !== 'ok') why.push(`${agentNames[current]} has no confirmed allowance`);
+      else if (task.tier === 'deep') why.push(`${agentNames[chosen.provider]} has more room for demanding work`);
+      else why.push(`${agentNames[chosen.provider]} has more allowance left`);
+    } else if (compared) {
+      const allowanceNote = explainAllowance(chosen, compared);
+      if (allowanceNote) why.push(allowanceNote);
     }
-    const choice = { provider: chosen.provider, model: model ? modelId(model) : null, modelName: model ? (model.displayName || model.name || modelId(model)) : null, effort, tier: task.tier, mode, reason: why.join(' · ') };
-    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, escalation: escalate(chosen.provider, chosen.models, choice) };
+
+    if (plannedHandoff) {
+      why.push(`${agentNames[chosen.provider]} has ${Math.round(chosen.shortRoom.remaining)}% left before its reset (usual ${task.tier} run ~${Math.round(chosen.shortRoom.usual)}%), so a handoff is planned`);
+    }
+
+    const choice = {
+      provider: chosen.provider,
+      model: model ? modelId(model) : null,
+      modelName: model ? (model.displayName || model.name || modelId(model)) : null,
+      effort,
+      tier: task.tier,
+      mode,
+      reason: why.join(' · '),
+      ...(chosen.steppedDown ? { steppedDown: true } : {}),
+      ...(plannedHandoff ? { plannedHandoff: true } : {}),
+    };
+    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
 
   // The same choice when the agent is already decided: a queued prompt that moved at a handoff is routed again for the
   // agent that took over (#93). Null when that agent lists no models, so the caller keeps its own choice.
-  function routeTo(provider, rows, { text, attachments = 0, assessment = null, mode = 'balanced' }) {
-    if (!MODES.includes(mode)) mode = 'balanced';
-    const task = assessment && TIERS.includes(assessment.tier) ? assessment : classify(text, { attachments }), [tier, wantedEffort] = plan[mode][task.tier], model = pickModel(rows, tier);
+  function routeTo(provider, rows, { text, attachments = 0, assessment = null, mode = 'smart' }) {
+    mode = normalizeMode(mode) || 'smart';
+    const task = assessment && TIERS.includes(assessment.tier) ? assessment : classify(text, { attachments }), [tier, wantedEffort] = plan[mode][task.tier];
+    let model = pickModel(rows, tier);
     if (!model) return null;
+    if (task.tier === 'deep' && modelTier(model) === 'light') return null;
     const choice = { provider, model: modelId(model), modelName: model.displayName || model.name || modelId(model), effort: pickEffort(effortsOf(model), wantedEffort), tier: task.tier, mode, reason: task.reason[0].toUpperCase() + task.reason.slice(1) };
     return { ...choice, escalation: escalate(provider, rows, choice) };
   }
 
-  root.relayRouting = { MODES, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies };
+  // Replays a sequence of prompts across modes with recorded usage readings (#128), comparing choices and remaining allowance.
+  const DEFAULT_STEP_MOVE = { light: { short: 2, weekly: 0.5 }, standard: { short: 6, weekly: 2 }, deep: { short: 14, weekly: 5 } };
+  function replay(prompts, { candidates = [], modes = MODES, current = null, allowApi = false, now = Date.now() } = {}) {
+    const results = {};
+    for (const rawMode of modes) {
+      const mode = normalizeMode(rawMode) || 'smart';
+      const state = candidates.map(candidate => ({
+        ...candidate,
+        usage: candidate.usage ? {
+          ...candidate.usage,
+          windows: (candidate.usage.windows || []).map(row => ({ ...row })),
+        } : candidate.usage,
+      }));
+      let active = current, previousAssessment = null, previousText = '', assessmentCalls = 0;
+      const choices = [];
+      for (const entry of prompts) {
+        const item = typeof entry === 'string' ? { text: entry } : entry;
+        const attachments = item.attachments || 0;
+        let assessment = triage(item.text, { attachments, previous: previousAssessment });
+        if (!assessment) {
+          if (mode === 'saver') {
+            const estimate = classify(item.text, { attachments, context: previousText });
+            assessment = { tier: estimate.tier, effort: 'low', reason: estimate.reason, source: 'local' };
+          } else {
+            assessmentCalls++;
+            if (item.assessment) {
+              assessment = { ...item.assessment, source: 'agent' };
+            } else {
+              const estimate = classify(item.text, { attachments, context: previousText });
+              const tier = estimate.tier === 'light' ? 'standard' : estimate.tier;
+              assessment = { tier, effort: tier === 'deep' ? 'high' : 'medium', reason: estimate.reason, source: 'fallback' };
+            }
+          }
+        }
+        const choice = route({ text: item.text, attachments, context: previousText, assessment, mode, candidates: state, current: active, allowApi, now });
+        choices.push(choice);
+        if (!choice.error) {
+          const target = state.find(row => row.provider === choice.provider);
+          const selectedRow = (target?.models || []).find(row => modelId(row) === choice.model);
+          const actualTier = selectedRow ? modelTier(selectedRow) : choice.tier || 'standard';
+          const effortBoost = ['max', 'xhigh', 'ultra'].includes(choice.effort) ? 1.25 : choice.effort === 'high' ? 1.1 : choice.effort === 'low' ? 0.8 : 1;
+          const defaults = DEFAULT_STEP_MOVE[actualTier] || DEFAULT_STEP_MOVE.standard;
+          const customSpend = item.spend?.[choice.provider] ?? item.spend;
+          for (const win of target?.usage?.windows || []) {
+            if (!windowApplies(win, choice.model) || !Number.isFinite(win.usedPercent)) continue;
+            const isWeekly = /week|7[- ]?d/i.test(`${win.label || ''} ${win.id || ''}`);
+            const delta = typeof customSpend === 'number' ? customSpend
+              : typeof customSpend === 'object' && customSpend !== null ? (customSpend[win.id || win.label] ?? (isWeekly ? customSpend.weekly : customSpend.short) ?? (isWeekly ? defaults.weekly : defaults.short) * effortBoost)
+              : (isWeekly ? defaults.weekly : defaults.short) * effortBoost;
+            win.usedPercent = Math.min(100, Math.round((win.usedPercent + delta) * 100) / 100);
+          }
+          active = choice.provider;
+          previousAssessment = assessment;
+          previousText = item.text;
+        }
+      }
+      const remaining = Object.fromEntries(state.map(row => [
+        row.provider,
+        Object.fromEntries((row.usage?.windows || []).map(win => [win.label || win.id || 'Plan limit', Math.max(0, Math.round((100 - (win.usedPercent ?? 100)) * 100) / 100)])),
+      ]));
+      results[mode] = { mode, choices, assessmentCalls, remaining };
+    }
+    return results;
+  }
+
+  root.relayRouting = { MODES, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);

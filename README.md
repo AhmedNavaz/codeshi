@@ -193,6 +193,18 @@ npm start
 
 Codeshi runs the agents you have installed, on your own accounts. It ships no API keys, adds no model service of its own and stores your conversations on your computer. The [guide](docs/guide.md) covers each feature in detail, including what is stored where.
 
+### The engine under the hood
+
+Codeshi is not just a UI wrapper—it provides a local orchestration engine built for resilient multi-agent development:
+
+- **Unified agent protocol**: Normalizes disparate agent protocols (Claude Agent SDK, Codex app-server JSON-RPC, Gemini/Antigravity ACP, and local Ollama models) into a consistent stream of tool calls, approvals, terminal outputs, and diffs.
+- **Lossless context rollover & handoffs**: When switching agents or refreshing context on long runs, Codeshi distills active file diffs, prompt queues, decisions, and unblocked tasks into a bounded brief without context amnesia or runaway token waste.
+- **Shadow Git checkpoints & mutation leases**: Runs and background tasks operate under filesystem mutation leases. Checkpoints snapshot directory states before and after each run, enabling instant rollbacks, conflict prevention, and Git worktree isolation.
+- **Autonomous verification & review loops**: Evaluates changes against configurable test suites and independent cross-agent reviewers (such as Ultra mode's secondary review pass) before presenting results.
+- **Smart spendability routing**: Automatically routes prompts across model tiers (Saver, Smart, Ultra) based on local prompt heuristics, file scope, and quota spendability.
+
+See the [architecture guide](docs/architecture.md) for how these systems interact.
+
 ## Contributing
 
 Codeshi is built in the open, and help of every size is welcome:

@@ -18,22 +18,22 @@ const snapshot = (used = 80000, capacity = 200000) => ({ used, capacity, source:
 const conversation = reading => ({ provider: 'codex', sessions: { codex: { id: 'native-1', contextUsage: reading } }, messages: [], runs: [], context: {}, lastRun: null });
 
 test('Flow targets follow routing modes and reported model capacity; totals never stand in for context', () => {
-  for (const [mode, target] of [['saving', 40000], ['balanced', 75000], ['quality', 120000]]) {
+  for (const [mode, target] of [['saver', 40000], ['smart', 75000], ['ultra', 120000], ['saving', 40000], ['balanced', 75000], ['quality', 120000]]) {
     const c = conversation(snapshot(target)); c.routing = { mode };
     assert.equal(rolloverDecision(c, 'codex').thresholdTokens, target);
     assert.equal(rolloverDecision(c, 'codex').rollover, true);
     c.sessions.codex.contextUsage.used = target - 1;
     assert.equal(rolloverDecision(c, 'codex').rollover, false);
   }
-  assert.equal(rolloverDecision(conversation(snapshot(30000, 32000)), 'codex', { routingMode: 'quality' }).thresholdTokens, 24000);
-  const c = conversation(null); c.routing = { mode: 'saving' }; c.lastRun = { provider: 'codex', usage: { total: { inputTokens: 2000000 } } };
+  assert.equal(rolloverDecision(conversation(snapshot(30000, 32000)), 'codex', { routingMode: 'ultra' }).thresholdTokens, 24000);
+  const c = conversation(null); c.routing = { mode: 'saver' }; c.lastRun = { provider: 'codex', usage: { total: { inputTokens: 2000000 } } };
   assert.equal(rolloverDecision(c, 'codex').used, null);
   assert.equal(rolloverDecision(c, 'codex').reason, 'legacy-session');
   assert.equal(rolloverDecision(c, 'codex').rollover, true, 'An unmeasured old session is refreshed without treating its totals as occupancy.');
   c.sessions.codex.managedContextVersion = 1;
   assert.equal(rolloverDecision(c, 'codex').rollover, false, 'Cumulative usage alone is not a context reading.');
   // Gemini's session is continued too now, so its runtime's context reading counts against the same targets.
-  const gemini = { ...conversation(null), provider: 'gemini', routing: { mode: 'balanced' }, sessions: { gemini: { id: 'google-session', managedContextVersion: 1, contextUsage: { ...snapshot(75000, 1048576), source: 'acp-usage' } } } };
+  const gemini = { ...conversation(null), provider: 'gemini', routing: { mode: 'smart' }, sessions: { gemini: { id: 'google-session', managedContextVersion: 1, contextUsage: { ...snapshot(75000, 1048576), source: 'acp-usage' } } } };
   assert.deepEqual([rolloverDecision(gemini, 'gemini').thresholdTokens, rolloverDecision(gemini, 'gemini').rollover], [75000, true]);
   gemini.sessions.gemini.contextUsage.used = 20000;
   assert.equal(rolloverDecision(gemini, 'gemini').rollover, false);
@@ -66,7 +66,7 @@ test('automatic targets preserve recent context, expire at the reported TTL, and
       contextUsage: { ...snapshot(78690), observedAt: new Date(now - 60000).toISOString() } } };
     let decision = rolloverDecision(c, provider, { now });
     assert.equal(decision.cacheWarm, true); assert.equal(decision.thresholdTokens, 120000); assert.equal(decision.rollover, false);
-    for (const [mode, target] of [['saving', 80000], ['balanced', 120000], ['quality', 150000]]) {
+    for (const [mode, target] of [['saver', 80000], ['smart', 120000], ['ultra', 150000], ['saving', 80000], ['balanced', 120000], ['quality', 150000]]) {
       assert.equal(rolloverDecision(c, provider, { now, routingMode: mode }).thresholdTokens, target);
     }
     assert.equal(rolloverDecision(c, provider, { now, normalLimit: 50000 }).thresholdTokens, 50000);

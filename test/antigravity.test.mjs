@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { antigravityInvocation, antigravitySessionParams, configureAntigravitySession, googleMetadata, connectGoogle, closeGoogleConnections, verifyAntigravity } from '../src/antigravity.mjs';
+import { antigravityInvocation, antigravitySessionParams, antigravityQuestion, configureAntigravitySession, googleMetadata, connectGoogle, closeGoogleConnections, verifyAntigravity } from '../src/antigravity.mjs';
 import { installAntigravity, googleRuntimePath } from '../src/antigravity-install.mjs';
 import { resolveBinary } from '../src/resolve-binary.mjs';
 import { runGemini } from '../src/gemini.mjs';
@@ -107,19 +107,97 @@ test('Google sign-in uses explicit native personal OAuth and reuses an active fl
   assert.equal((await connectGoogle(options, () => { throw new Error('Duplicate login'); })).started, true);
   assert.deepEqual(client.requests.at(-1), { method: 'authenticate', params: { methodId: 'oauth-personal' } }); finish({}); await new Promise(resolve => setImmediate(resolve)); assert(client.closed);
 });
-test('Antigravity coding streams through ACP, grants only one action and never answers interaction questions as approvals', async t => {
-  const root = folder(t);
-  for (const question of [false, true]) {
-    const client = new Client(), events = []; let calls = 0;
-    client.prompt = async () => {
-      const reply = await client.rpc({ toolCall: { toolCallId: question ? 'interaction_question' : 'command_1', kind: 'execute', title: 'Run tests' }, options: [{ kind: 'allow_always', optionId: 'always' }, { kind: 'allow_once', optionId: 'once' }] });
-      if (question) assert(reply.error); else assert.equal(reply.result.outcome.optionId, 'once');
-    };
-    const run = runGemini({ bin: path.join(root, 'agy_acp_server.par'), googleRoot: root, workspace: root, mode: 'edit', model: 'native-alternative', effort: 'high', prompt: 'Continue project' }, { clientFactory: () => client, event: event => events.push(event), metadata() {}, approval: async () => { calls++; return true; } });
-    if (question) { await assert.rejects(run, /denied or unsupported/); assert.equal(calls, 0); } else { await run; assert.equal(calls, 1); assert.equal(events.at(-1).type, 'turn.completed'); }
-    assert(client.closed);
-  }
+test('Antigravity coding streams through ACP and grants only one action', async t => {
+  const root = folder(t), client = new Client(), events = []; let calls = 0;
+  client.prompt = async () => {
+    const reply = await client.rpc({ toolCall: { toolCallId: 'command_1', kind: 'execute', title: 'Run tests' }, options: [{ kind: 'allow_always', optionId: 'always' }, { kind: 'allow_once', optionId: 'once' }] });
+    assert.equal(reply.result.outcome.optionId, 'once');
+  };
+  await runGemini({ bin: path.join(root, 'agy_acp_server.par'), googleRoot: root, workspace: root, mode: 'edit', model: 'native-alternative', effort: 'high', prompt: 'Continue project', relay: null }, { clientFactory: () => client, event: event => events.push(event), metadata() {}, approval: async () => { calls++; return true; } });
+  assert.equal(calls, 1); assert.equal(events.at(-1).type, 'turn.completed'); assert(client.closed);
 });
+
+const interaction = () => ({ toolCall: { toolCallId: 'interaction_question', kind: 'other', title: 'Which folder should open README.md?' }, options: [{ kind: 'allow_once', optionId: 'answer_frontend', name: 'Frontend (Recommended)' }, { kind: 'reject_once', optionId: 'answer_backend', name: 'Backend' }] });
+
+test('Antigravity fixed choices keep their option IDs through label limits and reject unrepresentable questions', () => {
+  const request = interaction(), form = antigravityQuestion(request);
+  assert.equal(form.questions[0].other, false); assert.equal(form.questions[0].multiple, false);
+  assert.equal(form.questions[0].options[0].recommended, true);
+  assert.deepEqual(form.respond([['Backend']]), { outcome: { outcome: 'selected', optionId: 'answer_backend' } });
+  for (const answers of [null, [], [['Something else']], [['Backend', 'Frontend (Recommended)']], [['Backend'], ['Backend']]]) assert.deepEqual(form.respond(answers), { outcome: { outcome: 'cancelled' } });
+  const names = ['Same', 'Same', 'X'.repeat(250) + 'A', 'X'.repeat(250) + 'B'];
+  const collided = antigravityQuestion({ ...request, options: names.map((name, index) => ({ name, optionId: 'id-' + index })) });
+  assert.equal(collided.questions[0].options.length, 4);
+  for (const [index, option] of collided.questions[0].options.entries()) assert.deepEqual(collided.respond([[option.label]]), { outcome: { outcome: 'selected', optionId: 'id-' + index } });
+  for (const options of [null, [], [{ optionId: '' }], [{ optionId: 'same' }, { optionId: 'same' }], [null], Array.from({ length: 9 }, (_, index) => ({ optionId: String(index) }))]) assert.equal(antigravityQuestion({ ...request, options }), null);
+});
+
+test('Antigravity questions wait for the person, pause silence, and skip without failing the run', async t => {
+  const root = folder(t);
+  for (const scenario of ['answer', 'skip', 'unavailable', 'review', 'assessment', 'invalid', 'cancel']) await t.test(scenario, async () => {
+    const client = new Client(), events = [], paused = [], asked = []; let stopped = false;
+    client.pauseSilence = value => paused.push(value);
+    client.prompt = async () => {
+      const reply = await client.rpc(interaction());
+      assert.deepEqual(reply.result, { outcome: scenario === 'answer' ? { outcome: 'selected', optionId: 'answer_backend' } : { outcome: 'cancelled' } });
+    };
+    const run = runGemini({ bin: path.join(root, 'agy_acp_server.par'), googleRoot: root, workspace: root, mode: 'edit', prompt: 'Continue project', relay: null, reviewSnapshot: scenario === 'review', routingAssessment: scenario === 'assessment' }, {
+      clientFactory: () => client, event: event => events.push(event), metadata() {}, cancelled: () => stopped,
+      approval: async () => { throw new Error('A tool approval must never answer a question.'); },
+      question: scenario === 'unavailable' ? null : async request => {
+        asked.push(request); assert.equal(paused.at(-1), true);
+        if (scenario === 'cancel') stopped = true;
+        return scenario === 'skip' ? null : [[scenario === 'invalid' ? 'My own answer' : 'Backend']];
+      },
+    });
+    if (scenario === 'cancel') await assert.rejects(run, /turn did not complete/); else { await run; assert.equal(events.at(-1).type, 'turn.completed'); }
+    if (['unavailable', 'review', 'assessment'].includes(scenario)) assert.equal(asked.length, 0);
+    else { assert.equal(asked[0].id, '42'); assert.equal(asked[0].questions[0].question, interaction().toolCall.title); assert.equal(paused.at(-1), false); }
+    assert(client.closed);
+  });
+});
+
+test('Antigravity questions cross the worker, wait even in full auto, and save the selected answer or skip', { skip: scriptCLIs }, async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-google-questions-'))), bin = googleRuntimePath(root), protocol = path.join(root, 'protocol.mjs'), replies = path.join(root, 'replies.jsonl'), workspace = path.join(root, 'workspace');
+  fs.mkdirSync(path.dirname(bin), { recursive: true }); fs.mkdirSync(workspace);
+  fs.writeFileSync(protocol, `#!${process.execPath}
+import readline from 'node:readline';
+import fs from 'node:fs';
+const initialized=${JSON.stringify(initialized)},session=${JSON.stringify(session())},interaction=${JSON.stringify(interaction())},send=m=>console.log(JSON.stringify({jsonrpc:'2.0',...m}));let prompt;
+for await(const line of readline.createInterface({input:process.stdin})){const m=JSON.parse(line);
+if(m.method==='initialize')send({id:m.id,result:initialized});
+if(m.method==='session/new')send({id:m.id,result:session});
+if(m.method==='session/set_config_option'){session.configOptions.find(o=>o.id===m.params.configId).currentValue=m.params.value;send({id:m.id,result:{configOptions:session.configOptions}});}
+if(m.method==='session/prompt'){prompt=m.id;send({id:42,method:'session/request_permission',params:{sessionId:session.sessionId,...interaction}});}
+if(m.id===42&&m.result){fs.appendFileSync(${JSON.stringify(replies)},JSON.stringify(m.result)+'\\n');send({method:'session/update',params:{sessionId:session.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Continued after your choice.'}}}});send({id:prompt,result:{stopReason:'end_turn'}});}}
+`, { mode: 0o700 });
+  fs.symlinkSync(protocol, bin);
+  const broker = new Broker({ workspace, dataDir: path.join(root, 'journal'), googleRoot: root, bins: { gemini: bin } });
+  t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const c = broker.get(broker.create().id), notifications = [];
+  broker.on('notify', notice => notifications.push(notice));
+  for (const skip of [false, true]) {
+    broker.start(c, { text: skip ? 'Skip this choice' : 'Choose a folder', provider: 'gemini', mode: 'edit', approvalPolicy: 'auto', requestId: skip ? 'skip-choice' : 'answer-choice' });
+    const run = broker.running, deadline = Date.now() + 15000;
+    while (broker.running === run && !run.approvals.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    const pending = [...run.approvals.values()][0];
+    assert(pending, 'Full auto must wait for the person to answer a Gemini question.');
+    assert.equal(pending.kind, 'question'); assert.equal(pending.provider, 'gemini');
+    assert.equal(pending.questions[0].other, false); assert.equal(pending.questions[0].multiple, false);
+    assert.equal(notifications.at(-1).title, 'Gemini has a question');
+    assert.throws(() => broker.approve(run.id, pending.id, true), { status: 409 });
+    assert.throws(() => broker.answer(run.id, pending.id, [['Something else']]), { status: 400 });
+    assert(run.approvals.has(pending.id), 'An invalid answer leaves the question waiting.');
+    broker.answer(run.id, pending.id, skip ? null : [['Backend']]);
+    await run.done; await broker.checkpoints.idle();
+    assert.equal(c.status, 'complete'); assert.equal(run.approvals.size, 0);
+    assert(c.messages.some(message => message.runId === run.id && message.text === 'Continued after your choice.'));
+    assert(c.messages.some(message => message.runId === run.id && message.text === (skip ? 'Skipped the question; the agent continues on its own judgement.' : 'Answered:\nWhich folder should open README.md? → Backend')));
+    assert.throws(() => broker.answer(run.id, pending.id, [['Backend']]), { status: 409 });
+  }
+  assert.deepEqual(fs.readFileSync(replies, 'utf8').trim().split('\n').map(JSON.parse), [{ outcome: { outcome: 'selected', optionId: 'answer_backend' } }, { outcome: { outcome: 'cancelled' } }]);
+});
+
 test('Antigravity runtime installation fails checksum verification before extraction and rejects unsupported platforms', async t => {
   const root = folder(t); let extracted = false;
   await assert.rejects(installAntigravity(root, { platform: 'darwin', arch: 'arm64', fetchImpl: async url => { assert.match(url, /^https:\/\/dl\.google\.com\//); return new Response('untrusted archive'); }, spawnImpl: () => { extracted = true; } }), /checksum/);

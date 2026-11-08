@@ -4,6 +4,19 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-11-08
+
+### Added
+
+- **Smart, Saver and Ultra routing modes, spending allowance where it resets soonest** (#128). Three new modes replace Cost saving, Balanced and Maximum quality across Flow, the Agents panel, usage notices and saved conversations. Every mode spends allowance where it resets soonest, valuing remaining headroom by how long it has to last across 5-hour, daily and weekly windows. A prompt is routed to the plan with the most spendable headroom before its reset, with continuity preserved when switching agents isn't worth the brief and reread. Saver uses local rules only on Send with no agent assessment call, keeping effort low and asking before any test retry. Smart assesses on Send and retries failed tests one step up. Ultra uses the strongest models and deepest reasoning first (stepping down within the agent before switching away when a weekly window is exhausted), retries one step up, and sends finished changes for an independent read-only review when a second subscription agent has room.
+- **Open files and links from a reply, and changed files from a step** (#109). A web address written plainly in a reply is now a link, like a named one. A file named in a reply or in inline code opens in the file preview, at its line when one is given (`src/app.js:24`, `#L24-L30`); a file in a step's list of changed files opens its uncommitted changes, or the file itself when there are none. In a workspace with several folders, `folder/path` goes to that folder, and a path that exists in more than one folder offers a button for each instead of guessing. Links and files work from the keyboard. A path outside the workspace, a missing file or a folder that isn't on this computer says so, and a reference to a folder reads as plain text.
+
+### Fixed
+
+- **Answer Gemini's questions in Codeshi.** Antigravity's multiple-choice questions now appear in the question card instead of ending the run with an unsupported-action error and a request to continue in its native client. Pick an offered answer or skip the question, and Gemini continues. Full auto-approval still waits for your choice.
+- **Remote access asked for the QR code again, while the computer still said connected** (#114). Each browser on a phone keeps its own pairing, so a page opened in a QR scanner's browser wasn't paired in Safari or from a Home Screen icon. A browser that isn't paired now says so, and **Move to another browser**, at the bottom of the phone's workspace list, carries an approved connection over with a one-use link, without approving again. An **Away from home** phone now stays allowed for up to a week and across Codeshi restarts, until you remove it or turn remote access off; **Same Wi-Fi** stays at 12 hours and still ends when Codeshi quits. The computer's list tells a phone that is active now from one that is only allowed, with when it was last seen, and approving the same phone again replaces its old connection instead of using up the five slots.
+- **Opening a long workspace chat** (#124). 0.32.0 opened the chat on its latest messages, but the app still stalled for seconds on a workspace with a long history: replaying the saved conversation looked up each message by scanning the whole list, and the side panels fetched the whole conversation just to find its id. A 55 MB journal of 100,000 records now opens in under half a second instead of thirteen. Changing the agent, mode, permissions, model or routing, or refreshing the context, no longer replaces the paged chat with every message, and the first scroll to the end no longer loads older pages by itself.
+
 ## [0.32.0] - 2026-11-07
 
 ### Added
@@ -638,6 +651,7 @@ First public release.
 [0.6.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.6.0
 [0.5.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.4.0
+[0.33.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0
 [0.32.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0
 [0.31.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1
 [0.30.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.30.0

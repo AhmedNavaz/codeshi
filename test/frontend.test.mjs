@@ -2916,20 +2916,20 @@ test('the usage notice says what a run used and offers only what helps next, in 
   assert.equal(box.hidden, false, 'A later run can still speak up.');
 });
 
-test('in Flow the usage notice can switch to Cost saving, keeping the other routing choices', async () => {
+test('in Flow the usage notice can switch to Saver, keeping the other routing choices', async () => {
   const ui = await browser({ flowUI: true, layoutUI: true }), c = ui.canonical.get('project-one'), choices = [];
   ui.setIntercept((request, next) => {
     if (request.path.endsWith('/routing')) { choices.push(request.body); c.routing = request.body; c.usageWatch.notice.action = null; return response(c); }
     return next();
   });
-  c.routing = { mode: 'balanced', allowApi: true, check: true };
-  c.usageWatch = { runId: 'run-big', provider: 'codex', tokens: 10726923, usual: 1800000, samples: 30, partial: false, moves: [], notice: { heavy: true, moves: [], context: { used: 318000, state: 'due' }, action: 'saving' } };
+  c.routing = { mode: 'smart', allowApi: true, check: true };
+  c.usageWatch = { runId: 'run-big', provider: 'codex', tokens: 10726923, usual: 1800000, samples: 30, partial: false, moves: [], notice: { heavy: true, moves: [], context: { used: 318000, state: 'due' }, action: 'saver' } };
   await ui.window.relayUI.refresh();
   const action = ui.$('usage-notice-action');
   assert.equal(ui.$('usage-notice').hidden, false);
-  assert.equal(action.textContent, 'Use Cost saving');
+  assert.equal(action.textContent, 'Use Saver');
   action.click(); await flush();
-  assert.deepEqual(choices.at(-1), { mode: 'saving', allowApi: true, check: true });
+  assert.deepEqual(choices.at(-1), { mode: 'saver', allowApi: true, check: true });
   assert.equal(action.hidden, true, 'Once it is on, there is nothing left to offer.');
   assert.equal(ui.$('usage-notice').hidden, false, 'What the run used is still worth reading.');
 });
@@ -3438,12 +3438,12 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   ui.window.relayFlow={isOn:()=>true};ui.window.dispatchEvent(new UIEvent('relay-flow'));await flush();
   assert.equal(ui.$('agents-routing').hidden,false,'In Flow the section shows.');assert.equal(ui.$('agents-routing-note').hidden,true);
   const options=()=>ui.$('routing-options').querySelectorAll('.routing-option');
-  assert.deepEqual(options().map(row=>row.querySelector('strong').textContent),['Cost saving','Balanced','Maximum quality'],'No manual mode: Flow always routes.');
+  assert.deepEqual(options().map(row=>row.querySelector('strong').textContent),['Saver','Smart','Ultra'],'No manual mode: Flow always routes.');
   assert.match(options()[1].textContent,/Matches the model and effort to each message/,'Each mode says what it does.');
   assert.deepEqual(options().map(row=>row.getAttribute('aria-checked')),['false','false','false']);
   options()[1].click();await flush();await flush();
-  assert.deepEqual(choices[0],{mode:'balanced',allowApi:false,check:false});
-  assert.equal(ui.$('picked-agent').textContent,'Routing');assert.equal(ui.$('picked-model').textContent,'Balanced');
+  assert.deepEqual(choices[0],{mode:'smart',allowApi:false,check:false});
+  assert.equal(ui.$('picked-agent').textContent,'Routing');assert.equal(ui.$('picked-model').textContent,'Smart');
   assert(ui.$('model-picker-button').classList.contains('routing'));assert.equal(ui.$('effort-button').hidden,true,'Routing chooses the effort with the model.');
   ui.$('open-agents').click();ui.$('model-picker-button').click();await flush();
   assert.equal(ui.$('agents-panel').hidden,false,'The model button opens Routing while it is on.');
@@ -3452,15 +3452,15 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   assert.equal(ui.$('route-preview'),null,'The agent is chosen on Send, so nothing above the box guesses at it.');
   ui.$('message-input').dispatchEvent(new UIEvent('keydown',{key:'Enter'}));await flush();await flush();
   const sent=ui.requests.filter(request=>request.path.endsWith('/messages')).at(-1).body;
-  assert.deepEqual([sent.provider,sent.model,sent.effort,sent.routing],['codex','model-one','high',{mode:'balanced',reason:'A complex task (refactoring)',tier:'deep',escalation:null}],'Model One at high effort is already its strongest, so there is no step up.');
-  conversation.status='complete';conversation.messages.push({id:'routed',role:'user',text:'Refactor the payment module into services',provider:'codex',runId:'routed-run',routing:{mode:'balanced',reason:'A complex task (refactoring)',tier:'deep',model:'model-one',effort:'high'},createdAt:new Date().toISOString()});
+  assert.deepEqual([sent.provider,sent.model,sent.effort,sent.routing],['codex','model-one','high',{mode:'smart',reason:'A complex task (refactoring)',tier:'deep',escalation:null}],'Model One at high effort is already its strongest, so there is no step up.');
+  conversation.status='complete';conversation.messages.push({id:'routed',role:'user',text:'Refactor the payment module into services',provider:'codex',runId:'routed-run',routing:{mode:'smart',reason:'A complex task (refactoring)',tier:'deep',model:'model-one',effort:'high'},createdAt:new Date().toISOString()});
   await ui.window.relayUI.refresh();
   const note=ui.$('messages').querySelector('.message-routing');
-  assert.equal(note.textContent,'Auto · Codex · Model One · high effort');assert.match(note.title,/Balanced: A complex task/);
+  assert.equal(note.textContent,'Auto · Codex · Model One · high effort');assert.match(note.title,/Smart: A complex task/);
 
   assert.equal(ui.$('handoff-threshold').value,'90');assert.equal(ui.$('handoff-automatic').checked,false);
   ui.$('routing-allow-api').checked=true;ui.fire('routing-allow-api','change');await flush();await flush();
-  assert.deepEqual(choices.at(-1),{mode:'balanced',allowApi:true,check:false});
+  assert.deepEqual(choices.at(-1),{mode:'smart',allowApi:true,check:false});
   assert.equal(ui.$('routing-check-row').hidden,false);
   assert.equal(ui.$('routing-check').disabled,true,'Checking needs a Test command.');assert.match(ui.$('routing-check-hint').textContent,/Needs a test command\. Choose one in Run\./);
   assert.equal(ui.$('routing-check-set').hidden,false);
@@ -3468,7 +3468,7 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   assert.equal(ui.$('routing-check').disabled,false,'A Test command saved in Run shows at once.');assert.match(ui.$('routing-check-hint').textContent,/runs npm test\. If the tests fail, routing retries once/);
   assert.equal(ui.$('routing-check-set').hidden,true);
   ui.$('routing-check').checked=true;ui.fire('routing-check','change');await flush();await flush();
-  assert.deepEqual(choices.at(-1),{mode:'balanced',allowApi:true,check:true});
+  assert.deepEqual(choices.at(-1),{mode:'smart',allowApi:true,check:true});
   conversation.runs=[{id:'a',check:{status:'passed'}},{id:'b',check:{status:'failed'}},{id:'b2',retryOf:'b',check:{status:'passed'}},{id:'c',check:{status:'failed'}},{id:'c2',retryOf:'c',check:{status:'failed'}},{id:'d',check:{status:'skipped'}}];await ui.window.relayUI.refresh();
   assert.equal(ui.$('routing-check-stats').textContent,'Last 3 checked runs: 1 passed first time, 1 after a retry, 1 still failing.');
   ui.$('handoff-threshold').value='80';ui.fire('handoff-threshold','change');await flush();
@@ -4853,15 +4853,15 @@ test('a limit that has its own line keeps it, instead of adding a column that sq
 });
 
 test('a sent message says how its agent was chosen, so slow or wrong ratings can be spotted', async () => {
-  const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), base = { mode: 'balanced', reason: 'A focused change', tier: 'standard', model: 'model-one', effort: 'medium' };
+  const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), base = { mode: 'smart', reason: 'A focused change', tier: 'standard', model: 'model-one', effort: 'medium' };
   const message = (id, routing) => ({ id, role: 'user', text: id, provider: 'codex', runId: id, routing: { ...base, ...routing }, createdAt: new Date().toISOString() });
   chat.status = 'complete'; chat.messages.push(message('rated', { ratedBy: 'agent', ratedMs: 3140 }), message('continued', { ratedBy: 'local' }), message('estimated', { ratedBy: 'fallback' }), message('older', {}));
   await ui.window.relayUI.refresh(); await flush();
   const titles = ui.$('messages').querySelectorAll('.message-routing').map(note => note.title);
-  assert.match(titles[0], /^Balanced: A focused change · Rated by an agent in 3\.1 s$/);
+  assert.match(titles[0], /^Smart: A focused change · Rated by an agent in 3\.1 s$/);
   assert.match(titles[1], /Continued from the last rating, with no agent call$/);
   assert.match(titles[2], /Estimated locally because no agent could rate it in time$/);
-  assert.equal(titles[3], 'Balanced: A focused change', 'Older messages have nothing to add.');
+  assert.equal(titles[3], 'Smart: A focused change', 'Older messages have nothing to add.');
 });
 
 test('Flow retains observed native compaction counts after the run completes', async () => {
@@ -4935,7 +4935,7 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   assert.equal(ui.window.relayFlow.enter(), true); await flush();
   assert.match(ui.$('flow-status-text').textContent, /^Codex is on “Write the tests” · \d/, 'The status bar says what is happening.'); assert.equal(ui.$('flow-status').dataset.live, 'true');
   const working = flowText(ui, 'working');
-  assert.match(working, /^How it’s working now\s*Routing\s*Balanced\s*Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit\./, 'The mode leads, with its handoff.');
+  assert.match(working, /^How it’s working now\s*Routing\s*Smart\s*Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and moves the task to another agent at 90% of a limit\./, 'The mode leads, with its handoff.');
   assert.match(working, /After a run changes files, your tests run/);
   assert.match(working, /Next message\s*Codex is working on it now\./);
   assert.doesNotMatch(working, /Near a limit/, 'Handoff follows the mode; there is no separate line for it.');
@@ -4970,9 +4970,11 @@ test('Flow turns routing on, keeps mode changes in Agent settings, and turns rou
   await ui.window.relayUI.refreshAccounts(); await flush();
   assert.equal(chat.routing, undefined, 'The normal view has no routing.');
   ui.window.relayFlow.enter(); await flush();
-  assert.deepEqual(chat.routing, { mode: 'balanced', allowApi: false, check: false }, 'Entering Flow turns routing on, Balanced at first.');
-  assert.match(flowText(ui, 'working'), /Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit\..*Next message\s*Codeshi picks the agent, model and effort when you send\./);
+  assert.deepEqual(chat.routing, { mode: 'smart', allowApi: false, check: false }, 'Entering Flow turns routing on, Smart at first.');
+  assert.match(flowText(ui, 'working'), /Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and moves the task to another agent at 90% of a limit\..*Next message\s*Codeshi picks the agent, model and effort when you send\./);
   const card = ui.$('flow-card-working');
+  assert.equal(card.querySelector('.flow-mode').dataset.mode, 'smart');
+  assert.equal(card.querySelector('.flow-mode-icon') !== null, true);
   assert.equal(card.querySelector('.flow-change'), null);
   assert.equal(card.querySelectorAll('[role="radio"]').length, 0, 'Routing controls live in Agent settings.');
   assert.doesNotMatch(card.textContent, /Change how it works|Change…/);
@@ -4980,23 +4982,24 @@ test('Flow turns routing on, keeps mode changes in Agent settings, and turns rou
   assert.match(flowText(ui, 'working'), /Next message\s*Codeshi picks the agent, model and effort when you send\./, 'A draft changes nothing: the choice is made on Send.');
   ui.findButton('Agent settings').click(); await flush();
   assert.equal(ui.$('agents-routing').hidden, false); assert.equal(ui.$('agents-routing-note').hidden, true); assert.equal(ui.$('agents-handoff').hidden, true);
-  assert.deepEqual(ui.$('routing-options').querySelectorAll('.routing-option').map(row => row.dataset.mode), ['saving', 'balanced', 'quality']);
-  const quality = ui.$('routing-options').querySelectorAll('.routing-option').find(row => row.dataset.mode === 'quality');
-  quality.click(); await flush();
-  assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Agent settings change the mode without changing billing or tests.');
-  assert.match(flowText(ui, 'working'), /Routing\s*Maximum quality\s*Codeshi favors stronger models and deeper reasoning, and holds on until 95% of a limit/);
+  assert.deepEqual(ui.$('routing-options').querySelectorAll('.routing-option').map(row => row.dataset.mode), ['saver', 'smart', 'ultra']);
+  const ultra = ui.$('routing-options').querySelectorAll('.routing-option').find(row => row.dataset.mode === 'ultra');
+  ultra.click(); await flush();
+  assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Agent settings change the mode without changing billing or tests.');
+  assert.match(flowText(ui, 'working'), /Routing\s*Ultra\s*Codeshi uses the strongest models and deepest reasoning first/);
+  assert.equal(card.querySelector('.flow-mode').dataset.mode, 'ultra');
   ui.$('flow-detail-close').click(); await flush();
   ui.window.relayUI.commands.agent('codex'); await flush();
-  assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Choosing an agent by hand is not Flow’s way: routing stays.');
+  assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Choosing an agent by hand is not Flow’s way: routing stays.');
   assert.match(ui.$('notice-text').textContent, /Leave Flow to pick one yourself/);
   ui.window.relayFlow.leave(); await flush();
   assert.equal(chat.routing, null, 'Leaving Flow turns routing off: the normal view picks by hand.');
   assert.equal(ui.$('picked-agent').textContent, 'Codex');
   assert.equal(ui.$('agents-routing').hidden, true); assert.equal(ui.$('agents-routing-note').hidden, false); assert.equal(ui.$('agents-handoff').hidden, false);
   ui.window.relayFlow.enter(); await flush();
-  assert.deepEqual(chat.routing, { mode: 'quality', allowApi: false, check: false }, 'Flow remembers the mode this workspace used last.');
+  assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Flow remembers the mode this workspace used last.');
   const fresh = await flowBrowser();
-  fresh.canonical.get('project-one').routing = { mode: 'saving', allowApi: false, check: false };
+  fresh.canonical.get('project-one').routing = { mode: 'saver', allowApi: false, check: false };
   await fresh.window.relayUI.refresh(); await flush();
   assert.equal(fresh.canonical.get('project-one').routing, null, 'Routing found on outside Flow is turned off at the next idle moment.');
 });
@@ -5004,13 +5007,13 @@ test('Flow turns routing on, keeps mode changes in Agent settings, and turns rou
 test('a narrow window keeps the Flow cards out of the chat as chips, and one opens at a time', async () => {
   const ui = await flowBrowser({ wide: true }), chat = ui.canonical.get('project-one');
   ui.window.relayFlow.enter(); await flush();
-  Object.assign(chat, { routing: { mode: 'quality' }, queue: [{ id: 'q1', text: 'Next thing', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }] });
+  Object.assign(chat, { routing: { mode: 'ultra' }, queue: [{ id: 'q1', text: 'Next thing', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }] });
   await ui.window.relayUI.refresh(); await flush();
   ui.window.relayFlow.enter(); await flush();
   // Every media query matches here, so the window counts as narrow: chips under the header, no side columns.
   assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-strip').hidden, false);
   const chips = () => ui.$('flow-strip').querySelectorAll('.flow-chip').map(chip => chip.textContent);
-  assert.deepEqual(chips(), ['Maximum quality', 'Plans', '1 queued message', 'Files', 'Your space'], 'Every card has a chip, with preferences available separately.');
+  assert.deepEqual(chips(), ['Ultra', 'Plans', '1 queued message', 'Files', 'Your space'], 'Every card has a chip, with preferences available separately.');
   ui.$('flow-strip').querySelectorAll('.flow-chip')[2].click(); await flush();
   assert.equal(ui.$('flow-peek').hidden, false); assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-next'); assert.equal(ui.document.activeElement, ui.$('flow-peek-close'));
   assert.equal(ui.$('flow-strip').querySelectorAll('.flow-chip')[2].getAttribute('aria-pressed'), 'true');
@@ -5493,6 +5496,14 @@ test('opening a long workspace of 10,000 messages opens promptly, pages latest, 
   assert(ui.state().conversation.messages.length > initialMsgCount, 'Older messages were loaded');
   assert(ui.state().conversation.earlier < initialEarlier, 'Earlier count decreased');
 
+  // Changing settings while paged requests a paged slice (?limit=) and preserves the paged window
+  ui.$('select-claude').click();
+  await flush();
+  const providerReq = ui.requests.filter(r => r.path.includes('/provider')).at(-1);
+  assert.equal(providerReq.params.limit, String(ui.state().conversation.messages.length), 'Settings update asks for a paged slice while paged');
+  assert(ui.state().conversation.earlier > 9800, 'Paged window is preserved after changing settings');
+  assert(ui.state().conversation.messages.length <= 160, 'DOM does not expand to all 10,000 messages');
+
   await ui.window.relayUI.commands.find();
   await flush();
   const searchInput = ui.$('conversation-search-input');
@@ -5532,4 +5543,194 @@ test('opening a long workspace of 10,000 messages opens promptly, pages latest, 
   assert.equal(ui.state().conversation.earlier, liveEarlierBefore, 'Earlier count preserved across live updates');
   assert.equal(ui.state().conversation.messages.at(-1).text, 'Brand new live prompt');
   assert.equal(ui.state().conversation.messages.length, liveCountBefore + 1);
+});
+
+test('plain URLs, reply file links, inline code file paths and changed files in steps open their targets or report why (#109)', async () => {
+  const ui = await browser({ filesUI: true, insights: true, moreProjects: true, desktop: true });
+  const chat = ui.canonical.get('project-one'), runId = 'run-109';
+  const files = {
+    'frontend:src/my file.js': 'const one = 1;\nconst two = 2;\nconst three = 3;\n',
+    'backend:api/routes.js': 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n',
+    'frontend:shared.js': 'export const side = "frontend";\n',
+    'backend:shared.js': 'export const side = "backend";\n',
+    'api:index.js': 'export const single = true;\nexport const lineTwo = 2;\n',
+  };
+  const diffs = {
+    'frontend:src/my file.js': { folderId: 'frontend', path: 'src/my file.js', code: ' M', diff: 'diff --git a/src/my file.js b/src/my file.js\n--- a/src/my file.js\n+++ b/src/my file.js\n@@ -1,2 +1,2 @@\n const one = 1;\n-const two = 0;\n+const two = 2;\n', truncated: false },
+    'frontend:shared.js': { folderId: 'frontend', path: 'shared.js', code: ' M', diff: 'diff --git a/shared.js b/shared.js\n--- a/shared.js\n+++ b/shared.js\n@@ -1 +1 @@\n-old\n+frontend\n', truncated: false },
+    'backend:shared.js': { folderId: 'backend', path: 'shared.js', code: ' M', diff: 'diff --git a/shared.js b/shared.js\n--- a/shared.js\n+++ b/shared.js\n@@ -1 +1 @@\n-old\n+backend\n', truncated: false },
+  };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/files/preview') {
+      const key = `${request.params.folderId}:${request.params.path}`;
+      if (!files[key]) return response({ error: 'File not found.' }, 404);
+      return response({ name: request.params.path.split('/').pop(), kind: 'text', mime: 'text/plain', bytes: files[key].length, text: files[key] });
+    }
+    if (request.path === '/api/git/diff') {
+      const key = `${request.params.folderId}:${request.params.path}`;
+      if (!diffs[key]) return response({ error: 'This file has no current changes. Refresh Git activity.' }, 404);
+      return response(diffs[key]);
+    }
+    return next();
+  });
+
+  chat.status = 'running';
+  chat.activeRun = { id: runId, provider: 'codex' };
+  chat.messages.push(
+    { id: 'u-109', runId, role: 'user', text: 'Update the files and share links.' },
+    { id: 'step-edit', runId, role: 'activity', provider: 'claude', text: 'Edit\n{"file_path":"/workspace/example/frontend/src/my file.js","old_string":"const two = 0;","new_string":"const two = 2;"}\nUpdated.' },
+    { id: 'step-list', runId, role: 'activity', provider: 'codex', text: 'File changes: [{"path":"api/routes.js","kind":"add","added":3},{"path":"shared.js","kind":"update","added":1},{"path":"api/removed.js","kind":"delete"},{"path":"/private/tmp/outside.js","kind":"update"}]' },
+    {
+      id: 'reply-109',
+      runId,
+      role: 'assistant',
+      provider: 'codex',
+      text: [
+        'See https://example.com/docs/setup, (https://en.wikipedia.org/wiki/Rust_(programming_language)), and [Issue #109](https://github.com/AhmedNavaz/codeshi/issues/109).',
+        'Inspect [my file.js](file:///workspace/example/frontend/src/my%20file.js#L2-L3), [routes](api/routes.js:2:5), `Frontend/src/my file.js:3`, and [shared](shared.js).',
+        'Also check [missing](Frontend/src/missing.js), [outside](/private/tmp/notes.txt), and [unsupported](vscode://file/workspace/example/frontend/src/my%20file.js).',
+        'Folders like [Frontend](Frontend), [root](file:///workspace/example/frontend), and [src/](src/) stay unlinked.',
+      ].join('\n\n'),
+    }
+  );
+  await ui.window.relayUI.refresh(); await flush();
+
+  const reply = ui.$('message-reply-109');
+  const webLinks = reply.querySelectorAll('a');
+  assert.deepEqual(webLinks.map(node => [node.textContent, node.href]), [
+    ['https://example.com/docs/setup', 'https://example.com/docs/setup'],
+    ['https://en.wikipedia.org/wiki/Rust_(programming_language)', 'https://en.wikipedia.org/wiki/Rust_(programming_language)'],
+    ['Issue #109', 'https://github.com/AhmedNavaz/codeshi/issues/109'],
+  ]);
+  webLinks[0].click();
+  assert.equal(ui.externalLinks.at(-1), 'https://example.com/docs/setup');
+
+  const fileLinks = reply.querySelectorAll('.message-file-link');
+  const findFileLink = label => fileLinks.find(node => node.textContent === label);
+
+  // File link with spaces and #L2-L3 line range opens preview and highlights lines 2 and 3.
+  findFileLink('my file.js').click(); await flush();
+  assert.equal(ui.$('file-preview').hidden, false);
+  assert.equal(ui.$('file-preview-path').textContent, 'Frontend / src/my file.js');
+  const highlighted = () => ui.$('file-preview-content').querySelectorAll('.source-line').map((row, idx) => row.classList.contains('review-line') ? idx + 1 : null).filter(Boolean);
+  assert.deepEqual(highlighted(), [2, 3]);
+
+  // Unprefixed relative path in a multi-folder workspace probes folders and opens the unique match on keyboard Enter.
+  findFileLink('routes').dispatchEvent(new UIEvent('keydown', { key: 'Enter' })); await flush();
+  assert.equal(ui.$('file-preview-path').textContent, 'Backend / api/routes.js');
+  assert.deepEqual(highlighted(), [2]);
+
+  // Inline code file reference (`Frontend/src/my file.js:3`) opens on Space.
+  findFileLink('Frontend/src/my file.js:3').dispatchEvent(new UIEvent('keydown', { key: ' ' })); await flush();
+  assert.equal(ui.$('file-preview-path').textContent, 'Frontend / src/my file.js');
+  assert.deepEqual(highlighted(), [3]);
+
+  // Duplicate relative path across two workspace folders shows a clear notice with folder choices instead of dead-ending.
+  findFileLink('shared').click(); await flush();
+  assert.equal(ui.$('notice').hidden, false);
+  assert.equal(ui.$('notice-text').textContent, 'shared.js is in 2 workspace folders. Open it from:');
+  const noticeActions = ui.$('notice').querySelectorAll('.notice-action-btn');
+  assert.equal(noticeActions.length, 2);
+  assert.equal(noticeActions[0].textContent, 'Frontend');
+  assert.equal(noticeActions[1].textContent, 'Backend');
+  noticeActions[0].click(); await flush();
+  assert.equal(ui.$('notice').hidden, true);
+  assert.equal(ui.$('file-preview').hidden, false);
+  assert.equal(ui.$('file-preview-path').textContent, 'Frontend / shared.js');
+
+  // Missing file, path outside workspace, unavailable folder, and unsupported scheme show clear notices.
+  findFileLink('missing').click(); await flush();
+  assert.equal(ui.$('notice-text').textContent, 'File not found.');
+  findFileLink('outside').click(); await flush();
+  assert.match(ui.$('notice-text').textContent, /Only files inside this workspace can be opened/);
+  findFileLink('unsupported').click(); await flush();
+  assert.match(ui.$('notice-text').textContent, /Only web addresses and files in this workspace can be opened/);
+
+  // Directory targets and workspace folders are rendered as plain spans and never as clickable links that fail with folder notices.
+  assert.equal(reply.querySelector('.message-file-link[title="file:///workspace/example/frontend"]'), null);
+  assert.equal(fileLinks.find(node => ['Frontend', 'root', 'src/'].includes(node.textContent)), undefined);
+  const plainFolder = reply.querySelectorAll('span').find(node => node.textContent === 'root');
+  assert.ok(plainFolder);
+  assert.equal(plainFolder.classList.contains('message-file-link'), false);
+  plainFolder.click(); await flush();
+  assert.match(ui.$('notice-text').textContent, /Only web addresses and files in this workspace can be opened/);
+
+  ui.projects[0].folders[0].available = false;
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('message-reply-109').querySelectorAll('.message-file-link').find(node => node.textContent === 'my file.js').click(); await flush();
+  assert.match(ui.$('notice-text').textContent, /Frontend is not available on this computer/);
+  ui.projects[0].folders[0].available = true;
+  await ui.window.relayUI.refresh(); await flush();
+
+  // Clicking an edited file in an activity row while the run is active opens the existing Git diff viewer without toggling the step's details.
+  const editStep = ui.document.querySelectorAll('.activity-entry')[0];
+  const editOutput = editStep.querySelector('.activity-output');
+  assert.equal(editOutput.hidden, true);
+  const editFile = editStep.querySelector('.activity-file');
+  editFile.click(); await flush();
+  assert.equal(editOutput.hidden, true, 'Clicking the file name does not toggle the activity row output.');
+  assert.equal(ui.$('diff-dialog').open, true);
+  assert.equal(ui.$('diff-title').textContent, 'src/my file.js');
+  assert.match(ui.$('diff-meta').textContent, /Frontend · Modified/);
+  ui.$('close-diff').click();
+
+  // After the run finishes, clicking a changed file with no current Git diff falls back to file preview, and duplicate diffs warn clearly.
+  chat.status = 'complete';
+  chat.lastRun = { id: runId, provider: 'codex', status: 'complete' };
+  await ui.window.relayUI.refresh(); await flush();
+  const listStep = ui.document.querySelectorAll('.activity-entry')[1];
+  const activityFiles = listStep.querySelectorAll('.activity-file');
+  // api/routes.js has no entry in `diffs`, so it falls back to previewing Backend / api/routes.js.
+  activityFiles[0].dispatchEvent(new UIEvent('keydown', { key: 'Enter' })); await flush();
+  assert.equal(ui.$('file-preview').hidden, false);
+  assert.equal(ui.$('file-preview-path').textContent, 'Backend / api/routes.js');
+  // shared.js has uncommitted diffs in both Frontend and Backend, so the notice offers one button per folder.
+  activityFiles[1].click(); await flush();
+  assert.equal(ui.$('notice-text').textContent, 'shared.js has uncommitted changes in 2 workspace folders. Show the changes from:');
+  assert.deepEqual(ui.$('notice').querySelectorAll('.notice-action-btn').map(button => button.textContent), ['Frontend', 'Backend']);
+  // A deleted file with no current uncommitted changes explains why it cannot open.
+  activityFiles[2].click(); await flush();
+  assert.match(ui.$('notice-text').textContent, /api\/removed\.js was deleted and has no current uncommitted changes/);
+  // An activity file outside the workspace shows a clear notice.
+  activityFiles[3].click(); await flush();
+  assert.match(ui.$('notice-text').textContent, /Only files inside this workspace can be opened/);
+
+  // Single-folder workspace resolves unprefixed relative paths directly.
+  await ui.switchProject('project-two');
+  const secondChat = ui.canonical.get('project-two');
+  secondChat.messages.push({ id: 'single-reply', role: 'assistant', provider: 'codex', text: 'See `index.js:2`.' });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('message-single-reply').querySelector('.message-file-link').click(); await flush();
+  assert.equal(ui.$('file-preview-path').textContent, 'API / index.js');
+  assert.deepEqual(highlighted(), [2]);
+});
+
+test('Remote access settings distinguish Active now from Allowed devices and explain 1-week Away from home persistence (#114)', async () => {
+  const ui = await browser({ workbench: true });
+  const now = Date.now();
+  const state = {
+    enabled: true,
+    interfaces: [{ name: 'Wi-Fi', address: '192.168.1.10' }],
+    devices: [
+      { id: 'local-active', name: 'Active iPhone', code: '111111', state: 'active', activeNow: true, lastSeenAt: now },
+      { id: 'local-idle', name: 'Closed iPhone', code: '222222', state: 'active', activeNow: false, lastSeenAt: now - 5 * 60_000 },
+    ],
+    remote: {
+      configured: true,
+      enabled: true,
+      devices: [
+        { id: 'remote-idle', name: 'Away iPhone', code: '333333', state: 'active', activeNow: false, lastSeenAt: now - 10 * 60_000 },
+      ],
+    },
+  };
+  ui.setIntercept((request, next) => request.path === '/api/phone' ? response(state) : next());
+  vm.runInNewContext(fs.readFileSync(new URL('../public/phone-access.js', import.meta.url), 'utf8'), {
+    window: ui.window, document: ui.document, requestAnimationFrame: fn => fn(), setInterval: () => {},
+  });
+  await ui.window.relaySettings.open('general'); await flush();
+  assert.match(ui.$('settings-content').textContent, /Active iPhone.*Active now/s);
+  assert.match(ui.$('settings-content').textContent, /Closed iPhone.*Allowed · last seen 5m ago/s);
+  const select = ui.labelledInput('Connection'); select.value = 'remote'; select.dispatchEvent(new UIEvent('change')); await flush();
+  assert.match(ui.$('settings-content').textContent, /up to a week and across Codeshi restarts/);
+  assert.match(ui.$('settings-content').textContent, /Away iPhone.*Allowed · last seen 10m ago/s);
 });

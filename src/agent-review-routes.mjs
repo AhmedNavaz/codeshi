@@ -12,7 +12,7 @@ export function createReviewRoutes({ registry, body, json }) {
     const projectId = url.searchParams.get('projectId');
     if (!projectId) fail('Select a workspace first.');
     let project = registry.get(projectId);
-    let broker = registry.broker(projectId), c = broker.get(registry.mainConversation(projectId).id), agents = reviewAgents(c);
+    let broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId)), agents = reviewAgents(c);
     const selected = () => { const id = url.pathname.match(/^\/api\/reviews\/([a-f0-9-]{36})(?:\/(?:prepare-fix|stop))?$/)?.[1]; const review = c.reviews.find(item => item.id === id); if (!review) fail('Review not found in this workspace.', 404); return review; };
     if (req.method === 'GET' && url.pathname === '/api/reviews') {
       json(res, 200, { ...agents, reviewerModel: c.models[agents.reviewer] || null, limits: reviewLimits, goal: (c.context.goal || c.messages.filter(message => message.role === 'user' && !message.reviewId).at(-1)?.text || '').slice(0, 4000), repositories: listReviewChanges(project.folders), reviews: c.reviews.map((review, index) => ({ ...publicReview(review), ...(index === 0 ? reviewFreshness(review, project.folders) : {}) })) }); return true;
@@ -22,7 +22,7 @@ export function createReviewRoutes({ registry, body, json }) {
     const input = await body(req, url.pathname === '/api/reviews/automatic/preview' ? 512000 : 32000);
     project = registry.get(projectId);
     // Folder membership can change while a request body arrives; use the current broker and roots.
-    broker = registry.broker(projectId); c = broker.get(registry.mainConversation(projectId).id); agents = reviewAgents(c);
+    broker = registry.broker(projectId); c = broker.get(registry.mainConversationId(projectId)); agents = reviewAgents(c);
     if (url.pathname === '/api/reviews/automatic/preview') {
       if (broker.running || broker.backgroundReview) fail('Finish the current run and review before configuring automatic review.', 409);
       const folderIds = input.folderIds ?? listReviewChanges(project.folders).filter(repo => repo.available).map(repo => repo.folderId);

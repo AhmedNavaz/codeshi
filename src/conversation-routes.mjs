@@ -43,7 +43,7 @@ export function createConversationRoutes({ registry, body, json, importer = new 
       project = registry.add({ ...(typeof input.name === 'string' && input.name.trim() ? { name: input.name } : {}), folders: [...folders, ...chosenFolders] });
     }
     const result = await registry.withMutation(project.id, 'conversation-import', async () => {
-      const conversation = registry.mainConversation(project.id), broker = registry.broker(project.id), c = broker.get(conversation.id);
+      const id = registry.mainConversationId(project.id), broker = registry.broker(project.id), c = broker.get(id);
       const result = broker.importTranscripts(c, previews);
       // A shared file's saved goal, decisions and tasks fill only fields this conversation has not set.
       if (!result.duplicate) for (const shared of previews.map(preview => preview.context).filter(Boolean)) {
@@ -65,7 +65,7 @@ export function createConversationRoutes({ registry, body, json, importer = new 
         if (url.searchParams.get('scope') === 'workspace' && !project) fail('Select a workspace first.');
         const result = await importer.list(url.searchParams.get('provider'), url.searchParams.get('scope') === 'workspace' ? project.folders : null, { cursor: url.searchParams.get('cursor') });
         if (project) {
-          const conversation = registry.broker(project.id).get(registry.mainConversation(project.id).id);
+          const conversation = registry.broker(project.id).get(registry.mainConversationId(project.id));
           const imported = new Set(Object.keys(conversation.imports).map(key => key.split(':').slice(0, 2).join(':')));
           result.sessions = result.sessions.map(session => ({ ...session, imported: imported.has(`${session.provider}:${session.id}`) }));
         }
@@ -94,8 +94,8 @@ export function createConversationRoutes({ registry, body, json, importer = new 
     const result = await registry.withMutation(projectId, 'conversation-import', async () => {
       const current = registry.get(projectId);
       if (JSON.stringify(current.folders) !== JSON.stringify(folders)) throw Object.assign(new Error('Workspace folders changed. Preview the import again.'), { status: 409 });
-      const conversation = registry.mainConversation(projectId);
-      return registry.broker(projectId).importTranscript(registry.broker(projectId).get(conversation.id), preview);
+      const id = registry.mainConversationId(projectId);
+      return registry.broker(projectId).importTranscript(registry.broker(projectId).get(id), preview);
     });
     json(res, 200, result); return true;
   };

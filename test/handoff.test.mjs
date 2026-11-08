@@ -568,7 +568,7 @@ test('routed prompts are routed again for the new agent, and a list that can’t
   await env.broker.handoff.check(run);
   await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
   const light = named(env, 'Fix a typo in the readme'), deep = named(env, 'Refactor the payment module');
-  assert.deepEqual([light.provider, light.model, light.effort, light.routing.mode], ['claude', 'claude-haiku', 'low', 'balanced']);
+  assert.deepEqual([light.provider, light.model, light.effort, light.routing.mode], ['claude', 'claude-haiku', 'low', 'smart']);
   assert.deepEqual([deep.provider, deep.model, deep.effort, deep.routing.tier], ['claude', 'claude-opus', 'high', 'deep']);
   assert.notEqual(deep.routing.escalation?.provider, 'codex', 'Its step up belongs to the new agent too.');
   assert.match(light.routing.reason, /^Moved at a handoff/);

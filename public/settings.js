@@ -88,7 +88,7 @@
       if (!keepAwake) bridge.getKeepAwake().then(state => { keepAwake = state; box.checked = state.enabled === true; box.disabled = false; }).catch(() => { if (box.isConnected) { error.textContent = 'Keep awake could not be loaded. Close Settings and try again.'; error.hidden = false; } });
     }
     if (window.relayFlow?.isOn?.()) {
-      const mode = api().getState().conversation?.routing?.mode || 'balanced', routing = window.relayRouting;
+      const routing = window.relayRouting, mode = routing.normalizeMode?.(api().getState().conversation?.routing?.mode) || api().getState().conversation?.routing?.mode || 'smart';
       kit.row(work, { label: 'Flow handoff', description: `Follows ${routing.modeNames[mode]} routing: at ${routing.handoffThresholds[mode]}% used, continue with another eligible subscription agent with confirmed room. Change the mode in Flow’s routing card.`, keywords: 'handoff hand off automatic routing limit quota switch agent' });
     } else {
     const offer = kit.select(work, { label: 'Offer a handoff near a usage limit', description: 'When an agent is close to its limit, offer to continue the task with another connected agent.', keywords: 'handoff hand off limit quota switch agent', options: [['0', 'Never'], ['80', 'At 80%'], ['90', 'At 90%'], ['95', 'At 95%']], value: String(handoff?.threshold ?? 90), disabled: !handoff, onChange: value => saveHandoff({ threshold: Number(value) }) });

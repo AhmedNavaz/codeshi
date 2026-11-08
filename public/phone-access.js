@@ -10,15 +10,30 @@
   // The section draws only while it can be seen: in Settings, or wherever else hosts it and says so.
   let shown = null;
   const visible = () => Boolean(target?.isConnected) && Boolean(shown ? shown() : document.getElementById('settings')?.open);
+  function seenAgo(at) {
+    if (!Number.isFinite(at) || at <= 0) return '';
+    const seconds = Math.max(1, Math.floor((Date.now() - at) / 1000));
+    if (seconds < 60) return 'just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  }
+  function deviceDescription(device, durationText) {
+    const lead = device.activeNow ? 'Active now' : device.lastSeenAt ? `Allowed · last seen ${seenAgo(device.lastSeenAt)}` : 'Allowed · not open right now';
+    return `${lead} · ${durationText}`;
+  }
   function updateEntry(state) {
     if (!entry) return;
     if (state.remote?.devices.some(item => item.state === 'pending')) connection = 'remote';
     const devices = [...state.devices, ...(state.remote?.devices || [])];
     const pending = devices.filter(item => item.state === 'pending').length, active = devices.filter(item => item.state === 'active').length;
+    const activeNow = devices.filter(item => item.state === 'active' && item.activeNow).length;
     document.getElementById('connect-phone-label').textContent = state.enabled || state.remote?.enabled ? 'Remote access on' : 'Remote access';
     const count = document.getElementById('connect-phone-count'); count.hidden = !pending; count.textContent = String(pending);
     entry.dataset.connected = String(active > 0);
-    entry.title = pending ? `${pending} pairing request${pending === 1 ? '' : 's'} waiting for approval` : active ? `${active} paired browser${active === 1 ? '' : 's'} connected` : 'Remote access from your phone or tablet, on the same Wi-Fi or away from home';
+    entry.title = pending ? `${pending} pairing request${pending === 1 ? '' : 's'} waiting for approval` : activeNow ? `${activeNow} paired browser${activeNow === 1 ? '' : 's'} active now` : active ? `${active} paired browser${active === 1 ? '' : 's'} allowed` : 'Remote access from your phone or tablet, on the same Wi-Fi or away from home';
   }
   function revealPhone() { if (focusPhone) { focusPhone = false; requestAnimationFrame(() => target?.isConnected && target.scrollIntoView({ block: 'start' })); } }
   function revealQR(qr, requested) {
@@ -73,15 +88,15 @@
     }
     for (const device of state.devices) {
       const pending = device.state === 'pending';
-      kit.row(rows, { label: device.name, description: pending ? `Check ${device.code} on your phone. Allow gives this browser control of all saved workspaces, including prompts, Stop and approvals.` : 'Connected for up to 12 hours, or until you turn off access or quit Codeshi.', control: pending ? [kit.button('Decline', () => action({ action: 'deny', id: device.id })), kit.button('Allow', () => action({ action: 'allow', id: device.id }), 'primary')] : kit.button('Remove device', () => action({ action: 'revoke', id: device.id }), 'danger') });
+      kit.row(rows, { label: device.name, description: pending ? `Check ${device.code} on your phone. Allow gives this browser control of all saved workspaces, including prompts, Stop and approvals.` : deviceDescription(device, 'Connected for up to 12 hours, or until you turn off access or quit Codeshi.'), control: pending ? [kit.button('Decline', () => action({ action: 'deny', id: device.id })), kit.button('Allow', () => action({ action: 'allow', id: device.id }), 'primary')] : kit.button('Remove device', () => action({ action: 'revoke', id: device.id }), 'danger') });
     }
-    kit.note(target, 'Phone browsers show progress while open. Lock-screen notifications and iPhone Live Activities are not included. Some guest Wi-Fi networks block devices from connecting to each other.');
+    kit.note(target, 'Phone browsers show progress while open. Each browser on your phone keeps its own pairing; you can move an approved connection to another browser from the Workspaces sheet on the phone.');
     revealPhone();
   }
   function drawRemote(state, rows, revealInvite) {
     if (!state?.configured) { kit.note(target, state?.error || 'Remote access is not configured in this build. Same Wi-Fi pairing is available.'); return; }
     const manage = input => action({ ...input, connection: 'remote' });
-    kit.row(rows, { label: state.enabled ? 'Remote access is on' : 'Remote access is off', description: 'Works over mobile data or another Wi-Fi network. Firebase carries encrypted messages between the paired phone and computer. Access is off after restarting Codeshi.', control: kit.button(state.enabled ? 'Turn off remote access' : 'Enable remote access', () => manage({ action: state.enabled ? 'stop' : 'start' }), state.enabled ? '' : 'primary') });
+    kit.row(rows, { label: state.enabled ? 'Remote access is on' : 'Remote access is off', description: 'Works over mobile data or another Wi-Fi network. Firebase carries encrypted messages between the paired phone and computer. Paired browsers stay allowed for up to a week and across Codeshi restarts until you turn this off or remove them.', control: kit.button(state.enabled ? 'Turn off remote access' : 'Enable remote access', () => manage({ action: state.enabled ? 'stop' : 'start' }), state.enabled ? '' : 'primary') });
     if (state.error) kit.note(target, state.error);
     if (!state.enabled) return;
     if (state.invite) {
@@ -90,10 +105,10 @@
       revealQR(qr, revealInvite);
       const manual = kit.details(target, 'Can’t scan? Copy the link'), link = node('input', undefined, 'phone-pair-link'); link.readOnly = true; link.value = state.invite.url; link.setAttribute('aria-label', 'One-use remote pairing link'); link.addEventListener('click', () => link.select()); manual.append(link);
     }
-    kit.row(rows, { label: 'Pair another browser', description: 'Every new browser needs approval here.', control: kit.button(state.invite ? 'New QR code' : 'Show QR code', () => manage({ action: 'invite' })) });
+    kit.row(rows, { label: 'Pair another browser', description: 'Every new browser needs approval here, unless moved from an already paired browser on your phone.', control: kit.button(state.invite ? 'New QR code' : 'Show QR code', () => manage({ action: 'invite' })) });
     for (const device of state.devices) {
       const pending = device.state === 'pending';
-      kit.row(rows, { label: device.name, description: pending ? `Check ${device.code} on your phone. Allow gives it control of saved workspaces, prompts, Stop and approvals.` : 'Connected for up to 12 hours. Remove it here to disconnect it immediately.', control: pending ? [kit.button('Decline', () => manage({ action: 'deny', id: device.id })), kit.button('Allow', () => manage({ action: 'allow', id: device.id }), 'primary')] : kit.button('Remove device', () => manage({ action: 'revoke', id: device.id }), 'danger') });
+      kit.row(rows, { label: device.name, description: pending ? `Check ${device.code} on your phone. Allow gives it control of saved workspaces, prompts, Stop and approvals.` : deviceDescription(device, 'Connected for up to a week and across restarts. Remove it here to disconnect it immediately.'), control: pending ? [kit.button('Decline', () => manage({ action: 'deny', id: device.id })), kit.button('Allow', () => manage({ action: 'allow', id: device.id }), 'primary')] : kit.button('Remove device', () => manage({ action: 'revoke', id: device.id }), 'danger') });
     }
     kit.note(target, 'Both devices need internet. Live progress works while the phone page is open; lock-screen notifications are not included. Same Wi-Fi access has its own on/off control.');
   }

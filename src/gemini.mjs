@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { GeminiClient } from './acp-client.mjs';
 import { acpApprovalRequest, acpToolItem, allowedWrites, writeKey } from './acp-tools.mjs';
-import { isAntigravityACP, antigravityInvocation, antigravityRelay, antigravitySessionParams, configureAntigravitySession, antigravityAccount, verifyAntigravity, removeRuntimeSkill } from './antigravity.mjs';
+import { isAntigravityACP, antigravityInvocation, antigravityRelay, antigravitySessionParams, configureAntigravitySession, antigravityAccount, antigravityQuestion, verifyAntigravity, removeRuntimeSkill } from './antigravity.mjs';
 import { probeCli } from './cli-probe.mjs';
 import { withBinaryPath } from './resolve-binary.mjs';
 import { readWorkspaceFile, writeWorkspaceFile } from './workspace-files.mjs';
@@ -69,7 +69,7 @@ export function geminiFile(config, filename) {
   throw new Error('Gemini requested a file outside this workspace.');
 }
 
-export async function runGemini(config, { event, approval, metadata, cancelled = () => false, steerable = () => {}, probe = probeCli, invocation = geminiInvocation, clientFactory = options => new GeminiClient(options), spawnImpl = spawn }) {
+export async function runGemini(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, probe = probeCli, invocation = geminiInvocation, clientFactory = options => new GeminiClient(options), spawnImpl = spawn }) {
   if (isAgy(config.bin)) return runAgy(config, { event, metadata, cancelled, spawnImpl });
   const antigravity = isAntigravityACP(config.bin);
   if (!antigravity && config.effort) throw new Error('Gemini reasoning effort is controlled by its native model; clear the effort selection.');
@@ -86,7 +86,7 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
   // Text before a tool is finished: what comes after it is a new message, below the tool, not more of the same one.
   const finishText = () => { if (!response) return; event({ type: 'item.completed', item: { id: segment ? `response-${segment}` : 'response', type: 'agent_message', text: response } }); response = ''; segment++; };
   const syncSilence = () => client.pauseSilence?.(asking > 0 || [...tools.values()].some(tool => tool.kind === 'execute' && !['completed', 'failed'].includes(tool.status)));
-  const ask = async request => { asking++; syncSilence(); try { return await approval(request); } finally { asking--; syncSilence(); } };
+  const ask = async (request, handler = approval) => { asking++; syncSilence(); try { return await handler(request); } finally { asking--; syncSilence(); } };
   client.on('message', async message => {
     const p = message.params || {};
     try {
@@ -96,10 +96,17 @@ export async function runGemini(config, { event, approval, metadata, cancelled =
         if (message.method === 'session/request_permission') {
           const once = p.options?.find(option => option.kind === 'allow_once');
           const tool = p.toolCall || {};
-          if (antigravity && /^interaction_/.test(tool.toolCallId || '')) throw new Error('Antigravity needs an interactive answer. Continue in its native client; Codeshi did not choose an answer for you.');
-          const allow = !cancelled() && config.mode !== 'read' && once && await ask({ id: String(message.id), ...acpApprovalRequest(tool), toolCall: tool });
-          if (!allow || cancelled()) { denied = true; result = { outcome: { outcome: 'cancelled' } }; }
-          else { for (const key of allowedWrites(tool)) approvedWrites.add(key); result = { outcome: { outcome: 'selected', optionId: once.optionId } }; }
+          if (antigravity && /^interaction_/.test(tool.toolCallId || '')) {
+            const form = antigravityQuestion(p);
+            if (!form) throw new Error('Codeshi could not display this Antigravity question and its choices. No answer was selected.');
+            finishText();
+            const answers = question && !config.reviewSnapshot && !config.routingAssessment && !cancelled() ? await ask({ id: String(message.id), questions: form.questions }, question) : null;
+            result = form.respond(cancelled() ? null : answers);
+          } else {
+            const allow = !cancelled() && config.mode !== 'read' && once && await ask({ id: String(message.id), ...acpApprovalRequest(tool), toolCall: tool });
+            if (!allow || cancelled()) { denied = true; result = { outcome: { outcome: 'cancelled' } }; }
+            else { for (const key of allowedWrites(tool)) approvedWrites.add(key); result = { outcome: { outcome: 'selected', optionId: once.optionId } }; }
+          }
         } else if (message.method === 'fs/read_text_file') {
           const file = geminiFile(config, p.path);
           let saved;

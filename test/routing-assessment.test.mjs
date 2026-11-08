@@ -23,8 +23,8 @@ function setup(t) {
   broker.handoff.models = async () => ({ data: models });
   broker.checks.usage = async () => usage();
   const c = broker.get(broker.create().id);
-  broker.setRouting(c, { mode: 'balanced' });
-  const input = { text: 'Yes, do it', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', mode: 'edit', approvalPolicy: 'ask', requestId: 'send-one', routing: { mode: 'balanced', tier: 'light', reason: 'Draft estimate' } };
+  broker.setRouting(c, { mode: 'smart' });
+  const input = { text: 'Yes, do it', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', mode: 'edit', approvalPolicy: 'ask', requestId: 'send-one', routing: { mode: 'smart', tier: 'light', reason: 'Draft estimate' } };
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { broker, c, input, root, workspace };
 }
@@ -62,6 +62,20 @@ test('a semantic assessment replaces the draft estimate before dispatch and shar
   assert(budget.tokens.input >= 40);
   assert.equal((await broker.dispatch(c, input)).runId, accepted.runId); assert.equal(calls, 1, 'Retrying an accepted Send never assesses or executes twice.');
   await assert.rejects(broker.dispatch(c, { ...input, text: 'Something else' }), /request ID/);
+});
+
+test('Saver uses local rules only on Send, making no agent assessment call and keeping effort low', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t); let calls = 0;
+  broker.setRouting(c, { mode: 'saver' });
+  broker.router.worker = async () => { calls++; return JSON.stringify(assessment); };
+  const accepted = await broker.dispatch(c, { ...input, requestId: 'saver-send', text: 'Refactor the payment module', routing: { mode: 'saver', tier: 'deep', reason: 'Draft' } });
+  await broker.running.done;
+  assert.equal(calls, 0, 'Saver never calls an assessment agent on Send.');
+  assert.equal(accepted.model, 'gpt-codex');
+  assert.equal(accepted.effort, 'low');
+  assert.equal(c.lastRun.routing.mode, 'saver');
+  assert.equal(c.lastRun.routing.assessment.source, 'local');
+  assert.equal(c.messages.findLast(message => message.role === 'user').routing.ratedBy, 'local');
 });
 
 test('a Send reads each agent once and starts on that reading, and a full limit costs no assessment', { skip: scriptCLIs }, async t => {
@@ -120,7 +134,7 @@ test('unknown quota never starts a paid assessment, and API consent applies to a
   broker.checks.usage = async () => ({ available: false });
   await assert.rejects(broker.dispatch(c, input), /fresh allowance/); assert.equal(calls, 0);
   broker.checks.usage = async () => usage(); broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'api' });
-  broker.setRouting(c, { mode: 'balanced', allowApi: true });
+  broker.setRouting(c, { mode: 'smart', allowApi: true });
   await assert.rejects(broker.dispatch(c, input), /bills by use/); assert.equal(calls, 0);
 });
 
@@ -189,7 +203,7 @@ test('a routed queued prompt is assessed at execution time and editing or pausin
   const ready = new Promise(resolve => { entered = resolve; });
   broker.router.worker = async () => { entered(); await new Promise(resolve => { release = resolve; }); return JSON.stringify(assessment); };
   broker.queueAction(c, { action: 'pause' });
-  broker.queueAction(c, { action: 'add', text: 'Do it', provider: 'codex', mode: 'edit', routing: { mode: 'balanced', tier: 'light', reason: 'Estimate' } });
+  broker.queueAction(c, { action: 'add', text: 'Do it', provider: 'codex', mode: 'edit', routing: { mode: 'smart', tier: 'light', reason: 'Estimate' } });
   broker.queueAction(c, { action: 'resume' });
   await ready;
   const run = broker.running;

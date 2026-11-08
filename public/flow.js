@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  // Flow mode (#107): just the chat, with plain-language cards in the space either side. Each card reads what
+  // Flow mode (#107, #128): just the chat, with plain-language cards in the space either side. Each card reads what
   // Codeshi has already recorded, with no extra model call: how routing and handoff are working, what's left on each plan, the plan and the queue, and the files changed with Undo.
   // Entering hides the sidebar and the panels behind a short seal moment; leaving brings them back as they were.
   // Approvals, questions and Stop stay in the chat, so they are never hidden.
@@ -20,10 +20,11 @@
   // always routes, so there is no manual mode here; leaving Flow is how you choose the agent and model by hand.
   // Handoff follows the mode too, with no separate setting: the task moves to another agent at the mode's share of a limit.
   const modes = [
-    { mode: 'saving', name: 'Cost saving', does: 'Codeshi favors lighter models and agents with allowance left, and moves the task to another agent at 80% of a limit.' },
-    { mode: 'balanced', name: 'Balanced', does: 'Codeshi matches the model and effort to each message, and moves the task to another agent at 90% of a limit.' },
-    { mode: 'quality', name: 'Maximum quality', does: 'Codeshi favors stronger models and deeper reasoning, and holds on until 95% of a limit before moving the task.' },
+    { mode: 'saver', name: 'Saver', does: 'Codeshi uses local rules with light and standard models at low effort, spends allowance where it resets soonest, and moves the task to another agent at 80% of a limit.' },
+    { mode: 'smart', name: 'Smart', does: 'Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and moves the task to another agent at 90% of a limit.' },
+    { mode: 'ultra', name: 'Ultra', does: 'Codeshi uses the strongest models and deepest reasoning first, stepping down one tier only when needed, and holds on until 95% of a limit before moving the task.' },
   ];
+  const canonicalMode = mode => window.relayRouting?.normalizeMode?.(mode) || mode || null;
   // The four cards, always present: each has a job, so none can be closed.
   const CARDS = [
     { id: 'working', title: 'How it’s working now', side: left },
@@ -49,15 +50,15 @@
   const narrowQuery = window.matchMedia?.('(max-width: 1180px)') || null, narrow = () => Boolean(narrowQuery?.matches);
   const reducedMotion = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
   const routing = () => api.getState().conversation?.routing || null;
-  // Routing belongs to Flow (#12, #107): entering turns it on, with the mode this workspace last used in Flow or
-  // Balanced, and leaving turns it off, so the normal view chooses the agent and model by hand. The choice is kept per browser.
+  // Routing belongs to Flow (#12, #107, #128): entering turns it on, with the mode this workspace last used in Flow or
+  // Smart, and leaving turns it off, so the normal view chooses the agent and model by hand. The choice is kept per browser.
   const ROUTING_KEY = id => `throughline:flow-routing:${id}`;
   let routingPending = false, routingReleasing = false;
-  function rememberRouting() { const current = routing(), id = api.getState().projectId; if (current && id) write(ROUTING_KEY(id), JSON.stringify({ mode: current.mode, allowApi: current.allowApi === true, check: current.check === true })); }
-  function savedRouting(id) { try { const saved = JSON.parse(read(ROUTING_KEY(id)) || 'null'); return saved && modes.some(option => option.mode === saved.mode) ? saved : null; } catch { return null; } }
+  function rememberRouting() { const current = routing(), id = api.getState().projectId; if (current && id) write(ROUTING_KEY(id), JSON.stringify({ mode: canonicalMode(current.mode), allowApi: current.allowApi === true, check: current.check === true })); }
+  function savedRouting(id) { try { const saved = JSON.parse(read(ROUTING_KEY(id)) || 'null'), mode = canonicalMode(saved?.mode); return saved && modes.some(option => option.mode === mode) ? { ...saved, mode } : null; } catch { return null; } }
   async function ensureRouting() {
     if (!on || routing() || routingPending || !api.getState().projectId) return;
-    const choice = savedRouting(api.getState().projectId) || { mode: 'balanced', allowApi: false, check: false };
+    const choice = savedRouting(api.getState().projectId) || { mode: 'smart', allowApi: false, check: false };
     routingPending = true; schedule();
     try { await api.setRouting({ mode: choice.mode, allowApi: choice.allowApi === true, check: choice.check === true }); }
     catch (error) { api.showNotice?.(`Flow could not turn routing on. ${error.message}`); }
@@ -213,7 +214,7 @@
   // How it's working now: the routing mode first, with what it does and when it hands off in plain words, what the next
   // message would do, and an inline testing preference. Routing changes live in Agent settings.
   function modeSentence(current) {
-    const option = modes.find(item => item.mode === current?.mode), extras = [];
+    const mode = canonicalMode(current?.mode), option = modes.find(item => item.mode === mode), extras = [];
     if (!option) return routingPending ? 'Turning routing on…' : 'Routing is off. Flow turns it on when the workspace is idle.';
     if (current?.allowApi) extras.push('Agents billed by use can be chosen.');
     if (current?.check) extras.push(api.getState().status?.verificationCadence === 'review-first' ? 'Routine automatic tests wait while you review. A selected build/review workflow still checks.' : 'After a run changes files, your tests run; if they fail, it tries once more, one step up.');
@@ -250,8 +251,18 @@
   testingSwitch.setAttribute('aria-describedby', testingDescription.id);
   const switchThumb = node('span'); switchThumb.setAttribute('aria-hidden', 'true'); testingSwitch.append(switchThumb);
   testingLabel.append(testingName, testingSwitch); testingControl.append(testingLabel, testingDescription);
-  const workingMode = node('div', 'flow-mode'), workingModeName = node('strong', 'flow-mode-name'), workingModeText = node('p', 'flow-mode-text'), workingNext = node('dd');
-  workingMode.append(node('span', 'flow-mode-eyebrow', 'Routing'), workingModeName, workingModeText);
+  const workingMode = node('div', 'flow-mode'), workingModeHeader = node('div', 'flow-mode-header');
+  const workingModeBadge = node('span', 'flow-mode-badge'); workingModeBadge.setAttribute('aria-hidden', 'true');
+  const workingModeIcon = node('i', 'flow-mode-icon'); workingModeIcon.setAttribute('aria-hidden', 'true');
+  workingModeBadge.append(workingModeIcon);
+  const workingModeTitles = node('div', 'flow-mode-titles');
+  const workingModeEyebrow = node('span', 'flow-mode-eyebrow', 'Routing');
+  const workingModeName = node('strong', 'flow-mode-name');
+  workingModeTitles.append(workingModeEyebrow, workingModeName);
+  const workingModeTag = node('span', 'flow-mode-tag'); workingModeTag.setAttribute('aria-hidden', 'true');
+  workingModeHeader.append(workingModeBadge, workingModeTitles, workingModeTag);
+  const workingModeText = node('p', 'flow-mode-text'), workingNext = node('dd');
+  workingMode.append(workingModeHeader, workingModeText);
   const workingFacts = node('dl', 'flow-facts');
   for (const [term, detail] of [['Next message', workingNext], ['Testing', testingControl]]) {
     const row = node('div'), value = detail.tagName === 'DD' ? detail : node('dd');
@@ -259,7 +270,7 @@
     row.append(node('dt', undefined, term), value); workingFacts.append(row);
   }
   function renderWorking(card) {
-    const state = api.getState(), current = routing(), currentMode = current?.mode || null;
+    const state = api.getState(), current = routing(), currentMode = canonicalMode(current?.mode);
     const signature = JSON.stringify([current, routingPending, nextLine(), state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence]);
     if (signature === card.signature) return;
     card.signature = signature;
@@ -268,6 +279,7 @@
       card.foot.append(button('flow-button', 'Agent settings', () => window.relayAgents?.open?.()));
     }
     const option = modes.find(item => item.mode === currentMode);
+    workingMode.dataset.mode = option ? option.mode : routingPending ? 'pending' : 'off';
     workingModeName.textContent = option ? option.name : routingPending ? 'Turning on…' : 'Off';
     workingModeText.textContent = modeSentence(current);
     workingNext.textContent = nextLine();
@@ -444,7 +456,7 @@
   // ---- A narrow window: the cards leave the sides and become a row of chips under the header; one opens at a time.
   function chipText(id) {
     const state = api.getState();
-    if (id === 'working') return modes.find(item => item.mode === routing()?.mode)?.name || 'Routing';
+    if (id === 'working') return modes.find(item => item.mode === canonicalMode(routing()?.mode))?.name || 'Routing';
     if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
     if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || []; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }
     const total = changedRuns().filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0);

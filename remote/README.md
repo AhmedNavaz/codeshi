@@ -43,15 +43,19 @@ Firebase configuration is included in packaged desktop builds; a release must in
 
 ## Pairing and transport
 
-Remote access is off by default and after every restart. Turning it on authenticates the computer anonymously,
-cleans up old channels belonging to that installation, and creates a five-minute, one-use invite. The QR link's
+Remote access is off by default. Turning it on authenticates the computer anonymously, cleans up old channels
+belonging to that installation that it no longer holds, and creates a five-minute, one-use invite. The QR link's
 fragment contains a random channel ID and a random 256-bit encryption key. The browser removes the fragment
 from the address bar and remembers the session on that phone. The key is never written to Firebase.
 
 The phone authenticates anonymously and submits an encrypted pairing request. The computer displays its name
-and six-digit number. The owner must compare that number and choose **Allow**. The grant lasts up to 12 hours;
-**Remove device**, turning remote access off, or quitting Codeshi stops further control. A new browser always
-requires computer approval. Scanning the link is not sufficient to start an agent or answer an approval.
+and six-digit number. The owner must compare that number and choose **Allow**. The grant lasts up to one week and survives a
+Codeshi restart: the computer keeps each active channel's ID and key next to its Firebase credentials in the
+owner-only `phone-firebase-auth.json`, reconnects on launch, and sets the expiry timer from the time remaining.
+**Remove device** or turning remote access off stops further control at once and deletes the channel. A new
+browser requires computer approval, unless an already paired browser hands its connection over: that creates a
+one-use, five-minute replacement channel and ends the old one. Scanning the link is not sufficient to start an
+agent or answer an approval.
 
 AES-GCM encrypts request and response contents, with separate authenticated directions and channel IDs. Firebase
 sees coordination metadata, such as anonymous IDs, expiry and connection state, plus encrypted packets. It does

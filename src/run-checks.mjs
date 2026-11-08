@@ -1,22 +1,27 @@
 import { randomUUID } from 'node:crypto';
+import { isAntigravityACP } from './antigravity.mjs';
+import { captureReview, listReviewChanges, reviewLimits } from './agent-review.mjs';
 import { providerUsage } from './providers.mjs';
 import { runSteps } from './recap.mjs';
+import { usualWindowSpend } from './usage-watch.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { assessQuota } from './task-budget.mjs';
+import '../public/routing.js';
 
-// Checking routed runs with the workspace's own tests (#12, stage 2). With Check with tests on, a routed run that
+// Checking routed runs with the workspace's own tests (#12, stage 2; #128). With Check with tests on, a routed run that
 // changed files is followed by the workspace's test command, the one marked for checks in the Run panel, never a
 // command from the agent or the repository. It runs as the usual Test session, so it shows in that panel and Stop works.
 //
 // When the tests fail, routing tries once more one step up: the same agent, so it keeps its session, with a stronger
-// model or more effort, told what failed. Balanced and Maximum quality retry on their own unless that agent is close
-// to its limit; Cost saving, and a retry that would go past the limit, ask first. A retry is never retried: if the
-// tests still fail, the work stops there. Queued prompts wait for the check and only carry on once the tests pass.
+// model or more effort, told what failed. Smart and Ultra retry on their own unless that agent is close to its limit;
+// Saver, and a retry that would go past the limit, ask first. A retry is never retried: if the tests still fail, the
+// work stops there. In Ultra, once the tests pass and a second subscription agent is connected with room, the finished
+// changes are sent for an independent read-only review (#15) within the task budget. Queued prompts wait for the check.
 export const CHECK_LIMIT_MS = 10 * 60 * 1000;
 export const CHECK_PAUSE = 'The tests failed after the last run.';
 const OUTPUT_TAIL = 4000;
 const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
-const AUTOMATIC = { balanced: 80, quality: 90 };
+const AUTOMATIC = { smart: 80, ultra: 90, balanced: 80, quality: 90 };
 const seconds = ms => ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.floor(ms / 60000)}m ${Math.round(ms % 60000 / 1000)}s`;
 const effortName = effort => effort ? `${effort[0].toUpperCase()}${effort.slice(1)} effort` : '';
 export const stepName = step => [names[step.provider], step.modelName || step.model, effortName(step.effort)].filter(Boolean).join(' · ');
@@ -40,7 +45,7 @@ export class RunChecks {
   restore() {
     for (const c of this.broker.conversations.values()) {
       const run = c.runs?.findLast(item => item.check?.status === 'running');
-      if (!run) continue;
+      if (!run || run.check?.status !== 'running') continue;
       this.finish(c, run.id, run.check, { status: 'interrupted', exitCode: null, output: '' }, 0);
       if (c.queue.length && !c.queuePaused) this.broker.queue.pause(c, 'Codeshi restarted while the tests were running.');
     }
@@ -95,7 +100,72 @@ export class RunChecks {
     if (result.status === 'timed-out') return this.hold(c, 'The tests didn’t finish after the last run.', 'The tests didn’t finish', 'They ran for 10 minutes and were stopped.');
     // Passed, stopped by the person, or skipped because the test command was already running: carry on.
     if (result.status === 'passed' && c.queuePaused?.reason === CHECK_PAUSE) this.broker.record(c, { type: 'queue_resume' });
+    if (result.status === 'passed' && globalThis.relayRouting.normalizeMode(run.routing?.mode) === 'ultra') {
+      if (await this.reviewUltra(c, run)) return;
+    }
     this.carryOn(c);
+  }
+
+
+  // Ultra (#128): with a second subscription agent connected with confirmed room, sends the finished changes for one
+  // independent read-only review (#15) within the task budget. Sequential after the build and check, never a race (#16).
+  async reviewUltra(c, run) {
+    if (this.closed || this.broker.running || this.broker.backgroundReview || c.lastRun?.id !== run.id) return false;
+    const folders = this.broker.workspaceFolders;
+    let repos = [];
+    try { repos = listReviewChanges(folders).filter(repo => repo.available && !repo.error && !repo.changesClipped); } catch { return false; }
+    const selections = [];
+    for (const repo of repos) for (const file of repo.changes) {
+      if (file.reason) continue;
+      const selection = { folderId: repo.folderId, path: file.path };
+      try { captureReview(folders, [selection]); selections.push(selection); } catch { continue; }
+      if (selections.length > reviewLimits.files) return false;
+    }
+    if (!selections.length) return false;
+    let snapshot;
+    try { snapshot = captureReview(folders, selections); } catch { return false; }
+
+    const candidates = [], taskId = run.taskId || run.id;
+    for (const provider of this.broker.availableProviders().filter(value => value !== run.provider)) {
+      const options = this.broker.usageOptions(provider);
+      if (provider === 'gemini' && isAntigravityACP(options.bin)) continue;
+      let account, usage, models;
+      try {
+        account = await this.broker.handoff.account(provider, { bin: options.bin, workspace: this.broker.workspace, googleRoot: this.broker.googleRoot });
+        if (!account?.installed || account.authenticated === false || account.billingSource !== 'subscription') continue;
+        usage = await this.usage(provider, options);
+        this.broker.observeQuota(c, provider, usage);
+        models = await this.broker.handoff.modelRows(provider);
+      } catch { continue; }
+      const allowed = model => !this.broker.budget.refusal(c, { task: { id: taskId, relation: 'review' }, provider, model, previousProvider: run.provider });
+      const allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
+      if (models.length ? !allowedModels.length : !allowed(null)) continue;
+      const usualSpend = usualWindowSpend(c, provider);
+      candidates.push({ provider, models, billingSource: 'subscription', usage, eligible: true, ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
+    }
+    if (!candidates.length || this.closed || this.broker.running || c.lastRun?.id !== run.id) return false;
+    const goal = (c.messages.find(message => message.role === 'user' && message.runId === (run.retryOf || run.id))?.text || run.prompt || c.context?.goal || 'Review the finished changes').slice(0, 4000);
+    const choice = globalThis.relayRouting.route({ text: goal, mode: 'ultra', candidates, quotaThreshold: 90 });
+    if (choice.error || choice.quota.state !== 'ok') return false;
+    const review = { snapshot, goal, builder: run.provider, provider: choice.provider, model: choice.model || null };
+    try {
+      this.broker.start(c, {
+        text: `Review selected changes: ${goal}`,
+        provider: choice.provider,
+        model: choice.model || null,
+        effort: choice.effort || null,
+        mode: 'read',
+        requestId: `ultra-review-${run.id}`,
+      }, {
+        review,
+        verifyReview: () => {
+          if (captureReview(this.broker.workspaceFolders, selections).digest !== snapshot.digest) {
+            throw Object.assign(new Error('The selected changes changed before the review started.'), { status: 409 });
+          }
+        },
+      });
+      return true;
+    } catch { return false; }
   }
 
   // Runs the test command and waits for it, stopping it at the time limit.

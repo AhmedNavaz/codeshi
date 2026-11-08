@@ -239,7 +239,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       const projectRoute=url.pathname.match(/^\/api\/projects\/([a-zA-Z0-9-]+)$/);
       if(req.method==='POST'&&projectRoute)return json(res,200,await registry.update(projectRoute[1],await body(req)));
       if(req.method==='GET'&&(url.pathname==='/api/ledger'||url.pathname==='/api/memory'||url.pathname==='/api/budget'||url.pathname==='/api/skills'||url.pathname==='/api/conversation/brief')){
-        const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);
+        const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversationId(projectId));
         return json(res,200,url.pathname==='/api/ledger'?await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}):url.pathname==='/api/memory'?broker.memory(c):url.pathname==='/api/budget'?broker.budget.view(c):url.pathname==='/api/skills'?broker.skills.view(c):broker.briefPreview(c));
       }
       if(req.method==='GET'&&url.pathname==='/api/conversation'){
@@ -251,13 +251,13 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         const toRun=url.searchParams.get('toRun')||null;
         const toMessage=url.searchParams.get('toMessage')||null;
         const options={since,limit,before,toRun,toMessage};
-        if(url.searchParams.get('task')){const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);return json(res,200,shape(broker.tasks.view(c,url.searchParams.get('task'),options)));}
+        if(url.searchParams.get('task')){const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversationId(projectId));return json(res,200,shape(broker.tasks.view(c,url.searchParams.get('task'),options)));}
         return json(res,200,shape(registry.mainConversation(selectedProjectId(url),options)));
       }
       if(req.method==='GET'&&url.pathname==='/api/conversation/search'){
         const projectId=selectedProjectId(url),broker=registry.broker(projectId);
         const task=url.searchParams.get('task');
-        const mainConv=broker.get(registry.mainConversation(projectId,{since:Number.MAX_SAFE_INTEGER}).id);
+        const mainConv=broker.get(registry.mainConversationId(projectId));
         const c=task?broker.tasks.find(mainConv,task):mainConv;
         const target=task?broker.tasks.lane(c,task)?.c||c:c;
         const q=(url.searchParams.get('q')||'').toLowerCase().trim();
@@ -320,22 +320,23 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         const c = shared ? owner.home : owner ? owner.c : broker.get(match[1]);
         if (req.method === 'GET' && !match[2]) return json(res, 200, broker.view(c));
         if (req.method === 'POST') {
-          if(!owner&&registry.mainConversation(selectedProjectId(url)).id!==c.id)return json(res,409,{error:'This project has one active chat. Open its project conversation to continue.'});
+          if(!owner&&registry.mainConversationId(selectedProjectId(url))!==c.id)return json(res,409,{error:'This project has one active chat. Open its project conversation to continue.'});
           const input = await body(req);
           if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
-          if (match[2] === 'compact') return json(res, 200, broker.compactContext(c, input));
+          const viewOptions = url.searchParams.has('limit') ? { limit: Number(url.searchParams.get('limit')) } : {};
+          if (match[2] === 'compact') return json(res, 200, broker.compactContext(c, input, viewOptions));
           if (match[2] === 'context') return json(res, 200, await broker.updateContext(c, input));
           if (match[2] === 'memory') return json(res, 200, broker.changeMemory(c, input));
           if (match[2] === 'skills') return json(res, 200, broker.skills.change(c, input));
           if (match[2] === 'budget') return json(res, 200, input.action === 'extend' ? broker.budget.extend(c, input) : broker.budget.setPolicy(c, input.policy || {}));
           if (match[2] === 'approval') return json(res, 200, await broker.approve(input.runId, input.approvalId, input.allow === true, input.remember ?? null));
           if (match[2] === 'answer') return json(res, 200, await broker.answer(input.runId, input.questionId, input.skip === true ? null : input.answers, c));
-          if (match[2] === 'provider') return json(res, 200, await broker.settings(c, input));
+          if (match[2] === 'provider') return json(res, 200, await broker.settings(c, input, viewOptions));
           if (match[2] === 'stop') return json(res, 200, broker.stop(c.id));
           if (match[2] === 'resume') return json(res, 200, input.cancel === true ? broker.cancelResume(c) : broker.scheduleResume(c, input));
           if (match[2] === 'queue') return json(res, 200, broker.queueAction(c, input));
           if (match[2] === 'steer') return json(res, 200, await broker.addToRun(c, input));
-          if (match[2] === 'routing') return json(res, 200, broker.setRouting(c, input));
+          if (match[2] === 'routing') return json(res, 200, broker.setRouting(c, input, viewOptions));
           if (match[2] === 'retry') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissRetry(c, input.offerId) : broker.acceptRetry(c, input));
           if (match[2] === 'handoff') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissHandoff(c, input.offerId) : await broker.acceptHandoff(c, input));
           if (match[2] === 'messages') return json(res, 202, await broker.dispatch(c, input));

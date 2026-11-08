@@ -4,7 +4,7 @@ import { atomicJSON } from './patches.mjs';
 import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open, MAX_PACKET } from '../public/phone-firebase.mjs';
 import { TRANSFER_ENCODING, conversationRoute, encodeConversation } from '../public/phone-transfer.mjs';
 
-const FIVE_MINUTES = 300_000, SESSION = 12 * 60 * 60_000;
+const FIVE_MINUTES = 300_000, SESSION = 7 * 24 * 60 * 60_000, ACTIVE_WINDOW = 45_000;
 const fail = (message, status = 400) => { throw Object.assign(Error(message), { status }); };
 const allowedGet = new Set(['/api/projects', '/api/status', '/api/conversation']);
 const allowedPost = new Set(['/api/tasks', '/api/tasks/plan', '/api/attachments']);
@@ -51,13 +51,44 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
   if (config) { try { settings = firebaseConfig(config); } catch (error) { setupError = error.message; } }
   let client = null, enabled = false, invite = null, error = null, generation = 0, transition = Promise.resolve(), lastTraffic = null;
   const rooms = new Map();
-  const load = () => { try { return JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch { return null; } };
-  const save = value => { if (storeFile) atomicJSON(storeFile, value); };
+  const readStore = () => { try { return storeFile ? JSON.parse(fs.readFileSync(storeFile, 'utf8')) : null; } catch { return null; } };
+  let storedAuth = readStore();
+  const isActiveNow = room => room.state === 'active' && room.activeNow !== false && Boolean(room.lastSeenAt && now() - room.lastSeenAt < ACTIVE_WINDOW);
+  const serializedRooms = () => [...rooms.values()]
+    .filter(room => room.state === 'active' && !room.handoverFrom && room.secret && now() < room.expiresAt)
+    .map(({ id, secret, owner, peer, name, code, expiresAt, lastSeenAt, approvedAt, deviceId }) => ({
+      id, secret, owner: owner || null, peer, name, code, state: 'active', expiresAt,
+      lastSeenAt: lastSeenAt || null, approvedAt: approvedAt || null, deviceId: deviceId || null,
+    }));
+  function persist(authPatch = null) {
+    if (!storeFile) return;
+    const current = readStore() || storedAuth || {};
+    if (authPatch) storedAuth = { ...current, ...authPatch };
+    else storedAuth = current;
+    const activeRooms = enabled ? serializedRooms() : [];
+    atomicJSON(storeFile, {
+      ...(storedAuth?.uid && storedAuth?.refreshToken ? { uid: storedAuth.uid, refreshToken: storedAuth.refreshToken } : {}),
+      enabled: Boolean(enabled && activeRooms.length > 0),
+      rooms: activeRooms,
+    });
+  }
+  const load = () => {
+    const data = readStore() || storedAuth;
+    return data?.uid && data?.refreshToken ? { uid: data.uid, refreshToken: data.refreshToken } : null;
+  };
+  const save = value => persist(value);
   function status() {
+    for (const room of [...rooms.values()]) if (now() >= room.expiresAt) {
+      rooms.delete(room.id); room.stop?.(); clearTimeout(room.timer);
+      if (invite?.id === room.id) invite = null;
+    }
     return { configured: Boolean(settings), enabled, error: setupError || error, url: settings?.phoneURL || null,
       traffic: client?.traffic ? { ...client.traffic } : lastTraffic,
       invite: invite && now() < invite.expiresAt ? { url: invite.url, qr: invite.qr, expiresAt: invite.expiresAt } : null,
-      devices: [...rooms.values()].filter(room => room.state !== 'waiting').map(({ id, name, code, state, expiresAt }) => ({ id, name, code, state, expiresAt })) };
+      devices: [...rooms.values()].filter(room => room.state !== 'waiting').map(room => ({
+        id: room.id, name: room.name, code: room.code, state: room.state, expiresAt: room.expiresAt,
+        lastSeenAt: room.lastSeenAt || null, activeNow: isActiveNow(room),
+      })) };
   }
   async function publish(room, value) {
     if (!enabled || !rooms.has(room.id)) return;
@@ -66,14 +97,29 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
   async function metadata(room) {
     await client.request(`rooms/${room.id}/meta`, 'PUT', { owner: room.owner, state: room.state, peer: room.peer || '', expiresAt: room.expiresAt });
   }
-  async function remove(room) {
+  async function remove(room, { persistStore = true } = {}) {
     rooms.delete(room.id); room.stop?.(); clearTimeout(room.timer);
     if (invite?.id === room.id) invite = null;
+    if (room.handoverId && rooms.has(room.handoverId)) {
+      const handover = rooms.get(room.handoverId);
+      room.handoverId = null;
+      await remove(handover, { persistStore: false });
+    }
+    if (persistStore && room.state === 'active') persist();
     // Expiry and rules still deny access if deletion cannot reach Firebase.
     try {
-      await client?.request(`rooms/${room.id}`, 'DELETE');
-      await client?.request(`owners/${room.owner}/${room.id}`, 'DELETE');
+      if (room.owner) {
+        await client?.request(`rooms/${room.id}`, 'DELETE');
+        await client?.request(`owners/${room.owner}/${room.id}`, 'DELETE');
+      }
     } catch { error = 'Disconnected locally. Firebase cleanup will be retried when remote access is enabled again.'; }
+  }
+  function watchRoom(room) {
+    room.stop?.();
+    room.stop = client.watch(`rooms/${room.id}/request`, value => receive(room, value), failure => { error = failure?.busy ? failure.message : 'Remote connection interrupted. Retrying…'; });
+    clearTimeout(room.timer);
+    room.timer = setTimeout(() => remove(room), Math.max(1, room.expiresAt - now()));
+    room.timer.unref?.();
   }
   async function receive(room, envelope) {
     if (!enabled || !rooms.has(room.id) || !envelope?.box || typeof envelope.uid !== 'string') return;
@@ -94,16 +140,59 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     const entry = { expiresAt: request.at + 30000, reply: null }; room.seen.set(request.id, entry);
     let reply;
     if (request.kind === 'pair' && room.state === 'waiting') {
-      if (!/^[0-9]{6}$/.test(request.code || '')) return;
-      room.peer = envelope.uid; room.code = request.code;
-      room.name = typeof request.name === 'string' && request.name.trim() ? request.name.trim().slice(0, 60) : 'Remote phone';
-      room.state = 'pending'; invite = null;
-      await metadata(room);
-      reply = { id: request.id, state: 'pending', code: room.code };
-    } else if (request.kind === 'session') reply = { id: request.id, state: room.state, code: room.code, expiresAt: room.expiresAt };
-    else if (room.state !== 'active') reply = { id: request.id, status: 401, body: { error: 'Approve this phone on the computer first.' } };
+      if (room.handoverFrom) {
+        const source = rooms.get(room.handoverFrom);
+        if (!source || source.state !== 'active' || now() >= source.expiresAt) { await remove(room); return; }
+        room.peer = envelope.uid;
+        room.code = source.code || (typeof request.code === 'string' ? request.code : '');
+        room.name = typeof request.name === 'string' && request.name.trim() ? request.name.trim().slice(0, 60) : source.name;
+        room.deviceId = typeof request.deviceId === 'string' && /^[A-Za-z0-9_.:-]{8,128}$/.test(request.deviceId) ? request.deviceId : source.deviceId || null;
+        room.state = 'active';
+        room.expiresAt = source.expiresAt;
+        room.approvedAt = source.approvedAt || now();
+        room.lastSeenAt = now();
+        room.activeNow = true;
+        delete room.handoverFrom;
+        source.handoverId = null;
+        await remove(source, { persistStore: false });
+        await metadata(room);
+        clearTimeout(room.timer); room.timer = setTimeout(() => remove(room), Math.max(1, room.expiresAt - now())); room.timer.unref?.();
+        persist();
+        reply = { id: request.id, state: 'active', code: room.code, expiresAt: room.expiresAt };
+      } else {
+        if (!/^[0-9]{6}$/.test(request.code || '')) return;
+        room.peer = envelope.uid; room.code = request.code;
+        room.name = typeof request.name === 'string' && request.name.trim() ? request.name.trim().slice(0, 60) : 'Remote phone';
+        room.deviceId = typeof request.deviceId === 'string' && /^[A-Za-z0-9_.:-]{8,128}$/.test(request.deviceId) ? request.deviceId : null;
+        for (const other of [...rooms.values()]) {
+          if (other.id !== room.id && other.state === 'pending' && (other.peer === room.peer || (room.deviceId && other.deviceId === room.deviceId))) await remove(other);
+        }
+        room.state = 'pending'; invite = null;
+        await metadata(room);
+        reply = { id: request.id, state: 'pending', code: room.code };
+      }
+    } else if (request.kind === 'session') {
+      if (room.state === 'active') {
+        if (request.active === false) room.activeNow = false;
+        else { room.lastSeenAt = now(); room.activeNow = true; }
+        persist();
+      }
+      reply = { id: request.id, state: room.state, code: room.code, expiresAt: room.expiresAt };
+    } else if (room.state !== 'active') reply = { id: request.id, status: 401, body: { error: 'Approve this phone on the computer first.' } };
     else if (request.kind === 'logout') { await remove(room); return; }
-    else if (request.kind === 'api') {
+    else if (request.kind === 'handover') {
+      if (room.handoverId && rooms.has(room.handoverId)) await remove(rooms.get(room.handoverId), { persistStore: false });
+      const id = token(), secret = token(), expiresAt = Math.min(room.expiresAt, now() + FIVE_MINUTES);
+      const next = { id, secret, key: await roomKey(secret), owner: room.owner, state: 'waiting', peer: '', name: room.name, code: room.code, expiresAt, handoverFrom: room.id, seen: new Map(), requests: 0 };
+      rooms.set(id, next); room.handoverId = id;
+      try {
+        await client.request(`owners/${next.owner}/${id}`, 'PUT', true);
+        await metadata(next);
+        watchRoom(next);
+        reply = { id: request.id, status: 200, body: { url: `${settings.phoneURL}/#remote=${id}.${secret}`, expiresAt } };
+      } catch (failure) { await remove(next, { persistStore: false }); reply = { id: request.id, status: 503, body: { error: failure.message } }; }
+    } else if (request.kind === 'api') {
+      room.lastSeenAt = now(); room.activeNow = true;
       try {
         reply = { id: request.id, ...await phoneRemoteRequest({ handle, local }, request) };
         const view = request.method === 'GET' && conversationRoute(request.path);
@@ -113,6 +202,7 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
         }
       }
       catch (failure) { reply = { id: request.id, status: 503, body: { error: failure.message } }; }
+      persist();
     } else reply = { id: request.id, status: 400, body: { error: 'Unknown phone request.' } };
     // Removal or expiry while the local handler was running cannot restore the device or publish another reply.
     if (!enabled || !rooms.has(room.id) || now() >= room.expiresAt) return;
@@ -124,11 +214,21 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     }
     await publish(room, reply); error = null;
   }
+  const countedRooms = () => [...rooms.values()].filter(room => !room.handoverFrom);
+  async function evictStaleIfNeeded(preferredName = null) {
+    for (const room of [...rooms.values()]) if (now() >= room.expiresAt) await remove(room);
+    if (countedRooms().length < 5) return;
+    const candidate = countedRooms().find(room => room.state === 'pending')
+      || (preferredName && countedRooms().find(room => room.state === 'active' && room.name === preferredName && !isActiveNow(room)))
+      || countedRooms().filter(room => room.state === 'active' && !isActiveNow(room) && (room.activeNow === false || room.lastSeenAt)).sort((a, b) => (a.lastSeenAt || 0) - (b.lastSeenAt || 0))[0];
+    if (candidate) await remove(candidate);
+  }
   async function newInvite() {
-    if (invite) await remove(invite);
-    if (rooms.size >= 5) fail('Remove a remote phone before pairing another.', 409);
+    if (invite) await remove(invite, { persistStore: false });
+    await evictStaleIfNeeded();
+    if (countedRooms().length >= 5) fail('Remove a remote phone before pairing another.', 409);
     const id = token(), secret = token(), identity = await client.identity();
-    const room = { id, key: await roomKey(secret), owner: identity.uid, state: 'waiting', peer: '', expiresAt: now() + FIVE_MINUTES, seen: new Map(), requests: 0 };
+    const room = { id, secret, key: await roomKey(secret), owner: identity.uid, state: 'waiting', peer: '', expiresAt: now() + FIVE_MINUTES, seen: new Map(), requests: 0 };
     rooms.set(id, room);
     try {
       await client.request(`owners/${room.owner}/${id}`, 'PUT', true);
@@ -136,20 +236,34 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
       room.url = `${settings.phoneURL}/#remote=${id}.${secret}`;
       const { default: QRCode } = await import('qrcode');
       room.qr = await QRCode.toDataURL(room.url, { errorCorrectionLevel: 'M', margin: 4, scale: 6 });
-      room.stop = client.watch(`rooms/${id}/request`, value => receive(room, value), failure => { error = failure?.busy ? failure.message : 'Remote connection interrupted. Retrying…'; });
-      room.timer = setTimeout(() => remove(room), FIVE_MINUTES); room.timer.unref();
+      watchRoom(room);
       invite = room;
-    } catch (failure) { await remove(room); throw failure; }
+    } catch (failure) { await remove(room, { persistStore: false }); throw failure; }
     return status();
   }
   async function stop() {
     enabled = false; generation++; invite = null;
-    const cleanup = Promise.allSettled([...rooms.values()].map(remove));
+    persist();
+    const cleanup = Promise.allSettled([...rooms.values()].map(room => remove(room, { persistStore: false })));
     let timeout;
     // Local authorization ends immediately, even without internet. Do not hold application shutdown open for
     // cloud cleanup; any remaining owner-index entries are retried on the next enable.
     await Promise.race([cleanup, new Promise(resolve => { timeout = setTimeout(resolve, 2000); })]);
     clearTimeout(timeout);
+    if (client?.traffic) lastTraffic = { ...client.traffic };
+    client?.close(); client = null;
+    return status();
+  }
+  async function shutdown() {
+    if (!storeFile) return stop();
+    generation++; invite = null;
+    const unapproved = [...rooms.values()].filter(room => room.state !== 'active' || room.handoverFrom || now() >= room.expiresAt);
+    for (const room of rooms.values()) { room.stop?.(); clearTimeout(room.timer); }
+    const cleanup = Promise.allSettled(unapproved.map(room => remove(room, { persistStore: false })));
+    let timeout;
+    await Promise.race([cleanup, new Promise(resolve => { timeout = setTimeout(resolve, 2000); })]);
+    clearTimeout(timeout);
+    persist();
     if (client?.traffic) lastTraffic = { ...client.traffic };
     client?.close(); client = null;
     return status();
@@ -163,9 +277,8 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
       enabled = true; error = null;
       try {
         const identity = await client.identity();
-        // An app restart always disconnects previously paired phones, including records left by a crash.
         const previous = await client.request(`owners/${identity.uid}`) || {};
-        for (const id of Object.keys(previous)) if (/^[a-f0-9]{64}$/.test(id)) {
+        for (const id of Object.keys(previous)) if (/^[a-f0-9]{64}$/.test(id) && !rooms.has(id)) {
           await client.request(`rooms/${id}`, 'DELETE'); await client.request(`owners/${identity.uid}/${id}`, 'DELETE');
         }
         return await newInvite();
@@ -177,11 +290,59 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     if (!room || now() >= room.expiresAt) fail('This remote phone request expired or was removed.', 404);
     if (['deny', 'revoke'].includes(input.action)) { await remove(room); return status(); }
     if (input.action !== 'allow' || room.state !== 'pending') fail('Choose a pending phone or remove a connected one.');
-    room.state = 'active'; room.expiresAt = now() + SESSION;
+    for (const other of [...rooms.values()]) {
+      if (other.id === room.id || other.handoverFrom) continue;
+      const sameDevice = Boolean(room.deviceId && other.deviceId === room.deviceId);
+      const staleSameName = other.name === room.name && (other.state === 'pending' || (other.state === 'active' && !isActiveNow(other) && (other.activeNow === false || other.lastSeenAt)));
+      if (sameDevice || staleSameName) await remove(other, { persistStore: false });
+    }
+    room.state = 'active'; room.approvedAt = now(); room.expiresAt = now() + SESSION; room.lastSeenAt = now(); room.activeNow = true;
     try { await metadata(room); await publish(room, { state: 'active', code: room.code, expiresAt: room.expiresAt }); }
     catch (failure) { await remove(room); fail(failure.message, 503); }
-    clearTimeout(room.timer); room.timer = setTimeout(() => remove(room), SESSION); room.timer.unref();
+    clearTimeout(room.timer); room.timer = setTimeout(() => remove(room), SESSION); room.timer.unref?.();
+    persist();
     return status();
+  }
+  if (settings && storeFile) {
+    const initial = readStore();
+    const restored = Array.isArray(initial?.rooms) ? initial.rooms.filter(entry =>
+      entry?.state === 'active' && /^[a-f0-9]{64}$/.test(entry.id || '') && /^[a-f0-9]{64}$/.test(entry.secret || '') &&
+      typeof entry.peer === 'string' && entry.peer && Number.isFinite(entry.expiresAt) && entry.expiresAt > now()) : [];
+    if (initial?.enabled && restored.length) {
+      enabled = true;
+      for (const entry of restored.slice(0, 5)) {
+        rooms.set(entry.id, {
+          id: entry.id, secret: entry.secret, owner: entry.owner || '', peer: entry.peer,
+          name: typeof entry.name === 'string' && entry.name ? entry.name : 'Remote phone',
+          code: typeof entry.code === 'string' ? entry.code : '',
+          state: 'active', expiresAt: entry.expiresAt, lastSeenAt: entry.lastSeenAt || null,
+          approvedAt: entry.approvedAt || null, deviceId: entry.deviceId || null,
+          activeNow: false, seen: new Map(), requests: 0,
+        });
+      }
+      transition = transition.then(async () => {
+        if (!enabled) return;
+        client = clientFactory ? clientFactory(settings) : new FirebasePhoneClient(settings, { load, save });
+        const identity = await client.identity();
+        for (const room of [...rooms.values()]) {
+          if (room.state !== 'active') continue;
+          if (now() >= room.expiresAt) { await remove(room, { persistStore: false }); continue; }
+          room.owner = room.owner || identity.uid;
+          room.key = await roomKey(room.secret);
+          await client.request(`owners/${room.owner}/${room.id}`, 'PUT', true);
+          await metadata(room);
+          watchRoom(room);
+        }
+        const previous = await client.request(`owners/${identity.uid}`) || {};
+        for (const id of Object.keys(previous)) if (/^[a-f0-9]{64}$/.test(id) && !rooms.has(id)) {
+          await client.request(`rooms/${id}`, 'DELETE'); await client.request(`owners/${identity.uid}/${id}`, 'DELETE');
+        }
+        if (!rooms.size) enabled = false;
+        persist();
+      }).catch(failure => { error = failure?.busy ? failure.message : 'Remote connection interrupted. Retrying…'; });
+    } else if (Array.isArray(initial?.rooms) && initial.rooms.length) {
+      persist();
+    }
   }
   let eventTimer = null;
   let projectsChanged = false;
@@ -199,5 +360,5 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     }, 2000); eventTimer.unref();
   }
   const manage = input => { const next = transition.then(() => action(input)); transition = next.catch(() => {}); return next; };
-  return { status, manage, notify, close: async () => { clearTimeout(eventTimer); await manage({ action: 'stop' }); } };
+  return { status, manage, notify, close: async () => { clearTimeout(eventTimer); const next = transition.then(() => shutdown()); transition = next.catch(() => {}); await next; } };
 }

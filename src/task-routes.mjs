@@ -5,7 +5,7 @@ export function createTaskRoutes({ registry, body, json }) {
     if (url.pathname !== '/api/tasks' && !url.pathname.startsWith('/api/tasks/')) return false;
     const projectId = url.searchParams.get('projectId');
     if (!projectId) fail('Select a workspace first.');
-    const broker = registry.broker(projectId), c = broker.get(registry.mainConversation(projectId).id), tasks = broker.tasks;
+    const broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId)), tasks = broker.tasks;
     if (url.pathname === '/api/tasks') {
       if (req.method === 'GET') { json(res, 200, { tasks: tasks.list(c) }); return true; }
       if (req.method !== 'POST') fail('Use GET or POST.', 405);

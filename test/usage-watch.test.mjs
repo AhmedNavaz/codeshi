@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
-import { observeReading, observeRunSize, runTokens, usageWatch } from '../src/usage-watch.mjs';
+import { observeReading, observeRunSize, runTokens, usageWatch, usualWindowSpend } from '../src/usage-watch.mjs';
 import { scriptCLIs } from './platform.mjs';
 
 const START = Date.parse('2026-11-07T08:00:00Z'), MINUTE = 60000;
@@ -97,6 +97,13 @@ test('a limit is reported from readings on each side of the run, and only while 
   assert.equal(usageWatch(withReadings(run, [reading(-1, 10, { id: 'opus', scope: 'opus', label: 'Weekly · Opus' }), reading(11, 60, { id: 'opus', scope: 'opus', label: 'Weekly · Opus' })]), refreshDue).moves.length, 0, 'A limit for one model is left out.');
 });
 
+test('usualWindowSpend summarizes recorded per-run window moves for standard and deep routing checks', () => {
+  const c = withReadings(usual(2), [reading(-1, 10), reading(11, 24), reading(19, 24), reading(31, 40)]);
+  const spend = usualWindowSpend(c, 'codex');
+  assert.equal(spend.short, 15);
+  assert.equal(spend.byWindow.primary, 15);
+});
+
 test('a run shorter than a minute keeps its before and after readings apart', () => {
   const c = withReadings([{ tokens: 1e6 }], [reading(.25, 20), reading(.75, 40)]);
   c.runs[0].endedAt = time(.5);
@@ -154,10 +161,11 @@ test('the suggestion is what actually helps next, in normal and Flow', () => {
   assert.deepEqual([step({ hasSession: false, used: 90000, rollover: false }).action], [null], 'No session means the next message already starts fresh.');
   assert.deepEqual([step({ hasSession: true, used: 90000, pending: true, rollover: true }).context.state, step({ hasSession: true, used: 90000, pending: true, rollover: true }).action], ['scheduled', null]);
 
-  assert.equal(step(refreshDue, 'balanced').action, 'saving');
-  assert.equal(step(refreshDue, 'quality').action, 'saving');
-  assert.equal(step(refreshDue, 'saving').action, null, 'Already on it.');
-  assert.equal(step({ hasSession: true, used: 90000, rollover: false }, 'balanced').action, 'compact');
+  assert.equal(step(refreshDue, 'smart').action, 'saver');
+  assert.equal(step(refreshDue, 'ultra').action, 'saver');
+  assert.equal(step(refreshDue, 'saver').action, null, 'Already on it.');
+  assert.equal(step(refreshDue, 'saving').action, null, 'Legacy saving mode is already Saver.');
+  assert.equal(step({ hasSession: true, used: 90000, rollover: false }, 'smart').action, 'compact');
 
   const gemini = withReadings([{ provider: 'gemini' }], [reading(-1, 10), reading(11, 40)], 'gemini');
   assert.equal(usageWatch(gemini, { hasSession: true, used: 90000, rollover: false }).notice.action, null, 'Gemini has no context refresh, and its tokens are unknown.');

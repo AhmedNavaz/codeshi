@@ -102,7 +102,7 @@
   function routeFor(text, count = 0) {
     const auto = routing(); if (!auto || !window.relayRouting) return null;
     const folders = project()?.folders?.length || 1;
-    const candidates = AGENTS.map(provider => ({ provider, eligible: available(provider) && !signedOut(provider) && !(provider === 'gemini' && (S.settings.mode === 'read' || folders > 1)) && (!S.c?.taskPolicy?.allowedProviders || S.c.taskPolicy.allowedProviders.includes(provider)), billingSource: S.accounts[provider]?.billingSource || 'unknown', usedPercent: usedPercent(provider), models: modelRows(provider) }));
+    const candidates = AGENTS.map(provider => ({ provider, eligible: available(provider) && !signedOut(provider) && !(provider === 'gemini' && (S.settings.mode === 'read' || folders > 1)) && (!S.c?.taskPolicy?.allowedProviders || S.c.taskPolicy.allowedProviders.includes(provider)), billingSource: S.accounts[provider]?.billingSource || 'unknown', usage: S.usage[provider], usedPercent: usedPercent(provider), models: modelRows(provider) }));
     return window.relayRouting.route({ text, attachments: count, mode: auto.mode, allowApi: auto.allowApi === true, candidates, current: S.c?.lastRun?.provider || S.settings.provider });
   }
 
@@ -223,7 +223,9 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       hiddenAt = Date.now(); clearTimeout(conversationTimer); clearTimeout(projectsTimer); clearTimeout(retryTimer);
-      conversationTimer = projectsTimer = null; return;
+      conversationTimer = projectsTimer = null;
+      phoneFetch('/phone/session?active=0').catch(() => {});
+      return;
     }
     if (Date.now() - hiddenAt > 3000) connect();
     checkConnection();
@@ -388,7 +390,7 @@
     try {
       const result = await api('/api/tasks/plan', { body: { folderId, provider, accessMode: mode, approvalPolicy } });
       if (S.draft !== folderId) return;
-      plan = [result.reason, result.uncommitted ? `${result.uncommitted} uncommitted change${result.uncommitted === 1 ? ' isn’t' : 's aren’t'} included.` : '', result.full ? `All ${result.limit} task slots are in use, so it starts when one frees up.` : ''].filter(Boolean).join(' ');
+      plan = [result.reason, result.uncommitted ? `${result.uncommitted} uncommitted change${result.uncommitted === 1 ? ' isn’t' : 's aren’t'} included.'` : '', result.full ? `All ${result.limit} task slots are in use, so it starts when one frees up.` : ''].filter(Boolean).join(' ');
     } catch (error) { if (S.draft === folderId) plan = error.message; }
     render();
   }
@@ -960,11 +962,29 @@
     const foot = node('div', 'sheet-foot');
     foot.append(segmented('Appearance', [['system', 'System'], ['light', 'Light'], ['graphite', 'Dark']], window.relayPhoneTheme?.choice() || 'system', value => { window.relayPhoneTheme?.choose(value); drawSheet(); }));
     foot.append(node('p', '', 'Work and sign-ins stay on your computer. Review, merging, files and the terminal are there too.'));
+    const move = button('Move to another browser', () => attempt(async () => {
+      const response = await phoneFetch('/phone/handover', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' });
+      const data = await response.json();
+      if (!response.ok || !data?.url) throw new Error(data?.error || 'Could not create a browser transfer link.');
+      try { await navigator.clipboard?.writeText?.(data.url); } catch { /* Selection works without clipboard access. */ }
+      openSheet('Move to another browser', body => {
+        body.append(node('p', 'sheet-text', 'Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) keeps its own connection. Open this one-use link in the browser you want to use within 5 minutes.'));
+        const field = node('input', 'own phone-handover-link');
+        field.type = 'text'; field.readOnly = true; field.value = data.url; field.setAttribute('aria-label', 'One-use browser transfer link');
+        field.addEventListener('click', () => field.select?.());
+        body.append(field);
+        if (data.code) body.append(node('p', 'sheet-note', `Or enter code ${String(data.code).replace(/(.{4})/, '$1 ')} in that browser.`));
+        body.append(node('p', 'sheet-note', 'Opening it moves this connection without asking on your computer again, and disconnects this browser.'));
+        const actions = node('div', 'card-actions');
+        actions.append(button('Copy link', () => { field.select?.(); navigator.clipboard?.writeText?.(data.url).catch(() => {}); toast('Link copied. Paste it in your other browser.'); }, 'big primary'));
+        body.append(actions);
+      });
+    }), 'link');
     const leave = button('Disconnect this phone', () => attempt(async () => {
       if (!leave.classList.contains('armed')) { leave.classList.add('armed'); leave.textContent = 'Tap again to disconnect'; setTimeout(() => { leave.classList.remove('armed'); leave.textContent = 'Disconnect this phone'; }, 3000); return; }
       try { await phoneFetch('/phone/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' }); } finally { location.replace('/'); }
     }), 'link danger');
-    foot.append(leave); host.append(foot);
+    foot.append(move, leave); host.append(foot);
   }
   $('where').addEventListener('click', () => {
     openSheet('Workspaces', whereSheet, () => JSON.stringify([S.projects.map(item => [item.id, item.name, item.pendingApprovals, item.runningConversationId]), tasks().map(task => [task.id, task.title, task.status, task.approvals]), S.thread, S.draft]));
@@ -1013,7 +1033,7 @@
       if (mode !== 'read' && approvalPolicy === 'auto') host.append(node('p', 'sheet-note warn', 'The agent acts without asking, so requests won’t come to this phone.'));
     };
     // Routing is set up on the computer. Here it shows only while it's on, and can be changed or turned off.
-    if (auto) host.append(segmented('Routing picks the agent', [['saving', 'Saving'], ['balanced', 'Balanced'], ['quality', 'Quality'], ['manual', 'Off']], auto.mode, value => setRouting(value === 'manual' ? null : value), locked));
+    if (auto) host.append(segmented('Routing picks the agent', [['saver', 'Saver'], ['smart', 'Smart'], ['ultra', 'Ultra'], ['manual', 'Off']], window.relayRouting?.normalizeMode?.(auto.mode) || auto.mode, value => setRouting(value === 'manual' ? null : value), locked));
     if (!auto) {
       const agents = node('div', 'field agents');
       agents.append(node('p', 'sheet-label', 'Agent'));

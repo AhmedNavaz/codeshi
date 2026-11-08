@@ -316,10 +316,17 @@
   // One side panel shows at a time, and docked layouts reopen the one last chosen (Agents at first). Narrow layouts
   // overlay it, so it starts closed there.
   function wantsGitPanel() { let preference = null; try { preference = localStorage.getItem('throughline:side-panel'); } catch { /* Defaults apply. */ } return preference === 'git' && Boolean(window.matchMedia?.('(min-width: 1101px)').matches); }
-  window.relayGit = { close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); } };
 
   const diffDialog = $('diff-dialog'), statusNames = { added: 'Added', untracked: 'New file', deleted: 'Deleted', renamed: 'Renamed', modified: 'Modified' };
   let diffRequest = 0;
+  function showDiff(folder, result, status) {
+    diffRequest++;
+    const code = String(result.code || ''), kind = status || (code === '??' ? 'untracked' : statusOf(code.trim()[0] || 'M')), staged = Boolean(code && !' ?'.includes(code[0]));
+    $('diff-title').textContent = result.path;
+    $('diff-meta').replaceChildren(`${folder.displayName || folder.name} · ${statusNames[kind] || 'Modified'}${staged ? ' · staged' : ''}`);
+    if (!diffDialog.open) diffDialog.showModal();
+    renderDiff(result);
+  }
   async function openDiff(repo, file, status) {
     const projectId = api.getState().projectId, request = ++diffRequest;
     $('diff-title').textContent = file.path; $('diff-meta').replaceChildren(`${repo.name} · ${statusNames[status]}${file.staged ? ' · staged' : ''}`);
@@ -328,6 +335,7 @@
     try { const result = await api.api(`/api/git/diff?folderId=${encodeURIComponent(repo.folderId)}&path=${encodeURIComponent(file.path)}`, {}, projectId); if (request === diffRequest) renderDiff(result); }
     catch (error) { if (request === diffRequest) $('diff-content').replaceChildren(el('p', error.message, 'inspector-empty')); }
   }
+  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff };
   // A changed image shows as pictures: before and after side by side, or the one side an added or deleted image has.
   function renderImages(images) {
     const view = el('div', undefined, 'diff-images'), size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;

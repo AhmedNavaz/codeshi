@@ -8,7 +8,7 @@ export function createCheckpointRoutes({ registry, body, json }) {
     if (req.method !== (url.pathname === '/api/checkpoints' ? 'GET' : 'POST')) fail(url.pathname === '/api/checkpoints' ? 'Use GET.' : 'Use POST.', 405);
     const projectId = url.searchParams.get('projectId');
     if (!projectId) fail('Select a workspace first.');
-    const broker = registry.broker(projectId), c = broker.get(registry.mainConversation(projectId).id);
+    const broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId));
     if (url.searchParams.get('task')) fail('Timeline currently belongs to the main workspace conversation.', 409);
     if (url.pathname === '/api/checkpoints') { json(res, 200, { entries: broker.checkpoints.timeline(c) }); return true; }
     const input = await body(req, 16000);

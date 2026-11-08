@@ -61,6 +61,8 @@ The **Testing cadence** preference shipped in 0.29.2 and applies in both views: 
 | GitHub/CI and publication | #18 | Explicit Normal reads; authorized scoped Flow reads; no implied publishing authority |
 | CLI | #90 | Same backend policies, journals, budgets and lifecycle |
 | Context, accounting and limits | #85, #84, #87, #123 | Shared foundation with honest occupancy/consumption reporting |
+| Onboarding and mode selection | #129 | Workspace-first setup; user-selected starting mode (Normal vs Flow) with presentable comparison |
+| Interface polish, typography & settings | #127, #130 | Typography scale, non-clipping workspace indicators, and categorized settings |
 
 1. **One managed task:** backend mode policy and safe takeover ([backend task policy draft](flow-issue-plan.md#backend-task-policy)), unified selection/handoff (#12, extending #17/#32/#91), visible decisions, checks and bounded recovery (#15), with measurements (#84) and controlled context (#85).
 2. **Managed task splitting:** build on manual task isolation (#88), bounded fan-out (#108), shared Plan cards (#97), board/schedule execution ([board/schedule issue draft](flow-issue-plan.md#board-and-schedule-execution)) and one parent budget (#87).
@@ -76,6 +78,8 @@ Existing manual capabilities and exact user-configured sequences remain availabl
 - Manual folder tasks already use separate brokers/journals, worktree isolation and shared mutation leases (#88). Flow fan-out must reuse that task/ownership model rather than removing guards.
 - Native provider capabilities differ. Codeshi disables user/project hooks for its invocations and restricts tools; skills/plugins/team features need an explicit compatibility design.
 - Approval correctness (#81) and reliable Stop/completion/worker cleanup must be fixed before widening unattended orchestration. Record actual provider failures separately from frontend state errors.
+- First-run onboarding currently puts agent account setup before workspace creation, and drops users into Normal mode without explaining or offering Flow mode. Redesigning onboarding (#129) prompts workspace and folder selection in Step 1, followed by a clear, presentable choice between Normal and Flow execution modes.
+- Small UI font sizes (10–11px) across sidebar items, task cards, and the bottom status bar create readability issues. In narrow sidebars, workspace names and running indicators clip against folder disclosures and menu buttons. Refined typography scale, non-clipping two-line workspace items (#127), and restructured Settings categories (#130) resolve these UI/UX inconsistencies.
 
 ## Delivery order
 

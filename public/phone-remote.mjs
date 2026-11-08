@@ -13,6 +13,12 @@ const listeners = new Set();
 const read = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
 const write = (key, value) => { try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(value)); } catch { /* An open session works without storage. */ } };
 function unpair() { if (sessionKey) write(sessionKey, null); }
+function deviceId() {
+  const key = `codeshi:remote-device:${config.projectId}`;
+  let id = read(key);
+  if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)) { id = token(16); write(key, id); }
+  return id;
+}
 function event(type, data = {}) { for (const listener of listeners) listener(type, data); }
 function waitingForApproval(matchCode) {
   title.textContent = 'Allow it on your computer';
@@ -79,8 +85,13 @@ function activate() {
         return new Response('{}', { status: 200 });
       }
       try {
-        if (path === '/phone/session') {
-          const result = await request({ kind: 'session' });
+        if (path === '/phone/handover') {
+          const result = await request({ kind: 'handover' });
+          return new Response(JSON.stringify(result.body || {}), { status: result.status || 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (path === '/phone/session' || path.startsWith('/phone/session?')) {
+          const url = new URL(path, 'https://phone.local');
+          const result = await request({ kind: 'session', ...(url.searchParams.get('active') === '0' ? { active: false } : {}) });
           return new Response(JSON.stringify(result), { status: result.status || (result.state === 'active' ? 200 : 401) });
         }
         const method = options.method || 'GET', view = method === 'GET' && conversationRoute(path);
@@ -130,20 +141,27 @@ async function start() {
   history.replaceState(null, '', location.pathname);
   const saved = read(sessionKey), match = fragment?.match(/^([a-f0-9]{64})\.([a-f0-9]{64})$/);
   const session = match ? { room: match[1], secret: match[2] } : saved;
-  if (!session) { note.textContent = 'On your computer, choose Remote access → Away from home and scan the QR code. Keep the computer awake with Codeshi open.'; return; }
+  if (!session) {
+    note.textContent = 'This browser isn’t paired yet. Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) has its own connection. Move the connection from the browser where you approved it, or on your computer choose Remote access → Away from home and scan a new QR code.';
+    return;
+  }
   if (!/^[a-f0-9]{64}$/.test(session.room || '')) throw Error('Scan a new QR code on your computer.');
   room = session.room; key = await roomKey(session.secret);
   const authKey = `codeshi:remote-auth:${config.projectId}`;
   client = new FirebasePhoneClient(config, { load: () => read(authKey), save: value => write(authKey, value) });
   const identity = await client.identity(), meta = await client.request(`rooms/${room}/meta`);
-  if (!meta || meta.expiresAt <= Date.now() || meta.peer && meta.peer !== identity.uid) { unpair(); throw Error('This connection expired or was removed. Scan a new QR code on your computer.'); }
+  if (!meta || meta.expiresAt <= Date.now() || meta.peer && meta.peer !== identity.uid) {
+    unpair();
+    throw Error('This connection expired or was removed. On your computer, choose Remote access → Away from home and scan a new QR code.');
+  }
   write(sessionKey, session);
   canWatch = meta.peer === identity.uid;
   if (meta.state === 'waiting') {
     const matchCode = String(100000 + crypto.getRandomValues(new Uint32Array(1))[0] % 900000);
     waitingForApproval(matchCode);
     const agent = navigator.userAgent, name = /iPhone/.test(agent) ? 'iPhone' : /iPad/.test(agent) ? 'iPad' : /Android/.test(agent) ? 'Android phone' : 'Remote phone';
-    await request({ kind: 'pair', name, code: matchCode });
+    const result = await request({ kind: 'pair', name, code: matchCode, deviceId: deviceId() });
+    if (result?.state === 'active') activate();
   } else {
     watch();
     const result = await request({ kind: 'session' });

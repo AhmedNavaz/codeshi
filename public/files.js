@@ -206,14 +206,26 @@
   });
   window.addEventListener('keydown',event => { if (event.key === 'Escape' && !event.isComposing && !document.querySelector('dialog[open]') && !$('file-preview').hidden) closePreview(); });
   window.addEventListener('relay-state',sync);
+  function focusLine(line, endLine = line, id = api.getState().projectId) {
+    if (id !== api.getState().projectId || !Number.isSafeInteger(line) || line < 1) return;
+    const rows = $('file-preview-content').querySelectorAll('.source-line'), finish = Number.isSafeInteger(endLine) && endLine >= line ? endLine : line;
+    for (let index = line; index <= finish; index++) rows[index - 1]?.classList.add('review-line');
+    rows[line - 1]?.scrollIntoView({ block: 'center' });
+  }
   window.relayFiles = {
-    async openAt(folderId, relative, line) {
+    async openAt(folderId, relative, line, endLine = line) {
       const state = api.getState(), id = state.projectId, folder = state.projects.find(project => project.id === id)?.folders.find(folder => folder.id === folderId);
       if (!folder) return api.showNotice('That folder is no longer in this workspace.');
       if (!await openFile(folder, { path: relative }, id)) return;
-      if (id !== api.getState().projectId || !Number.isSafeInteger(line)) return;
-      const target = $('file-preview-content').querySelectorAll('.source-line')[line - 1];
-      if (target) { target.classList.add('review-line'); target.scrollIntoView({ block: 'center' }); }
+      focusLine(line, endLine, id);
+    },
+    showPreviewAt(folder, relative, file, line, endLine = line) {
+      const id = api.getState().projectId;
+      previewVersion++;
+      showPreview(file, (folder.displayName || folder.name) + ' / ' + relative, id);
+      if (browser.open) browser.close();
+      $('close-file-preview').focus();
+      focusLine(line, endLine, id);
     },
     ids: () => files().map(file => file.id), uploading: () => uploads.has(api.getState().projectId), addFiles, addSnapshots,
     accepted(id, ids) { drafts.set(id, files(id).filter(file => !ids.includes(file.id))); save(id); pruneThumbnails(); if (id === api.getState().projectId) { status(); closePreview(); update(); } },

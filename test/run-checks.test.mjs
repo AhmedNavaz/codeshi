@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,7 +46,7 @@ function setup(t, results = []) {
   };
   t.after(async () => { await Promise.all(brokers.map(broker => broker.close())); fs.rmSync(root, { recursive: true, force: true }); });
   return {
-    runs, notices, release: () => fs.writeFileSync(path.join(workspace, '.release'), ''), unsave: () => { saved = null; },
+    root, workspace, runs, notices, release: () => fs.writeFileSync(path.join(workspace, '.release'), ''), unsave: () => { saved = null; },
     open(usedPercent = 10, verificationCadence = () => 'as-needed') {
       const broker = new Broker({ workspace, dataDir, bins: { codex: bin }, tests, verificationCadence });
       broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent }] });
@@ -64,8 +65,8 @@ test('Review first defers the routine check and repair loop, preserves queues an
   const env = setup(t, [{ status: 'failed', exitCode: 1, output: 'Would fail if run.' }]);
   let cadence = 'review-first';
   const broker = env.open(10, () => cadence), c = broker.get(broker.create().id);
-  broker.setRouting(c, { mode: 'balanced', check: true });
-  broker.start(c, { text: 'Hold the workspace', ...routed('balanced') });
+  broker.setRouting(c, { mode: 'smart', check: true });
+  broker.start(c, { text: 'Hold the workspace', ...routed('smart') });
   broker.queueAction(c, { action: 'add', text: 'A follow-up without edits', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
   cadence = 'as-needed';
   env.release();
@@ -94,9 +95,9 @@ test('Review first never skips explicitly selected workflow checks or test repai
 
 test('a routed run that changes files is checked with the saved Test command, and queued prompts wait for it', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
-  broker.setRouting(c, { mode: 'balanced', check: true });
-  broker.start(c, { text: 'Hold the workspace', ...routed('balanced') });
-  broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'balanced', reason: 'A small change', tier: 'light' } });
+  broker.setRouting(c, { mode: 'smart', check: true });
+  broker.start(c, { text: 'Hold the workspace', ...routed('smart') });
+  broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'smart', reason: 'A small change', tier: 'light' } });
   env.release();
   await until(() => c.runs.length === 2 && !broker.running);
   assert.equal(env.runs.length, 1, 'The queued prompt changed nothing, so only the first run was checked.');
@@ -104,25 +105,54 @@ test('a routed run that changes files is checked with the saved Test command, an
   const [first, second] = c.runs;
   assert.equal(first.check.status, 'passed'); assert.equal(second.check, undefined);
   assert(Date.parse(second.startedAt) >= Date.parse(first.check.startedAt), 'The queued prompt started after the check.');
-  assert.deepEqual(first.routing, { mode: 'balanced', tier: 'standard' }, 'The history keeps how each run was routed.');
+  assert.deepEqual(first.routing, { mode: 'smart', tier: 'standard' }, 'The history keeps how each run was routed.');
 
-  broker.setRouting(c, { mode: 'balanced', check: false });
-  broker.start(c, { text: 'Add promo codes', ...routed('balanced') });
+  broker.setRouting(c, { mode: 'smart', check: false });
+  broker.start(c, { text: 'Add promo codes', ...routed('smart') });
   await until(() => !broker.running && c.runs.length === 3);
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(env.runs.length, 1, 'With Check with tests off, nothing is checked.');
-  broker.setRouting(c, { mode: 'balanced', check: true });
+  broker.setRouting(c, { mode: 'smart', check: true });
   broker.start(c, { text: 'Add promo codes', provider: 'codex', mode: 'edit' });
   await until(() => !broker.running && c.runs.length === 4);
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(env.runs.length, 1, 'A model chosen by hand is not routed, so it is not checked.');
 });
 
+test('in Ultra, passing tests send the finished changes for an independent read-only review when a second subscription agent has room', { skip: scriptCLIs }, async t => {
+  const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
+  execFileSync('git', ['init', '-b', 'main'], { cwd: env.workspace });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: env.workspace });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: env.workspace });
+  fs.mkdirSync(path.join(env.workspace, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(env.workspace, 'src/checkout.js'), 'export const price = 100;\n');
+  execFileSync('git', ['add', 'src/checkout.js'], { cwd: env.workspace });
+  execFileSync('git', ['commit', '-m', 'init'], { cwd: env.workspace });
+  fs.writeFileSync(path.join(env.workspace, 'src/checkout.js'), 'export const price = 90;\n');
+
+  const claudeBin = path.join(env.root, 'claude-mock.mjs');
+  fs.writeFileSync(claudeBin, `#!${process.execPath}\nimport ${JSON.stringify(pathToFileURL(fixture).href)};\n`, { mode: 0o700 });
+  broker.configuredBins.claude = claudeBin;
+  broker.availableProviders = () => ['codex', 'claude'];
+  broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
+  broker.handoff.models = async provider => ({ data: provider === 'claude' ? [{ id: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] }] : [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
+
+  broker.setRouting(c, { mode: 'ultra', check: true });
+  broker.start(c, { text: 'Add promo codes', ...routed('ultra') });
+  await until(() => c.runs.some(run => run.review) && !broker.running && !broker.backgroundReview);
+  const reviewRun = c.runs.find(run => run.review);
+  assert.equal(reviewRun.provider, 'claude');
+  assert.equal(reviewRun.mode, 'read');
+  assert.equal(c.reviews.length, 1);
+  assert.equal(c.reviews[0].provider, 'claude');
+  assert.equal(c.taskBudgets[c.runs[0].taskId].reviews, 1);
+});
+
 test('failing tests are retried once, one step up and told what failed; a retry that still fails stops there and holds the queue', { skip: scriptCLIs }, async t => {
   const env = setup(t, [{ status: 'failed', exitCode: 1, output: 'checkout › applies a promo code\nExpected 90, received 100' }, { status: 'failed', exitCode: 1, output: 'still failing' }]);
   const broker = env.open(), c = broker.get(broker.create().id);
-  broker.setRouting(c, { mode: 'balanced', check: true });
-  broker.start(c, { text: 'Hold the workspace', ...routed('balanced') });
+  broker.setRouting(c, { mode: 'smart', check: true });
+  broker.start(c, { text: 'Hold the workspace', ...routed('smart') });
   broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
   env.release();
   await settled(broker, c, 2);
@@ -139,16 +169,16 @@ test('failing tests are retried once, one step up and told what failed; a retry 
   assert(env.notices.some(notice => notice.title === 'Tests still fail'));
 });
 
-test('Cost saving, or an agent near its limit, offers the retry; accepting starts it, and passing tests let the queue carry on', { skip: scriptCLIs }, async t => {
+test('Saver, or an agent near its limit, offers the retry; accepting starts it, and passing tests let the queue carry on', { skip: scriptCLIs }, async t => {
   const env = setup(t, [{ status: 'failed', exitCode: 1, output: 'fail' }, { status: 'exited', exitCode: 0, output: 'pass' }, { status: 'failed', exitCode: 2, output: 'fail' }]);
   const broker = env.open(), c = broker.get(broker.create().id);
-  broker.setRouting(c, { mode: 'saving', check: true });
-  broker.start(c, { text: 'Hold the workspace', ...routed('saving') });
+  broker.setRouting(c, { mode: 'saver', check: true });
+  broker.start(c, { text: 'Hold the workspace', ...routed('saver') });
   broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
   env.release();
   await until(() => c.retryOffer);
   assert.deepEqual([c.retryOffer.provider, c.retryOffer.model, c.retryOffer.effort, c.retryOffer.blocked], ['codex', 'gpt-codex', 'high', undefined]);
-  assert.equal(c.runs.length, 1, 'Cost saving asks before retrying.');
+  assert.equal(c.runs.length, 1, 'Saver asks before retrying.');
   assert.equal(c.queuePaused?.reason, CHECK_PAUSE);
   assert(env.notices.some(notice => notice.title === 'Tests failed' && /Retry with Codex · GPT Codex · High effort/.test(notice.body)));
   assert.throws(() => broker.acceptRetry(c, { offerId: 'other' }), /no longer offered/);
@@ -159,10 +189,10 @@ test('Cost saving, or an agent near its limit, offers the retry; accepting start
   assert.equal(c.queuePaused, null);
 
   const busy = env.open(85), b = busy.get(busy.create().id);
-  busy.setRouting(b, { mode: 'balanced', check: true });
-  busy.start(b, { text: 'Add promo codes', ...routed('balanced') });
+  busy.setRouting(b, { mode: 'smart', check: true });
+  busy.start(b, { text: 'Add promo codes', ...routed('smart') });
   await until(() => b.retryOffer);
-  assert.equal(b.retryOffer.blocked, 'Codex is at 85% of its limit', 'An agent near its limit asks first, even in Balanced.');
+  assert.equal(b.retryOffer.blocked, 'Codex is at 85% of its limit', 'An agent near its limit asks first, even in Smart.');
   busy.start(b, { text: 'Hello', provider: 'codex', mode: 'edit' });
   assert.equal(b.retryOffer, null, 'A new message replaces the offer.');
   await busy.running.done;
@@ -173,20 +203,20 @@ test('a slow check is stopped at its limit, a busy Test command skips it, and a 
   let broker = env.open();
   broker.checks.limitMs = 50;
   const c = broker.get(broker.create().id);
-  broker.setRouting(c, { mode: 'balanced', check: true });
-  broker.start(c, { text: 'Add promo codes', ...routed('balanced') });
+  broker.setRouting(c, { mode: 'smart', check: true });
+  broker.start(c, { text: 'Add promo codes', ...routed('smart') });
   await settled(broker, c, 1);
   assert(env.runs[0].stopped, 'The Test command was stopped.');
   assert.equal(c.runs[0].check.status, 'timed-out');
   assert.match(c.messages.find(message => message.text?.startsWith('Tests timed out')).text, /mark one that exits/);
   assert.equal(c.runs.length, 1, 'A check that didn’t finish is not a failure to retry.');
 
-  broker.start(c, { text: 'Add promo codes', ...routed('balanced') });
+  broker.start(c, { text: 'Add promo codes', ...routed('smart') });
   await settled(broker, c, 2);
   assert.equal(c.runs[1].check.status, 'skipped');
 
   broker.checks.limitMs = 60000;
-  broker.start(c, { text: 'Add promo codes', ...routed('balanced') });
+  broker.start(c, { text: 'Add promo codes', ...routed('smart') });
   await until(() => c.runs[2]?.check?.status === 'running');
   await broker.close();
   broker = env.open();
@@ -205,8 +235,8 @@ test('the retry prompt names the command and keeps only the end of the output', 
 test('unavailable or stale quota makes a failed routed check ask before retrying automatically', { skip: scriptCLIs }, async t => {
   const env = setup(t, [{ status: 'failed', exitCode: 1, output: 'Failing assertion' }]), broker = env.open(), c = broker.get(broker.create().id);
   broker.checks.usage = async () => ({ available: false });
-  broker.setRouting(c, { mode: 'balanced', check: true });
-  broker.start(c, { text: 'Add promo codes', ...routed('balanced') });
+  broker.setRouting(c, { mode: 'smart', check: true });
+  broker.start(c, { text: 'Add promo codes', ...routed('smart') });
   await until(() => c.retryOffer);
   assert.match(c.retryOffer.blocked, /allowance is unknown/);
   assert.equal(c.runs.length, 1);
@@ -229,8 +259,8 @@ test('through the app, the Test command saved in Project commands checks a route
   app.registry.broker(project.id).checks.usage = async () => usedNothing;
   const post = async (route, body) => { const response = await fetch(`http://127.0.0.1:${app.server.address().port}${route}?projectId=${project.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
   assert.equal((await post('/api/commands/save', { name: 'Tests', folderId: project.folders[0].id, directory: '', command: `"${process.execPath}" -e "process.stdout.write('31 passing')"`, test: true })).status, 200);
-  assert.deepEqual((await post(`/api/conversations/${id}/routing`, { mode: 'quality', check: true })).body.routing, { mode: 'quality', allowApi: false, check: true });
-  assert.equal((await post(`/api/conversations/${id}/messages`, { text: 'Add promo codes', ...routed('quality'), requestId: 'checked' })).status, 202);
+  assert.deepEqual((await post(`/api/conversations/${id}/routing`, { mode: 'ultra', check: true })).body.routing, { mode: 'ultra', allowApi: false, check: true });
+  assert.equal((await post(`/api/conversations/${id}/messages`, { text: 'Add promo codes', ...routed('ultra'), requestId: 'checked' })).status, 202);
   const c = app.registry.broker(project.id).get(id);
   await until(() => c.runs[0]?.check && c.runs[0].check.status !== 'running');
   assert.equal(c.runs[0].check.status, 'passed');

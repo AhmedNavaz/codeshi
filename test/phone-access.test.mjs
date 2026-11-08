@@ -270,3 +270,45 @@ if(m.id===1001&&!m.method){fs.writeFileSync(${JSON.stringify(outcome)},m.result.
   const saved = await (await fetch(`${desktop}/api/conversations/${c.id}`, { headers })).json();
   assert.match(JSON.stringify(saved.messages), /Phone approval received/);
 });
+
+test('same-Wi-Fi access distinguishes activeNow from allowed, moves a session to another browser, explains unpaired browsers, and replaces stale connections (#114)', async t => {
+  const f = await fixture(t);
+  const first = await f.pair();
+  await f.access.manage({ action: 'allow', id: first.device.id });
+  assert.equal(f.access.status().devices[0].activeNow, true);
+
+  // Hiding the phone tab marks activeNow false while keeping the session allowed.
+  assert.equal((await fetch(`${f.url}/phone/session?active=0`, { headers: { Cookie: first.cookie } })).status, 200);
+  assert.equal(f.access.status().devices[0].activeNow, false);
+  assert.equal(f.access.status().devices[0].state, 'active');
+
+  // An unpaired second browser (e.g. Safari or Home Screen after scanning in a QR reader) gets a clear explanation.
+  const unpaired = await fetch(`${f.url}/phone/session`);
+  assert.equal(unpaired.status, 401);
+  const unpairedBody = await unpaired.json();
+  assert.equal(unpairedBody.pairedElsewhere, true);
+  assert.match(unpairedBody.error, /Each browser on your phone.*Move the connection/i);
+
+  // Moving the connection to another browser rotates the credential without requiring computer approval or adding a second device.
+  const handover = await post(`${f.url}/phone/handover`, {}, { Cookie: first.cookie });
+  assert.equal(handover.status, 200);
+  const handoverData = await handover.json();
+  const moved = await post(`${f.url}/phone/pair`, { code: handoverData.code, name: 'Safari iPhone', deviceId: 'safari-device-0001' });
+  assert.equal(moved.status, 200);
+  const movedCookie = moved.headers.get('set-cookie').split(';')[0];
+  assert.equal((await moved.json()).state, 'active');
+  assert.equal(f.access.status().devices.length, 1);
+  assert.equal(f.access.status().devices[0].name, 'Safari iPhone');
+  assert.equal((await fetch(`${f.url}/api/projects`, { headers: { Cookie: first.cookie } })).status, 401, 'Old browser credential is replaced.');
+  assert.equal((await fetch(`${f.url}/api/projects`, { headers: { Cookie: movedCookie } })).status, 200, 'New browser credential works immediately.');
+
+  // Re-pairing when stale connections exist replaces an inactive connection instead of failing at the 5-device cap.
+  f.time(60_000);
+  assert.equal(f.access.status().devices[0].activeNow, false);
+  const invite = await f.access.manage({ action: 'invite' });
+  const repaired = await post(`${f.url}/phone/pair`, { code: invite.invite.code, name: 'Safari iPhone', deviceId: 'safari-device-0001' });
+  assert.equal(repaired.status, 202);
+  const pendingDevice = f.access.status().devices.find(row => row.state === 'pending');
+  await f.access.manage({ action: 'allow', id: pendingDevice.id });
+  assert.equal(f.access.status().devices.length, 1, 'Re-pairing replaces the previous connection for the same browser/phone.');
+});
