@@ -1,3 +1,4 @@
+#app-shell.flow .execution-policy-strip { display: none !important; }
 /* Flow mode (#107): just the chat in the middle, with plain-language cards in the space either side. It has its own
    look: the seal and the word Flow in the header, cards without frames, a larger message box and type, and controls
    at the foot of both rails. Details open in a focused Flow sheet; the workbench chrome steps aside. */
@@ -50,7 +51,8 @@
 .flow-status { display: none; align-items: center; gap: 7px; min-width: 0; min-height: 20px; padding: 0; color: var(--muted); font-size: 11px; }
 #app-shell.flow .flow-status:not([hidden]) { display: inline-flex; }
 .flow-status > i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
-.flow-status[data-live="true"] > i { background: var(--link); animation: pulse 1.4s ease-in-out infinite; }
+.flow-status[data-live="true"] { color: var(--text-strong); font-weight: 500; }
+.flow-status[data-live="true"] > i { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 .flow-status[data-attention="true"] > i { background: var(--warning); animation: none; }
 .flow-status[data-attention="true"] { color: var(--text); }
 .flow-status > span { overflow-wrap: anywhere; }
@@ -176,9 +178,35 @@
   --mode-eyebrow: var(--faint);
   opacity: .85;
 }
-.flow-tasks { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
-.flow-task { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-.flow-task-meta { color: var(--faint); font-size: 11.5px; }
+.flow-tasks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.flow-task {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+  transition: border-color .15s, background .15s;
+}
+.flow-task:hover { border-color: var(--border-strong); background: var(--surface-raised); }
+.flow-task.flow-task-running {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-raised));
+}
+.flow-task-button { align-self: flex-start; text-align: left; font-weight: 600; }
+.flow-task-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; color: var(--faint); font-size: 11.5px; }
+.flow-task-status-running { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 500; }
+.flow-pulse-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+  flex: none;
+}
 .flow-facts { display: grid; gap: 8px; margin: 0; }
 .flow-facts > div { display: grid; gap: 1px; min-width: 0; }
 .flow-facts dt { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
@@ -202,18 +230,57 @@
 .flow-switch:disabled { opacity: .5; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .flow-button, .flow-switch, .flow-switch > span { transition: none; } }
 
-.flow-plans { display: grid; gap: 11px; margin: 0; padding: 0; list-style: none; }
-.flow-plan { display: grid; gap: 4px; }
+.flow-plans { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.flow-plan {
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.flow-plan:hover, .flow-plan:focus-visible {
+  border-color: var(--border-strong);
+  outline: none;
+}
+.flow-plan.flow-plan-active {
+  padding: 10px 12px;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised));
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent);
+}
 .flow-plan-head { display: flex; align-items: center; gap: 7px; }
 .flow-plan-head strong { flex: 1; min-width: 0; color: var(--text-strong); font-weight: 600; }
 .flow-plan-head .agent-icon { width: 13px; height: 13px; }
 .flow-plan-value { color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .flow-plan[data-level="low"] .flow-plan-value { color: var(--warning); }
 .flow-plan[data-level="critical"] .flow-plan-value { color: var(--danger); }
+.flow-plan-working-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.flow-plan-working-badge::after {
+  content: "Working";
+}
+.flow-plan-windows { display: grid; gap: 8px; margin-top: 4px; padding-left: 2px; }
+.flow-plan-window { display: grid; gap: 2px; }
+.flow-plan-window-head { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; }
+.flow-plan-window-label { color: var(--text); font-weight: 500; }
 .flow-meter { position: relative; height: 5px; border-radius: 3px; background: var(--chip-bg); overflow: hidden; }
 .flow-meter::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--left, 0%); border-radius: 3px; background: var(--success); }
-.flow-plan[data-level="low"] .flow-meter::after { background: var(--warning); }
-.flow-plan[data-level="critical"] .flow-meter::after { background: var(--danger); }
+.flow-plan[data-level="low"] .flow-meter::after, .flow-plan-window[data-level="low"] .flow-meter::after { background: var(--warning); }
+.flow-plan[data-level="critical"] .flow-meter::after, .flow-plan-window[data-level="critical"] .flow-meter::after { background: var(--danger); }
 .flow-plan-when { color: var(--faint); font-size: 11.5px; }
 .flow-plan-secondary { color: var(--faint); font-size: 11.5px; }
 .flow-plan-secondary[data-level="low"] { color: var(--warning); }

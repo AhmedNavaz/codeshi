@@ -20,9 +20,9 @@
   // always routes, so there is no manual mode here; leaving Flow is how you choose the agent and model by hand.
   // Handoff follows the mode too, with no separate setting: the task moves to another agent at the mode's share of a limit.
   const modes = [
-    { mode: 'saver', name: 'Saver', does: 'Codeshi uses local rules with light and standard models at low effort, spends allowance where it resets soonest, and moves the task to another agent at 80% of a limit.' },
-    { mode: 'smart', name: 'Smart', does: 'Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and moves the task to another agent at 90% of a limit.' },
-    { mode: 'ultra', name: 'Ultra', does: 'Codeshi uses the strongest models and deepest reasoning first, stepping down one tier only when needed, and holds on until 95% of a limit before moving the task.' },
+    { mode: 'saver', name: 'Saver', does: 'Codeshi uses local rules with light and standard models at low effort, spends allowance where it resets soonest, and hands off autonomously as capacity tightens.' },
+    { mode: 'smart', name: 'Smart', does: 'Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and hands off adaptively as limits approach.' },
+    { mode: 'ultra', name: 'Ultra', does: 'Codeshi uses the strongest models and deepest reasoning first, stepping down one tier only when needed, and preserves task continuity before handing off.' },
   ];
   const canonicalMode = mode => window.relayRouting?.normalizeMode?.(mode) || mode || null;
   // The four cards, always present: each has a job, so none can be closed.
@@ -206,13 +206,24 @@
     return [option.does, ...extras].join(' ');
   }
   const draft = () => ({ text: $('message-input')?.value.trim() || '', files: window.relayFiles?.ids?.().length || 0 });
+  const continuationPattern = /^Continue the unfinished task from this shared conversation\.[^.]*\.?\s*/i;
+  function cleanRouteError(error) {
+    if (!error) return '';
+    let msg = String(error).trim();
+    msg = msg.replace(/\bContinue the unfinished task from this shared conversation\.[^.]*\./gi, '').trim();
+    msg = msg.replace(/^Auto found no connected agent within your rules/i, 'No connected agent is available within your rules');
+    msg = msg.replace(/\s*API-billed agents need separate consent\.?$/i, '');
+    return msg || 'No connected agent is available.';
+  }
   function nextLine() {
     const state = api.getState(), c = state.conversation;
-    if (api.isRunning()) { const run = c?.activeRun; return run?.purpose === 'routing' ? 'Assessing the task before choosing an agent, model and effort.' : `${agentName(run?.provider, run?.connection === 'local')} is working on it now.`; }
+    if (api.isRunning()) { const run = c?.activeRun; return run?.purpose === 'routing' ? (run?.phase === 'probing' ? 'Checking account and plan usage before choosing an agent.' : 'Assessing the task before choosing an agent, model and effort.') : `${agentName(run?.provider, run?.connection === 'local')} is working on it now.`; }
     if (c?.resume) return 'Waiting for a usage limit to reset, then it carries on.';
     if (routing()) {
-      const { text, files } = draft(), error = (text || files) && api.routeFor(text, files)?.error;
-      return error ? `Codeshi can’t choose yet. ${error}` : 'Codeshi picks the agent, model and effort when you send.';
+      const { text, files } = draft();
+      const cleanDraft = text.replace(continuationPattern, '').trim();
+      const error = (cleanDraft || files) && api.routeFor(cleanDraft, files)?.error;
+      return error ? `Codeshi can’t choose yet. ${cleanRouteError(error)}` : 'Codeshi picks the agent, model and effort when you send.';
     }
     const model = state.model ? window.relayModelPicker?.modelName?.(state.provider, state.model) || state.model : null;
     return `Your next message goes to ${agentNames[state.provider] || 'the agent'}${model ? `, ${model}` : ''}.`;
@@ -246,17 +257,17 @@
   workingModeTitles.append(workingModeEyebrow, workingModeName);
   const workingModeTag = node('span', 'flow-mode-tag'); workingModeTag.setAttribute('aria-hidden', 'true');
   workingModeHeader.append(workingModeBadge, workingModeTitles, workingModeTag);
-  const workingModeText = node('p', 'flow-mode-text'), workingNext = node('dd');
+  const workingModeText = node('p', 'flow-mode-text');
   workingMode.append(workingModeHeader, workingModeText);
   const workingFacts = node('dl', 'flow-facts');
-  for (const [term, detail] of [['Next message', workingNext], ['Testing', testingControl]]) {
+  for (const [term, detail] of [['Testing', testingControl]]) {
     const row = node('div'), value = detail.tagName === 'DD' ? detail : node('dd');
     if (value !== detail) value.append(detail);
     row.append(node('dt', undefined, term), value); workingFacts.append(row);
   }
   function renderWorking(card) {
     const state = api.getState(), current = routing(), currentMode = canonicalMode(current?.mode);
-    const signature = JSON.stringify([current, routingPending, nextLine(), state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence]);
+    const signature = JSON.stringify([current, routingPending, state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence]);
     if (signature === card.signature) return;
     card.signature = signature;
     if (!card.body.childNodes.length) {
@@ -267,7 +278,6 @@
     workingMode.dataset.mode = option ? option.mode : routingPending ? 'pending' : 'off';
     workingModeName.textContent = option ? option.name : routingPending ? 'Turning on…' : 'Off';
     workingModeText.textContent = modeSentence(current);
-    workingNext.textContent = nextLine();
     const reviewFirst = state.status?.verificationCadence === 'review-first';
     testingSwitch.setAttribute('aria-checked', String(reviewFirst));
     testingSwitch.disabled = testingPending || !state.ready || !state.status;
@@ -284,12 +294,14 @@
     const state = api.getState();
     return ['codex', 'claude', 'gemini'].filter(provider => state.accounts?.[provider]?.authenticated === true).map(provider => {
       const usage = window.relayUsage?.snapshot?.(provider), summary = window.relayUsage?.summary?.(provider);
-      return { provider, reported: usage?.available !== false, primary: summary?.primary || null, secondary: summary?.secondary || null, warning: summary?.warning || null };
+      const allWindows = (usage?.windows?.length ? usage.windows : (summary?.rows || [])).filter(w => Number.isFinite(w.usedPercent));
+      return { provider, reported: usage?.available !== false, primary: summary?.primary || null, secondary: summary?.secondary || null, warning: summary?.warning || null, allWindows };
     });
   }
   function renderPlans(card) {
     const state = api.getState(), rows = planRows();
-    const signature = JSON.stringify([rows, state.provider]);
+    const running = api.isRunning() ? (state.conversation?.activeRun?.connection === 'local' ? 'local' : state.conversation?.activeRun?.provider) : null;
+    const signature = JSON.stringify([rows, state.provider, running]);
     if (signature === card.signature) return;
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
@@ -303,6 +315,16 @@
       const item = node('li', 'flow-plan'), head = node('div', 'flow-plan-head'), icon = node('i', `agent-icon ${row.provider}`);
       item.dataset.provider = row.provider; icon.setAttribute('aria-hidden', 'true');
       head.append(icon, node('strong', undefined, agentNames[row.provider]));
+      const isWorking = row.provider === running;
+      if (isWorking) {
+        item.classList.add('flow-plan-active');
+        const badge = node('span', 'flow-plan-working-badge');
+        badge.setAttribute('aria-label', 'Working');
+        const dot = node('span', 'flow-pulse-dot');
+        dot.setAttribute('aria-hidden', 'true');
+        badge.append(dot);
+        head.append(badge);
+      }
       if (!row.primary) {
         head.append(node('span', 'flow-plan-value', row.reported ? 'No reading yet' : 'Not reported'));
         item.append(head);
@@ -311,22 +333,43 @@
         const percent = remaining(row.primary);
         item.dataset.level = level(percent);
         head.append(node('span', 'flow-plan-value', `${percent}% left`));
-        const meter = node('div', 'flow-meter'); meter.style.setProperty('--left', `${percent}%`); meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', `${percent}% of ${agentNames[row.provider]}’s ${row.primary.label} allowance left`);
+        const meter = node('div', 'flow-meter');
+        meter.style.setProperty('--left', `${percent}%`);
+        meter.setAttribute('role', 'img');
+        meter.setAttribute('aria-label', `${percent}% of ${agentNames[row.provider]}’s ${row.primary.label} allowance left`);
         const reset = resetWords(row.primary.resetsAt);
         item.append(head, meter, node('span', 'flow-plan-when', `${row.primary.label} limit${reset ? ` · ${reset}` : ''}`));
         if (row.secondary) {
           const otherReset = resetWords(row.secondary.resetsAt), other = node('span', 'flow-plan-secondary', `${row.secondary.label} · ${remaining(row.secondary)}% left${otherReset ? ` · ${otherReset}` : ''}`);
-          other.dataset.level = level(remaining(row.secondary)); item.append(other);
+          other.dataset.level = level(remaining(row.secondary));
+          item.append(other);
         }
       }
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-label', `${agentNames[row.provider]} limits. Click to view all limits in overlay.`);
+      item.title = `Click to view ${agentNames[row.provider]}’s full limits in an overlay window`;
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        window.relayUsage?.open?.(row.provider, item);
+      });
+      item.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          if (e.target.closest('button')) return;
+          e.preventDefault();
+          window.relayUsage?.open?.(row.provider, item);
+        }
+      });
       list.append(item);
     }
     body.append(list);
-    const chosen = rows.some(row => row.provider === state.provider) ? state.provider : rows[0].provider;
-    card.foot.append(button('flow-button', 'All limits', () => window.relayUsage?.open?.(chosen)));
+    const chosen = (running && rows.some(row => row.provider === running)) ? running : (rows.some(row => row.provider === state.provider) ? state.provider : rows[0].provider);
+    const allLimitsBtn = button('flow-button', 'All limits', (e) => window.relayUsage?.open?.(chosen, e.currentTarget || allLimitsBtn));
+    allLimitsBtn.title = 'View detailed limits in an overlay window';
+    card.foot.append(allLimitsBtn);
   }
 
-  // What's next: the agent's plan for the task, then what's queued. The plan stays while the task can still go on.
+    // What's next: the agent's plan for the task, then what's queued. The plan stays while the task can still go on.
   function planFor() {
     const c = api.getState().conversation, last = c?.lastRun, running = api.isRunning();
     const held = !running && last && last.status !== 'complete' && last.plan?.steps?.some(step => step.status !== 'done');
@@ -368,9 +411,34 @@
     // own Stop and Cancel; a task thread can come back to the whole workspace.
     if (others.length || state.taskId) {
       body.append(node('h3', 'flow-subhead', state.taskId ? 'This task runs beside the workspace chat' : 'Running beside this chat'));
-      const list = node('ul', 'flow-tasks'), taskWords = task => task.status === 'waiting' ? 'waiting to start' : task.status === 'running' ? 'working' : task.status === 'complete' ? 'finished' : task.status;
-      for (const task of others) { const item = node('li', 'flow-task'); item.append(button('flow-button', clip(task.title, 45), () => selectTask(task.id)), node('span', 'flow-task-meta', `${task.folderName ? `${task.folderName} · ` : ''}${taskWords(task)}`)); list.append(item); }
-      if (state.taskId) { const item = node('li', 'flow-task'); item.append(button('flow-button', 'Workspace chat', () => selectTask(null)), node('span', 'flow-task-meta', 'the whole workspace')); list.append(item); }
+      const list = node('ul', 'flow-tasks'), taskWords = task => task.status === 'waiting' ? 'waiting to start' : task.status === 'running' ? 'Working as extra task' : task.status === 'complete' ? 'finished' : task.status;
+      for (const task of others) {
+        const item = node('li', 'flow-task');
+        if (task.status === 'running') item.classList.add('flow-task-running');
+        const actionBtn = button('flow-button flow-task-button', task.title, () => selectTask(task.id));
+        actionBtn.title = `Switch to “${task.title}”`;
+        const meta = node('div', 'flow-task-meta');
+        if (task.folderName) meta.append(node('span', 'flow-task-folder', `${task.folderName} · `));
+        if (task.status === 'running') {
+          const badge = node('span', 'flow-task-status flow-task-status-running');
+          const dot = node('span', 'flow-pulse-dot');
+          dot.setAttribute('aria-hidden', 'true');
+          badge.append(dot, node('span', 'flow-task-status-text', 'Working as extra task'));
+          meta.append(badge);
+        } else {
+          meta.append(node('span', 'flow-task-status', taskWords(task)));
+        }
+        item.append(actionBtn, meta);
+        list.append(item);
+      }
+      if (state.taskId) {
+        const item = node('li', 'flow-task');
+        const actionBtn = button('flow-button flow-task-button', 'Workspace chat', () => selectTask(null));
+        const meta = node('div', 'flow-task-meta');
+        meta.append(node('span', 'flow-task-status', 'the whole workspace'));
+        item.append(actionBtn, meta);
+        list.append(item);
+      }
       body.append(list);
     }
   }
@@ -406,7 +474,7 @@
   const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, files: renderFiles };
 
   // ---- Live status in the working card. Remote access and Settings sit below it; no footer is needed.
-  const phaseWords = { starting: 'starting', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
+  const phaseWords = { starting: 'starting', probing: 'checking usage', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
   const elapsedWords = since => { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(since || '')) / 1000)); if (!Number.isFinite(seconds)) return ''; const minutes = Math.floor(seconds / 60); return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`; };
   function statusLine() {
     const state = api.getState(), c = state.conversation;
@@ -422,7 +490,7 @@
     const last = c.lastRun;
     if (!last) return { text: 'Ready', live: false };
     if (last.status === 'complete') { const files = c.checkpoints?.[last.id]?.files; return { text: `Done${files ? ` · ${plural(files, 'file')} changed` : ''}`, live: false }; }
-    return { text: last.status === 'interrupted' ? 'Stopped' : 'The last run didn’t finish', live: false, attention: last.status !== 'interrupted' };
+    return { text: last.status === 'interrupted' ? 'Stopped' : last.errorCategory === 'quota' ? 'Stopped at a usage limit' : 'The last run didn’t finish', live: false, attention: last.status !== 'interrupted' };
   }
   function renderStatus() {
     if (!status) return;
@@ -436,6 +504,7 @@
     if (text) text.textContent = line.text + context + compact; else status.textContent = line.text + context + compact;
     status.title = run ? `${run.compactions || 0} native compaction notifications observed. ${typeof native?.used === 'number' ? 'Context snapshot observed ' + (native.observedAt || 'at an unknown time') : 'Native context usage not reported.'}${run.context?.restoredAfterCompaction ? ' Task context restored in the same native session.' : ''}` : '';
     status.dataset.live = String(Boolean(line.live)); status.dataset.attention = String(Boolean(line.attention));
+    status.dataset.provider = (api.isRunning() && run?.provider) || '';
   }
 
   // ---- A narrow window: the cards leave the sides and become a row of chips under the header; one opens at a time.

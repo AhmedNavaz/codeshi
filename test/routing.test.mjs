@@ -291,3 +291,25 @@ test('the broker saves the Auto mode with the workspace and records what Auto ch
   broker.setRouting(broker.get(c.id), { mode: null });
   assert.equal(broker.get(c.id).routing, null);
 });
+
+test('adaptive quota thresholds: weekly windows expand headroom up to 97-98% based on remaining allowance and reset cadence (#135)', () => {
+  const { adaptiveThreshold, assessQuota } = globalThis.relayRouting;
+  const now = Date.parse('2026-11-08T12:00:00Z');
+  // 5-hour window with 4 hours left: does not arbitrarily bump above baseThreshold (90%)
+  const fiveHourRow = { label: '5-hour', period: '5-hour', usedPercent: 92, resetsAt: new Date(now + 4 * 3600000).toISOString() };
+  assert.equal(adaptiveThreshold(fiveHourRow, 90, { now, tier: 'standard' }), 90);
+
+  // 5-hour window with imminent reset (< 30 min): expands threshold to allow finishing
+  const imminentFiveHour = { label: '5-hour', period: '5-hour', usedPercent: 92, resetsAt: new Date(now + 15 * 60000).toISOString() };
+  assert(adaptiveThreshold(imminentFiveHour, 90, { now, tier: 'standard' }) > 90);
+
+  // Weekly window (periodHours >= 168) with 91% used (9% left) and 18h left out of 168h:
+  // Favorable reset cadence expands effective threshold to >= 95%
+  const weeklyRow = { label: 'Weekly', period: 'Weekly', usedPercent: 91, resetsAt: new Date(now + 18 * 3600000).toISOString() };
+  const adapted = adaptiveThreshold(weeklyRow, 90, { now, tier: 'standard' });
+  assert(adapted >= 95, `Expected adapted threshold >= 95, got ${adapted}`);
+
+  // assessQuota uses adaptive threshold for weekly window: 91% used is ok when threshold adapted to >= 95%
+  const quota = assessQuota({ available: true, checkedAt: new Date(now).toISOString(), windows: [weeklyRow] }, null, { threshold: 90, now, tier: 'standard' });
+  assert.equal(quota.state, 'ok', 'Weekly capacity remains spendable rather than hard-failing at static 90%');
+});

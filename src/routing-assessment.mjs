@@ -116,9 +116,25 @@ export class RoutingDispatcher {
     if (this.probes.has(provider)) return this.probes.get(provider);
     const broker = this.broker, options = broker.usageOptions(provider), known = this.readings.get(provider);
     const models = Promise.resolve(broker.handoff.modelRows(provider, this.probeLimitMs)).catch(error => { if (known?.models?.length) return known.models; throw error; });
-    const work = timeout(Promise.all([broker.handoff.account(provider, { ...options, workspace: broker.workspace }), Promise.resolve(broker.checks.usage(provider, options)).catch(() => null), models]), this.probeLimitMs)
-      .then(([account, usage, rows]) => { this.readings.set(provider, { at: Date.now(), bin: options.bin, account, usage, models: rows }); })
-      .catch(() => {})
+    const work = timeout(Promise.all([
+      Promise.resolve(broker.handoff.account(provider, { ...options, workspace: broker.workspace })).catch(error => ({ installed: true, authenticated: true, billingSource: 'unknown', error: error?.message })),
+      Promise.resolve(broker.checks.usage(provider, options)).catch(error => ({ available: false, reason: error?.message || 'Usage could not be read.' })),
+      models
+    ]), this.probeLimitMs)
+      .then(([account, usage, rows]) => {
+        this.readings.set(provider, { at: Date.now(), bin: options.bin, account, usage, models: rows });
+      })
+      .catch(error => {
+        const isTimeout = /timed? out/i.test(error?.message || '');
+        const reason = isTimeout ? 'Usage check timed out.' : (error?.message || 'Usage could not be read.');
+        this.readings.set(provider, {
+          at: Date.now(),
+          bin: options.bin,
+          account: known?.account || { installed: true, authenticated: true, billingSource: 'subscription' },
+          usage: { ...(known?.usage || {}), available: false, reason, timedOut: isTimeout, errorCategory: isTimeout ? 'timeout' : 'probe' },
+          models: known?.models || []
+        });
+      })
       .finally(() => { this.probes.delete(provider); });
     this.probes.set(provider, work);
     return work;
@@ -141,15 +157,30 @@ export class RoutingDispatcher {
   // about five seconds. After a moment Send goes on with that agent's last reading, or without it, and the check still
   // finishes for next time. It waits longer only for the agent keeping this conversation's session, or when nothing else
   // can take the message. The chosen agent is verified again before it starts unless its reading is from just now.
-  async candidates(c, input) {
-    const providers = this.broker.availableProviders(), probes = Promise.all(providers.map(provider => this.probe(provider)));
-    const settle = async ms => { let timer; await Promise.race([probes, new Promise(resolve => { timer = setTimeout(resolve, ms); timer.unref?.(); })]); clearTimeout(timer); };
+  async candidates(c, input, run = null) {
+    const providers = this.broker.availableProviders(), probePromises = providers.map(provider => this.probe(provider));
+    const settle = async ms => { let timer; await Promise.race([Promise.all(probePromises), new Promise(resolve => { timer = setTimeout(resolve, ms); timer.unref?.(); })]); clearTimeout(timer); };
     await settle(this.settleMs);
-    const rows = this.rows(c, input, providers), current = c.lastRun?.provider, allowApi = c.routing?.allowApi === true || input.routing.allowApi === true;
-    const routed = globalThis.relayRouting.route({ text: input.text, attachments: input.attachments?.length || 0, mode: input.routing.mode, candidates: rows, allowApi });
-    const keepsSession = !current || !providers.includes(current) || rows.some(row => row.provider === current && Date.now() - row.readAt < READING_LIFETIME_MS);
-    if (!routed.error && routed.quota.state === 'ok' && keepsSession) return rows;
-    await settle(this.probeLimitMs);
+    let rows = this.rows(c, input, providers), current = c.lastRun?.provider, allowApi = c.routing?.allowApi === true || input.routing.allowApi === true;
+    let routed = globalThis.relayRouting.route({ text: input.text, attachments: input.attachments?.length || 0, mode: input.routing.mode, candidates: rows, allowApi });
+    const keepsSession = () => !current || !providers.includes(current) || rows.some(row => row.provider === current && Date.now() - row.readAt < READING_LIFETIME_MS);
+    if (!routed.error && routed.quota.state === 'ok' && keepsSession()) return rows;
+
+    const deadline = Date.now() + this.probeLimitMs, remaining = new Set(probePromises);
+    for (const p of probePromises) p.then(() => remaining.delete(p), () => remaining.delete(p));
+    while (remaining.size > 0 && Date.now() < deadline) {
+      if (run?.stopped) throw fail('Routing assessment stopped. Your draft is saved.');
+      const msLeft = Math.max(1, deadline - Date.now());
+      let timer;
+      await Promise.race([
+        Promise.race([...remaining]),
+        new Promise(resolve => { timer = setTimeout(resolve, Math.min(msLeft, 500)); timer.unref?.(); })
+      ]);
+      clearTimeout(timer);
+      rows = this.rows(c, input, providers);
+      routed = globalThis.relayRouting.route({ text: input.text, attachments: input.attachments?.length || 0, mode: input.routing.mode, candidates: rows, allowApi });
+      if (!routed.error && routed.quota.state === 'ok' && keepsSession()) return rows;
+    }
     return this.rows(c, input, providers);
   }
 
@@ -241,11 +272,11 @@ export class RoutingDispatcher {
     const run = { id, taskId, c, execution, provider: input.provider || c.provider, mode: 'read', approvals: new Map(), steers: new Map(), stopped: false, ending: false, done: new Promise(resolve => { finish = resolve; }), purpose: 'routing' };
     broker.running = run;
     // A placeholder is visible even while account/model probes are running, so Stop and concurrency apply immediately.
-    c.routingPending = { id, provider: run.provider, taskId, purpose: 'routing', phase: 'routing', startedAt: new Date().toISOString() };
+    c.routingPending = { id, provider: run.provider, taskId, purpose: 'routing', phase: 'probing', startedAt: new Date().toISOString() };
     broker.emit('update', { conversationId: c.id });
     let result;
     try {
-      const checks = this.candidates(c, input); checks.catch(() => {});
+      const checks = this.candidates(c, input, run); checks.catch(() => {});
       const guard = () => {
         if (run.stopped) throw fail('Routing assessment stopped. Your draft is saved.');
         broker.execution.assert(c, execution, { action: 'routing' });
@@ -261,6 +292,7 @@ export class RoutingDispatcher {
           const estimate = globalThis.relayRouting.classify(input.text, { attachments, context: previousText });
           assessment = { tier: estimate.tier, effort: 'low', reason: estimate.reason, source: 'local' };
         } else {
+          if (c.routingPending) { c.routingPending.phase = 'assessing'; broker.emit('update', { conversationId: c.id }); }
           const rated = await this.assess(c, input, run, checks, { id, taskId, fingerprint, scope, began, guard });
           if (rated) assessment = rated;
           else {
@@ -270,17 +302,37 @@ export class RoutingDispatcher {
           }
         }
       }
+      if (c.routingPending) { c.routingPending.phase = 'routing'; broker.emit('update', { conversationId: c.id }); }
       await checks;
       guard();
       // A slow check may have finished during the assessment, so rank on whatever is newest.
-      let candidates = this.rows(c, input, broker.availableProviders()).filter(row => !policy.allowedProviders || policy.allowedProviders.includes(row.provider)).map(row => ({ ...row, models: row.models.filter(model => !policy.allowedModels[row.provider] || policy.allowedModels[row.provider].includes(model.id || model.model || model.value)) }));
+      const candidateRows = () => this.rows(c, input, broker.availableProviders()).filter(row => !policy.allowedProviders || policy.allowedProviders.includes(row.provider)).map(row => ({ ...row, models: row.models.filter(model => !policy.allowedModels[row.provider] || policy.allowedModels[row.provider].includes(model.id || model.model || model.value)) }));
+      let candidates = candidateRows();
       const override = policy.override && (!policy.overrideUsed || policy.override.scope === 'pinned') ? policy.override : null;
       if (override) candidates = candidates.filter(row => row.provider === override.provider);
       const allowApi = c.routing?.allowApi === true || input.routing.allowApi === true;
       // An explicitly previewed build/review workflow binds its builder and model. Respect that concrete choice while
       // assessing effort, rather than silently invalidating the review consent by switching to another builder.
       if (input.automaticReview) candidates = candidates.filter(row => row.provider === input.provider).map(row => ({ ...row, models: input.model ? row.models.filter(model => (model.id || model.model || model.value) === input.model) : [], ...(input.model ? { allowedModels: [input.model] } : {}) }));
-      const choice = override && candidates.length ? { provider: override.provider, model: override.model, effort: override.effort, mode: routingMode, tier: assessment.tier, reason: 'Your explicit task selection', quota: globalThis.relayRouting.assessQuota(candidates[0].usage, override.model, { threshold: 95 }) } : globalThis.relayRouting.route({ text: input.text, attachments, assessment, mode: routingMode, candidates, current: c.lastRun?.provider || c.provider, allowApi });
+      const evaluate = list => override && list.length ? { provider: override.provider, model: override.model, effort: override.effort, mode: routingMode, tier: assessment.tier, reason: 'Your explicit task selection', quota: globalThis.relayRouting.assessQuota(list[0].usage, override.model, { threshold: 95 }) } : globalThis.relayRouting.route({ text: input.text, attachments, assessment, mode: routingMode, candidates: list, current: c.lastRun?.provider || c.provider, allowApi });
+      let choice = evaluate(candidates);
+
+      // Recheck or join remaining in-flight probes before rejecting stale plan usage
+      if ((choice.error || choice.quota?.state === 'stale') && this.probes.size > 0) {
+        const deadline = Date.now() + this.probeLimitMs;
+        while (this.probes.size > 0 && Date.now() < deadline) {
+          if (run.stopped) throw fail('Routing assessment stopped. Your draft is saved.');
+          await Promise.race([
+            Promise.race([...this.probes.values()]),
+            new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(500, deadline - Date.now()))))
+          ]);
+          candidates = candidateRows();
+          if (override) candidates = candidates.filter(row => row.provider === override.provider);
+          if (input.automaticReview) candidates = candidates.filter(row => row.provider === input.provider).map(row => ({ ...row, models: input.model ? row.models.filter(model => (model.id || model.model || model.value) === input.model) : [], ...(input.model ? { allowedModels: [input.model] } : {}) }));
+          choice = evaluate(candidates);
+          if (!choice.error && choice.quota.state === 'ok') break;
+        }
+      }
       if (choice.error) throw fail(choice.error);
       if (choice.quota.state !== 'ok') throw fail('Auto could not confirm fresh allowance for the assessed task. Refresh plan usage or choose a model yourself.');
       const row = candidates.find(item => item.provider === choice.provider);

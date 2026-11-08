@@ -81,7 +81,7 @@
   const matches = (provider, row) => !query || [modelName(row), modelId(row), row.description, names[provider]].some(text => String(text || '').toLowerCase().includes(query));
 
   function optionRow(provider, row) {
-    const selected = isSelected(provider, row), choice = node('button', undefined, 'picker-row model-choice');
+    const state = api.getState(), selected = isSelected(provider, row), choice = node('button', undefined, 'picker-row model-choice');
     choice.type = 'button';
     choice.setAttribute('role', 'option');
     choice.setAttribute('aria-selected', String(selected));
@@ -252,7 +252,8 @@
   }
   async function preloadAll(projectId) {
     if (!projectId) return;
-    for (const provider of ['codex', 'claude', 'gemini', 'local']) if (!cache.has(projectId + ':' + provider)) await fetchModels(projectId, provider);
+    const missing = ['codex', 'claude', 'gemini', 'local'].filter(provider => !cache.has(projectId + ':' + provider));
+    await Promise.all(missing.map(provider => fetchModels(projectId, provider)));
   }
   // Opening the menu shows what is known at once and refreshes model lists older than a minute in the background.
   function refreshStale() {

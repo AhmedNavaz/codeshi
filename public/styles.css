@@ -335,6 +335,8 @@ summary::-webkit-details-marker { display: none; }
 .message-error::before { content: ""; flex: none; width: 15px; height: 15px; margin-top: 2px; background: var(--danger); -webkit-mask: var(--icon-alert) center / contain no-repeat; mask: var(--icon-alert) center / contain no-repeat; }
 .message-error-text { color: var(--muted); }
 .message-error-text::first-line { color: var(--text-strong); }
+.message-error-content { display: flex; flex-direction: column; gap: 8px; }
+.message-error-actions { display: flex; gap: 8px; margin-top: 4px; }
 .message-system { margin: 6px 0 6px 24px; color: var(--faint); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .disclosure-chevron { flex: none; width: 12px; height: 12px; background: currentColor; opacity: .7; transition: transform .15s ease; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; }
 details[open] > summary > .disclosure-chevron, .activity-entry.open .activity-output-toggle > .disclosure-chevron { transform: rotate(90deg); }

@@ -3245,6 +3245,15 @@ test('while work runs, a message joins the queue with the current settings, and 
   assert.equal(ui.$('model-picker-button').disabled,false,'Model picker button is usable while running');
   assert.equal(ui.$('model-select').disabled,false,'Model select is usable while running');
   await ui.window.relayModelPicker.preload(); await flush();
+  ui.$('model-picker-button').click(); await flush();
+  const pickerModels = ui.$('picker-models').querySelectorAll('.model-choice');
+  assert.equal(pickerModels.length > 0, true, 'Model picker renders model options while running');
+  const runningModel = pickerModels.find(item => !item.disabled && item.textContent.includes('Model One'));
+  assert(runningModel, 'Running agent models are selectable');
+  const otherAgentModel = pickerModels.find(item => item.disabled);
+  assert(otherAgentModel, 'Other agent models are disabled while a run is active');
+  runningModel.click(); await flush();
+  assert.equal(ui.state().model, 'model-one');
   await ui.window.relayUI.setConfiguration({model:'model-one',effort:'high'});
   ui.$('message-input').value='Then update the changelog';ui.fire('message-input','input');
   ui.$('message-input').dispatchEvent(new UIEvent('keydown',{key:'Enter'}));await flush();await flush();
@@ -4935,9 +4944,9 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   assert.equal(ui.window.relayFlow.enter(), true); await flush();
   assert.match(ui.$('flow-status-text').textContent, /^Codex is on “Write the tests” · \d/, 'The status bar says what is happening.'); assert.equal(ui.$('flow-status').dataset.live, 'true');
   const working = flowText(ui, 'working');
-  assert.match(working, /^How it’s working now\s*Routing\s*Smart\s*Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and moves the task to another agent at 90% of a limit\./, 'The mode leads, with its handoff.');
+  assert.match(working, /^How it’s working now\s*Routing\s*Smart\s*Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and hands off adaptively as limits approach\./, 'The mode leads, with its handoff.');
   assert.match(working, /After a run changes files, your tests run/);
-  assert.match(working, /Next message\s*Codex is working on it now\./);
+  assert.doesNotMatch(working, /Next message/, 'Redundant Next message section is removed.');
   assert.doesNotMatch(working, /Near a limit/, 'Handoff follows the mode; there is no separate line for it.');
   assert.equal(ui.$('flow-card-working').querySelectorAll('[role="radio"]').every(radio => radio.disabled), true, 'The mode waits while a run works.');
   const plans = flowText(ui, 'plans');
@@ -4956,12 +4965,67 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   Object.assign(chat, { status: 'complete', activeRun: null, lastRun: { id: 'run-3', provider: 'codex', status: 'complete', plan: chat.activeRun.plan } });
   ui.setIntercept((request, next) => request.path === '/api/checkpoints/preview' ? response({ digest: 'd', files: [], run: {}, runId: request.body.target.id }) : next());
   await ui.window.relayUI.refresh(); await flush();
-  assert.match(flowText(ui, 'working'), /Next message\s*Codeshi picks the agent, model and effort when you send\./);
+  assert.doesNotMatch(flowText(ui, 'working'), /Next message/, 'Redundant Next message section is removed.');
   assert.equal(ui.$('flow-status-text').textContent, 'Done'); assert.equal(ui.$('flow-status').dataset.live, 'false');
   assert.doesNotMatch(flowText(ui, 'next'), /Read the code/, 'A finished plan is not what’s next.'); assert.match(flowText(ui, 'next'), /Then · 1 queued message/);
   const undo = ui.$('flow-card-files').querySelectorAll('.flow-run-action').find(action => action.textContent === 'Undo');
   assert.equal(undo.disabled, false); undo.click(); await flush();
   assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').map(request => request.body.target), [{ kind: 'run', id: 'run-1' }]);
+});
+
+test('Flow mode card polish: extra task indicators, multi-window quota glance, and active agent highlighting (#136)', async () => {
+  const later = hours => new Date(Date.now() + hours * 3600e3).toISOString();
+  const ui = await flowBrowser({
+    usage: {
+      claude: { available: true, windows: [{ id: 'five', label: '5-hour', usedPercent: 40, resetsAt: later(3) }, { id: 'week', label: 'Weekly', usedPercent: 60, resetsAt: later(50) }] },
+      codex: { available: true, windows: [{ id: 'week', label: 'Weekly', usedPercent: 80, resetsAt: later(40) }] },
+    },
+  });
+  const chat = ui.canonical.get('project-one');
+  await ui.window.relayUI.refreshAccounts(); await flush();
+  ui.window.relayFlow.enter(); await flush();
+
+  // 1. Extra tasks with running indicator and unclipped title
+  const runningTask = { id: 'task-extra-1', title: 'Refactor background indexing engine', folderName: 'core', status: 'running', conversationId: 'lane-task-1' };
+  chat.parallelTasks = [runningTask];
+  await ui.window.relayUI.refresh(); await flush();
+  const taskEl = ui.$('flow-card-next').querySelector('.flow-task');
+  assert(taskEl.classList.contains('flow-task-running'), 'Running extra task has .flow-task-running class');
+  assert(taskEl.querySelector('.flow-pulse-dot'), 'Running extra task has animated pulsing dot indicator');
+  assert.match(flowText(ui, 'next'), /Refactor background indexing engine\s*core · Working as extra task/, 'Extra task shows unclipped title and Working as extra task status');
+
+  // 2. Active agent highlighting on plans card and status bar
+  chat.status = 'running';
+  chat.activeRun = { id: 'run-active', provider: 'claude', startedAt: new Date().toISOString() };
+  await ui.window.relayUI.refresh(); await flush();
+  let claudePlan = ui.$('flow-card-plans').querySelectorAll('.flow-plan').find(row => row.dataset.provider === 'claude');
+  assert(claudePlan, 'Claude plan item exists');
+  assert(claudePlan.classList.contains('flow-plan-active'), 'Executing agent has .flow-plan-active');
+  assert(claudePlan.querySelector('.flow-plan-working-badge'), 'Executing agent has Working badge');
+  assert.equal(ui.$('flow-status').dataset.provider, 'claude', 'Status bar tracks active provider');
+
+  // 3. Limits in overlay window instead of expanding inline in card
+  const allLimitsBtn = ui.$('flow-card-plans').querySelector('.flow-button');
+  assert(allLimitsBtn, 'All limits button exists in card');
+  assert.equal(allLimitsBtn.textContent, 'All limits');
+  allLimitsBtn.click(); await flush();
+  assert.equal(ui.$('usage-dialog').matches(':popover-open'), true, 'Opens limits overlay window');
+  assert.equal(ui.$('flow-card-plans').querySelector('.flow-plan-windows'), null, 'Cards avoid expanding multi-window lists directly in the rail');
+  assert.equal(ui.document.querySelector('.execution-policy-strip').hidden, true, 'Execution policy strip is hidden in Flow mode');
+
+  // 4. Clean status copy for idle quota stop and continuation prompt filtering
+  chat.status = 'incomplete';
+  chat.activeRun = null;
+  chat.lastRun = { id: 'run-last', provider: 'claude', status: 'failed', errorCategory: 'quota' };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('flow-status-text').textContent, 'Stopped at a usage limit');
+
+  // Draft continuation prompt does not produce synthetic error
+  chat.routing = { mode: 'smart' };
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('message-input').value = 'Continue the unfinished task from this shared conversation. Inspect the current files and saved activity first, and finish what remains.';
+  ui.fire('message-input', 'input'); await flush();
+  assert.doesNotMatch(flowText(ui, 'working'), /Next message/);
 });
 
 test('Flow layout changes preserve backend routing authority; explicit mode choices remain in Agent settings', async () => {

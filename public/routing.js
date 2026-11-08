@@ -21,7 +21,41 @@
     const name = String(model || '').toLowerCase();
     return Array.isArray(row.scopes) ? row.scopes.some(scope => typeof scope === 'string' && name.includes(scope.toLowerCase())) : !row.scope || name.includes(String(row.scope).toLowerCase());
   };
-  function assessQuota(usage, model = null, { now = Date.now(), threshold = 90, staleMs = 15 * 60 * 1000 } = {}) {
+
+  function windowPeriodHours(row) {
+    const label = `${row?.label || ''} ${row?.id || ''}`;
+    if (/week|7[- ]?d/i.test(label)) return 168;
+    if (/day|24[- ]?h|daily/i.test(label)) return 24;
+    return 5;
+  }
+
+  function adaptiveThreshold(row, baseThreshold = 90, { now = Date.now(), workload = null, tier = null } = {}) {
+    if (baseThreshold <= 0) return 0;
+    const periodHours = windowPeriodHours(row);
+    const resetMs = row?.resetsAt ? Date.parse(row.resetsAt) : NaN;
+    const hasReset = Number.isFinite(resetMs) && resetMs > now;
+    const hoursLeft = hasReset ? Math.max(0.1, (resetMs - now) / 3600000) : null;
+    const expectedSpend = typeof workload === 'number' && Number.isFinite(workload) && workload > 0
+      ? workload
+      : (periodHours >= 168 ? (tier === 'deep' ? 3 : 2) : periodHours >= 24 ? 4 : (tier === 'deep' ? 8 : 5));
+
+    if (hasReset && hoursLeft !== null) {
+      if (periodHours >= 168) {
+        if (hoursLeft <= 2 || hoursLeft / periodHours <= 0.05) {
+          return Math.max(baseThreshold, Math.min(98, 100 - Math.max(2, expectedSpend)));
+        }
+        const timeFraction = Math.min(1, hoursLeft / periodHours);
+        const buffer = Math.max(2.5, expectedSpend * (1 + timeFraction * 0.75));
+        return Math.max(baseThreshold, Math.min(97, Math.round(100 - buffer)));
+      }
+      if (hoursLeft <= 0.5) {
+        return Math.max(baseThreshold, Math.min(98, 100 - Math.max(2, expectedSpend)));
+      }
+    }
+    return baseThreshold;
+  }
+
+  function assessQuota(usage, model = null, { now = Date.now(), threshold = 90, staleMs = 15 * 60 * 1000, adaptive = true, workload = null, tier = null } = {}) {
     model ||= usage?.defaultModel || null;
     const all = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => row && !row.disabled);
     const unresolvedModel = !model && all.some(row => row.scope || row.scopes?.length);
@@ -33,14 +67,15 @@
     const windows = rows.map(row => {
       const usedPercent = Number.isFinite(row.usedPercent) && row.usedPercent >= 0 ? row.usedPercent : null;
       const resetPassed = row.resetsAt && Date.parse(row.resetsAt) <= now;
+      const effectiveThreshold = adaptive ? adaptiveThreshold(row, threshold, { now, workload, tier }) : threshold;
       return { id: row.id || null, label: row.label || row.id || 'Plan limit', usedPercent, resetsAt: row.resetsAt || null,
         ...(row.scope ? { scope: row.scope } : {}), ...(Array.isArray(row.scopes) ? { scopes: row.scopes } : {}),
-        state: old || resetPassed ? 'stale' : usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : usedPercent >= threshold ? 'near' : 'ok' };
+        state: old || resetPassed ? 'stale' : usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : usedPercent >= effectiveThreshold ? 'near' : 'ok' };
     });
     const state = windows.some(row => row.state === 'exhausted') ? 'exhausted' : old || windows.some(row => row.state === 'stale') ? 'stale'
       : unresolvedModel || !observedAt || !windows.length || windows.some(row => row.state === 'unknown') ? 'unknown' : windows.some(row => row.state === 'near') ? 'near' : 'ok';
     return { state, windows, observedAt, usedPercent: ['ok', 'near', 'exhausted'].includes(state) ? Math.max(...windows.map(row => row.usedPercent ?? 0)) : null,
-      ...(['unknown', 'stale'].includes(state) ? { reason: state === 'stale' ? 'Usage needs a fresh reading.' : usage?.reason || 'Fresh plan usage is not reported for this model.' } : {}) };
+      ...(['unknown', 'stale'].includes(state) ? { reason: state === 'stale' ? (usage?.timedOut ? 'Usage check timed out.' : (usage?.reason && usage.reason !== 'Usage needs a fresh reading.') ? usage.reason : 'Usage needs a fresh reading.') : usage?.reason || 'Fresh plan usage is not reported for this model.' } : {}) };
   }
   const quotaText = quota => !quota || ['unknown', 'stale'].includes(quota.state) ? `Plan usage ${quota?.state || 'unknown'}${quota?.reason ? ': ' + quota.reason : ''}`
     : quota.windows.map(row => `${row.label}: ${Math.round(row.usedPercent)}% used`).join('; ');
@@ -48,12 +83,6 @@
   // Values remaining allowance in a window by how long it has to last (#128). Allowance resetting within the hour is
   // nearly free to spend; weekly allowance with days to go is preserved. The tightest (binding) window on an agent
   // decides, so an early 5-hour reset never outweighs a tighter weekly window on the same agent.
-  function windowPeriodHours(row) {
-    const label = `${row?.label || ''} ${row?.id || ''}`;
-    if (/week|7[- ]?d/i.test(label)) return 168;
-    if (/day|24[- ]?h|daily/i.test(label)) return 24;
-    return 5;
-  }
   function windowSpendability(row, now = Date.now()) {
     const usedPercent = Number.isFinite(row?.usedPercent) ? row.usedPercent : 100;
     const remaining = Math.max(0, 100 - usedPercent);
@@ -225,7 +254,7 @@
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
       const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && modelId(row) !== 'default' && !row.hidden && distance(row) === distance(preferred))] : [null];
       const decorate = (model, steppedDown = false, steppedDownFrom = null, steppedDownQuota = null) => {
-        const quota = assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now });
+        const quota = assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now, tier: task.tier, workload: usualForWindow(candidate, null, task.tier) });
         const binding = bindingWindow(quota, now);
         const shortRoom = checkUsualRoom(candidate, quota, task.tier, now);
         return { ...candidate, selectedModel: model, quota, bindingWindow: binding, shortRoom, steppedDown, steppedDownFrom, steppedDownQuota };
@@ -411,5 +440,5 @@
     return results;
   }
 
-  root.relayRouting = { MODES, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, escalate, assessQuota, quotaText, windowApplies, windowSpendability, bindingWindow, replay };
+  root.relayRouting = { MODES, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, escalate, assessQuota, adaptiveThreshold, quotaText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);

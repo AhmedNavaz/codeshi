@@ -609,6 +609,18 @@ test('automatic handoff follows the same rules and says so in the conversation',
   assert.match(notes(limit.c).at(-1), /handed the task to Claude\. 1 queued prompt moved to Claude\.$/);
 });
 
+test('Flow mode executes handoff autonomously without publishing an interactive handoff offer card (#135)', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { preferences: { ...allowed, mode: 'smart' } }), run = await env.start();
+  queue(env, 'Flow queued task');
+  env.broker.queueAction(env.c, { action: 'pause' });
+  await env.broker.handoff.check(run);
+  assert.equal(env.c.handoffOffer, null, 'Flow mode does not set c.handoffOffer');
+  await until(() => env.broker.running && env.broker.running !== run, 'Flow autonomous handoff');
+  assert.equal(named(env, 'Flow queued task').provider, 'claude');
+  assert.match(notes(env.c).at(-1), /handed the task to Claude/);
+  await env.broker.running.done;
+});
+
 test('continuing with another agent after a limit takes the queued prompts along, if that agent needs no charges accepted', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   env.usage.codex = 100;

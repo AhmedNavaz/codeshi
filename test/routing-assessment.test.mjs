@@ -321,3 +321,89 @@ test('Codex assessment is ephemeral, read-only, isolated from coding sessions an
   assert.equal(thread.config['tools.update_plan'], undefined); assert.deepEqual(turn.outputSchema, schema); assert.equal(turn.sandboxPolicy.networkAccess, false);
   assert.equal(calls.some(call => call.method === 'thread/resume'), false);
 });
+
+test('cold start: First Send waits for in-flight probe and succeeds without spurious rejection', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t);
+  broker.router.settleMs = 10;
+  broker.router.probeLimitMs = 200;
+  broker.checks.usage = async () => {
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return usage();
+  };
+  broker.router.worker = async () => JSON.stringify(assessment);
+  const accepted = await broker.dispatch(c, input);
+  await broker.running.done;
+  assert.equal(accepted.provider, 'codex');
+  assert.equal(c.lastRun.provider, 'codex');
+});
+
+test('stale cache: First Send joins and refreshes stale readings rather than rejecting on first send', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t);
+  const staleTime = Date.now() - 20 * 60 * 1000;
+  broker.router.readings.set('codex', {
+    at: staleTime,
+    bin: broker.configuredBins.codex,
+    account: { installed: true, authenticated: true, billingSource: 'subscription' },
+    usage: { available: true, checkedAt: new Date(staleTime).toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(Date.now() + 3600000).toISOString() }] },
+    models,
+  });
+  broker.router.settleMs = 10;
+  broker.router.probeLimitMs = 200;
+  let usageReads = 0;
+  broker.checks.usage = async () => {
+    usageReads++;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return usage();
+  };
+  broker.router.worker = async () => JSON.stringify(assessment);
+  const accepted = await broker.dispatch(c, input);
+  await broker.running.done;
+  assert.equal(usageReads, 1);
+  assert.equal(accepted.provider, 'codex');
+  assert.equal(c.lastRun.provider, 'codex');
+  assert.equal(c.messages.filter(m => m.text === input.text).length, 1, 'No prompt runs twice.');
+});
+
+test('probes completing near the deadline are rechecked and can authorize work before timeout', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t);
+  broker.router.settleMs = 5;
+  broker.router.probeLimitMs = 80;
+  broker.checks.usage = async () => {
+    await new Promise(resolve => setTimeout(resolve, 40));
+    return usage();
+  };
+  broker.router.worker = async () => JSON.stringify(assessment);
+  const accepted = await broker.dispatch(c, input);
+  await broker.running.done;
+  assert.equal(accepted.provider, 'codex');
+});
+
+test('timeout identification: an actual probe timeout identifies check timed out rather than generic stale reading', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t);
+  const staleTime = Date.now() - 20 * 60 * 1000;
+  broker.router.readings.set('codex', {
+    at: staleTime,
+    bin: broker.configuredBins.codex,
+    account: { installed: true, authenticated: true, billingSource: 'subscription' },
+    usage: { available: true, checkedAt: new Date(staleTime).toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] },
+    models,
+  });
+  broker.router.settleMs = 5;
+  broker.router.probeLimitMs = 30;
+  broker.checks.usage = () => new Promise(resolve => setTimeout(resolve, 150));
+  broker.router.worker = async () => JSON.stringify(assessment);
+  await assert.rejects(broker.dispatch(c, input), /timed out/i);
+  assert.equal(broker.running, null);
+});
+
+test('cancellation during probe wait stops cleanly and leaves no duplicate run', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t);
+  broker.router.settleMs = 5;
+  broker.router.probeLimitMs = 500;
+  broker.checks.usage = () => new Promise(resolve => setTimeout(resolve, 200));
+  const dispatching = broker.dispatch(c, input);
+  setTimeout(() => broker.stop(c.id), 25);
+  await assert.rejects(dispatching, /assessment stopped/i);
+  assert.equal(broker.running, null);
+  assert.equal(c.messages.filter(m => m.role === 'user').length, 0);
+});

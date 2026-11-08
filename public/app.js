@@ -925,9 +925,36 @@
     if (moment) return moment;
     if (message.role === "error") {
       const error = element("div", "message-error");
-      error.append(element("span", "message-error-text", message.text || "The assistant stopped before finishing."));
+      const content = element("div", "message-error-content");
+      content.append(element("span", "message-error-text", message.text || "The assistant stopped before finishing."));
+      error.append(content);
       error.setAttribute("role", "note");
       if (message.id) error.id = "message-" + message.id;
+      const msgRun = message.runId ? state.conversation?.runs?.find(item => item.id === message.runId) : null;
+      if (msgRun?.errorCategory === 'budget' || /^Stopped:.*(?:times in this task|The same step has gone wrong)/i.test(message.text || '')) {
+        const taskId = msgRun?.taskId || state.conversation?.lastRun?.taskId;
+        const actions = element("div", "message-error-actions");
+        const dismissBtn = element("button", "pill-button", "Dismiss and retry");
+        dismissBtn.type = "button";
+        dismissBtn.addEventListener("click", async () => {
+          try {
+            await post(endpoint(state.conversation.id, "budget"), { action: 'reset', taskId }, state.projectId);
+            await refresh();
+            run(true);
+          } catch (err) { showNotice(err.message); }
+        });
+        const extendBtn = element("button", "pill-button", "Extend budget");
+        extendBtn.type = "button";
+        extendBtn.addEventListener("click", async () => {
+          try {
+            if (window.relayLimits) await window.relayLimits.extend(taskId, 'maxRepeatedFailures');
+            await refresh();
+            run(true);
+          } catch (err) { showNotice(err.message); }
+        });
+        actions.append(dismissBtn, extendBtn);
+        content.append(actions);
+      }
       return error;
     }
     if (message.role === "system") {
@@ -1499,6 +1526,12 @@
   // An offer to hand the task to another agent before a usage limit stops the run (#17).
   function renderHandoff() {
     const offer = state.conversation?.handoffOffer, section = $("handoff-offer");
+    const isFlow = state.flow || state.conversation?.execution?.active?.mode === "flow";
+    if (isFlow && (!offer || offer.to?.billingSource === "subscription")) {
+      section.hidden = true;
+      updateJump();
+      return;
+    }
     section.hidden = !offer || !isRunning();
     updateJump();
     if (section.hidden) return;
@@ -1687,12 +1720,17 @@
   });
   executionStrip.append(executionLabel, executionTakeover); ui.form.parentNode?.insertBefore(executionStrip, ui.form);
   function renderExecutionPolicy() {
+    if (document.getElementById('app-shell')?.classList.contains('flow')) {
+      executionStrip.hidden = true;
+      return;
+    }
     const execution = state.conversation?.execution, policy = execution?.active;
     executionStrip.hidden = !execution;
     executionLabel.textContent = execution ? `Task: ${policy?.mode === 'flow' ? 'Flow' : 'Normal'} · New work: ${execution.defaults.mode === 'flow' ? 'Flow' : 'Normal'}` : '';
     executionTakeover.hidden = !policy || policy.mode !== 'flow';
     executionTakeover.title = 'Revoke pending automatic work. The current native turn may finish; Stop ends it immediately.';
   }
+  window.addEventListener('relay-flow', renderExecutionPolicy);
   function renderControls() {
     renderExecutionPolicy();
     const running = isRunning();
@@ -1749,7 +1787,7 @@
     const switching = state.conversation?.limitSwitching;
     ui.continuation.hidden = !canContinue || Boolean(resume) || Boolean(switching);
     const previous=state.conversation?.lastRun;
-    const reason={quota:'Usage limit reached.',authentication:'Sign-in required.',permission:'A permission request was declined.',protocol:'The assistant connection stopped.',interrupted:'Run stopped.'}[previous?.errorCategory] || 'The previous run did not finish.';
+    const reason={quota:'Usage limit reached.',budget:'Task limit reached.',authentication:'Sign-in required.',permission:'A permission request was declined.',protocol:'The assistant connection stopped.',interrupted:'Run stopped.'}[previous?.errorCategory] || 'The previous run did not finish.';
     ui.continueText.textContent = reason;
     const alternative=['codex','claude','gemini'].find(provider=>provider!==state.provider&&!connection(provider).blocked) || state.provider;
     const continuationProvider=previous?.errorCategory==='quota' && previous.provider===state.provider && !connection(alternative).blocked ? alternative : state.provider;
@@ -2188,7 +2226,24 @@
     } catch (error) {
       // A task limit can be raised for this task, by the person, right here.
       const budget = error.details?.budget;
-      if (budget?.canExtend && window.relayLimits) showNotice(error.message, async () => { try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing); } catch (failure) { showNotice(failure.message); } }, "Allow more");
+      if (budget?.canExtend && window.relayLimits) {
+        if (budget.limit === 'maxRepeatedFailures') {
+          showNotice(error.message, async () => {
+            try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing); }
+            catch (failure) { showNotice(failure.message); }
+          }, "Extend budget", [{
+            label: "Dismiss and retry",
+            run: async () => {
+              try {
+                await post(endpoint(state.conversation.id, "budget"), { action: 'reset', taskId: budget.taskId }, state.projectId);
+                run(continuing);
+              } catch (failure) { showNotice(failure.message); }
+            }
+          }]);
+        } else {
+          showNotice(error.message, async () => { try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing); } catch (failure) { showNotice(failure.message); } }, "Allow more");
+        }
+      }
       else if (budget) showNotice(error.message);
       // The server knew the agent works in one folder before the page did: offer the folders rather than a retry that would fail again.
       else if (error.details?.folderChoice && !continuing && !state.taskId && !state.taskDraft) askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId, originalDraft });

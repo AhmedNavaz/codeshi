@@ -19,7 +19,7 @@ import { estimateContext, findMessage, managedContextVersion, milestoneMemory, o
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
-import { applyBudgetRecord, TaskBudgets } from './task-budget.mjs';
+import { applyBudgetRecord, isExplicitRetry, TaskBudgets } from './task-budget.mjs';
 import { SkillCatalog } from './skills.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
@@ -252,7 +252,11 @@ export class Broker extends EventEmitter {
   acceptHandoff(c, input = {}) { return this.handoff.accept(c, { offerId: input.offerId, billingConfirmed: input.billingConfirmed === true, queueBillingConfirmed: input.queueBillingConfirmed === true, queueDigest: input.queueDigest }); }
   // Continue with another agent after a limit: the person's own handoff, so queued prompts for the limited agent follow it (#93).
   async continueTask(c, input = {}) {
-    const previous = c.lastRun, result = this.start(c, { ...input, fresh: true, text: continuationRequest });
+    const previous = c.lastRun;
+    if (input.resetFailures && previous?.taskId && c.taskBudgets?.[previous.taskId]) {
+      this.budget.reset(c, { taskId: previous.taskId });
+    }
+    const result = this.start(c, { ...input, fresh: true, text: continuationRequest });
     if (!result.duplicate && previous?.errorCategory === 'quota' && this.running?.provider !== previous.provider) await this.handoff.followContinue(c, previous.provider, this.running).catch(error => console.error('Codeshi could not move the queued prompts:', error.message));
     return result;
   }
@@ -805,6 +809,10 @@ export class Broker extends EventEmitter {
     this.execution.assert(c, execution, executionOptions, prospective);
     if (routing && executionOptions.action === 'routing' && routing.mode !== prospective.routingMode) throw Object.assign(new Error('The task routing preference changed. Refresh before sending.'), { status: 409, category: 'execution-policy' });
     verifyExecution?.();
+    const targetTaskId = task?.id || c.lastRun?.taskId;
+    if (targetTaskId && (retryOf || isExplicitRetry(text)) && c.taskBudgets?.[targetTaskId] && (c.taskBudgets[targetTaskId].stopped?.kind === 'maxRepeatedFailures' || this.budget.exceeded(c, c.taskBudgets[targetTaskId])?.limit === 'maxRepeatedFailures')) {
+      this.budget.reset(c, { taskId: targetTaskId });
+    }
     this.budget.assertCanStart(c, { task, provider, model, local: Boolean(local) });
     // A task that continues keeps its plan (#92), and a new prompt starts without one.
     const plan = task.relation === 'continuation' ? carriedPlan(c.lastRun) : null;

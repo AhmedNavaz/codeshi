@@ -134,15 +134,21 @@ export class HandoffMonitor {
     return best;
   }
 
-  async offer(c, run, usedWindow) {
+  async prepareOffer(c, run, usedWindow) {
     const to = await this.destination(c, run);
     if (!to || this.broker.running !== run || !this.broker.execution.allows(c, run.execution, { action: 'manual' })) return null;
     const request = c.messages.find(message => message.runId === run.id && message.role === 'user');
-    c.handoffOffer = {
+    return {
       id: randomUUID(), createdAt: new Date().toISOString(), runId: run.id, execution: run.execution, scope: this.scope(c, run),
       from: { provider: run.provider, usedPercent: usedWindow.usedPercent, window: usedWindow.label || null, resetsAt: usedWindow.resetsAt || null },
       to, task: taskLine(request?.text), queue: this.broker.queue.cover(c, run.provider, to),
     };
+  }
+
+  async offer(c, run, usedWindow) {
+    const offer = await this.prepareOffer(c, run, usedWindow);
+    if (!offer) return null;
+    c.handoffOffer = offer;
     this.broker.emit('update', { conversationId: c.id });
     return c.handoffOffer;
   }
@@ -153,23 +159,27 @@ export class HandoffMonitor {
     let usage = null; try { usage = await this.usage(run.provider, this.broker.usageOptions(run.provider)); } catch {}
     this.observe(c, run.provider, usage);
     // The model the run is really using, which is known once it starts even when the agent's default was left selected.
-    const model = c.activeRun?.effectiveModel || c.model || usage?.defaultModel, assessment = assessQuota(usage, model, { threshold: preferences.threshold });
+    const model = c.activeRun?.effectiveModel || c.model || usage?.defaultModel;
+    const assessment = assessQuota(usage, model, { threshold: preferences.threshold, now: Date.now(), tier: run.routing?.tier || null });
     const top = highest(usage, model);
     if (!top || !['near', 'exhausted'].includes(assessment.state)) return;
-    const offer = await this.offer(c, run, top);
+    const offer = await this.prepareOffer(c, run, top);
     if (!offer) return;
     if (preferences.automatic && !run.automaticReview && offer.to.billingSource === 'subscription' && offer.to.quota === 'ok') {
-      try { await this.accept(c, { offerId: offer.id, automatic: true }); return; } catch {}
+      try {
+        await this.executeOffer(c, run, offer, { automatic: true });
+        return;
+      } catch (err) {}
     }
+    if (preferences.automatic && preferences.mode && offer.to.billingSource === 'subscription') return;
+    c.handoffOffer = offer;
+    this.broker.emit('update', { conversationId: c.id });
     this.broker.emit('notify', { conversationId: c.id, kind: 'handoff', title: 'Usage limit is close', body: `${names[run.provider]} has used ${Math.round(top.usedPercent)}% of its limit. Hand off to ${names[offer.to.provider]}?` });
   }
 
-  // Revalidates the offer immediately before switching, then stops the run and continues on the destination.
-  async accept(c, { offerId, billingConfirmed = false, queueBillingConfirmed = false, queueDigest, automatic = false } = {}) {
-    const run = this.broker.running, offer = c.handoffOffer;
-    if (!offer || offer.id !== offerId) throw Object.assign(new Error('This handoff offer is no longer current.'), { status: 409, offer: c.handoffOffer || null });
+  async executeOffer(c, run, offer, { billingConfirmed = false, queueBillingConfirmed = false, queueDigest, automatic = false } = {}) {
     const stale = async reason => {
-      c.handoffOffer = null;
+      if (c.handoffOffer === offer) c.handoffOffer = null;
       const top = run && this.broker.running === run ? { usedPercent: offer.from.usedPercent, label: offer.from.window, resetsAt: offer.from.resetsAt } : null;
       const fresh = top ? await this.offer(c, run, top) : null;
       throw Object.assign(new Error(`${reason} Review the updated offer before switching.`), { status: 409, offer: fresh });
@@ -186,7 +196,8 @@ export class HandoffMonitor {
     if (offer.to.billingSource !== 'subscription' && (automatic || billingConfirmed !== true)) throw Object.assign(new Error(`${names[offer.to.provider]} is not billed to a subscription. Confirm its charges separately to hand off.`), { status: 409, offer, billingRequired: true });
 
     this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual', provider: offer.to.provider, model: offer.to.model, effort: offer.to.effort });
-    run.handoff = offer; c.handoffOffer = null;
+    run.handoff = offer;
+    if (c.handoffOffer === offer) c.handoffOffer = null;
     this.broker.stop(c.id);
     await run.done;
     this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' });
@@ -195,6 +206,13 @@ export class HandoffMonitor {
     const result = this.broker.start(c, { provider: offer.to.provider, model: offer.to.model, ...(offer.to.routing ? { effort: offer.to.effort, routing: offer.to.routing } : {}), mode: offer.to.mode, approvalPolicy: offer.to.approvalPolicy, fresh: true, text: continuationRequest, billingConfirmed: offer.to.billingSource !== 'subscription' && billingConfirmed === true, requestId: `handoff-${offer.id}` }, { execution: offer.execution, executionAction: automatic ? 'handoff' : 'manual' });
     if (automatic) this.broker.emit('notify', { conversationId: c.id, kind: 'started', title: `Handed off to ${names[offer.to.provider]}`, body: `${names[offer.from.provider]} was close to its usage limit, so the task continues with ${names[offer.to.provider]}.` });
     return result;
+  }
+
+  // Revalidates the offer immediately before switching, then stops the run and continues on the destination.
+  async accept(c, { offerId, billingConfirmed = false, queueBillingConfirmed = false, queueDigest, automatic = false } = {}) {
+    const offer = c.handoffOffer;
+    if (!offer || offer.id !== offerId) throw Object.assign(new Error('This handoff offer is no longer current.'), { status: 409, offer: c.handoffOffer || null });
+    return this.executeOffer(c, this.broker.running, offer, { billingConfirmed, queueBillingConfirmed, queueDigest, automatic });
   }
 
   // Moves queued prompts to the agent that took over. A failure here leaves each prompt where it was and the handoff goes on.

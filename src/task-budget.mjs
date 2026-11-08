@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { commandOutcome } from './tool-outcomes.mjs';
 import { normalizeUsage } from './task-ledger.mjs';
 import '../public/routing.js';
@@ -70,7 +71,7 @@ export function applyBudgetRecord(c, record) {
   if (record.type === 'routing_assessment_start') record = { ...record, type: 'background_review', review: { id: record.id, provider: record.provider, model: record.model, assessment: true } };
   else if (record.type === 'routing_assessment_metadata') record = { ...record, type: 'review_budget', began: record.metadata?.began };
   else if (record.type === 'routing_assessment_end') record = { ...record, type: 'review_result' };
-  if (['submission', 'run_end', 'background_review', 'review_budget', 'review_result', 'task_policy', 'task_failure', 'task_budget_stop', 'task_budget_extend'].includes(record.type) || record.type === 'run_metadata' && (record.metadata?.usage || record.metadata?.costUSD !== undefined)) c.taskBudgetRevision = record.seq;
+  if (['submission', 'run_end', 'background_review', 'review_budget', 'review_result', 'task_policy', 'task_failure', 'task_budget_stop', 'task_budget_extend', 'task_budget_reset'].includes(record.type) || record.type === 'run_metadata' && (record.metadata?.usage || record.metadata?.costUSD !== undefined)) c.taskBudgetRevision = record.seq;
   if (record.type === 'task_policy') { c.taskPolicy = record.policy; return; }
   if (record.type === 'submission') {
     if (c.taskOfRun?.[record.id]) return;
@@ -134,7 +135,7 @@ export function applyBudgetRecord(c, record) {
   }
   if (record.type === 'task_failure') {
     // Old versions also counted words in command inputs. Recheck their diagnostics when replaying the journal.
-    if (record.kind === 'command' && !record.toolOutcome && !commandOutcome({ text: `$ ${record.what}\n${record.how}` })?.failed) return;
+    if ((record.kind === 'command' || record.kind === 'probe') && !record.toolOutcome && !commandOutcome({ text: `$ ${String(record.what).replace(/\n/g, ' ')}\n${record.how}` })?.failed) return;
     const state = c.taskBudgets?.[record.taskId]; if (state) addFailure(state, { ...record }); return;
   }
   if (record.type === 'check' && record.check?.status === 'failed') {
@@ -143,7 +144,44 @@ export function applyBudgetRecord(c, record) {
     return;
   }
   if (record.type === 'task_budget_stop') { const state = c.taskBudgets?.[record.taskId]; if (state) state.stopped = { kind: record.kind, runId: record.runId, at: record.at }; return; }
-  if (record.type === 'task_budget_extend') { const state = c.taskBudgets?.[record.taskId]; if (state) { state.extra[record.limit] = (state.extra[record.limit] || 0) + record.add; state.stopped = null; } }
+  if (record.type === 'task_budget_extend') { const state = c.taskBudgets?.[record.taskId]; if (state) { state.extra[record.limit] = (state.extra[record.limit] || 0) + record.add; state.stopped = null; } return; }
+  if (record.type === 'task_budget_reset') { const state = c.taskBudgets?.[record.taskId]; if (state) { state.failures = {}; state.stopped = null; } }
+}
+
+const PROBE_PROGRAMS = new Set([
+  'curl', 'wget', 'ping', 'nc', 'netcat', 'telnet', 'traceroute',
+  'host', 'dig', 'nslookup', 'http', 'https', 'whoami', 'uptime',
+  'which', 'type', 'ps', 'pgrep', 'top', 'htop', 'lsof', 'netstat', 'ss'
+]);
+const PROBE_GH_SUBCOMMANDS = new Set(['view', 'watch', 'list', 'status', 'checks']);
+const PROBE_GIT_SUBCOMMANDS = new Set(['ls-remote', 'fetch', 'status', 'log', 'show', 'diff', 'rev-parse', 'describe', 'cat-file']);
+
+export function isDiagnosticProbe(command) {
+  if (typeof command !== 'string' || !command.trim()) return false;
+  const unwrapped = String(command).replace(/^(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/, '$2').trim();
+  if (/(?:-o\s+\/dev\/null|-o\s+nul|>+\s*\/dev\/null|2>&1\s*>\s*\/dev\/null|--head|-I\b|%{http_code})/i.test(unwrapped)) return true;
+  const firstSegment = unwrapped.split(/[|;&\n]/)[0].trim();
+  const tokens = firstSegment.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return false;
+  let idx = 0;
+  while (idx < tokens.length && (tokens[idx].includes('=') || tokens[idx] === 'env' || tokens[idx] === 'sudo')) idx++;
+  if (idx >= tokens.length) return false;
+  const prog = path.basename(tokens[idx]).toLowerCase();
+  if (PROBE_PROGRAMS.has(prog)) return true;
+  const sub = (tokens[idx + 1] || '').toLowerCase(), sub2 = (tokens[idx + 2] || '').toLowerCase();
+  if (prog === 'gh') {
+    if (PROBE_GH_SUBCOMMANDS.has(sub) || PROBE_GH_SUBCOMMANDS.has(sub2)) return true;
+    if (sub === 'api' && !tokens.slice(idx + 1).some(t => ['-x', '-X', '--method'].includes(t) && /^(POST|PUT|PATCH|DELETE)$/i.test(t))) return true;
+  }
+  if (prog === 'git' && (PROBE_GIT_SUBCOMMANDS.has(sub) || PROBE_GIT_SUBCOMMANDS.has(sub2))) return true;
+  if (/\b(?:curl|wget|ping|nc|netcat)\b/i.test(unwrapped)) return true;
+  return false;
+}
+
+export function isExplicitRetry(text) {
+  if (typeof text !== 'string') return false;
+  const trimmed = text.trim();
+  return /^(?:retry|try\s+again|restart|dismiss\s+and\s+retry|run\s+again|retry\s+task)\b/i.test(trimmed);
 }
 
 // What a step says about the work: a command that failed, or an edit, identified so the same one can be recognized again.
@@ -159,7 +197,8 @@ export function classifyStep(input) {
   // Agents wrap the same command differently, so the shell around it doesn't count: otherwise changing agents would reset the count.
   const command = String(what).replace(/^(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/, '$2').trim();
   const tail = output.trim().split('\n').slice(-3).join(' ') || `Exit code ${outcome.exitCode ?? 'unknown'}`;
-  return { kind: 'command', signature: hash(`command\0${normalize(command)}\0${normalize(tail)}`), what: command.slice(0, 200), how: tail.slice(-300), ...(message.toolOutcome ? { toolOutcome: message.toolOutcome } : {}) };
+  const kind = isDiagnosticProbe(command) ? 'probe' : 'command';
+  return { kind, signature: hash(`${kind}\0${normalize(command)}\0${normalize(tail)}`), what: command.slice(0, 200), how: tail.slice(-300), ...(message.toolOutcome ? { toolOutcome: message.toolOutcome } : {}) };
 }
 
 export class TaskBudgets {
@@ -189,7 +228,8 @@ export class TaskBudgets {
   }
   // The first limit a task has used up, if any.
   exceeded(c, state) {
-    const limits = this.limits(c, state), used = this.used(state), repeated = Object.values(state.failures).filter(item => item.count >= limits.maxRepeatedFailures).sort((a, b) => b.count - a.count)[0];
+    const limits = this.limits(c, state), used = this.used(state);
+    const repeated = Object.values(state.failures).filter(item => item.kind !== 'probe' && !isDiagnosticProbe(item.what) && item.count >= limits.maxRepeatedFailures).sort((a, b) => b.count - a.count)[0];
     if (repeated) return { limit: 'maxRepeatedFailures', used: repeated.count, allowed: limits.maxRepeatedFailures, message: `The same step has gone wrong ${repeated.count} times in this task: ${repeated.what}` };
     if (limits.maxWorkingMinutes !== null && used.workingMs >= limits.maxWorkingMinutes * 60000) return { limit: 'maxWorkingMinutes', used: Math.round(used.workingMs / 60000), allowed: limits.maxWorkingMinutes, message: `This task has reached its limit of ${limits.maxWorkingMinutes} working minutes.` };
     if (limits.maxTokens !== null && used.tokens >= limits.maxTokens) return { limit: 'maxTokens', used: used.tokens, allowed: limits.maxTokens, message: `This task has used ${used.tokens.toLocaleString('en-US')} tokens, over its limit of ${limits.maxTokens.toLocaleString('en-US')}.` };
@@ -227,6 +267,13 @@ export class TaskBudgets {
     const add = EXTEND[limit] ?? (MEASURED_LIMITS.includes(limit) && typeof base === 'number' ? Math.ceil(base / 2 * 100) / 100 : null);
     if (add === null || (MEASURED_LIMITS.includes(limit) && policy[limit] === null)) throw fail('That limit can not be raised for a task.');
     this.broker.record(c, { type: 'task_budget_extend', taskId, limit, add });
+    return this.view(c);
+  }
+  reset(c, { taskId } = {}) {
+    const id = taskId || c.routingPending?.taskId || c.activeRun?.taskId || c.lastRun?.taskId || c.lastRun?.id;
+    const state = id && c.taskBudgets?.[id];
+    if (!state) throw fail('That task is no longer tracked.', 404);
+    this.broker.record(c, { type: 'task_budget_reset', taskId: id });
     return this.view(c);
   }
   // The most an API-billed run may spend, for agents that can enforce it themselves.
@@ -278,7 +325,7 @@ export class TaskBudgets {
     if (!state) return { policy, defaults: defaultPolicy(), task: null, quota: this.quota(c) };
     const limits = this.limits(c, state), used = this.used(state), exceeded = this.exceeded(c, state);
     return { policy, defaults: defaultPolicy(), quota: this.quota(c), task: { taskId, limits, runs: state.runs, retries: state.retries, reviews: state.reviews, handoffs: state.handoffs, workingMs: used.workingMs, tokens: used.tokens, cacheRead: state.tokens.cacheRead, spendUSD: used.spendUSD, runsWithoutUsage: state.runsWithoutUsage, active: Object.keys(state.active).length,
-      failures: Object.values(state.failures).filter(item => item.kind !== 'edit' || item.count > 1).sort((a, b) => b.count - a.count).slice(0, 8), stopped: state.stopped, exceeded } };
+      failures: Object.values(state.failures).filter(item => (item.kind !== 'edit' || item.count > 1) && item.kind !== 'probe' && !isDiagnosticProbe(item.what)).sort((a, b) => b.count - a.count).slice(0, 8), stopped: state.stopped, exceeded } };
   }
   quota(c) { return Object.fromEntries(Object.entries(c.quotaReadings || {}).map(([provider, reading]) => [provider, assessQuota({ available: true, windows: reading.windows, fetchedAt: reading.observedAt }, c.models?.[provider] || null)])); }
 }

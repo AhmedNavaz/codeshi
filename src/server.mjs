@@ -329,7 +329,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (match[2] === 'context') return json(res, 200, await broker.updateContext(c, input));
           if (match[2] === 'memory') return json(res, 200, broker.changeMemory(c, input));
           if (match[2] === 'skills') return json(res, 200, broker.skills.change(c, input));
-          if (match[2] === 'budget') return json(res, 200, input.action === 'extend' ? broker.budget.extend(c, input) : broker.budget.setPolicy(c, input.policy || {}));
+          if (match[2] === 'budget') return json(res, 200, input.action === 'extend' ? broker.budget.extend(c, input) : input.action === 'reset' ? broker.budget.reset(c, input) : broker.budget.setPolicy(c, input.policy || {}));
           if (match[2] === 'approval') return json(res, 200, await broker.approve(input.runId, input.approvalId, input.allow === true, input.remember ?? null));
           if (match[2] === 'answer') return json(res, 200, await broker.answer(input.runId, input.questionId, input.skip === true ? null : input.answers, c));
           if (match[2] === 'provider') return json(res, 200, await broker.settings(c, input, viewOptions));

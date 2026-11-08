@@ -72,7 +72,24 @@
       if (state.runsWithoutUsage && limits.maxTokens !== null) card.append(node('p', 'panel-muted', `${plural(state.runsWithoutUsage, 'run')} reported no tokens, so the total is lower than the real one.`));
       const top = state.failures?.[0];
       if (top && top.count > 1) card.append(node('p', 'task-note', `Went wrong ${top.count} of ${limits.maxRepeatedFailures} times: ${top.what}`));
-      if (state.exceeded) { const reached = node('div', 'limits-reached'); reached.append(node('span', '', state.exceeded.message), button('Allow more', () => extend(state.taskId, state.exceeded.limit).catch(error => api.showNotice(error.message)))); card.append(reached); }
+      if (state.exceeded) {
+        const reached = node('div', 'limits-reached');
+        reached.append(node('span', '', state.exceeded.message));
+        if (state.exceeded.limit === 'maxRepeatedFailures') {
+          reached.append(
+            button('Dismiss and retry', async () => {
+              try {
+                await api.post(`/api/conversations/${conversation().id}/budget`, { action: 'reset', taskId: state.taskId });
+                await api.refresh();
+              } catch (error) { api.showNotice(error.message); }
+            }),
+            button('Extend budget', () => extend(state.taskId, state.exceeded.limit).catch(error => api.showNotice(error.message)))
+          );
+        } else {
+          reached.append(button('Allow more', () => extend(state.taskId, state.exceeded.limit).catch(error => api.showNotice(error.message))));
+        }
+        card.append(reached);
+      }
     }
   }
   function renderEarlier() {
@@ -179,5 +196,6 @@
   buildLimitsForm();
   window.relayTasks = { open: section => setOpen(true, section), close: () => { if (!panel.hidden) setOpen(false, null, false); }, toggle: () => setOpen(panel.hidden), isOpen: () => !panel.hidden };
   // A refused run offers to raise the limit from the notice at the top of the conversation.
-  window.relayLimits = { extend };
+  async function reset(taskId) { const c = conversation(); if (!c) return false; budget = await api.post(`/api/conversations/${c.id}/budget`, { action: 'reset', taskId }); render(); return true; }
+  window.relayLimits = { extend, reset };
 })();

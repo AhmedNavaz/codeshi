@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest } from '../src/context.mjs';
-import { applyBudgetRecord, assessQuota, classifyStep, defaultPolicy, validatePolicy } from '../src/task-budget.mjs';
+import { applyBudgetRecord, assessQuota, classifyStep, defaultPolicy, isDiagnosticProbe, isExplicitRetry, validatePolicy } from '../src/task-budget.mjs';
 import { ledgerFromRecords } from '../src/task-ledger.mjs';
 import { scriptCLIs } from './platform.mjs';
 
@@ -306,4 +306,101 @@ test('a partial and then final review sample replaces live usage and is charged 
   assert.equal(broker.budget.used(state(c, 'parent')).tokens, 530);
   assert.equal(state(c, 'parent').spendUSD, 0);
   assert.deepEqual(c.budgetTotals.codex, { input: 9000, output: 1000 }, 'A fresh reviewer cannot change the builder’s session baseline.');
+});
+
+
+test('diagnostic and read-only probe commands are differentiated from mutating failure loops (#137)', () => {
+  const probes = [
+    'curl -fsSL -o /dev/null -w "%{http_code}\n" https://github.com/electron/electron/releases/download/v44.10.0/electron-v44.10.0-darwin-arm64.zip',
+    'curl -I https://api.github.com/repos/AhmedNavaz/codeshi',
+    '/usr/bin/curl -sSf https://example.com',
+    'wget -q -O /dev/null https://example.com',
+    'ping -c 1 github.com',
+    'gh run watch 42472370759',
+    'gh issue view 137',
+    'gh pr checks 120',
+    'git fetch origin main',
+    'git ls-remote origin',
+    'git status'
+  ];
+  for (const cmd of probes) {
+    assert.equal(isDiagnosticProbe(cmd), true, `Expected ${cmd} to be identified as probe`);
+  }
+
+  const mutating = [
+    'npm test',
+    'npx jest --bail',
+    'npm run build',
+    'cargo test',
+    'pytest test_task.py',
+    'make check',
+    'node scripts/check.mjs',
+    'git commit -m "fix"'
+  ];
+  for (const cmd of mutating) {
+    assert.equal(isDiagnosticProbe(cmd), false, `Expected ${cmd} not to be identified as probe`);
+  }
+});
+
+test('read-only diagnostic probes with non-zero exits do not trigger maxRepeatedFailures loop stops (#137)', t => {
+  const { broker, c } = setup(t, { maxRepeatedFailures: 3 });
+  const curlCmd = 'curl -fsSL -o /dev/null -w "%{http_code}" https://github.com/electron/electron/releases/download/v44.10.0/electron-v44.10.0-darwin-arm64.zip';
+  const classified = classifyStep(`$ ${curlCmd}\nExit code 22`);
+  assert.equal(classified.kind, 'probe');
+
+  broker.record(c, { type: 'submission', id: 'probe-task', task: { id: 'probe-task', parentRunId: null, relation: null }, provider: 'codex', message: { id: 'm', role: 'user', text: 'Check download' }, requestId: 'p', mode: 'edit', model: null, context: {} });
+  const taskState = state(c, 'probe-task');
+
+  // Record 5 repeated curl probe failures
+  for (let i = 0; i < 5; i++) {
+    broker.record(c, { type: 'task_failure', taskId: 'probe-task', runId: 'probe-task', provider: 'codex', ...classified });
+  }
+
+  // The failures are tracked, but exceeded must not stop on probe failures
+  assert.equal(Object.values(taskState.failures).length, 1);
+  assert.equal(Object.values(taskState.failures)[0].count, 5);
+  assert.equal(broker.budget.exceeded(c, taskState), null, 'Probes must not exceed maxRepeatedFailures');
+
+  // Mutating commands still trigger maxRepeatedFailures
+  const testStep = classifyStep('$ npm test\nError: test failed');
+  assert.equal(testStep.kind, 'command');
+  for (let i = 0; i < 3; i++) {
+    broker.record(c, { type: 'task_failure', taskId: 'probe-task', runId: 'probe-task', provider: 'codex', ...testStep });
+  }
+  const exceeded = broker.budget.exceeded(c, taskState);
+  assert.equal(exceeded?.limit, 'maxRepeatedFailures');
+  assert.match(exceeded.message, /npm test/);
+});
+
+test('explicit retry or reset restores task readiness after maxRepeatedFailures (#137)', t => {
+  const { broker, c } = setup(t, { maxRepeatedFailures: 2 });
+  broker.record(c, { type: 'submission', id: 't1', task: { id: 't1', parentRunId: null, relation: null }, provider: 'codex', message: { id: 'm1', role: 'user', text: 'Build' }, requestId: 'r1', mode: 'edit', model: null, context: {} });
+  const step = classifyStep('$ npm test\nError: build failed');
+  broker.record(c, { type: 'task_failure', taskId: 't1', runId: 't1', provider: 'codex', ...step });
+  broker.record(c, { type: 'task_failure', taskId: 't1', runId: 't1', provider: 'codex', ...step });
+  broker.record(c, { type: 'task_budget_stop', taskId: 't1', runId: 't1', kind: 'maxRepeatedFailures', used: 2, allowed: 2 });
+  broker.record(c, { type: 'run_end', status: 'interrupted' });
+
+  const taskState = state(c, 't1');
+  assert.equal(taskState.stopped?.kind, 'maxRepeatedFailures');
+  assert.equal(broker.budget.exceeded(c, taskState)?.limit, 'maxRepeatedFailures');
+
+  // Standard continuation without retry/reset is refused
+  assert.throws(() => broker.budget.assertCanStart(c, { task: { id: 't1', relation: 'continuation' }, provider: 'codex', model: null }), refused(/gone wrong 2 times/));
+
+  // Resetting the task clears the failure state and stopped flag
+  broker.budget.reset(c, { taskId: 't1' });
+  assert.equal(taskState.stopped, null);
+  assert.deepEqual(taskState.failures, {});
+  assert.equal(broker.budget.exceeded(c, taskState), null);
+
+  // Task can start again
+  assert.equal(broker.budget.refusal(c, { task: { id: 't1', relation: 'continuation' }, provider: 'codex', model: null }), null);
+
+  // Test explicit retry phrasing
+  assert.equal(isExplicitRetry('retry'), true);
+  assert.equal(isExplicitRetry('try again'), true);
+  assert.equal(isExplicitRetry('restart'), true);
+  assert.equal(isExplicitRetry('dismiss and retry'), true);
+  assert.equal(isExplicitRetry('Please do something completely different'), false);
 });
