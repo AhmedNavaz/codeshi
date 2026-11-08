@@ -5,7 +5,7 @@ name: codeshi-sharing
 
 services:
   sharing:
-    image: ghcr.io/ahmednavaz/throughline-sharing:latest
+    image: ghcr.io/ahmednavaz/codeshi-sharing:latest
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0

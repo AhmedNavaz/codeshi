@@ -6,7 +6,7 @@ app = "replace-with-your-app-name"
 primary_region = "iad"
 
 [build]
-  image = "ghcr.io/ahmednavaz/throughline-sharing:latest"
+  image = "ghcr.io/ahmednavaz/codeshi-sharing:latest"
 
 [env]
   HOST = "0.0.0.0"

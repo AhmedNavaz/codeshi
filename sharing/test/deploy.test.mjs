@@ -43,7 +43,7 @@ async function sharingService(t, env) {
 }
 
 test('the templates run the image each release publishes, on the port it listens on', () => {
-  assert.equal(image, 'ghcr.io/ahmednavaz/throughline-sharing', 'The image keeps its name from before the rename.');
+  assert.equal(image, 'ghcr.io/ahmednavaz/codeshi-sharing', 'The image is named codeshi-sharing.');
   assert.match(dockerfile, new RegExp(`^EXPOSE ${port}$`, 'm'));
   for (const [template, reference] of [['compose.yaml', yaml(service('sharing'), 'image')], ['fly.toml', toml(table('[build]'), 'image')]]) {
     const [name, tag] = reference?.split(/:(?=[^:]*$)/) || [];
