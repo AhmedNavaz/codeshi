@@ -1,6 +1,6 @@
 # Task execution policy
 
-Local implementation of [#131](https://github.com/AhmedNavaz/codeshi/issues/131); unreleased and awaiting owner testing. `src/execution-policy.mjs` records authority in each conversation's existing JSONL journal. Task IDs are shared with the task ledger and budget; a policy change does not reset usage, counters or request deduplication.
+Shipped in 0.34.1 ([#131](https://github.com/AhmedNavaz/codeshi/issues/131)). `src/execution-policy.mjs` records authority in each conversation's existing JSONL journal. Task IDs are shared with the task ledger and budget; a policy change does not reset usage, counters or request deduplication.
 
 ## New work and existing tasks
 

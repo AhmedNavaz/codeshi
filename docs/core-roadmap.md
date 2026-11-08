@@ -28,7 +28,7 @@ Agreed direction, not released behavior: **Normal** is explicit agent/settings/t
 
 **Released preview:** the focused view uses the original routing/handoff settings. Both entry and exit require an idle workspace, including other tasks, reviews, tests, reset waits and unpaused queues. A view request never starts a new task and blocked requests are not deferred. Recheck before applying an animated transition and keep all active work reachable. This read-only activity guard is not the backend execution-policy milestone below.
 
-**Local implementation, unreleased:** [Task execution policy](execution-policy.md) documents journaled authority, safe takeover, migration and client controls. Owner testing is still required. The future CLI will use the same API.
+**Shipped in 0.34.1:** [Task execution policy](execution-policy.md) documents journaled authority, safe takeover, migration and client controls. The future CLI will use the same API.
 
 **Tracking:** [backend task policy #131](https://github.com/AhmedNavaz/codeshi/issues/131). #107 owns the user experience; #12 owns selection; #87 owns accounting and limits. Extend their existing engine/journal rather than inventing another task store or routing engine.
 

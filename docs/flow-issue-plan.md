@@ -4,13 +4,13 @@ The first publication step was completed on 2026-11-08: created #131 (backend ta
 
 The 17 append-only updates from Issue 17 onward remain unpublished drafts. Preserve current issue states and shipped milestones; re-read each current issue body and comments before applying its draft so newer discussion is not overwritten.
 
-The canonical product split is in [ROADMAP.md](../ROADMAP.md#normal-and-flow-the-agreed-execution-split), with backend boundaries in the [core roadmap](core-roadmap.md#normal-and-flow-execution-contract). The local implementation of #131 is described in [Task execution policy](execution-policy.md), pending owner testing and release. Unified lifecycle selection in #12 and board/schedule execution in #132 remain follow-ups.
+The canonical product split is in [ROADMAP.md](../ROADMAP.md#normal-and-flow-the-agreed-execution-split), with backend boundaries in the [core roadmap](core-roadmap.md#normal-and-flow-execution-contract). The implementation of #131 shipped in 0.34.1, described in [Task execution policy](execution-policy.md). Unified lifecycle selection in #12 and board/schedule execution in #132 remain follow-ups.
 
 ## November 2026 feedback tracking
 
 Read the existing issue bodies and comments before applying these updates. Published follow-ups: new bugs [#133](https://github.com/AhmedNavaz/codeshi/issues/133) (Codex JSON-RPC Unicode framing), [#134](https://github.com/AhmedNavaz/codeshi/issues/134) (stale quota on first Send), [#137](https://github.com/AhmedNavaz/codeshi/issues/137) (task budget probe loop stop), and [#138](https://github.com/AhmedNavaz/codeshi/issues/138) (release packaging CDN mirror fallback); new enhancements [#135](https://github.com/AhmedNavaz/codeshi/issues/135) (adaptive quota thresholds and autonomous Flow handoffs) and [#136](https://github.com/AhmedNavaz/codeshi/issues/136) (Flow mode card polish: extra task indicators, multi-window quota glance, and active agent highlighting); appended scope to [#12](https://github.com/AhmedNavaz/codeshi/issues/12) (selection/handoff threshold conflict and policy-aware offers), [#107](https://github.com/AhmedNavaz/codeshi/issues/107) (task navigation, progress, all usage windows and working-agent indicators), and [#85](https://github.com/AhmedNavaz/codeshi/issues/85) (bounded shared-history briefs and measurements).
 
-The local #133 fix frames stdout only at LF after streaming UTF-8 decoding. Replaying captured valid app-server output through the installed Electron runtime's old readline reproduced the exact position-19609 error at a pasted Unicode line separator. The adapter regressions cover large Unicode prompts, byte boundaries, CRLF, malformed frames and truncated EOF. This fix is unreleased and requires owner testing. Other feedback above remains planned; #98, #123 and #128 retain their shipped status. The published issue bodies now include these follow-ups beyond their earlier snapshots below.
+The local #133 fix frames stdout only at LF after streaming UTF-8 decoding. Replaying captured valid app-server output through the installed Electron runtime's old readline reproduced the exact position-19609 error at a pasted Unicode line separator. The adapter regressions cover large Unicode prompts, byte boundaries, CRLF, malformed frames and truncated EOF. Shipped in 0.34.1. Other feedback above has shipped in 0.35.0 or remains planned; #98, #123 and #128 retain their shipped status. The published issue bodies now include these follow-ups beyond their earlier snapshots below.
 
 ## New issues
 
@@ -51,7 +51,7 @@ This issue implements that execution boundary. #107 owns the Flow experience, #1
 
 Implement before presenting Flow as managed execution. Start with one task, unified routing/handoff and bounded verification/recovery; then task splitting; then teams and hands-free operation. Native agents retain their own tool loops, planning and compaction in both modes.
 
-Local implementation: journaled policies, dispatch guards, safe takeover, legacy recovery and desktop/phone controls; unreleased and awaiting owner testing. See [the execution contract](execution-policy.md). Historical shipped behavior in #17, #32, #91 and #15 remains recorded there; follow-up mode enforcement is tracked here.
+Shipped in 0.34.1: journaled policies, dispatch guards, safe takeover, legacy recovery and desktop/phone controls. See [the execution contract](execution-policy.md). Historical shipped behavior in #17, #32, #91 and #15 remains recorded there; follow-up mode enforcement is tracked here.
 
 ### Board and schedule execution
 
