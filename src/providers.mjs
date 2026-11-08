@@ -4,7 +4,6 @@ import { isAntigravityACP, googleMetadata, connectGoogle, disconnectGoogle, clos
 import { geminiSetup, isAgy, agyUnsupported } from './gemini.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import readline from 'node:readline';
 import os from 'node:os';
 import { probeCli } from './cli-probe.mjs';
 import { resolveBinary, withBinaryPath } from './resolve-binary.mjs';
@@ -57,8 +56,18 @@ export class CodexClient extends EventEmitter {
     this.child = spawnImpl(bin, [...args, 'app-server'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false, env });
     let diagnostic = '';
     this.child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-16000); });
-    const lines = readline.createInterface({ input: this.child.stdout });
-    lines.on('line', line => {
+    const end = error => {
+      if (this.closed) return;
+      this.closed = true;
+      for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
+      this.pending.clear(); this.emit('closed', error);
+    };
+    // App-server uses JSONL. Electron's readline also splits at Unicode line/paragraph separators, which are valid
+    // inside JSON strings (including pasted prompts). Only LF delimits a frame; decode UTF-8 across pipe chunks first.
+    let buffered = '';
+    this.child.stdout.setEncoding('utf8');
+    const receive = line => {
+      if (this.closed) return;
       try {
         const message = JSON.parse(line);
         if (message.id !== undefined && !message.method) {
@@ -70,15 +79,19 @@ export class CodexClient extends EventEmitter {
         } else this.emit('message', message);
       } catch (error) {
         const failure = new Error(`Invalid Codex JSON-RPC protocol: ${error.message}`);
-        for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(failure); }
-        this.pending.clear(); this.emit('closed', failure); this.close();
+        this.close(); end(failure);
+      }
+    };
+    this.child.stdout.on('data', chunk => {
+      buffered += chunk;
+      let boundary;
+      while (!this.closed && (boundary = buffered.indexOf('\n')) !== -1) {
+        const line = buffered.slice(0, boundary); buffered = buffered.slice(boundary + 1);
+        receive(line);
       }
     });
-    const end = error => {
-      this.closed = true;
-      for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
-      this.pending.clear(); this.emit('closed', error);
-    };
+    // Preserve a complete final record without LF, but never discard a truncated event or replay an accepted turn.
+    this.child.stdout.on('end', () => { if (buffered && !this.closed) receive(buffered); buffered = ''; });
     this.child.on('error', end);
     this.child.on('close', (code, signal) => end(new Error(diagnostic || `Codex app-server closed (${code ?? signal}).`)));
     this.child.stdin.on('error', () => {});
