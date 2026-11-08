@@ -5953,6 +5953,69 @@ test('plain URLs, reply file links, inline code file paths and changed files in 
   assert.deepEqual(highlighted(), [2]);
 });
 
+test('images in replies show inline from the workspace, open in the preview on click, and stay links where they can’t be shown (#80)', async () => {
+  const ui = await browser({ filesUI: true, moreProjects: true, desktop: true });
+  const chat = ui.canonical.get('project-one');
+  const images = { 'frontend:shots/before.png': ['image/png', 'YmVmb3Jl'], 'frontend:shots/home.png': ['image/png', 'aG9tZQ=='], 'frontend:shots/after.png': ['image/png', 'YWZ0ZXI='], 'backend:out/chart.webp': ['image/webp', 'Y2hhcnQ='], 'frontend:shared.png': ['image/png', 'ZnJvbnQ='], 'backend:shared.png': ['image/png', 'YmFjaw=='] };
+  for (let n = 1; n <= 8; n++) images[`frontend:many/${n}.png`] = ['image/png', btoa(String(n))];
+  const reads = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/files/preview') {
+      const key = `${request.params.folderId}:${request.params.path}`; reads.push(key);
+      if (key === 'frontend:notes.md') return response({ name: 'notes.md', kind: 'text', mime: 'text/markdown', bytes: 6, text: '# Notes' });
+      if (!images[key]) return response({ error: 'File not found.' }, 404);
+      const [mime, data] = images[key];
+      return response({ name: request.params.path.split('/').pop(), kind: 'image', mime, bytes: atob(data).length, data });
+    }
+    return next();
+  });
+  chat.messages.push(
+    { id: 'u-80', runId: 'run-80', role: 'user', text: 'Take screenshots of the page.' },
+    {
+      id: 'reply-80', runId: 'run-80', role: 'assistant', provider: 'claude',
+      text: [
+        '![Home page](Frontend/shots/home.png)',
+        'Here is [the new layout](shots/after.png), and the chart is in `Backend/out/chart.webp`.',
+        'Not shown: ![banner](https://example.com/banner.png), ![odd](Frontend/shots/a;b.png), ![temporary](/private/tmp/shot.png), [notes](Frontend/notes.md), ![missing](Frontend/shots/missing.png) and ![which one](shared.png).',
+      ].join('\n\n'),
+    },
+    { id: 'bold-80', runId: 'run-80', role: 'assistant', provider: 'claude', text: 'Compare **![Before](Frontend/shots/before.png) with `Frontend/shots/home.png`** here.' },
+    { id: 'many-80', runId: 'run-80', role: 'assistant', provider: 'claude', text: [1, 2, 3, 4, 5, 6, 7, 8].map(n => `![Shot ${n}](Frontend/many/${n}.png)`).join('\n') },
+  );
+  await ui.window.relayUI.refresh(); await flush(); await flush();
+
+  const reply = ui.$('message-reply-80');
+  const shown = host => host.querySelectorAll('.message-image').filter(node => !node.hidden).map(node => { const img = node.querySelector('.message-image-picture'); return [img.alt, img.src]; });
+  assert.deepEqual(shown(reply), [
+    ['Home page', 'data:image/png;base64,aG9tZQ=='],
+    ['the new layout', 'data:image/png;base64,YWZ0ZXI='],
+    ['chart.webp', 'data:image/webp;base64,Y2hhcnQ='],
+  ], 'A Markdown image, a link to an image and an image path each show the image, from the folder they name or the only folder that has them.');
+  assert.equal(reply.textContent.includes('!'), false, 'No stray “!” is left from the Markdown image syntax.');
+  assert.deepEqual(reply.querySelectorAll('a').map(node => node.textContent), ['banner'], 'An image on the web stays a link: the page only shows images from the workspace.');
+  assert(reply.querySelectorAll('.message-file-link').some(node => node.textContent === 'which one'), 'An image in several folders stays a link that asks which one.');
+  assert.deepEqual(reads.filter(key => key.startsWith('frontend:notes') || key.includes(';')), [], 'A file that isn’t an image, or a path no file link would open, is never read for a picture.');
+  const bold = ui.$('message-bold-80');
+  assert.deepEqual(shown(bold).map(([alt]) => alt), ['Before', 'home.png']);
+  assert.deepEqual(bold.querySelectorAll('strong').flatMap(node => node.querySelectorAll('.message-image')), [], 'Images in bold text still go under the line, not inside the bold text.');
+  assert.deepEqual(shown(ui.$('message-many-80')).map(([alt]) => alt), ['Shot 1', 'Shot 2', 'Shot 3', 'Shot 4', 'Shot 5', 'Shot 6'], 'A reply shows at most six images; the rest stay links.');
+
+  // Clicking an image opens it in the file preview, larger.
+  reply.querySelectorAll('.message-image-open')[0].click(); await flush();
+  assert.equal(ui.$('file-preview').hidden, false);
+  assert.equal(ui.$('file-preview-path').textContent, 'Frontend / shots/home.png');
+  assert.equal(ui.$('file-preview-content').querySelector('img').src, 'data:image/png;base64,aG9tZQ==');
+
+  // Coming back from another workspace draws the reply again, with the images it already read and nothing read again.
+  const before = reads.length, row = ui.$('message-reply-80');
+  await ui.window.relayUI.selectProject('project-two'); await flush();
+  await ui.window.relayUI.selectProject('project-one'); await flush(); await flush();
+  assert.notEqual(ui.$('message-reply-80'), row, 'The reply was drawn again.');
+  assert.deepEqual(shown(ui.$('message-reply-80')).map(([alt]) => alt), ['Home page', 'the new layout', 'chart.webp'], 'Its images show at once.');
+  assert.deepEqual(reads.slice(before), [], 'Nothing is read again.');
+  assert.deepEqual(ui.$('message-reply-80').querySelectorAll('.message-image-alt').map(node => [node.textContent, node.hidden]), [['Home page', true], ['banner', false], ['odd', false], ['temporary', false], ['missing', false], ['which one', false]], 'An image’s description is hidden once the image shows, and stays a link otherwise.');
+});
+
 test('Remote access settings distinguish Active now from Allowed devices and explain 1-week Away from home persistence (#114)', async () => {
   const ui = await browser({ workbench: true });
   const now = Date.now();

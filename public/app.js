@@ -552,20 +552,79 @@
     renderInline(host, label, true);
     parent.append(host);
   }
-  function renderInline(parent, text, inLink = false) {
+  // Images in a reply (#80): a Markdown image, a link to an image or an image's path shows the image under its line,
+  // read from the workspace as the file preview reads it, and opens in the preview when clicked. A web image stays a
+  // link, since the page only shows images from the workspace, and so does a path in several folders, outside the
+  // workspace, missing or not an image. A reply shows at most six, and keeps each one it read while this page is open,
+  // so drawing the transcript again reads nothing.
+  const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]), REPLY_IMAGE_LIMIT = 6, REPLY_IMAGE_CACHE = 48;
+  const replyImageCache = new Map();
+  let replyImages = null;
+  function imagePath(raw) {
+    const parsed = parseReferenceTarget(raw);
+    if (parsed?.kind !== "file" || !isFileReference(raw) || isFolderReference(raw)) return null;
+    return IMAGE_EXTENSIONS.has(parsed.path.split(".").pop().toLowerCase()) ? parsed.path : null;
+  }
+  async function loadReplyImage(path, projectId) {
+    const read = async (folder, relative) => {
+      try {
+        const file = await api(`/api/files/preview?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}`, {}, projectId);
+        return file?.kind === "image" && /^image\/(?:png|jpeg|gif|webp)$/.test(file.mime) && typeof file.data === "string" ? `data:${file.mime};base64,${file.data}` : null;
+      } catch { return null; }
+    };
+    const resolved = resolveWorkspaceCandidates(path);
+    if (resolved.kind === "exact") return await read(resolved.folder, resolved.relative) || (resolved.fallbackRelative ? read(resolved.folder, resolved.fallbackRelative) : null);
+    if (resolved.kind !== "probe") return null;
+    const found = (await Promise.all(resolved.folders.map(folder => read(folder, resolved.relative)))).filter(Boolean);
+    return found.length === 1 ? found[0] : null;
+  }
+  function cachedReplyImage(key, path) {
+    let entry = replyImageCache.get(key);
+    if (entry) replyImageCache.delete(key);
+    else {
+      entry = { done: false, src: null };
+      entry.promise = loadReplyImage(path, state.projectId).then(src => { Object.assign(entry, { done: true, src }); return src; });
+    }
+    replyImageCache.set(key, entry);
+    while (replyImageCache.size > REPLY_IMAGE_CACHE) replyImageCache.delete(replyImageCache.keys().next().value);
+    return entry;
+  }
+  function replyImage(raw, alt, fallback = null) {
+    const images = replyImages, path = images ? imagePath(raw) : null;
+    if (!path || images.seen.has(path) || images.seen.size >= REPLY_IMAGE_LIMIT) return null;
+    images.seen.add(path);
+    const name = path.split(/[\\/]/).pop(), figure = element("span", "message-image"), open = element("button", "message-image-open"), picture = element("img", "message-image-picture");
+    open.type = "button"; open.title = `Open ${name}`; open.setAttribute("aria-label", `Open ${alt || name}`);
+    picture.alt = alt || name;
+    open.append(picture); figure.append(open);
+    open.addEventListener("click", () => openReference(raw));
+    const show = src => { if (!src) return; picture.src = src; figure.hidden = false; if (fallback) fallback.hidden = true; };
+    const entry = cachedReplyImage(`${state.projectId}\n${images.scope}\n${path}`, path);
+    figure.hidden = true;
+    if (entry.done) show(entry.src); else entry.promise.then(show);
+    return figure;
+  }
+  function renderInline(parent, text, inLink = false, found = null) {
+    const top = !found;
+    found ||= [];
     let last = 0;
-    for (const match of text.matchAll(/\[([^\]\n]+)\]\(((?:[^()\n]|\([^()\n]*\))+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|(?<![\w/])(https?:\/\/[^\s<>"]+)/g)) {
+    for (const match of text.matchAll(/!\[([^\]\n]*)\]\(((?:[^()\n]|\([^()\n]*\))+)\)|\[([^\]\n]+)\]\(((?:[^()\n]|\([^()\n]*\))+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|(?<![\w/])(https?:\/\/[^\s<>"]+)/g)) {
       if (match.index > last) parent.append(document.createTextNode(text.slice(last, match.index)));
-      if (match[1] !== undefined) renderLink(parent, match[1], match[2]);
-      else if (match[3] !== undefined) {
-        const code = element("code", "", match[3]);
-        if (!inLink && isFileReference(match[3]) && !isFolderReference(match[3])) { code.classList.add("message-file-link"); code.title = match[3]; activate(code, () => openReference(match[3])); }
-        parent.append(code);
-      } else if (match[4] !== undefined) { const strong = element("strong"); renderInline(strong, match[4], inLink); parent.append(strong); }
+      if (match[1] !== undefined) {
+        // The image's description stays as a link, in case the image can't be shown.
+        const target = match[2].trim(), label = match[1].trim() || target.split(/[\\/]/).pop();
+        if (inLink) parent.append(document.createTextNode(label));
+        else { const alt = element("span", "message-image-alt"); renderLink(alt, label, target); parent.append(alt); found.push({ target, alt: match[1].trim(), fallback: alt }); }
+      } else if (match[3] !== undefined) { renderLink(parent, match[3], match[4]); if (!inLink) found.push({ target: match[4].trim(), alt: match[3] }); }
       else if (match[5] !== undefined) {
-        if (inLink) parent.append(document.createTextNode(match[5]));
+        const code = element("code", "", match[5]);
+        if (!inLink && isFileReference(match[5]) && !isFolderReference(match[5])) { code.classList.add("message-file-link"); code.title = match[5]; activate(code, () => openReference(match[5])); found.push({ target: match[5], alt: "" }); }
+        parent.append(code);
+      } else if (match[6] !== undefined) { const strong = element("strong"); renderInline(strong, match[6], inLink, found); parent.append(strong); }
+      else if (match[7] !== undefined) {
+        if (inLink) parent.append(document.createTextNode(match[7]));
         else {
-          const { url, trailing } = splitPlainUrl(match[5]);
+          const { url, trailing } = splitPlainUrl(match[7]);
           if (url) renderLink(parent, url, url);
           if (trailing) parent.append(document.createTextNode(trailing));
         }
@@ -573,6 +632,7 @@
       last = match.index + match[0].length;
     }
     if (last < text.length) parent.append(document.createTextNode(text.slice(last)));
+    if (top) for (const { target, alt, fallback } of found) { const figure = replyImage(target, alt, fallback); if (figure) parent.append(figure); }
   }
   // Lightweight syntax coloring for code blocks and file previews. Tokens become text nodes and spans, never HTML.
   const syntaxFamilies = {
@@ -1022,7 +1082,10 @@
     }
     const text=message.text || (streaming ? '' : 'No text response.');
     const parts=text.split(/```([^\n`]*)\n([\s\S]*?)```/g);
+    replyImages = user || !message.id ? null : { scope: message.id, seen: new Set() };
+    try {
     for(let i=0;i<parts.length;i+=3){if(parts[i]){if(user)body.append(document.createTextNode(parts[i]));else renderProse(body,parts[i]);}if(parts[i+2]!==undefined){const block=element('div','code-block'),head=element('div','code-head'),pre=element('pre');head.append(element('span','code-language',parts[i+1].trim()||'code'),copyButton('code-copy','Copy code',parts[i+2]));pre.append(highlightedCode(parts[i+2],parts[i+1].trim()));block.append(head,pre);body.append(block);}}
+    } finally { replyImages = null; }
     if (!user || message.steer) row.append(heading);
     row.append(body);
     // A prompt stays at the top of its turn while the results scroll past (see .message-prompt). A long one shows its
