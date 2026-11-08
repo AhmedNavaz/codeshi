@@ -2929,7 +2929,7 @@ test('in Flow the usage notice can switch to Saver, keeping the other routing ch
   assert.equal(ui.$('usage-notice').hidden, false);
   assert.equal(action.textContent, 'Use Saver');
   action.click(); await flush();
-  assert.deepEqual(choices.at(-1), { mode: 'saver', allowApi: true, check: true });
+  assert.deepEqual(choices.at(-1), { mode: 'saver', allowApi: true, check: true, executionRevision: 0 });
   assert.equal(action.hidden, true, 'Once it is on, there is nothing left to offer.');
   assert.equal(ui.$('usage-notice').hidden, false, 'What the run used is still worth reading.');
 });
@@ -3442,7 +3442,7 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   assert.match(options()[1].textContent,/Matches the model and effort to each message/,'Each mode says what it does.');
   assert.deepEqual(options().map(row=>row.getAttribute('aria-checked')),['false','false','false']);
   options()[1].click();await flush();await flush();
-  assert.deepEqual(choices[0],{mode:'smart',allowApi:false,check:false});
+  assert.deepEqual(choices[0],{mode:'smart',allowApi:false,check:false,executionRevision:0});
   assert.equal(ui.$('picked-agent').textContent,'Routing');assert.equal(ui.$('picked-model').textContent,'Smart');
   assert(ui.$('model-picker-button').classList.contains('routing'));assert.equal(ui.$('effort-button').hidden,true,'Routing chooses the effort with the model.');
   ui.$('open-agents').click();ui.$('model-picker-button').click();await flush();
@@ -3460,7 +3460,7 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
 
   assert.equal(ui.$('handoff-threshold').value,'90');assert.equal(ui.$('handoff-automatic').checked,false);
   ui.$('routing-allow-api').checked=true;ui.fire('routing-allow-api','change');await flush();await flush();
-  assert.deepEqual(choices.at(-1),{mode:'smart',allowApi:true,check:false});
+  assert.deepEqual(choices.at(-1),{mode:'smart',allowApi:true,check:false,executionRevision:0});
   assert.equal(ui.$('routing-check-row').hidden,false);
   assert.equal(ui.$('routing-check').disabled,true,'Checking needs a Test command.');assert.match(ui.$('routing-check-hint').textContent,/Needs a test command\. Choose one in Run\./);
   assert.equal(ui.$('routing-check-set').hidden,false);
@@ -3468,7 +3468,7 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   assert.equal(ui.$('routing-check').disabled,false,'A Test command saved in Run shows at once.');assert.match(ui.$('routing-check-hint').textContent,/runs npm test\. If the tests fail, routing retries once/);
   assert.equal(ui.$('routing-check-set').hidden,true);
   ui.$('routing-check').checked=true;ui.fire('routing-check','change');await flush();await flush();
-  assert.deepEqual(choices.at(-1),{mode:'smart',allowApi:true,check:true});
+  assert.deepEqual(choices.at(-1),{mode:'smart',allowApi:true,check:true,executionRevision:0});
   conversation.runs=[{id:'a',check:{status:'passed'}},{id:'b',check:{status:'failed'}},{id:'b2',retryOf:'b',check:{status:'passed'}},{id:'c',check:{status:'failed'}},{id:'c2',retryOf:'c',check:{status:'failed'}},{id:'d',check:{status:'skipped'}}];await ui.window.relayUI.refresh();
   assert.equal(ui.$('routing-check-stats').textContent,'Last 3 checked runs: 1 passed first time, 1 after a retry, 1 still failing.');
   ui.$('handoff-threshold').value='80';ui.fire('handoff-threshold','change');await flush();
@@ -3477,7 +3477,7 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   ui.window.relayFlow.isOn=()=>false;ui.window.dispatchEvent(new UIEvent('relay-flow'));await flush();
   assert.equal(ui.$('agents-routing').hidden,true,'Back in the normal view the section goes.');
   ui.$('select-codex').click();await flush();await flush();
-  assert.deepEqual(choices.at(-1),{mode:null});assert.equal(ui.$('picked-agent').textContent,'Codex','Choosing an agent yourself turns routing off.');
+  assert.deepEqual(choices.at(-1),{mode:null,executionRevision:0});assert.equal(ui.$('picked-agent').textContent,'Codex','Choosing an agent yourself turns routing off.');
   ui.$('open-git').click();await flush();
   assert.equal(ui.$('agents-panel').hidden,true,'Git and Agents share the side panel.');
 });
@@ -4964,44 +4964,19 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').map(request => request.body.target), [{ kind: 'run', id: 'run-1' }]);
 });
 
-test('Flow turns routing on, keeps mode changes in Agent settings, and turns routing off on leaving', async () => {
+test('Flow layout changes preserve backend routing authority; explicit mode choices remain in Agent settings', async () => {
   const ui = await flowBrowser(), chat = ui.canonical.get('project-one');
-  ui.setIntercept((request, next) => { if (request.path.endsWith('/routing')) { chat.routing = request.body.mode ? { mode: request.body.mode, allowApi: request.body.allowApi, check: request.body.check } : null; return response(clone(chat)); } return next(); });
-  await ui.window.relayUI.refreshAccounts(); await flush();
-  assert.equal(chat.routing, undefined, 'The normal view has no routing.');
+  ui.setIntercept((request, next) => { if (request.path.endsWith('/routing')) { chat.routing = request.body.mode ? { mode: request.body.mode } : null; return response(clone(chat)); } return next(); });
   ui.window.relayFlow.enter(); await flush();
-  assert.deepEqual(chat.routing, { mode: 'smart', allowApi: false, check: false }, 'Entering Flow turns routing on, Smart at first.');
-  assert.match(flowText(ui, 'working'), /Codeshi matches the model and effort to each message, spends allowance where it resets soonest, and moves the task to another agent at 90% of a limit\..*Next message\s*Codeshi picks the agent, model and effort when you send\./);
-  const card = ui.$('flow-card-working');
-  assert.equal(card.querySelector('.flow-mode').dataset.mode, 'smart');
-  assert.equal(card.querySelector('.flow-mode-icon') !== null, true);
-  assert.equal(card.querySelector('.flow-change'), null);
-  assert.equal(card.querySelectorAll('[role="radio"]').length, 0, 'Routing controls live in Agent settings.');
-  assert.doesNotMatch(card.textContent, /Change how it works|Change…/);
-  ui.$('message-input').value = 'Rename the variable in app.js'; ui.fire('message-input', 'input'); await flush();
-  assert.match(flowText(ui, 'working'), /Next message\s*Codeshi picks the agent, model and effort when you send\./, 'A draft changes nothing: the choice is made on Send.');
-  ui.findButton('Agent settings').click(); await flush();
-  assert.equal(ui.$('agents-routing').hidden, false); assert.equal(ui.$('agents-routing-note').hidden, true); assert.equal(ui.$('agents-handoff').hidden, true);
-  assert.deepEqual(ui.$('routing-options').querySelectorAll('.routing-option').map(row => row.dataset.mode), ['saver', 'smart', 'ultra']);
-  const ultra = ui.$('routing-options').querySelectorAll('.routing-option').find(row => row.dataset.mode === 'ultra');
-  ultra.click(); await flush();
-  assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Agent settings change the mode without changing billing or tests.');
-  assert.match(flowText(ui, 'working'), /Routing\s*Ultra\s*Codeshi uses the strongest models and deepest reasoning first/);
-  assert.equal(card.querySelector('.flow-mode').dataset.mode, 'ultra');
-  ui.$('flow-detail-close').click(); await flush();
-  ui.window.relayUI.commands.agent('codex'); await flush();
-  assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Choosing an agent by hand is not Flow’s way: routing stays.');
-  assert.match(ui.$('notice-text').textContent, /Leave Flow to pick one yourself/);
+  assert.equal(ui.state().conversation.routing, undefined, 'Opening a view grants no execution authority.');
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/routing')).length, 0);
+  await ui.window.relayUI.setRouting({ mode: 'saver', allowApi: false, check: false }); await flush();
+  assert.equal(ui.state().conversation.routing.mode, 'saver');
   ui.window.relayFlow.leave(); await flush();
-  assert.equal(chat.routing, null, 'Leaving Flow turns routing off: the normal view picks by hand.');
-  assert.equal(ui.$('picked-agent').textContent, 'Codex');
-  assert.equal(ui.$('agents-routing').hidden, true); assert.equal(ui.$('agents-routing-note').hidden, false); assert.equal(ui.$('agents-handoff').hidden, false);
+  assert.equal(ui.state().conversation.routing.mode, 'saver', 'Closing a view does not revoke task authority.');
   ui.window.relayFlow.enter(); await flush();
-  assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Flow remembers the mode this workspace used last.');
-  const fresh = await flowBrowser();
-  fresh.canonical.get('project-one').routing = { mode: 'saver', allowApi: false, check: false };
-  await fresh.window.relayUI.refresh(); await flush();
-  assert.equal(fresh.canonical.get('project-one').routing, null, 'Routing found on outside Flow is turned off at the next idle moment.');
+  assert.equal(ui.state().conversation.routing.mode, 'saver');
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/routing')).length, 1);
 });
 
 test('a narrow window keeps the Flow cards out of the chat as chips, and one opens at a time', async () => {
@@ -5733,4 +5708,33 @@ test('Remote access settings distinguish Active now from Allowed devices and exp
   const select = ui.labelledInput('Connection'); select.value = 'remote'; select.dispatchEvent(new UIEvent('change')); await flush();
   assert.match(ui.$('settings-content').textContent, /up to a week and across Codeshi restarts/);
   assert.match(ui.$('settings-content').textContent, /Away iPhone.*Allowed · last seen 10m ago/s);
+});
+
+test('desktop surfaces task execution policy and takes manual control without sending Stop', async () => {
+  const ui = await browser(), chat = ui.canonical.get('project-one');
+  chat.execution = { defaults: { mode: 'flow', revision: 3 }, active: { taskId: 'task-policy', revision: 2, mode: 'flow' } };
+  const policies = [];
+  ui.setIntercept((request, next) => {
+    if (request.path.endsWith('/execution-policy')) { policies.push(request.body); chat.execution.active = { ...chat.execution.active, mode: 'normal', revision: 3 }; chat.execution.defaults = { mode: 'normal', revision: 4 }; return response(chat); }
+    return next();
+  });
+  await ui.window.relayUI.refresh();
+  const strip = ui.document.querySelector('.execution-policy-strip'); assert.match(strip.textContent, /Task: Flow · New work: Flow/);
+  strip.querySelector('button').click(); await flush();
+  assert.deepEqual(policies, [{ taskId: 'task-policy', revision: 2, action: 'takeover' }]);
+  assert.match(strip.textContent, /Task: Normal · New work: Normal/); assert.equal(strip.querySelector('button').hidden, true);
+  assert.equal(ui.requests.some(request => request.path.endsWith('/stop')), false);
+});
+
+test('Normal reset controls wait only for the chosen task agent, while Flow may compare connected agents', async () => {
+  for (const delegated of [false, true]) {
+    const ui = await browser(), chat = ui.canonical.get('project-one');
+    chat.status = 'incomplete'; chat.lastRun = { provider: 'codex', errorCategory: 'quota' };
+    chat.execution = { defaults: { mode: 'normal', revision: 0 }, active: { mode: delegated ? 'flow' : 'normal', automation: { wait: delegated } } };
+    ui.setIntercept((request, next) => request.path.endsWith('/resume') ? response(chat) : next());
+    await ui.window.relayUI.refresh(); ui.$('resume-button').click(); await flush();
+    const scheduled = ui.requests.filter(request => request.path.endsWith('/resume')).at(-1);
+    assert(scheduled); assert.equal(scheduled.body.providers.includes('claude'), delegated);
+    assert.equal(scheduled.body.providers[0], 'codex');
+  }
 });

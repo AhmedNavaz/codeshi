@@ -77,7 +77,7 @@ export class TaskCoordinator {
     return { ...plan, running, limit, full: running >= limit };
   }
 
-  start(c, input = {}) {
+  start(c, input = {}, { queueExecution = null } = {}) {
     if (this.closed) throw fail('Codeshi is stopping.', 503);
     const text = typeof input.text === 'string' ? input.text.trim() : '';
     if (!text || text.length > 100000) throw fail('Enter a message between 1 and 100,000 characters.', 400);
@@ -89,13 +89,18 @@ export class TaskCoordinator {
     this.main.validateSelection(model, 'auto', effort);
     const allowed = this.main.budget.allows(c, provider, model);
     if (!allowed.allowed) throw fail(allowed.reason);
+    this.main.execution.expect(this.main.execution.defaults(c).revision, input.executionRevision);
+    if (input.parentTaskId) { if (input.execution?.taskId !== input.parentTaskId) throw fail('The child task must name its parent execution policy.'); this.main.execution.assert(c, input.execution, { action: 'children' }); throw fail('Automatic child assignment is not available yet. Start an explicit independent task.'); }
+    const policyId = queueExecution?.taskId || randomUUID(); this.main.execution.ensure(c, policyId, { requestId: input.requestId });
+    const execution = queueExecution || this.main.execution.token(c, policyId);
+    this.main.execution.assert(c, execution, { action: input.routing ? 'routing' : 'manual', provider, model, effort });
     const attachments = Array.isArray(input.attachments) ? input.attachments : [];
     this.main.attachments.select(attachments);
     const dependsOn = input.dependsOn || null;
     if (dependsOn) { const before = this.find(c, dependsOn); if (['discarded', 'cancelled'].includes(before.status)) throw fail(`“${before.title}” was ${before.status}, so nothing can wait for it.`); }
     const folder = this.plan(c, { ...input, provider, accessMode: mode, approvalPolicy }).folder;
     // Ownership is saved before anything can start, so a crash at any point finds a task it can recover.
-    const task = { id: randomUUID(), requestId: input.requestId, title: line(text), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
+    const task = { id: policyId, execution, requestId: input.requestId, title: line(text), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
     this.main.record(c, { type: 'parallel_task', task });
     const saved = this.find(c, task.id);
     this.tick(c);
@@ -109,7 +114,7 @@ export class TaskCoordinator {
     const requestId = `queue-${input.id}`, accepted = (c.parallelTasks || []).find(task => task.requestId === requestId);
     if (accepted) return this.public(accepted);
     const item = this.main.queue.item(c, input.id);
-    const task = this.start(c, { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, ...(item.routing ? { routing: item.routing } : {}), folderId: input.folderId, requestId });
+    const task = this.start(c, { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, ...(item.routing ? { routing: item.routing } : {}), folderId: input.folderId, requestId }, { queueExecution: item.execution });
     this.main.queue.act(c, { action: 'remove', id: item.id });
     return task;
   }
@@ -140,6 +145,8 @@ export class TaskCoordinator {
   }
   directory(task) { return path.join(this.main.dataDir, 'tasks', task.id); }
   launch(c, task, plan) {
+    if (!task.execution) { this.main.execution.ensure(c, task.id, { source: 'legacy-task', config: { mode: task.routing ? 'flow' : 'normal', routingMode: task.routing?.mode } }); this.update(c, task, { execution: this.main.execution.token(c, task.id) }); }
+    this.main.execution.assert(c, task.execution, { action: task.routing ? 'routing' : 'manual', provider: task.provider, model: task.model, effort: task.effort });
     const { identity } = plan;
     const place = plan.mode === 'worktree' ? createWorktree(identity, path.join(this.directory(task), 'worktree'), task.id) : { scopePath: identity.real };
     this.update(c, task, { mode: plan.mode, modeReason: plan.reason, reason: null, commonDir: identity.commonDir || null, ...place, ...(identity.git ? { repoRoot: identity.root, prefix: identity.prefix } : {}), ...(plan.uncommitted ? { uncommitted: plan.uncommitted } : {}) });
@@ -153,9 +160,10 @@ export class TaskCoordinator {
       lane.broker.budget.setPolicy(conversation, this.main.budget.policy(c));
       if (task.includeHistory) for (const message of c.messages.filter(item => ['user', 'assistant'].includes(item.role) && item.text?.trim() && !item.reviewId).slice(-20)) lane.broker.record(conversation, { type: 'message', message: { id: randomUUID(), role: message.role, text: message.text, provider: message.provider, status: 'complete', createdAt: message.createdAt } });
     }
+    if (first) lane.broker.record(lane.c, { type: 'execution_policy', policy: this.main.execution.current(c, task.execution.taskId) });
     const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` };
-    if (task.routing) lane.broker.dispatch(lane.c, input).catch(error => { this.update(c, task, { status: 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
-    else lane.broker.start(lane.c, input);
+    if (task.routing) lane.broker.dispatch(lane.c, input, { execution: task.execution }).catch(error => { this.update(c, task, { status: 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
+    else lane.broker.start(lane.c, input, { execution: task.execution });
     this.sync(c, task);
   }
   // Opens a task's lane. It only ever holds the task's own folder, so reopening it after a crash can't widen what it reaches.
@@ -205,8 +213,15 @@ export class TaskCoordinator {
   // One task's conversation, as the page shows it. Undo works on the real folders from the main conversation, so a lane doesn't offer it.
   view(c, id, options) {
     const task = this.find(c, id), lane = this.lane(c, task);
-    if (!lane?.c) return { id: null, messages: [], status: task.status, queue: [], runs: [], task: this.public(task), parallelTasks: this.list(c), checkpoints: {} };
+    if (!lane?.c) return { execution: { defaults: this.main.execution.defaults(c), active: this.main.execution.current(c, task.execution?.taskId), policies: [] }, id: null, messages: [], status: task.status, queue: [], runs: [], task: this.public(task), parallelTasks: this.list(c), checkpoints: {} };
     return { ...lane.broker.view(lane.c, options), task: this.public(task), parallelTasks: this.list(c), checkpoints: {} };
+  }
+
+  executionPolicy(c, id, input) {
+    const task = this.find(c, id), lane = this.lanes.get(task.id);
+    const broker = lane?.c ? lane.broker : this.main, conversation = lane?.c || c;
+    if (!task.execution) throw fail('Refresh this task after its legacy policy has been restored.');
+    return broker.execution.change(conversation, { ...input, taskId: task.execution.taskId });
   }
 
   // ---- Coming back: a worktree task's changes against the folder as it is now.

@@ -12,7 +12,7 @@ import { resolveBinary } from './resolve-binary.mjs';
 // its access and permission setting and takes the new agent's model and effort. Only what the person was shown moves: each
 // prompt is matched by a digest of what it was when the offer was made, so one that changed since stays where it is.
 export const QUEUE_LIMIT = 20;
-const queueDigest = item => createHash('sha256').update(JSON.stringify([item.id, item.text, item.provider, item.model, item.effort, item.mode, item.approvalPolicy, item.attachments, item.billingConfirmed, item.routing || null])).digest('hex').slice(0, 24);
+const queueDigest = item => createHash('sha256').update(JSON.stringify([item.id, item.text, item.provider, item.model, item.effort, item.mode, item.approvalPolicy, item.attachments, item.billingConfirmed, item.routing || null, item.execution || null])).digest('hex').slice(0, 24);
 
 export class PromptQueue {
   constructor(broker) { this.broker = broker; this.closed = false; this.held = new Set(); }
@@ -55,7 +55,11 @@ export class PromptQueue {
       broker.validateSelection(model, 'auto', effort);
       broker.attachments.select(attachments);
       const routing = routingNote(input.routing);
-      broker.record(c, { type: 'queue_add', item: { id: randomUUID(), text, provider, model, effort, mode, approvalPolicy, attachments, billingConfirmed: input.billingConfirmed === true, ...(routing ? { routing } : {}), createdAt: new Date().toISOString() } });
+      broker.execution.expect(broker.execution.defaults(c).revision, input.executionRevision);
+      const taskId = randomUUID(); broker.execution.ensure(c, taskId, { requestId: input.requestId });
+      const execution = broker.execution.token(c, taskId);
+      broker.execution.assert(c, execution, { action: routing ? 'routing' : 'manual', provider, model, effort });
+      broker.record(c, { type: 'queue_add', item: { id: randomUUID(), execution, text, provider, model, effort, mode, approvalPolicy, attachments, billingConfirmed: input.billingConfirmed === true, ...(routing ? { routing } : {}), createdAt: new Date().toISOString() } });
     } else if (action === 'update') {
       const item = this.item(c, input.id);
       const text = typeof input.text === 'string' ? input.text.trim() : item.text;
@@ -64,6 +68,11 @@ export class PromptQueue {
       const effort = input.effort !== undefined ? (input.effort || null) : item.effort;
       broker.validateSelection(model, 'auto', effort);
       const clearRouting = Boolean(item.routing && (input.clearRouting || (input.model !== undefined && input.model !== item.model)));
+      if (clearRouting && item.execution) {
+        const previous = broker.execution.current(c, item.execution.taskId);
+        if (previous) broker.record(c, { type: 'execution_policy', policy: { ...previous, mode: 'normal', automation: Object.fromEntries(Object.keys(previous.automation).map(action => [action, false])), revision: previous.revision + 1, authorization: { source: 'explicit-queue-selection', at: new Date().toISOString() } } });
+        broker.record(c, { type: 'queue_execution', id: item.id, execution: broker.execution.token(c, item.execution.taskId) });
+      }
       broker.record(c, { type: 'queue_update', id: input.id, text, ...(input.model !== undefined ? { model } : {}), ...(input.effort !== undefined ? { effort } : {}), ...(clearRouting ? { clearRouting: true } : {}) });
     } else if (action === 'move') {
       this.item(c, input.id);
@@ -94,7 +103,7 @@ export class PromptQueue {
     this.held.add(c.id);
     try {
       const input = { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, requestId: `queue-${item.id}` };
-      const options = { queued: item.id, verifyRouting: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || !current || queueDigest(current) !== digest) throw Object.assign(new Error('The queued prompt changed or the queue was paused during assessment.'), { status: 409 }); } };
+      const options = { execution: item.execution, queued: item.id, verifyExecution: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || current && queueDigest(current) !== digest || !current && !c.requests[`queue-${item.id}`]) throw Object.assign(new Error('The queue changed or was paused before the provider started.'), { status: 409 }); }, verifyRouting: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || !current || queueDigest(current) !== digest) throw Object.assign(new Error('The queued prompt changed or the queue was paused during assessment.'), { status: 409 }); } };
       const { runId } = item.routing ? await broker.dispatch(c, input, options) : broker.start(c, input, options);
       broker.record(c, { type: 'queue_started', id: item.id, runId });
       broker.emit('update', { conversationId: c.id });
@@ -112,7 +121,7 @@ export class PromptQueue {
     if (status === 'complete') { setTimeout(() => this.tick(c), 0); return; }
     if (run.errorCategory === 'quota') {
       if (!c.resume) {
-        try { this.broker.resume.schedule(c, { providers: this.broker.availableProviders(), mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true }); }
+        try { this.broker.resume.schedule(c, { providers: this.broker.execution.allows(c, run.execution, { action: 'wait' }) ? this.broker.availableProviders() : [run.provider], execution: run.execution, mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true }); }
         catch (error) { this.pause(c, `Waiting for a reset could not start: ${error.message}`); }
       }
       return;
@@ -143,21 +152,24 @@ export class PromptQueue {
   // already allowed in advance) it is everything queued for that agent right now. An earlier confirmation of charges was
   // for the old agent, so it never carries over: a destination billed per use needs the person's own yes for these prompts.
   // `choose` picks a routed prompt's model again for the new agent.
-  async move(c, { from, to, covered = null, billingConfirmed = false, choose = null }) {
+  async move(c, { from, to, covered = null, billingConfirmed = false, choose = null, verifyExecution = () => {} }) {
     const charged = to.billingSource !== 'subscription';
     this.held.add(c.id);
     try {
+      verifyExecution();
       const wanted = (covered || this.cover(c, from, to)?.items || []);
       const routed = new Map();
       if (choose && !(charged && !billingConfirmed)) for (const entry of wanted) {
         const item = c.queue.find(row => row.id === entry.id);
-        if (item?.routing) routed.set(item.id, await choose(item));
+        if (item?.routing && this.broker.execution.allows(c, item.execution, { action: 'routing' })) routed.set(item.id, await choose(item));
       }
+      verifyExecution();
       // Nothing is awaited from here until the move is saved, so what's checked is what moves.
       const moves = [], changed = [], stayed = [];
       for (const entry of wanted) {
         const item = c.queue.find(row => row.id === entry.id);
         if (!item) continue;
+        if (!this.broker.execution.allows(c, item.execution, { action: covered ? 'manual' : 'handoff', provider: to.provider, model: routed.get(item.id)?.model ?? to.model, effort: routed.get(item.id)?.effort ?? c.efforts[to.provider]?.[to.model || 'default'] ?? null })) { changed.push(item.id); continue; }
         if (item.provider !== from || queueDigest(item) !== entry.digest || !this.canRun(to.provider, item)) { changed.push(item.id); continue; }
         if (charged && !billingConfirmed) { stayed.push(item.id); continue; }
         const choice = routed.get(item.id);

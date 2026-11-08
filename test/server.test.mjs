@@ -653,7 +653,7 @@ test('conversation paging with limit and before, and search across full history'
   assert.equal(providerPaged.messages.length, 20);
   assert.equal(providerPaged.earlier, 100);
 
-  const routingPaged = await (await post(`${f.url}/api/conversations/${initial.id}/routing?projectId=${project.id}&limit=20`, { mode: 'smart' })).json();
+  const routingPaged = await (await post(`${f.url}/api/conversations/${initial.id}/routing?projectId=${project.id}&limit=20`, { mode: 'smart', executionRevision: 0 })).json();
   assert.equal(routingPaged.routing.mode, 'smart');
   assert.equal(routingPaged.messages.length, 20);
   assert.equal(routingPaged.earlier, 100);

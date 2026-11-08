@@ -105,6 +105,7 @@ test('choosing and editing model and effort for queued prompts survives restarts
   assert.equal(c.model, 'next-model');
   assert.equal(c.effort, 'high');
 
+  broker.execution.setDefault(c, { mode: 'flow' });
   const q1 = add(broker, c, 'First queued with routing', { model: 'routed-model', effort: 'medium', routing: { mode: 'balanced', reason: 'Initial routing reason', tier: 'standard' } }).queue[0].id;
   assert.equal(c.queue[0].model, 'routed-model');
   assert.equal(c.queue[0].effort, 'medium');

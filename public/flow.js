@@ -56,21 +56,6 @@
   let routingPending = false, routingReleasing = false;
   function rememberRouting() { const current = routing(), id = api.getState().projectId; if (current && id) write(ROUTING_KEY(id), JSON.stringify({ mode: canonicalMode(current.mode), allowApi: current.allowApi === true, check: current.check === true })); }
   function savedRouting(id) { try { const saved = JSON.parse(read(ROUTING_KEY(id)) || 'null'), mode = canonicalMode(saved?.mode); return saved && modes.some(option => option.mode === mode) ? { ...saved, mode } : null; } catch { return null; } }
-  async function ensureRouting() {
-    if (!on || routing() || routingPending || !api.getState().projectId) return;
-    const choice = savedRouting(api.getState().projectId) || { mode: 'smart', allowApi: false, check: false };
-    routingPending = true; schedule();
-    try { await api.setRouting({ mode: choice.mode, allowApi: choice.allowApi === true, check: choice.check === true }); }
-    catch (error) { api.showNotice?.(`Flow could not turn routing on. ${error.message}`); }
-    finally { routingPending = false; schedule(); }
-  }
-  // Outside Flow routing is off. A failure here is not reported: the next idle moment tries again.
-  async function releaseRouting() {
-    if (!routing() || routingReleasing) return;
-    routingReleasing = true; rememberRouting();
-    try { await api.setRouting({ mode: null }); } catch { /* Tried again when the workspace is idle. */ }
-    finally { routingReleasing = false; schedule(); }
-  }
   const sidePanels = ['agents', 'git', 'brief', 'tasks', 'timeline'];
   const openSidePanel = () => sidePanels.find(name => $(`${name}-panel`) && !$(`${name}-panel`).hidden) || null;
   const detail = $('flow-detail'), detailBody = $('flow-detail-body');
@@ -215,7 +200,7 @@
   // message would do, and an inline testing preference. Routing changes live in Agent settings.
   function modeSentence(current) {
     const mode = canonicalMode(current?.mode), option = modes.find(item => item.mode === mode), extras = [];
-    if (!option) return routingPending ? 'Turning routing on…' : 'Routing is off. Flow turns it on when the workspace is idle.';
+    if (!option) return routingPending ? 'Turning routing on…' : 'Normal execution. Choose Smart, Saver or Ultra to delegate new tasks.';
     if (current?.allowApi) extras.push('Agents billed by use can be chosen.');
     if (current?.check) extras.push(api.getState().status?.verificationCadence === 'review-first' ? 'Routine automatic tests wait while you review. A selected build/review workflow still checks.' : 'After a run changes files, your tests run; if they fail, it tries once more, one step up.');
     return [option.does, ...extras].join(' ');
@@ -512,9 +497,9 @@
         saved = { panel: openSidePanel(), bottom: window.relayPanel?.isOpen?.() ? window.relayPanel.active() : null };
         window.relayAgents?.close?.(); window.relayGit?.close?.(); window.relayBrief?.close?.(); window.relayTasks?.close?.(); window.relayTimeline?.close?.(); window.relayReviews?.closePanel?.();
         if (saved.bottom) window.relayPanel?.hide?.();
-        on = true; shell.classList.add('flow'); liftHeader(); moveControls(); place(); tick(); ensureRouting();
+        on = true; shell.classList.add('flow'); liftHeader(); moveControls(); place(); tick();
       } else {
-        on = false; closeDetail(); closePeek(); window.relayPanel?.hide?.(); releaseRouting();
+        on = false; closeDetail(); closePeek(); window.relayPanel?.hide?.();
         clearTimeout(ticker); ticker = null;
         const previous = saved; saved = null;
         shell.classList.remove('flow'); restoreControls(); dropHeader();
@@ -590,10 +575,9 @@
     const has = Boolean(api.getState().projectId);
     if (has && api.getState().ready && !restored) { restored = true; if (!on && read(KEY) === 'on' && !lockReason()) changeMode(true, false); }
     if (!has && on && !transitioning) applyMode(false, false, null, true);
-    // Routing follows the view: on in Flow, off outside it, put right at the next idle moment if something else changed it.
+    // Layout restoration only remembers display preferences; authority comes from the task policy.
     const idle = has && api.getState().ready && !transitioning && !checkingMode && !api.isRunning();
-    if (idle && on) { if (routing()) rememberRouting(); else ensureRouting(); }
-    else if (idle && !on && routing()) releaseRouting();
+    if (idle && on && routing()) rememberRouting();
     schedule();
   });
   for (const type of ['relay-account', 'relay-billing']) window.addEventListener(type, schedule);

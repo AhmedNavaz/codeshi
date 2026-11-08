@@ -56,14 +56,18 @@ export class ResumeScheduler {
   }
 
   // limited: agents that also reached a limit during this task, which aren't taken as ready just for reporting no usage.
-  schedule(c, { providers, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', billingConfirmed = false, limited = [], requireQuota = false } = {}) {
+  schedule(c, { providers, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', billingConfirmed = false, limited = [], requireQuota = false, execution = null } = {}) {
     if (c.lastRun?.errorCategory !== 'quota' || this.broker.running?.c.id === c.id) throw Object.assign(new Error('Waiting for a reset is available after a run stops on a usage limit.'), { status: 409 });
     const chosen = [...new Set(Array.isArray(providers) ? providers : [])].filter(provider => this.broker.availableProviders().includes(provider));
+    execution ||= this.broker.execution.token(c, c.lastRun?.taskId || c.lastRun?.id);
+    this.broker.execution.assert(c, execution, { action: 'manual' });
+    const delegated = this.broker.execution.allows(c, execution, { action: 'wait' });
+    if (!delegated && (chosen.length !== 1 || chosen[0] !== c.lastRun.provider)) throw Object.assign(new Error('Normal can wait only for the explicitly selected agent. Choose Flow to delegate reset selection.'), { status: 409 });
     if (!chosen.length) throw Object.assign(new Error('Choose at least one connected agent to continue with.'), { status: 400 });
     for (const provider of chosen) this.broker.checkRunSettings(provider, mode, approvalPolicy);
     if (c.resume) this.end(c, 'replaced');
     const at = this.now();
-    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}), ...(requireQuota ? { requireQuota: true } : {}) };
+    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, execution, selection: { provider: c.lastRun.provider, model: c.lastRun.model, effort: c.lastRun.effort ?? null }, delegated, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}), ...(requireQuota ? { requireQuota: true } : {}) };
     this.broker.record(c, { type: 'resume', resume });
     this.status.delete(c.id);
     this.arm(); this.tick();
@@ -101,8 +105,8 @@ export class ResumeScheduler {
         this.end(c, 'expired'); continue;
       }
       if (this.broker.running) continue;
-      const provider = await this.firstReady(c);
-      if (provider && c.resume && !this.broker.running) this.launch(c, provider);
+      const waitingId = c.resume.id, provider = await this.firstReady(c);
+      if (provider && c.resume?.id === waitingId && !this.broker.running) this.launch(c, provider);
     }
   }
 
@@ -115,8 +119,9 @@ export class ResumeScheduler {
       const known = status.agents.get(provider), due = status.checks.get(provider) ?? 0;
       let state = known;
       if (!known || now >= due) {
-        const model = provider === c.provider ? c.model : c.models[provider] || null;
-        if (!this.broker.budget.allows(c, provider, model).allowed) continue;
+        const model = resume.selection?.provider === provider ? resume.selection.model : provider === c.provider ? c.model : c.models[provider] || null;
+        const effort = resume.selection?.provider === provider ? resume.selection.effort : c.efforts[provider]?.[model || 'default'] ?? null;
+        if (!this.broker.execution.allows(c, resume.execution, { action: resume.delegated ? 'wait' : 'manual', provider, model, effort }) || !this.broker.budget.allows(c, provider, model).allowed) continue;
         let usage = null;
         try { usage = await this.usage(provider, this.broker.usageOptions(provider)); } catch {}
         state = { ...limitState(usage, model), checkedAt: new Date(now).toISOString() };
@@ -136,16 +141,18 @@ export class ResumeScheduler {
       }
       if (!ready && state.limited !== true) ready = provider;
     }
-    status.nextCheckAt = Math.min(...status.checks.values());
+    status.nextCheckAt = status.checks.size ? Math.min(...status.checks.values()) : now + this.checkMs;
     this.broker.emit('update', { conversationId: c.id });
     return ready;
   }
 
   launch(c, provider) {
-    const resume = c.resume, model = provider === c.provider ? c.model : c.models[provider] || null;
+    const resume = c.resume, model = resume.selection?.provider === provider ? resume.selection.model : provider === c.provider ? c.model : c.models[provider] || null;
+    const effort = resume.selection?.provider === provider ? resume.selection.effort : c.efforts[provider]?.[model || 'default'] ?? null;
     try {
+      this.broker.execution.assert(c, resume.execution, { action: resume.delegated ? 'wait' : 'manual', provider, model, effort });
       this.broker.message(c, 'system', `${names[provider]} has room again, so Codeshi is continuing the task.`);
-      const { runId } = this.broker.start(c, { provider, mode: resume.mode, approvalPolicy: resume.approvalPolicy, fresh: true, text: continuationRequest, model, billingConfirmed: resume.billingConfirmed, requestId: `resume-${resume.id}` }, { resume });
+      const { runId } = this.broker.start(c, { provider, mode: resume.mode, approvalPolicy: resume.approvalPolicy, fresh: true, text: continuationRequest, model, effort, billingConfirmed: resume.billingConfirmed, requestId: `resume-${resume.id}` }, { resume, execution: resume.execution, executionAction: resume.delegated ? 'wait' : 'manual' });
       this.end(c, 'started', { provider, runId });
       this.notify(c, 'started', `Continuing with ${names[provider]}`, `${names[provider]} has room again, so the unfinished task is continuing.`);
     } catch (error) {
@@ -159,7 +166,7 @@ export class ResumeScheduler {
   // A resumed run that reaches another limit waits again while attempts remain. Returns whether it is waiting,
   // so the broker does not also report the run as stopped.
   runEnded(c, run) {
-    if (!run.resume || run.errorCategory !== 'quota' || (run.resume.attempts || 0) + 1 >= RESUME_ATTEMPTS || Date.parse(run.resume.expiresAt) <= this.now()) return false;
+    if (!this.broker.execution.allows(c, run.execution, { action: run.resume?.delegated ? 'wait' : 'manual' }) || !run.resume || run.errorCategory !== 'quota' || (run.resume.attempts || 0) + 1 >= RESUME_ATTEMPTS || Date.parse(run.resume.expiresAt) <= this.now()) return false;
     const provider = names[run.provider] || run.provider;
     const resume = { ...run.resume, id: randomUUID(), attempts: (run.resume.attempts || 0) + 1 };
     this.broker.record(c, { type: 'resume', resume });

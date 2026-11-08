@@ -25,7 +25,7 @@ export class AutomaticReviewRuns {
       if (c.queue.length && !c.queuePaused) this.broker.queue.pause(c, 'Automatic review stopped here. Check the result before resuming queued prompts.');
       return true;
     }
-    if (this.closed || status !== 'complete' || run.hadPendingInput || run.persistenceError) {
+    if (!this.broker.execution.allows(c, run.execution, { action: 'review', sequence: true }) || this.closed || status !== 'complete' || run.hadPendingInput || run.persistenceError) {
       this.finish(c, run, status === 'interrupted' || this.closed ? 'interrupted' : 'blocked', 'The build did not finish cleanly. Start a new review when ready.');
       return true;
     }
@@ -39,7 +39,7 @@ export class AutomaticReviewRuns {
       if (!snapshot) { this.finish(c, run, 'skipped', 'No reviewable text changes in the selected folders.'); return true; }
       const result = this.jobs.start(project, this.broker, c, { snapshot, goal: plan.goal, builder: run.provider,
         provider: plan.reviewer, model: plan.model, builderRunId: run.id }, { requestId: `automatic-review-${run.id}`, goal: plan.goal,
-        files: snapshot.files.map(({ folderId, path }) => ({ folderId, path })), approvedDigest: snapshot.digest, billingConfirmed: plan.billingConfirmed });
+        files: snapshot.files.map(({ folderId, path }) => ({ folderId, path })), approvedDigest: snapshot.digest, billingConfirmed: plan.billingConfirmed }, { execution: run.execution, sequence: true });
       this.phase(c, run, 'reviewing', 'Reviewing the captured changes. You can compose your next prompt.', result.reviewId);
       const job = this.broker.backgroundReview;
       job.done.then(() => {

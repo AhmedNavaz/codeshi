@@ -12,7 +12,7 @@ export function phoneRemotePath(method, path) {
   if (typeof path !== 'string' || path.length > 2000 || !path.startsWith('/') || path.startsWith('//') || /[#\\]/.test(path)) return null;
   const url = new URL(path, 'http://phone.local');
   const allowed = method === 'GET' ? allowedGet.has(url.pathname) || /^\/api\/providers\/(codex|claude|gemini)\/(account|usage|models)$/.test(url.pathname)
-    : method === 'POST' && (allowedPost.has(url.pathname) || /^\/api\/conversations\/[a-zA-Z0-9-]+\/(messages|approval|answer|stop|provider|queue|steer|handoff|retry|continue|resume|routing)$/.test(url.pathname));
+    : method === 'POST' && (allowedPost.has(url.pathname) || /^\/api\/conversations\/[a-zA-Z0-9-]+\/(messages|approval|answer|stop|provider|queue|steer|handoff|retry|continue|resume|routing|execution-policy)$/.test(url.pathname));
   if (!allowed) return null;
   if (url.pathname === '/api/conversation') url.searchParams.set('tail', String(Math.min(Math.max(Number(url.searchParams.get('tail')) || 40, 1), 100)));
   return url.pathname + url.search;

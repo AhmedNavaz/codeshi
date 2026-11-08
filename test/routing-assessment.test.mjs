@@ -274,7 +274,8 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   }
 });
 `, { mode: 0o700 });
-  const run = { id: 'assessor', c, approvals: new Map(), stopped: false, ending: false }, seen = [];
+  broker.execution.ensure(c, 'assessment-task');
+  const run = { id: 'assessor', c, execution: broker.execution.token(c, 'assessment-task'), approvals: new Map(), stopped: false, ending: false }, seen = [];
   const answer = await runAssessmentWorker(broker, run, { provider: 'codex', bin: broker.configuredBins.codex, transport: 'app-server', model: 'small', effort: 'low', prompt: 'Rate this.' }, value => seen.push(value));
   assert.equal(answer, '{}'); assert(run.child, 'The process was still on its way out.');
   assert.equal(seen.find(value => value.usage).usage.total.inputTokens, 30, 'Its usage had already arrived.');

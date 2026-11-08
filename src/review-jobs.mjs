@@ -18,12 +18,14 @@ export class ReviewJobs {
     if (!job || job.id !== reviewId) fail('This review is no longer running.');
     return job.worker.stop(job.conversation.id);
   }
-  start(project, main, c, review, input) {
+  start(project, main, c, review, input, { execution = null, sequence = false } = {}) {
     if (this.closing) fail('Codeshi is shutting down.');
     const fingerprint = reviewRequestKey(input), accepted = c.reviewRequests[input.requestId];
     if (accepted) { if (accepted.fingerprint !== fingerprint) fail('This request ID was used for another review.'); return { ...accepted, duplicate: true }; }
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.requestId)) fail('Invalid review request ID.', 400);
     const parent = c.activeRun || c.lastRun, taskId = parent?.taskId || parent?.id || null;
+    execution ||= main.execution.token(c, taskId);
+    if (execution) main.execution.assert(c, execution, { action: sequence ? 'review' : 'manual', sequence: sequence, provider: review.provider, model: review.model });
     main.admit?.(c);
     main.budget.assertCanStart(c, { task: taskId ? { id: taskId, relation: 'review' } : null, provider: review.provider, model: review.model });
     if (this.jobs.has(project.id)) fail('A background review is already running in this workspace.');
@@ -61,7 +63,7 @@ export class ReviewJobs {
       };
       // Persist the worker PID in the main journal before its start message can launch the native provider.
       worker.on('update', progress);
-      const result = worker.start(conversation, { text: 'Review approved changes: ' + review.goal, provider: review.provider, model: review.model, mode: 'read', requestId: input.requestId, billingConfirmed: input.billingConfirmed === true }, { review: { ...review, background: true }, verifyReview() {} });
+      const result = worker.start(conversation, { text: 'Review approved changes: ' + review.goal, provider: review.provider, model: review.model, mode: 'read', requestId: input.requestId, billingConfirmed: input.billingConfirmed === true }, { review: { ...review, background: true }, verifyReview() {}, verifyExecution: () => { if (execution) main.execution.assert(c, execution, { action: sequence ? 'review' : 'manual', sequence: sequence, provider: review.provider, model: review.model }); } });
       const job = { id, worker, conversation, directory, done: null }; this.jobs.set(project.id, job); main.backgroundReview = job;
       progress();
       job.done = worker.running.done.then(async () => {

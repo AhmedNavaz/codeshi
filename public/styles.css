@@ -1411,3 +1411,7 @@ button.capability strong::after { content: " →"; color: var(--faint); }
   .app-shell.sidebar-collapsed .workspace-chip { display: none; }
   .command-bar { position: relative; top: auto; left: auto; transform: none; flex: 1 1 auto; width: auto; margin: 0 auto; }
 }
+
+.execution-policy-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 14px; font-size: 12px; }
+.execution-policy-strip[hidden] { display: none; }
+.execution-policy-strip button { font: inherit; cursor: pointer; padding: 5px 9px; border: 1px solid currentColor; border-radius: 6px; color: inherit; background: transparent; }

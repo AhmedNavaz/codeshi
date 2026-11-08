@@ -96,6 +96,7 @@ export async function runAssessmentWorker(broker, run, config, metadata) {
       });
       const pidStart = processStart(child.pid);
       broker.record(run.c, { type: 'routing_assessment_metadata', id: run.id, metadata: { pid: child.pid, pidStart, began: true } });
+      broker.execution.assert(run.c, run.execution, { action: 'routing', provider: config.provider, model: config.model, effort: config.effort });
       child.send({ type: 'start', config: { ...config, workspace: directory, workspaces: [], images: [], mode: 'read', approvalPolicy: 'ask', sessionId: null, routingAssessment: true, outputSchema: assessmentSchema, googleRoot: broker.googleRoot } }, () => {});
     });
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
@@ -186,6 +187,8 @@ export class RoutingDispatcher {
     if (!usable(assessor)) return null;
     guard();
     const chosen = assessors.find(row => row.provider === assessor.provider);
+    // Assessors consume allowance too and must obey the same provider/model restrictions.
+    if (!broker.execution.allows(c, broker.execution.token(c, taskId), { action: 'routing', provider: chosen.provider, model: assessor.model, effort: assessor.effort })) return null;
     try { broker.budget.assertCanStart(c, { task: { id: taskId, relation: 'assessment' }, provider: chosen.provider, model: assessor.model }); } catch { return null; }
     run.provider = chosen.provider;
     Object.assign(c.routingPending, { provider: chosen.provider, model: assessor.model, effort: assessor.effort });
@@ -228,9 +231,14 @@ export class RoutingDispatcher {
     broker.admit?.(c);
     input = { ...input, mode: input.mode || c.mode, approvalPolicy: input.approvalPolicy || c.approvalPolicy || 'ask', routing: { ...input.routing, mode: routingMode } };
     const scopeNow = () => hash([broker.workspaceSignature, c.context, c.taskPolicy, c.routing, c.settingsRevision, input.mode, input.approvalPolicy]), scope = scopeNow();
-    const taskId = saved?.taskId || randomUUID(), id = randomUUID(), began = Date.now();
+    broker.execution.expect(broker.execution.defaults(c).revision, input.executionRevision);
+    const taskId = options.execution?.taskId || saved?.taskId || randomUUID(), id = randomUUID(), began = Date.now();
+    broker.execution.ensure(c, taskId, { requestId: input.requestId });
+    const execution = options.execution || broker.execution.token(c, taskId);
+    const policy = broker.execution.assert(c, execution, { action: 'routing' });
+    if (routingMode !== policy.routingMode) throw fail('The routing preference changed. Refresh this task before sending.');
     let finish;
-    const run = { id, taskId, c, provider: input.provider || c.provider, mode: 'read', approvals: new Map(), steers: new Map(), stopped: false, ending: false, done: new Promise(resolve => { finish = resolve; }), purpose: 'routing' };
+    const run = { id, taskId, c, execution, provider: input.provider || c.provider, mode: 'read', approvals: new Map(), steers: new Map(), stopped: false, ending: false, done: new Promise(resolve => { finish = resolve; }), purpose: 'routing' };
     broker.running = run;
     // A placeholder is visible even while account/model probes are running, so Stop and concurrency apply immediately.
     c.routingPending = { id, provider: run.provider, taskId, purpose: 'routing', phase: 'routing', startedAt: new Date().toISOString() };
@@ -240,14 +248,15 @@ export class RoutingDispatcher {
       const checks = this.candidates(c, input); checks.catch(() => {});
       const guard = () => {
         if (run.stopped) throw fail('Routing assessment stopped. Your draft is saved.');
+        broker.execution.assert(c, execution, { action: 'routing' });
         if (scope !== scopeNow()) throw fail('Workspace or routing settings changed during assessment. Send again to assess the current task.');
-        options.verifyRouting?.();
+        options.verifyRouting?.(); options.verifyExecution?.();
       };
       const attachments = input.attachments?.length || 0;
       const previousText = c.messages.findLast(message => message.role === 'user' && !message.reviewId && !message.steer)?.text || c.context?.goal || '';
       let assessment = globalThis.relayRouting.triage(input.text, { attachments, previous: c.lastRun?.routing?.assessment });
       if (!assessment) {
-        if (routingMode === 'saver') {
+        if (routingMode === 'saver' || policy.override && (!policy.overrideUsed || policy.override.scope === 'pinned')) {
           // Saver (#128): local rules only, no agent call; light and standard models at low effort.
           const estimate = globalThis.relayRouting.classify(input.text, { attachments, context: previousText });
           assessment = { tier: estimate.tier, effort: 'low', reason: estimate.reason, source: 'local' };
@@ -264,12 +273,14 @@ export class RoutingDispatcher {
       await checks;
       guard();
       // A slow check may have finished during the assessment, so rank on whatever is newest.
-      let candidates = this.rows(c, input, broker.availableProviders());
+      let candidates = this.rows(c, input, broker.availableProviders()).filter(row => !policy.allowedProviders || policy.allowedProviders.includes(row.provider)).map(row => ({ ...row, models: row.models.filter(model => !policy.allowedModels[row.provider] || policy.allowedModels[row.provider].includes(model.id || model.model || model.value)) }));
+      const override = policy.override && (!policy.overrideUsed || policy.override.scope === 'pinned') ? policy.override : null;
+      if (override) candidates = candidates.filter(row => row.provider === override.provider);
       const allowApi = c.routing?.allowApi === true || input.routing.allowApi === true;
       // An explicitly previewed build/review workflow binds its builder and model. Respect that concrete choice while
       // assessing effort, rather than silently invalidating the review consent by switching to another builder.
       if (input.automaticReview) candidates = candidates.filter(row => row.provider === input.provider).map(row => ({ ...row, models: input.model ? row.models.filter(model => (model.id || model.model || model.value) === input.model) : [], ...(input.model ? { allowedModels: [input.model] } : {}) }));
-      const choice = globalThis.relayRouting.route({ text: input.text, attachments, assessment, mode: routingMode, candidates, current: c.lastRun?.provider || c.provider, allowApi });
+      const choice = override && candidates.length ? { provider: override.provider, model: override.model, effort: override.effort, mode: routingMode, tier: assessment.tier, reason: 'Your explicit task selection', quota: globalThis.relayRouting.assessQuota(candidates[0].usage, override.model, { threshold: 95 }) } : globalThis.relayRouting.route({ text: input.text, attachments, assessment, mode: routingMode, candidates, current: c.lastRun?.provider || c.provider, allowApi });
       if (choice.error) throw fail(choice.error);
       if (choice.quota.state !== 'ok') throw fail('Auto could not confirm fresh allowance for the assessed task. Refresh plan usage or choose a model yourself.');
       const row = candidates.find(item => item.provider === choice.provider);
@@ -278,7 +289,7 @@ export class RoutingDispatcher {
       broker.record(c, { type: 'routing_decision', id, taskId, requestId: input.requestId, fingerprint, scope, result });
       broker.running = null; delete c.routingPending;
       // Assessment usage belongs to the task it rated. Without one, the run takes its task the usual way.
-      const submission = broker.start(c, { ...input, provider: choice.provider, model: choice.model, effort: choice.effort, routing: { mode: choice.mode, reason: choice.reason, tier: choice.tier, ...(choice.plannedHandoff ? { plannedHandoff: true } : {}), assessment: { id, ...assessment }, escalation: choice.escalation } }, { ...options, ...(run.assessorStarted ? { assessedTask: { id: taskId, parentRunId: id, relation: 'assessed' } } : {}), routingEvidence: { provider: row.provider, account: row.account, usage: row.usage, at: row.readAt } });
+      const submission = broker.start(c, { ...input, provider: choice.provider, model: choice.model, effort: choice.effort, routing: { mode: choice.mode, reason: choice.reason, tier: choice.tier, ...(choice.plannedHandoff ? { plannedHandoff: true } : {}), assessment: { id, ...assessment }, escalation: choice.escalation } }, { ...options, execution, assessedTask: { id: taskId, parentRunId: run.assessorStarted ? id : null, relation: run.assessorStarted ? 'assessed' : null }, routingEvidence: { provider: row.provider, account: row.account, usage: row.usage, at: row.readAt } });
       const accepted = { ...submission, provider: choice.provider, model: choice.model, effort: choice.effort };
       broker.record(c, { type: 'routing_submission', requestId: input.requestId, submission: accepted });
       return accepted;

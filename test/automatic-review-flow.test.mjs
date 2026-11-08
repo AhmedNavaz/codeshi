@@ -280,3 +280,16 @@ test('reviewer API billing still needs its own consent before the provider can c
   assert.equal(f.c.runs[0].automaticReview.status, 'blocked'); assert.equal(f.c.reviews[0].status, 'failed');
   assert.match(f.c.reviews[0].summary, /billing|confirm/i); assert.equal(f.captures().length, 1, 'Builder consent never permits a paid reviewer run.');
 });
+
+test('manual takeover lets an in-flight reviewer finish at its native boundary and revokes future dispatch', { skip: scriptCLIs }, async t => {
+  const f = await fixture(t, { write: { 'app.js': 'export const value = 2;\n' }, holdReview: true });
+  f.broker.execution.setDefault(f.c, { mode: 'flow' });
+  const input = await f.prepare(); f.broker.start(f.c, input); await f.broker.running.done;
+  await until(() => f.broker.backgroundReview && f.captures().some(capture => capture.review));
+  const policy = f.broker.execution.active(f.c), job = f.broker.backgroundReview, native = job.worker.running;
+  f.broker.execution.change(f.c, { taskId: policy.taskId, revision: policy.revision, action: 'takeover' });
+  assert.equal(job.worker.running, native); assert.equal(native.stopped, false);
+  f.releaseReview(); await job.done;
+  assert.equal(f.captures().length, 2); assert.equal(f.broker.execution.active(f.c).mode, 'normal');
+  assert.equal(f.broker.running, null); assert.equal(f.c.reviews[0].status, 'complete');
+});

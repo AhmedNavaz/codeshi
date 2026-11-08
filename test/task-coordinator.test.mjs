@@ -230,6 +230,7 @@ test('a queued prompt can start as a task beside the main run, keeping its setti
   const main = env.broker.running;
   await until(() => env.captured(fs.realpathSync(env.folders.a)).length, 'the main run');
   env.broker.queueAction(env.c, { action: 'add', text: 'First queued', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
+  env.broker.execution.setDefault(env.c, { mode: 'flow' });
   env.broker.queueAction(env.c, { action: 'add', text: 'Hold A', provider: 'claude', mode: 'read', approvalPolicy: 'ask', routing: { mode: 'balanced', reason: 'A light task', tier: 'light' } });
   const [first, second] = env.c.queue;
   assert.throws(() => env.broker.tasks.fromQueue(env.c, { id: second.id, folderId: 'missing' }), /Choose a folder/);

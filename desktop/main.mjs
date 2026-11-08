@@ -254,8 +254,9 @@ else {
         // If it never entered, say what it was waiting for.
         const entry=await win.webContents.executeJavaScript(`(()=>{const s=window.relayUI.getState(),c=s.conversation;return {on:window.relayFlow.isOn(),locked:window.relayFlow.isLocked(),ready:s.ready,loading:s.loading,pending:s.pending,settingsPending:s.settingsPending,taskDraft:Boolean(s.taskDraft),activity:s.status?.workspaceActivity,running:s.status?.runningConversationId,status:c?.status,queue:c?.queue?.length,notice:document.querySelector('#notice,.notice')?.textContent||null};})()`);
         smokeStep('flow entered '+entry.on);
-        // Routing is Flow's: entering turns it on, Balanced at first, and leaving turns it off.
-        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`['smart','balanced'].includes(window.relayUI.getState().conversation?.routing?.mode)`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        // The view grants no authority. An explicit choice delegates new work to Flow.
+        const layoutOnly=await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing&&window.relayUI.getState().conversation?.execution?.defaults.mode==='normal'`);
+        await win.webContents.executeJavaScript(`window.relayUI.setRouting({mode:'smart',allowApi:false,check:false})`);
         win.setContentSize(1440,900);
         result.flow=await win.webContents.executeJavaScript(`(async()=>{
           await new Promise(resolve=>requestAnimationFrame(resolve));
@@ -276,6 +277,7 @@ else {
           close.click();await new Promise(resolve=>setTimeout(resolve,20));
           return {remoteDebug,entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:document.querySelectorAll('.flow-card').length===4,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about')&&!/preview/i.test(document.getElementById('flow-left').textContent+document.getElementById('flow-right').textContent),routingOn:['smart','balanced'].includes(window.relayUI.getState().conversation.routing?.mode)&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
         })()`);
+        result.flow.layoutOnly=layoutOnly;
         const screenshot=path.join(os.tmpdir(),`codeshi-flow-${process.pid}.png`);
         const captured=await Promise.race([win.webContents.capturePage(),new Promise(resolve=>setTimeout(()=>resolve(null),3000))]);
         if(captured&&!captured.isEmpty()){fs.writeFileSync(screenshot,captured.toPNG());result.flow.screenshot=screenshot;}else result.flow.screenshotUnavailable=true;
@@ -290,9 +292,10 @@ else {
         await win.webContents.executeJavaScript(`window.relayUI.refresh().then(()=>window.relayFlow.leave())`);
         for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         result.flow.left=await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&getComputedStyle(document.querySelector('.status-bar')).display!=='none'`);
-        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing`))break;await new Promise(resolve=>setTimeout(resolve,20));}
+        result.flow.routingPreserved=await win.webContents.executeJavaScript(`window.relayUI.getState().conversation?.routing?.mode==='smart'&&window.relayUI.getState().conversation?.execution?.defaults.mode==='flow'`);
+        await win.webContents.executeJavaScript(`window.relayUI.setRouting({mode:null})`);
         result.flow.routingOff=await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing&&document.getElementById('agents-routing').hidden`);
-        result.flow.passed=['entered','footerHidden','cards','windowControlsClear','details','headerPlaced','remote','noPreview','routingOn','narrow','locked','left','routingOff'].every(key=>result.flow[key]===true);
+        result.flow.passed=['entered','footerHidden','cards','windowControlsClear','details','headerPlaced','remote','noPreview','layoutOnly','routingOn','narrow','locked','left','routingPreserved','routingOff'].every(key=>result.flow[key]===true);
         console.log('AI_RELAY_FLOW_SMOKE '+JSON.stringify(result.flow));
         if(!result.flow.passed)throw Error('Flow smoke check failed: '+JSON.stringify({...result.flow,entry}));
       }

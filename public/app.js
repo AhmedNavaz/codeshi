@@ -1237,6 +1237,8 @@
   // Agents a wait can continue with: the one that stopped and the one selected first, then any other connected agent.
   function resumeProviders() {
     const connected = ["codex", "claude", "gemini"].filter(provider => available(provider) && !connection(provider).blocked);
+    const policy = state.conversation?.execution?.active;
+    if (policy && !policy.automation?.wait) return connected.filter(provider => provider === state.conversation?.lastRun?.provider);
     return [...new Set([state.conversation?.lastRun?.provider, state.provider, ...connected])].filter(provider => connected.includes(provider));
   }
   function resumeText(resume) {
@@ -1309,7 +1311,7 @@
     const routed = routeFor(text, attachments.length);
     if (routed?.error) { showNotice(routed.error); return; }
     state.pending = "queue"; renderControls();
-    const added = await queueAction({ action: "add", text, provider: routed?.provider || state.provider, model: (routed ? routed.model : state.model) || null, effort: (routed ? routed.effort : state.effort) || null, mode: state.mode, approvalPolicy: state.approvalPolicy || "ask", attachments, billingConfirmed: window.relayBillingConfirmed === true, ...(routed ? { routing: { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } } : {}) });
+    const added = await queueAction({ executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, action: "add", text, provider: routed?.provider || state.provider, model: (routed ? routed.model : state.model) || null, effort: (routed ? routed.effort : state.effort) || null, mode: state.mode, approvalPolicy: state.approvalPolicy || "ask", attachments, billingConfirmed: window.relayBillingConfirmed === true, ...(routed ? { routing: { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } } : {}) });
     if (added) {
       window.relayFiles?.accepted(projectId, attachments);
       if (ui.input.value === draft) { ui.input.value = ""; storedWrite(draftKey(), ""); storedWrite(draftKey(null), ""); resizeInput(); }
@@ -1337,7 +1339,7 @@
   }
   async function setRouting(choice) {
     if (!state.conversation) await ensureCanonicalConversation();
-    await post(endpoint(state.conversation.id, "routing"), choice, state.projectId);
+    await post(endpoint(state.conversation.id, "routing"), { ...choice, executionRevision: state.conversation?.execution?.defaults?.revision ?? 0 }, state.projectId);
     await refresh();
   }
   // A note added to the working run (#32): the agent takes it into the same task instead of after it.
@@ -1672,7 +1674,27 @@
     catch (error) { showNotice(error.message); }
   }
 
+  const executionStrip = document.createElement('div'); executionStrip.className = 'execution-policy-strip';
+  const executionLabel = document.createElement('span'), executionTakeover = document.createElement('button');
+  executionTakeover.type = 'button'; executionTakeover.textContent = 'Take manual control';
+  executionTakeover.addEventListener('click', async () => {
+    const policy = state.conversation?.execution?.active;
+    if (!policy) return;
+    executionTakeover.disabled = true;
+    try { await post(endpoint(state.conversation.id, 'execution-policy'), { taskId: policy.taskId, revision: policy.revision, action: 'takeover' }, state.projectId); await refresh(); }
+    catch (error) { showNotice(error.message); }
+    finally { executionTakeover.disabled = false; }
+  });
+  executionStrip.append(executionLabel, executionTakeover); ui.form.parentNode?.insertBefore(executionStrip, ui.form);
+  function renderExecutionPolicy() {
+    const execution = state.conversation?.execution, policy = execution?.active;
+    executionStrip.hidden = !execution;
+    executionLabel.textContent = execution ? `Task: ${policy?.mode === 'flow' ? 'Flow' : 'Normal'} · New work: ${execution.defaults.mode === 'flow' ? 'Flow' : 'Normal'}` : '';
+    executionTakeover.hidden = !policy || policy.mode !== 'flow';
+    executionTakeover.title = 'Revoke pending automatic work. The current native turn may finish; Stop ends it immediately.';
+  }
   function renderControls() {
+    renderExecutionPolicy();
     const running = isRunning();
     const otherRunning = isOtherRunning();
     const busy = Boolean(state.pending) || state.loading || state.projectSaving;
@@ -2125,7 +2147,7 @@
       // A blank task: sending starts it, and the conversation moves to it.
       if (state.taskDraft) {
         if (automaticReview) throw Error('Build then review runs from the main conversation for now.');
-        const task = await window.relayTaskThreads.start({ text, attachments, provider, model: model || null, effort: effort || null, mode, approvalPolicy, routing, requestId, billingConfirmed: window.relayBillingConfirmed === true });
+        const task = await window.relayTaskThreads.start({ executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, model: model || null, effort: effort || null, mode, approvalPolicy, routing, requestId, billingConfirmed: window.relayBillingConfirmed === true });
         state.retrySubmission = null;
         window.relayFiles?.accepted(projectId, attachments);
         if (ui.input.value === originalDraft) { ui.input.value = ""; storedWrite(draftKey(), ""); resizeInput(); }
@@ -2145,7 +2167,7 @@
           state.retrySubmission.localContext = catalog.context;
         }
         await post('/api/local-models/start', { model:localChoice.model, digest:localChoice.digest, task:continuing ? 'Continue the unfinished task from the saved conversation. Inspect current files first.' : text, ...(continuing ? { continuing:true } : {}), attachments, requestId, context:state.retrySubmission.localContext }, projectId);
-      } else accepted = await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
+      } else accepted = await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
       state.retrySubmission = null;
       window.relayAutomaticReview?.accepted(projectId, automaticReview);
       if (!continuing) window.relayFiles?.accepted(projectId, attachments);

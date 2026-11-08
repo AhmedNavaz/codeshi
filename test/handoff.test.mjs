@@ -43,6 +43,7 @@ function setup(t, { preferences = { threshold: 90, automatic: false }, scenarios
   t.reopened = next => { opened.add(next); return next; };
   t.after(async () => { for (const open of opened) await open.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const c = broker.get(broker.create().id);
+  broker.execution.setDefault(c, { mode: 'flow' });
   return {
     broker, c, settings, usage, billing, notices, workspace, dataDir, bins,
     // Returns once the mock agent is working, so what it was asked is on record.
@@ -77,7 +78,7 @@ test('an exhausted window for another model neither blocks an agent nor raises a
 
 test('handoff checks Antigravity additional-folder support in Normal and Flow and preserves the CLI folder limit', async () => {
   const account = { installed: true, authenticated: true, billingSource: 'subscription', source: 'antigravity-acp', capabilities: { additionalDirectories: true } };
-  const broker = { workspace: '/first', workspaces: ['/first', '/second'], availableProviders: () => ['codex', 'gemini'], usageOptions: () => ({}), observeQuota() {}, budget: { refusal: () => null } };
+  const broker = { execution: { allows: () => true, current: () => null }, workspace: '/first', workspaces: ['/first', '/second'], availableProviders: () => ['codex', 'gemini'], usageOptions: () => ({}), observeQuota() {}, budget: { refusal: () => null } };
   const handoff = new HandoffMonitor(broker, {
     account: async () => account,
     models: async () => ({ models: [{ id: 'gemini-3.8-flash', displayName: 'Gemini Flash', isDefault: true }] }),
@@ -218,6 +219,7 @@ const captures = env => fs.readFileSync(path.join(env.workspace, '.mock-captures
 test('a routed run hands off by its routing mode, without asking: Cost saving at 80%, Maximum quality not before 95%', { skip: scriptCLIs }, async t => {
   const routed = mode => ({ text: 'Build the feature', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode, reason: 'A test', tier: 'standard' } });
   const saving = setup(t);
+  saving.broker.execution.setDefault(saving.c, { mode: 'flow', routingMode: 'saver' });
   saving.broker.start(saving.c, routed('saving'));
   const first = await until(() => saving.requests().length && saving.broker.running, 'the Cost saving run');
   await saving.broker.handoff.check(first);
@@ -225,6 +227,7 @@ test('a routed run hands off by its routing mode, without asking: Cost saving at
   await saving.broker.running.done;
   assert(saving.c.messages.some(message => /Codeshi handed the task to Claude/.test(message.text)));
   const quality = setup(t);
+  quality.broker.execution.setDefault(quality.c, { mode: 'flow', routingMode: 'ultra' });
   quality.broker.start(quality.c, routed('quality'));
   const run = await until(() => quality.requests().length && quality.broker.running, 'the Maximum quality run');
   await quality.broker.handoff.check(run);

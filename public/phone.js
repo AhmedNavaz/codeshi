@@ -563,7 +563,8 @@
   }
   async function waitForReset() {
     const connected = AGENTS.filter(provider => available(provider) && !signedOut(provider));
-    const providers = [...new Set([S.c.lastRun?.provider, S.settings.provider, ...connected])].filter(provider => connected.includes(provider));
+    const delegated = !S.c.execution?.active || S.c.execution.active.automation?.wait === true;
+    const providers = (delegated ? [...new Set([S.c.lastRun?.provider, S.settings.provider, ...connected])] : [S.c.lastRun?.provider]).filter(provider => connected.includes(provider));
     try { await api(endpoint('resume'), { body: { providers, mode: S.settings.mode, approvalPolicy: S.settings.approvalPolicy, billingConfirmed: false } }); }
     finally { await refreshConversation(); }
   }
@@ -672,7 +673,18 @@
     if (signedOut(provider)) return `Sign in to ${name(provider)} on your computer, or choose another agent.`;
     return '';
   }
+  const executionStrip = node('div', 'execution-policy-strip'), executionLabel = node('span');
+  const executionTakeover = button('Take manual control', () => attempt(async () => {
+    const policy = S.c?.execution?.active; if (!policy) return;
+    await api(endpoint('execution-policy'), { body: { taskId: policy.taskId, revision: policy.revision, action: 'takeover' } });
+    await refreshConversation();
+  }), 'big');
+  executionStrip.append(executionLabel, executionTakeover); $('composer').parentNode?.insertBefore(executionStrip, $('composer'));
   function renderComposer() {
+    const execution = S.c?.execution, policy = execution?.active;
+    executionStrip.hidden = !execution;
+    executionLabel.textContent = execution ? `Task: ${policy?.mode === 'flow' ? 'Flow' : 'Normal'} · New work: ${execution.defaults.mode === 'flow' ? 'Flow' : 'Normal'}` : '';
+    executionTakeover.hidden = !policy || policy.mode !== 'flow';
     const running = isRunning(), queueing = running || Boolean(S.c?.resume), blocked = sendBlocked(), other = otherRunning(), canAdd = running && S.c?.canAddToRun === true;
     input.placeholder = blocked ? 'Choose another agent to send' : other ? 'Another run is using this workspace' : S.draft ? 'What should this task do?' : queueing ? 'Queue a follow-up…' : routing() ? 'Message' : `Message ${name(S.settings.provider)}`;
     const send = $('send');
@@ -737,13 +749,13 @@
       if (S.retry?.key !== key) S.retry = { key, id: L.requestId(crypto) };
       const requestId = S.retry.id;
       if (S.draft) {
-        const task = await api('/api/tasks', { body: { text, attachments: files, provider, model: model || null, effort: effort || null, mode, approvalPolicy, routing: note, requestId, billingConfirmed, folderId: S.draft, includeHistory: false, dependsOn: null } });
+        const task = await api('/api/tasks', { body: { executionRevision: S.c?.execution?.defaults?.revision ?? 0, text, attachments: files, provider, model: model || null, effort: effort || null, mode, approvalPolicy, routing: note, requestId, billingConfirmed, folderId: S.draft, includeHistory: false, dependsOn: null } });
         clearComposer(draft);
         await selectThread(task.id);
         return;
       }
-      if (queueing) await api(endpoint('queue'), { body: { action: 'add', text, provider, model: model || null, effort: effort || null, mode, approvalPolicy, attachments: files, billingConfirmed, ...(note ? { routing: note } : {}) } });
-      else await api(endpoint('messages'), { body: { text, attachments: files, provider, mode, approvalPolicy, requestId, model: model || undefined, effort: effort || null, routing: note, billingConfirmed } });
+      if (queueing) await api(endpoint('queue'), { body: { executionRevision: S.c?.execution?.defaults?.revision ?? 0, action: 'add', text, provider, model: model || null, effort: effort || null, mode, approvalPolicy, attachments: files, billingConfirmed, ...(note ? { routing: note } : {}) } });
+      else await api(endpoint('messages'), { body: { executionRevision: S.c?.execution?.defaults?.revision ?? 0, text, attachments: files, provider, mode, approvalPolicy, requestId, model: model || undefined, effort: effort || null, routing: note, billingConfirmed } });
       clearComposer(draft);
       pinned = true;
       await refreshConversation();
@@ -1008,7 +1020,7 @@
   function setRouting(mode) {
     const auto = routing();
     return attempt(async () => {
-      await api(endpoint('routing'), { body: mode ? { mode, allowApi: auto?.allowApi === true, check: auto?.check === true } : { mode: null } });
+      await api(endpoint('routing'), { body: mode ? { mode, allowApi: auto?.allowApi === true, check: auto?.check === true, executionRevision: S.c?.execution?.defaults?.revision ?? 0 } : { mode: null, executionRevision: S.c?.execution?.defaults?.revision ?? 0 } });
       await refreshConversation(); drawSheet();
     });
   }

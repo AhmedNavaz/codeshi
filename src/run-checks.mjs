@@ -54,7 +54,7 @@ export class RunChecks {
   // The command marked for checks when a finished run should be checked: a complete routed run, with Check with tests on,
   // that changed files. A retry is always checked, so its result is known even if it changed nothing.
   wanted(c, run, status) {
-    if (this.closed || !this.tests || status !== 'complete' || run.review || run.local || !run.routing || c.routing?.check !== true) return null;
+    if (!this.broker.execution.allows(c, run.execution, { action: 'check', sequence: Boolean(run.automaticReview) }) || this.closed || !this.tests || status !== 'complete' || run.review || run.local || !run.routing || c.routing?.check !== true) return null;
     let command = null;
     try { command = this.tests.saved(); } catch { return null; }
     if (!command?.command) return null;
@@ -91,6 +91,7 @@ export class RunChecks {
     const result = await this.execute();
     if (this.closed) return;
     this.finish(c, run.id, check, result, Date.now() - started);
+    if (!this.broker.execution.allows(c, run.execution, { action: 'manual' })) return;
     if (run.automaticReview) {
       if (result.status === 'passed') this.broker.automaticReviews.runEnded(c, run, 'complete');
       else this.broker.automaticReviews.invalidate(c, run, 'The build checks did not pass. Review stopped; inspect the test result before continuing.');
@@ -110,7 +111,7 @@ export class RunChecks {
   // Ultra (#128): with a second subscription agent connected with confirmed room, sends the finished changes for one
   // independent read-only review (#15) within the task budget. Sequential after the build and check, never a race (#16).
   async reviewUltra(c, run) {
-    if (this.closed || this.broker.running || this.broker.backgroundReview || c.lastRun?.id !== run.id) return false;
+    if (!this.broker.execution.allows(c, run.execution, { action: 'review' }) || this.closed || this.broker.running || this.broker.backgroundReview || c.lastRun?.id !== run.id) return false;
     const folders = this.broker.workspaceFolders;
     let repos = [];
     try { repos = listReviewChanges(folders).filter(repo => repo.available && !repo.error && !repo.changesClipped); } catch { return false; }
@@ -137,7 +138,7 @@ export class RunChecks {
         this.broker.observeQuota(c, provider, usage);
         models = await this.broker.handoff.modelRows(provider);
       } catch { continue; }
-      const allowed = model => !this.broker.budget.refusal(c, { task: { id: taskId, relation: 'review' }, provider, model, previousProvider: run.provider });
+      const allowed = model => this.broker.execution.allows(c, run.execution, { action: 'review', provider, model }) && !this.broker.budget.refusal(c, { task: { id: taskId, relation: 'review' }, provider, model, previousProvider: run.provider });
       const allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
@@ -157,7 +158,7 @@ export class RunChecks {
         mode: 'read',
         requestId: `ultra-review-${run.id}`,
       }, {
-        review,
+        review, execution: run.execution, executionAction: 'review',
         verifyReview: () => {
           if (captureReview(this.broker.workspaceFolders, selections).digest !== snapshot.digest) {
             throw Object.assign(new Error('The selected changes changed before the review started.'), { status: 409 });
@@ -202,12 +203,12 @@ export class RunChecks {
     if (this.broker.running) return;
     const automatic = AUTOMATIC[run.routing.mode];
     const blocked = automatic ? await this.limited(step, automatic) : null;
-    if (this.closed || this.broker.running) return;
-    if (automatic && !blocked) {
+    if (!this.broker.execution.allows(c, run.execution, { action: 'manual' }) || this.closed || this.broker.running) return;
+    if (automatic && !blocked && this.broker.execution.allows(c, run.execution, { action: 'retry' })) {
       try { this.retry(c, run, step, command, result); return; }
       catch (error) { return this.hold(c, `The retry could not start: ${error.message}`, 'Tests failed', `The retry with ${stepName(step)} could not start.`); }
     }
-    const offer = { id: randomUUID(), runId: run.id, provider: step.provider, model: step.model || null, modelName: step.modelName || null, effort: step.effort || null, tier: step.tier || null, mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true, routingMode: run.routing.mode, command: command.command, directory: command.directory || '', exitCode: result.exitCode, output: result.output, ...(blocked ? { blocked } : {}), createdAt: new Date().toISOString() };
+    const offer = { id: randomUUID(), execution: run.execution, runId: run.id, provider: step.provider, model: step.model || null, modelName: step.modelName || null, effort: step.effort || null, tier: step.tier || null, mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true, routingMode: run.routing.mode, command: command.command, directory: command.directory || '', exitCode: result.exitCode, output: result.output, ...(blocked ? { blocked } : {}), createdAt: new Date().toISOString() };
     this.broker.record(c, { type: 'retry_offer', offer });
     this.hold(c, CHECK_PAUSE, 'Tests failed', `Retry with ${stepName(step)}?`);
   }
@@ -222,9 +223,9 @@ export class RunChecks {
     return quota.state === 'near' ? `${names[step.provider]} is at ${Math.round(quota.usedPercent)}% of its limit` : null;
   }
 
-  retry(c, run, step, command, result) {
+  retry(c, run, step, command, result, automatic = true) {
     return this.broker.start(c, { text: retryPrompt(command, result), provider: step.provider, model: step.model || null, effort: step.effort || null, mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true,
-      routing: { mode: run.routing.mode, tier: step.tier, reason: 'The tests failed, so one step up' }, requestId: `retry-${run.id}` }, { retryOf: run.id });
+      routing: { mode: run.routing.mode, tier: step.tier, reason: 'The tests failed, so one step up' }, requestId: `retry-${run.id}` }, { retryOf: run.id, execution: run.execution, executionAction: automatic ? 'retry' : 'manual' });
   }
 
   // A retry the person accepted from an offer.
@@ -234,8 +235,9 @@ export class RunChecks {
     if (this.broker.running) throw Object.assign(new Error('An agent is working in this workspace. Retry once it finishes.'), { status: 409 });
     if (c.lastRun?.id !== offer.runId) throw Object.assign(new Error('Another run has finished since. Send a new message instead.'), { status: 409 });
     this.broker.record(c, { type: 'retry_offer_end', id: offer.id, outcome: 'accepted' });
-    const run = { id: offer.runId, mode: offer.mode, approvalPolicy: offer.approvalPolicy, billingConfirmed: offer.billingConfirmed, routing: { mode: offer.routingMode } };
-    return this.retry(c, run, offer, { command: offer.command, directory: offer.directory }, { exitCode: offer.exitCode, output: offer.output });
+    this.broker.execution.assert(c, offer.execution, { action: 'manual' });
+    const run = { id: offer.runId, execution: offer.execution, mode: offer.mode, approvalPolicy: offer.approvalPolicy, billingConfirmed: offer.billingConfirmed, routing: { mode: offer.routingMode } };
+    return this.retry(c, run, offer, { command: offer.command, directory: offer.directory }, { exitCode: offer.exitCode, output: offer.output }, false);
   }
   dismiss(c, offerId) {
     if (c.retryOffer?.id === offerId) this.broker.record(c, { type: 'retry_offer_end', id: offerId, outcome: 'dismissed' });

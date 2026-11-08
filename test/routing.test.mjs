@@ -232,6 +232,7 @@ test('a fresh backend reading can stop a routed dispatch before any agent starts
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const c = broker.get(broker.create().id); let reads = 0;
   broker.checks.usage = async (_provider, options) => { reads++; assert.equal(options.refresh, true); return { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 5 }, { label: 'Weekly', scopes: ['gpt-codex'], usedPercent: 100 }] }; };
+  broker.execution.setDefault(c, { mode: 'flow' });
   broker.start(c, { text: 'Add a test', provider: 'codex', model: 'gpt-codex', routing: { mode: 'smart', reason: 'A focused change' } });
   await broker.running.done;
   assert.equal(reads, 1);

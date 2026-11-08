@@ -16,10 +16,10 @@ export function createTaskRoutes({ registry, body, json }) {
     const input = await body(req);
     if (url.pathname === '/api/tasks/plan') { json(res, 200, tasks.preview(c, input)); return true; }
     if (url.pathname === '/api/tasks/from-queue') { json(res, 202, tasks.fromQueue(c, input)); return true; }
-    const match = url.pathname.match(/^\/api\/tasks\/([\da-f-]{36})\/(review|check|merge|keep|discard|start|close)$/);
+    const match = url.pathname.match(/^\/api\/tasks\/([\da-f-]{36})\/(review|check|merge|keep|discard|start|close|execution-policy)$/);
     if (!match) fail('Not found.', 404);
     const [, id, action] = match;
-    json(res, 200, action === 'review' ? tasks.review(c, id) : action === 'check' ? await tasks.check(c, id, input) : action === 'merge' ? await tasks.integrate(c, id, input) : action === 'keep' ? tasks.keep(c, id) : action === 'discard' ? tasks.discard(c, id) : action === 'start' ? tasks.resumeWaiting(c, id) : tasks.closeTask(c, id));
+    json(res, 200, action === 'execution-policy' ? tasks.executionPolicy(c, id, input) : action === 'review' ? tasks.review(c, id) : action === 'check' ? await tasks.check(c, id, input) : action === 'merge' ? await tasks.integrate(c, id, input) : action === 'keep' ? tasks.keep(c, id) : action === 'discard' ? tasks.discard(c, id) : action === 'start' ? tasks.resumeWaiting(c, id) : tasks.closeTask(c, id));
     return true;
   };
 }

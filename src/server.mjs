@@ -309,7 +309,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           return json(res,existed?200:201,registry.mainConversation(projectId));
         }
       }
-      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry|compact))?$/);
+      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry|compact|execution-policy))?$/);
       if (match) {
         const workspaceBroker = selectedBroker(url);
         // A conversation can belong to a task's lane (#88), which answers for its own run. Memory, skills, limits and the project
@@ -324,6 +324,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           const input = await body(req);
           if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
           const viewOptions = url.searchParams.has('limit') ? { limit: Number(url.searchParams.get('limit')) } : {};
+          if (match[2] === 'execution-policy') return json(res, 200, broker.execution.change(c, input));
           if (match[2] === 'compact') return json(res, 200, broker.compactContext(c, input, viewOptions));
           if (match[2] === 'context') return json(res, 200, await broker.updateContext(c, input));
           if (match[2] === 'memory') return json(res, 200, broker.changeMemory(c, input));
@@ -336,6 +337,8 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (match[2] === 'resume') return json(res, 200, input.cancel === true ? broker.cancelResume(c) : broker.scheduleResume(c, input));
           if (match[2] === 'queue') return json(res, 200, broker.queueAction(c, input));
           if (match[2] === 'steer') return json(res, 200, await broker.addToRun(c, input));
+          if (match[2] === 'routing' && !Number.isSafeInteger(input.executionRevision)) return json(res, 409, { error: 'Refresh execution settings before changing routing.' });
+          if (['messages', 'queue'].includes(match[2]) && input.routing && !Number.isSafeInteger(input.executionRevision)) return json(res, 409, { error: 'Refresh execution settings before delegating new work.' });
           if (match[2] === 'routing') return json(res, 200, broker.setRouting(c, input, viewOptions));
           if (match[2] === 'retry') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissRetry(c, input.offerId) : broker.acceptRetry(c, input));
           if (match[2] === 'handoff') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissHandoff(c, input.offerId) : await broker.acceptHandoff(c, input));

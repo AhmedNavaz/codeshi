@@ -29,7 +29,7 @@ function setup(t, scenarios = {}) {
     captures() { const file = path.join(workspace, '.mock-captures.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').slice(0, -1).map(JSON.parse) : []; },
   };
 }
-async function run(broker, c, text, provider) { broker.start(c, { text, provider, mode: 'edit' }); await broker.running.done; }
+async function run(broker, c, text, provider) { broker.execution.setDefault(c, { mode: 'flow' }); broker.start(c, { text, provider, mode: 'edit' }); await broker.running.done; }
 // A broker whose clock and plan usage the test controls.
 function controlled(broker, usage) {
   const clock = { now: Date.now() };

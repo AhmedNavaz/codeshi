@@ -259,8 +259,8 @@ test('through the app, the Test command saved in Project commands checks a route
   app.registry.broker(project.id).checks.usage = async () => usedNothing;
   const post = async (route, body) => { const response = await fetch(`http://127.0.0.1:${app.server.address().port}${route}?projectId=${project.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() }; };
   assert.equal((await post('/api/commands/save', { name: 'Tests', folderId: project.folders[0].id, directory: '', command: `"${process.execPath}" -e "process.stdout.write('31 passing')"`, test: true })).status, 200);
-  assert.deepEqual((await post(`/api/conversations/${id}/routing`, { mode: 'ultra', check: true })).body.routing, { mode: 'ultra', allowApi: false, check: true });
-  assert.equal((await post(`/api/conversations/${id}/messages`, { text: 'Add promo codes', ...routed('ultra'), requestId: 'checked' })).status, 202);
+  assert.deepEqual((await post(`/api/conversations/${id}/routing`, { mode: 'ultra', check: true, executionRevision: 0 })).body.routing, { mode: 'ultra', allowApi: false, check: true });
+  assert.equal((await post(`/api/conversations/${id}/messages`, { text: 'Add promo codes', ...routed('ultra'), executionRevision: 1, requestId: 'checked' })).status, 202);
   const c = app.registry.broker(project.id).get(id);
   await until(() => c.runs[0]?.check && c.runs[0].check.status !== 'running');
   assert.equal(c.runs[0].check.status, 'passed');

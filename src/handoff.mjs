@@ -53,7 +53,7 @@ export class HandoffMonitor {
   unwatch(run) { clearTimeout(this.timers.get(run.id)); this.timers.delete(run.id); if (run.c.handoffOffer) { run.c.handoffOffer = null; } }
 
   // The scope an offer is bound to. Progress within the run does not change it; a new task, folders or project context does.
-  scope(c, run) { return createHash('sha256').update(JSON.stringify([run.id, this.broker.workspaceSignature, c.context])).digest('hex'); }
+  scope(c, run) { return createHash('sha256').update(JSON.stringify([run.id, this.broker.workspaceSignature, c.context, this.broker.execution.current(c, run.taskId)?.revision])).digest('hex'); }
 
   // A reading that can't be saved must never get in the way of a handoff.
   observe(c, provider, usage) { try { this.broker.observeQuota(c, provider, usage); } catch (error) { console.error('Codeshi could not save a usage reading:', error.message); } }
@@ -61,7 +61,9 @@ export class HandoffMonitor {
   // In Flow a routed run hands off by its mode, with no separate setting (#107, #128): Saver moves the task on early,
   // Ultra holds the strongest model longest, and all three move without asking. Other runs use Settings.
   policy(run) {
-    const mode = globalThis.relayRouting.normalizeMode(run?.routing?.mode) || run?.routing?.mode;
+    const allowed = this.broker.execution.allows(run.c, run.execution, { action: 'handoff' });
+    const mode = allowed ? globalThis.relayRouting.normalizeMode(run?.routing?.mode) || run?.routing?.mode : null;
+    if (!allowed) return { ...this.preferences(), automatic: false };
     return mode && FLOW_HANDOFF[mode] ? { threshold: FLOW_HANDOFF[mode], automatic: true, mode } : this.preferences();
   }
   async modelRows(provider, limitMs = 5000) {
@@ -95,7 +97,7 @@ export class HandoffMonitor {
         this.observe(c, provider, usage);
         models = await this.modelRows(provider);
       } catch { continue; }
-      const allowed = model => !this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider });
+      const allowed = model => this.broker.execution.allows(c, run.execution, { action: 'manual', provider, model }) && !this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider });
       const allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
@@ -114,7 +116,7 @@ export class HandoffMonitor {
     for (const provider of this.broker.availableProviders().filter(value => value !== run.provider && !exclude.includes(value))) {
       const model = c.models[provider] || null, options = this.broker.usageOptions(provider);
       // Never offer a move the task's limits would refuse: the old agent is stopped before the new one starts (#87).
-      if (this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider })) continue;
+      if (!this.broker.execution.allows(c, run.execution, { action: 'manual', provider, model }) || this.broker.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model, previousProvider: run.provider })) continue;
       let usage = null; try { usage = await this.usage(provider, options); } catch {}
       this.observe(c, provider, usage);
       const assessment = assessQuota(usage, model, { threshold });
@@ -134,10 +136,10 @@ export class HandoffMonitor {
 
   async offer(c, run, usedWindow) {
     const to = await this.destination(c, run);
-    if (!to || this.broker.running !== run) return null;
+    if (!to || this.broker.running !== run || !this.broker.execution.allows(c, run.execution, { action: 'manual' })) return null;
     const request = c.messages.find(message => message.runId === run.id && message.role === 'user');
     c.handoffOffer = {
-      id: randomUUID(), createdAt: new Date().toISOString(), runId: run.id, scope: this.scope(c, run),
+      id: randomUUID(), createdAt: new Date().toISOString(), runId: run.id, execution: run.execution, scope: this.scope(c, run),
       from: { provider: run.provider, usedPercent: usedWindow.usedPercent, window: usedWindow.label || null, resetsAt: usedWindow.resetsAt || null },
       to, task: taskLine(request?.text), queue: this.broker.queue.cover(c, run.provider, to),
     };
@@ -183,12 +185,14 @@ export class HandoffMonitor {
     if (current.quota !== offer.to.quota) await stale(`${names[offer.to.provider]}'s allowance reading changed.`);
     if (offer.to.billingSource !== 'subscription' && (automatic || billingConfirmed !== true)) throw Object.assign(new Error(`${names[offer.to.provider]} is not billed to a subscription. Confirm its charges separately to hand off.`), { status: 409, offer, billingRequired: true });
 
+    this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual', provider: offer.to.provider, model: offer.to.model, effort: offer.to.effort });
     run.handoff = offer; c.handoffOffer = null;
     this.broker.stop(c.id);
     await run.done;
-    const queue = await this.moveQueue(c, offer.from.provider, offer.to, { covered: offer.queue?.items || [], billingConfirmed: queueBillingConfirmed === true });
+    this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' });
+    const queue = await this.moveQueue(c, offer.from.provider, offer.to, { covered: offer.queue?.items || [], billingConfirmed: queueBillingConfirmed === true, verifyExecution: () => this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' }) });
     this.broker.message(c, 'system', `${names[offer.from.provider]} was close to its usage limit, so ${automatic ? 'Codeshi handed' : 'you handed'} the task to ${names[offer.to.provider]}.${this.queueNote(queue, offer.from.provider, offer.to.provider)}`);
-    const result = this.broker.start(c, { provider: offer.to.provider, model: offer.to.model, ...(offer.to.routing ? { effort: offer.to.effort, routing: offer.to.routing } : {}), mode: offer.to.mode, approvalPolicy: offer.to.approvalPolicy, fresh: true, text: continuationRequest, billingConfirmed: offer.to.billingSource !== 'subscription' && billingConfirmed === true, requestId: `handoff-${offer.id}` });
+    const result = this.broker.start(c, { provider: offer.to.provider, model: offer.to.model, ...(offer.to.routing ? { effort: offer.to.effort, routing: offer.to.routing } : {}), mode: offer.to.mode, approvalPolicy: offer.to.approvalPolicy, fresh: true, text: continuationRequest, billingConfirmed: offer.to.billingSource !== 'subscription' && billingConfirmed === true, requestId: `handoff-${offer.id}` }, { execution: offer.execution, executionAction: automatic ? 'handoff' : 'manual' });
     if (automatic) this.broker.emit('notify', { conversationId: c.id, kind: 'started', title: `Handed off to ${names[offer.to.provider]}`, body: `${names[offer.from.provider]} was close to its usage limit, so the task continues with ${names[offer.to.provider]}.` });
     return result;
   }
@@ -259,23 +263,23 @@ export class HandoffMonitor {
       const [to, resets] = await Promise.all([this.destination(c, run, tried), this.resetsAt(c, run)]);
       const limit = `${from} reached its usage limit${resets ? `, which resets ${resets}` : ''}`;
       // The person may have sent something while this was being worked out; theirs goes ahead.
-      if (this.closed || this.broker.running || c.lastRun?.id !== run.id) return done(true);
+      if (this.closed || this.broker.running || c.lastRun?.id !== run.id || !this.broker.execution.allows(c, run.execution, { action: 'handoff' })) return done(true);
       if (to?.billingSource === 'subscription' && to.quota === 'ok') {
         c.limitSwitching = null;
         // Queued prompts wait for the run that takes over, as after any handoff.
         run.handoff = { atLimit: true };
-        const queue = await this.moveQueue(c, run.provider, to);
+        const queue = await this.moveQueue(c, run.provider, to, { verifyExecution: () => this.broker.execution.assert(c, run.execution, { action: 'handoff' }) });
         // The person may have sent something while the prompts moved; theirs still goes ahead.
-        if (this.closed || this.broker.running || c.lastRun?.id !== run.id) return done(true);
+        if (this.closed || this.broker.running || c.lastRun?.id !== run.id || !this.broker.execution.allows(c, run.execution, { action: 'handoff' })) return done(true);
         this.broker.message(c, 'system', `${limit}, so Codeshi handed the task to ${names[to.provider]}.${this.queueNote(queue, run.provider, to.provider)}`);
-        this.broker.start(c, { provider: to.provider, model: to.model, ...(to.routing ? { effort: to.effort, routing: to.routing } : {}), mode: to.mode, approvalPolicy: to.approvalPolicy, fresh: true, text: continuationRequest, requestId: `limit-${run.id}` }, { limitChain: tried });
+        this.broker.start(c, { provider: to.provider, model: to.model, ...(to.routing ? { effort: to.effort, routing: to.routing } : {}), mode: to.mode, approvalPolicy: to.approvalPolicy, fresh: true, text: continuationRequest, requestId: `limit-${run.id}` }, { limitChain: tried, execution: run.execution, executionAction: 'handoff' });
         this.broker.emit('notify', { conversationId: c.id, kind: 'started', title: `Handed off to ${names[to.provider]}`, body: `${from} reached its usage limit, so the task continues with ${names[to.provider]}.` });
         return done(true);
       }
       const providers = await this.subscriptionAgents();
-      if (this.closed || this.broker.running || c.lastRun?.id !== run.id) return done(true);
+      if (this.closed || this.broker.running || c.lastRun?.id !== run.id || !this.broker.execution.allows(c, run.execution, { action: 'handoff' })) return done(true);
       if (!providers.length) return done(false);
-      this.broker.resume.schedule(c, { providers, mode: run.mode, approvalPolicy: run.approvalPolicy, limited: providers, requireQuota: true });
+      this.broker.resume.schedule(c, { providers, execution: run.execution, mode: run.mode, approvalPolicy: run.approvalPolicy, limited: providers, requireQuota: true });
       this.broker.message(c, 'system', `${limit}, and no other agent has confirmed room, so the task waits for a fresh allowance reading after a reset.`);
       this.broker.emit('notify', { conversationId: c.id, kind: 'waiting', title: 'Waiting for a reset', body: `${from} reached its usage limit and no other agent has room. Codeshi will continue when one does.` });
       return done(true);

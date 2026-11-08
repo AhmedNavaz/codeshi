@@ -49,6 +49,7 @@ Backend code lives in `src/`; Electron, browser UI and the separately deployable
 | `src/task-plan.mjs` | A task's plan across its agents: what is carried, how the next agent's report replaces it, and what the brief says |
 | `src/project-memory.mjs` | What is kept for every agent in a workspace: entries, what is relevant to a task, and rule-based suggestions |
 | `src/skills.mjs`, `starter-skills/` | The skill catalog: finding, checking, private copies and what a task is told, plus the optional starters |
+| `src/execution-policy.mjs` | Journaled Normal/Flow authority, policy revisions, restrictions and safe takeover ([contract](docs/execution-policy.md)) |
 | `src/task-budget.mjs` | Limits for a whole task, checked before every run and worked out from the journal |
 | `src/task-ledger.mjs`, `evals/` | What tasks used, worked out from the journal, and repeatable evaluations with hidden checks |
 | `src/collaboration*.mjs`, `src/patches.mjs`, `src/sharing-client.mjs` | Ask a Friend: approved packages, returned patches and the private-link client |
@@ -72,7 +73,7 @@ npm run test:desktop
 - The interface must work under the server's Content Security Policy: no inline scripts or `style` attributes, and no `innerHTML` for provider or user content. Build DOM nodes instead.
 - Colors, sizes and icons come from the tokens in `public/editor-theme.css`; please don't hard-code colors in components.
 - App settings belong on General, Accounts, Alerts or Voice in `public/settings.js`; use its shared group/row kit when a feature supplies its own controls. Keep workspace-specific choices in their workspace controls and Ask a Friend actions in its separate dialog.
-- Some identifiers still use the project's former names, AI Relay and Throughline: `ai-relay.*` file formats, the `X-AI-Relay` header and `AI_RELAY_*` variables; the app's bundle ID `local.throughline.desktop` and the speech helper's `local.throughline.speech`; `throughline:` keys in the page's storage; the `Throughline` and `AI Relay` data folders; and the `throughline-sharing` container image. Installed copies, saved data and exported files depend on them, so they are kept on purpose; don't rename them without a migration. The repository is now `AhmedNavaz/codeshi`; keep the old `AhmedNavaz/throughline` name unused so GitHub can redirect old links.
+- Some identifiers still use the project's former names, AI Relay and Throughline: `ai-relay.*` file formats, the `X-AI-Relay` header and `AI_RELAY_*` variables; the app's bundle ID `local.throughline.desktop` and the speech helper's `local.throughline.speech`; `throughline:` keys in the page's storage; the `Throughline` and `AI Relay` data folders; and formerly the `throughline-sharing` container image. Installed copies, saved data and exported files depend on them, so they are kept on purpose; don't rename them without a migration. The repository is now `AhmedNavaz/codeshi`; keep the old `AhmedNavaz/throughline` name unused so GitHub can redirect old links.
 
 ## Reporting bugs
 

@@ -140,3 +140,14 @@ test('phone runSheet leaves model and effort usable while running, and queueShee
     effort: 'high',
   });
 });
+
+test('phone Normal reset waits name only the task agent; Flow can compare connected agents', async () => {
+  const block = source.slice(source.indexOf('  async function waitForReset()'), source.indexOf('  function renderDock()'));
+  for (const delegated of [false, true]) {
+    let sent;
+    const context = { S: { c: { lastRun: { provider: 'codex' }, execution: { active: { automation: { wait: delegated } } } }, settings: { provider: 'claude', mode: 'edit', approvalPolicy: 'ask' } }, AGENTS: ['codex', 'claude'], available: () => true, signedOut: () => false, endpoint: value => value, api: async (_path, input) => { sent = input.body; }, refreshConversation: async () => {} };
+    vm.createContext(context); await vm.runInContext(block + '\nwaitForReset();', context);
+    assert.deepEqual([...sent.providers], delegated ? ['codex', 'claude'] : ['codex']);
+    assert.equal(sent.approvalPolicy, 'ask'); assert.equal(sent.billingConfirmed, false);
+  }
+});
