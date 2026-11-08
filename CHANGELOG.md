@@ -4,6 +4,18 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-08
+
+### Added
+
+- **Task execution policy and safe manual takeover** (#131). New work defaults to Normal authority, while selecting Smart, Saver or Ultra delegates Flow for new tasks. Each task retains its own journaled policy with independent flags for routing, handoffs, retries, reviews, checks, reset waits and subtasks. Taking manual control increments the policy revision and immediately revokes pending automatic decisions, pauses routed queue items, and prevents native startup under stale authorizations while allowing running commands or turns to settle safely.
+- **Codeshi sharing container image.** The private-link Ask a Friend container is now published as `ghcr.io/ahmednavaz/codeshi-sharing`.
+
+### Fixed
+
+- **Codex JSON-RPC framing on long messages and Unicode separators** (#133). Delimit Codex app-server protocol frames strictly on newline characters rather than relying on readline line breaks, preventing unterminated string and unexpected token syntax errors when streaming long replies or multi-chunk messages.
+- **Desktop Flow smoke test.** Ensure Flow layout validation accounts for explicit routing mode delegation.
+
 ## [0.33.1] - 2026-11-08
 
 ### Fixed
@@ -657,6 +669,7 @@ First public release.
 [0.6.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.6.0
 [0.5.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.4.0
+[0.34.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.34.0
 [0.33.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.1
 [0.33.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0
 [0.32.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0
