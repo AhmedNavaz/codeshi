@@ -4,6 +4,12 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-11-08
+
+### Fixed
+
+- **Desktop smoke test routing assertion.** Accept `smart` (and legacy `balanced`) mode during Flow smoke tests.
+
 ## [0.33.0] - 2026-11-08
 
 ### Added
@@ -651,6 +657,7 @@ First public release.
 [0.6.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.6.0
 [0.5.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.4.0
+[0.33.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.1
 [0.33.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0
 [0.32.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0
 [0.31.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1
