@@ -156,6 +156,8 @@ test('Gemini JSON-RPC client rejects malformed output and clears pending request
 });
 
 test('an effort saved under the Antigravity connection cannot stop a run on Gemini CLI, which takes its effort from the model', { skip: scriptCLIs }, async t => {
+  // Hooks run in the order they're added, so this closes the broker, and the work it saves in the folder, before the folder is removed.
+  let broker; t.after(() => broker?.close());
   const root = folder(t), workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
   const cli = path.join(root, 'gemini.mjs');
   fs.writeFileSync(cli, `#!${process.execPath}
@@ -168,7 +170,7 @@ if(m.method==='session/new')emit({id:m.id,result:{sessionId:'native-session',mod
 if(m.method==='session/prompt'){emit({method:'session/update',params:{sessionId:'native-session',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Done.'}}}});emit({id:m.id,result:{stopReason:'end_turn'}});}
 }
 `, { mode: 0o700 });
-  const broker = new Broker({ workspace, bins: { gemini: cli }, dataDir: path.join(root, 'data') }); t.after(() => broker.close());
+  broker = new Broker({ workspace, bins: { gemini: cli }, dataDir: path.join(root, 'data') });
   const c = broker.get(broker.create().id);
   broker.settings(c, { provider: 'gemini', model: 'chosen-model', mode: 'edit', effort: 'high' });
   assert.equal(c.efforts.gemini['chosen-model'], 'high');
@@ -178,6 +180,8 @@ if(m.method==='session/prompt'){emit({method:'session/update',params:{sessionId:
 });
 
 test('Gemini worker completes canonical handoffs, preserves other sessions and model choices, and releases the workspace after Stop', { skip: scriptCLIs }, async t => {
+  // Hooks run in the order they're added, so this closes the broker, and the work it saves in the folder, before the folder is removed.
+  let broker; t.after(() => broker?.close());
   const root = folder(t), workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
   const cli = path.join(root, 'gemini.mjs'), capture = path.join(root, 'capture.jsonl');
   fs.writeFileSync(cli, `#!${process.execPath}
@@ -189,7 +193,7 @@ if(m.method==='initialize')emit({id:m.id,result:{protocolVersion:1}});
 if(m.method==='session/new')emit({id:m.id,result:{sessionId:'native-session',models:{currentModelId:'chosen-model'}}});
 if(m.method==='session/prompt'){if(m.params.prompt[0].text.includes('HANG-FIXTURE')&&!m.params.prompt[0].text.includes('Retry after stopping'))continue;emit({method:'session/update',params:{sessionId:'native-session',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Gemini finished the task.'}}}});emit({id:m.id,result:{stopReason:'end_turn'}});}}
 `, { mode: 0o700 });
-  const dataDir = path.join(root, 'data'), broker = new Broker({ workspace, bins: { gemini: cli }, dataDir }); t.after(() => broker.close());
+  const dataDir = path.join(root, 'data'); broker = new Broker({ workspace, bins: { gemini: cli }, dataDir });
   const c = broker.get(broker.create().id);
   broker.record(c, { type: 'session', provider: 'codex', id: 'original-codex', workspaceSignature: broker.workspaceSignature });
   broker.message(c, 'assistant', 'Existing Claude plan', 'claude');
@@ -210,6 +214,8 @@ if(m.method==='session/prompt'){if(m.params.prompt[0].text.includes('HANG-FIXTUR
 });
 
 test('Antigravity cannot infer authentication or billing and cannot start a run without an approval protocol', { skip: scriptCLIs }, async t => {
+  // Hooks run in the order they're added, so this closes the broker, and the work it saves in the folder, before the folder is removed.
+  let broker; t.after(() => broker?.close());
   const root = folder(t), bin = path.join(root, 'agy'), captures = path.join(root, 'commands.jsonl');
   fs.writeFileSync(bin, `#!${process.execPath}
 import fs from 'node:fs';
@@ -224,7 +230,7 @@ process.exit(1);
   const before = fs.readFileSync(captures, 'utf8');
   for (const mode of ['read', 'edit']) await assert.rejects(runGemini({ bin, workspace: root, mode, prompt: 'Must not run' }, { event() {}, metadata() {} }), /interactive tool approvals/);
   assert.equal(fs.readFileSync(captures, 'utf8'), before, 'Unsupported adapters fail before invoking a task.');
-  const broker = new Broker({ workspace: root, dataDir: path.join(root, 'history'), bins: { gemini: bin, codex: bin, claude: bin } }); t.after(() => broker.close());
+  broker = new Broker({ workspace: root, dataDir: path.join(root, 'history'), bins: { gemini: bin, codex: bin, claude: bin } });
   const c = broker.get(broker.create().id), status = await broker.status();
   assert.equal(status.providers.gemini.installed, true); assert.equal(status.providers.gemini.available, false);
   assert.throws(() => broker.start(c, { text: 'Must not be accepted', provider: 'gemini' }), /interactive tool approvals/);
