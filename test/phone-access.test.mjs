@@ -326,7 +326,8 @@ test('a phone shows a planner’s reply as the plan it proposed, says where to a
   assert.equal(phoneConversation({ id: 'e', messages: [], orchestrations: [{ id: 'p', status: 'failed', summary: 'x'.repeat(1200), steps: [] }] }).plans[0].summary, `${'x'.repeat(1000)}…`, 'A long summary is clipped for the phone.');
 
   // The page draws the planner's reply from its plan, not the raw JSON.
-  const source = fs.readFileSync(new URL('../public/phone.js', import.meta.url), 'utf8');
+  // Windows checks the file out with CRLF line endings, and the blocks are found by their LF lines.
+  const source = fs.readFileSync(new URL('../public/phone.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
   const block = name => { const start = source.indexOf(`  function ${name}(`); assert.notEqual(start, -1, name); return source.slice(start, source.indexOf('\n  }\n', start) + 4); };
   const node = (tag, cls = '', text = '') => { const element = { tag, cls, text, children: [], append(...items) { element.children.push(...items); } }; return element; };
   const S = { c: out, draft: null, messages: out.messages };
