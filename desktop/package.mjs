@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {buildHelper} from '../src/voice.mjs';
+import {createElectronDownloader,electronChecksums} from '../scripts/electron-download.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const identity=process.env.AI_RELAY_SIGN_IDENTITY;
 // npm installs node-pty's macOS helper without its execute bit; the terminal's shell cannot start without it.
@@ -17,7 +18,10 @@ if(process.platform==='darwin')console.log('Built '+await buildHelper());
 // that is expected, since it can only compile on macOS 26 and the Intel build runs on macOS 15.
 const mac=process.platform==='darwin';
 const layeredIcon=mac?{extendInfo:{CFBundleIconName:'AppIcon'},afterCopy:[({buildPath})=>fs.copyFileSync(path.join(root,'assets','Assets.car'),path.join(buildPath,'..','Assets.car'))]}:{extendInfo:{}};
-const builds=await packager({dir:root,name:'Codeshi',out:path.join(root,'dist'),overwrite:true,asar:false,prune:true,appBundleId:'local.throughline.desktop',icon:path.join(root,'assets',process.platform==='win32'?'icon.ico':process.platform==='darwin'?'icon.icns':'icon.png'),appCategoryType:'public.app-category.developer-tools',...layeredIcon,extendInfo:{...layeredIcon.extendInfo,NSMicrophoneUsageDescription:'Codeshi listens while voice input is on, to turn what you say into a message.',NSSpeechRecognitionUsageDescription:'Codeshi recognizes your speech on this Mac. The audio never leaves it.',NSLocalNetworkUsageDescription:'Codeshi connects to a paired phone browser on your local network when you turn on Remote access.'},ignore:[/\.code-workspace$/,/^\/\.data(?:\/|$)/,/^\/docs(?:\/|$)/,/^\/\.github(?:\/|$)/,/^\/dist(?:\/|$)/,/^\/output(?:\/|$)/,/^\/test(?:\/|$)/,/^\/evals(?:\/|$)/,/^\/scripts(?:\/|$)/,/^\/\.git(?:\/|$)/,/^\/sharing\/\.data(?:\/|$)/,/^\/sharing\/(?:test|deploy)(?:\/|$)/,/^\/install\.(?:sh|ps1)$/,
+// Electron comes from GitHub's releases, verified against the checksums the electron package ships rather than a fetched
+// SHASUMS256.txt, with retries and a mirror for when GitHub's downloads fail (#138).
+const download={checksums:electronChecksums(root),downloader:createElectronDownloader()};
+const builds=await packager({dir:root,name:'Codeshi',out:path.join(root,'dist'),overwrite:true,download,asar:false,prune:true,appBundleId:'local.throughline.desktop',icon:path.join(root,'assets',process.platform==='win32'?'icon.ico':process.platform==='darwin'?'icon.icns':'icon.png'),appCategoryType:'public.app-category.developer-tools',...layeredIcon,extendInfo:{...layeredIcon.extendInfo,NSMicrophoneUsageDescription:'Codeshi listens while voice input is on, to turn what you say into a message.',NSSpeechRecognitionUsageDescription:'Codeshi recognizes your speech on this Mac. The audio never leaves it.',NSLocalNetworkUsageDescription:'Codeshi connects to a paired phone browser on your local network when you turn on Remote access.'},ignore:[/\.code-workspace$/,/^\/\.data(?:\/|$)/,/^\/docs(?:\/|$)/,/^\/\.github(?:\/|$)/,/^\/dist(?:\/|$)/,/^\/output(?:\/|$)/,/^\/test(?:\/|$)/,/^\/evals(?:\/|$)/,/^\/scripts(?:\/|$)/,/^\/\.git(?:\/|$)/,/^\/sharing\/\.data(?:\/|$)/,/^\/sharing\/(?:test|deploy)(?:\/|$)/,/^\/install\.(?:sh|ps1)$/,
   /^\/remote\/(?:dist|test)(?:\/|$)/,
   // Icon sources and the brand kit are build inputs; the app only reads its PNG icons at run time.
   /^\/assets\/(?:brand|AppIcon\.icon)(?:\/|$)/,/^\/assets\/(?:Assets\.car|social-preview\.png|icon(?:-dark)?\.svg)$/,/^\/node_modules\/@anthropic-ai\/claude-agent-sdk-[^/]+(?:\/|$)/,
