@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
-import { rolloverDecision, milestoneMemory, observationsFor, validateContextLimit } from '../src/context-rollover.mjs';
+import { refreshDiagnosis, rolloverDecision, milestoneMemory, observationsFor, validateContextLimit } from '../src/context-rollover.mjs';
 import { preferencePatch, publicPreferences } from '../src/preferences.mjs';
 import { continuationRequest, prepareContext } from '../src/context.mjs';
 import { fixtureById } from '../evals/fixtures.mjs';
@@ -313,4 +313,80 @@ test('preferences and manual compaction work through the local API without calli
   assert(result.body.messages.some(message => message.contextMilestone && /refresh scheduled.*next message/i.test(message.text)));
   assert(!result.body.messages.some(message => /Context compacted|memory refreshed/.test(message.text)));
   assert.equal(broker.running, null);
+});
+
+test('repeated quick refreshes are explained from the recorded seed, turns and reading, and never from a model', () => {
+  const session = (seed, turns) => ({ provider: 'codex', sessions: { codex: { id: 'fresh', managedContextVersion: 1, seed: { bytes: seed * 4, estimatedTokens: seed }, turns } }, contextRollovers: {} });
+  const decision = overrides => ({ rollover: true, near: true, used: 76000, thresholdTokens: 75000, modeTarget: 75000, capacity: 200000, source: 'provider-report', ...overrides });
+  const large = refreshDiagnosis(session(50000, 1), 'codex', decision());
+  assert.equal(large.cause, 'large-seed'); assert.equal(large.count, 1); assert.equal(large.current, true); assert.equal(large.estimated, false);
+  assert.match(large.explanation, /task brief alone was about 50,000 tokens, 67% of the 75,000 tokens target/);
+  const small = refreshDiagnosis(session(10000, 2), 'codex', decision({ used: 31000, thresholdTokens: 30000, capacity: 40000 }));
+  assert.equal(small.cause, 'small-window'); assert.match(small.explanation, /75% of this model's reported 40,000 tokens window, below the 75,000 tokens/);
+  const growth = refreshDiagnosis(session(10000, 1), 'codex', decision({ used: 80000, source: 'journal-size-estimate' }));
+  assert.equal(growth.cause, 'turn-growth'); assert.equal(growth.estimated, true);
+  assert.match(growth.explanation, /started at about 10,000 tokens and reached 80,000 tokens within one turn.*estimate from recorded activity/);
+  assert.equal(refreshDiagnosis(session(10000, 5), 'codex', decision()), null, 'A session that lasted several turns is ordinary growth, not a repeated refresh.');
+  assert.equal(refreshDiagnosis(session(10000, 1), 'codex', decision({ rollover: false, near: false })), null, 'A fresh session that is not near its target needs no explanation.');
+  assert.equal(refreshDiagnosis(session(10000, 1), 'codex', decision({ used: null })), null, 'Without a reading there is nothing to explain.');
+  const history = { provider: 'codex', sessions: { codex: { id: 'fresh', managedContextVersion: 1, seed: { estimatedTokens: 1000 }, turns: 4 } },
+    contextRollovers: { codex: { pending: false, history: [{ previousTurns: 9, previousSeed: { estimatedTokens: 1000 } }, { previousTurns: 1, previousSeed: { estimatedTokens: 48000 }, used: 80000, thresholdTokens: 75000, modeTarget: 75000, capacity: null, source: 'provider-report' }] } } };
+  const past = refreshDiagnosis(history, 'codex', decision({ rollover: false, near: false, used: 20000 }));
+  assert.equal(past.count, 1); assert.equal(past.current, false); assert.equal(past.cause, 'large-seed');
+  assert.equal(refreshDiagnosis({ sessions: {}, contextRollovers: {} }, 'codex', decision()), null);
+});
+
+test('the refresh history records each replaced session’s seed and turns, survives a restart, and the view explains a streak', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-refresh-history-'));
+  const options = { workspace: root, dataDir: path.join(root, 'data') };
+  const broker = new Broker(options), c = broker.get(broker.create().id);
+  t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const submit = (id, context, extra = {}) => broker.record(c, { type: 'submission', id, requestId: `req-${id}`, provider: 'codex', mode: 'read', model: null, transport: 'cli', context, message: { id: `m-${id}`, role: 'user', text: `Message ${id}` }, ...extra });
+  const start = (id, bytes, rollover = null) => submit(id, { sessionMode: 'fresh', sessionReason: rollover ? 'context-rollover' : 'new-conversation', bytes, size: { bytes, estimatedTokens: Math.ceil(bytes / 4) }, ...(rollover ? { rollover } : {}) }, rollover ? { resetSession: true } : {});
+  start('r1', 20000);
+  broker.record(c, { type: 'session', provider: 'codex', id: 'native-1', managedContextVersion: 1, workspaceSignature: broker.workspaceSignature });
+  assert.deepEqual([c.sessions.codex.turns, c.sessions.codex.seed.estimatedTokens, c.sessions.codex.seed.reason, c.sessions.codex.seed.rollover], [1, 5000, 'new-conversation', false]);
+  submit('r2', { sessionMode: 'resumed', bytes: 3000 });
+  broker.record(c, { type: 'session', provider: 'codex', id: 'native-1', workspaceSignature: broker.workspaceSignature });
+  assert.equal(c.sessions.codex.turns, 2, 'A resumed turn counts; re-recording the same session keeps the count.');
+  assert.equal(broker.view(c).contextControl.seed.estimatedTokens, 5000);
+  assert.equal(broker.view(c).contextControl.turns, 2);
+  assert.equal(broker.view(c).contextControl.repeatedRefresh, null);
+  // The first session fills up after two turns; the brief that replaces it is large.
+  start('r3', 190000, { reason: 'threshold', used: 80000, thresholdTokens: 75000, modeTarget: 75000, capacity: 200000, source: 'provider-report', previousSessionId: 'native-1' });
+  const history = c.contextRollovers.codex.history;
+  assert.equal(history.length, 1);
+  assert.deepEqual([history[0].reason, history[0].previousSessionId, history[0].previousTurns, history[0].previousSeed.estimatedTokens, history[0].seedBytes, history[0].used], ['threshold', 'native-1', 2, 5000, 190000, 80000]);
+  assert.equal(c.sessions.codex, undefined);
+  broker.record(c, { type: 'session', provider: 'codex', id: 'native-2', managedContextVersion: 1, workspaceSignature: broker.workspaceSignature });
+  assert.deepEqual([c.sessions.codex.turns, c.sessions.codex.seed.estimatedTokens, c.sessions.codex.seed.rollover], [1, 47500, true]);
+  c.sessions.codex.contextUsage = snapshot(76000, 200000);
+  const control = broker.view(c).contextControl;
+  assert.equal(control.refreshes, 1);
+  assert.equal(control.repeatedRefresh.cause, 'large-seed');
+  assert.equal(control.repeatedRefresh.count, 2, 'The first session filled up after two turns, and the fresh one is already over its target.');
+  assert.equal(control.repeatedRefresh.current, true);
+  // The run finishes and checkpoints, which settles the pending refresh. A manual refresh then records the session it
+  // replaces; the dispatch that follows fills in the seed without a second entry.
+  broker.record(c, { type: 'run_end', status: 'complete' });
+  broker.record(c, { type: 'checkpoint', provider: 'codex' });
+  assert.equal(c.contextRollovers.codex.pending, false);
+  broker.compactContext(c, { provider: 'codex' });
+  assert.equal(c.contextRollovers.codex.history.length, 2);
+  assert.deepEqual([c.contextRollovers.codex.history[1].reason, c.contextRollovers.codex.history[1].previousTurns, c.contextRollovers.codex.history[1].previousSeed.estimatedTokens, c.contextRollovers.codex.history[1].seedBytes], ['manual', 1, 47500, null]);
+  start('r4', 180000, { reason: 'manual', used: 76000, thresholdTokens: 75000, modeTarget: 75000, capacity: 200000, source: 'provider-report' });
+  assert.equal(c.contextRollovers.codex.history.length, 2, 'The scheduled refresh and its dispatch are one entry.');
+  assert.equal(c.contextRollovers.codex.history[1].seedBytes, 180000);
+  broker.record(c, { type: 'session', provider: 'codex', id: 'native-3', managedContextVersion: 1, workspaceSignature: broker.workspaceSignature });
+  c.sessions.codex.contextUsage = snapshot(70000, 200000);
+  const streak = broker.view(c).contextControl.repeatedRefresh;
+  assert.equal(streak.count, 3, 'Two sessions in a row needed a refresh within two turns, and this one is near its target already.');
+  assert.equal(streak.cause, 'large-seed');
+  await broker.close();
+  const reopened = new Broker(options);
+  try {
+    const again = reopened.get(c.id);
+    assert.equal(again.contextRollovers.codex.history.length, 2);
+    assert.deepEqual([again.sessions.codex.turns, again.sessions.codex.seed.estimatedTokens], [1, 45000]);
+  } finally { await reopened.close(); }
 });

@@ -14,11 +14,46 @@ const submission = (id, minute, extra = {}, text = 'Build it') => ({ type: 'subm
 const metadata = (minute, value) => ({ type: 'run_metadata', at: at(minute), metadata: value });
 const end = (minute, status = 'complete', errorCategory) => ({ type: 'run_end', at: at(minute), status, ...(errorCategory ? { errorCategory } : {}) });
 
+test('role totals include failed assessments and unknown reviews without counting either as builder work', () => {
+  const { runs, tasks: [task] } = ledgerFromRecords([
+    { type: 'routing_assessment_start', id: 'assess', taskId: 'task', provider: 'claude', at: at(0) },
+    { type: 'routing_assessment_end', id: 'assess', at: at(1), result: { status: 'failed', effectiveEffort: 'low', usage: { input_tokens: 20, output_tokens: 5 } } },
+    submission('build', 2, { task: { id: 'task', parentRunId: 'assess', relation: 'assessed' } }),
+    metadata(2, { usage: { input_tokens: 100, output_tokens: 10 } }), end(3),
+    { type: 'background_review', taskId: 'task', at: at(4), review: { id: 'review', provider: 'codex' } },
+    { type: 'review_result', id: 'review', at: at(5), result: { status: 'complete' } },
+  ]);
+  assert.deepEqual(runs.map(run => run.role), ['assessment', 'builder', 'review']);
+  assert.equal(runs[0].effort, 'low');
+  assert.equal(task.startedAt, at(0), 'Task time includes its assessor before the builder starts.');
+  assert.equal(task.roles.assessment.usage.input, 20);
+  assert.equal(task.roles.builder.usage.input, 100);
+  assert.equal(task.roles.review.usage.input, null);
+  assert.equal(task.roles.review.usage.runsWithTokens, 0);
+  assert.equal(task.usage.input, 120);
+  assert.equal(task.usage.runs, 3);
+  assert.equal(task.workingMs, Object.values(task.roles).reduce((sum, role) => sum + role.workingMs, 0));
+});
+
 test('the Claude native adapter receives the remaining API budget without turning it into a token estimate', async () => {
   let options;
   async function* queryImpl(input) { options = input.options; yield { type: 'result', subtype: 'success', result: 'Done' }; }
   await runClaude({ workspace: '/project', prompt: 'Review', mode: 'read', bin: '/fake', maxBudgetUsd: 1.25 }, { queryImpl, event() {}, metadata() {}, approval: async () => false });
   assert.equal(options.maxBudgetUsd, 1.25);
+});
+
+test('native and reported spend enforcement survive ledger export for builders, reviews and assessments', () => {
+  const native = { spend: 'native', maxSpendUSD: 1.25 }, reported = { spend: 'reported-usage', maxSpendUSD: 1 };
+  const { runs } = ledgerFromRecords([
+    submission('builder', 0), metadata(0, { budgetEnforcement: native }), end(1),
+    { type: 'background_review', taskId: 'builder', at: at(2), review: { id: 'review', provider: 'codex' } },
+    { type: 'review_budget', id: 'review', metadata: { budgetEnforcement: reported } },
+    { type: 'review_result', id: 'review', result: { status: 'complete', budgetEnforcement: reported } },
+    { type: 'routing_assessment_start', id: 'assess', taskId: 'builder', provider: 'claude', at: at(3) },
+    { type: 'routing_assessment_metadata', id: 'assess', metadata: { budgetEnforcement: native } },
+    { type: 'routing_assessment_end', id: 'assess', result: { status: 'complete' } },
+  ]);
+  assert.deepEqual(runs.map(run => run.budgetEnforcement), [native, reported, native]);
 });
 
 test('each agent\'s usage has one shape, and what it did not report stays unknown', () => {

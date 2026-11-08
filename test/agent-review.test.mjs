@@ -79,7 +79,10 @@ test('background reviews read approved copies while the builder continues, retry
 
 test('background review tokens stop the worker against its parent budget and release its reservation', { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app);
-  api.broker.start(api.c, { text: 'Build', provider: 'codex', requestId: 'build' }); await api.broker.running.done;
+  api.broker.start(api.c, { text: 'Build', provider: 'codex', requestId: 'build' });
+  // Give this mock builder a complete zero-token reading so the review can test the remaining allowance.
+  api.broker.record(api.c, { type: 'run_metadata', metadata: { usage: { input_tokens: 0, output_tokens: 0 } } });
+  await api.broker.running.done;
   const taskId = api.c.lastRun.taskId;
   api.broker.budget.setPolicy(api.c, { maxTokens: 100 });
   f.scenario({ hang: true });
@@ -107,6 +110,8 @@ test('background review tokens stop the worker against its parent budget and rel
   assert.equal(ledger.runs.find(run => run.relation === 'review').compactionEvents.length, 1, 'The reviewer compaction observation survives cleanup too.');
   assert.throws(() => api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'retry-over-limit' }), /used 120 tokens/);
   api.broker.budget.extend(api.c, { taskId, limit: 'maxTokens' });
+  assert.throws(() => api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'still-partial' }), /complete token usage/, 'Increasing the cap cannot fill in an interrupted partial usage report.');
+  api.broker.budget.setPolicy(api.c, { maxTokens: null });
   f.scenario({}); api.broker.start(api.c, { text: continuationRequest, provider: 'codex', requestId: 'allowed-more' }); await api.broker.running.done;
   assert.equal(api.c.lastRun.taskId, taskId);
 });

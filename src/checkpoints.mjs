@@ -347,7 +347,14 @@ export class RunCheckpoints {
     for (const [id, saved] of Object.entries(c.snapshots || {})) {
       const message = c.messages?.find(item => item.runId === id && item.role === 'user');
       const run = c.runs?.find(item => item.id === id) || c.activeRun?.id === id && c.activeRun || {};
-      entries.push({ id, kind: 'run', runId: id, provider: run.provider || message?.provider || null, local: Boolean(run.local || run.connection === 'local' || message?.connection === 'local'), prompt: run.prompt || message?.text.slice(0, 200) || '',
+      const rawPrompt = run.prompt || message?.text?.slice(0, 200) || '';
+      const isContinuation = /^\s*Continue the unfinished task from this shared conversation/i.test(rawPrompt);
+      const taskPrompt = isContinuation
+        ? (c.messages?.find(m => m.role === 'user' && !/^\s*Continue the unfinished task from this shared conversation/i.test(m.text || '') && (m.runId === run.taskId || c.taskOfRun?.[m.runId] === run.taskId || m.runId === run.parentRunId))?.text?.slice(0, 200)
+           || (c.runs || []).find(r => r.taskId === run.taskId && r.prompt && !/^\s*Continue the unfinished task from this shared conversation/i.test(r.prompt))?.prompt?.slice(0, 200)
+           || '')
+        : rawPrompt;
+      entries.push({ id, kind: 'run', runId: id, provider: run.provider || message?.provider || null, local: Boolean(run.local || run.connection === 'local' || message?.connection === 'local'), prompt: taskPrompt,
         at: saved.before?.at || saved.after?.at, status: run.status || (c.activeRun?.id === id ? 'running' : 'unknown'), files: saved.files ?? null,
         checkpoints: ['before', 'after'].filter(phase => saved[phase]).map(phase => point(id, phase, saved[phase].folders, saved[phase].at)) });
     }

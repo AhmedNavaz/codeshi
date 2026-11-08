@@ -60,6 +60,11 @@
       const tile = node('div', 'stat'); tile.append(node('strong', '', value), node('span', '', label)); tile.title = title; tiles.append(tile);
     }
     card.replaceChildren(head, line, tiles);
+    const roleNames = { builder: 'Builder', assessment: 'Routing assessment', review: 'Reviewer', 'read-only': 'Read-only work' };
+    for (const [role, measured] of Object.entries(task.roles || {})) {
+      card.append(node('p', 'panel-muted', `${roleNames[role] || role}: ${plural(measured.runs, 'run')} · ${duration(measured.workingMs)} · ${usageText(measured.usage)}`));
+    }
+    if (task.roles?.assessment || task.roles?.review) card.append(node('p', 'panel-muted', 'These calls are included in the total. Provider-internal planning, summaries and delegated work cannot be separated by role.'));
     // Limits only appear once one is set, as bars against what this task has used.
     if (state && state.taskId === task.id) {
       const limits = state.limits, bars = node('div', 'task-limits');
@@ -70,6 +75,17 @@
       card.append(bars);
       if (state.active && [limits.maxWorkingMinutes, limits.maxTokens, limits.maxSpendUSD].some(value => value !== null)) card.append(node('p', 'panel-muted', 'The remaining measured allowance is reserved for this task’s running agent. Continue or review this task after it finishes.'));
       if (state.runsWithoutUsage && limits.maxTokens !== null) card.append(node('p', 'panel-muted', `${plural(state.runsWithoutUsage, 'run')} reported no tokens, so the total is lower than the real one.`));
+      if (state.runsWithPartialUsage && limits.maxTokens !== null) card.append(node('p', 'panel-muted', `${plural(state.runsWithPartialUsage, 'run')} reported only partial tokens. The remaining token allowance is unknown.`));
+      if (state.runsWithoutCost && limits.maxSpendUSD !== null) card.append(node('p', 'panel-muted', `${plural(state.runsWithoutCost, 'run')} reported no API cost or confirmed billing. Reported spend is a lower bound; the remaining allowance is unknown.`));
+      if (limits.maxTokens !== null) card.append(node('p', 'panel-muted', 'Token limits are checked as usage is reported; in-flight work can overshoot.'));
+      if (limits.maxSpendUSD !== null) {
+        const caps = state.enforcement?.spendCaps, active = state.enforcement?.activeSpendCaps || [];
+        const native = (caps?.native || 0) + active.filter(cap => cap.spend === 'native').length;
+        const reported = (caps?.reported || 0) + active.filter(cap => cap.spend !== 'native').length;
+        card.append(node('p', 'panel-muted', `API spend checks: ${plural(native, 'run')} with a native adapter cap, ${reported} checked through reported usage. In-flight work can overshoot.`));
+      }
+      const over = state.overages;
+      if (over && (over.tokens || over.spendUSD || over.workingMs)) card.append(node('p', 'task-note', `Reported over limit: ${[over.tokens ? `${over.tokens.toLocaleString()} tokens` : '', over.spendUSD ? `$${over.spendUSD.toFixed(4)} API spend` : '', over.workingMs ? `${duration(over.workingMs)} working time` : ''].filter(Boolean).join(' · ')}.`));
       const top = state.failures?.[0];
       if (top && top.count > 1) card.append(node('p', 'task-note', `Went wrong ${top.count} of ${limits.maxRepeatedFailures} times: ${top.what}`));
       if (state.exceeded) {
@@ -85,6 +101,8 @@
             }),
             button('Extend budget', () => extend(state.taskId, state.exceeded.limit).catch(error => api.showNotice(error.message)))
           );
+        } else if (['tokenUsageUnknown', 'spendUsageUnknown'].includes(state.exceeded.limit)) {
+          reached.append(button('Review limits', openLimits));
         } else {
           reached.append(button('Allow more', () => extend(state.taskId, state.exceeded.limit).catch(error => api.showNotice(error.message))));
         }
@@ -135,11 +153,18 @@
       box.id = `limit-agent-${key}`; box.type = 'checkbox';
       label.append(box, node('span', '', name)); agentsHost.append(label);
     }
+    const modelsHost = $('limits-models');
+    for (const [key, name] of AGENTS) {
+      const label = node('label', 'limit-field'), input = node('input');
+      input.id = `limit-models-${key}`; input.type = 'text'; input.placeholder = 'All models';
+      label.append(node('span', '', `${name} models`), input); modelsHost.append(label);
+    }
   }
   function fillLimitsForm() {
     const policy = budget?.policy || {};
     for (const [key] of FIELDS) $(`limit-${key}`).value = policy[key] ?? '';
     for (const [key] of AGENTS) $(`limit-agent-${key}`).checked = !policy.allowedProviders || policy.allowedProviders.includes(key);
+    for (const [key] of AGENTS) $(`limit-models-${key}`).value = (policy.allowedModels?.[key] || []).join(', ');
     $('limits-error').hidden = true;
   }
   async function openLimits() {
@@ -154,6 +179,12 @@
     for (const [key, , empty] of FIELDS) { const raw = String($(`limit-${key}`).value).trim(); if (raw === '' && !empty) continue; policy[key] = raw === '' ? null : Number(raw); }
     const allowed = AGENTS.map(([key]) => key).filter(key => $(`limit-agent-${key}`).checked);
     policy.allowedProviders = allowed.length === AGENTS.length ? null : allowed;
+    const models = {};
+    for (const [key] of AGENTS) {
+      const values = [...new Set(String($(`limit-models-${key}`).value || '').split(/[,\s]+/).filter(Boolean))];
+      if (values.length) models[key] = values;
+    }
+    policy.allowedModels = Object.keys(models).length ? models : null;
     try { budget = await api.post(`/api/conversations/${c.id}/budget`, { action: 'policy', policy }); $('limits-dialog').close(); render(); await api.refresh(); }
     catch (error) { $('limits-error').textContent = error.message; $('limits-error').hidden = false; }
   });

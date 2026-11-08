@@ -6,6 +6,15 @@ const envelope = prepared => JSON.parse(prepared.prompt.slice(prepared.prompt.in
 const conversation = () => ({ provider: 'gemini', mode: 'edit', sessions: {}, context: { summary: 'Current project brief', goal: 'Finish issue 69', decisions: ['Preserve unrelated edits'], tasks: ['Verify handoffs'] }, messages: [] });
 const message = (c, role, text, provider = 'codex', extra = {}) => c.messages.push({ seq: c.messages.length + 1, role, text, provider, ...extra });
 
+test('Flow context tells agents how to prepare a saved project review without authorizing a launch', () => {
+  const c = conversation(); c.routing = { mode: 'smart' };
+  const value = envelope(prepareContext(c, 'Help me review the project'));
+  assert.match(value.projectReview, /\.codeshi\/preview.json/); assert.match(value.projectReview, /dependsOn/);
+  assert.match(value.projectReview, /person starts the reviewed profile/);
+  assert.match(value.projectReview, /do not store secrets or perform installations/);
+  c.routing = null; assert.equal(envelope(prepareContext(c, 'Manual task')).projectReview, undefined);
+});
+
 test('handoffs preserve primary and recent real user instructions instead of filling up on command output', () => {
   const c = conversation();
   message(c, 'user', 'Build the project runner. Keep commands local and never execute on detection.');

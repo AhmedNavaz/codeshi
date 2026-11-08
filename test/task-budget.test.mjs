@@ -12,7 +12,6 @@ import { scriptCLIs } from './platform.mjs';
 // Two stand-in agents speaking Codex's protocol: what each does comes from the marker in its prompt, and each records its prompts.
 function setup(t, policy = null) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-budget-')));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = path.join(root, 'workspace'), dataDir = path.join(root, 'data'), prompts = path.join(root, 'prompts.jsonl'), bin = path.join(root, 'agent.mjs');
   fs.mkdirSync(workspace);
   fs.writeFileSync(bin, `#!${process.execPath}
@@ -47,7 +46,7 @@ emit({type:'result',subtype:'success',result:'Done'});
 `, { mode: 0o700 });
   const brokers = [], bins = { codex: bin, claude: claudeBin, gemini: path.join(root, 'none') };
   const open = () => { const broker = new Broker({ workspace, dataDir, bins, handoffPreferences: () => ({ threshold: 0, automatic: false }) }); brokers.push(broker); return broker; };
-  t.after(async () => { await Promise.all(brokers.map(broker => broker.close())); });
+  t.after(async () => { try { await Promise.all(brokers.map(broker => broker.close())); } finally { fs.rmSync(root, { recursive: true, force: true }); } });
   const broker = open(), c = broker.get(broker.create().id);
   if (policy) broker.budget.setPolicy(c, policy);
   let count = 0;
@@ -277,7 +276,9 @@ test('review usage is live, replacement-based and preserved through restart even
   const next = open(), restored = next.get(c.id), saved = state(restored, 'parent');
   assert.equal(restored.reviews[0].status, 'interrupted');
   assert.deepEqual([next.budget.used(saved).tokens, saved.spendUSD, saved.reviews, Object.keys(saved.active).length], [100, 0.5, 1, 0]);
-  assert.equal(next.budget.refusal(restored, { task: { id: 'parent', relation: 'review' }, provider: 'claude' }), null);
+  assert.equal(next.budget.refusal(restored, { task: { id: 'parent', relation: 'review' }, provider: 'claude' }).limit, 'tokenUsageUnknown', 'An interrupted partial sample is a lower bound, not a reusable remainder.');
+  next.budget.setPolicy(restored, { maxTokens: null });
+  assert.equal(next.budget.refusal(restored, { task: { id: 'parent', relation: 'review' }, provider: 'claude' }), null, 'The owner can explicitly remove the unmeasurable limit.');
   const ledger = ledgerFromRecords(fs.readFileSync(path.join(next.dataDir, `${c.id}.jsonl`), 'utf8').trim().split('\n').map(JSON.parse));
   assert.equal(ledger.runs[0].taskId, 'parent'); assert.equal(ledger.runs[0].parentRunId, 'build');
   assert.equal(ledger.runs[0].usage.input, 80); assert.equal(ledger.runs[0].costEstimateUSD, 0.5);
@@ -306,6 +307,54 @@ test('a partial and then final review sample replaces live usage and is charged 
   assert.equal(broker.budget.used(state(c, 'parent')).tokens, 530);
   assert.equal(state(c, 'parent').spendUSD, 0);
   assert.deepEqual(c.budgetTotals.codex, { input: 9000, output: 1000 }, 'A fresh reviewer cannot change the builder’s session baseline.');
+});
+
+test('missing API costs and incomplete token readings survive recovery and cannot silently fund more work', async t => {
+  const { broker, c, open } = setup(t, { maxTokens: 1000, maxSpendUSD: 5 });
+  broker.record(c, { type: 'submission', id: 'older', task: { id: 'older' }, provider: 'codex', message: { id: 'older-message', role: 'user', text: 'Old task' }, requestId: 'older', mode: 'read', context: {} });
+  broker.record(c, { type: 'run_metadata', metadata: { usage: { input_tokens: 0, output_tokens: 0 }, account: { billingSource: 'subscription' } } });
+  broker.record(c, { type: 'run_end', status: 'complete' });
+  broker.record(c, { type: 'routing_assessment_start', id: 'assess', taskId: 'parent', provider: 'claude', billingSource: 'api' });
+  broker.record(c, { type: 'routing_assessment_metadata', id: 'assess', metadata: { began: true, usage: { input_tokens: 100 }, budgetEnforcement: { spend: 'native', maxSpendUSD: 5 } } });
+  broker.record(c, { type: 'routing_assessment_end', id: 'assess', result: { status: 'complete' } });
+  assert.equal(state(c, 'parent').runsWithPartialUsage, 1);
+  assert.equal(state(c, 'parent').runsWithoutCost, 1);
+  const plan = { task: { id: 'parent', relation: 'assessed' }, provider: 'codex' };
+  assert.throws(() => broker.budget.assertCanStart(c, plan), error => error.details.budget.limit === 'tokenUsageUnknown' && !error.details.budget.canExtend);
+  broker.budget.setPolicy(c, { maxTokens: null });
+  assert.equal(broker.budget.refusal(c, { ...plan, task: { id: 'parent', relation: null } }).limit, 'spendUsageUnknown', 'An omitted relation cannot bypass an existing task limit.');
+  assert.equal(broker.budget.remainingSpend(c, 'parent'), 0, 'Unknown cost cannot become a new native cap of $5.');
+  await broker.close();
+  const next = open(), restored = next.get(c.id), view = next.budget.view(restored).task;
+  assert.equal(view.runsWithoutCost, 1); assert.equal(view.runsWithPartialUsage, 1);
+  assert.equal(view.taskId, 'parent', 'A refused new assessment shows its budget rather than the previous coding task.');
+  assert.equal(view.enforcement.spendCaps.native, 1);
+  assert.equal(next.budget.refusal(restored, plan).limit, 'spendUsageUnknown');
+  next.budget.setPolicy(restored, { maxSpendUSD: null });
+  assert.equal(next.budget.refusal(restored, plan), null);
+});
+
+test('task spend distinguishes missing, zero, invalid and subscription costs and reports overshoot', t => {
+  const { broker, c } = setup(t, { maxSpendUSD: 1, maxTokens: 10 });
+  const run = (id, billing, costUSD) => {
+    broker.record(c, { type: 'background_review', taskId: 'parent', review: { id, provider: 'claude' }, billingSource: billing });
+    broker.record(c, { type: 'review_budget', id, metadata: { budgetEnforcement: { spend: 'reported-usage', maxSpendUSD: 1 } } });
+    broker.record(c, { type: 'review_result', id, result: { status: 'complete', costUSD, usage: { input_tokens: 8, output_tokens: 2 } } });
+  };
+  run('zero', 'api', 0); run('sub', 'subscription', undefined);
+  assert.equal(state(c, 'parent').runsWithoutCost, 0);
+  run('missing', 'api', undefined); run('invalid', 'api', -3); run('unknown', 'unknown', 1);
+  assert.equal(state(c, 'parent').runsWithoutCost, 3);
+  run('paid', 'api', 1.5);
+  const view = broker.budget.view(c).task;
+  assert.equal(view.spendUSD, 1.5); assert.equal(view.overages.spendUSD, 0.5);
+  assert.equal(view.overages.tokens, 50); assert.equal(view.enforcement.spendCaps.reported, 6);
+});
+
+test('local model allowlists match the selected local model rather than an absent default', t => {
+  const { broker, c } = setup(t, { allowedModels: { local: ['local-model'] } });
+  assert.equal(broker.budget.refusal(c, { task: { id: 'new' }, provider: 'codex', local: true, model: 'local-model' }), null);
+  assert.equal(broker.budget.refusal(c, { task: { id: 'new' }, provider: 'codex', local: true, model: 'other-model' }).limit, 'allowed');
 });
 
 

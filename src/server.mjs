@@ -8,6 +8,7 @@ import { SharingClient, validateSharingURL } from './sharing-client.mjs';
 import { collaborationRoute } from './collaboration-routes.mjs';
 import { closeAccountConnections } from './providers.mjs';
 import { createCommandRoutes } from './project-commands.mjs';
+import { createProjectReviewRoutes } from './project-review.mjs';
 import { createTerminalRoutes } from './terminal.mjs';
 import { createVoiceRoutes } from './voice.mjs';
 import { buildRecap } from './recap.mjs';
@@ -42,6 +43,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
+  '/project-review.js': ['project-review.js', 'text/javascript; charset=utf-8'], '/project-review.css': ['project-review.css', 'text/css; charset=utf-8'],
   '/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'], '/alerts.css': ['alerts.css', 'text/css; charset=utf-8'],
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/settings.js': ['settings.js', 'text/javascript; charset=utf-8'], '/settings.css': ['settings.css', 'text/css; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/logo.svg': ['logo.svg', 'image/svg+xml'], '/mark.svg': ['mark.svg', 'image/svg+xml'],
@@ -100,6 +102,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const localRoutes = createLocalRoutes({ registry, body, json });
   const taskRoutes = createTaskRoutes({ registry, body, json });
   const commandRoutes = createCommandRoutes({ registry, body, json });
+  const projectReviewRoutes = createProjectReviewRoutes({ registry, commands: commandRoutes.commands, body, json });
   const terminalRoutes = createTerminalRoutes({ registry, body, json });
   const voiceRoutes = createVoiceRoutes({ body, json, ...(voice ? { sessions: voice } : {}) });
   const listeners = new Set();
@@ -271,6 +274,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         }
         return json(res,200,{query:q,total:target.messages.length,matches});
       }
+      if (await projectReviewRoutes.route({ req, res, url })) return;
       if (await commandRoutes.route({ req, res, url })) return;
       if (await terminalRoutes.route({ req, res, url })) return;
       if (await voiceRoutes.route({ req, res, url })) return;
@@ -374,6 +378,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     closeAccountConnections();
     await step('remote access', () => phoneAccess.close());
     await step('reviews', () => reviewRoutes.close());
+    await step('project review', () => projectReviewRoutes.close());
     await step('commands', () => commandRoutes.close());
     await step('terminals', () => terminalRoutes.close());
     await step('voice', () => voiceRoutes.close());
@@ -383,7 +388,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     await step('connections', () => new Promise(resolve => { server.close(resolve); if (force) server.closeAllConnections(); }));
     if (failure) throw failure;
   })();
-  return { server, registry, collaboration, sharing, commands: commandRoutes.commands, terminals: terminalRoutes.sessions, close,
+  return { server, registry, collaboration, sharing, commands: commandRoutes.commands, projectReview: projectReviewRoutes.review, terminals: terminalRoutes.sessions, close,
     getAppearancePreference: () => appearance(config),
     getKeepAwakePreference: () => config.keepAwake === true,
     // Handoff near a usage limit (#17): offered at 90% by default, automatic only when allowed, 0 turns offers off.

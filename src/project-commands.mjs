@@ -26,7 +26,7 @@ function location(project, input) {
   if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) fail('The project directory must stay inside its attached folder.');
   return { folderId: folder.id, directory, cwd };
 }
-function configuration(project, input) {
+export function commandConfiguration(project, input) {
   const selected = location(project, input);
   if (typeof input.command !== 'string' || !input.command.trim() || input.command.length > 4096 || /[\0\r\n]/.test(input.command)) fail('Enter a single-line command (up to 4096 characters).');
   return { folderId: selected.folderId, directory: selected.directory, command: input.command.trim() };
@@ -123,7 +123,7 @@ export class ProjectCommands {
   // Adds a command, or changes one. Marking one for checks unmarks the others.
   save(id, input = {}) {
     if (this.closing) fail('Codeshi is stopping.', 503);
-    const config = configuration(this.registry.get(id), input), name = tidyName(input.name), commands = this.list(id);
+    const config = commandConfiguration(this.registry.get(id), input), name = tidyName(input.name), commands = this.list(id);
     if (!name || name.length > 40) fail('Name the command in 40 characters or fewer.');
     const existing = input.id === undefined || input.id === null ? null : commands.find(command => command.id === input.id);
     if (input.id !== undefined && input.id !== null && !existing) fail('That command was removed. Refresh the Run panel.', 404);
@@ -152,8 +152,13 @@ export class ProjectCommands {
     return this.state(id, { output: null });
   }
   start(id, commandId) {
+    return this.startConfigured(id, commandId, this.find(id, commandId));
+  }
+  // Review launch plans share process ownership/cleanup with Run, without overwriting its saved commands.
+  startConfigured(id, commandId, command) {
     if (this.closing) fail('Codeshi is stopping.', 503);
-    const command = this.find(id, commandId), key = this.key(id, commandId);
+    commandConfiguration(this.registry.get(id), command);
+    const key = this.key(id, commandId);
     if (commandActive(this.sessions.get(key))) fail(`${command.name} is already running. Stop it or restart it.`, 409);
     if ([...this.sessions.values()].filter(commandActive).length >= 16) fail('Stop an active project command before starting another.', 409);
     // Acquire the existing per-workspace instance lock, but not the editing lease:

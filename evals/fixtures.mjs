@@ -129,4 +129,13 @@ export const fixtures = [
     trace: [{ steps: [{ type: 'say', text: 'discount() multiplies by the percent without dividing by 100.' }], usage: { input: 900, cached: 0, output: 60, reasoning: 10 } }],
   },
 ];
+// The same repository and hidden acceptance check as the manual small-edit baseline. Only the routing policy and
+// recorded assessor prefix differ; both invocations go through provider workers and the broker journal.
+fixtures.push({
+  ...fixtures[0], id: 'routing-assessment', title: 'Routing assessment and builder on the small-edit baseline', routing: 'smart',
+  trace: [
+    { steps: [{ type: 'say', text: JSON.stringify({ tier: 'light', effort: 'low', reason: 'A single formatter edit with a precise expected result.' }) }], usage: { input: 300, cached: 0, output: 40, reasoning: 10 } },
+    ...fixtures[0].trace,
+  ],
+});
 export const fixtureById = id => fixtures.find(fixture => fixture.id === id);

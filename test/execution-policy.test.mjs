@@ -32,6 +32,26 @@ function setup(t, options = {}) {
 function flow(broker, c, mode = 'smart') { broker.setRouting(c, { mode, check: true }); }
 const routed = (text, mode = 'smart') => ({ text, provider: 'codex', routing: { mode }, mode: 'edit' });
 
+test('turning routing off restores manual control for the previous Flow task and new work', async t => {
+  const { broker, c, open } = setup(t);
+  flow(broker, c, 'ultra');
+  const taskId = 'completed-flow-task';
+  broker.execution.ensure(c, taskId);
+  broker.record(c, { type: 'run_start', id: taskId, taskId, provider: 'codex' });
+  broker.record(c, { type: 'run_metadata', metadata: { taskId } });
+  broker.record(c, { type: 'run_end', status: 'complete' });
+  const revision = broker.execution.defaults(c).revision;
+  assert.throws(() => broker.setRouting(c, { mode: null, executionRevision: revision - 1 }), /Execution policy changed/);
+  assert.equal(broker.execution.active(c).mode, 'flow', 'A stale request cannot revoke task authority.');
+  broker.setRouting(c, { mode: null, executionRevision: revision });
+  assert.equal(c.routing, null);
+  assert.equal(broker.execution.defaults(c).mode, 'normal');
+  assert.equal(broker.execution.active(c).mode, 'normal');
+  assert.equal(Object.values(broker.execution.active(c).automation).every(value => value === false), true);
+  const recovered = open(), saved = recovered.get(c.id);
+  assert.equal(recovered.execution.active(saved).mode, 'normal', 'Manual control survives reopening the conversation.');
+});
+
 test('execution policy validates automation, restrictions and step/pinned overrides separately from access', () => {
   assert.equal(executionConfig().automation.handoff, false);
   assert.equal(executionConfig({ mode: 'flow', automation: { retry: false } }).automation.retry, false);

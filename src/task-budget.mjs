@@ -44,8 +44,9 @@ export function validatePolicy(input = {}, current = defaultPolicy()) {
 // that Codeshi can't tell, which is different from there being room.
 export const assessQuota = (...args) => globalThis.relayRouting.assessQuota(...args);
 
-const emptyState = taskId => ({ taskId, runs: 0, retries: 0, reviews: 0, handoffs: 0, workingMs: 0, tokens: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }, spendUSD: 0, runsWithoutUsage: 0, failures: {}, active: {}, extra: {}, stopped: null, startedAt: null });
+const emptyState = taskId => ({ taskId, runs: 0, retries: 0, reviews: 0, handoffs: 0, workingMs: 0, tokens: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }, spendUSD: 0, runsWithoutUsage: 0, runsWithPartialUsage: 0, runsWithoutCost: 0, spendCaps: { native: 0, reported: 0 }, failures: {}, active: {}, extra: {}, stopped: null, startedAt: null });
 const newTokens = usage => (usage?.input || 0) + (usage?.output || 0) + (usage?.cacheWrite || 0);
+const knownCost = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 function stateFor(c, taskId) {
   c.taskBudgets ||= {};
   if (!c.taskBudgets[taskId]) {
@@ -71,7 +72,7 @@ export function applyBudgetRecord(c, record) {
   if (record.type === 'routing_assessment_start') record = { ...record, type: 'background_review', review: { id: record.id, provider: record.provider, model: record.model, assessment: true } };
   else if (record.type === 'routing_assessment_metadata') record = { ...record, type: 'review_budget', began: record.metadata?.began };
   else if (record.type === 'routing_assessment_end') record = { ...record, type: 'review_result' };
-  if (['submission', 'run_end', 'background_review', 'review_budget', 'review_result', 'task_policy', 'task_failure', 'task_budget_stop', 'task_budget_extend', 'task_budget_reset'].includes(record.type) || record.type === 'run_metadata' && (record.metadata?.usage || record.metadata?.costUSD !== undefined)) c.taskBudgetRevision = record.seq;
+  if (['submission', 'run_end', 'background_review', 'review_budget', 'review_result', 'task_policy', 'task_failure', 'task_budget_stop', 'task_budget_extend', 'task_budget_reset'].includes(record.type) || record.type === 'run_metadata' && (record.metadata?.usage || record.metadata?.costUSD !== undefined || record.metadata?.account || record.metadata?.budgetEnforcement)) c.taskBudgetRevision = record.seq;
   if (record.type === 'task_policy') { c.taskPolicy = record.policy; return; }
   if (record.type === 'submission') {
     if (c.taskOfRun?.[record.id]) return;
@@ -94,6 +95,7 @@ export function applyBudgetRecord(c, record) {
     if (!entry?.background) return;
     if (record.type === 'review_process' || record.began || record.metadata?.effectiveModel || record.metadata?.usage) entry.began = true;
     const metadata = record.metadata || {};
+    if (metadata.budgetEnforcement) entry.budgetEnforcement = metadata.budgetEnforcement;
     if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage);
     if (entry.usage?.source === 'claude-model-usage-total') entry.costUSD = entry.usage.costEstimateUSD;
     else if (typeof metadata.costUSD === 'number') entry.costUSD = metadata.costUSD;
@@ -103,6 +105,7 @@ export function applyBudgetRecord(c, record) {
   if (record.type === 'run_metadata') {
     const state = activeState(), entry = state?.active[c.budgetActive], metadata = record.metadata || {};
     if (!entry) return;
+    if (metadata.budgetEnforcement) entry.budgetEnforcement = metadata.budgetEnforcement;
     if (metadata.effectiveModel || metadata.usage) entry.began = true;
     if (metadata.account?.billingSource) entry.billing = metadata.account.billingSource;
     if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage, { previous: c.budgetTotals?.[entry.provider] });
@@ -114,15 +117,20 @@ export function applyBudgetRecord(c, record) {
     const id = record.type === 'run_end' ? c.budgetActive : record.id, taskId = id && c.taskOfRun?.[id], state = taskId && c.taskBudgets?.[taskId], entry = state?.active[id];
     if (record.type === 'run_end') { c.budgetLast = entry ? { provider: entry.provider } : c.budgetLast; c.budgetActive = null; }
     if (!entry) return;
-    if (record.type === 'review_result') { const result = record.result || {}; if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage); if (entry.usage?.source === 'claude-model-usage-total') entry.costUSD = entry.usage.costEstimateUSD; else if (typeof result.costUSD === 'number') entry.costUSD = result.costUSD; if (result.billingSource) entry.billing = result.billingSource; if (result.usage || result.status === 'complete') entry.began = true; }
+    if (record.type === 'review_result') { const result = record.result || {}; if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage); if (entry.usage?.source === 'claude-model-usage-total') entry.costUSD = entry.usage.costEstimateUSD; else if (typeof result.costUSD === 'number') entry.costUSD = result.costUSD; if (result.billingSource) entry.billing = result.billingSource; if (result.budgetEnforcement) entry.budgetEnforcement = result.budgetEnforcement; if (result.usage || result.status === 'complete') entry.began = true; }
     delete state.active[id];
     // A run refused before anything started used nothing, so what it reserved goes back.
     if (!entry.began) { state.runs--; if (entry.counted) state[entry.counted]--; return; }
     state.workingMs += Math.max(0, new Date(record.at).getTime() - new Date(entry.startedAt).getTime());
     if (!entry.background) c.budgetTotals[entry.provider] = entry.usage?.sessionTotal || { input: null, output: null, cacheRead: null, cacheWrite: null, reasoning: null, costEstimateUSD: null };
-    if (entry.usage?.reported?.length) { for (const key of ['input', 'output', 'cacheWrite', 'cacheRead']) state.tokens[key] += entry.usage[key] || 0; }
+    if (entry.usage?.reported?.length) {
+      for (const key of ['input', 'output', 'cacheWrite', 'cacheRead']) state.tokens[key] += entry.usage[key] || 0;
+      if (entry.usage.partial || entry.usage.input == null || entry.usage.output == null) state.runsWithPartialUsage++;
+    }
     else state.runsWithoutUsage++;
-    if (entry.billing === 'api' && typeof entry.costUSD === 'number') state.spendUSD += entry.costUSD;
+    if (entry.billing === 'api' && knownCost(entry.costUSD)) state.spendUSD += entry.costUSD;
+    else if (entry.billing === 'api' || entry.billing === 'unknown') state.runsWithoutCost++;
+    if (entry.budgetEnforcement) state.spendCaps[entry.budgetEnforcement.spend === 'native' ? 'native' : 'reported']++;
     return;
   }
   if (record.type === 'background_review') {
@@ -224,7 +232,7 @@ export class TaskBudgets {
     const live = Object.values(state.active), now = Date.now();
     return { workingMs: state.workingMs + live.reduce((sum, entry) => sum + Math.max(0, now - new Date(entry.startedAt).getTime()), 0),
       tokens: state.tokens.input + state.tokens.output + state.tokens.cacheWrite + live.reduce((sum, entry) => sum + newTokens(entry.usage), 0),
-      spendUSD: state.spendUSD + live.reduce((sum, entry) => sum + (entry.billing === 'api' && typeof entry.costUSD === 'number' ? entry.costUSD : 0), 0) };
+      spendUSD: state.spendUSD + live.reduce((sum, entry) => sum + (entry.billing === 'api' && knownCost(entry.costUSD) ? entry.costUSD : 0), 0) };
   }
   // The first limit a task has used up, if any.
   exceeded(c, state) {
@@ -234,13 +242,15 @@ export class TaskBudgets {
     if (limits.maxWorkingMinutes !== null && used.workingMs >= limits.maxWorkingMinutes * 60000) return { limit: 'maxWorkingMinutes', used: Math.round(used.workingMs / 60000), allowed: limits.maxWorkingMinutes, message: `This task has reached its limit of ${limits.maxWorkingMinutes} working minutes.` };
     if (limits.maxTokens !== null && used.tokens >= limits.maxTokens) return { limit: 'maxTokens', used: used.tokens, allowed: limits.maxTokens, message: `This task has used ${used.tokens.toLocaleString('en-US')} tokens, over its limit of ${limits.maxTokens.toLocaleString('en-US')}.` };
     if (limits.maxSpendUSD !== null && used.spendUSD >= limits.maxSpendUSD) return { limit: 'maxSpendUSD', used: used.spendUSD, allowed: limits.maxSpendUSD, message: `This task has reached its API spending limit of $${limits.maxSpendUSD}.` };
+    if (limits.maxTokens !== null && (state.runsWithoutUsage || state.runsWithPartialUsage)) return { limit: 'tokenUsageUnknown', message: 'Earlier runs did not report complete token usage. The remaining token allowance is unknown. Review task limits before continuing.' };
+    if (limits.maxSpendUSD !== null && state.runsWithoutCost) return { limit: 'spendUsageUnknown', message: 'Earlier API runs did not report a cost or confirmed billing. The remaining spending allowance is unknown. Review task limits before continuing.' };
     return null;
   }
   // Why this run can't start, or null. Nothing is reserved here: the record that saves the run does that, in the same step.
   refusal(c, { task, provider, model, local = false, previousProvider = null }) {
-    const key = local ? 'local' : provider, permitted = this.allows(c, key, local ? null : model);
-    if (!permitted.allowed && !(local && !this.policy(c).allowedProviders)) return { limit: 'allowed', message: permitted.reason };
-    if (!task?.relation) return null;
+    const key = local ? 'local' : provider, permitted = this.allows(c, key, model);
+    if (!permitted.allowed) return { limit: 'allowed', message: permitted.reason };
+    if (!task?.id) return null;
     const state = c.taskBudgets?.[task.id];
     if (!state) return null;
     const limits = this.limits(c, state), counted = relationOf(task.relation, key, previousProvider ?? c.lastRun?.provider);
@@ -258,7 +268,7 @@ export class TaskBudgets {
     const refused = this.refusal(c, plan);
     if (!refused) return;
     const taskId = plan.task?.id || null;
-    throw Object.assign(new Error(refused.message), { status: 409, category: 'budget', details: { budget: { ...refused, taskId, canExtend: Boolean(plan.task?.relation) && !['allowed', 'maxConcurrent', 'reservation'].includes(refused.limit) } } });
+    throw Object.assign(new Error(refused.message), { status: 409, category: 'budget', details: { budget: { ...refused, taskId, canExtend: Boolean(plan.task?.relation) && !['allowed', 'maxConcurrent', 'reservation', 'tokenUsageUnknown', 'spendUsageUnknown'].includes(refused.limit) } } });
   }
   extend(c, { taskId, limit }) {
     const state = c.taskBudgets?.[taskId], policy = this.policy(c);
@@ -279,7 +289,7 @@ export class TaskBudgets {
   // The most an API-billed run may spend, for agents that can enforce it themselves.
   remainingSpend(c, taskId) {
     const state = c.taskBudgets?.[taskId], { maxSpendUSD } = this.limits(c, state);
-    return maxSpendUSD === null ? null : Math.max(0, maxSpendUSD - (state ? this.used(state).spendUSD : 0));
+    return maxSpendUSD === null ? null : state?.runsWithoutCost ? 0 : Math.max(0, maxSpendUSD - (state ? this.used(state).spendUSD : 0));
   }
 
   // While a run works: the working-time limit, stopped on time, whatever the agent is doing. A quiet run is left alone otherwise.
@@ -321,10 +331,13 @@ export class TaskBudgets {
 
   // The current task for the panel.
   view(c) {
-    const policy = this.policy(c), review = c.reviews?.find(item => c.taskOfRun?.[item.id]), taskId = c.routingPending?.taskId || c.activeRun?.taskId || c.lastRun?.taskId || c.lastRun?.id || c.taskOfRun?.[review?.id], state = taskId ? c.taskBudgets?.[taskId] : null;
+    const policy = this.policy(c), review = c.reviews?.find(item => c.taskOfRun?.[item.id]), taskId = c.routingPending?.taskId || c.activeRun?.taskId || Object.keys(c.taskBudgets || {}).at(-1) || c.lastRun?.taskId || c.lastRun?.id || c.taskOfRun?.[review?.id], state = taskId ? c.taskBudgets?.[taskId] : null;
     if (!state) return { policy, defaults: defaultPolicy(), task: null, quota: this.quota(c) };
     const limits = this.limits(c, state), used = this.used(state), exceeded = this.exceeded(c, state);
     return { policy, defaults: defaultPolicy(), quota: this.quota(c), task: { taskId, limits, runs: state.runs, retries: state.retries, reviews: state.reviews, handoffs: state.handoffs, workingMs: used.workingMs, tokens: used.tokens, cacheRead: state.tokens.cacheRead, spendUSD: used.spendUSD, runsWithoutUsage: state.runsWithoutUsage, active: Object.keys(state.active).length,
+      runsWithPartialUsage: state.runsWithPartialUsage, runsWithoutCost: state.runsWithoutCost,
+      enforcement: { tokens: 'reported-usage', spendCaps: { ...state.spendCaps }, activeSpendCaps: Object.values(state.active).map(entry => entry.budgetEnforcement).filter(Boolean) },
+      overages: { tokens: limits.maxTokens === null ? 0 : Math.max(0, used.tokens - limits.maxTokens), spendUSD: limits.maxSpendUSD === null ? 0 : Math.max(0, used.spendUSD - limits.maxSpendUSD), workingMs: limits.maxWorkingMinutes === null ? 0 : Math.max(0, used.workingMs - limits.maxWorkingMinutes * 60000) },
       failures: Object.values(state.failures).filter(item => (item.kind !== 'edit' || item.count > 1) && item.kind !== 'probe' && !isDiagnosticProbe(item.what)).sort((a, b) => b.count - a.count).slice(0, 8), stopped: state.stopped, exceeded } };
   }
   quota(c) { return Object.fromEntries(Object.entries(c.quotaReadings || {}).map(([provider, reading]) => [provider, assessQuota({ available: true, windows: reading.windows, fetchedAt: reading.observedAt }, c.models?.[provider] || null)])); }

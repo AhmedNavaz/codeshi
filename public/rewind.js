@@ -71,7 +71,7 @@
     const multiple = new Set(preview.files.map(file => file.folderId)).size > 1 || (api.getState().projects?.find(project => project.id === current.projectId)?.folders?.length || 1) > 1;
     $('rewind-title').textContent = restoring ? 'Restore this checkpoint?' : `${redo ? 'Redo' : 'Undo'} ${agent(preview)}’s changes?`;
     const when = preview.checkpointAt || preview.startedAt ? new Date(preview.checkpointAt || preview.startedAt) : null;
-    $('rewind-meta').textContent = [restoring ? `${current.target.phase === 'before' ? 'Before' : 'After'} ${preview.checkpointKind === 'restore' ? 'workspace restore' : preview.checkpointKind === 'undo' ? 'undo / redo' : 'the run'}` : '', preview.prompt ? `“${preview.prompt.length > 120 ? preview.prompt.slice(0, 119) + '…' : preview.prompt}”` : '', when && !Number.isNaN(when.getTime()) ? when.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : ''].filter(Boolean).join(' · ');
+    $('rewind-meta').textContent = [restoring ? `${current.target.phase === 'before' ? 'Before' : 'After'} ${preview.checkpointKind === 'restore' ? 'workspace restore' : preview.checkpointKind === 'undo' ? 'undo / redo' : 'the run'}` : '', (preview.prompt && !/^\s*Continue the unfinished task from this shared conversation/i.test(preview.prompt)) ? `“${preview.prompt.length > 120 ? preview.prompt.slice(0, 119) + '…' : preview.prompt}”` : '', when && !Number.isNaN(when.getTime()) ? when.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : ''].filter(Boolean).join(' · ');
     const count = action => work.filter(file => file.action === action).length;
     const parts = redo ? (work.length ? [`puts back ${plural(work.length, 'file')} as the run left them`] : []) : [count('restore') && `restores ${plural(count('restore'), 'file')}`, count('merge') && `takes the run’s edits out of ${plural(count('merge'), 'file')}, keeping later changes`, count('remove') && `removes ${plural(count('remove'), 'file')} it added`, count('recreate') && `brings back ${plural(count('recreate'), 'file')} it deleted`].filter(Boolean);
     const summary = parts.length ? `This ${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')}.` : redo ? 'There is nothing to put back: these files changed since the undo.' : 'There is nothing to undo: these files are already as they were before the run, or changed since.';
@@ -141,7 +141,7 @@
       const when = new Date(entry.at);
       head.append(node('strong', title), node('time', Number.isNaN(when.getTime()) ? 'Time unavailable' : when.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })));
       item.append(head);
-      if (entry.prompt) {
+      if (entry.prompt && !/^\s*Continue the unfinished task from this shared conversation/i.test(entry.prompt)) {
         const promptEl = node('p', entry.prompt, 'checkpoint-prompt');
         promptEl.addEventListener('click', () => api.jumpToRun?.(entry.runId || entry.id));
         item.append(promptEl);

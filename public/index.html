@@ -63,6 +63,7 @@
     <script src="/rewind.js" defer></script>
     <script src="/alerts.js" defer></script>
     <script src="/project-commands.js" defer></script>
+    <script src="/project-review.js" defer></script>
     <script src="/flow.js" defer></script>
     <link rel="stylesheet" href="/project-commands.css" />
     <link rel="stylesheet" href="/polish.css" />
@@ -71,6 +72,7 @@
     <link rel="stylesheet" href="/agent-review.css" />
     <link rel="stylesheet" href="/rewind.css" />
     <link rel="stylesheet" href="/flow.css" />
+    <link rel="stylesheet" href="/project-review.css" />
     <link rel="stylesheet" href="/alerts.css" />
     <link rel="stylesheet" href="/questions.css" />
   </head>
@@ -92,7 +94,7 @@
         <span id="workspace-name" class="sr-only">No workspace selected</span>
       </aside>
 
-      <aside id="flow-left" class="flow-side flow-left" aria-label="How it’s working and what’s left" hidden></aside>
+      <aside id="flow-left" class="flow-side flow-left" aria-label="What’s next and what’s left" hidden></aside>
       <main class="main-panel">
         <header id="conversation-header" class="conversation-header">
           <div id="flow-brand" class="flow-brand" hidden><img class="flow-brand-mark" src="/mark.svg" alt="" width="22" height="22" /><span class="flow-brand-name">Flow</span><span id="flow-brand-workspace" class="flow-brand-workspace"></span></div>
@@ -295,7 +297,7 @@
           </div>
         </section>
       </main>
-      <aside id="flow-right" class="flow-side flow-right" aria-label="What’s next and files changed" hidden></aside>
+      <aside id="flow-right" class="flow-side flow-right" aria-label="How it’s working and files changed" hidden></aside>
       <section id="flow-peek" class="flow-peek" aria-label="Card" hidden><div class="flow-peek-head"><button id="flow-peek-close" class="icon-button flow-peek-close" type="button" aria-label="Close card" title="Close"></button></div><div id="flow-peek-body" class="flow-peek-body"></div></section>
       <div id="flow-veil" class="flow-veil" aria-hidden="true" hidden><img src="/mark.svg" alt="" width="96" height="96" /></div>
 
@@ -382,14 +384,16 @@
       </footer>
     </div>
 
-    <dialog id="compact-confirmation" class="context-confirm" aria-labelledby="compact-confirm-title" aria-describedby="compact-confirm-description compact-confirm-continuity compact-confirm-note">
+    <dialog id="compact-confirmation" class="context-confirm" aria-labelledby="compact-confirm-title" aria-describedby="compact-confirm-description compact-repeat-note compact-confirm-continuity compact-confirm-note">
       <header class="context-confirm-head"><span class="context-confirm-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="m3 3 6 6M3 9h6V3m12 0-6 6m0-6v6h6M3 21l6-6m-6 0h6v6m12 0-6-6m0 6v-6h6"/></svg></span><div><span id="compact-confirm-agent" class="context-confirm-agent"></span><h2 id="compact-confirm-title">Agent context</h2></div></header>
       <div id="compact-context-reading" class="context-reading" hidden>
         <div class="context-reading-line"><span id="compact-reading-label"></span><strong id="compact-reading-value"></strong></div>
         <span id="context-meter" class="context-meter" role="meter" aria-label="Progress toward automatic refresh" hidden><span></span></span>
         <div id="compact-target-line" class="context-reading-line"><span>Automatic refresh target</span><span id="compact-target-value"></span></div>
+        <div id="compact-seed-line" class="context-reading-line" hidden><span id="compact-seed-label">Task brief at session start</span><span id="compact-seed-value"></span></div>
       </div>
       <p id="compact-confirm-description"></p>
+      <p id="compact-repeat-note" class="context-confirm-repeat" hidden></p>
       <p id="compact-confirm-continuity" class="context-confirm-continuity">Your chat and draft stay saved. Codeshi prepares a task brief from your decisions, recent work and project files to help the agent continue.</p>
       <p id="compact-confirm-note" class="context-confirm-note"></p>
       <footer><button id="compact-cancel" class="secondary-button" type="button">Cancel</button><button id="compact-confirm" class="primary-button" type="button">Refresh on next send</button></footer>
@@ -546,7 +550,7 @@
 
     <dialog id="limits-dialog" class="panel-dialog" aria-labelledby="limits-dialog-title">
       <form id="limits-form"><header class="panel-dialog-head"><div><h2 id="limits-dialog-title">Task limits</h2><p class="panel-muted">One set of limits for a whole task, across its agents, retries and reviews. A new prompt starts a new task. Empty means no limit; counts are checked before every run, and time and tokens as agents report them.</p></div></header>
-        <div class="panel-dialog-body"><div id="limits-fields" class="limits-fields"></div><p class="panel-muted">A time, token or spend limit reserves the remaining allowance for one agent per task. Reviews share that allowance. Tokens and costs depend on what the agent reports and can overshoot; missing usage cannot be enforced.</p><fieldset id="limits-agents" class="limits-agents"><legend>Agents this workspace may use</legend></fieldset><p id="limits-error" class="project-error" role="alert" hidden></p></div>
+        <div class="panel-dialog-body"><div id="limits-fields" class="limits-fields"></div><p class="panel-muted">A time, token or spend limit reserves the remaining allowance for one agent per task. Reviews share that allowance. Tokens and costs depend on what the agent reports and can overshoot. Missing usage makes the remaining allowance unknown and pauses further work on that task until you review its limits.</p><fieldset id="limits-agents" class="limits-agents"><legend>Agents this workspace may use</legend></fieldset><fieldset id="limits-models" class="limits-fields"><legend>Models this workspace may use</legend><p class="panel-muted">Enter model IDs separated by commas. Empty allows all models for that agent.</p></fieldset><p id="limits-error" class="project-error" role="alert" hidden></p></div>
         <footer class="panel-dialog-foot"><button id="limits-cancel" class="secondary-button" type="button">Cancel</button><button class="primary-button" type="submit">Save</button></footer></form>
     </dialog>
 

@@ -49,11 +49,23 @@ async function playTurn(prompt = '') {
   } else if (claude) setInterval(() => {}, 1000);
 }
 if (claude) {
-  let prompt = '';
-  for await (const part of process.stdin) prompt += part;
   const resume = process.argv.indexOf('--resume');
   if (resume >= 0) { threadId = process.argv[resume + 1]; totals = sessions[threadId] || totals; }
-  await playTurn(prompt);
+  if (process.argv.includes('--input-format')) {
+    // The SDK keeps stdin open for later control messages. Its first user message starts this recorded turn.
+    let played = false;
+    readline.createInterface({ input: process.stdin }).on('line', async line => {
+      const message = JSON.parse(line);
+      if (message.type !== 'user' || played) return;
+      played = true;
+      const content = message.message?.content;
+      await playTurn(typeof content === 'string' ? content : (content || []).map(block => block.text || '').join('\n'));
+    });
+  } else {
+    let prompt = '';
+    for await (const part of process.stdin) prompt += part;
+    await playTurn(prompt);
+  }
 } else readline.createInterface({ input: process.stdin }).on('line', line => {
   const message = JSON.parse(line);
   if (message.id >= 700 && !message.method) return resumeAfterQuestion?.();

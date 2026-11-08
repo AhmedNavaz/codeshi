@@ -48,11 +48,54 @@ export function rolloverDecision(c, provider, { normalLimit = 'auto', routingMod
   // claim that their cumulative token allowance is their current context. An explicit Off choice remains respected.
   const legacy = Boolean(session && !session.managedContextVersion && used === null && thresholdTokens !== null);
   const pending = c.contextRollovers?.[provider]?.pending === true;
-  return { pending, hasSession: Boolean(session), mode: flow ? routingMode : 'normal', adaptive: flow || normalLimit === 'auto', thresholdTokens, used, source, cacheWarm, observedAt: useJournal ? session.contextEstimate.observedAt : reading?.observedAt || null,
+  return { pending, hasSession: Boolean(session), mode: flow ? routingMode : 'normal', adaptive: flow || normalLimit === 'auto', thresholdTokens, modeTarget: target, capacity, used, source, cacheWarm, observedAt: useJournal ? session.contextEstimate.observedAt : reading?.observedAt || null,
     estimated: useJournal || reading?.estimated === true || source === 'last-request-input-lower-bound', legacy,
     near: used !== null && thresholdTokens !== null && used >= thresholdTokens * 0.85,
     rollover: pending || legacy || Boolean(session && used !== null && thresholdTokens !== null && used >= thresholdTokens),
     reason: pending ? c.contextRollovers[provider].reason : legacy ? 'legacy-session' : 'threshold' };
+}
+
+// The seed is the first envelope a fresh native session receives: Codeshi's own bytes, measured separately from the
+// provider's context reading, its cached input and the cumulative usage totals (#85). It is a byte estimate.
+export const sessionSeed = (context, at) => context ? { bytes: context.bytes || 0, estimatedTokens: context.size?.estimatedTokens ?? Math.ceil((context.bytes || 0) / 4), reason: context.sessionReason || null, rollover: Boolean(context.rollover), at } : null;
+export const REFRESH_HISTORY = 8;
+// A fresh session that is due for another refresh after at most this many turns counts as a quick refresh.
+const QUICK_TURNS = 2;
+
+// Explains repeated fresh sessions from what was recorded: the seed each session started with, how many turns it lasted
+// and the reading that made it due again. Nothing here is a model summary; the causes are the only three Codeshi can
+// tell apart from its own records, and the reading's source is kept so an estimate is never presented as a measurement.
+export function refreshDiagnosis(c, provider, decision) {
+  const session = c.sessions?.[provider], history = c.contextRollovers?.[provider]?.history || [];
+  const quick = entry => Number.isFinite(entry?.previousTurns) && entry.previousTurns <= QUICK_TURNS && entry.previousSeed;
+  let streak = 0; for (let index = history.length - 1; index >= 0 && quick(history[index]); index--) streak++;
+  const currentQuick = Boolean(session?.managedContextVersion && session.seed && (session.turns || 0) <= QUICK_TURNS && (decision.rollover || decision.near) && decision.used !== null);
+  if (!currentQuick && !streak) return null;
+  const latest = currentQuick ? { previousSeed: session.seed, previousTurns: session.turns || 0, used: decision.used, thresholdTokens: decision.thresholdTokens, modeTarget: decision.modeTarget, capacity: decision.capacity, source: decision.source } : history.at(-1);
+  const seedTokens = latest.previousSeed?.estimatedTokens ?? 0, threshold = latest.thresholdTokens || 0, used = latest.used ?? null;
+  const share = threshold > 0 ? seedTokens / threshold : 0;
+  const tokens = value => `${Math.round(value).toLocaleString('en-US')} tokens`;
+  const turns = latest.previousTurns === 1 ? 'one turn' : `${latest.previousTurns} turns`;
+  let cause, explanation;
+  if (share >= 0.6) {
+    cause = 'large-seed';
+    explanation = `The task brief alone was about ${tokens(seedTokens)}, ${Math.round(share * 100)}% of the ${tokens(threshold)} target, so each fresh session was close to its limit before any work. Shorten the saved goal, decisions and tasks, keep the task to fewer folders, or raise the context limit.`;
+  } else if (Number.isFinite(latest.modeTarget) && threshold > 0 && threshold < latest.modeTarget && latest.capacity > 0) {
+    cause = 'small-window';
+    explanation = `The target is capped at 75% of this model's reported ${tokens(latest.capacity)} window, below the ${tokens(latest.modeTarget)} the mode would use, so ordinary work reaches it quickly. A model with a larger window gives more room per session.`;
+  } else {
+    cause = 'turn-growth';
+    explanation = `The session started at about ${tokens(seedTokens)} and ${used !== null ? `reached ${tokens(used)}` : 'passed the target'} within ${turns}: the agent's own file reads and tool output grew it, which Codeshi cannot shorten during a run. A refresh only happens between turns; smaller steps keep each turn's growth down.`;
+  }
+  const estimated = latest.source === 'journal-size-estimate' || latest.source === 'last-request-input-lower-bound';
+  if (latest.source === 'journal-size-estimate') explanation += ' This reading is an estimate from recorded activity rather than a provider reading, and can overcount.';
+  return { count: streak + (currentQuick ? 1 : 0), cause, explanation, seedTokens, usedTokens: used, thresholdTokens: threshold, turns: latest.previousTurns, estimated, current: currentQuick };
+}
+
+// What the context control shows beside the decision: the seed, the turns so far and any repeated-refresh explanation.
+export function contextControlView(c, provider, decision) {
+  const session = c.sessions?.[provider], rollovers = c.contextRollovers?.[provider];
+  return { ...decision, seed: session?.seed || null, turns: session?.turns || 0, refreshes: rollovers?.history?.length || 0, repeatedRefresh: refreshDiagnosis(c, provider, decision) };
 }
 
 // A bounded, replayable fallback for providers without an occupancy reading. Only this native session's outbound

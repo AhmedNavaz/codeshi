@@ -7,7 +7,7 @@ import { copyReviewFiles, reviewFreshness } from './agent-review.mjs';
 
 const fail = (message, status = 409) => { throw Object.assign(new Error(message), { status }); };
 // What the reviewer used, for the task's totals (#84). The reviewer's own journal goes away with its temporary folder.
-const reviewCost = run => ({ ...(run?.usage ? { usage: run.usage } : {}), ...(typeof run?.costUSD === 'number' ? { costUSD: run.costUSD } : {}), ...(run?.account?.billingSource ? { billingSource: run.account.billingSource } : {}) });
+const reviewCost = run => ({ ...(run?.usage ? { usage: run.usage } : {}), ...(typeof run?.costUSD === 'number' ? { costUSD: run.costUSD } : {}), ...(run?.account?.billingSource ? { billingSource: run.account.billingSource } : {}), ...(run?.budgetEnforcement ? { budgetEnforcement: run.budgetEnforcement } : {}) });
 export const reviewRequestKey = input => createHash('sha256').update(JSON.stringify({ goal: input.goal, files: input.files, approvedDigest: input.approvedDigest })).digest('hex');
 
 export class ReviewJobs {
@@ -52,7 +52,7 @@ export class ReviewJobs {
         if (current && run?.pid && current.pid !== run.pid) main.record(c, { type: 'review_process', id, pid: run.pid, pidStart: run.pidStart });
         if (current && run && worker.running) {
           const entry = conversation.taskBudgets?.[run.taskId]?.active[run.id];
-          const sample = { began: Boolean(entry?.began), metadata: { ...(run.usage ? { usage: run.usage } : {}), ...(typeof run.costUSD === 'number' ? { costUSD: run.costUSD } : {}), ...(run.account ? { account: run.account } : {}), ...(run.effectiveModel ? { effectiveModel: run.effectiveModel } : {}) } };
+          const sample = { began: Boolean(entry?.began), metadata: { ...(run.usage ? { usage: run.usage } : {}), ...(typeof run.costUSD === 'number' ? { costUSD: run.costUSD } : {}), ...(run.account ? { account: run.account } : {}), ...(run.effectiveModel ? { effectiveModel: run.effectiveModel } : {}), ...(run.budgetEnforcement ? { budgetEnforcement: run.budgetEnforcement } : {}) } };
           const signature = JSON.stringify(sample);
           if (signature !== budgetSample) { main.record(c, { type: 'review_budget', id, ...sample }); budgetSample = signature; }
           watchedRun = worker.running;

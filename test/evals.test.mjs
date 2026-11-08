@@ -11,8 +11,55 @@ import { checkPin, experimentInputs, fingerprint, validatePin } from '../evals/e
 
 const cli = new URL('../evals/cli.mjs', import.meta.url).pathname;
 
+test('routing evaluations count assessor overhead, reserve its budget and repeat the same pinned inputs', { skip: scriptCLIs }, async () => {
+  const fixture = fixtureById('routing-assessment'), policy = parsePolicy({ agent: 'codex' });
+  const budget = { maxRuns: 2, maxTokens: 10000, runs: 0, tokens: 0 };
+  const result = await runFixture(fixture, policy, { budget });
+  assert.equal(result.failure, undefined);
+  assert.equal(result.check.passed, true);
+  assert.deepEqual(result.runs.map(run => run.role), ['assessment', 'builder']);
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.runs[1].parentRunId, result.runs[0].runId);
+  assert.equal(result.usage.input, 1500);
+  assert.equal(result.usage.output, 130);
+  assert.equal(budget.runs, 2);
+  assert.equal(budget.tokens, 2030);
+  assert.equal(result.accounting.roles.assessment.usage.input, 300);
+  assert.equal(result.accounting.roles.builder.usage.input, 1200);
+  const repeated = await runFixture(fixture, policy, { pin: result });
+  assert.equal(repeated.failure, undefined);
+  assert.equal(compareResults([result, repeated])[0].repeats, 2);
+  assert.match(reportMarkdown(compareResults([result])), /\| assessment \|/);
+  const stopped = await runFixture(fixture, policy, { budget: { maxRuns: 1, maxTokens: 10000, runs: 0, tokens: 0 } });
+  assert.equal(stopped.skipped, 'budget');
+  assert.equal(stopped.runs.length, 0);
+});
+
+test('failed routing assessments retain measured overhead when the builder falls back', { skip: scriptCLIs }, async () => {
+  const fixture = structuredClone(fixtureById('routing-assessment'));
+  fixture.trace[0].steps[0].text = 'invalid assessment';
+  const result = await runFixture(fixture, parsePolicy({ agent: 'codex' }));
+  assert.equal(result.failure, undefined);
+  assert.equal(result.runs[0].status, 'failed');
+  assert.equal(result.accounting.roles.assessment.usage.input, 300);
+  assert.equal(result.usage.input, 1500);
+  assert.equal(result.check.passed, true);
+  assert.equal(result.outcome.firstAttemptSuccess, false);
+});
+
+test('recorded Claude routing uses the SDK assessor and CLI builder without losing either usage report', { skip: scriptCLIs }, async () => {
+  const result = await runFixture(fixtureById('routing-assessment'), parsePolicy({ agent: 'claude' }));
+  assert.equal(result.failure, undefined);
+  assert.equal(result.check.passed, true);
+  assert.deepEqual(result.runs.map(run => run.status), ['complete', 'complete']);
+  assert.deepEqual(result.runs.map(run => run.role), ['assessment', 'builder']);
+  assert.equal(result.usage.input, 1500);
+  assert.equal(result.accounting.roles.assessment.usage.input, 300);
+  assert.equal(result.accounting.roles.builder.usage.input, 1200);
+});
+
 test('every kind of task the issue asks for has a fixture with a check the agent cannot see', () => {
-  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'review']);
+  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'review', 'routing-assessment']);
   for (const fixture of fixtures) {
     assert(fixture.check || fixture.checkReply, fixture.id);
     assert(fixture.rubric, fixture.id);

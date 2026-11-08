@@ -15,7 +15,7 @@ import { RunCheckpoints } from './checkpoints.mjs';
 import { normalizeUsage, readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
 import { claudeRequestContext, contextReading, restoreAfterCompaction } from './context-state.mjs';
 import { observeReading, observeRunSize, usageWatch } from './usage-watch.mjs';
-import { estimateContext, findMessage, managedContextVersion, milestoneMemory, observationsFor, rolloverDecision } from './context-rollover.mjs';
+import { contextControlView, estimateContext, findMessage, managedContextVersion, milestoneMemory, observationsFor, REFRESH_HISTORY, rolloverDecision, sessionSeed } from './context-rollover.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
@@ -285,7 +285,10 @@ export class Broker extends EventEmitter {
     if (record.type === 'context') c.context = record.context;
     if (record.type === 'semantic_observation') c.semanticObservations = [...(c.semanticObservations || []).filter(item => item.id !== record.observation.id), { ...record.observation, observedAt: record.at }].slice(-200);
     if (record.type === 'context_compact_requested') {
-      c.contextRollovers ||= {}; c.contextRollovers[record.provider] = { pending: true, reason: 'manual', at: record.at };
+      const replaced = c.sessions[record.provider], history = c.contextRollovers?.[record.provider]?.history || [];
+      const entry = { at: record.at, reason: 'manual', used: replaced?.contextUsage?.used ?? null, source: replaced?.contextUsage?.source || null, thresholdTokens: null, modeTarget: null, capacity: replaced?.contextUsage?.capacity ?? null,
+        previousSessionId: replaced?.id || null, previousTurns: replaced?.turns ?? null, previousSeed: replaced?.seed || null, seedBytes: null };
+      c.contextRollovers ||= {}; c.contextRollovers[record.provider] = { pending: true, reason: 'manual', at: record.at, history: c.contextRollovers[record.provider]?.pending ? history : [...history, entry].slice(-REFRESH_HISTORY) };
       delete c.sessions[record.provider];
       const milestone = { id: `compact-${record.seq}`, role: 'system', text: 'Context refresh scheduled. The next message to this agent starts a fresh session with a task brief. Chat history stays saved.', contextMilestone: true, createdAt: record.at, seq: record.seq };
       c.messages.push(milestone); c.messageById.set(milestone.id, milestone);
@@ -374,12 +377,21 @@ export class Broker extends EventEmitter {
     }
     if (record.type === 'submission') {
       if (record.context?.rollover) {
-        c.contextRollovers ||= {}; c.contextRollovers[record.provider] = { pending: true, reason: record.context.rollover.reason, at: record.at };
+        // The refresh history keeps what the session being replaced started with and how long it lasted, so repeated
+        // quick refreshes can be explained later (#85). Bounded; the journal keeps every record.
+        const replaced = c.sessions[record.provider], rollover = record.context.rollover, history = c.contextRollovers?.[record.provider]?.history || [];
+        const scheduled = c.contextRollovers?.[record.provider]?.pending && !replaced && history.length && history.at(-1).seedBytes === null;
+        const entry = scheduled ? { ...history.at(-1), seedBytes: record.context.bytes || 0, thresholdTokens: rollover.thresholdTokens ?? null, modeTarget: rollover.modeTarget ?? null }
+          : { at: record.at, reason: rollover.reason, used: rollover.used ?? null, source: rollover.source || null, thresholdTokens: rollover.thresholdTokens ?? null, modeTarget: rollover.modeTarget ?? null, capacity: rollover.capacity ?? null,
+            previousSessionId: replaced?.id || rollover.previousSessionId || null, previousTurns: replaced?.turns ?? null, previousSeed: replaced?.seed || null, seedBytes: record.context.bytes || 0 };
+        c.contextRollovers ||= {}; c.contextRollovers[record.provider] = { pending: true, reason: rollover.reason, at: record.at, history: [...(scheduled ? history.slice(0, -1) : history), entry].slice(-REFRESH_HISTORY) };
         const milestone = { id: `rollover-${record.id}`, role: 'system', text: 'Starting a fresh agent session with a task brief. Chat history stays saved.', contextMilestone: true, createdAt: record.at, seq: record.seq };
         c.messages.push(milestone); c.messageById.set(milestone.id, milestone);
       }
       if (!record.review && !record.local) {
         if (record.resetSession) delete c.sessions[record.provider];
+        // Turns count the messages a native session has received; a fresh session's first turn is counted when it is recorded.
+        if (c.sessions[record.provider]?.id && record.context?.sessionMode !== 'fresh') c.sessions[record.provider].turns = (c.sessions[record.provider].turns || 0) + 1;
         Object.assign(c, { provider: record.provider, mode: record.mode, approvalPolicy: record.approvalPolicy || 'ask', model: record.model, transport: record.transport, settingsRevision: record.seq });
         c.models[record.provider] = record.model; c.transports[record.provider] = record.transport;
       } else if (record.review) c.reviews = [{ ...record.review, id: record.id, startedAt: record.at, status: 'running', findings: [] }, ...c.reviews].slice(0, 10);
@@ -413,6 +425,7 @@ export class Broker extends EventEmitter {
       c.sessions[record.provider] = {
       id: record.id, cursor: c.sessions[record.provider]?.id === record.id ? c.sessions[record.provider].cursor : 0,
       managedContextVersion: record.managedContextVersion ?? (same ? previous.managedContextVersion : undefined),
+      ...(same ? { turns: previous.turns || 1, ...(previous.seed ? { seed: previous.seed } : {}) } : { turns: 1, ...(sessionSeed(c.activeRun?.context, record.at) ? { seed: sessionSeed(c.activeRun?.context, record.at) } : {}) }),
       ...(same && previous.contextEstimate ? { contextEstimate: previous.contextEstimate } : record.managedContextVersion ? { contextEstimate: { baseTokens: 0, bytes: c.activeRun?.context?.bytes || 0, observedAt: record.at } } : {}),
       ...(c.sessions[record.provider]?.id === record.id && c.sessions[record.provider]?.needsContextRefresh ? { needsContextRefresh: true } : {}),
       ...(c.sessions[record.provider]?.id === record.id && c.sessions[record.provider]?.contextUsage ? { contextUsage: c.sessions[record.provider].contextUsage } : {}),
@@ -433,7 +446,14 @@ export class Broker extends EventEmitter {
     if (record.type === 'run_end') { if (c.activeRun && !c.activeRun.reviewId) c.lastBuilder = c.activeRun.provider; c.lastRun = { ...c.activeRun, status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at }; c.activeRun = null; c.status = record.status; }
       // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
     if (record.type === 'submission' || record.type === 'run_start') {
-      c.runs = [...(c.runs || []), { id: record.id, ...(record.execution ? { execution: record.execution } : {}), ...(record.task ? { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation } : {}), ...(record.context?.scope ? { context: { scope: record.context.scope } } : {}), provider: record.provider, model: record.model || null, mode: record.mode || null, ...(record.review ? { review: record.review } : {}), ...(record.context?.verification ? { verification: record.context.verification } : {}), local: Boolean(record.local), prompt: String(record.message?.text || '').slice(0, 300), startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
+      const runText = String(record.message?.text || '');
+      const isContinuationRun = record.task?.relation === 'continuation' || /^\s*Continue the unfinished task from this shared conversation/i.test(runText);
+      const taskPrompt = isContinuationRun
+        ? ((c.runs || []).findLast(r => r.taskId === record.task?.id && r.prompt && !/^\s*Continue the unfinished task from this shared conversation/i.test(r.prompt))?.prompt
+           || c.messages?.find(m => m.role === 'user' && !/^\s*Continue the unfinished task from this shared conversation/i.test(m.text || '') && (m.runId === record.task?.id || c.taskOfRun?.[m.runId] === record.task?.id))?.text?.slice(0, 300)
+           || runText.slice(0, 300))
+        : runText.slice(0, 300);
+      c.runs = [...(c.runs || []), { id: record.id, ...(record.execution ? { execution: record.execution } : {}), ...(record.task ? { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation } : {}), ...(record.context?.scope ? { context: { scope: record.context.scope } } : {}), provider: record.provider, model: record.model || null, mode: record.mode || null, ...(record.review ? { review: record.review } : {}), ...(record.context?.verification ? { verification: record.context.verification } : {}), local: Boolean(record.local), prompt: taskPrompt, startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
         ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building', summary: 'Build first, then one read-only review of the selected folders.' } } : {}),
         ...(record.routing ? { routing: { mode: normalizeRoutingMode(record.routing.mode), tier: record.routing.tier || null } } : {}), ...(record.retryOf ? { retryOf: record.retryOf } : {}) }].slice(-50);
     }
@@ -558,7 +578,7 @@ export class Broker extends EventEmitter {
     const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     if (c.routingPending) { visible.status = 'running'; visible.activeRun = c.routingPending; visible.canAddToRun = false; }
-    const contextFor = provider => rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() });
+    const contextFor = provider => contextControlView(c, provider, rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() }));
 
     let messages = changed || c.messages;
     let earlier = undefined;
@@ -644,7 +664,14 @@ export class Broker extends EventEmitter {
     if (input.mode !== null && input.mode !== undefined && !ROUTING_MODES.includes(input.mode)) throw Object.assign(new Error('Choose Smart, Saver or Ultra.'), { status: 400 });
     const routing = input.mode === null || input.mode === undefined ? null : { mode: normalizeRoutingMode(input.mode), allowApi: input.allowApi === true, check: input.check === true };
     if (c.activeRun) throw Object.assign(new Error('Stop the current run before changing how agents are chosen.'), { status: 409 });
-    this.execution.setDefault(c, { ...this.execution.defaults(c), mode: routing ? 'flow' : 'normal', automation: undefined, routingMode: routing?.mode || 'smart' }, { expectedRevision: input.executionRevision });
+    const defaults = this.execution.defaults(c), active = this.execution.active(c);
+    this.execution.expect(defaults.revision, input.executionRevision);
+    if (!routing && active?.mode === 'flow') {
+      // Leaving Flow also revokes the previous task's automatic continuations and queued decisions.
+      this.execution.change(c, { taskId: active.taskId, revision: active.revision, action: 'takeover' });
+    } else {
+      this.execution.setDefault(c, { ...defaults, mode: routing ? 'flow' : 'normal', automation: undefined, routingMode: routing?.mode || 'smart', ...(!routing ? { override: null } : {}) }, { expectedRevision: input.executionRevision });
+    }
     this.record(c, { type: 'routing', routing });
     return this.view(c, viewOptions);
   }
@@ -841,7 +868,7 @@ export class Broker extends EventEmitter {
     const ordinaryFresh = Boolean(fresh || changedWorkspace || switchedAgent || !c.sessions[provider]?.id);
     const decision = rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: routing?.mode || c.routing?.mode || this.contextRouting(), model, effort });
     const rollover = !review && !local && decision.rollover
-      ? { ...decision, previousSessionId: c.sessions[provider]?.id || null, memory: milestoneMemory(c, { folders: this.workspaceFolders, text }) } : null;
+      ? { ...decision, previousSessionId: c.sessions[provider]?.id || null, previousTurns: c.sessions[provider]?.turns ?? null, memory: milestoneMemory(c, { folders: this.workspaceFolders, text }) } : null;
     const resetSession = Boolean(c.sessions[provider] && (changedWorkspace || switchedAgent || fresh || rollover));
     const effectiveFresh = ordinaryFresh || Boolean(rollover);
     const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
@@ -866,7 +893,7 @@ export class Broker extends EventEmitter {
         ...(local ? { local } : {}), ...(review ? { review } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
         ...(automaticReview ? { automaticReview } : {}),
-        message: { id: randomUUID(), role: 'user', text, ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), ...(routing.steppedDown ? { steppedDown: true } : {}), ...(routing.plannedHandoff ? { plannedHandoff: true } : {}), ...(routing.assessment ? { ratedBy: routing.assessment.source, ...(routing.assessment.ms ? { ratedMs: routing.assessment.ms } : {}) } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
+        message: { id: randomUUID(), role: 'user', text, ...(text === continuationRequest ? { continuation: true } : {}), ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), ...(routing.steppedDown ? { steppedDown: true } : {}), ...(routing.plannedHandoff ? { plannedHandoff: true } : {}), ...(routing.assessment ? { ratedBy: routing.assessment.source, ...(routing.assessment.ms ? { ratedMs: routing.assessment.ms } : {}) } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
     for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', `Using skill ${skill.name}: ${skill.reason}`, provider);
     // A message sent by hand takes the place of a wait for a reset.

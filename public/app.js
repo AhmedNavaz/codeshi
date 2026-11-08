@@ -920,6 +920,7 @@
     return entry;
   }
 
+  const isContinuationPrompt = message => message?.role === "user" && (message.continuation || /^\s*Continue the unfinished task from this shared conversation/i.test(message.text || ""));
   function renderMessage(message) {
     const moment = limitMoment(message);
     if (moment) return moment;
@@ -1097,7 +1098,7 @@
     // Each prompt starts a turn holding everything that answers it, so the prompt can stay at the top while its results scroll.
     // Inside a turn, each run is one thread under the agent's name: its replies and steps sit on one line, in order.
     const starts = [];
-    messages.forEach((message, index) => { if (message.role === "user" && !message.steer) starts.push(index); });
+    messages.forEach((message, index) => { if (message.role === "user" && !message.steer && !isContinuationPrompt(message)) starts.push(index); });
     const segments = starts[0] > 0 || (!starts.length && messages.length) ? [{ from: 0, to: starts[0] ?? messages.length, loose: true }] : [];
     starts.forEach((from, index) => segments.push({ from, to: starts[index + 1] ?? messages.length }));
     const lastSegmentOfRun = new Map();
@@ -1193,6 +1194,7 @@
       };
       for (let index = segment.from; index < segment.to; index++) {
         const message = messages[index];
+        if (isContinuationPrompt(message)) continue;
         if (message.role === "user" && !message.steer) {
           thread = null;
           place(messageNode(message, index));
@@ -1361,7 +1363,7 @@
       const unsupported = provider === "gemini" && (unsupportedRead || unsupportedFolders);
       return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usage: window.relayUsage?.snapshot?.(provider), allowedModels: state.conversation?.taskPolicy?.allowedModels?.[provider] || null, models: window.relayModelPicker?.models?.(provider) || [] };
     });
-    const previousRequest = state.conversation?.messages?.findLast(message => message.role === 'user' && !message.reviewId && !message.steer)?.text || state.conversation?.context?.goal || '';
+    const previousRequest = state.conversation?.messages?.findLast(message => message.role === 'user' && !message.reviewId && !message.steer && !isContinuationPrompt(message))?.text || state.conversation?.context?.goal || '';
     return window.relayRouting.route({ text, attachments, context: previousRequest, mode: mode || routing.mode, allowApi: routing?.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
   }
   async function setRouting(choice) {
@@ -1424,8 +1426,12 @@
     state.queueSignature = signature;
     $("prompt-queue-title").textContent = `Up next · ${queue.length}`;
     $("prompt-queue-paused").hidden = !c.queuePaused;
-    $("prompt-queue-paused").textContent = c.queuePaused ? `Paused: ${c.queuePaused.reason}` : "";
+    const pausedReason = c.queuePaused ? `Paused: ${c.queuePaused.reason}` : "";
+    $("prompt-queue-paused").textContent = pausedReason;
+    $("prompt-queue-paused").title = pausedReason;
     $("prompt-queue-toggle").textContent = c.queuePaused ? "Resume queue" : "Pause";
+    $("prompt-queue-toggle").title = c.queuePaused ? "Resume queue" : "Pause queue";
+    $("prompt-queue-toggle").setAttribute("aria-label", c.queuePaused ? "Resume queue" : "Pause queue");
     $("prompt-queue-toggle").disabled = Boolean(state.pending);
     const icon = (name, text, handler, disabled = false) => { const button = element("button", `icon-button queue-action queue-${name}`); button.type = "button"; button.title = text; button.setAttribute("aria-label", text); button.disabled = disabled || Boolean(state.pending); button.addEventListener("click", handler); return button; };
     $("prompt-queue-list").replaceChildren(...queue.map((item, index) => {
@@ -1485,7 +1491,11 @@
         cancel.addEventListener("click", () => { state.queueEditing = null; renderQueue(); });
         const buttons = element("div", "prompt-queue-edit-actions"); buttons.append(save, cancel);
         body.append(editor, controls, buttons);
-      } else body.append(element("p", "prompt-queue-text", item.text), element("span", "prompt-queue-meta", meta));
+      } else {
+        const metaSpan = element("span", "prompt-queue-meta", meta);
+        metaSpan.title = meta;
+        body.append(element("p", "prompt-queue-text", item.text), metaSpan);
+      }
       // A task's own queue stays a queue: tasks start from the main conversation.
       const folders = state.taskId || state.taskDraft ? [] : foldersFor(currentProject()), folderName = folder => folder.displayName || folder.name;
       const chosen = sidebarLevelFor() === "folder" ? folders.find(folder => folder.id === selectedFolderId()) : folders.length === 1 ? folders[0] : null;
@@ -1643,6 +1653,14 @@
     $('compact-reading-value').textContent = measured ? `${used.toLocaleString()} tokens` : '';
     $('compact-target-line').hidden = !(target > 0);
     $('compact-target-value').textContent = target > 0 ? `${target.toLocaleString()} tokens` : '';
+    // The seed is Codeshi's own first envelope to this session, an estimate kept apart from the provider's reading (#85).
+    const seed = context?.seed, seedTokens = Number.isFinite(seed?.estimatedTokens) ? seed.estimatedTokens : null;
+    $('compact-seed-line').hidden = seedTokens === null || ['native', 'preparing', 'ready'].includes(kind);
+    $('compact-seed-value').textContent = seedTokens === null ? '' : `about ${seedTokens.toLocaleString()} tokens${context.turns > 0 ? ` · ${context.turns === 1 ? '1 turn' : `${context.turns} turns`} so far` : ''}`;
+    $('compact-seed-line').title = seedTokens === null ? '' : `${(seed.bytes || 0).toLocaleString()} bytes of task brief and history sent when this session started, estimated at 4 bytes per token. Not the provider's reading.`;
+    const repeat = context?.repeatedRefresh, repeatNote = $('compact-repeat-note');
+    repeatNote.hidden = !repeat;
+    repeatNote.textContent = repeat ? `${repeat.current ? 'This fresh session is already near its target' : 'The last fresh session needed another refresh'}${repeat.count > 1 ? `, the ${{ 2: 'second', 3: 'third' }[repeat.count] || `${repeat.count}th`} time in a row` : ''}. ${repeat.explanation}` : '';
     meter.hidden = percent === null;
     meter.style.setProperty('--context-progress', String(percent ?? 0));
     for (const name of ['aria-valuemin', 'aria-valuemax', 'aria-valuenow', 'aria-valuetext']) meter.removeAttribute(name);
@@ -2542,7 +2560,8 @@
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", workbench: true, run: () => window.relayTerminal?.open() },
     { label: "Run: your dev servers, tests and scripts", workbench: true, run: () => window.relayPanel?.show("run") },
-    ...(window.relayDesktop?.openPreview ? [{ label: "Preview your app and point at what to change", run: () => { const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
+    { label: "Review your app: launch map and live services", run: () => window.relayProjectReview?.open() },
+    ...(window.relayDesktop?.openPreview ? [{ label: "Preview your app and point at what to change", run: () => { if (window.relayFlow?.isOn()) { window.relayProjectReview?.open(); return; } const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
     { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
     { label: "General: appearance, keep awake, handoff and updates", run: () => window.relaySettings?.open("general") },

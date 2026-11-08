@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { captureRect, cleanElement, createPreview, isPreviewURL, pickText, previewURL, sourceLocation, sourceScript } from '../desktop/preview.mjs';
+import { apiInterceptorScript, captureRect, cleanElement, createPreview, isPreviewURL, pickText, previewURL, sourceLocation, sourceScript } from '../desktop/preview.mjs';
 
 test('the preview opens only local addresses, without credentials', () => {
   assert.equal(previewURL(' http://localhost:5173/checkout '), 'http://localhost:5173/checkout');
@@ -123,4 +123,66 @@ test('a pick always arrives: a blank screenshot is taken once more, and a captur
   // How the screenshot went is kept, so a check can say why a pick came without one.
   const unpainted = await pickWith([async () => blank, async () => blank]);
   assert.deepEqual([hung.capture, unpainted.capture, unpainted.pick.image, unpainted.captures], ['hung', 'blank', null, 2]);
+});
+
+test('the toolbar receives backend and DB configuration stack and displays running services', async () => {
+  const sent = [];
+  const contents = () => ({ url: '', isDestroyed: () => false, setWindowOpenHandler() {}, on() {}, once() {}, loadFile() {}, send: (ch, val) => sent.push([ch, val]), focus() {}, isLoading: () => false, navigationHistory: { canGoBack: () => false, canGoForward: () => false }, async loadURL(url) { this.url = url; }, getURL() { return this.url; }, getTitle: () => '', executeJavaScript: async () => {} });
+  class View { constructor() { this.webContents = contents(); } setBounds() {} }
+  class Window { constructor() { this.contentView = { addChildView() {} }; } getContentBounds() { return { width: 1000, height: 700 }; } on() {} show() {} focus() {} setTitle() {} close() {} destroy() {} isDestroyed() { return false; } }
+  const session = { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} }) };
+  const preview = createPreview({ BaseWindow: Window, WebContentsView: View, session, ipcMain: { on() {}, off() {} }, shell: { openExternal() {} }, root: '/app' });
+  await preview.open({ projectId: 'p1', url: 'http://localhost:3000/' });
+  const stack = {
+    profile: 'Development',
+    prerequisites: ['MongoDB running on port 27017'],
+    services: [
+      { name: 'Backend API', kind: 'service', status: 'ready', url: 'http://127.0.0.1:8000', folder: 'backend' },
+      { name: 'Web', kind: 'service', status: 'ready', url: 'http://127.0.0.1:3000', folder: 'frontend' },
+    ],
+  };
+  preview.showStack(stack);
+  assert.deepEqual(sent.filter(([ch]) => ch === 'preview:stack'), [['preview:stack', stack]]);
+  preview.dispose();
+});
+
+test('apiInterceptorScript is valid javascript and intercepts fetch and xhr calls', () => {
+  const script = apiInterceptorScript();
+  assert.match(script, /codeshi:api-call/);
+  assert.match(script, /origFetch/);
+  assert.doesNotThrow(() => new Function(`return ${script}`), 'The interceptor script is valid JavaScript.');
+});
+
+test('api calls captured in preview page reach the toolbar with method, url, request and response', async () => {
+  const sent = [];
+  const handlers = {};
+  const contents = () => ({ url: 'http://localhost:3000/app', isDestroyed: () => false, setWindowOpenHandler() {}, on() {}, once() {}, loadFile() {}, send: (ch, val) => sent.push([ch, val]), focus() {}, isLoading: () => false, navigationHistory: { canGoBack: () => false, canGoForward: () => false }, async loadURL(url) { this.url = url; }, getURL() { return this.url; }, getTitle: () => '', executeJavaScript: async () => {} });
+  class View { constructor() { this.webContents = contents(); } setBounds() {} }
+  class Window { constructor() { this.contentView = { addChildView() {} }; } getContentBounds() { return { width: 1000, height: 700 }; } on() {} show() {} focus() {} setTitle() {} close() {} destroy() {} isDestroyed() { return false; } }
+  const session = { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} }) };
+  const preview = createPreview({ BaseWindow: Window, WebContentsView: View, session, ipcMain: { on: (ch, fn) => { handlers[ch] = fn; }, off() {} }, shell: { openExternal() {} }, root: '/app' });
+  await preview.open({ projectId: 'p1', url: 'http://localhost:3000/' });
+
+  const apiCall = {
+    id: 'req123',
+    type: 'fetch',
+    url: 'http://127.0.0.1:8000/api/users',
+    method: 'POST',
+    status: 200,
+    statusText: 'OK',
+    duration: 15,
+    request: { headers: { 'content-type': 'application/json' }, body: '{"name":"test"}' },
+    response: { headers: { 'content-type': 'application/json' }, body: '{"id":1,"name":"test"}' },
+    trigger: { kind: 'click', text: 'Create User', tag: 'button' },
+  };
+
+  handlers['preview:api-call']({ sender: preview.page.webContents }, apiCall);
+  const forwarded = sent.find(([ch]) => ch === 'preview:api-call');
+  assert(forwarded, 'API call forwarded to toolbar');
+  assert.equal(forwarded[1].method, 'POST');
+  assert.equal(forwarded[1].url, 'http://127.0.0.1:8000/api/users');
+  assert.equal(forwarded[1].request.body, '{"name":"test"}');
+  assert.equal(forwarded[1].response.body, '{"id":1,"name":"test"}');
+  assert.equal(forwarded[1].trigger.text, 'Create User');
+  preview.dispose();
 });

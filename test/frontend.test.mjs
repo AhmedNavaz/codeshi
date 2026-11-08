@@ -103,6 +103,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   async function fetch(url,options={}){
     const address=new URL(url,'http://127.0.0.1:4318');const request={path:address.pathname,projectId:address.searchParams.get('projectId'),params:Object.fromEntries(address.searchParams),method:options.method||'GET',body:options.body?JSON.parse(options.body):null};requests.push(request);
     const next=()=>{
+      if (request.path === '/api/commands/review') return response({ plan: null, run: null, error: null });
       if (request.path.startsWith('/api/commands')) {
         assert(projects.some(project=>project.id===request.projectId),'Project commands must name the current workspace.');
         let saved=commandStates.get(request.projectId); if(!saved){saved={commands:[],sessions:{}};commandStates.set(request.projectId,saved);}
@@ -283,7 +284,10 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
   if(automaticReviewUI)vm.runInContext(fs.readFileSync(new URL('../public/automatic-review.js',import.meta.url),'utf8'),context,{filename:'public/automatic-review.js'});
   if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
-  if(flowUI)vm.runInContext(fs.readFileSync(new URL('../public/flow.js',import.meta.url),'utf8'),context,{filename:'public/flow.js'});
+  if(flowUI) {
+    vm.runInContext(fs.readFileSync(new URL('../public/project-review.js',import.meta.url),'utf8'),context,{filename:'public/project-review.js'});
+    vm.runInContext(fs.readFileSync(new URL('../public/flow.js',import.meta.url),'utf8'),context,{filename:'public/flow.js'});
+  }
   if(alertsUI)vm.runInContext(fs.readFileSync(new URL('../public/alerts.js',import.meta.url),'utf8'),context,{filename:'public/alerts.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
   // A stand-in for xterm.js: it records what the page writes and lets a test type into it. With realTerminal, the page
@@ -1965,6 +1969,10 @@ test('the side panel tabs open their own panel, remember the choice, and old lin
 
 test('the Tasks panel shows the current task with its agents, numbers and tests, the tasks before it, and never shows unknown as zero', async () => {
   const { ledgerTask } = panelFixture();
+  ledgerTask.roles = {
+    builder: { runs: 1, workingMs: 145000, usage: { ...ledgerTask.usage, runs: 1 } },
+    assessment: { runs: 1, workingMs: 5000, usage: emptyUsage() },
+  };
   const ledger = prompts => ({ runs: [], quotaObservations: [], tasks: [
     { id: 'old', ...(prompts ? { prompt: 'Fix the header' } : {}), agents: { gemini: {} }, workingMs: 5000, runs: 1, handoffs: 0, retries: 0, reviews: 0, status: 'complete', verification: 'unverified', usage: emptyUsage() },
     { ...ledgerTask, ...(prompts ? {} : { prompt: undefined }) },
@@ -1985,6 +1993,8 @@ test('the Tasks panel shows the current task with its agents, numbers and tests,
   assert.deepEqual(card.querySelectorAll('.message-avatar').map(item => item.className), ['message-avatar claude', 'message-avatar codex']);
   assert.deepEqual(card.querySelectorAll('.stat').map(tile => tile.querySelector('strong').textContent), ['2m 30s', '1.3k', '2']);
   assert.match(card.querySelectorAll('.stat')[1].title, /1 of 2 runs reported/);
+  assert.match(card.textContent, /Routing assessment: 1 run · 5s · Usage not reported/);
+  assert.match(card.textContent, /These calls are included in the total/);
   assert.equal(card.querySelector('.task-limits'), null, 'No limits set, so no bars.');
   const earlier = ui.$('tasks-list').children;
   assert.equal(earlier.length, 1);
@@ -2308,13 +2318,43 @@ test('task limits show as bars on the current task, are set in a dialog, and a r
   ui.$('limits-open').click(); await flush();
   assert.equal(ui.$('limits-dialog').open, true);
   assert.equal(ui.$('limit-maxTokens').value, 5000);
+  assert.equal(ui.$('limit-models-claude').value, '');
+  ui.$('limit-models-claude').value = 'claude-sonnet, claude-haiku, claude-sonnet';
+  ui.$('limit-models-local').value = 'local-model';
   ui.$('limit-maxTokens').value = ''; ui.$('limit-agent-gemini').checked = false;
   ui.$('limits-form').dispatchEvent(new UIEvent('submit')); await flush();
   const saved = posted.at(-1);
   assert.equal(saved.action, 'policy');
   assert.equal(saved.policy.maxTokens, null, 'Empty means no limit.');
   assert.deepEqual([...saved.policy.allowedProviders].sort(), ['claude', 'codex', 'local']);
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.policy.allowedModels)), { claude: ['claude-sonnet', 'claude-haiku'], local: ['local-model'] });
   assert.equal(ui.$('limits-dialog').open, false);
+});
+
+test('task budget reports unknown allowance, enforcement and overshoot without offering a misleading extension', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, wide: true, setup: true }), { ledgerTask } = panelFixture();
+  const limits = { maxWorkingMinutes: null, maxTokens: 5000, maxSpendUSD: 1, maxHandoffs: 4, maxRetries: 3 };
+  const view = { policy: { ...limits, allowedModels: { codex: ['chosen-model'] } }, task: { taskId: 't1', limits, tokens: 6000, spendUSD: 1.25, workingMs: 0, handoffs: 0, retries: 0, runsWithPartialUsage: 1, runsWithoutCost: 1, enforcement: { spendCaps: { native: 1, reported: 2 }, activeSpendCaps: [] }, overages: { tokens: 1000, spendUSD: 0.25, workingMs: 0 }, exceeded: { limit: 'spendUsageUnknown', message: 'The remaining spending allowance is unknown.' } } };
+  const posted = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/budget') return response(view);
+    if (request.path === '/api/ledger') return response({ runs: [], tasks: [ledgerTask] });
+    if (/\/budget$/.test(request.path)) { posted.push(request.body); return response(view); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); ui.window.relayTasks.open(); await flush();
+  const card = ui.$('task-card');
+  assert.match(card.textContent, /partial tokens/);
+  assert.match(card.textContent, /spend is a lower bound/);
+  assert.match(card.textContent, /1 run with a native adapter cap, 2 checked through reported usage/);
+  assert.match(card.textContent, /Reported over limit: 1,000 tokens · \$0.2500 API spend/);
+  const action = card.querySelector('.limits-reached').querySelector('button');
+  assert.equal(action.textContent, 'Review limits'); action.click(); await flush();
+  assert.equal(ui.$('limits-dialog').open, true); assert.equal(posted.length, 0);
+  assert.equal(ui.$('limit-models-codex').value, 'chosen-model');
+  ui.$('limit-models-codex').value = '';
+  ui.$('limits-form').dispatchEvent(new UIEvent('submit')); await flush();
+  assert.equal(posted.at(-1).policy.allowedModels, null, 'Clearing restrictions explicitly returns to all models.');
 });
 
 test('what Full auto-approval allowed for Codex shows in the run, and a block by Read only names the setting', async () => {
@@ -2995,6 +3035,22 @@ test('compact details label the refresh signal honestly and update during work w
   assert.equal(ui.$('compact-reading-label').textContent, 'Last request input');
   assert.equal(ui.$('compact-target-value').textContent, '120,000 tokens');
   assert.match(ui.$('compact-confirm-note').textContent, /Recent activity allows a higher refresh target/);
+  assert.equal(ui.$('compact-seed-line').hidden, true, 'No seed is shown until a session records one.');
+  assert.equal(ui.$('compact-repeat-note').hidden, true);
+  // The seed is Codeshi's own first envelope, shown apart from the provider reading; a streak of quick refreshes is explained (#85).
+  Object.assign(c.contextControl, { seed: { bytes: 190000, estimatedTokens: 47500 }, turns: 1, repeatedRefresh: { count: 2, current: true, cause: 'large-seed', explanation: 'The task brief alone was about 47,500 tokens, 63% of the 75,000 tokens target.' } });
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('compact-seed-line').hidden, false);
+  assert.equal(ui.$('compact-seed-value').textContent, 'about 47,500 tokens · 1 turn so far');
+  assert.match(ui.$('compact-seed-line').title, /190,000 bytes.*Not the provider's reading/);
+  assert.equal(ui.$('compact-repeat-note').hidden, false);
+  assert.match(ui.$('compact-repeat-note').textContent, /^This fresh session is already near its target, the second time in a row\. The task brief alone was about 47,500 tokens/);
+  Object.assign(c.contextControl, { repeatedRefresh: { count: 1, current: false, cause: 'turn-growth', explanation: 'Growth.' } });
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('compact-repeat-note').textContent, 'The last fresh session needed another refresh. Growth.');
+  c.contextControl.repeatedRefresh = null; delete c.contextControl.seed;
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('compact-repeat-note').hidden, true); assert.equal(ui.$('compact-seed-line').hidden, true);
   c.contextControl.adaptive = false;
   await ui.window.relayUI.refresh();
   assert.doesNotMatch(ui.$('compact-confirm-note').textContent, /Recent activity/);
@@ -3283,6 +3339,24 @@ test('while work runs, a message joins the queue with the current settings, and 
   conversation.queuePaused={reason:'You stopped the run.'};await ui.window.relayUI.refresh();
   assert.equal(ui.$('prompt-queue-paused').hidden,false);assert.match(ui.$('prompt-queue-paused').textContent,/You stopped the run/);assert.equal(ui.$('prompt-queue-toggle').textContent,'Resume queue');
   ui.$('prompt-queue-toggle').click();await flush();assert.deepEqual(actions.at(-1),{action:'resume'});
+  // Long pause error messages retain toggle controls and populate tooltip (#140)
+  const longReason = "The next prompt could not start: Task authority changed. This pending decision was revoked; choose the next action manually.";
+  conversation.queuePaused = { reason: longReason };
+  await ui.window.relayUI.refresh();
+  assert.equal(ui.$('prompt-queue-paused').hidden, false);
+  assert.equal(ui.$('prompt-queue-paused').title, `Paused: ${longReason}`);
+  assert.match(ui.$('prompt-queue-paused').textContent, /Task authority changed/);
+  assert.equal(ui.$('prompt-queue-toggle').textContent, "Resume queue");
+  assert.equal(ui.$('prompt-queue-toggle').title, "Resume queue");
+  assert.equal(ui.$('prompt-queue-toggle').getAttribute("aria-label"), "Resume queue");
+  assert.equal(ui.$('prompt-queue-toggle').disabled, false);
+  const remainingItem = ui.$('prompt-queue-list').querySelector("li");
+  assert(remainingItem, "Queued item remains rendered");
+  const metaSpan = remainingItem.querySelector(".prompt-queue-meta");
+  assert(metaSpan, "Queue row metadata exists");
+  assert.match(metaSpan.title, /Codex/);
+  assert(remainingItem.querySelector(".prompt-queue-actions"), "Queue row action container exists");
+  assert(remainingItem.querySelector(".queue-edit"), "Edit action button exists");
 });
 
 test('a handoff offer names the destination, its billing and the task, needs charges confirmed separately, and a stale answer shows the fresh offer',async()=>{
@@ -4839,6 +4913,89 @@ test('Accounts connects through the provider flow, preserves a draft and shows f
 const flowBrowser = options => browser({ insights: true, agentsUI: true, layoutUI: true, rewindUI: true, flowUI: true, modelPickerUI: true, ...options });
 const flowText = (ui, id) => ui.$(`flow-card-${id}`).textContent.replace(/\s+/g, ' ');
 
+const reviewFixture = () => {
+  const service = { id: 'web', name: 'Web app', description: 'Review the frontend', folderId: 'frontend', folderName: 'Frontend', directory: '', command: 'npm run dev', kind: 'service', dependsOn: [], timeoutMs: 60000, ready: { url: 'http://localhost:3000/' } };
+  return { plan: { version: 1, revision: 'review-one', path: '.codeshi/preview.json', profiles: [{ id: 'dev', name: 'Development', services: [service], order: ['web'], preview: { service: 'web', url: 'http://localhost:3000/' } }] }, run: null, error: null };
+};
+
+test('Flow project review prepares in the background without changing or sending the chat draft', async () => {
+  const ui = await flowBrowser(), held = deferred(); let value = { plan: null, run: null, error: null };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/commands/review') return response(value);
+    if (request.path === '/api/commands/review/prepare') return held.promise;
+    return next();
+  });
+  ui.window.relayFlow.enter(); await flush();
+  ui.$('message-input').value = 'Keep my feedback';
+  ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === 'Prepare with agent').click(); await flush();
+  assert.equal(ui.$('message-input').value, 'Keep my feedback');
+  assert.match(flowText(ui, 'preview'), /Preparing your project review/);
+  assert.equal(ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === 'Preparing…').disabled, true);
+  assert.equal(ui.$('message-input').disabled, false, 'The main composer stays available.');
+  const request = ui.requests.find(request => request.path.endsWith('/review/prepare'));
+  assert.equal(request.projectId, 'project-one'); assert.equal(request.body.change, '');
+  assert.equal(typeof request.body.requestId, 'string');
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/messages')).length, 0);
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/review/start')).length, 0);
+  value = { ...value, preparation: { id: 'prepare-one', status: 'running' } };
+  held.resolve(response(value, 202)); await flush();
+  assert.match(flowText(ui, 'preview'), /Preparing your project review/);
+  value = { ...reviewFixture(), preparation: { id: 'prepare-one', status: 'ready' } };
+  await ui.window.relayProjectReview.refresh(); await flush();
+  assert.doesNotMatch(flowText(ui, 'preview'), /Preparing your project review/);
+  assert.match(flowText(ui, 'preview'), /Web app/);
+  assert.equal(ui.$('message-input').value, 'Keep my feedback');
+});
+
+test('Flow project review launches a bound profile, opens point-and-tell and prepares map changes in the background', async () => {
+  const ui = await flowBrowser({ previewUI: true }), value = reviewFixture();
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/commands/review') return response(value);
+    if (request.path === '/api/commands/review/prepare') { value.preparation = { id: 'prepare-update', status: 'running' }; return response(value, 202); }
+    if (request.path === '/api/commands/review/start') {
+      assert.equal(request.projectId, 'project-one'); assert.deepEqual(request.body, { revision: 'review-one', profileId: 'dev' });
+      value.run = { id: 'review-run', revision: 'review-one', profileId: 'dev', profileName: 'Development', status: 'ready', preview: value.plan.profiles[0].preview, steps: [{ ...value.plan.profiles[0].services[0], status: 'ready', session: { id: 'process-one', status: 'running', exitCode: null, output: '<script>not HTML</script>' } }] };
+      return response(value.run, 202);
+    }
+    if (request.path === '/api/commands/review/stop') { assert.equal(request.body.runId, 'review-run'); value.run.status = 'stopped'; value.run.preview = null; value.run.steps[0].session.status = 'stopped'; return response(value.run); }
+    return next();
+  });
+  await ui.window.relayProjectReview.refresh(); ui.window.relayFlow.enter(); await flush();
+  const cardButton = text => ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === text);
+  cardButton('Launch map').click(); await flush();
+  assert.equal(ui.$('project-review-dialog').open, true); assert.match(ui.$('project-review-dialog').textContent, /npm run dev/);
+  ui.$('project-review-dialog').querySelectorAll('button').find(button => button.textContent === 'Start review').click(); await flush();
+  assert.match(flowText(ui, 'preview'), /Ready/); assert.equal(cardButton('Start review').disabled, true);
+  cardButton('Open preview & point').click(); await flush();
+  assert.deepEqual(ui.previewOpens, [{ projectId: 'project-one', url: 'http://localhost:3000/' }]);
+  await ui.pickInPreview({ projectId: 'project-one', text: 'Change this heading', image: null }); await flush();
+  assert.match(ui.$('message-input').value, /Change this heading/);
+  assert.match(ui.$('project-review-dialog').textContent, /<script>not HTML<\/script>/, 'Logs are plain text.');
+  ui.$('project-review-request').value = 'Start a local database before the API';
+  ui.$('project-review-dialog').querySelectorAll('button').find(button => button.textContent === 'Ask agent to update').click(); await flush();
+  assert.equal(ui.$('project-review-dialog').open, false);
+  assert.match(ui.$('message-input').value, /Change this heading/); assert.doesNotMatch(ui.$('message-input').value, /Requested change/);
+  assert.equal(ui.requests.find(request => request.path.endsWith('/review/prepare')).body.change, 'Start a local database before the API');
+  cardButton('Stop review').click(); await flush(); assert.equal(cardButton('Stop review'), undefined);
+});
+
+test('Flow project review ignores a stale workspace response and retains Stop with an invalid changed map', async () => {
+  const ui = await flowBrowser({ moreProjects: true }), value = reviewFixture(), held = deferred(); let waiting = false;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/commands/review' && request.projectId === 'project-one') { waiting = true; return held.promise.then(() => response(value)); }
+    return next();
+  });
+  const refreshing = ui.window.relayProjectReview.refresh(); await flush(); assert.equal(waiting, true);
+  await ui.switchProject('project-two'); held.resolve(); await refreshing; await flush();
+  ui.window.relayFlow.enter(); await flush(); assert.doesNotMatch(flowText(ui, 'preview'), /Development/);
+  value.error = 'The map is invalid'; value.plan = null;
+  value.run = { id: 'existing', revision: 'old', profileId: 'dev', status: 'starting', steps: [] };
+  ui.setIntercept((request, next) => request.path === '/api/commands/review' ? response(value) : next());
+  await ui.window.relayProjectReview.refresh(); await flush();
+  assert.match(flowText(ui, 'preview'), /map is invalid/);
+  assert.equal(ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === 'Stop review').disabled, false);
+});
+
 test('limits stay out of the message box, in Normal and Flow, and stay in Plan usage', async () => {
   for (const file of ['index.html', 'insights.js', 'styles.css']) assert.doesNotMatch(fs.readFileSync(new URL(`../public/${file}`, import.meta.url), 'utf8'), /usage-chip/, `${file} has no usage chip.`);
   const ui = await flowBrowser({ usage: { codex: { provider: 'codex', available: true, windows: [{ id: 'primary', label: '5-hour', usedPercent: 20, resetsAt: null }] } } });
@@ -4852,6 +5009,16 @@ test('message box controls move to another line instead of shrinking until they 
   const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.composer-controls \{[^}]*flex-wrap: wrap/);
   assert.match(css, /@container composer \(max-width: 560px\) \{ \.composer-toolbar \{ flex-wrap: wrap;[^}]*\} \.composer-controls \{ display: contents; \} \}/, 'Narrow, the controls share lines with Send.');
+});
+
+test('prompt queue header and item controls remain visible and unclamped on long pause errors (#140)', () => {
+  const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.transcript-footer\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*calc\(100% - 24px\)/);
+  assert.match(css, /\.prompt-queue\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*100%/);
+  assert.match(css, /\.prompt-queue-head\s*\{[^}]*min-width:\s*0/);
+  assert.match(css, /(?:\.prompt-queue-head \.pill-button|#prompt-queue-toggle)[^{}]*\{[^}]*flex-shrink:\s*0/);
+  assert.match(css, /\.prompt-queue-meta\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.prompt-queue-actions\s*\{[^}]*flex-shrink:\s*0/);
 });
 
 test('a limit that has its own line keeps it, instead of adding a column that squeezes the row', () => {
@@ -4891,8 +5058,8 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
   assert.equal(shell.classList.contains('flow'), true);
   assert.equal(ui.$('agents-panel').hidden, true, 'The side panel steps aside.');
   assert.equal(ui.$('flow-left').hidden, false); assert.equal(ui.$('flow-right').hidden, false); assert.equal(ui.$('flow-strip').hidden, true, 'A wide window keeps the cards at the sides.');
-  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-card-working', 'flow-card-plans', 'flow-space']);
-  assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-card-next', 'flow-card-files', 'flow-connect']);
+  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-card-next', 'flow-card-plans', 'flow-space']);
+  assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-card-working', 'flow-card-files', 'flow-card-preview', 'flow-connect']);
   assert.equal(ui.$('toggle-flow').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('flow-status').hidden, false); assert.equal(ui.$('flow-status-text').textContent, 'Ready');
   assert.equal(ui.$('toggle-flow-label').textContent, 'Leave Flow'); assert.equal(ui.$('flow-brand').hidden, false); assert.equal(ui.$('flow-brand-workspace').textContent, 'Example workspace');
   assert.equal(ui.$('message-input').placeholder, 'What should we build next?', 'Flow has its own voice in the message box.');
@@ -5028,19 +5195,61 @@ test('Flow mode card polish: extra task indicators, multi-window quota glance, a
   assert.doesNotMatch(flowText(ui, 'working'), /Next message/);
 });
 
-test('Flow layout changes preserve backend routing authority; explicit mode choices remain in Agent settings', async () => {
+test('Flow turns routing on with Smart by default, keeps mode changes in Agent settings, and turns routing off on leaving', async () => {
   const ui = await flowBrowser(), chat = ui.canonical.get('project-one');
-  ui.setIntercept((request, next) => { if (request.path.endsWith('/routing')) { chat.routing = request.body.mode ? { mode: request.body.mode } : null; return response(clone(chat)); } return next(); });
+  const bodies = [];
+  ui.setIntercept((request, next) => { if (request.path.endsWith('/routing')) { bodies.push(request.body); chat.routing = request.body.mode ? { mode: request.body.mode, allowApi: request.body.allowApi, check: request.body.check } : null; return response(clone(chat)); } return next(); });
+  await ui.window.relayUI.refreshAccounts(); await flush();
+  assert.equal(chat.routing, undefined, 'The normal view has no routing.');
   ui.window.relayFlow.enter(); await flush();
-  assert.equal(ui.state().conversation.routing, undefined, 'Opening a view grants no execution authority.');
-  assert.equal(ui.requests.filter(request => request.path.endsWith('/routing')).length, 0);
-  await ui.window.relayUI.setRouting({ mode: 'saver', allowApi: false, check: false }); await flush();
-  assert.equal(ui.state().conversation.routing.mode, 'saver');
+  assert.deepEqual(chat.routing, { mode: 'smart', allowApi: false, check: false }, 'Entering Flow turns routing on, Smart at first: Flow has no manual mode.');
+  assert.equal(bodies.at(-1).executionRevision, 0, 'The routing change carries the new-work policy revision.');
+  const card = ui.$('flow-card-working');
+  assert.equal(card.querySelector('.flow-mode').dataset.mode, 'smart');
+  assert.match(flowText(ui, 'working'), /Routing\s*Smart\s*Codeshi matches the model and effort to each message/);
+  assert.doesNotMatch(flowText(ui, 'working'), /Off|Normal execution/);
+  ui.findButton('Agent settings').click(); await flush();
+  assert.equal(ui.$('agents-routing').hidden, false); assert.equal(ui.$('agents-routing-note').hidden, true);
+  const ultra = ui.$('routing-options').querySelectorAll('.routing-option').find(row => row.dataset.mode === 'ultra');
+  ultra.click(); await flush();
+  assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Agent settings change the mode without changing billing or tests.');
+  assert.equal(card.querySelector('.flow-mode').dataset.mode, 'ultra');
+  ui.$('flow-detail-close').click(); await flush();
   ui.window.relayFlow.leave(); await flush();
-  assert.equal(ui.state().conversation.routing.mode, 'saver', 'Closing a view does not revoke task authority.');
+  assert.equal(chat.routing, null, 'Leaving Flow turns routing off: the normal view picks by hand.');
+  assert.equal(ui.$('agents-routing').hidden, true); assert.equal(ui.$('agents-routing-note').hidden, false);
   ui.window.relayFlow.enter(); await flush();
-  assert.equal(ui.state().conversation.routing.mode, 'saver');
-  assert.equal(ui.requests.filter(request => request.path.endsWith('/routing')).length, 1);
+  assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Flow remembers the mode this workspace used last.');
+  const fresh = await flowBrowser();
+  fresh.canonical.get('project-one').routing = { mode: 'saver', allowApi: false, check: false };
+  await fresh.window.relayUI.refresh(); await flush();
+  assert.equal(fresh.canonical.get('project-one').routing, null, 'Routing found on outside Flow is turned off at the next idle moment.');
+});
+
+test('leaving Flow restores manual task control and repairs saved Flow authority without routing', async () => {
+  for (const alreadyOutside of [false, true]) {
+    const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), changes = [];
+    if (!alreadyOutside) { ui.window.relayFlow.enter(); await flush(); }
+    chat.execution = { defaults: { mode: 'normal', revision: 4 }, active: { taskId: 'previous-task', mode: 'flow', revision: 2 } };
+    chat.routing = alreadyOutside ? null : { mode: 'smart' };
+    ui.setIntercept((request, next) => {
+      if (request.path.endsWith('/routing') && request.body.mode === null) {
+        changes.push(request.body);
+        chat.routing = null;
+        chat.execution = { defaults: { mode: 'normal', revision: 5 }, active: { taskId: 'previous-task', mode: 'normal', revision: 3 } };
+        return response(clone(chat));
+      }
+      return next();
+    });
+    await ui.window.relayUI.refresh(); await flush();
+    if (!alreadyOutside) { ui.window.relayFlow.leave(); await flush(); }
+    assert.deepEqual(changes, [{ mode: null, executionRevision: 4 }], 'Normal explicitly releases previous task authority even if routing was already off.');
+    assert.equal(ui.$('app-shell').classList.contains('flow'), false);
+    const strip = ui.document.querySelector('.execution-policy-strip');
+    assert.match(strip.textContent, /Task: Normal · New work: Normal/);
+    assert.equal(strip.querySelector('button').hidden, true, 'Manual control is already the default; no takeover action remains.');
+    assert.equal(ui.$('agents-routing').hidden, true);
+  }
 });
 
 test('a narrow window keeps the Flow cards out of the chat as chips, and one opens at a time', async () => {
@@ -5052,16 +5261,16 @@ test('a narrow window keeps the Flow cards out of the chat as chips, and one ope
   // Every media query matches here, so the window counts as narrow: chips under the header, no side columns.
   assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-strip').hidden, false);
   const chips = () => ui.$('flow-strip').querySelectorAll('.flow-chip').map(chip => chip.textContent);
-  assert.deepEqual(chips(), ['Ultra', 'Plans', '1 queued message', 'Files', 'Your space'], 'Every card has a chip, with preferences available separately.');
-  ui.$('flow-strip').querySelectorAll('.flow-chip')[2].click(); await flush();
+  assert.deepEqual(chips(), ['1 queued message', 'Plans', 'Ultra', 'Files', 'Run and review your project', 'Your space'], 'Every card has a chip, with preferences available separately.');
+  ui.$('flow-strip').querySelectorAll('.flow-chip')[0].click(); await flush();
   assert.equal(ui.$('flow-peek').hidden, false); assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-next'); assert.equal(ui.document.activeElement, ui.$('flow-peek-close'));
-  assert.equal(ui.$('flow-strip').querySelectorAll('.flow-chip')[2].getAttribute('aria-pressed'), 'true');
+  assert.equal(ui.$('flow-strip').querySelectorAll('.flow-chip')[0].getAttribute('aria-pressed'), 'true');
   ui.$('flow-strip').querySelectorAll('.flow-chip')[1].click(); await flush();
   assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-plans', 'Another chip swaps the open card.');
   ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
-  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children.map(card => card.id).join(','), 'flow-card-next,flow-card-files,flow-connect', 'The cards go back to their sides.');
+  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children.map(card => card.id).join(','), 'flow-card-working,flow-card-files,flow-card-preview,flow-connect', 'The cards go back to their sides.');
   assert.equal(ui.$('flow-card-working').querySelectorAll('button').some(item => /hide/i.test(item.getAttribute('aria-label') || '')), false, 'Cards have no close button.');
-  assert.equal(ui.window.relayFlow.cards().length, 4);
+  assert.equal(ui.window.relayFlow.cards().length, 5);
 });
 
 test('Flow details use a dismissible sheet and restore the workbench when leaving', async () => {

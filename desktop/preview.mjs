@@ -116,8 +116,113 @@ export function sourceScript(nonce) {
   })()`;
 }
 
+export function apiInterceptorScript() {
+  return `(() => {
+    if (window.__codeshi_api_installed__) return;
+    window.__codeshi_api_installed__ = true;
+    let lastClick = null;
+    window.addEventListener("click", event => {
+      const el = event.target;
+      if (!el || el.nodeType !== 1) return;
+      const text = (el.innerText || el.textContent || el.value || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim().slice(0, 50);
+      lastClick = { tag: el.tagName.toLowerCase(), text, time: Date.now() };
+    }, true);
+    function clip(val, max = 32768) {
+      if (typeof val !== "string") return null;
+      return val.length > max ? val.slice(0, max) + "… [truncated]" : val;
+    }
+    function report(call) {
+      window.postMessage({ type: "codeshi:api-call", call }, "*");
+    }
+    const origFetch = window.fetch;
+    if (typeof origFetch === "function") {
+      window.fetch = async function(...args) {
+        const start = Date.now(), id = Math.random().toString(36).slice(2, 10);
+        let url = "", method = "GET", reqHeaders = {}, reqBody = null;
+        try {
+          const input = args[0], init = args[1] || {};
+          if (typeof input === "string") url = input;
+          else if (input instanceof URL) url = input.href;
+          else if (input && typeof input === "object") { url = input.url || ""; method = input.method || "GET"; }
+          if (init.method) method = init.method;
+          if (init.headers) {
+            if (init.headers instanceof Headers) init.headers.forEach((v, k) => { reqHeaders[k] = v; });
+            else if (typeof init.headers === "object") reqHeaders = { ...init.headers };
+          }
+          if (init.body) {
+            if (typeof init.body === "string") reqBody = init.body;
+            else if (init.body instanceof URLSearchParams) reqBody = init.body.toString();
+            else if (init.body instanceof FormData) {
+              const entries = [];
+              init.body.forEach((v, k) => entries.push(k + "=" + (typeof v === "string" ? v : "[File]")));
+              reqBody = entries.join("&");
+            } else {
+              try { reqBody = JSON.stringify(init.body); } catch { reqBody = "[Object]"; }
+            }
+          }
+          try { url = new URL(url, location.href).href; } catch {}
+        } catch {}
+        const trigger = (lastClick && (start - lastClick.time < 2000)) ? { ...lastClick } : null;
+        try {
+          const response = await origFetch.apply(this, args);
+          const duration = Date.now() - start;
+          let resBody = "";
+          try { resBody = await response.clone().text(); } catch {}
+          const resHeaders = {};
+          try { response.headers.forEach((v, k) => { resHeaders[k] = v; }); } catch {}
+          report({ id, type: "fetch", url, method: method.toUpperCase(), status: response.status, statusText: response.statusText, duration, request: { headers: reqHeaders, body: clip(reqBody) }, response: { headers: resHeaders, body: clip(resBody) }, trigger, time: new Date().toISOString() });
+          return response;
+        } catch (err) {
+          const duration = Date.now() - start;
+          report({ id, type: "fetch", url, method: method.toUpperCase(), status: 0, statusText: "Network Error", duration, request: { headers: reqHeaders, body: clip(reqBody) }, response: { headers: {}, body: String(err?.message || err) }, error: String(err?.message || err), trigger, time: new Date().toISOString() });
+          throw err;
+        }
+      };
+    }
+    const OrigXHR = window.XMLHttpRequest;
+    if (OrigXHR) {
+      function WrappedXHR() {
+        const xhr = new OrigXHR();
+        let method = "GET", url = "", reqHeaders = {}, reqBody = null, start = 0;
+        const id = Math.random().toString(36).slice(2, 10);
+        const origOpen = xhr.open;
+        xhr.open = function(m, u, ...rest) {
+          method = m || "GET"; url = u || "";
+          try { url = new URL(url, location.href).href; } catch {}
+          return origOpen.call(xhr, m, u, ...rest);
+        };
+        const origSetHeader = xhr.setRequestHeader;
+        xhr.setRequestHeader = function(k, v) { reqHeaders[k] = v; return origSetHeader.call(xhr, k, v); };
+        const origSend = xhr.send;
+        xhr.send = function(body) {
+          start = Date.now();
+          const trigger = (lastClick && (start - lastClick.time < 2000)) ? { ...lastClick } : null;
+          if (typeof body === "string") reqBody = body;
+          else if (body instanceof URLSearchParams) reqBody = body.toString();
+          else if (body) reqBody = "[Payload]";
+          xhr.addEventListener("loadend", () => {
+            const duration = Date.now() - start, resHeaders = {};
+            try {
+              (xhr.getAllResponseHeaders() || "").split(/\\r?\\n/).forEach(line => {
+                const colon = line.indexOf(":");
+                if (colon > 0) resHeaders[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
+              });
+            } catch {}
+            report({ id, type: "xhr", url, method: method.toUpperCase(), status: xhr.status, statusText: xhr.statusText, duration, request: { headers: reqHeaders, body: clip(reqBody) }, response: { headers: resHeaders, body: clip(xhr.responseText) }, trigger, time: new Date().toISOString() });
+          });
+          return origSend.call(xhr, body);
+        };
+        return xhr;
+      }
+      WrappedXHR.prototype = OrigXHR.prototype;
+      window.XMLHttpRequest = WrappedXHR;
+    }
+  })()`;
+}
+
 export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#1c1a18', captureWait = 1500 }) {
-  let win = null, toolbar = null, page = null, projectId = null, workspace = '', picking = false, pickCount = 0, capture = 'none';
+  let win = null, toolbar = null, page = null, projectId = null, workspace = '', picking = false, pickCount = 0, capture = 'none', currentToolbarHeight = toolbarHeight, lastStack = null;
+  const apiCalls = [];
   const previewSession = session.fromPartition(PREVIEW_PARTITION);
   previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   previewSession.setPermissionCheckHandler(() => false);
@@ -133,13 +238,14 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   function sync() {
     const value = state();
     toToolbar('preview:state', value);
+    if (lastStack) toToolbar('preview:stack', lastStack);
     if (win && !win.isDestroyed()) { let host = ''; try { host = new URL(value.url).host; } catch { /* Not loaded yet. */ } win.setTitle(host ? `Preview · ${host}` : 'Preview'); }
   }
   function layout() {
     if (!win || win.isDestroyed()) return;
     const { width, height } = win.getContentBounds();
-    toolbar.setBounds({ x: 0, y: 0, width, height: toolbarHeight });
-    page.setBounds({ x: 0, y: toolbarHeight, width, height: Math.max(0, height - toolbarHeight) });
+    toolbar.setBounds({ x: 0, y: 0, width, height: currentToolbarHeight });
+    page.setBounds({ x: 0, y: currentToolbarHeight, width, height: Math.max(0, height - currentToolbarHeight) });
   }
   function create() {
     win = new BaseWindow({ width: 1180, height: 820, minWidth: 480, minHeight: 320, title: 'Preview', backgroundColor: background() });
@@ -151,6 +257,9 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     toolbar.webContents.loadFile(path.join(root, 'desktop', 'preview-toolbar.html'));
     toolbar.webContents.once('did-finish-load', sync);
     const contents = page.webContents;
+    const injectInterceptor = () => { if (alive(page)) page.webContents.executeJavaScript(apiInterceptorScript()).catch(() => {}); };
+    contents.on('did-start-navigation', injectInterceptor);
+    contents.on('did-finish-load', injectInterceptor);
     // Local addresses stay in the preview; https links open in the browser; nothing opens a window.
     contents.setWindowOpenHandler(({ url }) => { if (isPreviewURL(url)) contents.loadURL(url); else if (/^https:\/\//i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
     const guard = (event, url) => { if (isPreviewURL(url)) return; event.preventDefault(); if (/^https:\/\//i.test(url)) shell.openExternal(url); };
@@ -163,7 +272,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   }
   async function open({ projectId: id = null, url, workspace: name = '' }) {
     const href = previewURL(url);
-    projectId = id; workspace = String(name || '').slice(0, 120); picking = false;
+    projectId = id; workspace = String(name || '').slice(0, 120); picking = false; currentToolbarHeight = toolbarHeight;
     if (!win || win.isDestroyed()) create();
     win.show(); win.focus();
     await page.webContents.loadURL(href).catch(() => {});
@@ -211,13 +320,49 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     else if (action === 'open-external' && isPreviewURL(contents.getURL())) shell.openExternal(contents.getURL());
     else if (action === 'navigate') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch (error) { toToolbar('preview:error', error.message); } }
     else if (action === 'focus-app') onPick({ projectId, focus: true });
+    else if (action === 'expand-drawer') { currentToolbarHeight = Math.max(toolbarHeight, Math.min(600, Number(value?.height) || 320)); layout(); }
+    else if (action === 'collapse-drawer') { currentToolbarHeight = toolbarHeight; layout(); }
+    else if (action === 'navigate-preview') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch {} }
   };
   const onPicked = (event, pick) => { if (!own(event, page) || !picking) return; picking = false; sync(); finish(pick).catch(error => toToolbar('preview:error', `The element could not be picked: ${error.message}`)); };
   const onCancelled = event => { if (own(event, page)) { picking = false; sync(); } };
   ipcMain.on('preview:toolbar', onToolbar); ipcMain.on('preview:picked', onPicked); ipcMain.on('preview:pick-cancelled', onCancelled);
+  const onApiCall = (event, call) => {
+    if (!own(event, page) || !call) return;
+    const item = {
+      id: String(call.id || Math.random().toString(36).slice(2, 10)),
+      type: call.type === 'xhr' ? 'XHR' : 'Fetch',
+      url: String(call.url || '').slice(0, 2000),
+      method: String(call.method || 'GET').slice(0, 10).toUpperCase(),
+      status: Number.isInteger(call.status) ? call.status : 0,
+      statusText: String(call.statusText || '').slice(0, 50),
+      duration: Math.max(0, Number(call.duration) || 0),
+      request: {
+        headers: call.request?.headers && typeof call.request.headers === 'object' ? call.request.headers : {},
+        body: typeof call.request?.body === 'string' ? call.request.body.slice(0, 65536) : null,
+      },
+      response: {
+        headers: call.response?.headers && typeof call.response.headers === 'object' ? call.response.headers : {},
+        body: typeof call.response?.body === 'string' ? call.response.body.slice(0, 65536) : null,
+      },
+      error: call.error ? String(call.error).slice(0, 500) : null,
+      trigger: call.trigger ? { kind: 'click', text: String(call.trigger.text || '').slice(0, 60), tag: String(call.trigger.tag || '').slice(0, 30) } : null,
+      time: call.time || new Date().toISOString(),
+    };
+    if (apiCalls.length >= 100) apiCalls.shift();
+    apiCalls.push(item);
+    toToolbar('preview:api-call', item);
+  };
+  ipcMain.on('preview:api-call', onApiCall);
+
 
   // Shows the latest edit in the previewed workspace in the trusted toolbar, never in the page: a file name and line counts only.
   let lastEdit = null;
+  function showStack(value) {
+    lastStack = value;
+    toToolbar('preview:stack', value);
+  }
+
   function showEdit(value) {
     const clean = value?.path ? { path: String(value.path).slice(-200), added: Math.max(0, Number(value.added) || 0), removed: Math.max(0, Number(value.removed) || 0) } : null;
     if (JSON.stringify(clean) === JSON.stringify(lastEdit)) return;
@@ -225,9 +370,9 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   }
 
   return {
-    showEdit, get projectId() { return alive(toolbar) ? projectId : null; },
+    showEdit, showStack, get projectId() { return alive(toolbar) ? projectId : null; },
     open, setPicking, close: () => { if (win && !win.isDestroyed()) win.close(); },
-    dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); if (win && !win.isDestroyed()) win.destroy(); win = null; },
+    dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); ipcMain.off('preview:api-call', onApiCall); if (win && !win.isDestroyed()) win.destroy(); win = null; },
     get page() { return page; }, get picking() { return picking; },
     // How the last pick's screenshot went: captured, blank, hung, or none when the pick had no area.
     get lastCapture() { return capture; },

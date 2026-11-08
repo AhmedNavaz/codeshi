@@ -25,12 +25,13 @@
     { mode: 'ultra', name: 'Ultra', does: 'Codeshi uses the strongest models and deepest reasoning first, stepping down one tier only when needed, and preserves task continuity before handing off.' },
   ];
   const canonicalMode = mode => window.relayRouting?.normalizeMode?.(mode) || mode || null;
-  // The four cards, always present: each has a job, so none can be closed.
+  // The cards, always present: each has a job, so none can be closed.
   const CARDS = [
-    { id: 'working', title: 'How it’s working now', side: left },
+    { id: 'next', title: 'What’s next', side: left },
     { id: 'plans', title: 'What’s left on your plans', side: left },
-    { id: 'next', title: 'What’s next', side: right },
+    { id: 'working', title: 'How it’s working now', side: right },
     { id: 'files', title: 'Files changed', side: right },
+    { id: 'preview', title: 'Run and review your project', side: right },
   ];
   let on = false, saved = null, testingPending = false, peeking = null, scheduled = false, ticker = null;
   let checkingMode = false, transitioning = false, restored = false;
@@ -56,6 +57,26 @@
   let routingPending = false, routingReleasing = false;
   function rememberRouting() { const current = routing(), id = api.getState().projectId; if (current && id) write(ROUTING_KEY(id), JSON.stringify({ mode: canonicalMode(current.mode), allowApi: current.allowApi === true, check: current.check === true })); }
   function savedRouting(id) { try { const saved = JSON.parse(read(ROUTING_KEY(id)) || 'null'), mode = canonicalMode(saved?.mode); return saved && modes.some(option => option.mode === mode) ? { ...saved, mode } : null; } catch { return null; } }
+  // Flow has no manual mode: entering turns routing on with the mode this workspace last used in Flow, or Smart.
+  async function ensureRouting() {
+    if (!on || routing() || routingPending || !api.getState().projectId) return;
+    const choice = savedRouting(api.getState().projectId) || { mode: 'smart', allowApi: false, check: false };
+    routingPending = true; schedule();
+    try { await api.setRouting({ mode: choice.mode, allowApi: choice.allowApi === true, check: choice.check === true }); }
+    catch (error) { api.showNotice?.(`Flow could not turn routing on. ${error.message}`); }
+    finally { routingPending = false; schedule(); }
+  }
+  const needsManualControl = () => {
+    const execution = api.getState().conversation?.execution;
+    return Boolean(routing() || execution?.defaults?.mode === 'flow' || execution?.active?.mode === 'flow');
+  };
+  // Outside Flow routing and task automation are off, including tasks saved before this behavior was enforced.
+  async function releaseRouting() {
+    if (!needsManualControl() || routingReleasing) return;
+    routingReleasing = true; rememberRouting();
+    try { await api.setRouting({ mode: null }); } catch { /* Tried again when the workspace is idle. */ }
+    finally { routingReleasing = false; schedule(); }
+  }
   const sidePanels = ['agents', 'git', 'brief', 'tasks', 'timeline'];
   const openSidePanel = () => sidePanels.find(name => $(`${name}-panel`) && !$(`${name}-panel`).hidden) || null;
   const detail = $('flow-detail'), detailBody = $('flow-detail-body');
@@ -151,7 +172,7 @@
   const cards = new Map(CARDS.map(card => {
     const element = node('section', 'flow-card'), head = node('div', 'flow-card-head'), title = node('h2', undefined, card.title), body = node('div', 'flow-card-body'), foot = node('div', 'flow-card-foot');
     element.id = `flow-card-${card.id}`; title.id = `flow-card-${card.id}-title`; element.setAttribute('aria-labelledby', title.id);
-    head.append(title); element.append(head, body, foot);
+    if (card.hidden) element.hidden = true; head.append(title); element.append(head, body, foot);
     return [card.id, { ...card, element, body, foot, signature: null }];
   }));
   // Quiet utility areas anchor the two rails, separate from the live task cards.
@@ -200,7 +221,7 @@
   // message would do, and an inline testing preference. Routing changes live in Agent settings.
   function modeSentence(current) {
     const mode = canonicalMode(current?.mode), option = modes.find(item => item.mode === mode), extras = [];
-    if (!option) return routingPending ? 'Turning routing on…' : 'Normal execution. Choose Smart, Saver or Ultra to delegate new tasks.';
+    if (!option) return routingPending ? 'Turning routing on…' : 'Routing is off. Flow turns it on when the workspace is idle.';
     if (current?.allowApi) extras.push('Agents billed by use can be chosen.');
     if (current?.check) extras.push(api.getState().status?.verificationCadence === 'review-first' ? 'Routine automatic tests wait while you review. A selected build/review workflow still checks.' : 'After a run changes files, your tests run; if they fail, it tries once more, one step up.');
     return [option.does, ...extras].join(' ');
@@ -385,7 +406,7 @@
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
     const selectTask = id => window.relayTaskThreads.select(id).catch(error => api.showNotice?.(error.message));
-    const others = tasks.filter(task => task.id !== state.taskId && !['integrated', 'kept', 'discarded', 'cancelled', 'lost', 'detached'].includes(task.status) && (task.conversationId || task.status === 'waiting'));
+    const others = tasks.filter(task => task.purpose !== 'project-review' && task.id !== state.taskId && !['integrated', 'kept', 'discarded', 'cancelled', 'lost', 'detached'].includes(task.status) && (task.conversationId || task.status === 'waiting'));
     if (!steps.length && !queue.length) body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : running ? `${agentName(run?.provider, run?.connection === 'local')} is working. Its plan appears here as it makes one.` : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
     if (steps.length) {
       const done = steps.filter(step => step.status === 'done').length, current = currentStep(steps);
@@ -461,7 +482,7 @@
     const total = rows.filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0);
     body.append(node('p', 'flow-lead', `${plural(total, 'file')} changed, across ${plural(rows.length, 'run')}.`));
     const list = node('ul', 'flow-runs');
-    for (const row of rows.slice(0, 6)) {
+    for (const row of rows.slice(0, 3)) {
       const item = node('li', 'flow-run');
       item.append(node('span', 'flow-run-title', row.undone ? 'Changes undone' : `${plural(row.files, 'file')} changed`));
       item.append(node('span', 'flow-run-meta', [agentName(row.run?.provider, row.run?.local), when(row.run?.startedAt)].filter(Boolean).join(' · ')));
@@ -471,7 +492,7 @@
     }
     body.append(list);
   }
-  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, files: renderFiles };
+  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, files: renderFiles, preview: card => window.relayProjectReview?.render(card) };
 
   // ---- Live status in the working card. Remote access and Settings sit below it; no footer is needed.
   const phaseWords = { starting: 'starting', probing: 'checking usage', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
@@ -510,6 +531,7 @@
   // ---- A narrow window: the cards leave the sides and become a row of chips under the header; one opens at a time.
   function chipText(id) {
     const state = api.getState();
+    if (id === 'preview') return window.relayProjectReview?.label() || 'Run and review your project';
     if (id === 'working') return modes.find(item => item.mode === canonicalMode(routing()?.mode))?.name || 'Routing';
     if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
     if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || []; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }
@@ -518,7 +540,7 @@
   }
   function renderStrip() {
     if (strip.hidden) return;
-    strip.replaceChildren(...CARDS.map(card => {
+    strip.replaceChildren(...CARDS.filter(card => !card.hidden).map(card => {
       const chip = button('flow-chip', chipText(card.id), () => peekCard(card.id));
       chip.setAttribute('aria-pressed', String(peeking === card.id)); chip.setAttribute('aria-label', `${card.title}: ${chipText(card.id)}`);
       return chip;
@@ -566,9 +588,9 @@
         saved = { panel: openSidePanel(), bottom: window.relayPanel?.isOpen?.() ? window.relayPanel.active() : null };
         window.relayAgents?.close?.(); window.relayGit?.close?.(); window.relayBrief?.close?.(); window.relayTasks?.close?.(); window.relayTimeline?.close?.(); window.relayReviews?.closePanel?.();
         if (saved.bottom) window.relayPanel?.hide?.();
-        on = true; shell.classList.add('flow'); liftHeader(); moveControls(); place(); tick();
+        on = true; shell.classList.add('flow'); liftHeader(); moveControls(); place(); tick(); ensureRouting();
       } else {
-        on = false; closeDetail(); closePeek(); window.relayPanel?.hide?.();
+        on = false; closeDetail(); closePeek(); window.relayPanel?.hide?.(); releaseRouting();
         clearTimeout(ticker); ticker = null;
         const previous = saved; saved = null;
         shell.classList.remove('flow'); restoreControls(); dropHeader();
@@ -577,7 +599,7 @@
       }
       if (remember) write(KEY, on ? 'on' : 'off');
       render(); modeChanged();
-      api.announce?.(on ? 'Flow on. Your routing, permissions and handoff settings stay as selected.' : 'Flow off.');
+      api.announce?.(on ? 'Flow on. Codeshi chooses the agent and model.' : 'Flow off. Manual control restored.');
       return true;
     }, wanted, () => { transitioning = false; render(); modeChanged(); });
   }
@@ -632,6 +654,7 @@
     if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeDetail();
   });
   window.addEventListener('relay-side-panel', scheduleDetail);
+  window.addEventListener('relay-project-review', schedule);
   if (typeof MutationObserver === 'function') {
     const observer = new MutationObserver(scheduleDetail);
     for (const name of [...sidePanels, 'review']) if ($(`${name}-panel`)) observer.observe($(`${name}-panel`), { attributes: true, attributeFilter: ['hidden'] });
@@ -644,9 +667,10 @@
     const has = Boolean(api.getState().projectId);
     if (has && api.getState().ready && !restored) { restored = true; if (!on && read(KEY) === 'on' && !lockReason()) changeMode(true, false); }
     if (!has && on && !transitioning) applyMode(false, false, null, true);
-    // Layout restoration only remembers display preferences; authority comes from the task policy.
+    // Routing follows the view: on in Flow, off outside it, put right at the next idle moment if something else changed it.
     const idle = has && api.getState().ready && !transitioning && !checkingMode && !api.isRunning();
-    if (idle && on && routing()) rememberRouting();
+    if (idle && on) { if (routing()) rememberRouting(); else ensureRouting(); }
+    else if (idle && !on && needsManualControl()) releaseRouting();
     schedule();
   });
   for (const type of ['relay-account', 'relay-billing']) window.addEventListener(type, schedule);

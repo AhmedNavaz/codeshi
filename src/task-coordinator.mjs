@@ -43,7 +43,7 @@ export class TaskCoordinator {
     if (others >= limit) throw fail(`${others} ${others === 1 ? 'task is' : 'tasks are'} already running, the most this workspace's task limits allow at once.`);
     if (task) this.syncPolicy(home, task);
   }
-  available(task) { return this.main.workspaceFolders.some(folder => folder.id === task.folderId); }
+  available(task) { return task.purpose === 'project-review' ? JSON.stringify(task.workspaceFolders.map(({ id, path }) => ({ id, path }))) === JSON.stringify(this.main.workspaceFolders.map(({ id, path }) => ({ id, path }))) : this.main.workspaceFolders.some(folder => folder.id === task.folderId); }
   syncPolicy(c, task) {
     const lane = this.lanes.get(task.id); if (!lane) return;
     const policy = this.main.budget.policy(c);
@@ -68,6 +68,8 @@ export class TaskCoordinator {
     if (!folder) throw fail('Choose a folder in this workspace.', 400);
     let identity;
     try { identity = folderIdentity(folder.path); } catch { throw fail(`${folder.displayName || folder.name} is unavailable.`, 404); }
+    // Launch-map preparation reads the actual attached workspace concurrently. It never edits files or uses a worktree.
+    if (input.purpose === 'project-review') return { mode: 'direct', reason: 'Inspecting the attached workspace', identity, folder };
     const plan = planIsolation(identity, this.occupants(c, input.taskId), { loose: unrestricted({ provider: input.provider || c.provider, mode: input.accessMode || input.mode || c.mode, approvalPolicy: input.approvalPolicy || c.approvalPolicy || 'ask' }) });
     return { ...plan, identity, folder, ...(plan.mode === 'worktree' ? { uncommitted: uncommittedCount(folder.path) } : {}) };
   }
@@ -77,7 +79,8 @@ export class TaskCoordinator {
     return { ...plan, running, limit, full: running >= limit };
   }
 
-  start(c, input = {}, { queueExecution = null } = {}) {
+  start(c, input = {}, { queueExecution = null, prepareReview = false } = {}) {
+    input = { ...input, purpose: prepareReview ? 'project-review' : null, ...(prepareReview ? { mode: 'read', approvalPolicy: 'ask' } : {}) };
     if (this.closed) throw fail('Codeshi is stopping.', 503);
     const text = typeof input.text === 'string' ? input.text.trim() : '';
     if (!text || text.length > 100000) throw fail('Enter a message between 1 and 100,000 characters.', 400);
@@ -88,19 +91,19 @@ export class TaskCoordinator {
     this.main.checkRunSettings(provider, mode, approvalPolicy);
     this.main.validateSelection(model, 'auto', effort);
     const allowed = this.main.budget.allows(c, provider, model);
-    if (!allowed.allowed) throw fail(allowed.reason);
+    if (!allowed.allowed && !(prepareReview && input.routing)) throw fail(allowed.reason);
     this.main.execution.expect(this.main.execution.defaults(c).revision, input.executionRevision);
     if (input.parentTaskId) { if (input.execution?.taskId !== input.parentTaskId) throw fail('The child task must name its parent execution policy.'); this.main.execution.assert(c, input.execution, { action: 'children' }); throw fail('Automatic child assignment is not available yet. Start an explicit independent task.'); }
     const policyId = queueExecution?.taskId || randomUUID(); this.main.execution.ensure(c, policyId, { requestId: input.requestId });
     const execution = queueExecution || this.main.execution.token(c, policyId);
-    this.main.execution.assert(c, execution, { action: input.routing ? 'routing' : 'manual', provider, model, effort });
+    this.main.execution.assert(c, execution, { action: input.routing ? 'routing' : 'manual', ...(prepareReview && input.routing ? {} : { provider, model, effort }) });
     const attachments = Array.isArray(input.attachments) ? input.attachments : [];
     this.main.attachments.select(attachments);
     const dependsOn = input.dependsOn || null;
     if (dependsOn) { const before = this.find(c, dependsOn); if (['discarded', 'cancelled'].includes(before.status)) throw fail(`“${before.title}” was ${before.status}, so nothing can wait for it.`); }
     const folder = this.plan(c, { ...input, provider, accessMode: mode, approvalPolicy }).folder;
     // Ownership is saved before anything can start, so a crash at any point finds a task it can recover.
-    const task = { id: policyId, execution, requestId: input.requestId, title: line(text), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
+    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(text), ...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
     this.main.record(c, { type: 'parallel_task', task });
     const saved = this.find(c, task.id);
     this.tick(c);
@@ -146,7 +149,7 @@ export class TaskCoordinator {
   directory(task) { return path.join(this.main.dataDir, 'tasks', task.id); }
   launch(c, task, plan) {
     if (!task.execution) { this.main.execution.ensure(c, task.id, { source: 'legacy-task', config: { mode: task.routing ? 'flow' : 'normal', routingMode: task.routing?.mode } }); this.update(c, task, { execution: this.main.execution.token(c, task.id) }); }
-    this.main.execution.assert(c, task.execution, { action: task.routing ? 'routing' : 'manual', provider: task.provider, model: task.model, effort: task.effort });
+    this.main.execution.assert(c, task.execution, { action: task.routing ? 'routing' : 'manual', ...(task.purpose === 'project-review' && task.routing ? {} : { provider: task.provider, model: task.model, effort: task.effort }) });
     const { identity } = plan;
     const place = plan.mode === 'worktree' ? createWorktree(identity, path.join(this.directory(task), 'worktree'), task.id) : { scopePath: identity.real };
     this.update(c, task, { mode: plan.mode, modeReason: plan.reason, reason: null, commonDir: identity.commonDir || null, ...place, ...(identity.git ? { repoRoot: identity.root, prefix: identity.prefix } : {}), ...(plan.uncommitted ? { uncommitted: plan.uncommitted } : {}) });
@@ -155,14 +158,14 @@ export class TaskCoordinator {
       const conversation = lane.broker.get(lane.broker.create().id); lane.c = conversation;
       lane.broker.updateContext(conversation, c.context);
       this.update(c, task, { conversationId: conversation.id });
-      for (const entry of (c.memory || []).filter(item => item.status === 'active' && (!item.folderId || item.folderId === task.folderId))) lane.broker.record(conversation, { type: 'memory_add', entry });
+      for (const entry of (c.memory || []).filter(item => item.status === 'active' && (task.purpose === 'project-review' || !item.folderId || item.folderId === task.folderId))) lane.broker.record(conversation, { type: 'memory_add', entry });
       if (c.skills?.length) lane.broker.record(conversation, { type: 'skills', skills: c.skills, dirs: c.skillDirs || [] });
       lane.broker.budget.setPolicy(conversation, this.main.budget.policy(c));
       if (task.includeHistory) for (const message of c.messages.filter(item => ['user', 'assistant'].includes(item.role) && item.text?.trim() && !item.reviewId).slice(-20)) lane.broker.record(conversation, { type: 'message', message: { id: randomUUID(), role: message.role, text: message.text, provider: message.provider, status: 'complete', createdAt: message.createdAt } });
     }
     if (first) lane.broker.record(lane.c, { type: 'execution_policy', policy: this.main.execution.current(c, task.execution.taskId) });
     const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` };
-    if (task.routing) lane.broker.dispatch(lane.c, input, { execution: task.execution }).catch(error => { this.update(c, task, { status: 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
+    if (task.routing) lane.broker.dispatch(lane.c, input, { execution: task.execution }).catch(error => { this.update(c, task, { status: task.preparationCancelled ? 'stopped' : 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
     else lane.broker.start(lane.c, input, { execution: task.execution });
     this.sync(c, task);
   }
@@ -171,7 +174,15 @@ export class TaskCoordinator {
     const open = this.lanes.get(task.id);
     if (open) return open;
     if (!task.scopePath) return null;
-    const broker = new this.BrokerClass({ lane: true, workspace: task.scopePath, workspaceFolders: [{ id: task.folderId, name: task.folderName, path: task.scopePath }], dataDir: path.join(this.directory(task), 'journal'), googleRoot: this.main.googleRoot, bins: this.main.configuredBins, contextPolicy: this.main.contextPolicy, handoffPreferences: this.main.handoff.preferences, verificationCadence: this.main.verificationCadence, contextLimit: this.main.contextLimit, contextRouting: () => c.routing?.mode || null, acquireMutation: operation => this.acquireFolders([task.scopePath], `${operation} for “${task.title}”`) });
+    const broker = new this.BrokerClass({ lane: true, workspace: task.scopePath, workspaceFolders: task.purpose === 'project-review' ? task.workspaceFolders : [{ id: task.folderId, name: task.folderName, path: task.scopePath }], dataDir: path.join(this.directory(task), 'journal'), googleRoot: this.main.googleRoot, bins: this.main.configuredBins, contextPolicy: this.main.contextPolicy, handoffPreferences: this.main.handoff.preferences, verificationCadence: this.main.verificationCadence, contextLimit: this.main.contextLimit, contextRouting: () => c.routing?.mode || null, acquireMutation: operation => task.purpose === 'project-review' ? { release() {}, setProcess() {} } : this.acquireFolders([task.scopePath], `${operation} for “${task.title}”`) });
+    if (task.purpose === 'project-review') {
+      // This lane only reads project files; the validated map is saved by ProjectReview. It needs no exclusive writer lease.
+      const check = broker.checkRunSettings.bind(broker);
+      broker.checkRunSettings = (provider, mode, approvalPolicy) => {
+        if (mode !== 'read') throw fail('Project-review preparation only inspects files. Use the main chat to edit the project.');
+        return check(provider, mode, approvalPolicy);
+      };
+    }
     broker.attachments = this.main.attachments; broker.skills.root = this.main.skills.root;
     broker.admit = () => this.admit(c, task);
     const lane = { broker, task, c: task.conversationId ? broker.conversations.get(task.conversationId) : null };
@@ -184,7 +195,7 @@ export class TaskCoordinator {
   sync(c, task) {
     const lane = this.lanes.get(task.id);
     if (!lane?.c || this.closed || ENDED.has(task.status) || ['detached', 'lost', 'blocked'].includes(task.status)) return;
-    const status = lane.broker.running ? 'running' : STOPPED[lane.c.status] || (lane.c.status === 'running' ? 'running' : task.status);
+    const status = lane.broker.running ? 'running' : task.preparationCancelled ? 'stopped' : STOPPED[lane.c.status] || (lane.c.status === 'running' ? 'running' : task.status);
     const selected = lane.c.activeRun || (status !== 'running' ? lane.c.lastRun : null);
     const provider = selected?.provider || task.provider, model = selected ? selected.model ?? null : task.model, effort = selected ? selected.effort ?? null : task.effort;
     if (status === task.status && provider === task.provider && model === task.model && effort === task.effort) return;
@@ -206,7 +217,7 @@ export class TaskCoordinator {
   }
 
   public(task) {
-    const lane = this.lanes.get(task.id), { text, attachments, requestId, folderPath, commonDir, repoRoot, ...shown } = task;
+    const lane = this.lanes.get(task.id), { text, attachments, requestId, folderPath, commonDir, repoRoot, preparationSource, workspaceFolders, ...shown } = task;
     return { ...shown, approvals: lane?.broker.pendingCount() || 0, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status) };
   }
   list(c) { return (c.parallelTasks || []).filter(task => !task.closed).map(task => this.public(task)); }

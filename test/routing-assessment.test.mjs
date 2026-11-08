@@ -64,6 +64,23 @@ test('a semantic assessment replaces the draft estimate before dispatch and shar
   await assert.rejects(broker.dispatch(c, { ...input, text: 'Something else' }), /request ID/);
 });
 
+test('Smart retrieves referenced scope before assessment and avoids light routing when retrieval fails', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t);
+  input.text = 'do #85';
+  let resolved = false;
+  broker.router.references.resolve = async text => {
+    assert.equal(text, 'do #85'); resolved = true;
+    return [{ reference: 'owner/project#85', body: 'Durable replay and concurrent compaction', unavailable: 'Recent comments unavailable' }];
+  };
+  broker.router.worker = async (_broker, _run, config) => {
+    assert(resolved); assert.match(config.prompt, /Durable replay and concurrent compaction/);
+    return JSON.stringify({ tier: 'light', effort: 'low', reason: 'Short prompt' });
+  };
+  await broker.dispatch(c, input); await broker.running.done;
+  assert.equal(c.lastRun.routing.assessment.tier, 'standard');
+  assert.equal(c.lastRun.routing.assessment.effort, 'medium');
+});
+
 test('Saver uses local rules only on Send, making no agent assessment call and keeping effort low', { skip: scriptCLIs }, async t => {
   const { broker, c, input } = setup(t); let calls = 0;
   broker.setRouting(c, { mode: 'saver' });

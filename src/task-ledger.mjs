@@ -91,6 +91,22 @@ export function sumUsage(entries) {
   return { ...total, reportedBy, runs: entries.length, runsWithTokens: entries.filter(usage => usage?.reported?.length).length, partialRuns: entries.filter(usage => usage?.partial).length };
 }
 
+// Attribute only whole invocations we can identify. Native planning, summaries and delegation may be included in a
+// provider's counters, but cannot be split into roles without separate provider evidence.
+export const runRole = run => run.role || (run.relation === 'assessment' ? 'assessment' : run.relation === 'review' ? 'review' : run.mode === 'read' ? 'read-only' : 'builder');
+export function usageByRole(runs) {
+  const groups = new Map();
+  for (const run of runs) {
+    const role = runRole(run);
+    if (!groups.has(role)) groups.set(role, []);
+    groups.get(role).push(run);
+  }
+  return Object.fromEntries([...groups].map(([role, entries]) => [role, {
+    runs: entries.length, workingMs: entries.reduce((sum, run) => sum + (run.elapsedMs || 0), 0),
+    usage: sumUsage(entries.map(run => run.usage)),
+  }]));
+}
+
 // Agents write their steps as text, so counting them goes by how each kind of step starts.
 function countStep(entry, text) {
   const value = String(text || '');
@@ -146,6 +162,7 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
     else if (record.type === 'run_metadata' && active) {
       const metadata = record.metadata || {};
       if (metadata.effectiveModel) active.effectiveModel = metadata.effectiveModel;
+      if (metadata.budgetEnforcement) active.budgetEnforcement = metadata.budgetEnforcement;
       if (metadata.effectiveEffort) active.effort = metadata.effectiveEffort;
       if (metadata.transport) active.transport = metadata.transport;
       if (metadata.account?.billingSource) active.billingSource = metadata.account.billingSource;
@@ -185,10 +202,12 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
     } else if (record.type === 'review_budget') {
       const entry = runs.get(record.id), metadata = record.metadata || {};
       if (!entry || entry.status !== 'running') continue;
+      if (metadata.budgetEnforcement) entry.budgetEnforcement = metadata.budgetEnforcement;
       if (metadata.usage) entry.usage = normalizeUsage(entry.provider, metadata.usage);
       if (metadata.account?.billingSource) entry.billingSource = metadata.account.billingSource;
       if (metadata.costUSD !== undefined || entry.usage?.source === 'claude-model-usage-total') finishCost(entry, entry.usage?.source === 'claude-model-usage-total' ? entry.usage.costEstimateUSD : metadata.costUSD);
       if (metadata.effectiveModel) entry.effectiveModel = metadata.effectiveModel;
+      if (metadata.effectiveEffort) entry.effort = metadata.effectiveEffort;
     } else if (record.type === 'review_result') {
       const entry = runs.get(record.id), result = record.result || {};
       if (entry?.status === 'running' || entry?.relation === 'review') {
@@ -196,8 +215,10 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
         entry.elapsedMs ??= entry.startedAt ? Date.parse(record.at) - Date.parse(entry.startedAt) : null;
         if (result.usage) entry.usage = normalizeUsage(entry.provider, result.usage);
         if (result.billingSource) entry.billingSource = result.billingSource;
+        if (result.budgetEnforcement) entry.budgetEnforcement = result.budgetEnforcement;
         if (result.costUSD !== undefined || entry.usage?.source === 'claude-model-usage-total') finishCost(entry, entry.usage?.source === 'claude-model-usage-total' ? entry.usage.costEstimateUSD : result.costUSD);
         if (result.effectiveModel) entry.effectiveModel = result.effectiveModel;
+        if (result.effectiveEffort) entry.effort = result.effectiveEffort;
         if (number(result.elapsedMs) !== null) entry.elapsedMs = result.elapsedMs;
         if (result.accounting) {
           const { effort, tools, approvals, interventions, compactions, compactionEvents } = result.accounting;
@@ -211,7 +232,8 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       }
     } else if (record.type === 'quota_observation') quota.push({ provider: record.provider, observedAt: Object.hasOwn(record, 'observedAt') ? record.observedAt : record.at, plan: record.plan || null, windows: record.windows || [] });
   }
-  return { runs: [...runs.values()], tasks: summarizeTasks([...runs.values()]), quotaObservations: quota };
+  const entries = [...runs.values()].map(run => ({ ...run, role: runRole(run) }));
+  return { runs: entries, tasks: summarizeTasks(entries), quotaObservations: quota };
 }
 
 export function summarizeTasks(runs) {
@@ -228,12 +250,12 @@ export function summarizeTasks(runs) {
     }
     for (const agent of Object.values(agents)) agent.usage = sumUsage(agent.usage);
     return {
-      id, ...(first.prompt ? { prompt: first.prompt } : {}), startedAt: first.startedAt,
+      id, ...(first.prompt ? { prompt: first.prompt } : {}), startedAt: list.map(run => run.startedAt).filter(Boolean).sort()[0] || null,
       endedAt: list.every(run => run.endedAt) ? list.map(run => run.endedAt).sort().at(-1) : null, status: final.status,
       // Only the time agents worked: waiting for a limit to reset falls between runs and isn't counted.
       workingMs: list.reduce((sum, run) => sum + (run.elapsedMs || 0), 0),
       runs: list.length, retries: list.filter(run => run.relation === 'retry').length, continuations: list.filter(run => run.relation === 'continuation').length, reviews: list.filter(run => run.relation === 'review').length,
-      interventions: list.reduce((sum, run) => sum + run.interventions, 0), usage: sumUsage(list.map(run => run.usage)), agents,
+      interventions: list.reduce((sum, run) => sum + run.interventions, 0), usage: sumUsage(list.map(run => run.usage)), agents, roles: usageByRole(list),
       firstAttemptSuccess: first.status === 'running' ? null : first.status === 'complete' && first.check?.status !== 'failed',
       // Passing the project's own tests is the only thing that counts as verified. A clean finish alone is not evidence.
       verification: latest?.status === 'passed' ? 'passed' : latest?.status === 'failed' ? 'failed' : 'unverified', latestCheck: latest,

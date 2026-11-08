@@ -5,6 +5,7 @@ Small repeatable tasks for finding out whether a change to Codeshi helps, before
 | Fixture | What it exercises |
 | --- | --- |
 | `small-edit` | One change in one file |
+| `routing-assessment` | The same repository and checks as `small-edit`, with a real routing assessor before the builder |
 | `cross-folder` | One change across two folders |
 | `bug-repair` | Repairing a failing test without changing it |
 | `quota-handoff` | A first agent stopped at its first edit, then a second continuing, as at a handoff |
@@ -99,7 +100,15 @@ Run enough repeats to see the spread: agents vary from run to run. Don't adverti
 
 Reports pool repeats only when experiment inputs, live/recorded mode and reported model/effort sequences match. Each row shows its experiment ID and actual models. Changed fixtures, skill resources, checks or engine versions stay separate; legacy results without pins remain readable but are not pooled. **Work (ms)** adds agent working intervals. **Wall (ms)** includes setup, quota observations, checks and cleanup as well, so evaluation overhead stays visible. Neither recorded-provider timings nor token counts are evidence of a live efficiency gain.
 
-Reviewers count in the task ledger, including their final effective model/effort, elapsed time, tool counts and interventions after temporary worker files are removed. Separate independent folder tasks retain separate task identities. Planning, summaries and retrieval currently use local rules or the ordinary provider turn, without separate Codeshi model calls. Delegated Codeshi model workers remain planned. Claude pipeline totals cover native delegated work where reported, but cannot attribute it to individual roles; other providers' internal delegation coverage is unknown. Saved evaluation `accounting` labels these boundaries. When separate model calls are introduced, they must carry task identities and join the same totals before this suite can claim to measure their overhead. Broader routing cases from the roadmap (stale quota, unsuitable models and concurrent account usage), delegated-worker evaluations, and longer live comparisons remain outstanding.
+Reviewers count in the task ledger, including their final effective model/effort, elapsed time, tool counts and interventions after temporary worker files are removed. Separate independent folder tasks retain separate task identities. Tasks and saved evaluation `accounting.roles` split whole invocations into builder, read-only, assessment and review roles. Each role has working time, usage and field coverage; these are included in the overall total, never added again. A failed assessor retains its measured usage, and an unreported role stays unknown. Task start time includes assessment before the builder starts. Reports show each role’s measured spread across repeats.
+
+The `routing-assessment` fixture uses the real routing dispatcher and provider worker before the builder. Its repository snapshot and hidden checks match `small-edit`, the manually selected single-agent baseline. Offline runs supply synthetic fresh quota/model observations and an assessor trace; live runs use the selected provider’s actual account, models and quota. Routing stays within the provider chosen by `--agent`, and chooses its model and effort. Both calls count toward tokens, and two invocation slots are reserved before dispatch, even when a fallback ends up using fewer. A one-slot remaining budget cannot start this fixture. Token budgets are checked between dispatched tasks, so the assessor and builder can together overshoot a token target; they are not hard provider caps. For example:
+
+```sh
+npm run eval -- run --fixture small-edit,routing-assessment --agent codex --repeat 3
+```
+
+These fixtures have separate experiment pins because policy and traces differ; inspect snapshots and checks to establish their common task inputs. Planning and summaries inside a provider turn cannot be separated by role. Retrieval and context reconstruction use local rules; routing assessments are separate Codeshi model calls and count explicitly. Delegated Codeshi model workers remain planned. Claude pipeline totals cover native delegated work where reported, but cannot attribute it to individual roles; other providers' internal delegation coverage is unknown. Broader routing cases from the roadmap (stale quota, unsuitable models and concurrent account usage), delegated-worker evaluations, and budgeted live comparisons remain outstanding. Recorded timings and token counts do not demonstrate efficiency gains.
 
 ## Measured so far
 

@@ -99,3 +99,4 @@ window.addEventListener('click', event => {
 window.addEventListener('keydown', event => { if (picking && event.key === 'Escape') { swallow(event); stop(); } }, true);
 window.addEventListener('scroll', () => { if (picking && hovered) outline(hovered); }, true);
 ipcRenderer.on('preview:picking', (_event, on) => { if (on) { picking = true; } else stop(false); });
+window.addEventListener("message", event => { if (event.data?.type === "codeshi:api-call" && event.data.call) ipcRenderer.send("preview:api-call", event.data.call); });

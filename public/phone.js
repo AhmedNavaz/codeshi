@@ -334,6 +334,7 @@
     let before = null, cursor = list.firstChild;
     const keep = new Set();
     for (const message of shown) {
+      if (message.role === 'user' && (message.continuation || /^\s*Continue the unfinished task from this shared conversation/i.test(message.text || ''))) continue;
       const showAgent = message.role === 'assistant' && message.provider !== before;
       if (message.role === 'assistant') before = message.provider;
       const key = `${message.role}\n${showAgent}\n${message.text}`;

@@ -148,9 +148,28 @@ else {
     preview=createPreview({BaseWindow,WebContentsView,session,ipcMain,shell,root,background:()=>appearance.background(),
       folders:id=>{try{return id?relay.registry.get(id).folders.map(folder=>({name:folder.displayName||folder.name,path:folder.path})):[];}catch{return [];}},
       onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image});}});
+    const previewStack=id=>{
+      try{
+        const review=relay.projectReview?.state(id);
+        const run=review?.run,plan=review?.plan;
+        const profile=plan?.profiles?.find(p=>p.id===(run?.profileId||"development"))||plan?.profiles?.[0];
+        if(!profile&&!run)return null;
+        return {
+          profile:run?.profileName||profile?.name||"",
+          prerequisites:profile?.prerequisites||[],
+          services:(run?.steps||profile?.services||[]).map(s=>({
+            name:s.name,kind:s.kind,status:s.status||"waiting",ready:s.ready,
+            url:s.ready?.url||(s.ready?.port?`http://127.0.0.1:${s.ready.port}`:null),
+            folder:s.folderName,command:s.command,
+          })),
+          previews:run?.previews||profile?.previews||(profile?.preview?[profile.preview]:[]),
+        };
+      }catch{return null;}
+    };
+    const syncPreviewStack=id=>{if(preview?.projectId&&preview.projectId===id)preview.showStack(previewStack(id));};
     // The preview's toolbar follows the edits in the workspace it shows (#102).
-    relay.registry.on('update',({projectId})=>{if(preview?.projectId&&preview.projectId===projectId)preview.showEdit(runningEdit(relay.registry,projectId));});
-    ipcMain.handle('relay:preview:open',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const project=relay.registry.get(String(input?.projectId||''));return preview.open({projectId:project.id,url:input?.url,workspace:project.name});});
+    relay.registry.on('update',({projectId})=>{if(preview?.projectId&&preview.projectId===projectId){preview.showEdit(runningEdit(relay.registry,projectId));syncPreviewStack(projectId);}});
+    ipcMain.handle('relay:preview:open',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const project=relay.registry.get(String(input?.projectId||''));const res=await preview.open({projectId:project.id,url:input?.url,workspace:project.name});syncPreviewStack(project.id);return res;});
     // Several folders can be chosen at once; the page adds every one of them.
     ipcMain.handle('relay:pick-folder',async event=>{if(!trusted(event))throw Error('Untrusted renderer');const choice=await dialog.showOpenDialog(win,{properties:['openDirectory','multiSelections'],message:'Choose one or more project folders. Hold ⌘ to select several.'});return choice.canceled||!choice.filePaths.length?null:choice.filePaths;});
     ipcMain.handle('relay:open-external',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const url=new URL(input);if(url.username||url.password||(url.protocol!=='https:' && !(url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname))))throw Error('Only HTTPS or local test links without credentials may open');await shell.openExternal(url.href);return true;});
@@ -254,9 +273,8 @@ else {
         // If it never entered, say what it was waiting for.
         const entry=await win.webContents.executeJavaScript(`(()=>{const s=window.relayUI.getState(),c=s.conversation;return {on:window.relayFlow.isOn(),locked:window.relayFlow.isLocked(),ready:s.ready,loading:s.loading,pending:s.pending,settingsPending:s.settingsPending,taskDraft:Boolean(s.taskDraft),activity:s.status?.workspaceActivity,running:s.status?.runningConversationId,status:c?.status,queue:c?.queue?.length,notice:document.querySelector('#notice,.notice')?.textContent||null};})()`);
         smokeStep('flow entered '+entry.on);
-        // The view grants no authority. An explicit choice delegates new work to Flow.
-        const layoutOnly=await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing&&window.relayUI.getState().conversation?.execution?.defaults.mode==='normal'`);
-        await win.webContents.executeJavaScript(`window.relayUI.setRouting({mode:'smart',allowApi:false,check:false})`);
+        // Routing is Flow's: entering turns it on, Smart by default, and leaving turns it off.
+        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`['smart','balanced'].includes(window.relayUI.getState().conversation?.routing?.mode)`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         win.setContentSize(1440,900);
         result.flow=await win.webContents.executeJavaScript(`(async()=>{
           await new Promise(resolve=>requestAnimationFrame(resolve));
@@ -275,15 +293,14 @@ else {
           // If the sheet didn't load, say what it showed.
           const remoteDebug=remote?null:{open:document.getElementById('flow-detail').open,title:document.getElementById('flow-detail-title').textContent,settings:document.getElementById('settings').open,shown:document.querySelector('.flow-phone')?.textContent?.slice(0,160)??null,hidden:document.hidden};
           close.click();await new Promise(resolve=>setTimeout(resolve,20));
-          return {remoteDebug,entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:document.querySelectorAll('.flow-card').length===4,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about')&&!/preview/i.test(document.getElementById('flow-left').textContent+document.getElementById('flow-right').textContent),routingOn:['smart','balanced'].includes(window.relayUI.getState().conversation.routing?.mode)&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
+          return {remoteDebug,entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:document.querySelectorAll('.flow-card').length===5,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about'),routingOn:['smart','balanced'].includes(window.relayUI.getState().conversation.routing?.mode)&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
         })()`);
-        result.flow.layoutOnly=layoutOnly;
         const screenshot=path.join(os.tmpdir(),`codeshi-flow-${process.pid}.png`);
         const captured=await Promise.race([win.webContents.capturePage(),new Promise(resolve=>setTimeout(()=>resolve(null),3000))]);
         if(captured&&!captured.isEmpty()){fs.writeFileSync(screenshot,captured.toPNG());result.flow.screenshot=screenshot;}else result.flow.screenshotUnavailable=true;
         win.setContentSize(900,800);
         await new Promise(resolve=>setTimeout(resolve,100));
-        result.flow.narrow=await win.webContents.executeJavaScript(`document.getElementById('flow-left').hidden&&!document.getElementById('flow-strip').hidden&&document.querySelectorAll('.flow-chip').length===5`);
+        result.flow.narrow=await win.webContents.executeJavaScript(`document.getElementById('flow-left').hidden&&!document.getElementById('flow-strip').hidden&&document.querySelectorAll('.flow-chip').length===6`);
         const broker=relay.registry.broker(project.id),conversation=[...broker.conversations.values()][0];
         conversation.status='running';conversation.activeRun={id:'flow-smoke-run',provider:'codex',mode:'read',startedAt:new Date().toISOString(),phase:'working'};
         await win.webContents.executeJavaScript(`window.relayUI.refresh()`);
@@ -292,10 +309,9 @@ else {
         await win.webContents.executeJavaScript(`window.relayUI.refresh().then(()=>window.relayFlow.leave())`);
         for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         result.flow.left=await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&getComputedStyle(document.querySelector('.status-bar')).display!=='none'`);
-        result.flow.routingPreserved=await win.webContents.executeJavaScript(`window.relayUI.getState().conversation?.routing?.mode==='smart'&&window.relayUI.getState().conversation?.execution?.defaults.mode==='flow'`);
-        await win.webContents.executeJavaScript(`window.relayUI.setRouting({mode:null})`);
+        for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing`))break;await new Promise(resolve=>setTimeout(resolve,20));}
         result.flow.routingOff=await win.webContents.executeJavaScript(`!window.relayUI.getState().conversation?.routing&&document.getElementById('agents-routing').hidden`);
-        result.flow.passed=['entered','footerHidden','cards','windowControlsClear','details','headerPlaced','remote','noPreview','layoutOnly','routingOn','narrow','locked','left','routingPreserved','routingOff'].every(key=>result.flow[key]===true);
+        result.flow.passed=['entered','footerHidden','cards','windowControlsClear','details','headerPlaced','remote','noPreview','routingOn','narrow','locked','left','routingOff'].every(key=>result.flow[key]===true);
         console.log('AI_RELAY_FLOW_SMOKE '+JSON.stringify(result.flow));
         if(!result.flow.passed)throw Error('Flow smoke check failed: '+JSON.stringify({...result.flow,entry}));
       }

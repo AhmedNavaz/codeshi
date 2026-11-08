@@ -8,7 +8,7 @@ import { Broker } from '../src/broker.mjs';
 import { continuationRequest, prepareContext } from '../src/context.mjs';
 import { providerUsage } from '../src/providers.mjs';
 import { STARTER_ROOT } from '../src/skills.mjs';
-import { sumUsage } from '../src/task-ledger.mjs';
+import { sumUsage, usageByRole } from '../src/task-ledger.mjs';
 import { validateContextLimit } from '../src/context-rollover.mjs';
 import { checkPin, comparisonKey, experimentInputs, fingerprint, observedModels, validatePin } from './experiment.mjs';
 
@@ -83,13 +83,29 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
   }
   const broker = new Broker({ workspace: folders[names[0]], workspaceFolders, dataDir: path.join(root, 'data'), bins, contextPolicy: policy.context, contextLimit: () => policy.contextLimit || 'off', handoffPreferences: () => ({ threshold: 0, automatic: false }) });
   let c = broker.get(broker.create().id);
+  if (fixture.routing) {
+    broker.setRouting(c, { mode: fixture.routing });
+    // The fixture compares a manual agent with routing within that agent's supported models, not unrelated accounts.
+    broker.availableProviders = () => [policy.builder.provider];
+    if (!live) {
+      broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
+      broker.handoff.models = async () => ({ data: [{ id: 'recorded-trace', displayName: 'Recorded model', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }, { reasoningEffort: 'high' }] }] });
+      broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(Date.now() + 3600000).toISOString() }] });
+    }
+  }
   const conversations = [c], run = { fixture: fixture.id, fixtureHash: sameFixture(fixture), snapshot, policy, live, sourceCommit: gitIn(here, ['rev-parse', 'HEAD']).stdout.trim() || null, startedAt: new Date().toISOString(), skipped: null, rubric: { criteria: fixture.rubric, verdict: null } };
   const quota = async phase => { if (!live) return null; const readings = {}; for (const provider of new Set([policy.builder.provider, policy.to?.provider].filter(Boolean))) { try { const usage = await providerUsage(provider, { ...broker.usageOptions(provider), refresh: true }); readings[provider] = usage.available ? { observedAt: new Date().toISOString(), windows: usage.windows.map(({ label, usedPercent, resetsAt }) => ({ label, usedPercent, resetsAt })) } : { unavailable: usage.reason || true }; } catch { readings[provider] = { unavailable: true }; } } return { phase, note: 'Account-wide: other tools count here too, so this is not what the task used.', readings }; };
   const spent = () => budget && (budget.runs >= budget.maxRuns || (budget.maxTokens && budget.tokens >= budget.maxTokens));
   const start = async (agent, text, { fresh = false, stopAfterFirstEdit = false, mode = 'edit' } = {}) => {
     if (spent()) { run.skipped = 'budget'; return false; }
-    if (budget) budget.runs++;
-    broker.start(c, { text, provider: agent.provider, ...(live ? {} : { transport: agent.provider === 'claude' ? 'cli' : 'app-server' }), model: agent.model, effort: agent.effort, mode, approvalPolicy: mode === 'read' ? 'ask' : 'auto', fresh, requestId: `eval-${Date.now()}-${budget?.runs ?? Math.random().toString(36).slice(2)}` });
+    // Reserve both invocations before routing; even a failed assessment can consume allowance. Never begin a rated
+    // dispatch with only one invocation left. A local fallback may use fewer than this conservative reservation.
+    const slots = fixture.routing ? 2 : 1;
+    if (budget && budget.runs + slots > budget.maxRuns) { run.skipped = 'budget'; return false; }
+    if (budget) budget.runs += slots;
+    const input = { text, provider: agent.provider, ...(live ? {} : { transport: agent.provider === 'claude' ? 'cli' : 'app-server' }), model: agent.model, effort: agent.effort, mode, approvalPolicy: mode === 'read' ? 'ask' : 'auto', fresh, requestId: `eval-${Date.now()}-${budget?.runs ?? Math.random().toString(36).slice(2)}`, ...(fixture.routing ? { routing: { mode: fixture.routing } } : {}) };
+    if (fixture.routing) await broker.dispatch(c, input);
+    else broker.start(c, input);
     const active = broker.running;
     // Nobody is here to answer. A question is skipped and counted, since needing to ask is part of the result, and a request
     // for approval is declined. A run that goes past the time limit is stopped rather than waited for.
@@ -184,7 +200,7 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
       questionsAsked: run.questionsAsked || 0, timedOut: Boolean(run.timedOut), repeatedFileReads: repeatedFileReads(messages, { workspace: folders[names[0]] }), missingUsage: real.filter(entry => !entry.usage?.reported?.length).length,
       compactions: real.reduce((sum, entry) => sum + entry.compactions, 0),
     };
-    run.accounting = { source: 'broker-journals', planning: 'local-rules-or-in-provider-usage', summaries: 'no-separate-codeshi-model-calls', retrieval: 'local-rules',
+    run.accounting = { source: 'broker-journals', roles: usageByRole(real), planning: 'in-provider-usage-not-separately-attributable', summaries: 'local-reconstruction-or-in-provider-usage', retrieval: 'local-rules',
       nativeDelegation: 'included-in-claude-modelUsage-where-reported; other-providers-unknown', nativeCompactionUsage: 'not-separately-attributable',
       providerCoverage: real.map(entry => ({ provider: entry.provider, source: entry.usage?.source || 'unreported', coverage: entry.usage?.coverage || null })) };
     run.quotaAfter = await quota('after');
@@ -210,6 +226,8 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
   } finally {
     await broker.close(); fs.rmSync(root, { recursive: true, force: true });
   }
+  // Failure paths retain the same role and coverage evidence as successful runs.
+  run.accounting ||= { source: 'broker-journals', roles: usageByRole(run.runs || []), providerCoverage: (run.runs || []).map(entry => ({ provider: entry.provider, source: entry.usage?.source || 'unreported', coverage: entry.usage?.coverage || null })) };
   run.endedAt = new Date().toISOString();
   run.outcome.wallMs = Math.round(performance.now() - began);
   return run;
@@ -224,7 +242,12 @@ export function compareResults(results) {
   for (const [index, result] of results.entries()) { const key = comparisonKey(result, index); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(result); }
   return [...groups.values()].map(list => {
     const outcomes = list.map(result => result.outcome || {}), rate = key => { const known = outcomes.filter(outcome => typeof outcome[key] === 'boolean'); return known.length ? { passed: known.filter(outcome => outcome[key]).length, of: known.length } : null; };
+    const roleNames = [...new Set(list.flatMap(result => Object.keys(result.accounting?.roles || {})))];
     return { fixture: list[0].fixture, policy: list[0].policy.id, experiment: list[0].experiment?.id || null, models: observedModels(list[0].runs || []), live: list[0].live, repeats: list.length, firstAttemptSuccess: rate('firstAttemptSuccess'), verifiedCompletion: rate('verifiedCompletion'),
+      roles: Object.fromEntries(roleNames.map(role => [role, Object.fromEntries(['runs', 'workingMs', 'input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'].map(field => [field, spread(list.map(result => {
+        const measured = result.accounting?.roles?.[role];
+        return (field === 'runs' || field === 'workingMs' ? measured?.[field] : measured?.usage?.[field]) ?? null;
+      }))]))])),
       input: spread(list.map(result => result.usage?.input ?? null)), output: spread(list.map(result => result.usage?.output ?? null)), cacheRead: spread(list.map(result => result.usage?.cacheRead ?? null)), cacheWrite: spread(list.map(result => result.usage?.cacheWrite ?? null)),
       reasoning: spread(list.map(result => result.usage?.reasoning ?? null)), compactions: spread(outcomes.map(outcome => outcome.compactions ?? null)),
       tokenCoverage: Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'].map(field => [field, list.every(result => result.usage?.reportedBy && typeof result.usage.runs === 'number')
@@ -247,5 +270,7 @@ export function reportMarkdown(rows) {
   lines.push('', 'Reconstruction is the fraction of fixture facts present in a fresh envelope probe. It does not measure retention inside a resumed native session. Observed compactions count notifications, not their token cost; zero means none observed. Provider-internal delegation and compaction costs are not separately attributable. Text envelope estimates, last-request counters and cumulative session usage are separate readings in saved results.');
   lines.push('', '| Fixture / policy | Token field coverage (reporting runs / all runs, across repeats) |', '| --- | --- |');
   for (const row of rows) lines.push(`| ${row.fixture} / ${row.policy} / ${row.experiment?.slice(0, 12) || 'legacy'} | ${Object.entries(row.tokenCoverage).map(([key, value]) => `${key}: ${value ? `${value.reported}/${value.of}` : 'unknown'}`).join('; ')} |`);
+  lines.push('', 'Whole-call roles below are already included in the totals above. Native planning, summaries, compaction and delegation cannot be separated by role; their inclusion depends on each provider’s reported coverage.', '', '| Fixture / policy | Role | Calls | Work (ms) | Input | Cache read | Cache write | Output | Reasoning (in output) |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  for (const row of rows) for (const [role, values] of Object.entries(row.roles || {})) lines.push(`| ${row.fixture} / ${row.policy} / ${row.experiment?.slice(0, 12) || 'legacy'} | ${role} | ${cell(values.runs)} | ${cell(values.workingMs)} | ${cell(values.input)} | ${cell(values.cacheRead)} | ${cell(values.cacheWrite)} | ${cell(values.output)} | ${cell(values.reasoning)} |`);
   return lines.join('\n') + '\n';
 }

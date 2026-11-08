@@ -8,7 +8,7 @@
   if (!api || !section || !list || !banner) return;
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'text-link') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
-  const tasks = () => api.getState().conversation?.parallelTasks || [];
+  const tasks = () => (api.getState().conversation?.parallelTasks || []).filter(task => task.purpose !== 'project-review' || task.id === api.getState().taskId || task.approvals);
   const LABEL = { waiting: 'Waiting', running: 'Working', complete: 'Finished', stopped: 'Stopped', failed: 'Did not finish', integrated: 'Merged', kept: 'Kept as a branch', discarded: 'Discarded', cancelled: 'Cancelled', blocked: 'Blocked', lost: 'Copy gone', detached: 'Folder removed' };
   const canMerge = task => task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status);
   const act = async (task, action, input = {}) => { const result = await api.post(`/api/tasks/${task.id}/${action}`, input); await api.refresh(); return result; };

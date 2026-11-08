@@ -52,7 +52,7 @@
     if (token !== renderRevision || projectId !== api().getState().projectId) return;
     const project = state.projects.find(item => item.id === projectId);
     const recent = (c.messages || []).filter(message => ['user', 'assistant'].includes(message.role) && !message.reviewId).slice(-8);
-    const latestTask = recent.filter(message => message.role === 'user').at(-1)?.text;
+    const latestTask = recent.filter(message => message.role === 'user' && !/^\s*Continue the unfinished task from this shared conversation/i.test(message.text || '')).at(-1)?.text;
     const latestError = (c.messages || []).filter(message => message.role === 'error').at(-1)?.text;
     let prepared = null, approved = null, sourceFiles = [], previewVersion = 0, config = {}, privacyWarnings = false;
     const current = () => token === renderRevision && projectId === api().getState().projectId;

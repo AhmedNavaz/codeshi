@@ -1,0 +1,52 @@
+.project-review-dialog { width: min(660px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--text); background: var(--bg); box-shadow: 0 24px 80px #0006; }
+.project-review-dialog::backdrop { background: #0006; }
+.project-review-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px 8px; }
+.project-review-head h2 { margin: 0; font-size: 17px; }
+.project-review-intro { margin: 0; padding: 0 20px 14px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.project-review-content { max-height: 48vh; overflow: auto; padding: 0 20px 16px; }
+.project-review-map { list-style: none; margin: 8px 0; padding: 0 0 0 10px; border-left: 2px solid var(--border); }
+.project-review-step { position: relative; padding: 6px 0 10px 8px; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.project-review-step::before { content: ''; position: absolute; left: -15px; top: 11px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.project-review-step[data-status="ready"]::before, .project-review-step[data-status="done"]::before { background: var(--success); }
+.project-review-step[data-status="failed"]::before { background: var(--danger, #c55); }
+.project-review-step[data-status="starting"]::before { background: var(--link); }
+.project-review-step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; justify-content: space-between; }
+.project-review-state, .project-review-folder, .project-review-hint { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.project-review-step p { margin: 5px 0; }
+.project-review-command { display: block; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font: 12px var(--mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-review-error { color: var(--danger, #c55); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.project-review-preparing { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.project-review-preparing::before { content: ''; flex: 0 0 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--link); border-radius: 50%; animation: project-review-spin 1s linear infinite; }
+@keyframes project-review-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .project-review-preparing::before { animation: none; } }
+.project-review-log summary { cursor: pointer; margin-top: 8px; }
+.project-review-log pre { max-height: 160px; padding: 8px; overflow: auto; background: var(--chip-bg); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.project-review-edit { display: grid; gap: 8px; border-top: 1px solid var(--border); padding: 14px 20px; font-size: 12px; }
+.project-review-edit textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 54px; max-height: 120px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--input-bg, var(--bg)); font: inherit; }
+.project-review-edit button { justify-self: start; }
+.project-review-edit p { margin: 0; }
+.project-review-profile { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-strong); font-size: 12px; font-weight: 600; margin-bottom: 2px; }
+.project-review-profile select { flex: 1; max-width: 220px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-raised, var(--bg)); font: inherit; font-size: 12px; cursor: pointer; }
+.project-review-name { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-strong); overflow-wrap: anywhere; }
+.project-review-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 12px; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--chip-bg); }
+.project-review-summary-status { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.project-review-summary-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.project-review-summary[data-status="ready"] .project-review-summary-status::before { background: var(--success); }
+.project-review-summary[data-status="starting"] .project-review-summary-status::before { background: var(--link); }
+.project-review-summary[data-status="failed"] .project-review-summary-status::before { background: var(--danger, #c55); }
+.project-review-services { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.project-review-service { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: color-mix(in srgb, var(--surface-raised, #8882) 70%, transparent); font-size: 12px; }
+.project-review-service-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
+.project-review-service[data-status="ready"] .project-review-service-dot, .project-review-service[data-status="done"] .project-review-service-dot { background: var(--success); }
+.project-review-service[data-status="starting"] .project-review-service-dot { background: var(--link); animation: project-review-spin 1.2s infinite; }
+.project-review-service[data-status="failed"] .project-review-service-dot { background: var(--danger, #c55); }
+.project-review-service-name { font-weight: 500; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-review-service-tag { font-size: 10.5px; color: var(--muted); padding: 1px 6px; border-radius: 4px; background: var(--chip-bg); flex: none; }
+.project-review-update { padding: 10px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.project-review-update p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+@media (max-height: 650px) { .project-review-content { max-height: 34vh; } }
+.project-review-service-endpoint { font-size: 11px; font-family: var(--mono, monospace); color: var(--muted); opacity: 0.85; }
+.project-review-prereqs { margin-top: 6px; padding: 6px 10px; border-radius: 6px; background: color-mix(in srgb, var(--surface-raised, #8882) 40%, transparent); font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+.project-review-prereqs strong { color: var(--text); font-weight: 600; }
+

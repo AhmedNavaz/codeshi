@@ -4,7 +4,7 @@ Shipped in 0.34.1 ([#131](https://github.com/AhmedNavaz/codeshi/issues/131)). `s
 
 ## New work and existing tasks
 
-New work defaults to **Normal**. Explicitly selecting Smart, Saver or Ultra delegates **Flow for new tasks**. Existing tasks retain their own policy. Entering, leaving or restoring the focused Flow layout makes no authorization change. Desktop and phone show both the active task policy and the new-work default above the composer.
+New work defaults to **Normal**. Selecting Smart, Saver or Ultra delegates **Flow for new tasks**. Existing tasks retain their own policy. Flow has no manual mode: entering the Flow view turns routing on with the mode that workspace last used in Flow, or Smart, and leaving turns it off, so the normal view chooses the agent and model by hand. Each of those changes goes through the same routing route and policy revision as a choice made in Agent settings. Desktop and phone show both the active task policy and the new-work default above the composer.
 
 Normal permits explicit provider/model selection, fixed queues, accepted handoff/retry offers, a selected agent's reset wait, and an approved exact build/review sequence. The native agent retains its own tools, planning and compaction. Flow additionally permits only the automatic actions enabled in that task's policy. Routing, handoff, retry, review, check, wait selection and child creation each have an independent flag. Existing routing selection and task budgets still supply the choices and limits.
 

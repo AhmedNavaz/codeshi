@@ -17,7 +17,10 @@ if(process.platform==='darwin')console.log('Built '+await buildHelper());
 // before it is signed. Electron Packager also looks for assets/icon.icon to compile itself and warns that there is none:
 // that is expected, since it can only compile on macOS 26 and the Intel build runs on macOS 15.
 const mac=process.platform==='darwin';
-const layeredIcon=mac?{extendInfo:{CFBundleIconName:'AppIcon'},afterCopy:[({buildPath})=>fs.copyFileSync(path.join(root,'assets','Assets.car'),path.join(buildPath,'..','Assets.car'))]}:{extendInfo:{}};
+// Give the fallback its own resource name too. System menus can resolve CFBundleIconFile separately from the
+// layered icon; retaining Electron's generic electron.icns name can leave them showing a cached older design.
+// Packager copies assets/icon.icns to the CFBundleIconFile destination before signing.
+const layeredIcon=mac?{extendInfo:{CFBundleIconName:'AppIcon',CFBundleIconFile:'Codeshi.icns'},afterCopy:[({buildPath})=>fs.copyFileSync(path.join(root,'assets','Assets.car'),path.join(buildPath,'..','Assets.car'))]}:{extendInfo:{}};
 // Electron comes from GitHub's releases, verified against the checksums the electron package ships rather than a fetched
 // SHASUMS256.txt, with retries and a mirror for when GitHub's downloads fail (#138).
 const download={checksums:electronChecksums(root),downloader:createElectronDownloader()};

@@ -2,14 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-LVKpDSsa+AXbwnjgSZQ9Wka5zMqw+eZ4obtZrc5rPPk='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-ijOLTkDVec1i/E5kRYZgDFdDYs8O6WlKLoKcdLDWr20='">
 <title>Preview toolbar</title>
 <style>
   /* Codeshi's Paper and Ink colours, as in public/editor-theme.css. */
-  :root { color-scheme: light dark; --bg: #f4efe6; --text: #1d1a17; --muted: #655c52; --faint: #71675c; --border: #e8e0d3; --hover: rgba(59, 42, 26, .06); --field: #fffdfa; --field-border: #d3c8b6; --accent: #d9381e; --accent-strong: #bf3019; --on-accent: #ffffff; --link: #b02e17; --danger: #b51f45; --success: #2b7530; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #1c1a18; --text: #d6cec2; --muted: #aaa194; --faint: #958c80; --border: #2c2926; --hover: rgba(255, 244, 227, .07); --field: #282624; --field-border: #3e3a35; --accent: #d9381e; --accent-strong: #c2301a; --on-accent: #ffffff; --link: #f2896f; --danger: #f26b85; --success: #73c991; } }
+  :root { color-scheme: light dark; --bg: #f4efe6; --text: #1d1a17; --muted: #655c52; --faint: #71675c; --border: #e8e0d3; --hover: rgba(59, 42, 26, .06); --field: #fffdfa; --field-border: #d3c8b6; --accent: #d9381e; --accent-strong: #bf3019; --on-accent: #ffffff; --link: #b02e17; --danger: #b51f45; --success: #2b7530; --panel-bg: #ece5d8; --badge-bg: rgba(59, 42, 26, .08); }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1c1a18; --text: #d6cec2; --muted: #aaa194; --faint: #958c80; --border: #2c2926; --hover: rgba(255, 244, 227, .07); --field: #282624; --field-border: #3e3a35; --accent: #d9381e; --accent-strong: #c2301a; --on-accent: #ffffff; --link: #f2896f; --danger: #f26b85; --success: #73c991; --panel-bg: #161412; --badge-bg: rgba(255, 244, 227, .09); } }
   html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 12.5px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-user-select: none; user-select: none; }
-  body { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 44px; padding: 0 10px; border-bottom: 1px solid var(--border); }
+  body { display: flex; flex-direction: column; }
+  #bar { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 44px; padding: 0 10px; border-bottom: 1px solid var(--border); width: 100%; flex: none; }
   button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; cursor: pointer; }
   button:hover:enabled { background: var(--hover); color: var(--text); }
   button:disabled { opacity: .4; cursor: default; }
@@ -17,6 +18,9 @@
   svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   #address { flex: 1; min-width: 120px; height: 28px; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--field-border); border-radius: 7px; background: var(--field); color: var(--text); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; -webkit-user-select: text; user-select: text; }
   #address:focus { border-color: var(--accent); }
+  .pill-btn { flex: none; padding: 0 9px; height: 26px; border: 1px solid var(--border); border-radius: 6px; font-size: 11.5px; font-weight: 500; background: var(--field); color: var(--text); }
+  .pill-btn:hover:enabled { border-color: var(--accent); background: var(--hover); }
+  .pill-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
   #workspace { flex: none; max-width: 160px; overflow: hidden; color: var(--faint); text-overflow: ellipsis; white-space: nowrap; }
   #workspace:empty { display: none; }
   #pick { flex: none; padding: 0 12px; border-radius: 14px; background: var(--accent); color: var(--on-accent); font-weight: 500; }
@@ -27,34 +31,268 @@
   #edit bdi { direction: ltr; }
   #edit .added { color: var(--success); }
   #edit .removed { color: var(--danger); }
-  #status { display: flex; align-items: center; gap: 6px; flex: none; max-width: 340px; overflow: hidden; color: var(--muted); white-space: nowrap; }
+  #status { display: flex; align-items: center; gap: 6px; flex: none; max-width: 320px; overflow: hidden; color: var(--muted); white-space: nowrap; font-size: 11.5px; text-overflow: ellipsis; cursor: pointer; }
   #status:empty { display: none; }
   #status[data-kind="error"] { color: var(--danger); white-space: normal; max-width: 420px; line-height: 1.25; font-size: 11.5px; }
-  #status[data-kind="picked"]::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+  #status[data-kind="picked"]::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex: none; }
+  #status[data-kind="api"]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--link); flex: none; }
   #back-to-app { height: 24px; padding: 0 8px; color: var(--link); }
+
+  /* Drawer panel styles */
+  #drawer { flex: 1; min-height: 0; overflow: hidden; background: var(--bg); display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
+  #drawer[hidden] { display: none; }
+  .drawer-panel { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
+  .drawer-panel[hidden] { display: none; }
+  .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 38px; padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--panel-bg); flex: none; font-size: 12px; }
+  .drawer-title-group { display: flex; align-items: center; gap: 8px; }
+  .drawer-actions { display: flex; align-items: center; gap: 8px; }
+  .drawer-btn { height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--field); color: var(--text); font-size: 11.5px; cursor: pointer; }
+  .drawer-btn:hover { background: var(--hover); }
+  #apis-filter { height: 24px; padding: 0 8px; border: 1px solid var(--field-border); border-radius: 5px; background: var(--field); color: var(--text); font: 11.5px monospace; outline: none; width: 180px; }
+  #apis-filter:focus { border-color: var(--accent); }
+  .drawer-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; }
+  .apis-split { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 0; padding: 0; height: 100%; }
+  .apis-list { border-right: 1px solid var(--border); overflow-y: auto; height: 100%; }
+  .apis-detail { overflow-y: auto; height: 100%; padding: 12px 16px; box-sizing: border-box; }
+  .api-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 11.5px; }
+  .api-row:hover { background: var(--hover); }
+  .api-row[aria-selected="true"] { background: var(--badge-bg); border-left: 2px solid var(--accent); }
+  .method-badge { font-family: ui-monospace, monospace; font-weight: 600; font-size: 10.5px; padding: 1px 5px; border-radius: 4px; flex: none; }
+  .method-GET { background: rgba(43, 117, 48, .15); color: var(--success); }
+  .method-POST { background: rgba(176, 46, 23, .15); color: var(--link); }
+  .method-PUT, .method-PATCH { background: rgba(191, 100, 20, .15); color: #c46812; }
+  .method-DELETE { background: rgba(181, 31, 69, .15); color: var(--danger); }
+  .status-badge { font-family: ui-monospace, monospace; font-size: 10.5px; font-weight: 600; padding: 1px 5px; border-radius: 4px; flex: none; }
+  .status-2xx { color: var(--success); }
+  .status-4xx, .status-5xx, .status-0 { color: var(--danger); }
+  .api-url-cell { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; }
+  .api-duration { color: var(--muted); font-size: 10.5px; flex: none; }
+  .trigger-chip { font-size: 10px; color: var(--muted); background: var(--badge-bg); padding: 1px 5px; border-radius: 3px; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stack-section { margin-bottom: 14px; }
+  .stack-section-title { font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  .stack-grid { display: grid; gap: 6px; }
+  .stack-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--field); }
+  .stack-service-title { font-weight: 500; font-size: 12px; }
+  .stack-service-meta { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+  .payload-box { margin-top: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--field); overflow: hidden; }
+  .payload-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: var(--panel-bg); border-bottom: 1px solid var(--border); font-size: 11.5px; font-weight: 500; }
+  .payload-pre { margin: 0; padding: 8px 10px; font: 11px/1.4 ui-monospace, monospace; max-height: 140px; overflow: auto; white-space: pre-wrap; word-break: break-all; -webkit-user-select: text; user-select: text; }
+  .detail-headline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .detail-url { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; -webkit-user-select: text; user-select: text; }
+  .detail-meta { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--muted); }
+  .count-tag { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: var(--badge-bg); color: var(--muted); }
 </style>
 </head>
 <body>
-  <button id="back" class="icon" type="button" aria-label="Back" title="Back" disabled><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
-  <button id="forward" class="icon" type="button" aria-label="Forward" title="Forward" disabled><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
-  <button id="reload" class="icon" type="button" aria-label="Reload" title="Reload"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
-  <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Local address" />
-  <span id="workspace" title="Picks go to this workspace's message"></span>
-  <span id="edit" role="status" aria-live="off"></span>
-  <span id="status" role="status" aria-live="polite"></span>
-  <button id="pick" type="button" aria-pressed="false" title="Pick an element to change (Esc stops)"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg><span id="pick-label">Pick element</span></button>
-  <button id="open-external" class="icon" type="button" aria-label="Open in browser" title="Open in your browser"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M18 14v4a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18V7.5A1.5 1.5 0 0 1 5.5 6H10"/></svg></button>
+  <div id="bar">
+    <button id="back" class="icon" type="button" aria-label="Back" title="Back" disabled><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button id="forward" class="icon" type="button" aria-label="Forward" title="Forward" disabled><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    <button id="reload" class="icon" type="button" aria-label="Reload" title="Reload"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
+    <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Local address" />
+    <button id="stack-btn" class="pill-btn" type="button" aria-pressed="false" title="View backend and database configuration"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg><span id="stack-label">Stack</span></button>
+    <button id="apis-btn" class="pill-btn" type="button" aria-pressed="false" title="Inspect API requests and responses"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span id="apis-label">APIs (0)</span></button>
+    <span id="workspace" title="Picks go to this workspace's message"></span>
+    <span id="edit" role="status" aria-live="off"></span>
+    <span id="status" role="status" aria-live="polite"></span>
+    <button id="pick" type="button" aria-pressed="false" title="Pick an element to change (Esc stops)"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg><span id="pick-label">Pick element</span></button>
+    <button id="open-external" class="icon" type="button" aria-label="Open in browser" title="Open in your browser"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M18 14v4a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18V7.5A1.5 1.5 0 0 1 5.5 6H10"/></svg></button>
+  </div>
+  <div id="drawer" hidden>
+    <div id="stack-panel" class="drawer-panel" hidden>
+      <div class="drawer-head">
+        <div class="drawer-title-group"><strong>Backend &amp; Database Configuration</strong></div>
+        <button id="stack-close" class="icon" type="button" aria-label="Close stack"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div id="stack-content" class="drawer-body"></div>
+    </div>
+    <div id="apis-panel" class="drawer-panel" hidden>
+      <div class="drawer-head">
+        <div class="drawer-title-group">
+          <strong>API Activity</strong>
+          <span id="apis-count-tag" class="count-tag">0</span>
+        </div>
+        <div class="drawer-actions">
+          <input id="apis-filter" type="text" placeholder="Filter URL or method…" spellcheck="false" aria-label="Filter APIs" />
+          <button id="apis-clear" class="drawer-btn" type="button">Clear</button>
+          <button id="apis-close" class="icon" type="button" aria-label="Close API inspector"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+      </div>
+      <div class="drawer-body apis-split">
+        <div id="apis-list" class="apis-list"></div>
+        <div id="apis-detail" class="apis-detail"></div>
+      </div>
+    </div>
+  </div>
 <script>
   const $ = id => document.getElementById(id), bridge = window.relayPreview;
-  let editing = false, statusTimer = null;
-  function status(kind, text, back = false) {
+  let editing = false, statusTimer = null, currentStack = null, activeDrawer = null, selectedApiId = null;
+  const apiCalls = [];
+
+  function status(kind, text, back = false, onClick = null) {
     clearTimeout(statusTimer);
     const host = $('status'); host.dataset.kind = kind || ''; host.replaceChildren();
     if (!text) return;
     host.append(document.createTextNode(text));
-    if (back) { const button = document.createElement('button'); button.id = 'back-to-app'; button.type = 'button'; button.textContent = 'Go to message'; button.addEventListener('click', () => bridge.act('focus-app')); host.append(button); }
-    if (kind !== 'error') statusTimer = setTimeout(() => status(''), back ? 8000 : 4000);
+    if (onClick) host.onclick = onClick; else host.onclick = null;
+    if (back) { const btn = document.createElement('button'); btn.id = 'back-to-app'; btn.type = 'button'; btn.textContent = 'Go to message'; btn.addEventListener?.('click', () => bridge.act('focus-app')); host.append(btn); }
+    if (kind !== 'error') statusTimer = setTimeout(() => status(''), back ? 8000 : 4500);
   }
+
+  function setDrawer(which, height = 320) {
+    if (activeDrawer === which) which = null;
+    activeDrawer = which;
+    $('drawer').hidden = !activeDrawer;
+    $('stack-panel').hidden = activeDrawer !== 'stack';
+    $('apis-panel').hidden = activeDrawer !== 'apis';
+    $('stack-btn')?.setAttribute?.('aria-pressed', String(activeDrawer === 'stack'));
+    $('apis-btn')?.setAttribute?.('aria-pressed', String(activeDrawer === 'apis'));
+    if (activeDrawer) {
+      bridge.act('expand-drawer', { height });
+      if (activeDrawer === 'stack') renderStack();
+      else if (activeDrawer === 'apis') renderApis();
+    } else {
+      bridge.act('collapse-drawer');
+    }
+  }
+
+  function renderStack() {
+    const host = $('stack-content'); if (!host) return;
+    host.replaceChildren();
+    if (!currentStack) {
+      const empty = document.createElement('p'); empty.textContent = 'No active project review services recorded yet.';
+      host.append(empty); return;
+    }
+    const profSec = document.createElement('div'); profSec.className = 'stack-section';
+    const profTitle = document.createElement('div'); profTitle.className = 'stack-section-title'; profTitle.textContent = 'Configuration Profile';
+    const profCard = document.createElement('div'); profCard.className = 'stack-card';
+    const profName = document.createElement('strong'); profName.textContent = currentStack.profile || 'Development';
+    profCard.append(profName); profSec.append(profTitle, profCard); host.append(profSec);
+
+    const srvSec = document.createElement('div'); srvSec.className = 'stack-section';
+    const srvTitle = document.createElement('div'); srvTitle.className = 'stack-section-title'; srvTitle.textContent = 'Running Backend & Services';
+    const srvGrid = document.createElement('div'); srvGrid.className = 'stack-grid';
+    for (const s of (currentStack.services || [])) {
+      const card = document.createElement('div'); card.className = 'stack-card';
+      const left = document.createElement('div');
+      const name = document.createElement('div'); name.className = 'stack-service-title'; name.textContent = s.name + (s.folder ? ' (' + s.folder + ')' : '');
+      const meta = document.createElement('div'); meta.className = 'stack-service-meta'; meta.textContent = (s.url || (s.ready?.port ? 'port ' + s.ready.port : '')) + (s.command ? ' · ' + s.command : '');
+      left.append(name, meta);
+      const statusBadge = document.createElement('span'); statusBadge.className = 'count-tag'; statusBadge.textContent = s.status || 'ready';
+      card.append(left, statusBadge); srvGrid.append(card);
+    }
+    srvSec.append(srvTitle, srvGrid); host.append(srvSec);
+
+    if (currentStack.prerequisites?.length) {
+      const preSec = document.createElement('div'); preSec.className = 'stack-section';
+      const preTitle = document.createElement('div'); preTitle.className = 'stack-section-title'; preTitle.textContent = 'Database & Prerequisites';
+      const preGrid = document.createElement('div'); preGrid.className = 'stack-grid';
+      for (const item of currentStack.prerequisites) {
+        const card = document.createElement('div'); card.className = 'stack-card';
+        const text = document.createElement('span'); text.textContent = item; card.append(text); preGrid.append(card);
+      }
+      preSec.append(preTitle, preGrid); host.append(preSec);
+    }
+
+    if (currentStack.previews?.length > 1) {
+      const prevSec = document.createElement('div'); prevSec.className = 'stack-section';
+      const prevTitle = document.createElement('div'); prevTitle.className = 'stack-section-title'; prevTitle.textContent = 'Switch Interface';
+      const prevGrid = document.createElement('div'); prevGrid.className = 'drawer-actions';
+      for (const target of currentStack.previews) {
+        const btn = document.createElement('button'); btn.className = 'drawer-btn'; btn.type = 'button';
+        const sName = currentStack.services?.find(s => s.id === target.service)?.name || target.service;
+        btn.textContent = 'Open ' + sName;
+        btn.addEventListener?.('click', () => bridge.act('navigate-preview', target.url));
+        prevGrid.append(btn);
+      }
+      prevSec.append(prevTitle, prevGrid); host.append(prevSec);
+    }
+  }
+
+  function formatBody(raw) {
+    if (!raw) return '(empty)';
+    try { return JSON.stringify(JSON.parse(raw), null, 2); }
+    catch { return raw; }
+  }
+
+  function renderApis() {
+    const list = $('apis-list'), detail = $('apis-detail');
+    if (!list || !detail) return;
+    const filter = ($('apis-filter')?.value || '').toLowerCase();
+    const filtered = apiCalls.filter(c => !filter || c.url.toLowerCase().includes(filter) || c.method.toLowerCase().includes(filter));
+    $('apis-count-tag').textContent = apiCalls.length + (apiCalls.length === 1 ? ' call' : ' calls');
+    list.replaceChildren();
+
+    if (!filtered.length) {
+      const empty = document.createElement('div'); empty.style.padding = '14px'; empty.style.color = 'var(--muted)';
+      empty.textContent = apiCalls.length ? 'No calls match filter.' : 'No API calls captured yet. Use the preview to see requests.';
+      list.append(empty);
+    }
+
+    for (let i = filtered.length - 1; i >= 0; i--) {
+      const call = filtered[i];
+      const row = document.createElement('div'); row.className = 'api-row';
+      if (call.id === selectedApiId) row.setAttribute('aria-selected', 'true');
+      const methodBadge = document.createElement('span'); methodBadge.className = 'method-badge method-' + call.method; methodBadge.textContent = call.method;
+      const statusBadge = document.createElement('span');
+      const sGroup = call.status >= 200 && call.status < 300 ? '2xx' : (call.status >= 400 && call.status < 500 ? '4xx' : (call.status >= 500 ? '5xx' : '0'));
+      statusBadge.className = 'status-badge status-' + sGroup; statusBadge.textContent = String(call.status || 'ERR');
+      const urlCell = document.createElement('span'); urlCell.className = 'api-url-cell';
+      let short = call.url; try { const parsed = new URL(call.url); short = parsed.pathname + parsed.search; } catch {}
+      urlCell.textContent = short; urlCell.title = call.url;
+      const dur = document.createElement('span'); dur.className = 'api-duration'; dur.textContent = call.duration + 'ms';
+      row.append(methodBadge, statusBadge, urlCell);
+      if (call.trigger) {
+        const trg = document.createElement('span'); trg.className = 'trigger-chip'; trg.textContent = call.trigger.text || call.trigger.tag; trg.title = 'Clicked ' + call.trigger.text;
+        row.append(trg);
+      }
+      row.append(dur);
+      row.addEventListener?.('click', () => { selectedApiId = call.id; renderApis(); });
+      list.append(row);
+    }
+
+    const selected = apiCalls.find(c => c.id === selectedApiId) || filtered[filtered.length - 1];
+    detail.replaceChildren();
+    if (!selected) {
+      const hint = document.createElement('p'); hint.style.color = 'var(--muted)'; hint.textContent = 'Select an API request to view link, request payload and response.';
+      detail.append(hint); return;
+    }
+
+    const head = document.createElement('div'); head.className = 'detail-headline';
+    const urlWrap = document.createElement('div');
+    const mBadge = document.createElement('span'); mBadge.className = 'method-badge method-' + selected.method; mBadge.textContent = selected.method;
+    const uSpan = document.createElement('span'); uSpan.className = 'detail-url'; uSpan.textContent = ' ' + selected.url;
+    urlWrap.append(mBadge, uSpan);
+    const metaWrap = document.createElement('div'); metaWrap.className = 'detail-meta';
+    const sBadge = document.createElement('span'); sBadge.className = 'status-badge status-' + (selected.status >= 200 && selected.status < 300 ? '2xx' : '4xx'); sBadge.textContent = selected.status + ' ' + selected.statusText;
+    const timeSpan = document.createElement('span'); timeSpan.textContent = selected.duration + 'ms';
+    metaWrap.append(sBadge, timeSpan);
+    if (selected.trigger) {
+      const tSpan = document.createElement('span'); tSpan.className = 'trigger-chip'; tSpan.textContent = 'Clicked: ' + (selected.trigger.text || selected.trigger.tag);
+      metaWrap.append(tSpan);
+    }
+    head.append(urlWrap, metaWrap); detail.append(head);
+
+    // Request section
+    const reqBox = document.createElement('div'); reqBox.className = 'payload-box';
+    const reqHead = document.createElement('div'); reqHead.className = 'payload-head';
+    const reqTitle = document.createElement('span'); reqTitle.textContent = 'Request Payload';
+    const reqCopy = document.createElement('button'); reqCopy.className = 'drawer-btn'; reqCopy.textContent = 'Copy Request';
+    reqCopy.addEventListener?.('click', () => { navigator.clipboard?.writeText?.(selected.request.body || ''); reqCopy.textContent = 'Copied!'; setTimeout(() => { reqCopy.textContent = 'Copy Request'; }, 1500); });
+    reqHead.append(reqTitle, reqCopy);
+    const reqPre = document.createElement('pre'); reqPre.className = 'payload-pre'; reqPre.textContent = formatBody(selected.request.body);
+    reqBox.append(reqHead, reqPre); detail.append(reqBox);
+
+    // Response section
+    const resBox = document.createElement('div'); resBox.className = 'payload-box';
+    const resHead = document.createElement('div'); resHead.className = 'payload-head';
+    const resTitle = document.createElement('span'); resTitle.textContent = 'Response (' + selected.status + ' ' + selected.statusText + ')';
+    const resCopy = document.createElement('button'); resCopy.className = 'drawer-btn'; resCopy.textContent = 'Copy Response';
+    resCopy.addEventListener?.('click', () => { navigator.clipboard?.writeText?.(selected.response.body || ''); resCopy.textContent = 'Copied!'; setTimeout(() => { resCopy.textContent = 'Copy Response'; }, 1500); });
+    resHead.append(resTitle, resCopy);
+    const resPre = document.createElement('pre'); resPre.className = 'payload-pre'; resPre.textContent = formatBody(selected.response.body);
+    resBox.append(resHead, resPre); detail.append(resBox);
+  }
+
   bridge.onState(state => {
     if (!editing) $('address').value = state.url || '';
     $('back').disabled = !state.back; $('forward').disabled = !state.forward;
@@ -65,6 +303,23 @@
   });
   bridge.onPicked(() => status('picked', 'Added to your message', true));
   bridge.onError(message => status('error', message));
+
+  bridge.onStack?.(stack => {
+    currentStack = stack;
+    const label = stack?.profile || (stack?.services?.length ? stack.services[0].name : 'Stack');
+    if ($('stack-label')) $('stack-label').textContent = label;
+    if (activeDrawer === 'stack') renderStack();
+  });
+
+  bridge.onApiCall?.(call => {
+    apiCalls.push(call);
+    if ($('apis-label')) $('apis-label').textContent = 'APIs (' + apiCalls.length + ')';
+    let short = call.url; try { const p = new URL(call.url); short = p.pathname + p.search; } catch {}
+    const trg = call.trigger ? '"' + call.trigger.text + '" → ' : '';
+    status('api', trg + call.method + ' ' + short + ' · ' + (call.status || 'ERR') + ' (' + call.duration + 'ms)', false, () => { selectedApiId = call.id; setDrawer('apis'); });
+    if (activeDrawer === 'apis') renderApis();
+  });
+
   // The latest edit stays a few seconds after the run ends, so the last change can be seen landing.
   let editTimer = null;
   bridge.onEdit(edit => {
@@ -76,11 +331,20 @@
     if (edit.removed) row.append(part(' −' + edit.removed, 'removed'));
     $('edit').replaceChildren(row);
   });
+
   for (const action of ['back', 'forward', 'reload', 'pick']) $(action).addEventListener('click', () => bridge.act(action));
   $('open-external').addEventListener('click', () => bridge.act('open-external'));
+  $('stack-btn')?.addEventListener?.('click', () => setDrawer('stack', 260));
+  $('apis-btn')?.addEventListener?.('click', () => setDrawer('apis', 340));
+  $('stack-close')?.addEventListener?.('click', () => setDrawer(null));
+  $('apis-close')?.addEventListener?.('click', () => setDrawer(null));
+  $('apis-clear')?.addEventListener?.('click', () => { apiCalls.length = 0; selectedApiId = null; if ($('apis-label')) $('apis-label').textContent = 'APIs (0)'; renderApis(); });
+  $('apis-filter')?.addEventListener?.('input', () => renderApis());
+
   $('address').addEventListener('focus', () => { editing = true; $('address').select(); });
   $('address').addEventListener('blur', () => { editing = false; });
-  $('address').addEventListener('keydown', event => { if (event.key === 'Enter') { bridge.act('navigate', $('address').value); $('address').blur(); } if (event.key === 'Escape') $('address').blur(); });
+  $('address').addEventListener('keydown', event => { if (event.key === 'Enter') { bridge.act('navigate', $('address').value); $('address').blur(); } if (event.key === 'Escape') { $('address').blur(); setDrawer(null); } });
+  window.addEventListener?.('keydown', event => { if (event.key === 'Escape' && activeDrawer) setDrawer(null); });
 </script>
 </body>
 </html>

@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld('relayPreview', Object.freeze({
   onPicked: listen('preview:picked'),
   onError: listen('preview:error'),
   onEdit: listen('preview:edit'),
+  onStack: listen('preview:stack'),
+  onApiCall: listen('preview:api-call'),
 }));
