@@ -22,6 +22,8 @@ The November 2026 reports are tracked without reopening shipped milestones:
 | Separate-task actions clip; Flow cards are redundant or hide usage windows | [#107](https://github.com/AhmedNavaz/codeshi/issues/107): readable task navigation, meaningful progress and expandable five-hour/weekly/model-specific limits with resets and freshness. |
 | Flow does not clearly mark which agent is working | [#107](https://github.com/AhmedNavaz/codeshi/issues/107): active task/agent indicators that move after handoff and handle concurrent lanes. Normal's shipped #98 remains complete. |
 | Long shared chats repeatedly reach native refresh limits | [#85](https://github.com/AhmedNavaz/codeshi/issues/85): bounded rolling task briefs with source retention and separate envelope/native-context/cumulative-usage measurements. Preserve the original journal and #123's shipped refresh behavior. |
+| Task budget stops on repeated read-only diagnostic probes and blocks retries | [#137](https://github.com/AhmedNavaz/codeshi/issues/137): distinguish non-mutating network/status checks from mutating failure loops; allow explicit user retry/reset on stopped tasks. |
+| Release packaging fails during GitHub asset CDN timeouts | [#138](https://github.com/AhmedNavaz/codeshi/issues/138), shipped in 0.34.1: packaging verifies Electron against the checksums the electron package ships, retries GitHub with growing pauses and falls back to a mirror. |
 
 These card changes explain and navigate recorded work; they do not make Flow assignments a manual responsibility. The detailed [follow-up scope](docs/core-roadmap.md#flow-feedback-follow-ups) distinguishes the local protocol fix from planned work.
 
@@ -202,6 +204,7 @@ The tracking umbrella is [#107](https://github.com/AhmedNavaz/codeshi/issues/107
 | Clickable response links, inline file references with line numbers, and activity diff viewer links ([#109](https://github.com/AhmedNavaz/codeshi/issues/109)) | [0.33.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0) |
 | Remote access multi-browser transfer, week-long connection persistence, and active status tracking ([#114](https://github.com/AhmedNavaz/codeshi/issues/114)) | [0.33.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0) |
 | Interactive Gemini multiple-choice question resolution directly in Codeshi question cards | [0.33.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.33.0) |
+| Release builds verify Electron against the checksums the electron package ships, retry GitHub with growing pauses and fall back to a mirror ([#138](https://github.com/AhmedNavaz/codeshi/issues/138)) | [0.34.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.34.1) |
 
 ## Now
 
@@ -212,6 +215,7 @@ The tracking umbrella is [#107](https://github.com/AhmedNavaz/codeshi/issues/107
 | Smart routing quota freshness: recheck or join probes before rejecting stale plan usage on first Send | Planned. Avoids spurious 'no connected agent' errors when usage readings age out | [#134](https://github.com/AhmedNavaz/codeshi/issues/134) |
 | Adaptive quota thresholds for Smart routing and autonomous handoff in Flow mode | Planned. Replaces static 90% cutoff with spendability capacity; eliminates manual handoff suggestion prompts during Flow execution | [#135](https://github.com/AhmedNavaz/codeshi/issues/135) |
 | Flow mode card polish: extra task indicators, multi-window quota glance, and active agent highlighting | Planned. Fixes clipped text on extra tasks, cleans status copy, adds multi-window limit toggle, and highlights working agent | [#136](https://github.com/AhmedNavaz/codeshi/issues/136) |
+| Task budget repeated failure detector stops on read-only diagnostic probes and blocks retries | Planned. Prevents non-mutating network/status checks from halting tasks; adds retry reset | [#137](https://github.com/AhmedNavaz/codeshi/issues/137) |
 | More agents and models, such as Grok, DeepSeek, Qwen and free cloud tiers, on your own accounts | Gemini through Google Antigravity and local models through Ollama have shipped; further agents are next | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | Notarized macOS builds, so downloads open without a security prompt | Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
 | Install with Homebrew: `brew install --cask codeshi` | Depends on #1 | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
