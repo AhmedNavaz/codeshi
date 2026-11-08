@@ -367,15 +367,15 @@ if(message.method==='turn/steer'){send({id:message.id,result:{turnId:'async-turn
   const { runId } = broker.start(c, { text: 'Connect remotely', provider: 'codex', transport: 'app-server', requestId: 'async-question' });
   const active = broker.running;
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { clearInterval(poll); reject(new Error('Async question did not arrive.')); }, 5000);
+    // Codex asks and then keeps working, so wait for both: under load the second message can come a moment later.
+    const timer = setTimeout(() => { clearInterval(poll); reject(new Error(broker.view(c).pendingApprovals.length ? 'Codex did not keep working without an answer.' : 'Async question did not arrive.')); }, 5000);
     const poll = setInterval(() => {
-      if (!broker.view(c).pendingApprovals.length || !broker.view(c).canAddToRun) return;
+      if (!broker.view(c).pendingApprovals.length || !broker.view(c).canAddToRun || !c.messages.some(message => message.text === 'Continuing to inspect the code.')) return;
       clearTimeout(timer); clearInterval(poll); resolve();
     }, 10);
   });
   const pending = broker.view(c).pendingApprovals[0];
   assert.equal(pending.blocking, false);
-  assert.ok(c.messages.some(message => message.text === 'Continuing to inspect the code.'), 'Codex kept working without an answer.');
   const result = await broker.answer(runId, pending.id, [['No project yet']], c);
   assert.equal(result.added, true); assert.equal(broker.view(c).pendingApprovals.length, 0);
   await active.done;
