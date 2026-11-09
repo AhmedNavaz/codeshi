@@ -51,6 +51,19 @@
     } catch (failure) { if (scope === projectId) error = failure.message; }
     finally { pending = false; changed(); if (dialog.open) renderDialog(); refresh(); }
   }
+  async function attach(services) {
+    const scope = projectId, value = current(), chosen = profile();
+    if (pending || !scope || !chosen || !services.length) return;
+    pending = true; error = ''; changed(); renderDialog();
+    try {
+      // Stop whatever partially launched, then relaunch attaching to the services already running on their ports.
+      if (active(value.run)) await api.post('/api/commands/review/stop', { runId: value.run?.id }, scope);
+      const run = await api.post('/api/commands/review/start', { revision: value.plan?.revision, profileId: chosen.id, adopt: services }, scope);
+      if (scope === projectId) states.set(scope, { ...current(), run });
+    } catch (failure) { if (scope === projectId) error = failure.message; }
+    finally { pending = false; changed(); if (dialog.open) renderDialog(); refresh(); }
+  }
+  const reassignPrompt = 'One or more services could not start because their ports are already in use on this computer. Update the launch map so each affected service uses an available port, or, if a service is already running locally (for example a database or daemon), list it under prerequisites instead of starting it.';
   const preparing = () => preparationRequests.has(projectId) || ['waiting', 'running'].includes(current().preparation?.status);
   const preparationRequests = new Set(), preparationErrors = new Map();
   async function configure(change = '') {
@@ -87,7 +100,7 @@
     }
     if (value?.approvals) host.append(button('Preparation needs your approval', async () => { if (dialog.open) close(); await api.setTask(value.id); }));
   }
-  const words = { waiting: 'Waiting', starting: 'Starting', ready: 'Ready', done: 'Completed', stopped: 'Stopped', blocked: 'Blocked', failed: 'Failed', stopping: 'Stopping' };
+  const words = { waiting: 'Waiting', starting: 'Starting', ready: 'Ready', adopted: 'Attached', done: 'Completed', stopped: 'Stopped', blocked: 'Blocked', failed: 'Failed', stopping: 'Stopping' };
   function serviceMap(chosen, run, detailed = false) {
     const list = node('ol', 'project-review-map');
     for (const id of chosen.order) {
@@ -131,12 +144,17 @@
     }
     host.append(start);
     if (running) { const stop = button('Stop review', () => perform('stop')); stop.disabled = pending || run.status === 'stopping'; host.append(stop); }
-    if (run?.error) {
-      const fixPrompt = /already in use/i.test(run.error)
-        ? 'Investigate the occupied port from launch observations: if the service (e.g. database or daemon) is already running locally, list it under prerequisites instead of starting it as a service; otherwise choose an available port.'
-        : 'Investigate the failed launch using the observations below and correct the map or explain missing prerequisites.';
-      host.append(button('Ask agent to fix startup', () => configure(fixPrompt)));
+    if (run?.conflicts?.length) {
+      const box = node('div', 'project-review-conflict'), many = run.conflicts.length > 1;
+      box.append(node('strong', null, many ? 'Ports already in use' : 'Port already in use'));
+      box.append(node('span', null, `${run.conflicts.map(item => `${item.name} (port ${item.port})`).join(', ')} ${many ? 'are' : 'is'} already serving on this computer, so ${many ? 'those services were' : 'that service was'} not started. Attach to the running server, or choose another port.`));
+      const row = node('div', 'project-review-conflict-actions');
+      const adoptable = run.conflicts.filter(item => item.adoptable).map(item => item.service);
+      if (adoptable.length) { const attachButton = button(adoptable.length > 1 ? 'Attach to running services' : 'Attach to the running service', () => attach(adoptable), 'flow-button flow-primary'); attachButton.disabled = pending; row.append(attachButton); }
+      const reassign = button('Use another port', () => configure(reassignPrompt)); reassign.disabled = preparing(); row.append(reassign);
+      box.append(row); host.append(box);
     }
+    if (run?.error) host.append(button('Ask agent to fix startup', () => configure('Investigate the failed launch using the observations below and correct the map or explain missing prerequisites.')));
     if (!detailed) { const prepare = button(chosen ? 'Launch map' : preparing() ? 'Preparing…' : 'Prepare with agent', chosen ? open : () => configure()); prepare.disabled = !chosen && preparing(); host.append(prepare); }
   }
   function profileChooser() {

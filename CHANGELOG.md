@@ -14,6 +14,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ### Fixed
 
+- **Project review survives long prerequisites and in-use ports** (#141). Prerequisite notes in a launch map are now trimmed, truncated to 120 characters and capped at ten per profile instead of rejecting the whole map, so preparation no longer fails with "List at most ten short prerequisites per profile." An occupied service port blocks only its own service (and anything that depends on it) rather than the entire launch, leaving unrelated services running; the Flow review card lists each busy port and offers **Attach to the running service** when a healthy server already answers its readiness URL, or **Use another port** to re-prepare the map. Codeshi still never adopts or terminates a process it did not start.
 - **Smart routing near-quota graceful provider fallback in Flow mode** ([#144](https://github.com/AhmedNavaz/codeshi/issues/144)). In Flow mode with Smart routing, when a candidate provider's binding window is near its quota limit (e.g. weekly window at 97% used) at the pre-flight launch check, Codeshi now automatically re-routes to an eligible alternative subscription provider or model tier instead of hard-pausing prompt queue progression before launch. If no alternative provider or model has usable quota, the queue pauses with clear inline action controls to proceed with remaining allowance or switch providers directly without losing queue position.
 
 ## [0.36.0] - 2026-11-08
