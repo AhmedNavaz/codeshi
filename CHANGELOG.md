@@ -2,7 +2,20 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.38.2] - 2026-11-10
+
+### Added
+- **Ambient weather outside the Lounge.** A **Keep going outside Lounge** switch on the Ambient Weather card, on by default, keeps Rain, Snow or Clear playing over Flow's cards after you leave the Lounge. Turn it off there, or turn Flow off, and the weather goes away. The weather only shows in Flow mode.
+- Rain and snow land on Flow's own cards and buttons, not just the Lounge cards.
+
+### Changed
+- The Lounge shows one activity at a time. Pick Breakout, Snake, Trivia or Typing on the left; the weather and a quote stay on the right. The Lounge remembers the last activity you picked. A game you switch away from waits, paused.
+- The Ambient Weather card starts on Clear instead of Rain.
+- The **What's next** card shows the highlighted task without the agent's status line, timer or pulsing "working" badge. The highlight alone marks the task that is running, and a plan step that is running is highlighted the same way.
+
+### Fixed
+- The highlighted task in **What's next** no longer runs past the edge of its card; long prompts are cut off with an ellipsis.
+- In the Lounge, **Start Game** starts Breakout and Snake; before, the button changed to **Pause** but nothing moved. Keys now go only to the game you clicked, which is outlined, so the arrow keys no longer steer both games at once. A game pauses when you click away from it, and Space no longer starts Breakout while you're playing Snake.
 
 ## [0.38.1] - 2026-11-10
 

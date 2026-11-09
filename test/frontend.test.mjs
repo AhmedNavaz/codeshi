@@ -5179,9 +5179,8 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   const activeStep = steps.find(s => s.classList.contains('active'));
   const doneStep = steps.find(s => s.classList.contains('done'));
   const pendingStep = steps.find(s => s.classList.contains('pending'));
-  assert(activeStep.querySelector('.flow-step-working-badge'), 'Active step has working badge');
-  assert(activeStep.querySelector('.flow-pulse-dot'), 'Active step has animated pulse dot');
-  assert(activeStep.querySelector('.flow-step-meta'), 'Active step shows live agent activity meta');
+  assert.equal(activeStep.querySelector('.flow-step-working-badge'), null, 'Active step is highlighted only, with no badge');
+  assert.equal(activeStep.querySelector('.flow-step-meta'), null, 'Active step shows no agent status line');
   assert.equal(doneStep.querySelector('.flow-step-working-badge'), null, 'Done step has no working badge');
   assert.equal(pendingStep.querySelector('.flow-step-working-badge'), null, 'Pending step has no working badge');
   const files = flowText(ui, 'files');
@@ -5234,8 +5233,8 @@ test('Flow mode card polish: extra task indicators, multi-window quota glance, a
   const currentWork = ui.$('flow-card-next').querySelector('.flow-current-work');
   assert(currentWork, 'Executing task without steps renders prominent .flow-current-work card');
   assert(currentWork.classList.contains('flow-plan-active'), 'Current work has active highlight');
-  assert(currentWork.querySelector('.flow-plan-working-badge'), 'Current work has Working badge');
-  assert(currentWork.querySelector('.flow-pulse-dot'), 'Current work has animated pulsing dot');
+  assert.equal(currentWork.querySelector('.flow-plan-working-badge'), null, 'Current work shows no working badge');
+  assert.equal(currentWork.querySelector('.flow-task-meta'), null, 'Current work shows no agent status or timer');
 
   // 3. Limits in overlay window instead of expanding inline in card
   const allLimitsBtn = ui.$('flow-card-plans').querySelector('.flow-button');
@@ -5834,6 +5833,54 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   assert.match(ui.$('flow-card-lounge-zen').textContent, /Retro Snake/);
   assert.match(ui.$('flow-card-lounge-trivia').textContent, /Trivia/);
   assert.match(ui.$('flow-card-lounge-typing').textContent, /Typing Speed Test/);
+
+  // One activity at a time on the left, picked from tabs; weather and quotes on the right.
+  const breakoutCard = ui.$('flow-card-lounge-arcade'), snakeCard = ui.$('flow-card-lounge-zen');
+  const tab = id => ui.$('flow-lounge-tab-' + id);
+  const shown = () => ['arcade', 'zen', 'trivia', 'typing'].filter(id => !ui.$('flow-card-lounge-' + id).hidden);
+  assert.deepEqual(shown(), ['arcade'], 'Breakout is the first activity shown.');
+  assert.equal(tab('breakout').getAttribute('aria-selected'), 'true');
+  assert.deepEqual(ui.$('flow-lounge-right').children.map(card => card.id), ['flow-card-lounge-weather', 'flow-card-lounge-quote']);
+  tab('trivia').click();
+  assert.deepEqual(shown(), ['trivia']); assert.equal(tab('trivia').getAttribute('aria-selected'), 'true'); assert.equal(tab('breakout').getAttribute('aria-selected'), 'false');
+  tab('snake').click();
+  assert.deepEqual(shown(), ['zen']);
+
+  // Keys reach only the game whose card holds focus.
+  const [breakoutBoard] = breakoutCard.querySelectorAll('canvas'), [snakeBoard] = snakeCard.querySelectorAll('canvas');
+  const status = card => card.querySelectorAll('.flow-lounge-status-line')[0].textContent;
+  const startButton = card => card.querySelectorAll('button').find(b => /Start Game|Pause|Resume|Play Again/.test(b.textContent));
+  const press = (target, key) => { const event = new UIEvent('keydown', { key, target }); ui.window.dispatchEvent(event); return event; };
+  assert.equal(press(ui.$('message-input'), 'ArrowUp').defaultPrevented, false, 'Keys outside a game card are left alone.');
+  assert.equal(press(ui.$('message-input'), ' ').defaultPrevented, false);
+  assert.match(status(snakeCard), /^Ready/); assert.match(status(breakoutCard), /^Ready/);
+
+  assert.equal(press(snakeBoard, 'ArrowUp').defaultPrevented, true);
+  assert.match(status(snakeCard), /^Playing/, 'An arrow key on the Snake board starts Snake.');
+  assert.match(status(breakoutCard), /^Ready/, 'Breakout ignores keys meant for Snake.');
+
+  // Focus leaving a running game pauses it.
+  snakeCard.dispatchEvent(new UIEvent('focusout', { relatedTarget: ui.$('message-input') }));
+  assert.match(status(snakeCard), /^Paused/); assert.equal(startButton(snakeCard).textContent, 'Resume');
+  press(snakeBoard, ' ');
+  assert.match(status(snakeCard), /^Playing/, 'Space resumes the focused game.');
+
+  // Switching activity pauses the game left behind; Space starts only the focused game.
+  tab('breakout').click();
+  assert.deepEqual(shown(), ['arcade']); assert.match(status(snakeCard), /^Paused/);
+  press(breakoutBoard, ' ');
+  assert.match(status(breakoutCard), /^Playing/); assert.match(status(snakeCard), /^Paused/);
+  assert.equal(press(startButton(breakoutCard), ' ').defaultPrevented, false, 'A focused button keeps Space for its own click.');
+  press(breakoutBoard, ' ');
+  assert.match(status(breakoutCard), /^Paused/);
+
+  // The Start button starts its own game and hands the keys to the board.
+  tab('snake').click();
+  startButton(snakeCard).click();
+  assert.match(status(snakeCard), /^Playing/); assert.equal(ui.document.activeElement, snakeBoard);
+  assert.equal(snakeCard.classList.contains('flow-lounge-game'), true); assert.equal(snakeBoard.tabIndex, 0);
+  tab('typing').click();
+  assert.deepEqual(shown(), ['typing']); assert.match(status(snakeCard), /^Paused/);
 
   // Switch weather mode to Snow and back to Rain
   const weatherTabs = ui.$('flow-card-lounge-weather').querySelectorAll('.flow-lounge-weather-tab');

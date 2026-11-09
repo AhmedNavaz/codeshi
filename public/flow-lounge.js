@@ -2,9 +2,9 @@
   "use strict";
   // Flow Lounge (#14): Play and relax while agents work.
   // - Fullscreen ambient weather canvas (Rain, Snow, Clear) physically interacting with UI cards and panels.
-  // - Left Rail: Breakout arcade mini-game, Tech & Code Trivia, Developer Wisdom quotes.
-  // - Right Rail: Retro Snake mini-game, Typing Speed Test, Ambient Weather controls.
-  // - Both games start only on click/interaction (no auto-start, no ugly overlay box).
+  // - Left Rail: one activity at a time (Breakout, Snake, Trivia or Typing), chosen from a picker.
+  // - Right Rail: the calm, always-on things: Ambient Weather controls and Developer Wisdom quotes.
+  // - Games start only on click/interaction; keys reach only the game whose card holds focus.
   // - Subdued, readable central view (.main-panel).
   // - Auto-recedes when approvals or agent attention is needed.
 
@@ -28,13 +28,16 @@
   let receded = false;
   let lastRunning = false;
 
+  const BREAKOUT_READY = "Ready · Start Game, or click the board and press Space";
+  const SNAKE_READY = "Ready · Start Game, or click the board and use the arrow keys";
+
   // ==========================================
   // 1. FULL-SCREEN AMBIENT WEATHER SIMULATION
   // ==========================================
   let weatherCanvas = null;
   let weatherCtx = null;
   let weatherAnimId = null;
-  let weatherMode = "rain"; // "rain" | "snow" | "clear"
+  let weatherMode = "clear"; // "rain" | "snow" | "clear"
   let rainDrops = [];
   let rainSplashes = [];
   let rainRipples = [];
@@ -56,6 +59,15 @@
         ".code-block",
         ".composer-input",
         ".starter-prompts button",
+        // Standard Flow cards and their buttons, so weather lands on them outside the Lounge too
+        "#flow-left .flow-card",
+        "#flow-right .flow-card",
+        "#flow-left .flow-card-head",
+        "#flow-right .flow-card-head",
+        "#flow-left .flow-button",
+        "#flow-right .flow-button",
+        "#flow-left .flow-step",
+        "#flow-right .flow-plan",
         // Lounge cards: interactive controls and content blocks
         ".flow-lounge-game-canvas",
         ".flow-lounge-score-pill",
@@ -168,9 +180,26 @@
     }
   }
 
+  // Weather can stay on outside the Lounge, in Flow only, when the person keeps it on from the weather card.
+  const KEEP_WEATHER_KEY = "throughline:lounge-keep-weather";
+  let keepWeather = (() => { try { return localStorage.getItem(KEEP_WEATHER_KEY) !== "0"; } catch { return true; } })();
+  const weatherShown = () => (active && !receded) || (keepWeather && Boolean(window.relayFlow?.isOn?.()));
+  function syncWeather() {
+    if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
+    if (weatherShown()) {
+      if (!weatherCanvas) initWeatherSystem(); else resizeWeatherCanvas();
+      updateObstacleRects();
+      if (!document.hidden) weatherAnimId = safeRequestAnim(drawWeather);
+    } else if (weatherCanvas) {
+      if (weatherCanvas.remove) weatherCanvas.remove(); else if (weatherCanvas.parentNode) weatherCanvas.parentNode.removeChild(weatherCanvas);
+      weatherCanvas = null;
+      weatherCtx = null;
+    }
+  }
+
   function drawWeather(time) {
     weatherAnimId = null;
-    if (!active || receded || document.hidden || !weatherCtx || !weatherCanvas) return;
+    if (!weatherShown() || document.hidden || !weatherCtx || !weatherCanvas) return;
     const ctx = weatherCtx;
     const w = weatherCanvas.width, h = weatherCanvas.height;
     ctx.clearRect(0, 0, w, h);
@@ -515,14 +544,14 @@
       }
     }
 
-    if (active && !receded) weatherAnimId = safeRequestAnim(drawWeather);
+    if (weatherShown()) weatherAnimId = safeRequestAnim(drawWeather);
   }
 
   function setWeatherMode(mode) {
     weatherMode = mode;
     if (weatherAnimId) safeCancelAnim(weatherAnimId);
     weatherAnimId = null;
-    if (active && !receded && !document.hidden) weatherAnimId = safeRequestAnim(drawWeather);
+    if (weatherShown() && !document.hidden) weatherAnimId = safeRequestAnim(drawWeather);
     rainSplashes = [];
     rainRipples = [];
     settledSnow = [];
@@ -585,7 +614,7 @@
       bStartBreakout.textContent = "▶ Start Game";
       bStartBreakout.className = "primary-button flow-lounge-btn";
     }
-    if (breakoutStatusEl) breakoutStatusEl.textContent = "Ready · Press Start Game or Space to launch";
+    if (breakoutStatusEl) breakoutStatusEl.textContent = BREAKOUT_READY;
   }
 
   function getBestScore(game) {
@@ -608,6 +637,11 @@
     breakoutBestEl.textContent = String(best);
   }
 
+  function loopBreakout() {
+    if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
+    breakoutAnimId = safeRequestAnim(drawBreakout);
+  }
+
   function startBreakout() {
     if (!breakoutState || breakoutState.gameOver || breakoutState.won) initBreakout();
     if (breakoutState) {
@@ -619,7 +653,18 @@
       bStartBreakout.textContent = "Pause";
       bStartBreakout.className = "secondary-button flow-lounge-btn";
     }
-    if (breakoutStatusEl) breakoutStatusEl.textContent = "Playing · Arrow keys or Drag paddle · Space to pause";
+    if (breakoutStatusEl) breakoutStatusEl.textContent = "Playing · Arrow keys, A/D or the mouse · Space to pause";
+    // The loop stops while the game waits, so starting has to wake it.
+    loopBreakout();
+  }
+
+  function setBreakoutPaused(paused) {
+    if (!breakoutStarted || breakoutPaused === paused) return;
+    breakoutPaused = paused;
+    if (breakoutState) breakoutState.leftDown = breakoutState.rightDown = false;
+    if (bStartBreakout) bStartBreakout.textContent = paused ? "Resume" : "Pause";
+    if (breakoutStatusEl) breakoutStatusEl.textContent = paused ? "Paused · Space or Resume to continue" : "Playing · Arrow keys, A/D or the mouse · Space to pause";
+    if (!paused) loopBreakout();
   }
 
   function stepBreakout() {
@@ -728,7 +773,6 @@
     const title = node("h2", undefined, "Breakout");
     head.append(title);
 
-    const sub = node("p", "flow-lounge-subtitle", "Lounge Arcade · Left Rail");
 
     const scorePill = node("div", "flow-lounge-score-pill");
     const scoreLabel = node("span", undefined, "Score ");
@@ -748,7 +792,7 @@
     if (typeof breakoutCanvas.getContext === "function") breakoutCtx = breakoutCanvas.getContext("2d");
     canvasWrap.append(breakoutCanvas);
 
-    breakoutStatusEl = node("div", "flow-lounge-status-line", "Ready · Press Start Game or Space to launch");
+    breakoutStatusEl = node("div", "flow-lounge-status-line", BREAKOUT_READY);
 
     breakoutCanvas.addEventListener("mousemove", e => {
       if (breakoutState) {
@@ -756,34 +800,45 @@
         const scaleX = breakoutCanvas.width / (rect.width || 320);
         const x = (e.clientX - rect.left) * scaleX;
         breakoutState.paddle.x = Math.max(0, Math.min(breakoutState.w - breakoutState.paddle.w, x - breakoutState.paddle.w / 2));
+        // Before launch the loop is idle; redraw so the paddle and ball follow the mouse.
+        if (!breakoutAnimId && (!breakoutStarted || breakoutPaused)) breakoutAnimId = safeRequestAnim(drawBreakout);
       }
     });
 
     const foot = node("div", "flow-card-foot flow-lounge-foot");
     bStartBreakout = button("primary-button flow-lounge-btn", "▶ Start Game", () => {
-      if (!breakoutStarted) {
-        startBreakout();
-      } else {
-        breakoutPaused = !breakoutPaused;
-        bStartBreakout.textContent = breakoutPaused ? "Resume" : "Pause";
-        if (breakoutStatusEl) breakoutStatusEl.textContent = breakoutPaused ? "Paused · Press Space to resume" : "Playing · Space to pause";
-        if (!breakoutPaused) {
-          if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
-          breakoutAnimId = safeRequestAnim(drawBreakout);
-        }
-      }
+      if (!breakoutStarted) startBreakout();
+      else setBreakoutPaused(!breakoutPaused);
+      if (breakoutStarted && !breakoutPaused) focusBoard(breakoutCanvas);
     });
 
     const bRestart = button("secondary-button flow-lounge-btn", "Restart", () => {
       initBreakout();
       updateBreakoutScores();
-      if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
-      breakoutAnimId = safeRequestAnim(drawBreakout);
+      loopBreakout();
     });
 
     foot.append(bStartBreakout, bRestart);
-    card.append(head, sub, scorePill, canvasWrap, breakoutStatusEl, foot);
+    card.append(head, scorePill, canvasWrap, breakoutStatusEl, foot);
+    wireGameCard(card, breakoutCanvas, "Breakout board. Space starts or pauses; arrow keys or A and D move the paddle.", () => setBreakoutPaused(true));
     return card;
+  }
+
+  // Keys reach only the game whose card holds focus. Clicking anywhere on a game card gives it
+  // the keys (outlined), and focus leaving the card pauses that game so it doesn't run unseen.
+  function wireGameCard(card, canvas, label, pause) {
+    card.tabIndex = -1;
+    card.classList.add("flow-lounge-game");
+    canvas.tabIndex = 0;
+    canvas.setAttribute("aria-label", label);
+    card.addEventListener("focusout", e => {
+      if (e.relatedTarget?.closest?.(".flow-lounge-game") !== card) pause();
+    });
+  }
+
+  // Moving focus from the button to the board keeps Space for the game instead of re-pressing the button.
+  function focusBoard(canvas) {
+    try { canvas?.focus?.({ preventScroll: true }); } catch {}
   }
 
   // ==========================================
@@ -826,7 +881,7 @@
       bStartSnake.textContent = "▶ Start Game";
       bStartSnake.className = "primary-button flow-lounge-btn";
     }
-    if (snakeStatusEl) snakeStatusEl.textContent = "Ready · Press Start Game or Arrow keys / WASD to begin";
+    if (snakeStatusEl) snakeStatusEl.textContent = SNAKE_READY;
   }
 
   function spawnFood(snake, cols, rows) {
@@ -854,6 +909,21 @@
       bStartSnake.className = "secondary-button flow-lounge-btn";
     }
     if (snakeStatusEl) snakeStatusEl.textContent = "Playing · Arrow keys or WASD · Space to pause";
+    // The loop stops while the game waits, so starting has to wake it.
+    loopSnake();
+  }
+
+  function loopSnake() {
+    if (snakeAnimId) safeCancelAnim(snakeAnimId);
+    snakeAnimId = safeRequestAnim(drawSnake);
+  }
+
+  function setSnakePaused(paused) {
+    if (!snakeStarted || snakePaused === paused) return;
+    snakePaused = paused;
+    if (bStartSnake) bStartSnake.textContent = paused ? "Resume" : "Pause";
+    if (snakeStatusEl) snakeStatusEl.textContent = paused ? "Paused · Space or Resume to continue" : "Playing · Arrow keys or WASD · Space to pause";
+    if (!paused) loopSnake();
   }
 
   function stepSnake(time) {
@@ -927,7 +997,6 @@
     const title = node("h2", undefined, "Retro Snake");
     head.append(title);
 
-    const sub = node("p", "flow-lounge-subtitle", "Lounge Arcade · Right Rail");
 
     const scorePill = node("div", "flow-lounge-score-pill");
     const scoreLabel = node("span", undefined, "Score ");
@@ -947,32 +1016,24 @@
     if (typeof snakeCanvas.getContext === "function") snakeCtx = snakeCanvas.getContext("2d");
     canvasWrap.append(snakeCanvas);
 
-    snakeStatusEl = node("div", "flow-lounge-status-line", "Ready · Press Start Game or Arrow keys / WASD to begin");
+    snakeStatusEl = node("div", "flow-lounge-status-line", SNAKE_READY);
 
     const foot = node("div", "flow-card-foot flow-lounge-foot");
     bStartSnake = button("primary-button flow-lounge-btn", "▶ Start Game", () => {
-      if (!snakeStarted) {
-        startSnake();
-      } else {
-        snakePaused = !snakePaused;
-        bStartSnake.textContent = snakePaused ? "Resume" : "Pause";
-        if (snakeStatusEl) snakeStatusEl.textContent = snakePaused ? "Paused · Press Space to resume" : "Playing · Space to pause";
-        if (!snakePaused) {
-          if (snakeAnimId) safeCancelAnim(snakeAnimId);
-          snakeAnimId = safeRequestAnim(drawSnake);
-        }
-      }
+      if (!snakeStarted) startSnake();
+      else setSnakePaused(!snakePaused);
+      if (snakeStarted && !snakePaused) focusBoard(snakeCanvas);
     });
 
     const bRestart = button("secondary-button flow-lounge-btn", "Restart", () => {
       initSnake();
       updateSnakeScores();
-      if (snakeAnimId) safeCancelAnim(snakeAnimId);
-      snakeAnimId = safeRequestAnim(drawSnake);
+      loopSnake();
     });
 
     foot.append(bStartSnake, bRestart);
-    card.append(head, sub, scorePill, canvasWrap, snakeStatusEl, foot);
+    card.append(head, scorePill, canvasWrap, snakeStatusEl, foot);
+    wireGameCard(card, snakeCanvas, "Snake board. Arrow keys or W, A, S and D steer; Space starts or pauses.", () => setSnakePaused(true));
     return card;
   }
 
@@ -1372,84 +1433,91 @@
     bClear.setAttribute("data-mode", "clear");
     tabs.append(bRain, bSnow, bClear);
 
+    const keep = button("flow-lounge-weather-keep", "", () => {
+      keepWeather = !keepWeather;
+      try { localStorage.setItem(KEEP_WEATHER_KEY, keepWeather ? "1" : "0"); } catch {}
+      paintKeep();
+      syncWeather();
+    });
+    keep.setAttribute("role", "switch");
+    const paintKeep = () => {
+      keep.setAttribute("aria-checked", String(keepWeather));
+      keep.classList.toggle("active", keepWeather);
+      keep.textContent = keepWeather ? "Keeps going outside Lounge · On" : "Keep going outside Lounge · Off";
+    };
+    paintKeep();
     const hint = node("p", "flow-lounge-hint", "Rain drops splash and snowflakes settle upon cards and workspace headers.");
-    card.append(head, sub, tabs, hint);
+    card.append(head, sub, tabs, keep, hint);
     return card;
   }
 
   // ==========================================
   // 8. KEYBOARD SHORTCUTS FOR GAMES
   // ==========================================
-  window.addEventListener("keydown", e => {
-    if (!active || receded) return;
+  const KEY_DIRS = {
+    ArrowUp: "up", w: "up", W: "up",
+    ArrowDown: "down", s: "down", S: "down",
+    ArrowLeft: "left", a: "left", A: "left",
+    ArrowRight: "right", d: "right", D: "right",
+  };
+  const SNAKE_DIRS = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
 
-    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+  // Which game owns this key: the one whose card holds focus, or none.
+  function gameFor(target) {
+    const card = target?.closest?.(".flow-lounge-game");
+    if (card?.id === "flow-card-lounge-arcade") return "breakout";
+    if (card?.id === "flow-card-lounge-zen") return "snake";
+    return null;
+  }
+
+  window.addEventListener("keydown", e => {
+    if (!active || receded || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+    const game = gameFor(e.target);
+    if (!game) return;
+    const dir = KEY_DIRS[e.key];
 
     if (e.key === " ") {
-      if (breakoutStarted) {
-        breakoutPaused = !breakoutPaused;
-        if (bStartBreakout) bStartBreakout.textContent = breakoutPaused ? "Resume" : "Pause";
-        if (breakoutStatusEl) breakoutStatusEl.textContent = breakoutPaused ? "Paused · Press Space to resume" : "Playing · Space to pause";
-        if (!breakoutPaused) {
-          if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
-          breakoutAnimId = safeRequestAnim(drawBreakout);
-        }
-        e.preventDefault();
-      } else if (!breakoutStarted && (!snakeStarted || snakePaused)) {
-        startBreakout();
-        e.preventDefault();
-      }
+      // A focused button already answers Space with its own click.
+      if (e.target.tagName === "BUTTON") return;
+      e.preventDefault();
+      if (game === "breakout") breakoutStarted ? setBreakoutPaused(!breakoutPaused) : startBreakout();
+      else snakeStarted ? setSnakePaused(!snakePaused) : startSnake();
+      return;
+    }
+    if (!dir) return;
+    e.preventDefault();
+
+    if (game === "breakout" && breakoutState) {
+      if (dir === "left") breakoutState.leftDown = true;
+      if (dir === "right") breakoutState.rightDown = true;
       return;
     }
 
-    // Breakout controls
-    if (breakoutState) {
-      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") { breakoutState.leftDown = true; }
-      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") { breakoutState.rightDown = true; }
-    }
-
-    // Snake controls
-    if (snakeState && !snakeState.gameOver) {
-      const cur = snakeState.dir;
-      if ((e.key === "ArrowUp" || e.key === "w" || e.key === "W") && cur.y === 0) {
-        if (!snakeStarted) startSnake();
-        snakeState.nextDir = { x: 0, y: -1 };
-        e.preventDefault();
-      }
-      if ((e.key === "ArrowDown" || e.key === "s" || e.key === "S") && cur.y === 0) {
-        if (!snakeStarted) startSnake();
-        snakeState.nextDir = { x: 0, y: 1 };
-        e.preventDefault();
-      }
-      if ((e.key === "ArrowLeft" || e.key === "a" || e.key === "A") && cur.x === 0 && (!breakoutState || !breakoutStarted)) {
-        if (!snakeStarted) startSnake();
-        snakeState.nextDir = { x: -1, y: 0 };
-        e.preventDefault();
-      }
-      if ((e.key === "ArrowRight" || e.key === "d" || e.key === "D") && cur.x === 0 && (!breakoutState || !breakoutStarted)) {
-        if (!snakeStarted) startSnake();
-        snakeState.nextDir = { x: 1, y: 0 };
-        e.preventDefault();
-      }
+    if (game === "snake" && snakeState) {
+      if (!snakeStarted || snakeState.gameOver) startSnake();
+      else if (snakePaused) setSnakePaused(false);
+      const next = SNAKE_DIRS[dir], cur = snakeState.dir;
+      // No turning straight back into the body.
+      if (next.x !== -cur.x || next.y !== -cur.y) snakeState.nextDir = next;
     }
   });
 
   window.addEventListener("keyup", e => {
-    if (breakoutState) {
-      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") breakoutState.leftDown = false;
-      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") breakoutState.rightDown = false;
-    }
+    if (!breakoutState) return;
+    const dir = KEY_DIRS[e.key];
+    if (dir === "left") breakoutState.leftDown = false;
+    if (dir === "right") breakoutState.rightDown = false;
   });
 
   if (typeof window !== "undefined") {
     window.addEventListener("resize", () => {
-      if (active && !receded) {
+      if (weatherShown()) {
         resizeWeatherCanvas();
         updateObstacleRects();
       }
     });
     window.addEventListener("scroll", () => {
-      if (active && !receded) updateObstacleRects();
+      if (weatherShown()) updateObstacleRects();
     }, { passive: true, capture: true });
   }
 
@@ -1462,8 +1530,8 @@
     if (active && !receded && !document.hidden) {
       breakoutAnimId = safeRequestAnim(drawBreakout);
       snakeAnimId = safeRequestAnim(drawSnake);
-      weatherAnimId = safeRequestAnim(drawWeather);
     }
+    if (weatherShown() && !document.hidden) weatherAnimId = safeRequestAnim(drawWeather);
   });
 
   // ==========================================
@@ -1479,23 +1547,81 @@
     loungeRight.classList.remove("flow-slide-out-right", "flow-slide-in-right");
   }
 
-  function mountLoungeDecks() {
-    // Left side: Breakout card + Trivia card + Quote card
-    const cardBreakout = buildBreakoutCard();
-    const cardTrivia = buildTriviaCard();
-    const cardQuote = buildQuoteCard();
-    loungeLeft.replaceChildren(cardBreakout, cardTrivia, cardQuote);
+  // One activity at a time on the left, chosen from a picker; the calm, always-on things on the right.
+  const ACTIVITIES = [
+    { id: "breakout", label: "Breakout" },
+    { id: "snake", label: "Snake" },
+    { id: "trivia", label: "Trivia" },
+    { id: "typing", label: "Typing" },
+  ];
+  const ACTIVITY_KEY = "throughline:lounge-activity";
+  let activity = (() => {
+    try { const saved = localStorage.getItem(ACTIVITY_KEY); return ACTIVITIES.some(a => a.id === saved) ? saved : "breakout"; }
+    catch { return "breakout"; }
+  })();
+  let activityTabs = [];
+  let activityPanels = {};
 
-    // Right side: Snake card + Typing test card + Weather selector card
-    const cardSnake = buildSnakeCard();
-    const cardTyping = buildTypingCard();
-    const cardWeather = buildWeatherCard();
-    loungeRight.replaceChildren(cardSnake, cardTyping, cardWeather);
+  function buildPicker() {
+    const bar = node("div", "flow-lounge-picker");
+    bar.setAttribute("role", "tablist");
+    bar.setAttribute("aria-label", "Lounge activity");
+    activityTabs = ACTIVITIES.map(a => {
+      const tab = button("flow-lounge-picker-tab", a.label, () => chooseActivity(a.id));
+      tab.id = "flow-lounge-tab-" + a.id;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("data-activity", a.id);
+      tab.setAttribute("aria-controls", activityPanels[a.id]?.id || "");
+      return tab;
+    });
+    bar.addEventListener("keydown", e => {
+      const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (!step) return;
+      e.preventDefault();
+      const i = ACTIVITIES.findIndex(a => a.id === activity);
+      const next = ACTIVITIES[(i + step + ACTIVITIES.length) % ACTIVITIES.length].id;
+      chooseActivity(next);
+      activityTabs.find(tab => tab.getAttribute("data-activity") === next)?.focus?.();
+    });
+    bar.append(...activityTabs);
+    return bar;
+  }
+
+  function chooseActivity(id) {
+    // A game you switch away from waits, paused, where you left it.
+    if (id !== "breakout") setBreakoutPaused(true);
+    if (id !== "snake") setSnakePaused(true);
+    activity = id;
+    try { localStorage.setItem(ACTIVITY_KEY, id); } catch {}
+    for (const tab of activityTabs) {
+      const on = tab.getAttribute("data-activity") === id;
+      tab.setAttribute("aria-selected", String(on));
+      tab.tabIndex = on ? 0 : -1;
+      tab.classList.toggle("active", on);
+    }
+    for (const [key, panel] of Object.entries(activityPanels)) panel.hidden = key !== id;
+    updateObstacleRects();
+  }
+
+  function mountLoungeDecks() {
+    activityPanels = {
+      breakout: buildBreakoutCard(),
+      snake: buildSnakeCard(),
+      trivia: buildTriviaCard(),
+      typing: buildTypingCard(),
+    };
+    for (const [id, panel] of Object.entries(activityPanels)) {
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", "flow-lounge-tab-" + id);
+    }
+    loungeLeft.replaceChildren(buildPicker(), ...Object.values(activityPanels));
+    loungeRight.replaceChildren(buildWeatherCard(), buildQuoteCard());
 
     initBreakout();
     initSnake();
     updateBreakoutScores();
     updateSnakeScores();
+    chooseActivity(activity);
   }
 
   function enter() {
@@ -1558,11 +1684,7 @@
     if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
     if (quoteTimer) { safeClearInterval(quoteTimer); quoteTimer = null; }
 
-    if (weatherCanvas && weatherCanvas.parentNode) {
-      if (weatherCanvas.remove) weatherCanvas.remove(); else if (weatherCanvas.parentNode) weatherCanvas.parentNode.removeChild(weatherCanvas);
-      weatherCanvas = null;
-      weatherCtx = null;
-    }
+    syncWeather();
 
     clearSlideClasses();
 
@@ -1600,11 +1722,7 @@
     if (snakeAnimId) { safeCancelAnim(snakeAnimId); snakeAnimId = null; }
     if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
 
-    if (weatherCanvas && weatherCanvas.parentNode) {
-      if (weatherCanvas.remove) weatherCanvas.remove(); else if (weatherCanvas.parentNode) weatherCanvas.parentNode.removeChild(weatherCanvas);
-      weatherCanvas = null;
-      weatherCtx = null;
-    }
+    syncWeather();
 
     clearSlideClasses();
 
@@ -1682,9 +1800,11 @@
     if (!window.relayFlow?.isOn?.()) {
       if (active) exit();
       toggle.hidden = true;
+      syncWeather();
       return;
     }
     toggle.hidden = false;
+    if (weatherShown() !== Boolean(weatherCanvas)) syncWeather();
 
     const state = api.getState();
     const c = state.conversation;
@@ -1706,6 +1826,7 @@
     const on = Boolean(e?.detail?.on);
     toggle.hidden = !on;
     if (!on && active) exit();
+    syncWeather();
   });
 
   window.relayFlowLounge = {
@@ -1722,6 +1843,7 @@
     sync: (flowOn) => {
       toggle.hidden = !flowOn;
       if (!flowOn && active) exit();
+      syncWeather();
     },
   };
 })();

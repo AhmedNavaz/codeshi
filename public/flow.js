@@ -506,22 +506,10 @@
       titleEl.title = prompt || title;
       titleWrapper.append(icon, titleEl);
 
-      const badge = node('span', 'flow-plan-working-badge');
-      badge.setAttribute('aria-label', `${agent} is working`);
-      const dot = node('span', 'flow-pulse-dot');
-      dot.setAttribute('aria-hidden', 'true');
-      badge.append(dot);
-      head.append(titleWrapper, badge);
-
-      const meta = node('div', 'flow-task-meta');
-      const elapsed = elapsedWords(run?.startedAt);
-      const phase = phaseWords[run?.phase] || 'working';
-      const statusBadge = node('span', 'flow-task-status flow-task-status-running');
-      statusBadge.append(node('span', undefined, `${agent} is ${phase}${elapsed ? ` · ${elapsed}` : ''}`));
-      meta.append(statusBadge);
+      head.append(titleWrapper);
 
       const hint = node('p', 'flow-current-work-hint', 'The agent’s plan appears here as it makes one.');
-      activeItem.append(head, meta, hint);
+      activeItem.append(head, hint);
       body.append(activeItem);
     } else if (!steps.length && !queue.length) {
       body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
@@ -535,23 +523,6 @@
         item.append(mark, node('span', 'flow-step-text', step.text));
         if (step === current && !held && step.status === 'active') item.setAttribute('aria-current', 'step');
         item.setAttribute('aria-label', `${step.status === 'done' ? 'Done' : step.status === 'active' ? (held ? 'Stopped at' : 'Now') : 'To do'}: ${step.text}`);
-        if (step.status === 'active' && !held) {
-          const badge = node('span', 'flow-step-working-badge flow-plan-working-badge');
-          badge.setAttribute('aria-label', 'Working on this step');
-          const dot = node('span', 'flow-pulse-dot');
-          dot.setAttribute('aria-hidden', 'true');
-          badge.append(dot);
-          item.append(badge);
-
-          if (running && run) {
-            const agent = agentName(run.provider, run.connection === 'local');
-            const phase = phaseWords[run.phase] || 'working';
-            const elapsed = elapsedWords(run.startedAt);
-            const meta = node('div', 'flow-step-meta');
-            meta.append(node('span', 'flow-task-status flow-task-status-running', `${agent} is ${phase}${elapsed ? ` · ${elapsed}` : ''}`));
-            item.append(meta);
-          }
-        }
         list.append(item);
       }
       body.append(list);

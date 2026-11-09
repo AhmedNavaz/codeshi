@@ -382,8 +382,13 @@
   background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised));
   box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent);
   margin-bottom: 8px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
   transition: border-color .15s, background .15s, box-shadow .15s;
 }
+.flow-current-work .flow-task-head { min-width: 0; }
 .flow-current-work-title-wrap {
   display: flex;
   align-items: center;
@@ -687,6 +692,12 @@
   display: grid;
   gap: 10px;
 }
+/* The game holding the keyboard gets an accent edge; keys never reach the other one. */
+.flow-lounge-game { outline: none; transition: box-shadow 120ms ease; }
+.flow-lounge-game .flow-lounge-canvas { outline: none; cursor: pointer; }
+.flow-lounge-game:focus-within { box-shadow: var(--shadow-sm), 0 0 0 1.5px var(--accent); }
+.flow-lounge-game:focus-within .flow-lounge-canvas-wrap { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+@media (prefers-reduced-motion: reduce) { .flow-lounge-game { transition: none; } }
 .flow-lounge-subtitle {
   margin: -6px 0 2px;
   font-size: 11px;
@@ -802,8 +813,8 @@
   font-weight: 600;
 }
 
-/* Weather Selector Tabs */
-.flow-lounge-weather-tabs {
+/* Weather Selector Tabs, and the Lounge activity picker that shares their look */
+.flow-lounge-weather-tabs, .flow-lounge-picker {
   display: flex;
   gap: 4px;
   padding: 3px;
@@ -811,7 +822,8 @@
   background: var(--surface-raised);
   border: 1px solid var(--border);
 }
-.flow-lounge-weather-tab {
+.flow-lounge-picker { flex: none; }
+.flow-lounge-weather-tab, .flow-lounge-picker-tab {
   flex: 1;
   padding: 5px 8px;
   border: 0;
@@ -828,14 +840,18 @@
   justify-content: center;
   gap: 4px;
 }
-.flow-lounge-weather-tab:hover {
+.flow-lounge-weather-keep { justify-self: start; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.flow-lounge-weather-keep.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--text-strong); }
+.flow-lounge-weather-tab:hover, .flow-lounge-picker-tab:hover {
   color: var(--text);
 }
-.flow-lounge-weather-tab.active {
+.flow-lounge-weather-tab.active, .flow-lounge-picker-tab.active {
   background: var(--bg);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
 }
+.flow-lounge-picker-tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.flow-lounge-left > .flow-lounge-card[hidden] { display: none; }
 
 /* Trivia Card */
 .flow-lounge-trivia-meta {
