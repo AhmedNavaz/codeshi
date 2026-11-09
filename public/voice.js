@@ -175,7 +175,8 @@
   function stopSpeaking() { if (!speaking) return; finishReading?.(); reading++; synth()?.cancel(); }
 
   // A message sent from a voice draft marks the run it starts; that run's summary is read aloud when it finishes.
-  $('composer')?.addEventListener('submit', () => { if (voiceDraft && input.value.trim()) awaitingRun = true; voiceDraft = false; cancelCountdown(); if (status.dataset.state === 'countdown') show(''); }, true);
+  // The message box may already be empty here: sending clears it at once. An emptied voice draft has voiceDraft off already.
+  $('composer')?.addEventListener('submit', () => { if (voiceDraft) awaitingRun = true; voiceDraft = false; cancelCountdown(); if (status.dataset.state === 'countdown') show(''); }, true);
   input.addEventListener('input', event => { if (!input.value.trim()) voiceDraft = false; if (countdown !== null && event.isTrusted) { cancelCountdown(); show(''); } });
   let runningId = null, announced = null;
   window.addEventListener('relay-state', () => {

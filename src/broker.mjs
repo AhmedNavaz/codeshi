@@ -13,6 +13,7 @@ import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
 import { normalizeUsage, readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
+import { smartResults } from './smart-results.mjs';
 import { claudeRequestContext, contextReading, restoreAfterCompaction } from './context-state.mjs';
 import { observeReading, observeRunSize, usageWatch, usualWindowSpend } from './usage-watch.mjs';
 import { contextControlView, estimateContext, findMessage, managedContextVersion, milestoneMemory, observationsFor, REFRESH_HISTORY, rolloverDecision, sessionSeed } from './context-rollover.mjs';
@@ -106,7 +107,7 @@ export function routingNote(routing) {
   const assessed = routing.assessment;
   const assessment = assessed && typeof assessed.id === 'string' && TIERS.includes(assessed.tier) && ['low', 'medium', 'high'].includes(assessed.effort) && ['agent', 'local', 'fallback', 'plan'].includes(assessed.source)
     ? { id: assessed.id.slice(0, 128), tier: assessed.tier, effort: assessed.effort, source: assessed.source, reason: typeof assessed.reason === 'string' ? assessed.reason.slice(0, 300) : '', ...(Number.isFinite(assessed.ms) ? { ms: assessed.ms } : {}) } : null;
-  return { mode, reason: typeof routing.reason === 'string' ? routing.reason.slice(0, 300) : '', ...(TIERS.includes(routing.tier) ? { tier: routing.tier } : {}), ...(routing.steppedDown === true ? { steppedDown: true } : {}), ...(routing.plannedHandoff === true ? { plannedHandoff: true } : {}), ...(assessment ? { assessment } : {}), ...(escalation ? { escalation } : {}) };
+  return { mode, reason: typeof routing.reason === 'string' ? routing.reason.slice(0, 300) : '', ...(TIERS.includes(routing.tier) ? { tier: routing.tier } : {}), ...(routing.steppedDown === true ? { steppedDown: true } : {}), ...(routing.plannedHandoff === true ? { plannedHandoff: true } : {}), ...(['expiring', 'asked'].includes(routing.remainder) ? { remainder: routing.remainder } : {}), ...(assessment ? { assessment } : {}), ...(escalation ? { escalation } : {}) };
 }
 
 // Where each new imported message goes, as the id of the message it follows (null for the start). A run's prompt and replies stay together as one turn,
@@ -331,10 +332,11 @@ export class Broker extends EventEmitter {
     if (record.type === 'queue_add') c.queue = [...c.queue, record.item?.routing?.mode ? { ...record.item, routing: { ...record.item.routing, mode: normalizeRoutingMode(record.item.routing.mode) } } : record.item];
     if (record.type === 'queue_update') c.queue = c.queue.map(item => { if (item.id !== record.id) return item; const updated = { ...item }; if (record.text !== undefined) updated.text = record.text; if ('provider' in record) updated.provider = record.provider; if ('model' in record) updated.model = record.model; if ('effort' in record) updated.effort = record.effort; if (record.clearRouting) delete updated.routing; return updated; });
     if (record.type === 'queue_move') { const item = c.queue.find(entry => entry.id === record.id); if (item) { const rest = c.queue.filter(entry => entry !== item); rest.splice(record.index, 0, item); c.queue = rest; } }
-    if (record.type === 'queue_remove' || record.type === 'queue_started') { delete c.queueResumeProceed; c.queue = c.queue.filter(item => item.id !== record.id); }
+    // "Proceed with remaining allowance" holds for the rest of the queue, so each later prompt doesn't pause again.
+    if (record.type === 'queue_remove' || record.type === 'queue_started') { c.queue = c.queue.filter(item => item.id !== record.id); if (!c.queue.length) delete c.queueResumeProceed; }
     // One record, so a restart finds each prompt with one owner: moved or not, never both (#93).
     if (record.type === 'queue_moved') { const moves = new Map(record.moves.map(move => [move.id, move])); c.queue = c.queue.map(item => { const move = moves.get(item.id); if (!move) return item; const { routing, ...rest } = item; const { id, ...fields } = move; return { ...rest, ...(routing && !('routing' in fields) ? { routing } : {}), ...fields }; }); }
-    if (record.type === 'queue_pause') c.queuePaused = { reason: record.reason, at: record.at };
+    if (record.type === 'queue_pause') c.queuePaused = { reason: record.reason, at: record.at, ...(record.proceedTried ? { proceedTried: true } : {}) };
     if (record.type === 'queue_resume') { c.queuePaused = null; if (record.proceedWithNearQuota) c.queueResumeProceed = true; else delete c.queueResumeProceed; }
     if (record.type === 'resume_end' && c.resume?.id === record.id) { c.resume = null; c.resumeEnded = { id: record.id, outcome: record.outcome, provider: record.provider || null, at: record.at }; }
     if (['settings', 'submission'].includes(record.type) && !record.review && !record.local) {
@@ -359,6 +361,9 @@ export class Broker extends EventEmitter {
     if (record.type === 'message_delta') { const message = findMessage(c, record.id); if (!message) throw new Error('Message delta has no original message.'); message.text += record.text; message.seq = record.seq; if (record.status) message.status = record.status; if (record.toolOutcome) message.toolOutcome = record.toolOutcome; }
     if (record.type === 'run_metadata') {
       if (c.activeRun) Object.assign(c.activeRun, record.metadata);
+      // Routing switched agents before the run started (#144): the saved run is the new agent's, after a restart too.
+      const switched = record.metadata?.routingFallback;
+      if (c.activeRun && switched?.to) Object.assign(c.activeRun, { provider: switched.to, model: switched.toModel ?? null, ...(switched.toEffort !== undefined ? { effort: switched.toEffort } : {}), ...(switched.toTransport ? { transport: switched.toTransport } : {}) });
       if (c.activeRun && record.metadata?.usage) c.activeRun.usageMeasured = normalizeUsage(c.activeRun.provider, record.metadata.usage, { previous: c.budgetTotals?.[c.activeRun.provider] });
       const reading = c.activeRun && contextReading(c.activeRun.provider, record.metadata || {}, record.at);
       if (reading) {
@@ -519,6 +524,22 @@ export class Broker extends EventEmitter {
   }
 
   // The task ledger for a conversation (#84), worked out from its journal. Prompts and commands only when asked for.
+  // Smart results (#139) for the whole workspace: every conversation and its parallel tasks. Only task summaries are
+  // kept between requests, and a journal is read again only once it has changed.
+  async results(options = {}) {
+    const prompts = options.prompts === true, tasks = [];
+    this.resultsCache ||= new Map();
+    for (const c of this.conversations.values()) {
+      const file = path.join(this.dataDir, `${c.id}.jsonl`), key = `${c.id}:${prompts}`;
+      let stat;
+      try { stat = await fs.promises.stat(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      const version = `${stat.size}:${stat.mtimeMs}`, cached = this.resultsCache.get(key);
+      if (cached?.version !== version) this.resultsCache.set(key, { version, tasks: (await readLedger(file, { prompts })).tasks });
+      tasks.push(...this.resultsCache.get(key).tasks);
+    }
+    if (this.tasks) tasks.push(...await this.tasks.ledgers({ prompts }));
+    return smartResults(tasks, { ...options, prompts });
+  }
   async ledger(c, options = {}) { const ledger = await readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options); return this.tasks ? { ...ledger, tasks: [...ledger.tasks, ...await this.tasks.ledgers(options)].sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt))) } : ledger; }
 
   compactContext(c, { provider = c.provider } = {}, viewOptions = {}) {
@@ -838,14 +859,16 @@ export class Broker extends EventEmitter {
         this.observeQuota(c, provider, provUsage);
         models = await this.handoff.modelRows(provider);
       } catch { continue; }
-      const allowed = m => (!run.execution || this.execution.allows(c, run.execution, { action: 'routing', provider, model: m }) || this.execution.allows(c, run.execution, { action: 'manual', provider, model: m })) && !this.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model: m, previousProvider: failedProvider });
+      // The run is already saved and holds its task's reservation and counts (#87). Choosing another agent before it
+      // starts hands nothing off, so only the task's own limits and allow-lists apply, not its own reservation.
+      const allowed = m => (!run.execution || this.execution.allows(c, run.execution, { action: 'routing', provider, model: m }) || this.execution.allows(c, run.execution, { action: 'manual', provider, model: m })) && !this.budget.refusal(c, { task: { id: run.taskId, relation: null }, provider, model: m, runId: run.id });
       let allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
       if (provider === failedProvider && failedModel) {
         allowedModels = allowedModels.filter(id => id !== failedModel);
       }
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
-      candidates.push({ provider, models: models.filter(m => !allowedModels.length || allowedModels.includes(m.id || m.model || m.value)), billingSource: account.billingSource, usage: provUsage, eligible: true, ...(allowedModels.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
+      candidates.push({ provider, account, models: models.filter(m => !allowedModels.length || allowedModels.includes(m.id || m.model || m.value)), billingSource: account.billingSource, usage: provUsage, eligible: true, ...(allowedModels.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
     }
     if (!candidates.length) return null;
     const choice = globalThis.relayRouting.route({ text, attachments: run.message?.attachments?.length || 0, assessment, mode, candidates, current: failedProvider, allowApi, quotaThreshold: threshold });
@@ -858,11 +881,12 @@ export class Broker extends EventEmitter {
       steppedDown: choice.steppedDown || false,
       routing: { mode, reason: choice.reason, tier: choice.tier },
       usage: chosenRow?.usage || null,
+      account: chosenRow?.account || null,
       quota: choice.quota
     };
   }
 
-  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null, orchestrate = false, executionRevision, proceedWithNearQuota = false }, { execution = null, executionAction = 'manual', verifyExecution, review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null, assessedTask = null, routingEvidence = null, proceedWithNearQuota: optionProceedWithNearQuota = false } = {}) {
+  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null, orchestrate = false, executionRevision, proceedWithNearQuota = false, role = null }, { execution = null, executionAction = 'manual', verifyExecution, review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null, assessedTask = null, routingEvidence = null, proceedWithNearQuota: optionProceedWithNearQuota = false } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
     // Orchestrate (#12): a read-only run that proposes a plan, in the conversation's own session so it knows the context.
     // Only a new message asks for one; reviews, queued prompts, retries, resumes and local runs never pass it.
@@ -908,14 +932,14 @@ export class Broker extends EventEmitter {
       try { available = fs.statSync(directory).isDirectory(); } catch {}
       if (!available) throw Object.assign(new Error(`Workspace folder is unavailable: ${directory}. Reconnect it or remove it from this project before starting an assistant.`), { status: 409 });
     }
-    const bin = resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot });
+    let bin = resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot });
     if (!bin) throw Object.assign(new Error(`${provider === 'gemini' ? 'Gemini' : provider === 'codex' ? 'Codex' : 'Claude'} CLI could not be found. Install it or set AI_RELAY_${provider.toUpperCase()}_BIN to its executable path, then retry.`), { status: 503, category: 'installation' });
     if (provider === 'gemini' && isAntigravityACP(bin) && mode === 'read') throw Object.assign(new Error(antigravityReadOnly), { status: 400, category: 'permission' });
     // Gemini CLI takes its effort from the model, so a level saved under the Antigravity connection doesn't apply and can't stop a run.
     if (provider === 'gemini' && !isAntigravityACP(bin)) effort = null;
     // Antigravity negotiates additional folders with the runtime before any prompt is sent.
     if (provider === 'gemini' && isAgy(bin)) throw Object.assign(new Error(agyUnsupported), { status: 503, category: 'installation' });
-    const actualTransport = transportFor(provider, transport, this.configuredBins[provider]);
+    let actualTransport = transportFor(provider, transport, this.configuredBins[provider]);
     if ((provider === 'gemini' && actualTransport !== 'acp') || (provider !== 'gemini' && actualTransport === 'acp') || (provider === 'codex' && actualTransport === 'sdk') || (provider === 'claude' && actualTransport === 'app-server')) throw Object.assign(new Error('This transport does not support the selected provider.'), { status: 400 });
     // A native session may retain tool permissions for folders since removed.
     // Reconstruct from the canonical journal whenever membership changes.
@@ -928,28 +952,28 @@ export class Broker extends EventEmitter {
     const resetSession = Boolean(c.sessions[provider] && (changedWorkspace || switchedAgent || fresh || rollover));
     const effectiveFresh = ordinaryFresh || Boolean(rollover);
     const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
-    const sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
+    let sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
     const verification = verificationForRun(this.verificationCadence(), { retryOf, automaticReview });
-    const prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
-    const lease = this.acquireMutation(`provider:${provider}`);
+    let lease = this.acquireMutation(`provider:${provider}`);
     let baseline;
     try { if (review) verifyReview(); baseline = review ? { kind: 'review', git: true, digest: review.snapshot.digest, capturedAt: new Date().toISOString() } : workspaceBaseline(this.workspace, this.workspaceFolders); } catch (error) { lease.release(); throw error; }
     const run = { id: runId, taskId: task.id, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
       stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, limitChain, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
-      execution, executionOptions, model, effort, steerable: !review && !orchestrate && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview, orchestrate, verification: prepared.metadata.verification, proceedWithNearQuota: Boolean(proceedWithNearQuota || optionProceedWithNearQuota || c.queueResumeProceed) };
+      execution, executionOptions, model, effort, steerable: !review && !orchestrate && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview, orchestrate, verification: prepared.metadata.verification, proceedWithNearQuota: Boolean(proceedWithNearQuota || optionProceedWithNearQuota || queued && c.queueResumeProceed), role: role || null };
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
       this.execution.ensure(c, task.id, { requestId });
       this.execution.assert(c, execution, executionOptions);
-      this.record(c, { type: 'submission', id: runId, task, execution, ...(plan ? { plan } : {}), previousProvider: c.lastRun?.provider || null, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature,
+      this.record(c, { type: 'submission', id: runId, task, execution, ...(plan ? { plan } : {}), previousProvider: c.lastRun?.provider || null, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature, ...(role ? { role } : {}),
         ...(local ? { local } : {}), ...(review ? { review } : {}), ...(orchestrate ? { orchestration: { goal: text } } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
         ...(automaticReview ? { automaticReview } : {}),
-        message: { id: randomUUID(), role: 'user', text, ...(text === continuationRequest ? { continuation: true } : {}), ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(orchestrate ? { orchestrationId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, ...(routing.tier ? { tier: routing.tier } : {}), ...(routing.steppedDown ? { steppedDown: true } : {}), ...(routing.plannedHandoff ? { plannedHandoff: true } : {}), ...(routing.assessment ? { ratedBy: routing.assessment.source, ...(routing.assessment.ms ? { ratedMs: routing.assessment.ms } : {}) } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
+        message: { id: randomUUID(), role: 'user', text, ...(text === continuationRequest ? { continuation: true } : {}), ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(orchestrate ? { orchestrationId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, policy: globalThis.relayRouting.POLICY_VERSION, ...(routing.selectedBy === 'you' ? { selectedBy: 'you' } : {}), ...(routing.tier ? { tier: routing.tier } : {}), ...(routing.steppedDown ? { steppedDown: true } : {}), ...(routing.plannedHandoff ? { plannedHandoff: true } : {}), ...(routing.assessment ? { ratedBy: routing.assessment.source, ...(routing.assessment.ms ? { ratedMs: routing.assessment.ms } : {}) } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
     for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', `Using skill ${skill.name}: ${skill.reason}`, provider);
     // A message sent by hand takes the place of a wait for a reset.
@@ -1046,8 +1070,13 @@ export class Broker extends EventEmitter {
           this.observeQuota(c, provider, usage);
           this.record(c, { type: 'run_metadata', metadata: { routingQuota: quota } });
           if (['near', 'exhausted', 'stale'].includes(quota.state)) {
-            if (quota.state === 'near' && run.proceedWithNearQuota) {
-              this.message(c, 'activity', `Proceeding with remaining ${provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex'} allowance as requested (${globalThis.relayRouting.quotaText(quota)}).`, provider);
+            // Past the safety margin but not at the limit (#153): spent when you chose "Proceed with remaining allowance",
+            // or when the window resets soon enough that the rest would expire. Auto already chose knowing that, or a
+            // fresh reading shows it now, in which case an agent with ordinary headroom is tried first.
+            const spendRemainder = quota.state === 'near' && (run.proceedWithNearQuota || Boolean(quota.burndown));
+            const remainderNote = () => { const note = globalThis.relayRouting.remainderText(provider, quota, { asked: run.proceedWithNearQuota && !quota.burndown }); this.message(c, 'activity', `${note}.`, provider); this.record(c, { type: 'run_metadata', metadata: { routingRemainder: { provider, reason: quota.burndown ? 'expiring' : 'asked', ...(quota.burndown ? { resetsAt: quota.burndown.resetsAt } : {}) } } }); };
+            if (spendRemainder && (run.proceedWithNearQuota || run.routing?.remainder)) {
+              remainderNote();
             } else if (['near', 'exhausted'].includes(quota.state)) {
               const fallback = await this.findRoutingFallback(c, run, { failedProvider: provider, failedModel: model, failedQuota: quota, usage });
               if (fallback) {
@@ -1066,18 +1095,24 @@ export class Broker extends EventEmitter {
                 this.bins[provider] = bin;
                 actualTransport = transportFor(provider, transport, this.configuredBins[provider]);
                 run.steerable = !review && actualTransport !== 'cli';
-                sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
-                const account = this.configuredBins[provider] ? { authenticated: true, authMode: "test", billingSource: "subscription" } : await accountStatus(provider, { bin, workspace: this.workspace, googleRoot: this.googleRoot });
+                // Another agent starts a fresh session with the brief prepared below; a smaller model of the same agent keeps its own.
+                sessionId = effectiveFresh || provider !== previousProvider ? null : c.sessions[provider]?.id;
+                // The account the switch was chosen from, read moments ago. A charge needs the same consent as any other
+                // start (#87): an agent that isn't billed to a subscription only runs if you confirmed charges for this run.
+                const account = fallback.account || (this.configuredBins[provider] ? { authenticated: true, authMode: "test", billingSource: "subscription" } : await accountStatus(provider, { bin, workspace: this.workspace, googleRoot: this.googleRoot }));
                 this.record(c, { type: 'run_metadata', metadata: { account: { authenticated: account.authenticated, authMode: account.authMode, billingSource: account.billingSource } } });
+                if (account.authenticated === false) throw Object.assign(new Error('Sign in through the provider’s supported authentication flow before running.'), { category: 'authentication' });
+                if (account.billingSource !== 'subscription' && !billingConfirmed) throw Object.assign(new Error(`Billing source is ${account.billingSource}. Explicitly confirm this provider run before it may consume usage.`), { category: 'permission' });
                 run.billingSource = account.billingSource;
                 prepared = prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode, session: { sessionReason: 'cross-agent-handoff', previousProvider }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: true, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
-                this.record(c, { type: 'run_metadata', metadata: { routingFallback: { from: previousProvider, fromModel: previousModel, to: provider, toModel: model, reason: `${previousProvider} quota is ${quota.state} (${globalThis.relayRouting.quotaText(quota)})` } } });
-                if (c.activeRun) { c.activeRun.provider = provider; c.activeRun.model = model; c.activeRun.effort = effort; }
+                this.record(c, { type: 'run_metadata', metadata: { routingFallback: { from: previousProvider, fromModel: previousModel, to: provider, toModel: model, toEffort: effort ?? null, toTransport: actualTransport, freshSession: !sessionId, reason: `${previousProvider} quota is ${quota.state} (${globalThis.relayRouting.quotaText(quota)})` } } });
                 this.message(c, 'activity', `${previousProvider === 'codex' ? 'Codex' : previousProvider === 'claude' ? 'Claude' : 'Gemini'} is near its quota limit (${globalThis.relayRouting.quotaText(quota)}). Smart routing switched to ${provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex'}${model ? ` (${model})` : ''}.`, provider);
                 if (fallback.usage) this.observeQuota(c, provider, fallback.usage);
                 if (fallback.quota) this.record(c, { type: 'run_metadata', metadata: { routingQuota: fallback.quota } });
                 Object.assign(executionOptions, { provider, model, effort });
                 this.emit('update', { conversationId: c.id });
+              } else if (spendRemainder) {
+                remainderNote();
               } else {
                 throw Object.assign(new Error(`Routing paused before starting ${provider}: ${globalThis.relayRouting.quotaText(quota)}. Refresh plan usage or choose a model manually.`), { category: 'routing', quotaState: quota.state });
               }
@@ -1099,7 +1134,10 @@ export class Broker extends EventEmitter {
           command.args.push('--model', model || 'default');
         }
         const remainingSpend = run.billingSource === 'api' ? this.budget.remainingSpend(c, run.taskId) : null;
-        const maxBudgetUsd = provider === 'claude' && actualTransport === 'sdk' ? remainingSpend : null;
+        // Claude stops itself at a dollar cap, through the SDK or `claude -p`. Other agents offer none, so their spend is
+        // checked as they report it and can overshoot (#87).
+        const maxBudgetUsd = provider === 'claude' && ['sdk', 'cli'].includes(actualTransport) ? remainingSpend : null;
+        if (maxBudgetUsd !== null && actualTransport === 'cli') command.args.push('--max-budget-usd', String(Math.max(0, maxBudgetUsd)));
         if (remainingSpend !== null) this.record(c, { type: 'run_metadata', metadata: { budgetEnforcement: { spend: maxBudgetUsd !== null ? 'native' : 'reported-usage', maxSpendUSD: remainingSpend } } });
         // The worker cannot launch a provider until its PID and mutation lease are durable.
         if (this.execution.current(c, task.id)?.override?.scope === 'step') this.record(c, { type: 'execution_override_used', taskId: task.id });
@@ -1169,7 +1207,7 @@ export class Broker extends EventEmitter {
         this.record(c, { type: 'run_process', pid: run.child.pid, pidStart });
         lease.setProcess(run.child.pid, pidStart);
         this.execution.assert(c, execution, executionOptions); verifyExecution?.();
-        run.child.send({ type: 'start', config: { ...(maxBudgetUsd !== null ? { maxBudgetUsd } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
+        run.child.send({ type: 'start', config: { ...(maxBudgetUsd !== null && actualTransport === 'sdk' ? { maxBudgetUsd } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
       } catch (error) { run.errorCategory = error.category || classifyError(error); complete(null, null, error); }
     };
     launch();
@@ -1309,7 +1347,12 @@ export class Broker extends EventEmitter {
         this.budget.check(run);
       }
       run.terminalSuccess = event.subtype === 'success' && !event.is_error;
-      if (!run.terminalSuccess) {
+      // Claude reached the spending cap Codeshi gave it (#87): a task limit, saved and shown like one. If the cost it just
+      // reported already stopped the run, that stop says it once.
+      if (event.subtype === 'error_max_budget_usd') {
+        run.failed = true;
+        if (!run.budgetStop) this.budget.nativeStop(run, { allowed: c.activeRun?.budgetEnforcement?.maxSpendUSD ?? null, agent: 'Claude' });
+      } else if (!run.terminalSuccess) {
         run.failed = true; if (run.errorCategory !== 'quota') run.errorCategory = classifyError(event.result || event.errors?.join(' '));
         this.agentError(run, clip(event.result || event.errors?.join('\n') || event.subtype || 'Claude could not complete this turn.'));
       } else if (event.result && !c.messages.some(m => m.runId === run.id && m.role === 'assistant')) {

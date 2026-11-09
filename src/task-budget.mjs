@@ -72,7 +72,7 @@ export function applyBudgetRecord(c, record) {
   if (record.type === 'routing_assessment_start') record = { ...record, type: 'background_review', review: { id: record.id, provider: record.provider, model: record.model, assessment: true } };
   else if (record.type === 'routing_assessment_metadata') record = { ...record, type: 'review_budget', began: record.metadata?.began };
   else if (record.type === 'routing_assessment_end') record = { ...record, type: 'review_result' };
-  if (['submission', 'run_end', 'background_review', 'review_budget', 'review_result', 'task_policy', 'task_failure', 'task_budget_stop', 'task_budget_extend', 'task_budget_reset'].includes(record.type) || record.type === 'run_metadata' && (record.metadata?.usage || record.metadata?.costUSD !== undefined || record.metadata?.account || record.metadata?.budgetEnforcement)) c.taskBudgetRevision = record.seq;
+  if (['submission', 'run_end', 'background_review', 'review_budget', 'review_result', 'task_policy', 'task_failure', 'task_budget_stop', 'task_budget_extend', 'task_budget_reset'].includes(record.type) || record.type === 'run_metadata' && (record.metadata?.usage || record.metadata?.costUSD !== undefined || record.metadata?.account || record.metadata?.budgetEnforcement || record.metadata?.routingFallback)) c.taskBudgetRevision = record.seq;
   if (record.type === 'task_policy') { c.taskPolicy = record.policy; return; }
   if (record.type === 'submission') {
     if (c.taskOfRun?.[record.id]) return;
@@ -105,6 +105,14 @@ export function applyBudgetRecord(c, record) {
   if (record.type === 'run_metadata') {
     const state = activeState(), entry = state?.active[c.budgetActive], metadata = record.metadata || {};
     if (!entry) return;
+    // Routing switched agents before this run started (#144). Its usage is the new agent's, read by that agent's rules,
+    // and the next run's handoff count follows the agent that really worked. A fresh session has no earlier total.
+    const switched = metadata.routingFallback;
+    if (switched?.to && switched.to !== entry.provider) {
+      entry.provider = switched.to;
+      if (switched.freshSession !== false) delete c.budgetTotals?.[switched.to];
+      else if (c.budgetTotals && !c.budgetTotals[switched.to]) c.budgetTotals[switched.to] = { input: null, output: null, cacheRead: null, cacheWrite: null, reasoning: null, costEstimateUSD: null };
+    }
     if (metadata.budgetEnforcement) entry.budgetEnforcement = metadata.budgetEnforcement;
     if (metadata.effectiveModel || metadata.usage) entry.began = true;
     if (metadata.account?.billingSource) entry.billing = metadata.account.billingSource;
@@ -151,7 +159,7 @@ export function applyBudgetRecord(c, record) {
     if (state) addFailure(state, { signature: hash(`check\0${record.check.command}\0${record.check.exitCode}`), kind: 'check', what: `Tests: ${record.check.command || 'test command'}`, how: `Exit code ${record.check.exitCode ?? 'unknown'}`, provider: null, runId: record.runId, at: record.at });
     return;
   }
-  if (record.type === 'task_budget_stop') { const state = c.taskBudgets?.[record.taskId]; if (state) state.stopped = { kind: record.kind, runId: record.runId, at: record.at }; return; }
+  if (record.type === 'task_budget_stop') { const state = c.taskBudgets?.[record.taskId]; if (state) state.stopped = { kind: record.kind, runId: record.runId, at: record.at, ...(record.native ? { native: true } : {}) }; return; }
   if (record.type === 'task_budget_extend') { const state = c.taskBudgets?.[record.taskId]; if (state) { state.extra[record.limit] = (state.extra[record.limit] || 0) + record.add; state.stopped = null; } return; }
   if (record.type === 'task_budget_reset') { const state = c.taskBudgets?.[record.taskId]; if (state) { state.failures = {}; state.stopped = null; } }
 }
@@ -247,17 +255,19 @@ export class TaskBudgets {
     return null;
   }
   // Why this run can't start, or null. Nothing is reserved here: the record that saves the run does that, in the same step.
-  refusal(c, { task, provider, model, local = false, previousProvider = null }) {
+  // `runId` names a run already saved and reserved that is choosing again before it starts, such as routing switching
+  // agents near a limit: its own reservation is not another worker.
+  refusal(c, { task, provider, model, local = false, previousProvider = null, runId = null }) {
     const key = local ? 'local' : provider, permitted = this.allows(c, key, model);
     if (!permitted.allowed) return { limit: 'allowed', message: permitted.reason };
     if (!task?.id) return null;
     const state = c.taskBudgets?.[task.id];
     if (!state) return null;
-    const limits = this.limits(c, state), counted = relationOf(task.relation, key, previousProvider ?? c.lastRun?.provider);
-    if (Object.keys(state.active).length >= limits.maxConcurrent) return { limit: 'maxConcurrent', used: Object.keys(state.active).length, allowed: limits.maxConcurrent, message: `This task already has ${limits.maxConcurrent} agents working.` };
+    const limits = this.limits(c, state), counted = relationOf(task.relation, key, previousProvider ?? c.lastRun?.provider), others = Object.keys(state.active).filter(id => id !== runId).length;
+    if (others >= limits.maxConcurrent) return { limit: 'maxConcurrent', used: others, allowed: limits.maxConcurrent, message: `This task already has ${limits.maxConcurrent} agents working.` };
     // No adapter offers a reliable estimate for an entire run. Reserve the remaining measured allowance for one worker,
     // rather than giving the same remaining tokens/dollars/minutes to a builder and reviewer at once. Other tasks are independent.
-    if (Object.keys(state.active).length && MEASURED_LIMITS.some(key => limits[key] !== null)) return { limit: 'reservation', message: 'This task’s remaining time, token or spending allowance is reserved by its running agent. Wait for it to finish before continuing or reviewing the same task.' };
+    if (others && MEASURED_LIMITS.some(key => limits[key] !== null)) return { limit: 'reservation', message: 'This task’s remaining time, token or spending allowance is reserved by its running agent. Wait for it to finish before continuing or reviewing the same task.' };
     if (counted) {
       const limit = { retries: 'maxRetries', reviews: 'maxReviews', handoffs: 'maxHandoffs' }[counted], words = { retries: 'retries', reviews: 'reviews', handoffs: 'handoffs' }[counted];
       if (state[counted] >= limits[limit]) return { limit, used: state[counted], allowed: limits[limit], message: `This task has used its ${limits[limit]} ${words}.` };
@@ -315,6 +325,14 @@ export class TaskBudgets {
     this.broker.record(c, { type: 'task_budget_stop', taskId, runId: recordRunId, kind: over.limit, used: over.used, allowed: over.allowed });
     this.broker.emit('notify', { conversationId: c.id, kind: 'stopped', title: 'Task limit reached', body: over.message });
     owner.stop(run.c.id);
+  }
+  // An agent ended itself at the spending cap Codeshi gave it, such as Claude's --max-budget-usd. It has already stopped,
+  // so this only saves why: the run ends as a task-limit stop, not as an agent error.
+  nativeStop(run, { limit = 'maxSpendUSD', allowed = null, agent = 'The agent' } = {}) {
+    const message = `${agent} stopped itself at this task's API spending cap${typeof allowed === 'number' ? ` ($${allowed.toFixed(2)} was left when it started)` : ''}. Raise the spending limit in Task limits to continue.`;
+    run.budgetStop = { limit, allowed, message, native: true }; run.errorCategory = 'budget';
+    this.broker.record(run.c, { type: 'task_budget_stop', taskId: run.taskId, runId: run.id, kind: limit, allowed, native: true });
+    this.broker.emit('notify', { conversationId: run.c.id, kind: 'stopped', title: 'Task limit reached', body: message });
   }
   // A step as it is saved. The same failure counts across runs and agents, because it is kept on the task.
   observeStep(c, message) {

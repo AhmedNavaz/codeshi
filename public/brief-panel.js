@@ -24,6 +24,7 @@
       ['pencil', 'Changed files', brief.changedFiles?.length ? String(brief.changedFiles.length) : 'None'],
       ['alert', 'Went wrong', brief.failedAttempts?.length ? plural(brief.failedAttempts.length, 'attempt') : 'Nothing'],
       ['check', 'Steps left', brief.unfinishedPlan?.length ? String(brief.unfinishedPlan.filter(step => step.status !== 'done').length) : 'No plan'],
+      ['clock', 'Earlier chat', brief.earlier ? `${plural(brief.earlier.requests.length, 'request')}${brief.earlier.decisions?.length ? `, ${plural(brief.earlier.decisions.length, 'decision')}` : ''} folded` : 'Sent word for word'],
     ];
     if (brief.scope?.otherFolders?.length) rows.unshift(['folder', 'Folders', `${brief.scope.folders.join(', ')} (not ${brief.scope.otherFolders.join(', ')})`]);
     host.replaceChildren(...rows.flatMap(([icon, name, value]) => { const mark = node('span', 'brief-item-icon'); mark.dataset.icon = icon; mark.setAttribute('aria-hidden', 'true'); return [mark, node('span', 'brief-item-name', name), node('span', 'brief-item-value', value)]; }));
@@ -54,6 +55,15 @@
       block.append(list);
       return block;
     };
+    // The rolling brief: older requests folded to a line each, with what came of them, and where the fold came from.
+    const earlierSection = earlier => {
+      const block = section('Earlier in this conversation', (earlier?.requests || []).slice().reverse().map(item => ({ main: item.text, aside: [item.inContext ? 'also sent in full' : '', item.repeated ? `sent ${item.repeated} times` : '', item.outcome ? `${item.outcome.status === 'error' ? 'stopped' : 'reply'}: ${item.outcome.text}` : 'no reply recorded'].filter(Boolean).join(' · ') })), 'Sent word for word; nothing folded', true);
+      if (!earlier) return block;
+      const day = value => value ? new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null, span = [day(earlier.folded.fromAt), day(earlier.folded.toAt)].filter(Boolean);
+      const why = earlier.trigger.reason === 'context-refresh' ? 'the context refresh keeps only the latest exchanges' : `the earlier conversation is ${Math.round(earlier.trigger.historyBytes / 1000).toLocaleString()} KB, over the ${Math.round(earlier.trigger.allowanceBytes / 1000)} KB it can take`;
+      block.append(node('p', 'panel-muted', `${plural(earlier.folded.messages, 'message')}${span.length ? ` from ${[...new Set(span)].join(' to ')}` : ''} folded without a model, because ${why}.${earlier.requestsLeftOut ? ` ${plural(earlier.requestsLeftOut, 'older request')} left out.` : ''} The originals stay in the conversation's journal.`));
+      return block;
+    };
     const KINDS = { convention: 'Convention', decision: 'Decision', solution: 'Working fix', 'failed-approach': 'Failed approach' };
     body.replaceChildren(
       section('Folders in scope', folders.map(name => ({ main: name })).concat((brief.scope?.otherFolders || []).map(name => ({ main: name, aside: 'left out, still available' }))), 'The whole workspace'),
@@ -65,6 +75,9 @@
       section('Changed so far', (brief.changedFiles || []).map(item => ({ main: `${item.folder}/${item.path}`, aside: item.missing ? 'missing' : item.status || '' })), 'No files changed in this task'),
       section('Went wrong before', (brief.failedAttempts || []).map(item => ({ main: item.what, aside: `${item.how}${item.times ? ` · ${item.times}×` : ''}` })), 'Nothing recorded', true),
       section('The plan so far', (brief.unfinishedPlan || []).map(item => ({ main: item.text, aside: { done: 'Done', active: 'In progress', pending: 'To do' }[item.status] || item.status })), 'No plan carried over'),
+      earlierSection(brief.earlier),
+      ...(brief.earlier?.decisions?.length ? [section('Decisions made earlier', brief.earlier.decisions.map(item => ({ main: item.text, aside: item.source === 'user-answer' ? 'your answer to a question' : 'your words' })), 'None', true)] : []),
+      ...(brief.unansweredQuestions?.length ? [section('Questions nobody answered', brief.unansweredQuestions.map(item => ({ main: item.question, aside: item.agent ? `asked by ${item.agent}` : '' })), 'None', true)] : []),
       ...(preview?.milestone ? [section('Memory for the fresh session', preview.milestone.observations.map(item => ({ main: item.text, aside: `${item.type} · ${item.source}${item.messageId ? ' · message ' + item.messageId : ''}` })), 'Current goals, user requests and project memory will be carried into the fresh session', true)] : []),
     );
     const note = node('p', 'panel-muted brief-dialog-note', `${$('brief-size').textContent ? $('brief-size').textContent + '. ' : ''}${brief.note ? 'Everything here is marked as evidence for the agent to check; your requests take priority over all of it.' : ''}`.trim());

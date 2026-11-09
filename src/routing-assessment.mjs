@@ -166,7 +166,8 @@ export class RoutingDispatcher {
     const settle = async ms => { let timer; await Promise.race([Promise.all(probePromises), new Promise(resolve => { timer = setTimeout(resolve, ms); timer.unref?.(); })]); clearTimeout(timer); };
     await settle(this.settleMs);
     let rows = this.rows(c, input, providers), current = c.lastRun?.provider, allowApi = c.routing?.allowApi === true || input.routing.allowApi === true;
-    let routed = globalThis.relayRouting.route({ text: input.text, attachments: input.attachments?.length || 0, mode: input.routing.mode, candidates: rows, allowApi });
+    const allowNear = input.proceedWithNearQuota === true;
+    let routed = globalThis.relayRouting.route({ text: input.text, attachments: input.attachments?.length || 0, mode: input.routing.mode, candidates: rows, allowApi, allowNear });
     const keepsSession = () => !current || !providers.includes(current) || rows.some(row => row.provider === current && Date.now() - row.readAt < READING_LIFETIME_MS);
     if (!routed.error && routed.quota.state === 'ok' && keepsSession()) return rows;
 
@@ -182,7 +183,7 @@ export class RoutingDispatcher {
       ]);
       clearTimeout(timer);
       rows = this.rows(c, input, providers);
-      routed = globalThis.relayRouting.route({ text: input.text, attachments: input.attachments?.length || 0, mode: input.routing.mode, candidates: rows, allowApi });
+      routed = globalThis.relayRouting.route({ text: input.text, attachments: input.attachments?.length || 0, mode: input.routing.mode, candidates: rows, allowApi, allowNear });
       if (!routed.error && routed.quota.state === 'ok' && keepsSession()) return rows;
     }
     return this.rows(c, input, providers);
@@ -231,7 +232,7 @@ export class RoutingDispatcher {
     Object.assign(c.routingPending, { provider: chosen.provider, model: assessor.model, effort: assessor.effort });
     const remainingSpend = chosen.billingSource === 'api' ? broker.budget.remainingSpend(c, taskId) : null;
     const config = { provider: chosen.provider, bin: chosen.bin, transport: chosen.provider === 'codex' ? 'app-server' : chosen.provider === 'claude' ? 'sdk' : 'acp', model: assessor.model, effort: assessor.effort, prompt: assessmentPrompt(c, input, broker, references), ...(chosen.provider === 'claude' && remainingSpend !== null ? { maxBudgetUsd: remainingSpend } : {}) };
-    broker.record(c, { type: 'routing_assessment_start', id, taskId, requestId: input.requestId, fingerprint, scope, provider: chosen.provider, model: assessor.model, effort: assessor.effort, billingSource: chosen.billingSource });
+    broker.record(c, { type: 'routing_assessment_start', id, taskId, requestId: input.requestId, fingerprint, scope, routingMode: input.routing.mode, policy: globalThis.relayRouting.POLICY_VERSION, provider: chosen.provider, model: assessor.model, effort: assessor.effort, billingSource: chosen.billingSource });
     if (remainingSpend !== null) broker.record(c, { type: 'routing_assessment_metadata', id, metadata: { budgetEnforcement: { spend: chosen.provider === 'claude' ? 'native' : 'reported-usage', maxSpendUSD: remainingSpend } } });
     run.assessorStarted = true;
     broker.budget.watch(run);
@@ -325,10 +326,13 @@ export class RoutingDispatcher {
       const override = policy.override && (!policy.overrideUsed || policy.override.scope === 'pinned') ? policy.override : null;
       if (override) candidates = candidates.filter(row => row.provider === override.provider);
       const allowApi = c.routing?.allowApi === true || input.routing.allowApi === true;
+      // "Proceed with remaining allowance" on a paused queue: an agent near its limit may run, so resuming doesn't pause again.
+      const allowNear = input.proceedWithNearQuota === true || options.proceedWithNearQuota === true;
+      const confirmed = choice => choice.quota.state === 'ok' || choice.quota.state === 'near' && (allowNear || Boolean(choice.quota.burndown));
       // An explicitly previewed build/review workflow binds its builder and model. Respect that concrete choice while
       // assessing effort, rather than silently invalidating the review consent by switching to another builder.
       if (input.automaticReview) candidates = candidates.filter(row => row.provider === input.provider).map(row => ({ ...row, models: input.model ? row.models.filter(model => (model.id || model.model || model.value) === input.model) : [], ...(input.model ? { allowedModels: [input.model] } : {}) }));
-      const evaluate = list => override && list.length ? { provider: override.provider, model: override.model, effort: override.effort, mode: routingMode, tier: assessment.tier, reason: 'Your explicit task selection', quota: globalThis.relayRouting.assessQuota(list[0].usage, override.model, { threshold: 95 }) } : globalThis.relayRouting.route({ text: input.text, attachments, assessment, mode: routingMode, candidates: list, current: c.lastRun?.provider || c.provider, allowApi });
+      const evaluate = list => override && list.length ? { provider: override.provider, model: override.model, effort: override.effort, mode: routingMode, tier: assessment.tier, reason: 'Your explicit task selection', selectedBy: 'you', quota: globalThis.relayRouting.assessQuota(list[0].usage, override.model, { threshold: 95 }) } : globalThis.relayRouting.route({ text: input.text, attachments, assessment, mode: routingMode, candidates: list, current: c.lastRun?.provider || c.provider, allowApi, allowNear });
       let choice = evaluate(candidates);
 
       // Recheck or join remaining in-flight probes before rejecting stale plan usage
@@ -348,14 +352,14 @@ export class RoutingDispatcher {
         }
       }
       if (choice.error) throw fail(choice.error);
-      if (choice.quota.state !== 'ok') throw fail('Auto could not confirm fresh allowance for the assessed task. Refresh plan usage or choose a model yourself.');
+      if (!confirmed(choice)) throw fail('Auto could not confirm fresh allowance for the assessed task. Refresh plan usage or choose a model yourself.');
       const row = candidates.find(item => item.provider === choice.provider);
       if (row?.billingSource !== 'subscription' && !input.billingConfirmed) throw fail('The final agent bills by use. Confirm billing or choose a subscription agent before sending.');
       result = { status: 'complete', assessment, choice };
       broker.record(c, { type: 'routing_decision', id, taskId, requestId: input.requestId, fingerprint, scope, result });
       broker.running = null; delete c.routingPending;
       // Assessment usage belongs to the task it rated. Without one, the run takes its task the usual way.
-      const submission = broker.start(c, { ...input, provider: choice.provider, model: choice.model, effort: choice.effort, routing: { mode: choice.mode, reason: choice.reason, tier: choice.tier, ...(choice.plannedHandoff ? { plannedHandoff: true } : {}), assessment: { id, ...assessment }, escalation: planning ? null : choice.escalation } }, { ...options, execution, assessedTask: { id: taskId, parentRunId: run.assessorStarted ? id : null, relation: run.assessorStarted ? 'assessed' : null }, routingEvidence: { provider: row.provider, account: row.account, usage: row.usage, at: row.readAt } });
+      const submission = broker.start(c, { ...input, provider: choice.provider, model: choice.model, effort: choice.effort, routing: { mode: choice.mode, reason: choice.reason, tier: choice.tier, ...(choice.selectedBy ? { selectedBy: choice.selectedBy } : {}), ...(choice.plannedHandoff ? { plannedHandoff: true } : {}), ...(choice.remainder ? { remainder: choice.remainder } : {}), assessment: { id, ...assessment }, escalation: planning ? null : choice.escalation } }, { ...options, execution, assessedTask: { id: taskId, parentRunId: run.assessorStarted ? id : null, relation: run.assessorStarted ? 'assessed' : null }, routingEvidence: { provider: row.provider, account: row.account, usage: row.usage, at: row.readAt } });
       const accepted = { ...submission, provider: choice.provider, model: choice.model, effort: choice.effort };
       broker.record(c, { type: 'routing_submission', requestId: input.requestId, submission: accepted });
       return accepted;

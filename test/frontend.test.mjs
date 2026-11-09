@@ -7,6 +7,7 @@ import test from 'node:test';
 import { sealPackage } from '../src/collaboration-format.mjs';
 import { exportConversation } from '../src/conversation-export.mjs';
 import { preferencePatch, publicPreferences } from '../src/preferences.mjs';
+import { smartResults } from '../src/smart-results.mjs';
 
 // Minimal DOM/event adapter for executing the actual browser scripts. It does
 // not pretend to verify layout, CSS, native dialogs, or browser accessibility.
@@ -260,17 +261,17 @@ async function browser({existing=true,available=true,providers={},authenticated=
   class Range{setStart(node,offset){this.startContainer=node;this.startOffset=offset;}setEnd(node,offset){this.endContainer=node;this.endOffset=offset;}getBoundingClientRect(){return this.startContainer.parentNode.getBoundingClientRect();}}
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
   const highlights=new Map();document.createRange=()=>new Range();
-  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async()=>{}}}});
+  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,clearInterval:id=>timers.delete(id),cancelAnimationFrame:()=>{},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async()=>{}}}});
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
-  const previewOpens=[],previewListeners=[];
-  if(previewUI)window.relayDesktop=Object.assign(window.relayDesktop||{},{openPreview:async input=>{previewOpens.push(clone(input));return true;},onPreviewPick:callback=>{previewListeners.push(callback);return ()=>{};}});
+  const previewOpens=[],previewListeners=[],previewCloses=[];
+  if(previewUI)window.relayDesktop=Object.assign(window.relayDesktop||{},{openPreview:async input=>{previewOpens.push(clone(input));return true;},closePreviews:async input=>{previewCloses.push(clone(input));return input.urls.length;},onPreviewPick:callback=>{previewListeners.push(callback);return ()=>{};}});
   vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(questionsUI)vm.runInContext(fs.readFileSync(new URL('../public/questions.js',import.meta.url),'utf8'),context,{filename:'public/questions.js'});if(workbench){vm.runInContext(fs.readFileSync(new URL('../public/settings.js',import.meta.url),'utf8'),context,{filename:'public/settings.js'});vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});}
   if(insights)vm.runInContext(fs.readFileSync(new URL('../public/insights.js',import.meta.url),'utf8'),context,{filename:'public/insights.js'});
   if(modelPickerUI)vm.runInContext(fs.readFileSync(new URL('../public/model-picker.js',import.meta.url),'utf8'),context,{filename:'public/model-picker.js'});
   if(layoutUI)vm.runInContext(fs.readFileSync(new URL('../public/layout.js',import.meta.url),'utf8'),context,{filename:'public/layout.js'});
   if(agentsUI)vm.runInContext(fs.readFileSync(new URL('../public/agents-panel.js',import.meta.url),'utf8'),context,{filename:'public/agents-panel.js'});
-  if(agentsUI)for(const name of ['parallel-tasks','brief-panel','memory','skills','tasks-panel'])vm.runInContext(fs.readFileSync(new URL(`../public/${name}.js`,import.meta.url),'utf8'),context,{filename:`public/${name}.js`});
+  if(agentsUI)for(const name of ['parallel-tasks','brief-panel','memory','skills','smart-results','tasks-panel'])vm.runInContext(fs.readFileSync(new URL(`../public/${name}.js`,import.meta.url),'utf8'),context,{filename:`public/${name}.js`});
   if(historyUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-history.js',import.meta.url),'utf8'),context,{filename:'public/conversation-history.js'});
   if(desktopControls)vm.runInContext(fs.readFileSync(new URL('../public/desktop-controls.js',import.meta.url),'utf8'),context,{filename:'public/desktop-controls.js'});
   if(setup)vm.runInContext(fs.readFileSync(new URL('../public/setup.js',import.meta.url),'utf8'),context,{filename:'public/setup.js'});
@@ -288,6 +289,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(flowUI) {
     vm.runInContext(fs.readFileSync(new URL('../public/project-review.js',import.meta.url),'utf8'),context,{filename:'public/project-review.js'});
     vm.runInContext(fs.readFileSync(new URL('../public/flow.js',import.meta.url),'utf8'),context,{filename:'public/flow.js'});
+    vm.runInContext(fs.readFileSync(new URL('../public/flow-lounge.js',import.meta.url),'utf8'),context,{filename:'public/flow-lounge.js'});
   }
   if(alertsUI)vm.runInContext(fs.readFileSync(new URL('../public/alerts.js',import.meta.url),'utf8'),context,{filename:'public/alerts.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
@@ -315,7 +317,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,previewCloses,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -2020,13 +2022,26 @@ test('the Brief panel says what the next agent gets, opens the full brief, and k
   });
   await ui.window.relayUI.refresh(); ui.window.relayBrief.open(); await flush(); ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
   const rows = ui.$('brief-composition').querySelectorAll('.brief-item-value').map(item => item.textContent);
-  assert.deepEqual(rows, ['website (not desktop)', 'All 1 entry', '2 enabled, 1 in use', 'AGENTS.md', '1', '1 attempt', '1']);
+  assert.deepEqual(rows, ['website (not desktop)', 'All 1 entry', '2 enabled, 1 in use', 'AGENTS.md', '1', '1 attempt', '1', 'Sent word for word']);
   assert.match(ui.$('brief-size').textContent, /≈4.2k tokens \(estimate\)/);
   ui.$('brief-view').click(); await flush();
   assert.equal(ui.$('brief-dialog').open, true);
   const titles = ui.$('brief-dialog-body').querySelectorAll('.brief-block-title').map(item => item.textContent);
-  assert.deepEqual(titles, ['Folders in scope', 'Repository instructions', 'Current file evidence', 'Changed since the last run', 'Memory', 'Skills', 'Changed so far', 'Went wrong before', 'The plan so far']);
+  assert.deepEqual(titles, ['Folders in scope', 'Repository instructions', 'Current file evidence', 'Changed since the last run', 'Memory', 'Skills', 'Changed so far', 'Went wrong before', 'The plan so far', 'Earlier in this conversation']);
   assert.match(ui.$('brief-dialog-body').textContent, /npm test.*exit 1 · 2×/);
+  ui.$('brief-dialog-close').click();
+  // A long conversation's older part is folded (#85): the panel says so, lists it newest first and says where it came from.
+  brief.earlier = { trigger: { reason: 'history-over-allowance', historyBytes: 1976205, allowanceBytes: 48000 }, folded: { messages: 23565, from: 'a', to: 'b' }, requests: [{ messageId: 'a', text: 'Set up the shop', outcome: { agent: 'codex', text: 'Shop set up.' } }, { messageId: 'b', inContext: true, text: 'Fix the receipt', repeated: 2, outcome: { agent: 'claude', status: 'error', text: 'Stopped.' } }], requestsLeftOut: 40, decisions: [{ text: 'Currency? → EUR', source: 'user-answer', messageId: 'c' }] };
+  brief.unansweredQuestions = [{ agent: 'codex', question: 'Show the VAT number?' }];
+  ui.window.relayBrief.reload(); await flush();
+  assert.equal(ui.$('brief-composition').querySelectorAll('.brief-item-value').at(-1).textContent, '2 requests, 1 decision folded');
+  ui.$('brief-view').click(); await flush();
+  const text = ui.$('brief-dialog-body').textContent;
+  assert.ok(text.indexOf('Fix the receipt') < text.indexOf('Set up the shop'), 'Newest first.');
+  assert.match(text, /also sent in full · sent 2 times · stopped: Stopped\./);
+  assert.match(text, /23,565 messages folded without a model, because the earlier conversation is 1,976 KB, over the 48 KB it can take\. 40 older requests left out\./);
+  assert.match(text, /Decisions made earlier.*Currency\? → EUR.*your answer to a question/);
+  assert.match(text, /Questions nobody answered.*Show the VAT number\?.*asked by codex/);
   ui.$('brief-dialog-close').click();
   assert.equal(ui.$('memory-empty').hidden, true);
   assert.equal(ui.$('skills-empty').hidden, false, 'With nothing enabled, the section explains what a skill is.');
@@ -3581,10 +3596,13 @@ test('routing assessment keeps Stop available while Send waits and preserves the
   ui.$('message-input').value = 'Do the task we discussed'; ui.fire('message-input', 'input');
   ui.$('message-input').dispatchEvent(new UIEvent('keydown', { key: 'Enter' })); await flush();
   await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('message-input').value, '', 'The box empties on Send, before the assessment ends.');
+  assert.match(ui.$('messages').textContent, /Do the task we discussed/, 'The message shows in the chat meanwhile.');
   assert.equal(ui.$('stop-button').hidden, false); assert.equal(ui.$('stop-button').disabled, false);
   assert.equal(ui.$('run-action').textContent, 'Assessing task');
   ui.$('stop-button').click(); await flush(); await flush();
   assert.equal(ui.$('message-input').value, 'Do the task we discussed');
+  assert.doesNotMatch(ui.$('messages').textContent, /Do the task we discussed/, 'A stopped message leaves the chat and returns to the box.');
   assert.match(ui.$('notice-text').textContent, /assessment stopped/);
   assert.equal(ui.requests.filter(request => request.path.endsWith('/messages')).length, 1);
 });
@@ -4978,6 +4996,37 @@ test('Flow project review launches a bound profile, opens point-and-tell and pre
   assert.match(ui.$('message-input').value, /Change this heading/); assert.doesNotMatch(ui.$('message-input').value, /Requested change/);
   assert.equal(ui.requests.find(request => request.path.endsWith('/review/prepare')).body.change, 'Start a local database before the API');
   cardButton('Stop review').click(); await flush(); assert.equal(cardButton('Stop review'), undefined);
+  assert.deepEqual(ui.previewCloses, [{ projectId: 'project-one', urls: ['http://localhost:3000/'] }], 'Stopping the review closes its preview window.');
+});
+
+test('Flow project review opens each interface in its own preview window, and Stop review closes only the review’s own (#142)', async () => {
+  const ui = await flowBrowser({ previewUI: true }), value = reviewFixture(), profile = value.plan.profiles[0], [web] = profile.services;
+  const admin = { ...web, id: 'admin', name: 'Admin dashboard', command: 'npm run admin', ready: { url: 'http://localhost:4201/' } };
+  const api = { ...web, id: 'api', name: 'API', command: 'npm run api', ready: { port: 8000 } };
+  const docs = { ...web, id: 'docs', name: 'Docs', command: 'npm run docs', ready: { url: 'http://localhost:4300/' } };
+  profile.services.push(admin, api, docs); profile.order.push('admin', 'api', 'docs');
+  profile.previews = [{ service: 'web', url: 'http://localhost:3000/' }, { service: 'admin', url: 'http://localhost:4201/' }];
+  const session = { id: 'process', status: 'running', exitCode: null, output: '' };
+  // Another app already serves the docs port, so the review left that service blocked.
+  value.run = { id: 'review-run', revision: 'review-one', profileId: 'dev', profileName: 'Development', status: 'blocked', previews: profile.previews, preview: profile.previews[0],
+    conflicts: [{ service: 'docs', name: 'Docs', port: 4300, url: 'http://localhost:4300/', adoptable: false }],
+    steps: [{ ...web, status: 'ready', session }, { ...admin, status: 'ready', session }, { ...api, status: 'ready', session }, { ...docs, status: 'blocked', session: null }] };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/commands/review') return response(value);
+    if (request.path === '/api/commands/review/stop') { value.run = { ...value.run, status: 'stopped', previews: [], preview: null, steps: value.run.steps.map(step => ({ ...step, session: step.session && { ...step.session, status: 'stopped' } })) }; return response(value.run); }
+    return next();
+  });
+  await ui.window.relayProjectReview.refresh(); ui.window.relayFlow.enter(); await flush();
+  const cardButton = text => ui.$('flow-card-preview').querySelectorAll('button').find(button => button.textContent === text);
+  assert.match(cardButton('Open Admin dashboard').title, /its own preview window, beside the others/);
+  cardButton('Open Web app').click(); await flush();
+  cardButton('Open Admin dashboard').click(); await flush();
+  assert.deepEqual(ui.previewOpens, [{ projectId: 'project-one', url: 'http://localhost:3000/' }, { projectId: 'project-one', url: 'http://localhost:4201/' }], 'Each interface is opened by its own address, for a window of its own.');
+  assert.deepEqual(ui.previewCloses, [], 'Opening one closes nothing.');
+  await ui.pickInPreview({ projectId: 'project-one', text: 'In the preview of Admin dashboard (localhost:4201/users), the “Save” button (#save): ', image: null }); await flush();
+  assert.match(ui.$('message-input').value, /^In the preview of Admin dashboard \(localhost:4201\/users\)/, 'A pick from either window goes into the message box.');
+  cardButton('Stop review').click(); await flush();
+  assert.deepEqual(ui.previewCloses, [{ projectId: 'project-one', urls: ['http://localhost:3000/', 'http://localhost:4201/', 'http://127.0.0.1:8000/'] }], 'The review’s own services close; the port another app holds is left alone.');
 });
 
 test('Flow project review ignores a stale workspace response and retains Stop with an invalid changed map', async () => {
@@ -5059,7 +5108,7 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
   assert.equal(shell.classList.contains('flow'), true);
   assert.equal(ui.$('agents-panel').hidden, true, 'The side panel steps aside.');
   assert.equal(ui.$('flow-left').hidden, false); assert.equal(ui.$('flow-right').hidden, false); assert.equal(ui.$('flow-strip').hidden, true, 'A wide window keeps the cards at the sides.');
-  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-card-next', 'flow-card-plans', 'flow-space']);
+  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-card-next', 'flow-card-plans', 'flow-card-results', 'flow-space']);
   assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-card-working', 'flow-card-files', 'flow-card-preview', 'flow-connect']);
   assert.equal(ui.$('toggle-flow').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('flow-status').hidden, false); assert.equal(ui.$('flow-status-text').textContent, 'Ready');
   assert.equal(ui.$('toggle-flow-label').textContent, 'Leave Flow'); assert.equal(ui.$('flow-brand').hidden, false); assert.equal(ui.$('flow-brand-workspace').textContent, 'Example workspace');
@@ -5124,6 +5173,15 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   const next = flowText(ui, 'next');
   assert.match(next, /1 of 3 done\./); assert.match(next, /Read the code.*Write the tests.*Fix the bug/); assert.match(next, /Then · 1 queued message\s*Then write the docs for it/);
   assert.equal(ui.$('flow-card-next').querySelectorAll('.flow-step').map(step => step.className).join('|'), 'flow-step done|flow-step active|flow-step pending');
+  const steps = ui.$('flow-card-next').querySelectorAll('.flow-step');
+  const activeStep = steps.find(s => s.classList.contains('active'));
+  const doneStep = steps.find(s => s.classList.contains('done'));
+  const pendingStep = steps.find(s => s.classList.contains('pending'));
+  assert(activeStep.querySelector('.flow-step-working-badge'), 'Active step has working badge');
+  assert(activeStep.querySelector('.flow-pulse-dot'), 'Active step has animated pulse dot');
+  assert(activeStep.querySelector('.flow-step-meta'), 'Active step shows live agent activity meta');
+  assert.equal(doneStep.querySelector('.flow-step-working-badge'), null, 'Done step has no working badge');
+  assert.equal(pendingStep.querySelector('.flow-step-working-badge'), null, 'Pending step has no working badge');
   const files = flowText(ui, 'files');
   assert.match(files, /3 files changed, across 2 runs\./, 'Undone changes are not counted.');
   assert.match(files, /Changes undone\s*Codex.*Redo.*3 files changed\s*Claude.*Undo/, 'Newest first.');
@@ -5171,6 +5229,11 @@ test('Flow mode card polish: extra task indicators, multi-window quota glance, a
   assert(claudePlan.classList.contains('flow-plan-active'), 'Executing agent has .flow-plan-active');
   assert(claudePlan.querySelector('.flow-plan-working-badge'), 'Executing agent has Working badge');
   assert.equal(ui.$('flow-status').dataset.provider, 'claude', 'Status bar tracks active provider');
+  const currentWork = ui.$('flow-card-next').querySelector('.flow-current-work');
+  assert(currentWork, 'Executing task without steps renders prominent .flow-current-work card');
+  assert(currentWork.classList.contains('flow-plan-active'), 'Current work has active highlight');
+  assert(currentWork.querySelector('.flow-plan-working-badge'), 'Current work has Working badge');
+  assert(currentWork.querySelector('.flow-pulse-dot'), 'Current work has animated pulsing dot');
 
   // 3. Limits in overlay window instead of expanding inline in card
   const allLimitsBtn = ui.$('flow-card-plans').querySelector('.flow-button');
@@ -5262,7 +5325,7 @@ test('a narrow window keeps the Flow cards out of the chat as chips, and one ope
   // Every media query matches here, so the window counts as narrow: chips under the header, no side columns.
   assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-strip').hidden, false);
   const chips = () => ui.$('flow-strip').querySelectorAll('.flow-chip').map(chip => chip.textContent);
-  assert.deepEqual(chips(), ['1 queued message', 'Plans', 'Ultra', 'Files', 'Run and review your project', 'Your space'], 'Every card has a chip, with preferences available separately.');
+  assert.deepEqual(chips(), ['1 queued message', 'Plans', 'Ultra results', 'Ultra', 'Files', 'Run and review your project', 'Your space'], 'Every card has a chip, with preferences available separately.');
   ui.$('flow-strip').querySelectorAll('.flow-chip')[0].click(); await flush();
   assert.equal(ui.$('flow-peek').hidden, false); assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-next'); assert.equal(ui.document.activeElement, ui.$('flow-peek-close'));
   assert.equal(ui.$('flow-strip').querySelectorAll('.flow-chip')[0].getAttribute('aria-pressed'), 'true');
@@ -5271,7 +5334,47 @@ test('a narrow window keeps the Flow cards out of the chat as chips, and one ope
   ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
   assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children.map(card => card.id).join(','), 'flow-card-working,flow-card-files,flow-card-preview,flow-connect', 'The cards go back to their sides.');
   assert.equal(ui.$('flow-card-working').querySelectorAll('button').some(item => /hide/i.test(item.getAttribute('aria-label') || '')), false, 'Cards have no close button.');
-  assert.equal(ui.window.relayFlow.cards().length, 5);
+  assert.equal(ui.window.relayFlow.cards().length, 6);
+});
+
+test('Smart results show observed use, compare with manual tasks only when the evidence allows, and list the tasks behind it (#139)', async () => {
+  const at = minute => new Date(Date.UTC(2026, 10, 5) + minute * 60000).toISOString();
+  const task = (n, group, seconds) => ({ id: `task-${n}`, startedAt: at(n), endedAt: at(n + 1), status: 'complete', verification: 'passed', routing: group === 'manual' ? null : { mode: group, policy: 1 }, taskClass: { kind: 'change', size: 'standard' }, contextPolicy: 'task',
+    models: [{ provider: 'codex', model: 'gpt-5', effort: 'low', role: 'builder' }], billing: ['subscription'], apiEstimateUSD: { total: null, runs: 0, billedRuns: 0 }, workingMs: seconds * 1000,
+    usage: { runs: 1, reportedBy: { input: 1, output: 1 }, input: 1000, output: 100, cacheWrite: null, partialRuns: 0, runsWithTokens: 1 }, runs: 1, retries: 0, interventions: 0, firstAttemptSuccess: true });
+  const now = Date.parse(at(200));
+  const few = smartResults([task(1, 'smart', 60)], { now, days: null });
+  const enough = smartResults([...Array.from({ length: 12 }, (_, index) => task(index, 'manual', 300)), ...Array.from({ length: 12 }, (_, index) => task(50 + index, 'smart', 200))], { now, days: null });
+  let report = few;
+  const asked = [];
+  const ui = await flowBrowser({ desktop: true, desktopControls: true });
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/results') { asked.push({ ...request.params }); return response(report); }
+    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [] });
+    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
+    return next();
+  });
+  ui.window.relayFlow.enter(); await flush(); await ui.window.relaySmartResults.refresh(); await flush();
+  const card = () => ui.$('flow-card-results').textContent.replace(/\s+/g, ' ');
+  assert.match(card(), /Smart results/);
+  assert.match(card(), /1 task · 1 verified by tests/);
+  assert.match(card(), /Not enough comparable data yet/, 'No percentage for a new user.');
+  assert.equal(asked.at(-1).prompts, undefined, 'The card never asks for requests.');
+
+  report = enough; await ui.window.relaySmartResults.refresh(); await flush();
+  assert.match(card(), /About 33% less working time per verified task than your manual tasks \(90% range: 33% less\)/);
+
+  ui.$('flow-card-results').querySelectorAll('button').find(button => button.textContent === 'Details').click(); await flush();
+  assert.equal(ui.$('tasks-panel').hidden, false, 'Details opens the Tasks panel, which Flow shows as its sheet.');
+  const section = () => ui.$('tasks-results-body').textContent.replace(/\s+/g, ' ');
+  assert.equal(ui.$('tasks-results').hidden, false);
+  assert.match(section(), /Working time: 3m 20s per verified task, against 5m 0s by hand · 33% less/);
+  assert.match(section(), /By hand 1h 0m − Smart 40m 0s = 20m 0s, 33\.3% of the manual total/, 'The arithmetic can be checked by hand.');
+  assert.match(section(), /never counted here/, 'Plan allowance stays out.');
+
+  ui.$('tasks-results-body').querySelectorAll('button').find(button => /^Show the 24 tasks$/.test(button.textContent)).click(); await flush();
+  ui.$('tasks-results-body').querySelectorAll('button').find(button => button.textContent === 'Leave out').click(); await flush();
+  assert.equal(asked.at(-1).exclude, enough.tasks[0].id, 'A task left out is sent with the next request, so the server recomputes without it.');
 });
 
 test('Flow details use a dismissible sheet and restore the workbench when leaving', async () => {
@@ -5690,6 +5793,104 @@ test('Flow toggles Review first inline, persists it across views and recovers fr
   assert.equal(toggle.getAttribute('aria-checked'), 'false');
   assert.equal(ui.$('message-input').value, 'Keep my draft');
   assert.equal(ui.requests.some(request => request.method === 'POST' && /\/(messages|continue)$/.test(request.path)), false);
+});
+
+test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and auto-recedes on attention or completion', async () => {
+  const ui = await flowBrowser({ desktop: true });
+  // In normal view Lounge is hidden
+  assert.equal(ui.$('toggle-flow-lounge').hidden, true);
+
+  // Enter Flow mode
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(ui.$('toggle-flow-lounge').hidden, false);
+  assert.equal(ui.$('toggle-flow-lounge').getAttribute('aria-pressed'), 'false');
+  assert.equal(ui.$('flow-lounge-left').hidden, true);
+  assert.equal(ui.$('flow-lounge-right').hidden, true);
+
+  // Click Lounge to activate
+  ui.$('toggle-flow-lounge').click(); await flush();
+  assert.equal(ui.window.relayFlowLounge.isActive(), true);
+  assert.equal(ui.$('app-shell').classList.contains('flow-lounge'), true);
+  assert.equal(ui.$('toggle-flow-lounge').getAttribute('aria-pressed'), 'true');
+  assert.equal(ui.$('flow-left').hidden, true);
+  assert.equal(ui.$('flow-right').hidden, true);
+  assert.equal(ui.$('flow-left').classList.contains('flow-slide-out-left'), true);
+  assert.equal(ui.$('flow-right').classList.contains('flow-slide-out-right'), true);
+  assert.equal(ui.$('flow-lounge-left').hidden, false);
+  assert.equal(ui.$('flow-lounge-right').hidden, false);
+  assert.equal(ui.$('flow-lounge-left').classList.contains('flow-slide-in-left'), true);
+  assert.equal(ui.$('flow-lounge-right').classList.contains('flow-slide-in-right'), true);
+
+  // Check card content: Breakout on left, Retro Snake on right, Trivia & Typing & Quotes & Weather
+  assert.equal(ui.$('flow-card-lounge-arcade') !== null, true);
+  assert.equal(ui.$('flow-card-lounge-zen') !== null, true);
+  assert.equal(ui.$('flow-card-lounge-trivia') !== null, true);
+  assert.equal(ui.$('flow-card-lounge-typing') !== null, true);
+  assert.equal(ui.$('flow-card-lounge-quote') !== null, true);
+  assert.equal(ui.$('flow-card-lounge-weather') !== null, true);
+  assert.match(ui.$('flow-card-lounge-arcade').textContent, /Breakout/);
+  assert.match(ui.$('flow-card-lounge-zen').textContent, /Retro Snake/);
+  assert.match(ui.$('flow-card-lounge-trivia').textContent, /Trivia/);
+  assert.match(ui.$('flow-card-lounge-typing').textContent, /Typing Speed Test/);
+
+  // Switch weather mode to Snow and back to Rain
+  const weatherTabs = ui.$('flow-card-lounge-weather').querySelectorAll('.flow-lounge-weather-tab');
+  const snowTab = weatherTabs.find(t => t.textContent.includes('Snow'));
+  assert(snowTab, 'Snow weather tab is available');
+  snowTab.click(); await flush();
+  assert.equal(ui.window.relayFlowLounge.getWeatherMode(), 'snow');
+  assert.equal(snowTab.classList.contains('active'), true);
+
+  const rainTab = weatherTabs.find(t => t.textContent.includes('Rain'));
+  assert(rainTab, 'Rain weather tab is available');
+  rainTab.click(); await flush();
+  assert.equal(ui.window.relayFlowLounge.getWeatherMode(), 'rain');
+  assert.equal(rainTab.classList.contains('active'), true);
+
+  // Attention needed (e.g. pending approval): Lounge auto-recedes
+  const c = ui.canonical.get('project-one');
+  c.pendingApprovals = [{ id: 'app-1', type: 'command', command: 'npm test', description: 'Run tests' }];
+  await ui.window.relayUI.refresh(); await flush();
+
+  assert.equal(ui.window.relayFlowLounge.isActive(), false);
+  assert.equal(ui.window.relayFlowLounge.isReceded(), true);
+  assert.equal(ui.$('app-shell').classList.contains('flow-lounge'), false);
+  assert.equal(ui.$('toggle-flow-lounge').classList.contains('flow-lounge-receded'), true);
+  assert.equal(ui.$('flow-left').hidden, false);
+  assert.equal(ui.$('flow-right').hidden, false);
+  assert.equal(ui.$('flow-left').classList.contains('flow-slide-out-left'), false);
+  assert.equal(ui.$('flow-right').classList.contains('flow-slide-out-right'), false);
+  assert.equal(ui.$('flow-left').classList.contains('flow-slide-in-left'), true);
+  assert.equal(ui.$('flow-right').classList.contains('flow-slide-in-right'), true);
+  assert.equal(ui.$('flow-lounge-left').hidden, true);
+  assert.equal(ui.$('flow-lounge-right').hidden, true);
+
+  // Approvals resolved: click Lounge button resumes
+  c.pendingApprovals = [];
+  ui.$('toggle-flow-lounge').click(); await flush();
+  assert.equal(ui.window.relayFlowLounge.isActive(), true);
+  assert.equal(ui.$('app-shell').classList.contains('flow-lounge'), true);
+  assert.equal(ui.$('flow-left').hidden, true);
+  assert.equal(ui.$('flow-right').hidden, true);
+  assert.equal(ui.$('flow-lounge-left').classList.contains('flow-slide-in-left'), true);
+  assert.equal(ui.$('flow-lounge-right').classList.contains('flow-slide-in-right'), true);
+
+  // Exiting Lounge via Lounge header toggle
+  ui.$('toggle-flow-lounge').click(); await flush();
+  assert.equal(ui.window.relayFlowLounge.isActive(), false);
+  assert.equal(ui.$('app-shell').classList.contains('flow-lounge'), false);
+  assert.equal(ui.$('flow-left').hidden, false);
+  assert.equal(ui.$('flow-right').hidden, false);
+  assert.equal(ui.$('flow-left').classList.contains('flow-slide-out-left'), false);
+  assert.equal(ui.$('flow-right').classList.contains('flow-slide-out-right'), false);
+  assert.equal(ui.$('flow-left').classList.contains('flow-slide-in-left'), true);
+  assert.equal(ui.$('flow-right').classList.contains('flow-slide-in-right'), true);
+  assert.equal(ui.$('flow-lounge-left').classList.contains('flow-slide-out-left'), true);
+  assert.equal(ui.$('flow-lounge-right').classList.contains('flow-slide-out-right'), true);
+
+  // Leaving Flow mode hides the Lounge toggle
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(ui.$('toggle-flow-lounge').hidden, true);
 });
 
 test('opening a long workspace of 10,000 messages opens promptly, pages latest, maintains scroll position on scroll up, searches unloaded history, jumps to unloaded runs, and streams live runs while paged', async () => {
@@ -6435,7 +6636,7 @@ test('The plan card shows each step as one row that opens to edit it, with the w
   assert.deepEqual(actions.at(-1), { action: 'update', id: 'plan-1', revision: 1, review: false, steps: [
     { ...second, dependsOn: [], agent: { provider: 'claude', model: null, effort: null } },
     { ...first, title: 'Add the items route', tier: 'deep' },
-    { id: 's3', title: 'Document it', instructions: 'Describe the route in the README.', files: [], tier: 'standard', dependsOn: ['s1'], agent: null }] });
+    { id: 's3', title: 'Document it', instructions: 'Describe the route in the README.', files: [], tier: 'standard', dependsOn: ['s1'], agent: null, role: 'builder', artifact: null, check: null, skills: [] }] });
   assert.equal(ui.$('orchestration-save').hidden, true); assert.equal(ui.$('orchestration-title').textContent, 'Plan · 3 steps');
   assert.deepEqual(rows().map(row => row.querySelector('.orchestration-step-detail').hidden), [false, false, false], 'Saving keeps open rows open.');
 

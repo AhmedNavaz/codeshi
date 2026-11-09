@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-UqumNAOIEjuCldT+fgkNt2rCTMGoeLji2/zg8rFX9Js='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-iBbvdEml6MUETVXavbRClQz3PFoKMBviDFV9KasKzso='">
 <title>Preview toolbar</title>
 <style>
   /* Codeshi's Paper and Ink colours, as in public/editor-theme.css. */
@@ -170,6 +170,34 @@
       const empty = document.createElement('p'); empty.textContent = 'No active project review services recorded yet.';
       host.append(empty); return;
     }
+
+    // Each interface has a window of its own, so this page stays where it is; the one this window shows is marked.
+    if (currentStack.previews?.length > 1) {
+      const section = document.createElement('div'); section.className = 'stack-section';
+      const heading = document.createElement('div'); heading.className = 'stack-section-title'; heading.textContent = 'Interfaces';
+      const grid = document.createElement('div'); grid.className = 'stack-grid';
+      for (const target of currentStack.previews) {
+        const card = document.createElement('div'); card.className = 'stack-card';
+        const left = document.createElement('div');
+        const title = currentStack.services?.find(s => s.id === target.service)?.name || target.service;
+        const name = document.createElement('div'); name.className = 'stack-service-title'; name.textContent = title;
+        const meta = document.createElement('div'); meta.className = 'stack-service-meta';
+        try { meta.textContent = new URL(target.url).host; } catch { meta.textContent = target.url; }
+        left.append(name, meta);
+        let action;
+        if (target.current) { action = document.createElement('span'); action.className = 'count-tag'; action.textContent = 'This window'; }
+        else {
+          action = document.createElement('button'); action.className = 'drawer-btn'; action.type = 'button';
+          action.textContent = target.open ? 'Show' : 'Open';
+          action.title = target.open ? 'Bring its preview window forward' : 'Open it in a new preview window';
+          action.setAttribute('aria-label', (target.open ? 'Show ' : 'Open ') + title);
+          action.addEventListener?.('click', () => bridge.act('open-interface', target.url));
+        }
+        card.append(left, action); grid.append(card);
+      }
+      section.append(heading, grid); host.append(section);
+    }
+
     const profSec = document.createElement('div'); profSec.className = 'stack-section';
     const profTitle = document.createElement('div'); profTitle.className = 'stack-section-title'; profTitle.textContent = 'Configuration Profile';
     const profCard = document.createElement('div'); profCard.className = 'stack-card';
@@ -199,20 +227,6 @@
         const text = document.createElement('span'); text.textContent = item; card.append(text); preGrid.append(card);
       }
       preSec.append(preTitle, preGrid); host.append(preSec);
-    }
-
-    if (currentStack.previews?.length > 1) {
-      const prevSec = document.createElement('div'); prevSec.className = 'stack-section';
-      const prevTitle = document.createElement('div'); prevTitle.className = 'stack-section-title'; prevTitle.textContent = 'Switch Interface';
-      const prevGrid = document.createElement('div'); prevGrid.className = 'drawer-actions';
-      for (const target of currentStack.previews) {
-        const btn = document.createElement('button'); btn.className = 'drawer-btn'; btn.type = 'button';
-        const sName = currentStack.services?.find(s => s.id === target.service)?.name || target.service;
-        btn.textContent = 'Open ' + sName;
-        btn.addEventListener?.('click', () => bridge.act('navigate-preview', target.url));
-        prevGrid.append(btn);
-      }
-      prevSec.append(prevTitle, prevGrid); host.append(prevSec);
     }
   }
 

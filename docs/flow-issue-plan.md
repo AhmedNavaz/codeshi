@@ -154,7 +154,7 @@ Both modes retain context selection and native-compaction visibility, the canoni
 
 #### Flow experience
 
-Keep the chat central with fixed purposeful cards: how work is assigned, remaining allowance, next steps and changed files/recovery. Explain automatic decisions and their reasons from recorded data, without a model call just to render a card. Agents/Timeline/Git details use dismissible Flow sheets. Utilities use the side space; narrow windows retain access. Approvals, questions, Stop and Take manual control are always reachable. Native window controls and interactive buttons must remain clickable; support keyboard/screen readers, reduced motion and both themes. Do not display unmeasured savings.
+Keep the chat central with fixed purposeful cards: how work is assigned, remaining allowance, next steps, routing results (#139: observed use, and a comparison with manual tasks only once the evidence passes its gates) and changed files/recovery. Explain automatic decisions and their reasons from recorded data, without a model call just to render a card. Agents/Timeline/Git details use dismissible Flow sheets. Utilities use the side space; narrow windows retain access. Approvals, questions, Stop and Take manual control are always reachable. Native window controls and interactive buttons must remain clickable; support keyboard/screen readers, reduced motion and both themes. Do not display unmeasured savings.
 
 #### Execution and migration
 
@@ -303,7 +303,7 @@ Append the following scope section, preserving existing body and completion chec
 
 This section governs future implementation where earlier proposal text differs. It does not change shipped behavior or mark new work complete. Product contract: #107.
 
-Plans, canvas/board/outline views and card editing remain shared. Normal can ask an agent for a draft, explicitly assign every card and run a selected card or exact dependency graph. Flow may generate proposed plans and manage assignments/execution only within its approved task policy. Auto is a Flow choice, not the default for every Normal card. Preserve user edits, privacy and draft-review rules; bounded execution authority does not grant permission to rewrite unrelated plans. Reuse one set of cards for plans, board execution ([board and schedule execution](https://github.com/AhmedNavaz/codeshi/issues/132)), #108 and #89.
+Plans, canvas/board/outline views and card editing remain shared. Normal can ask an agent for a draft or upload an end-to-end project document / PRD, explicitly verify and assign every card, and run a selected card or exact dependency graph. Flow may generate proposed plans and manage assignments/execution only within its approved task policy. Auto is a Flow choice, not the default for every Normal card. Preserve user edits, privacy and draft-review rules; bounded execution authority does not grant permission to rewrite unrelated plans. Reuse one set of cards for plans, board execution ([board and schedule execution](https://github.com/AhmedNavaz/codeshi/issues/132)), #108 and #89.
 
 
 ### Issue 15

@@ -3,12 +3,13 @@ import path from 'node:path';
 // Point and tell (#19): the workspace's app in a preview window, where clicking an element puts what it is into the
 // message box, with a screenshot of it, for the person to say or type what should change.
 //
-// The preview is its own window: a toolbar the app trusts above the page, each in its own view. The page only ever
-// shows local addresses, keeps its cookies and storage apart from Codeshi's, and cannot open windows, download
-// files or be given permissions. The element picker runs in the page's isolated world, so the page's scripts cannot
-// see or change it, and it never gives the page anything. What the picker reports is data: cleaned, bounded and
-// described in a sentence the person reads before sending. The helpers are pure, for tests; createPreview needs
-// Electron's classes.
+// Each preview is its own window: a toolbar the app trusts above the page, each in its own view. Every interface the
+// person opens, such as a website and its admin panel, gets a window of its own, so they can be reviewed side by side
+// (#142). The page only ever shows local addresses, keeps its cookies and storage apart from Codeshi's, and cannot open
+// windows, download files or be given permissions. The element picker runs in the page's isolated world, so the page's
+// scripts cannot see or change it, and it never gives the page anything. What the picker reports is data: cleaned,
+// bounded and described in a sentence the person reads before sending. The helpers are pure, for tests; createPreview
+// needs Electron's classes.
 export const PREVIEW_PARTITION = 'persist:throughline-preview';
 // The Stack and API inspector (#143) sits to the right of the page, under the toolbar's bar, so the page keeps its
 // full height. It is 380 px, 440 px in a window at least 1280 px wide, and always leaves the page 240 px. The toolbar's
@@ -28,6 +29,25 @@ export function previewURL(input) {
   return url.href;
 }
 export const isPreviewURL = value => { try { previewURL(value); return true; } catch { return false; } };
+
+// The local server an address reaches: its scheme and port. localhost, 127.0.0.1 and [::1] are this computer under
+// three names, so an interface finds its window under any of them.
+export function previewEndpoint(value) {
+  let url;
+  try { url = new URL(String(value ?? '')); } catch { return null; }
+  if (!['http:', 'https:'].includes(url.protocol) || !LOOPBACK.includes(url.hostname)) return null;
+  return `${url.protocol}//${url.port || (url.protocol === 'https:' ? '443' : '80')}`;
+}
+
+// The name the review's launch map gives the interface at an address, such as "Admin dashboard"; empty when the
+// address is none of the review's services.
+export function interfaceName(stack, url) {
+  const here = previewEndpoint(url), services = Array.isArray(stack?.services) ? stack.services : [];
+  if (!here || !services.length) return '';
+  const target = (Array.isArray(stack.previews) ? stack.previews : []).find(item => previewEndpoint(item?.url) === here);
+  const service = (target && services.find(item => item?.id === target.service)) || services.find(item => previewEndpoint(item?.url) === here);
+  return typeof service?.name === 'string' ? clip(service.name, 60) : '';
+}
 
 // What the picker reports, kept to plain, bounded values.
 export function cleanElement(input = {}) {
@@ -77,11 +97,14 @@ export function sourceLocation(hint, { folders = [] } = {}) {
   return { file: relative, ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}), ...(component ? { component } : {}), ...(approximate ? { approximate } : {}) };
 }
 
-// The sentence put into the message box: where the element is, what it is and where its code is.
+// The sentence put into the message box: where the element is, what it is and where its code is. Where the launch
+// map names the interface, the place starts with that name, so picks from a website and its admin panel differ.
 const KINDS = { a: 'link', button: 'button', input: 'field', textarea: 'text box', select: 'menu', img: 'image', svg: 'icon', h1: 'heading', h2: 'heading', h3: 'heading', h4: 'heading', h5: 'heading', h6: 'heading', nav: 'navigation', form: 'form', label: 'label', li: 'list item', ul: 'list', ol: 'list', table: 'table', p: 'paragraph', header: 'header', footer: 'footer', section: 'section', dialog: 'dialog' };
-export function pickText({ element, url, source }) {
+export function pickText({ element, url, source, label = '' }) {
   let where = 'the preview';
   try { const parsed = new URL(url); where = parsed.host + (parsed.pathname === '/' ? '' : parsed.pathname); } catch { /* The page's address is unknown. */ }
+  const place = clip(label, 60);
+  if (place) where = where === 'the preview' ? place : `${place} (${where})`;
   const kind = KINDS[element.tag] || `<${element.tag}> element`, name = element.text || element.label;
   const code = source?.file ? `${source.file}${source.line ? `:${source.line}` : ''}${source.component ? ` in ${source.component}` : ''}` : source?.component ? `in ${source.component}` : '';
   const details = [element.selector, code].filter(Boolean).join('; ');
@@ -228,85 +251,143 @@ export function apiInterceptorScript() {
   })()`;
 }
 
-export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#1c1a18', captureWait = 1500, platform = process.platform }) {
-  let win = null, toolbar = null, page = null, projectId = null, workspace = '', picking = false, pickCount = 0, capture = 'none', inspector = false, lastStack = null;
-  const apiCalls = [];
+// One window per interface (#142). A window is found again by its workspace and the local server its page shows, so
+// opening an interface that already has a window brings that window forward with its page, history and inspector as
+// they were; only a page that failed to load is loaded again. Each window has its own picker, inspector and API calls.
+// Opening one never closes or replaces another: the person closes a window, Stop review closes the windows of the
+// review's own services, and quitting closes the rest.
+export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, screen = null, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#1c1a18', captureWait = 1500, platform = process.platform }) {
+  const previews = new Set(), projects = new Map();
+  let capture = 'none', clock = 0;
   const previewSession = session.fromPartition(PREVIEW_PARTITION);
   previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   previewSession.setPermissionCheckHandler(() => false);
   previewSession.on('will-download', event => event.preventDefault());
   const alive = view => Boolean(view && !view.webContents.isDestroyed());
-  const own = (event, view) => alive(view) && event.sender === view.webContents;
-  const toToolbar = (channel, value) => { if (alive(toolbar)) toolbar.webContents.send(channel, value); };
+  const live = preview => Boolean(preview?.win && !preview.win.isDestroyed());
+  const toToolbar = (preview, channel, value) => { if (alive(preview.toolbar)) preview.toolbar.webContents.send(channel, value); };
+  // Where a window is: its page's address, or the local address it last went to while that loads or after it failed.
+  const address = preview => { const url = alive(preview.page) ? preview.page.webContents.getURL() : ''; return previewEndpoint(url) ? url : preview.requested; };
+  const endpoint = preview => previewEndpoint(address(preview));
+  const windowsOf = projectId => [...previews].filter(preview => live(preview) && preview.projectId === projectId);
+  const newest = list => list.reduce((best, preview) => !best || preview.used > best.used ? preview : best, null);
+  const latest = () => newest([...previews].filter(live));
+  const fromToolbar = event => [...previews].find(preview => alive(preview.toolbar) && event.sender === preview.toolbar.webContents);
+  const fromPage = event => [...previews].find(preview => alive(preview.page) && event.sender === preview.page.webContents);
+  // What each workspace's windows show besides their page: the review's stack and the agent's latest edit.
+  const known = projectId => { if (!projects.has(projectId)) projects.set(projectId, { stack: null, stackText: 'null', edit: null }); return projects.get(projectId); };
+  const label = preview => interfaceName(projects.get(preview.projectId)?.stack, address(preview));
 
-  function state() {
-    const contents = alive(page) ? page.webContents : null, history = contents?.navigationHistory;
-    return { url: contents?.getURL() || '', title: contents?.getTitle() || '', loading: Boolean(contents?.isLoading()), back: Boolean(history?.canGoBack()), forward: Boolean(history?.canGoForward()), picking, workspace };
+  function state(preview) {
+    const contents = alive(preview.page) ? preview.page.webContents : null, history = contents?.navigationHistory;
+    return { url: contents?.getURL() || '', title: contents?.getTitle() || '', loading: Boolean(contents?.isLoading()), back: Boolean(history?.canGoBack()), forward: Boolean(history?.canGoForward()), picking: preview.picking, workspace: preview.workspace, label: label(preview) };
   }
-  function sync() {
-    const value = state();
-    toToolbar('preview:state', value);
-    if (lastStack) toToolbar('preview:stack', lastStack);
-    if (win && !win.isDestroyed()) { let host = ''; try { host = new URL(value.url).host; } catch { /* Not loaded yet. */ } win.setTitle(host ? `Preview · ${host}` : 'Preview'); }
+  // The review's stack as one window sees it: which interface it shows, and which have a window already.
+  function stack(preview) {
+    const value = projects.get(preview.projectId)?.stack;
+    if (!value) return null;
+    const here = endpoint(preview), shown = new Set(windowsOf(preview.projectId).map(endpoint));
+    return { ...value, previews: (Array.isArray(value.previews) ? value.previews : []).map(item => { const at = previewEndpoint(item?.url); return { ...item, current: Boolean(at) && at === here, open: Boolean(at) && shown.has(at) }; }) };
   }
+  // The title tells the windows apart, in the window list and in macOS tabs: the interface, then its address.
+  function sync(preview) {
+    if (!live(preview)) return;
+    const value = state(preview), review = stack(preview);
+    toToolbar(preview, 'preview:state', value);
+    if (review) toToolbar(preview, 'preview:stack', review);
+    let host = ''; try { host = new URL(address(preview)).host; } catch { /* Not loaded yet. */ }
+    preview.win.setTitle(value.label ? `${value.label} · ${host || 'Preview'}` : host ? `Preview · ${host}` : 'Preview');
+  }
+  const syncProject = projectId => { for (const preview of windowsOf(projectId)) sync(preview); };
   // With the inspector open, the toolbar's view fills the window behind the page, and the page gives up width on the
   // right for it, never height.
-  function layout() {
-    if (!win || win.isDestroyed()) return;
-    const { width, height } = win.getContentBounds(), side = inspector ? inspectorWidth(width) : 0;
-    toolbar.setBounds({ x: 0, y: 0, width, height: side ? height : toolbarHeight });
-    page.setBounds({ x: 0, y: toolbarHeight, width: width - side, height: Math.max(0, height - toolbarHeight) });
+  function layout(preview) {
+    if (!live(preview)) return;
+    const { width, height } = preview.win.getContentBounds(), side = preview.inspector ? inspectorWidth(width) : 0;
+    preview.toolbar.setBounds({ x: 0, y: 0, width, height: side ? height : toolbarHeight });
+    preview.page.setBounds({ x: 0, y: toolbarHeight, width: width - side, height: Math.max(0, height - toolbarHeight) });
   }
   // ⇧⌘I, or Ctrl+Shift+I, shows or hides the inspector from either view. The page never sees those keys.
   const mac = platform === 'darwin';
   const toggleKey = input => input?.type === 'keyDown' && !input.isAutoRepeat && input.code === 'KeyI' && input.shift && !input.alt && (mac ? input.meta && !input.control : input.control && !input.meta);
-  const onKey = (event, input) => { if (!toggleKey(input)) return; event.preventDefault(); toToolbar('preview:toggle-inspector'); };
-  function create() {
-    win = new BaseWindow({ width: 1180, height: 820, minWidth: 480, minHeight: 320, title: 'Preview', backgroundColor: background() });
-    toolbar = new WebContentsView({ webPreferences: { preload: path.join(root, 'desktop', 'preview-toolbar-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
-    page = new WebContentsView({ webPreferences: { partition: PREVIEW_PARTITION, preload: path.join(root, 'desktop', 'preview-page-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false } });
-    inspector = false;
+  const onKey = preview => (event, input) => { if (!toggleKey(input)) return; event.preventDefault(); toToolbar(preview, 'preview:toggle-inspector'); };
+  // Another window opens a step below and to the right of the last one, at its size, on the same display, so the one
+  // behind stays in reach.
+  function placement() {
+    const last = latest();
+    if (!last) return { width: 1180, height: 820 };
+    const bounds = last.win.getBounds(), area = screen?.getDisplayMatching(bounds)?.workArea;
+    let x = bounds.x + 28, y = bounds.y + 28;
+    if (area && x + bounds.width > area.x + area.width) x = area.x + Math.max(0, Math.min(28, area.width - bounds.width));
+    if (area && y + bounds.height > area.y + area.height) y = area.y + Math.max(0, Math.min(28, area.height - bounds.height));
+    return { x, y, width: bounds.width, height: bounds.height };
+  }
+  function create({ projectId, workspace, href }) {
+    const preview = { projectId, workspace, requested: href, picking: false, pickCount: 0, inspector: false, failed: false, used: ++clock };
+    // On macOS the windows can also be merged into tabs, from the Window menu.
+    const win = new BaseWindow({ ...placement(), minWidth: 480, minHeight: 320, title: 'Preview', backgroundColor: background(), ...(mac ? { tabbingIdentifier: 'codeshi-preview' } : {}) });
+    const toolbar = new WebContentsView({ webPreferences: { preload: path.join(root, 'desktop', 'preview-toolbar-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    const page = new WebContentsView({ webPreferences: { partition: PREVIEW_PARTITION, preload: path.join(root, 'desktop', 'preview-page-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false } });
+    Object.assign(preview, { win, toolbar, page });
+    previews.add(preview);
     // The page goes above the toolbar's view, which fills the window behind it while the inspector is open.
     win.contentView.addChildView(toolbar); win.contentView.addChildView(page);
-    toolbar.webContents.on('before-input-event', onKey);
+    toolbar.webContents.on('before-input-event', onKey(preview));
     toolbar.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     toolbar.webContents.on('will-navigate', event => event.preventDefault());
     toolbar.webContents.loadFile(path.join(root, 'desktop', 'preview-toolbar.html'));
-    toolbar.webContents.once('did-finish-load', sync);
+    // A new toolbar starts with its window's state, the review's stack and the agent's latest edit in the workspace.
+    toolbar.webContents.once('did-finish-load', () => { sync(preview); const edit = projects.get(projectId)?.edit; if (edit) toToolbar(preview, 'preview:edit', edit); });
     const contents = page.webContents;
-    contents.on('before-input-event', onKey);
-    const injectInterceptor = () => { if (alive(page)) page.webContents.executeJavaScript(apiInterceptorScript()).catch(() => {}); };
+    contents.on('before-input-event', onKey(preview));
+    const injectInterceptor = () => { if (alive(page)) contents.executeJavaScript(apiInterceptorScript()).catch(() => {}); };
     contents.on('did-start-navigation', injectInterceptor);
     contents.on('did-finish-load', injectInterceptor);
-    // Local addresses stay in the preview; https links open in the browser; nothing opens a window.
+    // Local addresses stay in this window's page; https links open in the browser; nothing opens a window.
     contents.setWindowOpenHandler(({ url }) => { if (isPreviewURL(url)) contents.loadURL(url); else if (/^https:\/\//i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
     const guard = (event, url) => { if (isPreviewURL(url)) return; event.preventDefault(); if (/^https:\/\//i.test(url)) shell.openExternal(url); };
     contents.on('will-navigate', guard); contents.on('will-redirect', guard);
-    for (const name of ['did-navigate', 'did-navigate-in-page', 'did-start-loading', 'did-stop-loading', 'page-title-updated']) contents.on(name, sync);
-    contents.on('did-navigate', () => { picking = false; });
-    contents.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame && code !== -3) toToolbar('preview:error', `${url} could not load (${description}). Is the dev server running?`); });
-    win.on('resize', layout); layout();
-    win.on('closed', () => { win = toolbar = page = null; picking = false; lastEdit = null; });
+    // A page that loads is no longer failed, and one that moves to another server changes what the workspace's other
+    // windows show as open. A page that fails to load is loaded again when its interface is opened.
+    contents.on('did-navigate', () => { preview.picking = false; preview.failed = false; syncProject(projectId); });
+    for (const name of ['did-navigate-in-page', 'did-start-loading', 'did-stop-loading', 'page-title-updated']) contents.on(name, () => sync(preview));
+    contents.on('did-fail-load', (_event, code, description, url, mainFrame) => {
+      if (!mainFrame || code === -3) return;
+      preview.failed = true; if (isPreviewURL(url)) preview.requested = url;
+      toToolbar(preview, 'preview:error', `${url} could not load (${description}). Is the dev server running?`);
+    });
+    win.on('focus', () => { preview.used = ++clock; });
+    win.on('resize', () => layout(preview)); layout(preview);
+    // Electron leaves a view's page running after its window closes, so both views close with it.
+    win.on('closed', () => {
+      previews.delete(preview);
+      for (const view of [toolbar, page]) if (!view.webContents.isDestroyed()) view.webContents.close();
+      preview.win = preview.toolbar = preview.page = null; preview.picking = false;
+      if (windowsOf(projectId).length) syncProject(projectId); else projects.delete(projectId);
+    });
+    return preview;
   }
-  async function open({ projectId: id = null, url, workspace: name = '' }) {
-    const href = previewURL(url);
-    projectId = id; workspace = String(name || '').slice(0, 120); picking = false;
-    if (!win || win.isDestroyed()) create();
-    win.show(); win.focus();
-    await page.webContents.loadURL(href).catch(() => {});
-    sync();
+  async function open({ projectId = null, url, workspace = '' }) {
+    const href = previewURL(url), name = String(workspace || '').slice(0, 120);
+    const existing = newest(windowsOf(projectId).filter(preview => endpoint(preview) === previewEndpoint(href)));
+    const preview = existing || create({ projectId, workspace: name, href });
+    if (existing) { preview.used = ++clock; if (name) preview.workspace = name; if (preview.win.isMinimized()) preview.win.restore(); }
+    preview.win.show(); preview.win.focus();
+    if (!existing || preview.failed || !preview.page.webContents.getURL()) { preview.requested = href; await preview.page.webContents.loadURL(href).catch(() => {}); }
+    syncProject(projectId);
     return true;
   }
-  function setPicking(on) {
-    if (!alive(page)) return;
-    picking = Boolean(on);
-    page.webContents.send('preview:picking', picking);
-    sync();
-    if (picking) page.webContents.focus();
+  function setPicking(preview, on) {
+    if (!live(preview) || !alive(preview.page)) return;
+    preview.picking = Boolean(on);
+    preview.page.webContents.send('preview:picking', preview.picking);
+    sync(preview);
+    if (preview.picking) preview.page.webContents.focus();
   }
 
-  async function finish(pick) {
-    const contents = page.webContents, element = cleanElement(pick?.element), url = contents.getURL();
+  // A pick says which window's interface it came from, and goes to that window's workspace.
+  async function finish(preview, pick) {
+    const contents = preview.page.webContents, element = cleanElement(pick?.element), url = contents.getURL(), name = label(preview), { projectId } = preview;
     let hint = null;
     if (typeof pick?.nonce === 'string' && /^[a-z0-9]{8,40}$/.test(pick.nonce)) { try { hint = await contents.executeJavaScript(sourceScript(pick.nonce)); } catch { hint = null; } }
     const source = sourceLocation(hint, { folders: folders(projectId) }) || sourceLocation(element.attributeSource, { folders: folders(projectId) });
@@ -321,31 +402,36 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
       if (shot === 'hung') { capture = 'hung'; break; }
       if (shot && !shot.isEmpty()) { if (shot.getSize().width > 1600) shot = shot.resize({ width: 1600 }); image = { name: `preview-${element.tag}.png`, data: shot.toPNG().toString('base64') }; capture = 'captured'; }
     }
-    const value = { projectId, url, element, source, image, text: pickText({ element, url, source }) };
-    pickCount++;
+    const value = { projectId, url, label: name, element, source, image, text: pickText({ element, url, source, label: name }) };
+    preview.pickCount++;
     onPick(value);
-    toToolbar('preview:picked', { text: value.text, count: pickCount });
+    toToolbar(preview, 'preview:picked', { text: value.text, count: preview.pickCount });
     return value;
   }
 
+  // Each toolbar moves only its own window's page.
   const onToolbar = (event, action, value) => {
-    if (!own(event, toolbar) || !alive(page)) return;
-    const contents = page.webContents;
+    const preview = fromToolbar(event);
+    if (!preview || !alive(preview.page)) return;
+    const contents = preview.page.webContents;
     if (action === 'back' && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
     else if (action === 'forward' && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
     else if (action === 'reload') contents.reload();
-    else if (action === 'pick') setPicking(!picking);
+    else if (action === 'pick') setPicking(preview, !preview.picking);
     else if (action === 'open-external' && isPreviewURL(contents.getURL())) shell.openExternal(contents.getURL());
-    else if (action === 'navigate') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch (error) { toToolbar('preview:error', error.message); } }
-    else if (action === 'focus-app') onPick({ projectId, focus: true });
-    else if (action === 'show-inspector' || action === 'hide-inspector') { inspector = action === 'show-inspector'; layout(); }
-    else if (action === 'navigate-preview') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch {} }
+    else if (action === 'navigate') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch (error) { toToolbar(preview, 'preview:error', error.message); } }
+    else if (action === 'focus-app') onPick({ projectId: preview.projectId, focus: true });
+    else if (action === 'show-inspector' || action === 'hide-inspector') { preview.inspector = action === 'show-inspector'; layout(preview); }
+    // Another of the review's interfaces opens in a window of its own, or brings its window forward; this page stays.
+    else if (action === 'open-interface') open({ projectId: preview.projectId, url: value, workspace: preview.workspace }).catch(error => toToolbar(preview, 'preview:error', error.message));
   };
-  const onPicked = (event, pick) => { if (!own(event, page) || !picking) return; picking = false; sync(); finish(pick).catch(error => toToolbar('preview:error', `The element could not be picked: ${error.message}`)); };
-  const onCancelled = event => { if (own(event, page)) { picking = false; sync(); } };
+  const onPicked = (event, pick) => { const preview = fromPage(event); if (!preview?.picking) return; preview.picking = false; sync(preview); finish(preview, pick).catch(error => toToolbar(preview, 'preview:error', `The element could not be picked: ${error.message}`)); };
+  const onCancelled = event => { const preview = fromPage(event); if (preview) { preview.picking = false; sync(preview); } };
   ipcMain.on('preview:toolbar', onToolbar); ipcMain.on('preview:picked', onPicked); ipcMain.on('preview:pick-cancelled', onCancelled);
+  // A page's API calls go to its own window's inspector.
   const onApiCall = (event, call) => {
-    if (!own(event, page) || !call) return;
+    const preview = fromPage(event);
+    if (!preview || !call) return;
     const item = {
       id: String(call.id || Math.random().toString(36).slice(2, 10)),
       type: call.type === 'xhr' ? 'XHR' : 'Fetch',
@@ -366,31 +452,43 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
       trigger: call.trigger ? { kind: 'click', text: String(call.trigger.text || '').slice(0, 60), tag: String(call.trigger.tag || '').slice(0, 30) } : null,
       time: call.time || new Date().toISOString(),
     };
-    if (apiCalls.length >= 100) apiCalls.shift();
-    apiCalls.push(item);
-    toToolbar('preview:api-call', item);
+    toToolbar(preview, 'preview:api-call', item);
   };
   ipcMain.on('preview:api-call', onApiCall);
 
-
-  // Shows the latest edit in the previewed workspace in the trusted toolbar, never in the page: a file name and line counts only.
-  let lastEdit = null;
-  function showStack(value) {
-    lastStack = value;
-    toToolbar('preview:stack', value);
+  // The latest edit in a workspace shows in the trusted toolbars of its windows, never in a page: a file name and line
+  // counts only.
+  function showEdit(projectId, value) {
+    const clean = value?.path ? { path: String(value.path).slice(-200), added: Math.max(0, Number(value.added) || 0), removed: Math.max(0, Number(value.removed) || 0) } : null, saved = known(projectId);
+    if (JSON.stringify(clean) === JSON.stringify(saved.edit)) return;
+    saved.edit = clean;
+    for (const preview of windowsOf(projectId)) toToolbar(preview, 'preview:edit', clean);
   }
-
-  function showEdit(value) {
-    const clean = value?.path ? { path: String(value.path).slice(-200), added: Math.max(0, Number(value.added) || 0), removed: Math.max(0, Number(value.removed) || 0) } : null;
-    if (JSON.stringify(clean) === JSON.stringify(lastEdit)) return;
-    lastEdit = clean; toToolbar('preview:edit', clean);
+  // The review's services and interfaces, for the inspector's Stack and to name each window's interface.
+  function showStack(projectId, value) {
+    const saved = known(projectId), text = JSON.stringify(value ?? null);
+    if (text === saved.stackText) return;
+    Object.assign(saved, { stack: value ?? null, stackText: text });
+    syncProject(projectId);
+  }
+  // Closes every window, or a workspace's windows showing any of the given addresses, as Stop review does for the
+  // review's own services. Says how many it closed.
+  function close({ projectId, urls } = {}) {
+    const ends = Array.isArray(urls) ? new Set(urls.map(previewEndpoint).filter(Boolean)) : null;
+    const closing = [...previews].filter(preview => live(preview) && (!ends || preview.projectId === projectId && ends.has(endpoint(preview))));
+    for (const preview of closing) preview.win.close();
+    return closing.length;
   }
 
   return {
-    showEdit, showStack, get projectId() { return alive(toolbar) ? projectId : null; },
-    open, setPicking, close: () => { if (win && !win.isDestroyed()) win.close(); },
-    dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); ipcMain.off('preview:api-call', onApiCall); if (win && !win.isDestroyed()) win.destroy(); win = null; },
-    get page() { return page; }, get picking() { return picking; },
+    open, close, showEdit, showStack,
+    // Whether any window shows this workspace.
+    shows: projectId => windowsOf(projectId).length > 0,
+    // The smoke test picks in the window used last.
+    setPicking: on => setPicking(latest(), on),
+    dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); ipcMain.off('preview:api-call', onApiCall); for (const preview of [...previews]) if (live(preview)) preview.win.destroy(); previews.clear(); projects.clear(); },
+    get page() { return latest()?.page ?? null; }, get picking() { return Boolean(latest()?.picking); },
+    get count() { return [...previews].filter(live).length; },
     // How the last pick's screenshot went: captured, blank, hung, or none when the pick had no area.
     get lastCapture() { return capture; },
   };

@@ -206,6 +206,47 @@ test('weekly and model-specific windows count separately: an exhausted Opus wind
   assert.equal(allowed.model, 'sonnet', 'Model restrictions are applied before selection, not only when starting.');
 });
 
+test('allowance about to expire is spent, while mid-week the safety margin still holds (#153)', () => {
+  const now = Date.parse('2026-11-09T12:00:00Z'), checkedAt = new Date(now).toISOString(), at = hours => new Date(now + hours * 3600000).toISOString();
+  const usage = (weekly, resetsIn, short = 13) => ({ available: true, checkedAt, windows: [{ label: '5-hour', usedPercent: short }, { label: 'Weekly', usedPercent: weekly, resetsAt: at(resetsIn) }] });
+  // The reported case: both weekly windows at 97%, Claude's resetting in 4 hours with its 5-hour window nearly unused.
+  const options = { text: 'Refactor the payment module', mode: 'ultra', current: 'codex', now };
+  const reported = route({ ...options, candidates: agents({ codex: { usage: usage(97, 72, 0) }, claude: { usage: usage(97, 4) } }) });
+  assert.equal(reported.provider, 'claude', 'Claude spends what would expire in 4 hours instead of the queue pausing.');
+  assert.equal(reported.quota.state, 'near');
+  assert.equal(reported.remainder, 'expiring');
+  assert.equal(reported.model, 'opus', 'Ultra keeps the strongest model.');
+  assert.equal(reported.effort, 'high', 'The top effort level is not used on the last of an allowance.');
+  assert.match(reported.reason, /Spending Claude's remaining Weekly allowance \(3% left\) before it resets in 4h/);
+  assert.equal(globalThis.relayRouting.assessQuota(usage(97, 4), 'opus', { threshold: 95, now, tier: 'deep' }).burndown.label, 'Weekly');
+
+  // Mid-week, 97% still pauses to protect the days to come; past 6 hours to the reset is mid-week.
+  const midWeek = agents({ codex: { usage: usage(98.5, 72, 0) }, claude: { usage: usage(97, 7) } });
+  assert.match(route({ ...options, candidates: midWeek }).error, /found no connected agent/);
+  // Proceed with remaining allowance overrides that, spending the agent with the most left first.
+  const asked = route({ ...options, candidates: midWeek, allowNear: true });
+  assert.equal(asked.provider, 'claude', 'Among agents near their limit, the one with the most allowance left goes first, whoever ran last.');
+  assert.equal(asked.remainder, 'asked');
+  assert.match(asked.reason, /Spending Claude's remaining allowance as you asked \(Weekly: 3% left, resets Monday\)/);
+
+  // An expiring window doesn't override a tight window elsewhere on the same agent.
+  assert.equal(globalThis.relayRouting.assessQuota(usage(97, 4, 96), 'opus', { threshold: 95, now, tier: 'deep' }).burndown, undefined);
+  assert(route({ ...options, candidates: agents({ codex: { usage: usage(97, 72) }, claude: { usage: usage(97, 4, 96) } }) }).error);
+  // Ordinary headroom still comes first, and nothing at its limit is ever chosen.
+  assert.equal(route({ ...options, candidates: agents({ codex: { usage: usage(40, 72) }, claude: { usage: usage(97, 4) } }) }).provider, 'codex');
+  assert(route({ ...options, allowNear: true, candidates: agents({ codex: { usage: usage(100, 2) }, claude: { usage: usage(100, 2) } }) }).error);
+});
+
+test('a model-specific window that is near and not expiring steps down a tier before the queue pauses (#153)', () => {
+  const now = Date.parse('2026-11-09T12:00:00Z'), checkedAt = new Date(now).toISOString(), at = hours => new Date(now + hours * 3600000).toISOString();
+  // Opus's own weekly window is near mid-week; the account-wide weekly window is near too but resets in 3 hours.
+  const usage = { available: true, checkedAt, windows: [{ label: '5-hour', usedPercent: 10 }, { label: 'Weekly', usedPercent: 97, resetsAt: at(3) }, { label: 'Opus weekly', scopes: ['opus'], usedPercent: 97, resetsAt: at(80) }] };
+  const choice = route({ text: 'Refactor the payment module', mode: 'ultra', current: 'claude', now, candidates: agents({ claude: { usage } }).filter(row => row.provider === 'claude') });
+  assert.equal(choice.model, 'sonnet', 'Opus is kept for the rest of its week; Sonnet spends the expiring account allowance.');
+  assert.equal(choice.steppedDown, true);
+  assert.equal(choice.remainder, 'expiring');
+});
+
 test('replay compares Smart, Saver and Ultra across a prompt sequence with recorded usage readings', () => {
   const now = Date.parse('2026-11-08T12:00:00Z');
   const candidates = agents({
@@ -301,7 +342,7 @@ test('the broker saves the Auto mode with the workspace and records what Auto ch
   broker.start(c, { text: 'Fix the typo in the README', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light', extra: 'ignored' } });
   await broker.running.done;
   const prompt = c.messages.find(message => message.role === 'user');
-  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
+  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', policy: 1, tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
   assert.deepEqual(c.lastRun.routing, { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' });
   broker.queueAction(c, { action: 'pause' });
   broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' } });

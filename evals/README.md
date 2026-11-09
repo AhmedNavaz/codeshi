@@ -62,6 +62,7 @@ An agent is written `provider:model:effort`, and any part after the provider can
 
 ```sh
 npm run eval -- report    # compares everything saved
+npm run eval -- compare   # manual small-edit against routing-assessment, per verified run
 npm run eval -- list
 npm run eval -- delete all
 ```
@@ -83,6 +84,10 @@ npm run eval -- run --pin <saved-live-result.json> --live --max-runs 6 --max-tok
 Pass a result's path or its filename from the results directory. Policy overrides are refused. If any pinned input changed, the run fails before starting an agent or reading account quota, names the changed inputs, and exits with status 1. Restore the original code, skills and runtime before trying again. Pins verify versions; they do not archive or automatically restore them. Older results without pins cannot be repeated this way.
 
 The provider-reported model and effort are checked after execution too. A changed model alias is marked as a failed repeat, while keeping its measured usage and check outcome. Use explicit model and effort settings for live comparisons; an omitted setting uses the provider's default. Providers can change a model behind an unchanged name, and this cannot make their output deterministic or pin their hosted service. A run with unreported model identity stays separate in reports. A live repeat can spend its new budget even if model drift is only discovered at the end.
+
+### Manual against routed
+
+`compare` pairs saved `small-edit` (manual) and `routing-assessment` (routed) results that share the repository snapshot, hidden checks, builder agent, context policy, engine and runtime. It uses the same rules as the app's Smart results (`src/smart-results.mjs`): usage per verified run, failed runs included, totals summed, a fixed-seed range, and a quality gate before anything counts as a saving. Evaluations always run their checks, so the only lower thresholds are the repeat counts: 3 on each side. `--baseline` and `--routed` pick other fixtures, and `--live` keeps live results only. It runs nothing and spends nothing. Recorded results only check the arithmetic; only live repeats are evidence, and only for that fixture and agent.
 
 ## Reading the results
 

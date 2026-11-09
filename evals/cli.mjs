@@ -5,9 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { fixtures, fixtureById } from './fixtures.mjs';
 import { compareResults, parsePolicy, reportMarkdown, runFixture } from './harness.mjs';
 import { validatePin } from './experiment.mjs';
+import { measuredComparisons, measuredMarkdown } from './compare.mjs';
 
 // npm run eval -- run --agent claude:haiku --context task,recency --live --max-runs 12
-// npm run eval -- report | list | delete <file or all>
+// npm run eval -- report | compare | list | delete <file or all>
 const resultsDir = process.env.CODESHI_EVAL_RESULTS || path.join(path.dirname(fileURLToPath(import.meta.url)), 'results');
 const [command = 'run', ...rest] = process.argv.slice(2), options = { _: [] };
 for (let index = 0; index < rest.length; index++) { const word = rest[index]; if (word.startsWith('--')) { const next = rest[index + 1]; if (next === undefined || next.startsWith('--')) options[word.slice(2)] = true; else { options[word.slice(2)] = next; index++; } } else options._.push(word); }
@@ -47,6 +48,10 @@ if (command === 'run') {
 } else if (command === 'report') {
   const results = saved().map(name => JSON.parse(fs.readFileSync(path.join(resultsDir, name), 'utf8')));
   console.log(results.length ? reportMarkdown(compareResults(options.live ? results.filter(result => result.live) : results)) : 'No results saved yet.');
+} else if (command === 'compare') {
+  // Pairs saved manual and routed results on the same repository and checks. It runs nothing.
+  const results = saved().map(name => JSON.parse(fs.readFileSync(path.join(resultsDir, name), 'utf8')));
+  console.log(measuredMarkdown(measuredComparisons(options.live ? results.filter(result => result.live) : results, { baseline: typeof options.baseline === 'string' ? options.baseline : 'small-edit', routed: typeof options.routed === 'string' ? options.routed : 'routing-assessment' })));
 } else if (command === 'list') console.log(saved().join('\n') || 'No results saved yet.');
 else if (command === 'delete') {
   const target = options._[0];
@@ -54,4 +59,4 @@ else if (command === 'delete') {
   const names = target === 'all' ? saved() : saved().filter(name => name === path.basename(target));
   for (const name of names) fs.rmSync(path.join(resultsDir, name));
   console.log(`Deleted ${names.length}.`);
-} else { console.error(`Unknown command ${command}. Use run, report, list or delete.`); process.exit(2); }
+} else { console.error(`Unknown command ${command}. Use run, report, compare, list or delete.`); process.exit(2); }

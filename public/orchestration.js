@@ -1,6 +1,6 @@
-// Orchestrate (#12, stage 3): a message can be planned as a few steps. Turned on for one message, one read-only
+// Orchestrate (#12, #89, #97): a message can be planned as a few steps. Turned on for one message, one read-only
 // run plans it with the deepest work allowed; the plan then opens in the Plan side panel. Each
-// step is one row (number, title, tier, and the agent and model chosen) that opens to edit it, and the worst case
+// step is one row (number, role, title, tier, and the agent and model chosen) that opens to edit it, and the worst case
 // and the actions stay pinned below the steps. Nothing from a plan runs until it is approved, and queued messages wait
 // for it. The server checks every saved plan again.
 (() => {
@@ -10,6 +10,9 @@
   const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
   const TIERS = [['light', 'Light'], ['standard', 'Standard'], ['deep', 'Deep']];
   const AGENTS = [['', 'Auto'], ['codex', 'Codex'], ['claude', 'Claude'], ['gemini', 'Gemini']];
+  const ROLES = [['builder', 'Builder'], ['reviewer', 'Reviewer'], ['frontend', 'Frontend'], ['backend', 'Backend'], ['database', 'Database'], ['design', 'Design'], ['qa', 'QA']];
+  const ARTIFACTS = [['', 'None'], ['contract', 'Contract'], ['schema', 'Schema'], ['diff', 'Diff'], ['test_evidence', 'QA evidence'], ['findings', 'Findings']];
+  const roleNames = { builder: 'Builder', reviewer: 'Reviewer', frontend: 'Frontend', backend: 'Backend', database: 'Database', design: 'Design', qa: 'QA' };
   const OPEN = ['planning', 'draft', 'unstructured', 'failed', 'interrupted'];
   const PANEL_KEY = 'throughline:side-panel';
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
@@ -164,7 +167,13 @@
     row.dataset.step = step.id;
     const toggle = node('button', 'orchestration-step-toggle'); toggle.type = 'button'; toggle.setAttribute('aria-expanded', String(open));
     const detail = node('div', 'orchestration-step-detail'); detail.id = `orchestration-step-detail-${step.id}`; detail.hidden = !open; toggle.setAttribute('aria-controls', detail.id);
-    toggle.append(node('span', 'orchestration-step-number', String(number)), node('span', 'orchestration-step-name'), node('span', 'effort-bars orchestration-step-tier'), node('span', 'orchestration-step-route'));
+    toggle.append(
+      node('span', 'orchestration-step-number', String(number)),
+      node('span', 'orchestration-step-role', roleNames[step.role] || 'Builder'),
+      node('span', 'orchestration-step-name'),
+      node('span', 'effort-bars orchestration-step-tier'),
+      node('span', 'orchestration-step-route')
+    );
     toggle.addEventListener('click', () => {
       const show = !opened.ids.has(step.id); if (show) opened.ids.add(step.id); else opened.ids.delete(step.id);
       toggle.setAttribute('aria-expanded', String(show)); detail.hidden = !show;
@@ -179,13 +188,18 @@
     const instructions = field('textarea', 'orchestration-step-instructions', step.instructions, `Step ${number} instructions`, 'What to do, and how to know it is done', value => { step.instructions = value; changed(); });
     instructions.rows = 3; instructions.maxLength = LIMITS.instructions;
     const files = field('input', 'orchestration-step-files', step.files.join(', '), `Files step ${number} expects to change`, 'Files or folders it changes, separated by commas', value => { step.files = value.split(',').map(item => item.trim()).filter(Boolean); changed(); });
+    const roles = segment(`Step ${number} role`, 'orchestration-roles');
+    for (const [value, text] of ROLES) roles.append(choice('orchestration-role-option', text, 'role', value, () => { step.role = value; changed(); }));
     const tiers = segment(`Step ${number} tier`, 'orchestration-tiers');
     for (const [value, text] of TIERS) tiers.append(choice('orchestration-tier-option', text, 'tier', value, () => { step.tier = value; changed(); }));
     const agents = segment(`Step ${number} agent`, 'orchestration-agents');
     for (const [value, text] of AGENTS) agents.append(choice('orchestration-agent-option', text, 'provider', value, () => { step.agent = value ? { provider: value, model: null, effort: null } : null; changed(); }, `agent-icon ${value || 'auto'}`));
+    const artifacts = segment(`Step ${number} artifact`, 'orchestration-artifacts');
+    for (const [value, text] of ARTIFACTS) artifacts.append(choice('orchestration-artifact-option', text, 'artifact', value, () => { step.artifact = value || null; changed(); }));
+    const check = field('input', 'orchestration-step-check', step.check || '', `Step ${number} acceptance check`, 'Acceptance check command (e.g. npm test)', value => { step.check = value.trim() || null; changed(); }); check.maxLength = 300;
     const after = segment(`Steps that step ${number} waits for`, 'orchestration-afters-choice');
     const options = node('div', 'orchestration-step-options');
-    options.append(labelled('Tier', tiers), labelled('Agent', agents), labelled('Runs after', after));
+    options.append(labelled('Role', roles), labelled('Tier', tiers), labelled('Agent', agents), labelled('Artifact', artifacts), labelled('Check', check), labelled('Runs after', after));
     detail.append(title, instructions, files, options);
     row.append(line, detail);
     return row;
@@ -197,6 +211,8 @@
     edit.steps.forEach((step, index) => {
       const row = rows[index]; if (!row) return;
       const name = row.querySelector('.orchestration-step-name'); name.textContent = step.title.trim() || 'Untitled step'; name.classList.toggle('untitled', !step.title.trim());
+      const roleBadge = row.querySelector('.orchestration-step-role');
+      if (roleBadge) { roleBadge.textContent = roleNames[step.role] || 'Builder'; roleBadge.dataset.role = step.role || 'builder'; }
       const level = Math.max(0, TIERS.findIndex(([value]) => value === step.tier)), bars = row.querySelector('.orchestration-step-tier');
       bars.dataset.tier = TIERS[level][0]; bars.setAttribute('role', 'img'); bars.setAttribute('aria-label', `${TIERS[level][1]} step`); bars.title = `${TIERS[level][1]} step`;
       bars.replaceChildren(...TIERS.map((_, bar) => node('i', bar <= level ? 'on' : undefined)));
@@ -210,8 +226,10 @@
         chip.addEventListener('click', () => { step.dependsOn = step.dependsOn.filter(other => other !== id); changed(); });
         return chip;
       }));
+      for (const button of row.querySelectorAll('.orchestration-role-option')) button.setAttribute('aria-pressed', String((button.dataset.role || 'builder') === (step.role || 'builder')));
       for (const button of row.querySelectorAll('.orchestration-tier-option')) button.setAttribute('aria-pressed', String(button.dataset.tier === step.tier));
       for (const button of row.querySelectorAll('.orchestration-agent-option')) button.setAttribute('aria-pressed', String(button.dataset.provider === (step.agent?.provider || '')));
+      for (const button of row.querySelectorAll('.orchestration-artifact-option')) button.setAttribute('aria-pressed', String((button.dataset.artifact || '') === (step.artifact || '')));
       row.querySelector('.orchestration-afters-choice').replaceChildren(...edit.steps.slice(0, index).map((earlier, position) => {
         const button = choice('orchestration-after-option', `Step ${position + 1}`, 'step', earlier.id, () => {
           step.dependsOn = step.dependsOn.includes(earlier.id) ? step.dependsOn.filter(id => id !== earlier.id) : [...step.dependsOn, earlier.id]; changed();
@@ -280,7 +298,7 @@
     if (!edit || edit.planId !== plan.id || (!edit.dirty && edit.revision !== plan.revision)) edit = copy(plan);
     status.hidden = !(edit.dirty && edit.revision !== plan.revision);
     status.textContent = status.hidden ? '' : 'This plan changed in another window. Revert to see the latest version.';
-    const signature = JSON.stringify([plan.id, edit.revision, edit.structure, edit.steps.map(step => step.id)]);
+    const signature = JSON.stringify([plan.id, edit.revision, edit.structure, edit.steps.map(step => [step.id, step.role, step.artifact, step.check])]);
     if (signature !== drawn) { drawn = signature; $('orchestration-steps').replaceChildren(...edit.steps.map(stepRow)); }
     refreshDerived(plan);
   }
@@ -311,7 +329,7 @@
   $('orchestration-add').addEventListener('click', () => {
     if (!edit || edit.steps.length >= LIMITS.steps) return;
     const next = Math.max(0, ...edit.steps.map(step => Number(step.id.slice(1)) || 0)) + 1, id = `s${next}`;
-    edit.steps.push({ id, title: '', instructions: '', files: [], tier: 'standard', dependsOn: [], agent: null });
+    edit.steps.push({ id, title: '', instructions: '', files: [], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [] });
     opened.ids.add(id); changed(true);
     const rows = $('orchestration-steps').children; rows[rows.length - 1]?.querySelector('.orchestration-step-title')?.focus();
   });

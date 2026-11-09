@@ -39,15 +39,23 @@
     } catch (failure) { if (scope === projectId) error = failure.message; }
     finally { request = null; changed(); if (dialog.open) renderDialog(); if (scope !== projectId) refresh(); }
   }
+  // The addresses of a review's own services. Their preview windows close when the person stops the review (#142); a
+  // service left blocked by another app on its port was never part of it.
+  const reviewAddresses = run => [...new Set([
+    ...[...(run?.previews || []), run?.preview].map(item => item?.url),
+    ...(run?.steps || []).filter(step => step.status !== 'blocked' && step.ready).map(step => step.ready.url || (step.ready.port ? `http://127.0.0.1:${step.ready.port}/` : null)),
+  ].filter(Boolean))];
   async function perform(action) {
     const scope = projectId, value = current(), chosen = profile();
     if (pending || !scope) return;
+    const addresses = action === 'stop' ? reviewAddresses(value.run) : [];
     pending = true; error = ''; changed(); renderDialog();
     try {
       const run = action === 'start'
         ? await api.post('/api/commands/review/start', { revision: value.plan?.revision, profileId: chosen?.id }, scope)
         : await api.post('/api/commands/review/stop', { runId: value.run?.id }, scope);
       if (scope === projectId) states.set(scope, { ...current(), run });
+      if (addresses.length) window.relayPreview?.close?.(addresses, scope);
     } catch (failure) { if (scope === projectId) error = failure.message; }
     finally { pending = false; changed(); if (dialog.open) renderDialog(); refresh(); }
   }
@@ -139,7 +147,7 @@
       const name = run.steps.find(step => step.id === destination.service)?.name || 'project';
       const text = destinations.length > 1 ? `Open ${name}` : window.relayPreview?.available ? 'Open preview & point' : 'Open preview';
       const launch = button(text, () => preview(destination.url), 'flow-button flow-primary');
-      launch.title = window.relayPreview?.available ? `Review ${name} and point at changes` : destination.url;
+      launch.title = !window.relayPreview?.available ? destination.url : destinations.length > 1 ? `Open ${name} in its own preview window, beside the others, and point at changes` : `Review ${name} and point at changes`;
       host.append(launch);
     }
     host.append(start);
@@ -251,7 +259,7 @@
       if (value.run && value.run.revision !== value.plan.revision) content.append(node('p', 'project-review-hint', 'The saved map changed. Stop the current review before starting the new map.'));
     }
     const controls = node('div', 'project-review-actions'); actions(controls, true); content.append(controls);
-    content.append(node('p', 'project-review-hint', 'Start review runs the displayed commands on your computer. Opening the preview lets you select an element and attach it to chat. Running the project does not mark tests as passed.'));
+    content.append(node('p', 'project-review-hint', 'Start review runs the displayed commands on your computer. Each interface opens in a preview window of its own, where you can select an element and attach it to chat; Stop review closes them. Running the project does not mark tests as passed.'));
     preparationStatus(content);
     ask.disabled = preparing();
     ask.textContent = preparing() ? 'Preparing…' : chosen ? 'Ask agent to update' : 'Ask agent to prepare';

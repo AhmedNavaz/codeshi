@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   // Flow mode (#107, #128): just the chat, with plain-language cards in the space either side. Each card reads what
-  // Codeshi has already recorded, with no extra model call: how routing and handoff are working, what's left on each plan, the plan and the queue, and the files changed with Undo.
+  // Codeshi has already recorded, with no extra model call: how routing and handoff are working, what's left on each plan, the plan and the queue, routing results, and the files changed with Undo.
   // Entering hides the sidebar and the panels behind a short seal moment; leaving brings them back as they were.
   // Approvals, questions and Stop stay in the chat, so they are never hidden.
   const $ = id => document.getElementById(id), api = window.relayUI, shell = $('app-shell');
@@ -29,6 +29,7 @@
   const CARDS = [
     { id: 'next', title: 'What’s next', side: left },
     { id: 'plans', title: 'What’s left on your plans', side: left },
+    { id: 'results', title: 'Smart results', side: left },
     { id: 'working', title: 'How it’s working now', side: right },
     { id: 'files', title: 'Files changed', side: right },
     { id: 'preview', title: 'Run and review your project', side: right },
@@ -264,21 +265,21 @@
     if (running && run) {
       const agent = agentName(run.provider, run.connection === "local");
       const model = run.model ? (window.relayModelPicker?.modelName?.(run.provider, run.model) || run.model) : "";
-      const step = currentStep(run.plan?.steps || []);
-      const elapsed = elapsedWords(run.startedAt);
+      // The status line above this list already says which step the agent is on and for how long; these rows add the
+      // model, effort and phase, so nothing is said twice.
 
       if (run.purpose === "routing") {
         const row = node("div");
-        row.append(node("dt", undefined, "Assessor"), node("dd", undefined, `${agent}${model ? ` (${model})` : ""}: ${run.phase === "probing" ? "checking account & plan usage" : "assessing task"}${elapsed ? ` · ${elapsed}` : ""}`));
+        row.append(node("dt", undefined, "Assessor"), node("dd", undefined, `${agent}${model ? ` (${model})` : ""}: ${run.phase === "probing" ? "checking account & plan usage" : "assessing task"}`));
         workingFacts.append(row);
       } else if (run.purpose === "review") {
         const row = node("div");
-        row.append(node("dt", undefined, "Reviewer"), node("dd", undefined, `${agent}${model ? ` (${model})` : ""}: reviewing changes${elapsed ? ` · ${elapsed}` : ""}`));
+        row.append(node("dt", undefined, "Reviewer"), node("dd", undefined, `${agent}${model ? ` (${model})` : ""}: reviewing changes`));
         workingFacts.append(row);
       } else {
         const row = node("div");
         const phaseText = phaseWords[run.phase] || run.phase || "working";
-        row.append(node("dt", undefined, "Running"), node("dd", undefined, `${agent}${model ? ` · ${model}` : ""}${run.effort ? ` (${run.effort} effort)` : ""}: ${phaseText}${step ? ` on “${clip(step.text, 50)}”` : ""}${elapsed ? ` · ${elapsed}` : ""}`));
+        row.append(node("dt", undefined, "Running"), node("dd", undefined, `${agent}${model ? ` · ${model}` : ""}${run.effort ? ` (${run.effort} effort)` : ""}: ${phaseText}`));
         workingFacts.append(row);
       }
     } else if (c?.resume || c?.limitSwitching) {
@@ -478,14 +479,47 @@
   function renderNext(card) {
     const state = api.getState(), c = state.conversation, { steps, held, running, run } = planFor(), queue = c?.queue || [], tasks = c?.parallelTasks || [];
     const folders = state.projects?.find(project => project.id === state.projectId)?.folders || [], plan = waitingPlan();
-    const signature = JSON.stringify([plan, steps, held, running, queue, c?.queuePaused, state.projectId, state.taskId, state.taskDraft, folders, tasks.map(task => [task.id, task.title, task.status, task.conversationId, task.folderName])]);
+    const lastUserMsg = c?.messages?.filter(m => m.role === 'user').at(-1);
+    const signature = JSON.stringify([plan, steps, held, running, run?.provider, run?.phase, lastUserMsg?.id, lastUserMsg?.text, queue, c?.queuePaused, state.projectId, state.taskId, state.taskDraft, folders, tasks.map(task => [task.id, task.title, task.status, task.conversationId, task.folderName, task.runningStep, task.runningPhase])]);
     if (signature === card.signature) return;
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
     const selectTask = id => window.relayTaskThreads.select(id).catch(error => api.showNotice?.(error.message));
     const others = tasks.filter(task => task.purpose !== 'project-review' && task.id !== state.taskId && !['integrated', 'kept', 'discarded', 'cancelled', 'lost', 'detached'].includes(task.status) && (task.conversationId || task.status === 'waiting'));
     if (plan) body.append(node('p', 'flow-lead flow-plan-waiting', plan.text));
-    else if (!steps.length && !queue.length) body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : running ? `${agentName(run?.provider, run?.connection === 'local')} is working. Its plan appears here as it makes one.` : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
+    else if (running && !steps.length) {
+      const activeItem = node('div', 'flow-current-work flow-task-running flow-plan-active');
+      const head = node('div', 'flow-task-head');
+      const titleWrapper = node('div', 'flow-current-work-title-wrap');
+      const icon = node('i', `agent-icon ${run?.provider || state.provider}`);
+      icon.setAttribute('aria-hidden', 'true');
+      const agent = agentName(run?.provider, run?.connection === 'local');
+      const prompt = lastUserMsg?.text;
+      const title = state.taskId ? (tasks.find(t => t.id === state.taskId)?.title || 'Task thread') : (prompt ? clip(prompt, 95) : 'Current task');
+      const titleEl = node('strong', 'flow-task-title', title);
+      titleEl.title = prompt || title;
+      titleWrapper.append(icon, titleEl);
+
+      const badge = node('span', 'flow-plan-working-badge');
+      badge.setAttribute('aria-label', `${agent} is working`);
+      const dot = node('span', 'flow-pulse-dot');
+      dot.setAttribute('aria-hidden', 'true');
+      badge.append(dot);
+      head.append(titleWrapper, badge);
+
+      const meta = node('div', 'flow-task-meta');
+      const elapsed = elapsedWords(run?.startedAt);
+      const phase = phaseWords[run?.phase] || 'working';
+      const statusBadge = node('span', 'flow-task-status flow-task-status-running');
+      statusBadge.append(node('span', undefined, `${agent} is ${phase}${elapsed ? ` · ${elapsed}` : ''}`));
+      meta.append(statusBadge);
+
+      const hint = node('p', 'flow-current-work-hint', 'The agent’s plan appears here as it makes one.');
+      activeItem.append(head, meta, hint);
+      body.append(activeItem);
+    } else if (!steps.length && !queue.length) {
+      body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
+    }
     if (steps.length) {
       const done = steps.filter(step => step.status === 'done').length, current = currentStep(steps);
       body.append(node('p', 'flow-lead', done === steps.length ? 'All steps done.' : `${done} of ${steps.length} done${held ? ' · stopped' : ''}.`));
@@ -495,6 +529,23 @@
         item.append(mark, node('span', 'flow-step-text', step.text));
         if (step === current && !held && step.status === 'active') item.setAttribute('aria-current', 'step');
         item.setAttribute('aria-label', `${step.status === 'done' ? 'Done' : step.status === 'active' ? (held ? 'Stopped at' : 'Now') : 'To do'}: ${step.text}`);
+        if (step.status === 'active' && !held) {
+          const badge = node('span', 'flow-step-working-badge flow-plan-working-badge');
+          badge.setAttribute('aria-label', 'Working on this step');
+          const dot = node('span', 'flow-pulse-dot');
+          dot.setAttribute('aria-hidden', 'true');
+          badge.append(dot);
+          item.append(badge);
+
+          if (running && run) {
+            const agent = agentName(run.provider, run.connection === 'local');
+            const phase = phaseWords[run.phase] || 'working';
+            const elapsed = elapsedWords(run.startedAt);
+            const meta = node('div', 'flow-step-meta');
+            meta.append(node('span', 'flow-task-status flow-task-status-running', `${agent} is ${phase}${elapsed ? ` · ${elapsed}` : ''}`));
+            item.append(meta);
+          }
+        }
         list.append(item);
       }
       body.append(list);
@@ -586,7 +637,7 @@
     }
     body.append(list);
   }
-  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, files: renderFiles, preview: card => window.relayProjectReview?.render(card) };
+  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, files: renderFiles, preview: card => window.relayProjectReview?.render(card), results: card => window.relaySmartResults?.renderCard(card) };
 
   // ---- Live status in the working card. Remote access and Settings sit below it; no footer is needed.
   const phaseWords = { starting: 'starting', probing: 'checking usage', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
@@ -642,6 +693,7 @@
   function chipText(id) {
     const state = api.getState();
     if (id === 'preview') return window.relayProjectReview?.label() || 'Run and review your project';
+    if (id === 'results') { const data = window.relaySmartResults?.data?.(), mode = canonicalMode(routing()?.mode) || 'smart', name = modes.find(item => item.mode === mode)?.name || 'Smart', seen = data?.observed?.[mode]; return seen?.tasks ? `${name} · ${plural(seen.tasks, 'task')} · ${seen.verified} verified` : `${name} results`; }
     if (id === 'working') return modes.find(item => item.mode === canonicalMode(routing()?.mode))?.name || 'Routing';
     if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
     if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || [], plan = waitingPlan(); if (plan) return plan.chip; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }
@@ -744,7 +796,10 @@
     const state = api.getState(), tight = narrow();
     toggle.setAttribute('aria-pressed', String(on)); toggle.disabled = Boolean(lockReason() || checkingMode || transitioning);
     brand(); renderStatus();
-    left.hidden = right.hidden = !on || tight;
+    const loungeToggle = $('toggle-flow-lounge');
+    if (loungeToggle) loungeToggle.hidden = !on;
+    if (window.relayFlowLounge?.sync) window.relayFlowLounge.sync(on);
+    left.hidden = right.hidden = !on || tight || Boolean(window.relayFlowLounge?.isActive?.());
     strip.hidden = !on || !tight;
     if (!on || !tight) closePeek();
     if (!on) return;
@@ -765,6 +820,7 @@
   });
   window.addEventListener('relay-side-panel', scheduleDetail);
   window.addEventListener('relay-project-review', schedule);
+  window.addEventListener('relay-results', schedule);
   if (typeof MutationObserver === 'function') {
     const observer = new MutationObserver(scheduleDetail);
     for (const name of [...sidePanels, 'review']) if ($(`${name}-panel`)) observer.observe($(`${name}-panel`), { attributes: true, attributeFilter: ['hidden'] });
@@ -787,6 +843,6 @@
   // The next-message line follows the draft as it is typed.
   $('message-input')?.addEventListener('input', () => { if (on) schedule(); });
   // remoteAccess: the phone entry asks Flow first; true means the sheet opened, so Settings need not.
-  window.relayFlow = { toggle: toggleFlow, enter: () => changeMode(true), leave: () => changeMode(false), isOn: () => on, isLocked: () => Boolean(lockReason() || checkingMode || transitioning), peek: peekCard, cards: () => CARDS.map(card => ({ id: card.id, title: card.title })), remoteAccess: showPhone };
+  window.relayFlow = { toggle: toggleFlow, enter: () => changeMode(true), leave: () => changeMode(false), isOn: () => on, isLocked: () => Boolean(lockReason() || checkingMode || transitioning), peek: peekCard, cards: () => CARDS.map(card => ({ id: card.id, title: card.title })), remoteAccess: showPhone, lounge: () => window.relayFlowLounge };
   render();
 })();

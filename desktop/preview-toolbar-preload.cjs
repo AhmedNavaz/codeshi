@@ -1,7 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
-// The preview's toolbar (#19) can move the page, start picking, open the page in the browser and go back to
-// Codeshi. It hears the page's state, picks, load errors, the latest edit's file and line counts, the review's stack, the
-// page's API calls and the inspector's shortcut. It has no other access.
+// The preview's toolbar (#19) can move the page, start picking, open the page in the browser, open another of the
+// review's interfaces in a window of its own (#142) and go back to Codeshi. It hears the page's state, picks, load
+// errors, the latest edit's file and line counts, the review's stack, the page's API calls and the inspector's
+// shortcut. It has no other access.
 const listen = channel => callback => { ipcRenderer.on(channel, (_event, value) => callback(value)); };
 contextBridge.exposeInMainWorld('relayPreview', Object.freeze({
   act: (action, value) => ipcRenderer.send('preview:toolbar', action, value),

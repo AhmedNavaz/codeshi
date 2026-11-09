@@ -143,9 +143,10 @@ else {
     ipcMain.handle('relay:update:skip',(event,version)=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.skip(version);});
     ipcMain.handle('relay:update:automatic',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.setAutomatic(enabled);});
     ipcMain.on('relay:menu-state',(event,input)=>{if(!trusted(event))return;const next=menuState(input);if(next){page=next;updateMenu();}});
-    // Point and tell (#19): the workspace's app in a preview window; an element picked there goes to the message box.
+    // Point and tell (#19): the workspace's app in a preview window, one for each interface opened (#142); an element
+    // picked in any of them goes to the message box of that window's workspace.
     const previewPicks=[];
-    preview=createPreview({BaseWindow,WebContentsView,session,ipcMain,shell,root,background:()=>appearance.background(),
+    preview=createPreview({BaseWindow,WebContentsView,session,ipcMain,shell,screen,root,background:()=>appearance.background(),
       folders:id=>{try{return id?relay.registry.get(id).folders.map(folder=>({name:folder.displayName||folder.name,path:folder.path})):[];}catch{return [];}},
       onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image});}});
     const previewStack=id=>{
@@ -158,7 +159,7 @@ else {
           profile:run?.profileName||profile?.name||"",
           prerequisites:profile?.prerequisites||[],
           services:(run?.steps||profile?.services||[]).map(s=>({
-            name:s.name,kind:s.kind,status:s.status||"waiting",ready:s.ready,
+            id:s.id,name:s.name,kind:s.kind,status:s.status||"waiting",ready:s.ready,
             url:s.ready?.url||(s.ready?.port?`http://127.0.0.1:${s.ready.port}`:null),
             folder:s.folderName,command:s.command,
           })),
@@ -166,10 +167,13 @@ else {
         };
       }catch{return null;}
     };
-    const syncPreviewStack=id=>{if(preview?.projectId&&preview.projectId===id)preview.showStack(previewStack(id));};
-    // The preview's toolbar follows the edits in the workspace it shows (#102).
-    relay.registry.on('update',({projectId})=>{if(preview?.projectId&&preview.projectId===projectId){preview.showEdit(runningEdit(relay.registry,projectId));syncPreviewStack(projectId);}});
-    ipcMain.handle('relay:preview:open',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const project=relay.registry.get(String(input?.projectId||''));const res=await preview.open({projectId:project.id,url:input?.url,workspace:project.name});syncPreviewStack(project.id);return res;});
+    const syncPreviewStack=id=>{if(preview?.shows(id))preview.showStack(id,previewStack(id));};
+    // The preview toolbars follow the edits in the workspace they show (#102).
+    relay.registry.on('update',({projectId})=>{if(preview?.shows(projectId)){preview.showEdit(projectId,runningEdit(relay.registry,projectId));syncPreviewStack(projectId);}});
+    // The stack comes first, so a new window is named after its interface from the start.
+    ipcMain.handle('relay:preview:open',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const project=relay.registry.get(String(input?.projectId||''));preview.showStack(project.id,previewStack(project.id));return preview.open({projectId:project.id,url:input?.url,workspace:project.name});});
+    // Stop review closes the workspace's windows showing the review's services; the person's other windows stay.
+    ipcMain.handle('relay:preview:close',(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const urls=Array.isArray(input?.urls)?input.urls.slice(0,24).map(String):[];return preview.close({projectId:String(input?.projectId||''),urls});});
     // Several folders can be chosen at once; the page adds every one of them.
     ipcMain.handle('relay:pick-folder',async event=>{if(!trusted(event))throw Error('Untrusted renderer');const choice=await dialog.showOpenDialog(win,{properties:['openDirectory','multiSelections'],message:'Choose one or more project folders. Hold ⌘ to select several.'});return choice.canceled||!choice.filePaths.length?null:choice.filePaths;});
     ipcMain.handle('relay:open-external',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const url=new URL(input);if(url.username||url.password||(url.protocol!=='https:' && !(url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname))))throw Error('Only HTTPS or local test links without credentials may open');await shell.openExternal(url.href);return true;});

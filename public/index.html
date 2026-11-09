@@ -34,6 +34,7 @@
     <script src="/brief-panel.js" defer></script>
     <script src="/memory.js" defer></script>
     <script src="/skills.js" defer></script>
+    <script src="/smart-results.js" defer></script>
     <script src="/tasks-panel.js" defer></script>
     <script src="/conversation-history.js" defer></script>
     <script src="/setup.js" defer></script>
@@ -67,6 +68,7 @@
     <script src="/project-commands.js" defer></script>
     <script src="/project-review.js" defer></script>
     <script src="/flow.js" defer></script>
+    <script src="/flow-lounge.js" defer></script>
     <link rel="stylesheet" href="/project-commands.css" />
     <link rel="stylesheet" href="/polish.css" />
     <link rel="stylesheet" href="/files.css" />
@@ -97,6 +99,7 @@
       </aside>
 
       <aside id="flow-left" class="flow-side flow-left" aria-label="What’s next and what’s left" hidden></aside>
+      <aside id="flow-lounge-left" class="flow-side flow-lounge-side flow-lounge-left" aria-label="Lounge Arcade" hidden></aside>
       <main class="main-panel">
         <header id="conversation-header" class="conversation-header">
           <div id="flow-brand" class="flow-brand" hidden><img class="flow-brand-mark" src="/mark.svg" alt="" width="22" height="22" /><span class="flow-brand-name">Flow</span><span id="flow-brand-workspace" class="flow-brand-workspace"></span></div>
@@ -119,6 +122,7 @@
               <button id="toggle-sidebar" class="layout-toggle" type="button" aria-pressed="true" aria-label="Sidebar" title="Toggle sidebar"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><rect class="layout-fill" x="5" y="6" width="3" height="12" rx="1"/></svg></button>
               <button id="toggle-side-panel" class="layout-toggle" type="button" aria-pressed="false" aria-label="Side panel" title="Toggle side panel"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/><rect class="layout-fill" x="16" y="6" width="3" height="12" rx="1"/></svg></button>
             </div>
+            <button id="toggle-flow-lounge" class="flow-lounge-entry" type="button" aria-pressed="false" title="Lounge: ambient games and relaxation while agents work" hidden><svg class="icon flow-lounge-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="6"/><circle cx="8" cy="12" r="1.5"/><circle cx="16" cy="10" r="1"/><circle cx="14" cy="13" r="1"/><path d="M6 12h4M8 10v4"/></svg><span id="toggle-flow-lounge-label">Lounge</span></button>
             <button id="toggle-flow" class="flow-entry" type="button" aria-pressed="false" title="Flow: just the chat, with plain-language cards" disabled><img class="flow-entry-mark" src="/mark.svg" alt="" width="14" height="14" /><span id="toggle-flow-label">Flow</span></button>
           </div>
           <div id="header-menu" class="header-menu" popover="auto" role="menu" aria-label="More actions">
@@ -302,6 +306,7 @@
         </section>
       </main>
       <aside id="flow-right" class="flow-side flow-right" aria-label="How it’s working and files changed" hidden></aside>
+      <aside id="flow-lounge-right" class="flow-side flow-lounge-side flow-lounge-right" aria-label="Zen Atmosphere" hidden></aside>
       <section id="flow-peek" class="flow-peek" aria-label="Card" hidden><div class="flow-peek-head"><button id="flow-peek-close" class="icon-button flow-peek-close" type="button" aria-label="Close card" title="Close"></button></div><div id="flow-peek-body" class="flow-peek-body"></div></section>
       <div id="flow-veil" class="flow-veil" aria-hidden="true" hidden><img src="/mark.svg" alt="" width="96" height="96" /></div>
 
@@ -360,6 +365,10 @@
             <div class="panel-section-head"><h3 id="tasks-current-title" class="panel-section-title">Current task</h3><button id="limits-open" class="icon-button" type="button" aria-label="Task limits" title="Task limits"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="15.5" cy="7" r="2.2"/><circle cx="9.5" cy="17" r="2.2"/></svg></button></div>
             <p id="tasks-empty" class="panel-empty">Nothing has run yet. Each task you send shows here: which agents worked on it, how long, what it used, and whether the tests passed.</p>
             <div id="task-card" class="task-card" hidden></div>
+          </section>
+          <section id="tasks-results" class="panel-section" aria-labelledby="tasks-results-title" hidden>
+            <div class="panel-section-head"><h3 id="tasks-results-title" class="panel-section-title">Smart results</h3></div>
+            <div id="tasks-results-body" class="results-body"></div>
           </section>
           <section id="tasks-recent" class="panel-section" aria-labelledby="tasks-recent-title" hidden>
             <div class="panel-section-head"><h3 id="tasks-recent-title" class="panel-section-title">Earlier</h3></div>

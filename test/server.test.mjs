@@ -658,3 +658,28 @@ test('conversation paging with limit and before, and search across full history'
   assert.equal(routingPaged.messages.length, 20);
   assert.equal(routingPaged.earlier, 100);
 });
+
+test('server serves all script, stylesheet, and icon assets referenced in public/index.html', async t => {
+  const f = await fixture(t);
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const urls = [...new Set([...html.matchAll(/(?:src|href)="([^"]+)"/g)].map(m => m[1]))].filter(u => u.startsWith('/') && !u.startsWith('//'));
+  assert.ok(urls.includes('/flow-lounge.js'), 'flow-lounge.js is referenced in index.html');
+  for (const assetPath of urls) {
+    const res = await fetch(`${f.url}${assetPath}`);
+    assert.equal(res.status, 200, `Asset ${assetPath} should be served with 200 OK`);
+  }
+});
+
+test('Smart results come from the workspace’s saved tasks, without requests unless asked, and refuse an unreadable baseline (#139)', async t => {
+  const f = await fixture(t);
+  const [project] = await (await fetch(`${f.url}/api/projects`)).json();
+  await (await fetch(`${f.url}/api/conversation?projectId=${project.id}`)).json();
+  const results = await (await fetch(`${f.url}/api/results?projectId=${project.id}&days=all`)).json();
+  assert.equal(results.format, 'codeshi-smart-results');
+  assert.equal(results.range.days, null);
+  assert.equal(results.comparisons.smart.status, 'not-enough-data', 'A new workspace has nothing to compare and no invented figure.');
+  const chosen = await (await fetch(`${f.url}/api/results?projectId=${project.id}&baseline=${encodeURIComponent(JSON.stringify({ provider: 'codex', model: 'gpt-5' }))}`)).json();
+  assert.deepEqual(chosen.baseline.choice, { provider: 'codex', model: 'gpt-5', effort: null });
+  assert.equal(chosen.range.days, 30);
+  assert.equal((await fetch(`${f.url}/api/results?projectId=${project.id}&baseline=nope`)).status, 400);
+});

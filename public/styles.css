@@ -1040,6 +1040,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .prompt-queue-paused-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 2px 0 6px; min-width: 0; max-width: 100%; }
 .prompt-queue-paused-actions .pill-button { font-size: 11.5px; padding: 3px 8px; border-radius: 6px; flex-shrink: 0; }
 .prompt-queue-paused-actions .queue-proceed-button { border-color: var(--warning); color: var(--text-strong); }
+.prompt-queue-paused-actions .queue-proceed-note { font-size: 11.5px; color: var(--muted); min-width: 0; }
 .prompt-queue-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; min-width: 0; max-width: 100%; }
 .prompt-queue-item { display: flex; align-items: flex-start; gap: 10px; padding: 6px 8px; border-radius: 8px; transition: background .12s; min-width: 0; max-width: 100%; box-sizing: border-box; }
 .prompt-queue-item:hover, .prompt-queue-item:focus-within { background: var(--hover); }
@@ -1221,6 +1222,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .brief-item-icon[data-icon="alert"] { --mark: var(--icon-alert); }
 .brief-item-icon[data-icon="check"] { --mark: var(--icon-check); }
 .brief-item-icon[data-icon="folder"] { --mark: var(--icon-folder); }
+.brief-item-icon[data-icon="clock"] { --mark: var(--icon-clock); }
 .brief-item-name { color: var(--text); white-space: nowrap; }
 .brief-item-value { min-width: 0; overflow: hidden; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .brief-footer { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 6px 0 10px; }
@@ -1288,6 +1290,25 @@ button.commit-hash:hover { text-decoration: underline; }
 .ledger-row { min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .ledger-row .panel-row-meta { overflow-wrap: anywhere; }
 .task-card-line, .task-agents { flex-wrap: wrap; }
+.results-body { display: grid; gap: 8px; font-size: 12px; }
+.results-controls { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.results-control { display: grid; gap: 2px; min-width: 0; color: var(--faint); font-size: 10.5px; }
+.results-select { max-width: 100%; min-height: 24px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-raised); color: var(--text); font: inherit; font-size: 11.5px; }
+.results-table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.results-table th, .results-table td { padding: 3px 4px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.results-table th:first-child { text-align: left; color: var(--text); font-weight: 500; }
+.results-table tr:first-child th { color: var(--faint); font-weight: 500; }
+.results-comparison, .results-notes { display: grid; gap: 4px; }
+.results-comparison p, .results-notes p, .results-needs { margin: 0; }
+.results-needs { padding-left: 16px; color: var(--muted); }
+.results-verdict { margin: 0; color: var(--text); line-height: 1.45; }
+.results-verdict.good { color: var(--success); }
+.results-verdict.warn { color: var(--warning); }
+.results-metric { display: grid; gap: 4px; }
+.results-metric summary { cursor: pointer; color: var(--text); line-height: 1.45; }
+.results-metric .results-table { margin-top: 2px; }
+.results-foot { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.results-tasks .text-link { font-size: 11px; }
 
 /* Dialogs for the rare forms: limits, adding skills, and the full brief. */
 .panel-dialog { width: min(520px, calc(100vw - 48px)); max-height: calc(100vh - 64px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }

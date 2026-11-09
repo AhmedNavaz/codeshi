@@ -9,7 +9,8 @@ import { scriptCLIs } from './platform.mjs';
 import { gitExecutable } from '../src/resolve-binary.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { Broker } from '../src/broker.mjs';
-import { openPlan, parsePlan, planningRequest, validateSteps } from '../src/orchestration.mjs';
+import { openPlan, parsePlan, planningRequest, validateSteps, SPECIALIST_ROLES, ARTIFACT_KINDS, INTEGRATION_OUTCOMES, validateWorkflowOrder, invalidatedDownstream, stepBrief, recordArtifact, evaluateIntegration } from '../src/orchestration.mjs';
+import { ledgerFromRecords, usageByRole } from '../src/task-ledger.mjs';
 
 // A planner's reply in the agreed shape: steps refer to earlier steps by number, and never choose an agent.
 const reply = {
@@ -20,12 +21,12 @@ const reply = {
   ],
 };
 const parsed = [
-  { id: 's1', title: 'Add the API route', instructions: 'Add GET /api/items returning the saved items.', files: ['src/server.mjs'], tier: 'standard', dependsOn: [], agent: null },
-  { id: 's2', title: 'Show the items', instructions: 'List the items from /api/items on the page.', files: ['public/app.js', 'public/styles.css'], tier: 'light', dependsOn: ['s1'], agent: null },
+  { id: 's1', title: 'Add the API route', instructions: 'Add GET /api/items returning the saved items.', files: ['src/server.mjs'], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [] },
+  { id: 's2', title: 'Show the items', instructions: 'List the items from /api/items on the page.', files: ['public/app.js', 'public/styles.css'], tier: 'light', dependsOn: ['s1'], agent: null, role: 'builder', artifact: null, check: null, skills: [] },
 ];
 // What the server's routing hands a planning run.
 const planned = { mode: 'smart', reason: 'Plans the steps', tier: 'deep' };
-const step = (id, extra = {}) => ({ id, title: `Step ${id}`, instructions: `Do ${id}.`, files: [], tier: 'standard', dependsOn: [], agent: null, ...extra });
+const step = (id, extra = {}) => ({ id, title: `Step ${id}`, instructions: `Do ${id}.`, files: [], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [], ...extra });
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-orchestration-')), workspace = path.join(root, 'project');
@@ -102,7 +103,7 @@ test('a planner reply becomes numbered steps that refer to earlier steps, withou
   const padded = `{"notes":"${'n'.repeat(63000)}",${JSON.stringify(reply).slice(1)}`;
   assert.ok(Buffer.byteLength(padded) <= 64000); assert.equal(parsePlan(padded).status, 'draft');
   // Files and dependencies may be left out.
-  assert.deepEqual(parsePlan(JSON.stringify({ summary: 'One step.', steps: [{ title: 'Fix it', instructions: 'Fix the bug.', tier: 'deep' }] })).steps, [{ id: 's1', title: 'Fix it', instructions: 'Fix the bug.', files: [], tier: 'deep', dependsOn: [], agent: null }]);
+  assert.deepEqual(parsePlan(JSON.stringify({ summary: 'One step.', steps: [{ title: 'Fix it', instructions: 'Fix the bug.', tier: 'deep' }] })).steps, [{ id: 's1', title: 'Fix it', instructions: 'Fix the bug.', files: [], tier: 'deep', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [] }]);
 });
 
 test('a reply that is not a valid plan is reported, never guessed at', () => {
@@ -157,6 +158,10 @@ test('edited steps are checked before they are saved', () => {
     [[step('s1', { files: ['a.js', 7] })], /files/i],
     [[step('s1', { agent: { provider: 'other' } })], /agent/i],
     [[step('s1', { agent: { provider: 'codex', effort: 'enormous' } })], /effort/i],
+    [[step('s1', { role: 'wizard' })], /role/i],
+    [[step('s1', { artifact: 'potion' })], /artifact/i],
+    [[step('s1', { check: 'x'.repeat(301) })], /check/i],
+    [[step('s1', { role: 'qa' }), step('s2', { role: 'frontend', dependsOn: ['s1'] })], /check step/i],
   ];
   for (const [steps, message] of invalid) assert.throws(() => validateSteps(steps), error => error.status === 400 && message.test(error.message), JSON.stringify(steps)?.slice(0, 80));
 });
@@ -473,4 +478,128 @@ test('plans are edited with a revision check, superseded by a newer plan, discar
   await app.close();
   const restarted = client(await f.launch());
   assert.deepEqual(restarted.c().orchestrations, before);
+});
+
+test('specialist team workflows coordinate roles, validate workflow order, and attach task-specific briefs (#89)', () => {
+  assert.deepEqual(SPECIALIST_ROLES, ['builder', 'reviewer', 'frontend', 'backend', 'database', 'design', 'qa']);
+  assert.deepEqual(ARTIFACT_KINDS, ['contract', 'schema', 'diff', 'test_evidence', 'findings']);
+  assert.deepEqual(INTEGRATION_OUTCOMES, ['passed', 'failed', 'blocked', 'skipped', 'unverified', 'no_change']);
+
+  // Full checkout promo code specialist team plan
+  const promoPlanReply = {
+    summary: 'Coordinate contract, frontend, backend, and QA verification for checkout promo codes.',
+    steps: [
+      { title: 'API & data contract', instructions: 'Define POST /api/promo and data contract', files: ['docs/promo-api.json'], tier: 'standard', dependsOn: [], role: 'backend', artifact: 'contract' },
+      { title: 'Database promo schema', instructions: 'Implement promo codes table migration', files: ['src/db/promo-schema.mjs'], tier: 'standard', dependsOn: [1], role: 'database', artifact: 'schema' },
+      { title: 'Frontend checkout promo box', instructions: 'Add promo code input and discount preview', files: ['public/checkout.js'], tier: 'standard', dependsOn: [1], role: 'frontend', artifact: 'diff' },
+      { title: 'Backend promo evaluation', instructions: 'Apply valid promo discount logic', files: ['src/promo.mjs'], tier: 'standard', dependsOn: [1, 2], role: 'backend', artifact: 'diff' },
+      { title: 'QA integration & tests', instructions: 'Run integration check and verify contract', files: ['test/promo.test.mjs'], tier: 'standard', dependsOn: [3, 4], role: 'qa', artifact: 'test_evidence', check: 'npm test' },
+    ],
+  };
+  const parsedTeam = parsePlan(JSON.stringify(promoPlanReply));
+  assert.equal(parsedTeam.status, 'draft');
+  assert.equal(parsedTeam.steps.length, 5);
+  assert.equal(parsedTeam.steps[0].role, 'backend');
+  assert.equal(parsedTeam.steps[0].artifact, 'contract');
+  assert.equal(parsedTeam.steps[1].role, 'database');
+  assert.equal(parsedTeam.steps[1].artifact, 'schema');
+  assert.equal(parsedTeam.steps[2].role, 'frontend');
+  assert.equal(parsedTeam.steps[4].role, 'qa');
+  assert.equal(parsedTeam.steps[4].check, 'npm test');
+
+  // Workflow order enforcement: checks/integration cannot be upstream of implementation
+  assert.throws(() => validateWorkflowOrder([
+    step('s1', { role: 'qa' }),
+    step('s2', { role: 'frontend', dependsOn: ['s1'] }),
+  ]), /cannot depend on check step/);
+
+  // Contract invalidation downstream
+  const downstreamOfContract = invalidatedDownstream(parsedTeam.steps, 's1');
+  assert.deepEqual(downstreamOfContract, ['s2', 's3', 's4', 's5']);
+  const downstreamOfFrontend = invalidatedDownstream(parsedTeam.steps, 's3');
+  assert.deepEqual(downstreamOfFrontend, ['s5']);
+
+  // Task-specific brief generation (only upstream contract artifacts attached, scoped files, not whole chat)
+  const artifacts = {
+    s1: { kind: 'contract', content: '{"endpoint":"/api/promo","fields":["code","cartTotal"]}', revision: 'rev-1' },
+    s2: { kind: 'schema', content: 'CREATE TABLE promo_codes (...);', revision: 'rev-1' },
+  };
+  const frontendBrief = stepBrief(parsedTeam, parsedTeam.steps[2], { artifacts, sourceRevision: 'rev-1' });
+  assert.equal(frontendBrief.role, 'frontend');
+  assert.deepEqual(frontendBrief.files, ['public/checkout.js']);
+  assert.equal(frontendBrief.upstreamArtifacts.length, 1);
+  assert.equal(frontendBrief.upstreamArtifacts[0].stepId, 's1');
+  assert.equal(frontendBrief.upstreamArtifacts[0].kind, 'contract');
+  assert.match(frontendBrief.upstreamArtifacts[0].content, /\/api\/promo/);
+
+  // Backend brief depends on s1 and s2, receives both artifacts
+  const backendBrief = stepBrief(parsedTeam, parsedTeam.steps[3], { artifacts, sourceRevision: 'rev-1' });
+  assert.equal(backendBrief.role, 'backend');
+  assert.equal(backendBrief.upstreamArtifacts.length, 2);
+  assert.deepEqual(backendBrief.upstreamArtifacts.map(a => a.stepId), ['s1', 's2']);
+
+  // Structured artifact recording and downstream invalidation
+  const plan = { id: 'test-plan', steps: parsedTeam.steps, revision: 1, stepOutcomes: { s5: { outcome: 'passed', status: 'complete' } } };
+  recordArtifact(plan, { stepId: 's1', kind: 'contract', content: '{"v":2}', revision: 'rev-2' });
+  assert.equal(plan.artifacts.s1.kind, 'contract');
+  assert.equal(plan.artifacts.s1.revision, 'rev-2');
+  assert.equal(plan.stepOutcomes.s5.status, 'invalidated');
+  assert.equal(plan.stepOutcomes.s5.needsRecheck, true);
+
+  // Integration gating: QA failure blocks completion; self-report does not substitute for evidence
+  const qaStep = parsedTeam.steps[4];
+  const failedQA = evaluateIntegration({ step: qaStep, checkResult: { status: 'failed', exitCode: 1 } });
+  assert.equal(failedQA.outcome, 'failed');
+  assert.equal(failedQA.status, 'blocked');
+  assert.match(failedQA.reason, /QA check failed/);
+
+  const passedQA = evaluateIntegration({ step: qaStep, checkResult: { status: 'passed', exitCode: 0 } });
+  assert.equal(passedQA.outcome, 'passed');
+  assert.equal(passedQA.status, 'complete');
+
+  // Unverified when check command declared but no check result
+  const unverified = evaluateIntegration({ step: qaStep, checkResult: null });
+  assert.equal(unverified.outcome, 'unverified');
+  assert.equal(unverified.status, 'unverified');
+
+  // No-change outcome
+  const noChange = evaluateIntegration({ step: step('s1'), filesChanged: 0 });
+  assert.equal(noChange.outcome, 'no_change');
+
+  // Finite repair cycle: 1st cycle repairs, 2nd cycle blocks to prevent infinite review loop
+  const reviewStep = step('s1', { role: 'reviewer' });
+  const findings = [{ message: 'Add input validation' }];
+  const firstRepair = evaluateIntegration({ step: reviewStep, reviewFindings: findings, repairCycles: 0 });
+  assert.equal(firstRepair.status, 'repair');
+  assert.equal(firstRepair.needsRepair, true);
+  const secondRepair = evaluateIntegration({ step: reviewStep, reviewFindings: findings, repairCycles: 1 });
+  assert.equal(secondRepair.status, 'blocked');
+  assert.equal(secondRepair.needsRepair, false);
+});
+
+test('specialist roles are recorded and attributed in task ledger usageByRole (#89)', () => {
+  const records = [
+    { type: 'submission', id: 'run-1', provider: 'codex', model: 'gpt-codex', at: '2026-11-09T10:00:00Z', role: 'backend' },
+    { type: 'message', message: { runId: 'run-1', role: 'activity', text: '$ npm test' } },
+    { type: 'run_end', id: 'run-1', status: 'complete', at: '2026-11-09T10:00:10Z' },
+    { type: 'submission', id: 'run-2', provider: 'claude', model: 'claude-sonnet', at: '2026-11-09T10:00:15Z', role: 'frontend' },
+    { type: 'message', message: { runId: 'run-2', role: 'activity', text: 'Edit public/app.js' } },
+    { type: 'run_end', id: 'run-2', status: 'complete', at: '2026-11-09T10:00:25Z' },
+    { type: 'submission', id: 'run-3', provider: 'gemini', model: 'gemini-pro', at: '2026-11-09T10:00:30Z', role: 'qa' },
+    { type: 'message', message: { runId: 'run-3', role: 'activity', text: 'Tests passed: npm test' } },
+    { type: 'run_end', id: 'run-3', status: 'complete', at: '2026-11-09T10:00:40Z' },
+  ];
+  const ledger = ledgerFromRecords(records);
+  assert.equal(ledger.runs.length, 3);
+  assert.equal(ledger.runs[0].role, 'backend');
+  assert.equal(ledger.runs[1].role, 'frontend');
+  assert.equal(ledger.runs[2].role, 'qa');
+
+  const byRole = usageByRole(ledger.runs);
+  assert.ok(byRole.backend);
+  assert.ok(byRole.frontend);
+  assert.ok(byRole.qa);
+  assert.equal(byRole.backend.runs, 1);
+  assert.equal(byRole.frontend.runs, 1);
+  assert.equal(byRole.qa.runs, 1);
 });

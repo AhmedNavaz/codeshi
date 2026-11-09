@@ -51,6 +51,18 @@
   function draftKey(id = state.conversation?.id) { return state.taskDraft && id !== null ? `ai-relay:draft:task:${state.taskDraft.folderId}` : `ai-relay:draft:${id || "new"}`; }
   function saveDraft() { if (state.status && state.ready && !state.loading) storedWrite(draftKey(), ui.input.value); }
   function restoreDraft() { ui.input.value = storedRead(draftKey()) || ""; resizeInput(); }
+  // The message box empties the moment a message is sent, queued or added to a run, not when the server answers (Auto's
+  // assessment can take a while). The saved draft stays until the message is accepted, and a refused one goes back in the box.
+  function takeDraft() { const draft = ui.input.value; saveDraft(); ui.input.value = ""; resizeInput(); return draft; }
+  function returnDraft(draft) { const typed = ui.input.value; ui.input.value = typed.trim() ? `${draft}\n${typed}` : draft; saveDraft(); resizeInput(); }
+  function draftAccepted() { if (ui.input.value === "") { storedWrite(draftKey(), ""); storedWrite(draftKey(null), ""); } }
+  // The message just sent shows in the chat at once, until the saved conversation has it.
+  function shownMessages(c) {
+    const saved = c?.messages || [], sending = state.sending;
+    if (!sending || sending.projectId !== state.projectId || (sending.conversationId && sending.conversationId !== c?.id)) return saved;
+    const from = saved.findIndex(message => message.id === sending.after) + 1;
+    return saved.slice(from).some(message => message.role === "user" && message.text === sending.message.text) ? saved : [...saved, sending.message];
+  }
   function label(provider) { return provider === "gemini" ? "Gemini" : provider === "claude" ? "Claude" : "Codex"; }
   function available(provider) { return Boolean(state.status?.providers?.[provider]?.available); }
   // A task beside the main conversation (#88) answers only for itself; the main run doesn't hold it up.
@@ -1150,7 +1162,7 @@
   const drawn = { scope: null, base: null, messages: [], turns: new Map(), steps: new WeakMap(), version: 0 };
   const noOpenOutputs = new Set();
   function renderMessages(forceScroll = false) {
-    const c = state.conversation, messages = c?.messages || [];
+    const c = state.conversation, messages = shownMessages(c);
     const folders = state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path);
     const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.orchestrations?.map(plan => [plan.id, plan.status, window.relayOrchestration?.describe(plan)]), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
     const scope = JSON.stringify([state.projectId, c?.id, folders]);
@@ -1410,13 +1422,13 @@
     if (state.localSelections[projectId]) { showNotice("Queue a cloud agent. Local models start from Continue locally."); return; }
     const routed = routeFor(text, attachments.length);
     if (routed?.error) { showNotice(routed.error); return; }
-    state.pending = "queue"; renderControls();
+    state.pending = "queue"; takeDraft(); renderControls();
     const added = await queueAction({ executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, action: "add", text, provider: routed?.provider || state.provider, model: (routed ? routed.model : state.model) || null, effort: (routed ? routed.effort : state.effort) || null, mode: state.mode, approvalPolicy: state.approvalPolicy || "ask", attachments, billingConfirmed: window.relayBillingConfirmed === true, ...(routed ? { routing: { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } } : {}) });
     if (added) {
       window.relayFiles?.accepted(projectId, attachments);
-      if (ui.input.value === draft) { ui.input.value = ""; storedWrite(draftKey(), ""); storedWrite(draftKey(null), ""); resizeInput(); }
+      draftAccepted();
       announce("Added to the queue.");
-    }
+    } else returnDraft(draft);
     state.pending = null; renderControls();
   }
   // Auto (#12): Codeshi picks the agent, model and effort for each message when it is sent.
@@ -1450,13 +1462,14 @@
     if (ui.input.value.trim() === '/compact') { showNotice('Finish or stop the current run before compacting context.'); return; }
     const text = ui.input.value.trim(), id = state.conversation?.id, projectId = state.projectId, draft = ui.input.value;
     if (!text || state.pending || !id || $("steer-button").hidden || $("steer-button").disabled) return;
-    state.pending = "steer"; renderControls();
+    state.pending = "steer"; takeDraft(); renderControls();
+    let added = false;
     try {
       const result = await post(endpoint(id, "steer"), { text }, projectId);
-      if (ui.input.value === draft) { ui.input.value = ""; storedWrite(draftKey(), ""); storedWrite(draftKey(null), ""); resizeInput(); }
+      added = true; draftAccepted();
       if (result?.added) announce("Added to the current run.");
       else showNotice("The run finished before your note could be added, so it runs next from the queue.");
-    } catch (error) { showNotice(error.message); }
+    } catch (error) { if (!added) returnDraft(draft); showNotice(error.message); }
     finally { state.pending = null; await refresh(); }
   }
   // The agent's plan above the message box: one line with how many steps are done and the current one, which opens
@@ -1513,12 +1526,18 @@
       pausedActions.hidden = !isQuotaPaused || !queue.length;
       if (isQuotaPaused && queue.length) {
         pausedActions.replaceChildren();
-        const proceedBtn = element("button", "pill-button queue-proceed-button", "Proceed with remaining allowance");
-        proceedBtn.type = "button";
-        proceedBtn.title = "Start the next prompt using the remaining allowance";
-        proceedBtn.disabled = Boolean(state.pending);
-        proceedBtn.addEventListener("click", () => queueAction({ action: "resume", proceedWithNearQuota: true }));
-        pausedActions.append(proceedBtn);
+        // Once the queue already had your go-ahead, no agent has allowance left to spend, so the offer isn't repeated (#153).
+        if (!c.queuePaused.proceedTried) {
+          const proceedBtn = element("button", "pill-button queue-proceed-button", "Proceed with remaining allowance");
+          proceedBtn.type = "button";
+          proceedBtn.title = "Start the next prompt using the remaining allowance, below an agent's limit, for the rest of this queue";
+          proceedBtn.disabled = Boolean(state.pending);
+          proceedBtn.addEventListener("click", () => queueAction({ action: "resume", proceedWithNearQuota: true }));
+          pausedActions.append(proceedBtn);
+        } else {
+          const note = element("span", "queue-proceed-note", "No agent has allowance left to spend. Wait for a reset or switch agents.");
+          pausedActions.append(note);
+        }
 
         const blockedMatch = c.queuePaused.reason.match(/Routing paused before starting (\w+)/i);
         const blockedProvider = blockedMatch ? blockedMatch[1].toLowerCase() : (queue[0]?.provider || null);
@@ -2185,7 +2204,7 @@
     const projectId = state.projectId, version = state.projectVersion;
     const conversation = await api('/api/conversation?limit=80',{},projectId);
     if (!sameProject(projectId,version)) throw new Error('The workspace changed while opening its chat.');
-    applyConversation(conversation); restoreDraft(); render(); return conversation;
+    applyConversation(conversation); if (!state.sending) restoreDraft(); render(); return conversation;
   }
 
   async function refresh() {
@@ -2325,7 +2344,13 @@
     const projectId = state.projectId;
     state.pending = continuing ? "continue" : "send";
     saveDraft();
-    render();
+    const taken = !continuing && !again;
+    if (taken) {
+      takeDraft();
+      state.sending = { projectId, conversationId: state.taskDraft ? null : state.conversation?.id || null, after: state.conversation?.messages?.at(-1)?.id || null, message: { role: "user", text, createdAt: new Date().toISOString() } };
+    }
+    let accepting = false;
+    render(taken);
     hideNotice();
     try {
       await state.settingsPromise;
@@ -2335,7 +2360,7 @@
         const task = await window.relayTaskThreads.start({ executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, model: model || null, effort: effort || null, mode, approvalPolicy, routing, requestId, billingConfirmed: window.relayBillingConfirmed === true });
         state.retrySubmission = null;
         window.relayFiles?.accepted(projectId, attachments);
-        if (ui.input.value === originalDraft) { ui.input.value = ""; storedWrite(draftKey(), ""); resizeInput(); }
+        accepting = true; if (ui.input.value === "") storedWrite(draftKey(), "");
         await window.relayTaskThreads.started(task);
         announce(`The task in ${task.folderName} has started.`);
         return;
@@ -2357,12 +2382,8 @@
       window.relayAutomaticReview?.accepted(projectId, automaticReview);
       if (orchestrate && !again) window.relayOrchestration?.accepted(projectId);
       if (!continuing && !again) window.relayFiles?.accepted(projectId, attachments);
-      if (!continuing && !again && ui.input.value === originalDraft) {
-        ui.input.value = "";
-        storedWrite(draftKey(), "");
-        storedWrite(draftKey(null), "");
-        resizeInput();
-      }
+      accepting = true;
+      if (taken) draftAccepted();
       state.conversation.status = "running";
       if (!localChoice) state.conversation.provider = accepted?.provider || provider;
       state.conversation.mode = mode;
@@ -2372,6 +2393,7 @@
       await refresh();
       render(true);
     } catch (error) {
+      if (taken && !accepting) { state.sending = null; returnDraft(originalDraft); }
       // A task limit can be raised for this task, by the person, right here.
       const budget = error.details?.budget;
       if (budget?.canExtend && window.relayLimits) {
@@ -2397,7 +2419,7 @@
       else if (error.details?.folderChoice && !continuing && !orchestrate && !state.taskId && !state.taskDraft) askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId, originalDraft });
       else showNotice(error.message, () => run(continuing, again));
       await refresh();
-    } finally { state.pending = null; render(); ui.input.focus(); }
+    } finally { state.pending = null; state.sending = null; render(); ui.input.focus(); }
   }
 
   async function stop() {

@@ -231,6 +231,50 @@ test('a routed queued prompt is assessed at execution time and editing or pausin
   assert.equal(fs.existsSync(path.join(workspace, '.mock-captures.jsonl')), false);
 });
 
+test('Proceed with remaining allowance starts the paused queue instead of pausing it again, and holds for the rest of the queue (#153)', { skip: scriptCLIs }, async t => {
+  const { broker, c, workspace } = setup(t);
+  const until = async (check, what) => { for (let i = 0; i < 250 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 20)); assert(check(), what); };
+  const launches = () => fs.existsSync(path.join(workspace, '.mock-captures.jsonl')) ? fs.readFileSync(path.join(workspace, '.mock-captures.jsonl'), 'utf8').trim().split('\n').length : 0;
+  // Mid-week: the weekly window is past the safety margin with three days to go, so Auto keeps it.
+  const weekly = used => () => ({ ...usage(), windows: [...usage().windows, { label: 'Weekly', usedPercent: used, resetsAt: new Date(Date.now() + 72 * 3600000).toISOString() }] });
+  broker.checks.usage = async () => weekly(98)();
+  broker.router.probeLimitMs = 50;
+  broker.router.worker = async () => JSON.stringify(assessment);
+  broker.queueAction(c, { action: 'pause' });
+  for (const text of ['Fix the parser', 'Then add its tests']) broker.queueAction(c, { action: 'add', text, provider: 'codex', mode: 'edit', routing: { mode: 'smart', tier: 'standard', reason: 'Estimate' } });
+  broker.queueAction(c, { action: 'resume' });
+  await until(() => c.queuePaused, 'The queue pauses on the near-limit reading.');
+  assert.match(c.queuePaused.reason, /no connected agent/); assert.equal(c.queuePaused.proceedTried, undefined);
+  assert.equal(launches(), 0);
+
+  broker.queueAction(c, { action: 'resume', proceedWithNearQuota: true });
+  await until(() => launches() === 2 && !broker.running && !c.queue.length, 'Proceed starts the queue instead of pausing again, and the next prompt goes ahead on the same go-ahead.');
+  assert.equal(c.lastRun.routing.remainder, 'asked'); assert.equal(c.lastRun.routingRemainder.reason, 'asked');
+  assert.deepEqual(c.messages.filter(message => message.role === 'user').map(message => /Spending Codex's remaining allowance as you asked/.test(message.routing?.reason)), [true, true], 'Each prompt says why it ran near the limit.');
+  assert.equal(c.messages.filter(message => message.role === 'activity' && /Spending Codex's remaining allowance as you asked \(Weekly: 2% left/.test(message.text)).length, 2);
+  assert.equal(c.queuePaused, null); assert.equal(c.queueResumeProceed, undefined, 'The go-ahead ends with the queue.');
+
+  // At the limit, Proceed can't help, so it isn't offered again.
+  broker.checks.usage = async () => weekly(100)();
+  broker.queueAction(c, { action: 'pause' });
+  broker.queueAction(c, { action: 'add', text: 'One more', provider: 'codex', mode: 'edit', routing: { mode: 'smart', tier: 'standard', reason: 'Estimate' } });
+  broker.queueAction(c, { action: 'resume', proceedWithNearQuota: true });
+  await until(() => c.queuePaused, 'An exhausted agent pauses the queue.');
+  assert.equal(c.queuePaused.proceedTried, true); assert.equal(launches(), 2);
+});
+
+test('a Send spends allowance that resets within hours without asking, and says so (#153)', { skip: scriptCLIs }, async t => {
+  const { broker, c, input, workspace } = setup(t);
+  broker.checks.usage = async () => ({ ...usage(13), windows: [...usage(13).windows, { label: 'Weekly', usedPercent: 97, resetsAt: new Date(Date.now() + 4 * 3600000).toISOString() }] });
+  broker.router.probeLimitMs = 50;
+  broker.router.worker = async () => JSON.stringify(assessment);
+  const accepted = await broker.dispatch(c, { ...input, text: 'Repair the worker queue' }); await broker.running.done;
+  assert.equal(accepted.provider, 'codex');
+  assert(fs.existsSync(path.join(workspace, '.mock-captures.jsonl')), 'The agent started.');
+  assert.equal(c.lastRun.routing.remainder, 'expiring'); assert.equal(c.lastRun.routingRemainder.reason, 'expiring');
+  assert(c.messages.some(message => message.role === 'activity' && /Spending Codex's remaining Weekly allowance \(3% left\) before it resets in 4h/.test(message.text)));
+});
+
 test('the native assessment worker returns its structured result and usage without touching coding-session state', { skip: scriptCLIs }, async t => {
   const { broker, c, input, root, workspace } = setup(t), log = path.join(root, 'assessment-rpc.jsonl');
   fs.writeFileSync(broker.configuredBins.codex, `#!${process.execPath}

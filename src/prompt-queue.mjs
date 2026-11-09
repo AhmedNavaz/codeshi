@@ -33,8 +33,9 @@ export class PromptQueue {
     }
   }
 
-  pause(c, reason) {
-    this.broker.record(c, { type: 'queue_pause', reason: String(reason).slice(0, 300) });
+  // proceedTried: the queue already had your go-ahead to spend remaining allowance, so offering it again can't help.
+  pause(c, reason, { proceedTried = false } = {}) {
+    this.broker.record(c, { type: 'queue_pause', reason: String(reason).slice(0, 300), ...(proceedTried ? { proceedTried: true } : {}) });
     this.broker.emit('update', { conversationId: c.id });
   }
 
@@ -117,8 +118,8 @@ export class PromptQueue {
     const item = c.queue[0];
     const digest = queueDigest(item);
     this.held.add(c.id);
+    const proceedWithNearQuota = Boolean(c.queueResumeProceed || item.proceedWithNearQuota);
     try {
-      const proceedWithNearQuota = Boolean(c.queueResumeProceed || item.proceedWithNearQuota);
       const input = { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, proceedWithNearQuota, requestId: `queue-${item.id}` };
       const options = { execution: item.execution, queued: item.id, proceedWithNearQuota, verifyExecution: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || current && queueDigest(current) !== digest || !current && !c.requests[`queue-${item.id}`]) throw Object.assign(new Error('The queue changed or was paused before the provider started.'), { status: 409 }); }, verifyRouting: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || !current || queueDigest(current) !== digest) throw Object.assign(new Error('The queued prompt changed or the queue was paused during assessment.'), { status: 409 }); } };
       const { runId } = item.routing ? await broker.dispatch(c, input, options) : broker.start(c, input, options);
@@ -126,7 +127,7 @@ export class PromptQueue {
       broker.emit('update', { conversationId: c.id });
     } catch (error) {
       if (error.status === 409 && broker.running) return;
-      this.pause(c, `The next prompt could not start: ${error.message}`);
+      this.pause(c, `The next prompt could not start: ${error.message}`, { proceedTried: proceedWithNearQuota });
       broker.emit('notify', { conversationId: c.id, kind: 'stopped', title: 'Queue paused', body: 'The next queued prompt could not start. Open the workspace to see why.' });
     } finally { this.held.delete(c.id); }
   }

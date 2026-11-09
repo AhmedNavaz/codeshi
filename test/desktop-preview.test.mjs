@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { INSPECTOR_WIDTH, apiInterceptorScript, captureRect, cleanElement, createPreview, isPreviewURL, pickText, previewURL, sourceLocation, sourceScript } from '../desktop/preview.mjs';
+import { INSPECTOR_WIDTH, apiInterceptorScript, captureRect, cleanElement, createPreview, interfaceName, isPreviewURL, pickText, previewEndpoint, previewURL, sourceLocation, sourceScript } from '../desktop/preview.mjs';
 
 test('the preview opens only local addresses, without credentials', () => {
   assert.equal(previewURL(' http://localhost:5173/checkout '), 'http://localhost:5173/checkout');
@@ -43,6 +43,23 @@ test('a pick reads as a sentence: where, what and where its code is', () => {
   assert.equal(pickText({ element: { tag: 'img', text: '', label: 'Trail runner', selector: 'img.hero' }, url: 'http://localhost:3000/', source: null }), 'In the preview of localhost:3000, the “Trail runner” image (img.hero): ');
   assert.equal(pickText({ element: { tag: 'section', text: '', label: '', selector: '' }, url: 'bad' }), 'In the preview of the preview, the section: ');
   assert.equal(pickText({ element: { tag: 'my-widget', text: '', label: '', selector: 'my-widget' }, url: 'http://localhost:4000/', source: { component: 'Widget' } }), 'In the preview of localhost:4000, the <my-widget> element (my-widget; in Widget): ');
+  // With several interfaces, the launch map's name for the one picked in comes first (#142).
+  assert.equal(pickText({ element: { tag: 'button', text: 'Save', label: '', selector: '#save' }, url: 'http://localhost:4201/users', source: null, label: 'Admin dashboard' }), 'In the preview of Admin dashboard (localhost:4201/users), the “Save” button (#save): ');
+  assert.equal(pickText({ element: { tag: 'button', text: 'Save', label: '', selector: '' }, url: 'bad', label: 'Admin dashboard' }), 'In the preview of Admin dashboard, the “Save” button: ');
+});
+
+test('an interface is found by the local server it reaches, under any of this computer’s names, and named as the launch map names it', () => {
+  assert.equal(previewEndpoint('http://localhost:4200/cart'), 'http://4200');
+  assert.equal(previewEndpoint('http://127.0.0.1:4200/'), 'http://4200', 'localhost and 127.0.0.1 are the same server.');
+  assert.equal(previewEndpoint('http://[::1]:4200'), 'http://4200');
+  assert.deepEqual([previewEndpoint('https://localhost/'), previewEndpoint('http://localhost/')], ['https://443', 'http://80']);
+  assert.notEqual(previewEndpoint('http://localhost:4201/'), previewEndpoint('http://localhost:4200/'));
+  for (const value of ['http://example.com:4200/', 'file:///tmp/a', 'nonsense', null]) assert.equal(previewEndpoint(value), null, String(value));
+  const stack = { services: [{ id: 'site', name: 'Website', url: 'http://localhost:4200/' }, { id: 'admin', name: 'Admin dashboard', url: 'http://localhost:4201/' }, { id: 'api', name: 'API', url: 'http://127.0.0.1:8000/health' }], previews: [{ service: 'admin', url: 'http://127.0.0.1:4201/' }] };
+  assert.equal(interfaceName(stack, 'http://localhost:4201/users/7'), 'Admin dashboard');
+  assert.equal(interfaceName(stack, 'http://localhost:4200/'), 'Website', 'A service the map does not list as a preview is still named by its address.');
+  assert.equal(interfaceName(stack, 'http://localhost:8000/docs'), 'API');
+  assert.deepEqual([interfaceName(stack, 'http://localhost:5173/'), interfaceName(null, 'http://localhost:4200/'), interfaceName(stack, 'bad')], ['', '', '']);
 });
 
 test('the screenshot is the element with a margin, kept inside the visible page', () => {
@@ -73,14 +90,15 @@ test('the toolbar shows the agent’s edit from its own trusted script, and noth
   class Window { constructor() { this.contentView = { addChildView() {} }; } getContentBounds() { return { width: 1000, height: 700 }; } on() {} show() {} focus() {} setTitle() {} close() {} destroy() {} isDestroyed() { return false; } }
   const session = { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} }) };
   const preview = createPreview({ BaseWindow: Window, WebContentsView: View, session, ipcMain: { on() {}, off() {} }, shell: { openExternal() {} }, root: '/app' });
-  assert.equal(preview.projectId, null, 'Before it opens it follows nothing.');
+  assert.equal(preview.shows('p'), false, 'Before it opens it shows no workspace.');
   await preview.open({ projectId: 'p', url: 'http://localhost:5173/' });
-  assert.equal(preview.projectId, 'p');
+  assert.equal(preview.shows('p'), true);
   sent.length = 0;
-  preview.showEdit({ path: 'src/BuyBox.tsx', added: 4, removed: 2, contents: 'SECRET' });
-  preview.showEdit({ path: 'src/BuyBox.tsx', added: 4, removed: 2 });
-  preview.showEdit(null);
-  assert.deepEqual(sent.filter(([channel]) => channel === 'preview:edit'), [['preview:edit', { path: 'src/BuyBox.tsx', added: 4, removed: 2 }], ['preview:edit', null]], 'Only a file and counts, and only when it changes.');
+  preview.showEdit('p', { path: 'src/BuyBox.tsx', added: 4, removed: 2, contents: 'SECRET' });
+  preview.showEdit('p', { path: 'src/BuyBox.tsx', added: 4, removed: 2 });
+  preview.showEdit('other', { path: 'src/Elsewhere.tsx', added: 1, removed: 0 });
+  preview.showEdit('p', null);
+  assert.deepEqual(sent.filter(([channel]) => channel === 'preview:edit'), [['preview:edit', { path: 'src/BuyBox.tsx', added: 4, removed: 2 }], ['preview:edit', null]], 'Only a file and counts, only when it changes, and only from the workspace it shows.');
   assert.deepEqual(pageSent.filter(([channel]) => channel === 'preview:edit'), [], 'Nothing goes to the page.');
   preview.dispose();
   const page = fs.readFileSync(new URL('../desktop/preview-toolbar.html', import.meta.url), 'utf8'), script = page.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -141,8 +159,10 @@ test('the toolbar receives backend and DB configuration stack and displays runni
       { name: 'Web', kind: 'service', status: 'ready', url: 'http://127.0.0.1:3000', folder: 'frontend' },
     ],
   };
-  preview.showStack(stack);
-  assert.deepEqual(sent.filter(([ch]) => ch === 'preview:stack'), [['preview:stack', stack]]);
+  preview.showStack('p1', stack);
+  preview.showStack('p1', structuredClone(stack));
+  preview.showStack('p2', { ...stack, profile: 'Another workspace' });
+  assert.deepEqual(sent.filter(([ch]) => ch === 'preview:stack'), [['preview:stack', { ...stack, previews: [] }]], 'Sent once, and only to the windows of its workspace.');
   preview.dispose();
 });
 
@@ -191,9 +211,9 @@ test('api calls captured in preview page reach the toolbar with method, url, req
 function inspectorWindow({ platform } = {}) {
   const handlers = {}, events = {}, views = [], added = [], sent = [];
   const size = { width: 1180, height: 820 };
-  const contents = () => ({ url: '', handlers: {}, isDestroyed: () => false, setWindowOpenHandler() {}, on(name, handler) { this.handlers[name] = handler; }, once() {}, loadFile() {}, send: (channel, value) => sent.push([channel, value]), focus() {}, isLoading: () => false, navigationHistory: { canGoBack: () => false, canGoForward: () => false }, async loadURL(url) { this.url = url; }, getURL() { return this.url; }, getTitle: () => '', executeJavaScript: async () => {} });
+  const contents = () => ({ url: '', handlers: {}, isDestroyed: () => false, close() {}, setWindowOpenHandler() {}, on(name, handler) { this.handlers[name] = handler; }, once() {}, loadFile() {}, send: (channel, value) => sent.push([channel, value]), focus() {}, isLoading: () => false, navigationHistory: { canGoBack: () => false, canGoForward: () => false }, async loadURL(url) { this.url = url; }, getURL() { return this.url; }, getTitle: () => '', executeJavaScript: async () => {} });
   class View { constructor() { this.webContents = contents(); this.bounds = null; views.push(this); } setBounds(value) { this.bounds = value; } }
-  class Window { constructor() { this.contentView = { addChildView: view => added.push(view) }; } getContentBounds() { return { ...size }; } on(name, handler) { events[name] = handler; } show() {} focus() {} setTitle() {} close() {} destroy() {} isDestroyed() { return false; } }
+  class Window { constructor() { this.contentView = { addChildView: view => added.push(view) }; } getContentBounds() { return { ...size }; } on(name, handler) { events[name] = handler; } show() {} focus() {} isMinimized() { return false; } restore() {} setTitle() {} close() {} destroy() {} isDestroyed() { return false; } }
   const session = { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} }) };
   const preview = createPreview({ BaseWindow: Window, WebContentsView: View, session, ipcMain: { on: (channel, handler) => { handlers[channel] = handler; }, off() {} }, shell: { openExternal() {} }, root: '/app', ...platform ? { platform } : {} });
   const act = (view, action) => handlers['preview:toolbar']({ sender: view.webContents }, action);
@@ -218,7 +238,7 @@ test('the Stack and API inspector opens on the right of the page, which keeps it
   assert.deepEqual(shown(), [{ x: 0, y: 0, width: 480, height: 44 }, { x: 0, y: 44, width: 480, height: 276 }]);
   w.act(toolbar, 'show-inspector');
   await w.preview.open({ projectId: 'p1', url: 'http://localhost:3000/orders' });
-  assert.equal(page.bounds.width, 240, 'Opening another address keeps the inspector as the toolbar shows it.');
+  assert.deepEqual([w.views.length, page.bounds.width, page.webContents.getURL()], [2, 240, 'http://localhost:3000/'], 'Opening the same interface again brings its window forward as it was, inspector and page.');
   w.events.closed();
   await w.preview.open({ projectId: 'p1', url: 'http://localhost:3000/' });
   assert.deepEqual([w.views[2].bounds.height, w.views[3].bounds.width], [44, 480], 'A new window starts with it closed, as its new toolbar does.');
@@ -268,4 +288,130 @@ test('the toolbar switches between Stack and APIs in one inspector, and the shor
   apiCall({ id: 'c1', method: 'GET', url: 'http://localhost:3000/api/orders', status: 200, statusText: 'OK', duration: 4, request: {}, response: {} });
   node('status').onclick(); assert.deepEqual(showing(), ['apis', 'false', 'true']);
   node('status').onclick(); assert.deepEqual(showing(), ['apis', 'false', 'true'], 'A second click keeps it open.');
+});
+
+test('Stack lists the review’s interfaces first: this window’s is marked, and the others open or come forward in windows of their own (#142)', () => {
+  const html = fs.readFileSync(new URL('../desktop/preview-toolbar.html', import.meta.url), 'utf8'), script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const nodes = new Map(), acts = [];
+  const element = (id = '', tag = 'div') => ({ id, tag, hidden: false, attributes: {}, children: [], listeners: {}, dataset: {}, style: {}, value: '', textContent: '', className: '', title: '', setAttribute(name, value) { this.attributes[name] = value; }, addEventListener(type, handler) { this.listeners[type] = handler; }, append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; }, select() {}, blur() {} });
+  const node = id => { if (!nodes.has(id)) nodes.set(id, element(id)); return nodes.get(id); };
+  let showStack = null;
+  const bridge = { act: (action, value) => acts.push([action, value]), onState() {}, onPicked() {}, onError() {}, onEdit() {}, onStack: callback => { showStack = callback; }, onApiCall() {}, onToggleInspector() {} };
+  new Function('document', 'window', 'setTimeout', 'clearTimeout', script)({ getElementById: node, createElement: tag => element('', tag), createTextNode: value => ({ textContent: value }) }, { relayPreview: bridge, navigator: { platform: 'MacIntel' }, addEventListener() {} }, () => 0, () => {});
+  showStack({ profile: 'Development', services: [{ id: 'site', name: 'Website' }, { id: 'admin', name: 'Admin dashboard' }, { id: 'api', name: 'API' }], previews: [{ service: 'site', url: 'http://localhost:4200/', current: true, open: true }, { service: 'admin', url: 'http://localhost:4201/', current: false, open: true }, { service: 'api', url: 'http://127.0.0.1:8000/', current: false, open: false }] });
+  node('stack-btn').listeners.click();
+  const [heading, list] = node('stack-content').children[0].children;
+  assert.equal(heading.textContent, 'Interfaces');
+  const rows = list.children.map(card => { const [about, action] = card.children; return [about.children[0].textContent, about.children[1].textContent, action.tag, action.textContent, action.attributes['aria-label'] ?? null]; });
+  assert.deepEqual(rows, [['Website', 'localhost:4200', 'span', 'This window', null], ['Admin dashboard', 'localhost:4201', 'button', 'Show', 'Show Admin dashboard'], ['API', '127.0.0.1:8000', 'button', 'Open', 'Open API']]);
+  acts.length = 0;
+  list.children[1].children[1].listeners.click(); list.children[2].children[1].listeners.click();
+  assert.deepEqual(acts, [['open-interface', 'http://localhost:4201/'], ['open-interface', 'http://127.0.0.1:8000/']], 'Neither moves this window’s page.');
+  assert.doesNotMatch(script, /navigate-preview/);
+});
+
+// Electron stand-ins for several preview windows (#142): each window keeps its options, title and events, and each
+// view's web contents what it was sent and loaded. Closing a window reports it closed, as Electron does.
+function previewWindows({ workArea = { x: 0, y: 25, width: 1440, height: 875 }, platform = 'darwin' } = {}) {
+  const handlers = {}, windows = [], picks = [];
+  const contents = () => ({ url: '', handlers: {}, sent: [], loads: [], destroyed: false, isDestroyed() { return this.destroyed; }, close() { this.destroyed = true; },
+    setWindowOpenHandler() {}, on(name, handler) { (this.handlers[name] ||= []).push(handler); }, once(name, handler) { this.on(name, handler); },
+    emit(name, ...args) { for (const handler of this.handlers[name] || []) handler({ preventDefault() {} }, ...args); },
+    loadFile() {}, send(channel, value) { this.sent.push([channel, value]); }, focus() {}, isLoading: () => false, reload() {},
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false }, async loadURL(url) { this.loads.push(url); this.url = url; }, getURL() { return this.url; }, getTitle: () => '',
+    executeJavaScript: async () => null, capturePage: async () => ({ isEmpty: () => false, getSize: () => ({ width: 66, height: 36 }), toPNG: () => Buffer.from('png') }) });
+  class View { constructor() { this.webContents = contents(); } setBounds(value) { this.bounds = value; } }
+  class Window {
+    constructor(options) { this.options = options; this.bounds = { x: options.x ?? 130, y: options.y ?? 40, width: options.width, height: options.height }; this.events = {}; this.views = []; this.title = ''; this.closed = false; this.contentView = { addChildView: view => this.views.push(view) }; windows.push(this); }
+    getContentBounds() { return { width: this.bounds.width, height: this.bounds.height }; } getBounds() { return { ...this.bounds }; }
+    on(name, handler) { (this.events[name] ||= []).push(handler); } emit(name) { for (const handler of this.events[name] || []) handler(); }
+    show() {} focus() { this.emit('focus'); } isMinimized() { return false; } restore() {} setTitle(value) { this.title = value; }
+    close() { if (this.closed) return; this.closed = true; this.emit('closed'); } destroy() { this.close(); } isDestroyed() { return this.closed; }
+  }
+  const session = { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} }) };
+  const preview = createPreview({ BaseWindow: Window, WebContentsView: View, session, screen: { getDisplayMatching: () => ({ workArea }) }, ipcMain: { on: (channel, handler) => { handlers[channel] = handler; }, off() {} }, shell: { openExternal() {} }, root: '/app', platform, onPick: value => picks.push(value), captureWait: 30 });
+  const toolbar = win => win.views[0].webContents, page = win => win.views[1].webContents;
+  const act = (win, action, value) => handlers['preview:toolbar']({ sender: toolbar(win) }, action, value);
+  const lastStack = win => toolbar(win).sent.filter(([channel]) => channel === 'preview:stack').at(-1)?.[1];
+  const marks = win => lastStack(win).previews.map(item => `${item.service}:${item.current ? 'here' : item.open ? 'open' : 'closed'}`);
+  return { preview, handlers, windows, picks, toolbar, page, act, marks, settle: () => new Promise(resolve => setTimeout(resolve, 0)) };
+}
+
+test('each interface opens in a window of its own beside the others, and opening it again brings that window forward as it was (#142)', async () => {
+  const w = previewWindows(), { preview, windows, toolbar, page } = w;
+  preview.showStack('p1', { profile: 'Development', services: [{ id: 'site', name: 'Website', url: 'http://localhost:4200' }, { id: 'admin', name: 'Admin dashboard', url: 'http://localhost:4201' }, { id: 'api', name: 'API', url: 'http://127.0.0.1:8000/health' }], previews: [{ service: 'site', url: 'http://localhost:4200/' }, { service: 'admin', url: 'http://localhost:4201/' }] });
+  await preview.open({ projectId: 'p1', url: 'http://localhost:4200/', workspace: 'Bizbay' });
+  await preview.open({ projectId: 'p1', url: 'http://localhost:4201/', workspace: 'Bizbay' });
+  const [site, admin] = windows;
+  assert.equal(preview.count, 2, 'The admin panel opens beside the website instead of replacing it.');
+  assert.deepEqual([page(site).getURL(), page(admin).getURL()], ['http://localhost:4200/', 'http://localhost:4201/']);
+  assert.deepEqual([site.title, admin.title], ['Website · localhost:4200', 'Admin dashboard · localhost:4201'], 'The titles tell the windows apart.');
+  assert.deepEqual([site.options.width, site.options.height, site.options.x], [1180, 820, undefined], 'The first window opens where the system puts it.');
+  assert.deepEqual([admin.options.x, admin.options.y, admin.options.width, admin.options.height], [158, 68, 1180, 820], 'The next opens a step down and to the right, at the same size.');
+  assert.equal(site.options.tabbingIdentifier, 'codeshi-preview', 'On macOS the windows can be merged into tabs.');
+  const windows32 = previewWindows({ platform: 'win32' });
+  await windows32.preview.open({ url: 'http://localhost:4200/' });
+  assert.equal(windows32.windows[0].options.tabbingIdentifier, undefined, 'Elsewhere there are no window tabs.');
+  windows32.preview.dispose();
+  assert.deepEqual(w.marks(site), ['site:here', 'admin:open']);
+  assert.deepEqual(w.marks(admin), ['site:open', 'admin:here']);
+
+  // The website moves on; opening it again, even under another name for this computer, brings it forward as it is.
+  page(site).url = 'http://localhost:4200/cart'; page(site).emit('did-navigate');
+  await preview.open({ projectId: 'p1', url: 'http://127.0.0.1:4200/', workspace: 'Bizbay' });
+  assert.equal(preview.count, 2);
+  assert.deepEqual([page(site).loads, page(site).getURL()], [['http://localhost:4200/'], 'http://localhost:4200/cart'], 'Its page keeps its place and history.');
+  assert.equal(preview.page.webContents, page(site), 'It is the window in use.');
+
+  // Each window has its own picker, and a pick says which interface it came from.
+  w.act(admin, 'pick');
+  assert.deepEqual(page(admin).sent.at(-1), ['preview:picking', true]);
+  assert.equal(page(site).sent.some(([channel]) => channel === 'preview:picking'), false, 'Picking in one window leaves the other alone.');
+  const pick = { nonce: 'abcdef1234', element: { tag: 'button', text: 'Save', selector: '#save' }, rect: { x: 10, y: 10, width: 50, height: 20 }, viewport: { width: 1000, height: 700 } };
+  w.handlers['preview:picked']({ sender: page(site) }, pick);
+  assert.equal(w.picks.length, 0, 'A window that is not picking reports nothing.');
+  page(admin).url = 'http://localhost:4201/users';
+  w.handlers['preview:picked']({ sender: page(admin) }, pick);
+  for (const until = Date.now() + 2000; !w.picks.length && Date.now() < until;) await w.settle();
+  assert.deepEqual([w.picks[0].projectId, w.picks[0].label, w.picks[0].text], ['p1', 'Admin dashboard', 'In the preview of Admin dashboard (localhost:4201/users), the “Save” button (#save): ']);
+  assert.ok(w.picks[0].image, 'With its screenshot.');
+  assert.deepEqual([toolbar(admin).sent.some(([channel]) => channel === 'preview:picked'), toolbar(site).sent.some(([channel]) => channel === 'preview:picked')], [true, false]);
+
+  // A page's API calls go to its own window's inspector, and an edit to every window of the workspace.
+  w.handlers['preview:api-call']({ sender: page(site) }, { id: 'c1', type: 'fetch', url: 'http://localhost:4200/api/cart', method: 'GET', status: 200 });
+  assert.deepEqual([toolbar(site).sent.some(([channel]) => channel === 'preview:api-call'), toolbar(admin).sent.some(([channel]) => channel === 'preview:api-call')], [true, false]);
+  preview.showEdit('p1', { path: 'src/cart.ts', added: 2, removed: 1 });
+  assert.deepEqual([site, admin].map(win => toolbar(win).sent.filter(([channel]) => channel === 'preview:edit').length), [1, 1]);
+
+  // From a toolbar, an interface with a window comes forward and one without opens beside it; this page stays.
+  w.act(site, 'open-interface', 'http://localhost:4201/'); await w.settle();
+  assert.deepEqual([preview.count, preview.page.webContents === page(admin), page(site).getURL()], [2, true, 'http://localhost:4200/cart']);
+  w.act(site, 'open-interface', 'http://127.0.0.1:8000/health'); await w.settle();
+  const api = windows[2];
+  assert.deepEqual([preview.count, api.title], [3, 'API · 127.0.0.1:8000']);
+  assert.deepEqual([api.options.x, api.options.y], [186, 53], 'A window that would run off the display stays on it.');
+  w.act(site, 'open-interface', 'https://example.com/'); await w.settle();
+  assert.match(toolbar(site).sent.at(-1)[1], /local addresses only/);
+  assert.equal(preview.count, 3);
+
+  // A page that failed to load loads again when its interface is opened, also while it shows the browser's error page.
+  page(admin).url = 'chrome-error://chromewebdata/';
+  page(admin).emit('did-fail-load', -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:4201/users', true);
+  admin.title = ''; page(admin).emit('did-stop-loading');
+  assert.equal(admin.title, 'Admin dashboard · localhost:4201', 'It is still the admin window.');
+  await preview.open({ projectId: 'p1', url: 'http://localhost:4201/' });
+  assert.deepEqual([preview.count, page(admin).loads], [3, ['http://localhost:4201/', 'http://localhost:4201/']]);
+
+  // Another workspace's preview of the same port is a window of its own, so its picks go to that workspace.
+  await preview.open({ projectId: 'p2', url: 'http://localhost:4200/' });
+  assert.deepEqual([preview.count, preview.shows('p2'), preview.shows('p3')], [4, true, false]);
+
+  // Stop review closes the workspace's windows for the review's services, and their pages stop; the rest stay.
+  assert.equal(preview.close({ projectId: 'p1', urls: ['http://localhost:4201/', 'http://127.0.0.1:8000/'] }), 2);
+  assert.deepEqual(windows.map(win => win.closed), [false, true, true, false]);
+  assert.deepEqual([page(admin).isDestroyed(), toolbar(admin).isDestroyed()], [true, true], 'A closed window’s page stops running.');
+  assert.deepEqual(w.marks(site), ['site:here', 'admin:closed'], 'The website’s window sees the admin window go.');
+  assert.equal(preview.close({ projectId: 'p1', urls: [] }), 0);
+  preview.dispose();
+  assert.deepEqual([preview.count, windows.every(win => win.closed)], [0, true]);
 });

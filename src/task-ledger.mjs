@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { continuationRequest } from './context.mjs';
 import { runSteps } from './recap.mjs';
+import '../public/routing.js';
 
 // The task-efficiency ledger (#84): what each task cost and how it ended, worked out from the conversation's journal, so
 // there is no second store to keep in step. It holds counts, times and identities. Prompts and check commands only appear
@@ -121,9 +122,25 @@ function countStep(entry, text) {
   else entry.tools.other++;
 }
 
+// Who chose the agent (#139): a routing mode, or you. A choice you pinned while routing was on counts as yours.
+function routingOf(record) {
+  const routing = record.routing;
+  if (!routing?.mode) return null;
+  const manual = routing.selectedBy === 'you' || routing.reason === 'Your explicit task selection';
+  return { mode: manual ? null : globalThis.relayRouting.normalizeMode(routing.mode), policy: Number.isSafeInteger(routing.policy) ? routing.policy : null, tier: routing.tier || null, reason: typeof routing.reason === 'string' ? routing.reason.slice(0, 200) : null, ...(manual ? { selectedBy: 'you' } : {}) };
+}
+// How big a request looks, by Codeshi's local rules, so tasks are compared with others of the same size. The same rules
+// rate every task whichever way its agent was chosen; only the result is kept, never the request.
+const taskClass = record => {
+  const text = String(record.message?.text || '');
+  if (!text || record.retryOf || record.review || text === continuationRequest) return null;
+  return { kind: record.mode === 'read' ? 'question' : 'change', size: globalThis.relayRouting.classify(text, { attachments: record.message?.attachments?.length || 0 }).tier };
+};
+
 const newEntry = (id, record, overrides = {}) => ({
-  runId: id, taskId: id, parentRunId: null, relation: null, provider: record.provider || null, model: record.model || null, effectiveModel: null, effort: record.effort || null,
+  runId: id, taskId: id, parentRunId: null, relation: null, provider: record.provider || null, model: record.model || null, effectiveModel: null, effort: record.effort || null, role: record.role || overrides.role || null,
   mode: record.mode || null, approvalPolicy: record.approvalPolicy || null, transport: record.effectiveTransport || record.transport || null, local: Boolean(record.local), billingSource: null,
+  routing: routingOf(record), taskClass: taskClass(record), workspace: record.workspaceSignature || null,
   startedAt: record.at || null, endedAt: null, elapsedMs: null, status: 'running', errorCategory: null, usage: null, costEstimateUSD: null, costBasis: null,
   tools: { commands: 0, edits: 0, other: 0 }, approvals: { allowed: 0, denied: 0, automatic: 0, byRule: 0 }, interventions: 0, compactions: 0, compactionEvents: [], check: null, filesChanged: null, retryOf: record.retryOf || null,
   context: record.context ? { bytes: record.context.bytes ?? null, estimatedTokens: record.context.size?.estimatedTokens ?? null, policy: record.context.policy || null, sessionMode: record.context.sessionMode || null, sessionReason: record.context.sessionReason || null, omittedMessages: record.context.omittedMessages ?? null, shortenedMessages: record.context.shortenedMessages ?? null, memoryEntries: record.context.memory?.length ?? null, skills: record.context.skills?.map(({ name, version, reason }) => ({ name, version, reason })) || [] } : null,
@@ -150,7 +167,7 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
     return entry;
   };
   for (let record of records) {
-    if (record.type === 'routing_assessment_start') record = { ...record, type: 'background_review', review: { id: record.id, provider: record.provider, model: record.model, effort: record.effort, assessment: true } };
+    if (record.type === 'routing_assessment_start') record = { ...record, type: 'background_review', review: { id: record.id, provider: record.provider, model: record.model, effort: record.effort, assessment: true, ...(record.routingMode ? { routing: { mode: record.routingMode, policy: record.policy } } : {}) } };
     else if (record.type === 'routing_assessment_metadata') record = { ...record, type: 'review_budget' };
     else if (record.type === 'routing_assessment_end') record = { ...record, type: 'review_result' };
     if (record.type === 'submission') {
@@ -160,7 +177,15 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       else if (!totals.has(record.provider)) totals.set(record.provider, Object.fromEntries([...FIELDS, 'costEstimateUSD'].map(key => [key, null])));
     } else if (record.type === 'run_start') active = open(record.id, record);
     else if (record.type === 'run_metadata' && active) {
-      const metadata = record.metadata || {};
+      const metadata = record.metadata || {}, switched = metadata.routingFallback;
+      // Routing switched agents before the run started (#144): the run is the new agent's, and so is its usage.
+      if (switched?.to) {
+        if (switched.to !== active.provider) {
+          if (switched.freshSession !== false) totals.delete(switched.to);
+          else if (!totals.has(switched.to)) totals.set(switched.to, Object.fromEntries([...FIELDS, 'costEstimateUSD'].map(key => [key, null])));
+        }
+        Object.assign(active, { provider: switched.to, model: switched.toModel ?? null, ...(switched.toEffort !== undefined ? { effort: switched.toEffort } : {}), ...(switched.toTransport ? { transport: switched.toTransport } : {}) });
+      }
       if (metadata.effectiveModel) active.effectiveModel = metadata.effectiveModel;
       if (metadata.budgetEnforcement) active.budgetEnforcement = metadata.budgetEnforcement;
       if (metadata.effectiveEffort) active.effort = metadata.effectiveEffort;
@@ -198,7 +223,7 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       if (entry) entry.filesChanged = record.files ?? null;
     } else if (record.type === 'background_review') {
       const review = record.review || {};
-      runs.set(review.id, newEntry(review.id, { provider: review.provider, model: review.model, effort: review.effort, at: record.at, mode: 'read' }, { relation: review.assessment ? 'assessment' : 'review', taskId: record.taskId || last?.taskId || review.id, parentRunId: record.parentRunId || last?.runId || null, billingSource: record.billingSource || 'unknown' }));
+      runs.set(review.id, newEntry(review.id, { provider: review.provider, model: review.model, effort: review.effort, at: record.at, mode: 'read', routing: review.routing }, { relation: review.assessment ? 'assessment' : 'review', taskId: record.taskId || last?.taskId || review.id, parentRunId: record.parentRunId || last?.runId || null, billingSource: record.billingSource || 'unknown' }));
     } else if (record.type === 'review_budget') {
       const entry = runs.get(record.id), metadata = record.metadata || {};
       if (!entry || entry.status !== 'running') continue;
@@ -249,7 +274,15 @@ export function summarizeTasks(runs) {
       if (typeof run.filesChanged === 'number') agent.filesChanged = (agent.filesChanged || 0) + run.filesChanged;
     }
     for (const agent of Object.values(agents)) agent.usage = sumUsage(agent.usage);
+    // A task that stopped while routing was still assessing has no builder, so the assessment says how it was chosen.
+    const chosen = builders[0] || list.find(run => run.relation === 'assessment') || first;
+    const priced = list.filter(run => run.costBasis === 'api-estimate');
     return {
+      routing: chosen.routing || null, taskClass: builders.find(run => run.taskClass)?.taskClass || null, workspace: first.workspace || null, contextPolicy: first.context?.policy || null,
+      models: list.map(run => ({ provider: run.provider, model: run.effectiveModel || run.model || null, effort: run.effort || null, role: run.role || runRole(run), local: run.local || undefined })),
+      billing: [...new Set(list.map(run => run.billingSource || 'unknown'))].sort(),
+      // Agents' own dollar figures, kept only where the run was billed per use. They are estimates, not charges.
+      apiEstimateUSD: { total: priced.length ? priced.reduce((sum, run) => sum + run.costEstimateUSD, 0) : null, runs: priced.length, billedRuns: list.filter(run => run.billingSource === 'api').length },
       id, ...(first.prompt ? { prompt: first.prompt } : {}), startedAt: list.map(run => run.startedAt).filter(Boolean).sort()[0] || null,
       endedAt: list.every(run => run.endedAt) ? list.map(run => run.endedAt).sort().at(-1) : null, status: final.status,
       // Only the time agents worked: waiting for a limit to reset falls between runs and isn't counted.

@@ -30,7 +30,7 @@ import { phoneConversation } from './phone-conversation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
-  '/brief-panel.js': ['brief-panel.js', 'text/javascript; charset=utf-8'], '/tasks-panel.js': ['tasks-panel.js', 'text/javascript; charset=utf-8'], '/skills.js': ['skills.js', 'text/javascript; charset=utf-8'], '/memory.js': ['memory.js', 'text/javascript; charset=utf-8'], '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
+  '/brief-panel.js': ['brief-panel.js', 'text/javascript; charset=utf-8'], '/tasks-panel.js': ['tasks-panel.js', 'text/javascript; charset=utf-8'], '/smart-results.js': ['smart-results.js', 'text/javascript; charset=utf-8'], '/skills.js': ['skills.js', 'text/javascript; charset=utf-8'], '/memory.js': ['memory.js', 'text/javascript; charset=utf-8'], '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
   '/bottom-panel.js': ['bottom-panel.js', 'text/javascript; charset=utf-8'], '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'],
   '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
   '/parallel-tasks.js': ['parallel-tasks.js', 'text/javascript; charset=utf-8'], '/parallel-tasks.css': ['parallel-tasks.css', 'text/css; charset=utf-8'], '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'],
@@ -43,7 +43,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
-  '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
+  '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow-lounge.js': ['flow-lounge.js', 'text/javascript; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
   '/project-review.js': ['project-review.js', 'text/javascript; charset=utf-8'], '/project-review.css': ['project-review.css', 'text/css; charset=utf-8'],
   '/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'], '/alerts.css': ['alerts.css', 'text/css; charset=utf-8'],
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],
@@ -242,6 +242,13 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       }
       const projectRoute=url.pathname.match(/^\/api\/projects\/([a-zA-Z0-9-]+)$/);
       if(req.method==='POST'&&projectRoute)return json(res,200,await registry.update(projectRoute[1],await body(req)));
+      // Smart results (#139): worked out from this workspace's saved tasks on request, with no model call.
+      if(req.method==='GET'&&url.pathname==='/api/results'){
+        const broker=registry.broker(selectedProjectId(url)),days=url.searchParams.get('days'),raw=url.searchParams.get('baseline');
+        let baseline=null;
+        if(raw){try{baseline=JSON.parse(raw);}catch{baseline=null;}if(!baseline||typeof baseline.provider!=='string')throw Object.assign(new Error('Choose a manual baseline agent.'),{status:400});baseline={provider:baseline.provider,model:typeof baseline.model==='string'?baseline.model:null,effort:typeof baseline.effort==='string'?baseline.effort:null};}
+        return json(res,200,await broker.results({days:days==='all'?null:Math.min(3650,Math.max(1,Number(days)||30)),baseline,exclude:(url.searchParams.get('exclude')||'').split(',').filter(Boolean).slice(0,1000),prompts:url.searchParams.get('prompts')==='1'}));
+      }
       if(req.method==='GET'&&(url.pathname==='/api/ledger'||url.pathname==='/api/memory'||url.pathname==='/api/budget'||url.pathname==='/api/skills'||url.pathname==='/api/conversation/brief')){
         const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversationId(projectId));
         return json(res,200,url.pathname==='/api/ledger'?await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}):url.pathname==='/api/memory'?broker.memory(c):url.pathname==='/api/budget'?broker.budget.view(c):url.pathname==='/api/skills'?broker.skills.view(c):broker.briefPreview(c));

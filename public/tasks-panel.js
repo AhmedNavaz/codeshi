@@ -210,6 +210,7 @@
     if (open) {
       window.relayAgents?.close(); window.relayGit?.close(); window.relayReviews?.closePanel?.(); window.relayTimeline?.close(); window.relayBrief?.close(); window.relayOrchestration?.closePanel?.();
       load();
+      window.relaySmartResults?.renderSection(); window.relaySmartResults?.load();
       if (section === 'limits') openLimits();
     }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));

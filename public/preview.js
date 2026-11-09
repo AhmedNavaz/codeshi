@@ -1,8 +1,9 @@
 (() => {
   'use strict';
-  // Point and tell (#19), in the page: opens the workspace's app in the desktop app's preview window, and puts what is
-  // picked there into the message box as a sentence, with a screenshot of the element attached. Nothing is sent: the
-  // person says or types what should change and sends it as usual. Only the desktop app has the preview.
+  // Point and tell (#19), in the page: opens the workspace's app in the desktop app's preview, a window for each
+  // interface (#142), and puts what is picked in any of them into the message box as a sentence, with a screenshot of
+  // the element attached. Nothing is sent: the person says or types what should change and sends it as usual. Only
+  // the desktop app has the preview.
   const api = window.relayUI, bridge = window.relayDesktop;
   if (!api) return;
   const available = typeof bridge?.openPreview === 'function';
@@ -24,5 +25,10 @@
     if (pick.image?.data) await window.relayFiles?.addSnapshots?.([{ name: pick.image.name, data: pick.image.data }], api.getState().projectId);
     api.announce?.('The element you picked is in the message box. Say or type what should change.');
   });
-  window.relayPreview = { available, open };
+  // Stop review closes the windows showing the review's services in its workspace; other windows stay open.
+  async function close(urls, projectId = api.getState().projectId) {
+    if (typeof bridge?.closePreviews !== 'function' || !projectId || !Array.isArray(urls) || !urls.length) return 0;
+    try { return await bridge.closePreviews({ projectId, urls }); } catch { return 0; }
+  }
+  window.relayPreview = { available, open, close };
 })();

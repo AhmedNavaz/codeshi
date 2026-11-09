@@ -453,3 +453,106 @@ test('explicit retry or reset restores task readiness after maxRepeatedFailures 
   assert.equal(isExplicitRetry('dismiss and retry'), true);
   assert.equal(isExplicitRetry('Please do something completely different'), false);
 });
+
+// Routing switching agents near a limit (#144) under one task budget (#87): Codex reads near its weekly limit, so the run
+// switches to Claude before it starts. The Claude stand-in reports a per-turn count (100 in) and a session total (700 in)
+// that differ, so usage read by the wrong agent's rules shows up as the wrong number.
+function switchSetup(t, { policy = null, claudeBilling = 'subscription' } = {}) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-budget-switch-')));
+  const workspace = path.join(root, 'workspace'), dataDir = path.join(root, 'data'), argsLog = path.join(root, 'claude-args.jsonl');
+  fs.mkdirSync(workspace); fs.writeFileSync(path.join(workspace, '.mock-scenarios.json'), '{}');
+  const codex = path.join(root, 'codex.mjs'), claude = path.join(root, 'claude.mjs');
+  fs.writeFileSync(codex, `#!${process.execPath}\nimport ${JSON.stringify(new URL('./mock-cli.mjs', import.meta.url).href)};\n`, { mode: 0o700 });
+  fs.writeFileSync(claude, `#!${process.execPath}
+import fs from 'node:fs';
+if(process.argv.includes('--version')){console.log('claude fixture 1');process.exit(0);}
+let prompt='';for await(const part of process.stdin)prompt+=part;
+fs.appendFileSync(${JSON.stringify(argsLog)},JSON.stringify(process.argv.slice(2))+'\\n');
+const emit=value=>console.log(JSON.stringify(value)),capped=prompt.includes('CAP-HIT'),cost=capped?0.31:0.02;
+const usage={usage:{input_tokens:100,output_tokens:10},modelUsage:{'claude-sonnet':{inputTokens:700,outputTokens:70,cacheReadInputTokens:0,cacheCreationInputTokens:0,costUSD:cost}},total_cost_usd:cost};
+emit({type:'system',subtype:'init',session_id:'claude-switch',model:'claude-sonnet'});
+if(prompt.includes('CAP-QUIET')){emit({type:'result',subtype:'error_max_budget_usd',session_id:'claude-switch',is_error:true});}
+else if(capped){emit({type:'result',subtype:'error_max_budget_usd',session_id:'claude-switch',is_error:true,...usage});}
+else{emit({type:'assistant',message:{id:'answer',content:[{type:'text',text:'Done'}]}});emit({type:'result',subtype:'success',session_id:'claude-switch',result:'Done',is_error:false,...usage});}
+`, { mode: 0o700 });
+  const brokers = [];
+  const open = () => {
+    const broker = new Broker({ workspace, dataDir, bins: { codex, claude, gemini: path.join(root, 'none') }, handoffPreferences: () => ({ threshold: 0, automatic: false }) });
+    broker.availableProviders = () => ['codex', 'claude'];
+    broker.handoff.account = async provider => ({ installed: true, authenticated: true, billingSource: provider === 'claude' ? claudeBilling : 'subscription' });
+    broker.handoff.modelRows = async provider => provider === 'codex' ? [{ id: 'gpt-codex', displayName: 'Codex' }] : [{ id: 'claude-sonnet', displayName: 'Sonnet' }];
+    const fresh = () => new Date().toISOString(), resets = hours => new Date(Date.now() + hours * 3600000).toISOString();
+    // Mid-week, so the rest is kept rather than spent before a reset (#153).
+    broker.checks.usage = async provider => ({ available: true, checkedAt: fresh(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: resets(2) }, { label: 'Weekly', usedPercent: provider === 'codex' ? 98 : 20, resetsAt: resets(72) }] });
+    brokers.push(broker); return broker;
+  };
+  t.after(async () => { try { await Promise.all(brokers.map(broker => broker.close())); } finally { fs.rmSync(root, { recursive: true, force: true }); } });
+  const broker = open(), c = broker.get(broker.create().id);
+  broker.setRouting(c, { mode: 'smart' });
+  if (policy) broker.budget.setPolicy(c, policy);
+  const start = (text, extra = {}) => { broker.start(c, { text, provider: 'codex', model: 'gpt-codex', mode: 'edit', approvalPolicy: 'auto', requestId: `switch-${text.length}-${Date.now()}`, routing: { mode: 'smart', tier: 'standard', reason: 'Estimate' }, ...extra }); return broker.running; };
+  const claudeArgs = () => fs.existsSync(argsLog) ? fs.readFileSync(argsLog, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+  return { broker, c, open, start, claudeArgs };
+}
+
+test('routing can switch agents near a limit while the task has a measured limit, and the usage is booked to the agent that worked', { skip: scriptCLIs }, async t => {
+  const env = switchSetup(t, { policy: { maxTokens: 50000, maxConcurrent: 1 } });
+  await env.start('Fix the parser').done;
+  assert.equal(env.c.lastRun.provider, 'claude', 'The run\'s own reservation is not another worker, so the switch goes ahead.');
+  assert.equal(env.c.lastRun.status, 'complete');
+  assert.equal(env.c.lastRun.model, 'claude-sonnet');
+  const taskId = env.c.lastRun.taskId;
+  assert.deepEqual(state(env.c, taskId).tokens, { input: 700, output: 70, cacheWrite: 0, cacheRead: 0 }, 'Claude\'s session total, read by Claude\'s rules.');
+  assert.deepEqual([state(env.c, taskId).runs, state(env.c, taskId).handoffs], [1, 0], 'Choosing another agent before starting hands nothing off.');
+  const ledger = (await env.broker.ledger(env.c)).runs.at(-1);
+  assert.deepEqual([ledger.provider, ledger.model, ledger.usage.input], ['claude', 'claude-sonnet', 700]);
+  await env.broker.close();
+  const reopened = env.open(), c = reopened.get(env.c.id);
+  assert.equal(c.lastRun.provider, 'claude', 'A restart finds the same agent.');
+  assert.deepEqual(state(c, taskId).tokens, { input: 700, output: 70, cacheWrite: 0, cacheRead: 0 });
+});
+
+test('a switch to an agent billed per use needs your consent, and then Claude gets the remaining spend as its own cap', { skip: scriptCLIs }, async t => {
+  const refusedEnv = switchSetup(t, { claudeBilling: 'api', policy: { maxSpendUSD: 0.5 } });
+  await refusedEnv.start('Fix the parser').done;
+  assert.equal(refusedEnv.claudeArgs().length, 0, 'Without consent, an agent billed per use is not a candidate.');
+  assert.equal(refusedEnv.c.lastRun.errorCategory, 'routing');
+  assert.notEqual(refusedEnv.c.lastRun.provider, 'claude');
+
+  const env = switchSetup(t, { claudeBilling: 'api', policy: { maxSpendUSD: 0.5 } });
+  await env.start('Fix the parser', { billingConfirmed: true }).done;
+  assert.equal(env.c.lastRun.provider, 'claude');
+  const args = env.claudeArgs().at(-1);
+  assert.equal(args[args.indexOf('--max-budget-usd') + 1], '0.5', 'The CLI connection is given the native cap.');
+  assert.deepEqual(env.c.lastRun.budgetEnforcement, { spend: 'native', maxSpendUSD: 0.5 });
+  assert.equal(state(env.c).spendUSD, 0.02);
+  assert.equal(env.broker.budget.view(env.c).task.enforcement.spendCaps.native, 1);
+});
+
+test('Claude stopping at its spending cap is one task-limit stop, whether its own cap or the cost it reported got there first', { skip: scriptCLIs }, async t => {
+  const errors = c => c.messages.filter(message => message.role === 'error').map(message => message.text);
+  // Claude reports what it cost, over the cap: Codeshi's own check stops the run first, and Claude's result adds nothing.
+  const reported = switchSetup(t, { claudeBilling: 'api', policy: { maxSpendUSD: 0.3 } });
+  await reported.start('CAP-HIT', { billingConfirmed: true }).done;
+  assert.deepEqual([reported.c.lastRun.provider, reported.c.lastRun.errorCategory], ['claude', 'budget']);
+  assert.equal(errors(reported.c).length, 1, 'One message, not an agent error as well.');
+  assert.match(errors(reported.c)[0], /^Stopped: This task has reached its API spending limit of \$0\.3\./);
+  const view = reported.broker.budget.view(reported.c).task;
+  assert.equal(view.spendUSD, 0.31);
+  assert.equal(view.overages.spendUSD.toFixed(2), '0.01', 'What it went over is reported, not hidden.');
+  assert.equal(view.exceeded.limit, 'maxSpendUSD');
+
+  // Claude stops at its cap without reporting a cost: only its own cap knows, and the stop still says why.
+  const quiet = switchSetup(t, { claudeBilling: 'api', policy: { maxSpendUSD: 0.3 } });
+  await quiet.start('CAP-QUIET', { billingConfirmed: true }).done;
+  assert.deepEqual([quiet.c.lastRun.provider, quiet.c.lastRun.errorCategory], ['claude', 'budget']);
+  assert.equal(errors(quiet.c).length, 1);
+  assert.match(errors(quiet.c)[0], /^Stopped: Claude stopped itself at this task's API spending cap \(\$0\.30 was left when it started\)\. Raise the spending limit in Task limits to continue\./);
+  assert.doesNotMatch(errors(quiet.c)[0], /error_max_budget_usd/);
+  const stopped = quiet.broker.budget.view(quiet.c).task;
+  assert.deepEqual([stopped.stopped.kind, stopped.stopped.native], ['maxSpendUSD', true]);
+  assert.equal(stopped.exceeded.limit, 'spendUsageUnknown', 'A cost never reported is unknown, not zero.');
+  await quiet.broker.close();
+  const reopened = quiet.open(), again = reopened.budget.view(reopened.get(quiet.c.id)).task;
+  assert.deepEqual([again.stopped.native, again.exceeded.limit], [true, 'spendUsageUnknown'], 'The stop, its reason and the unknown cost survive a restart.');
+});

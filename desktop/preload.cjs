@@ -36,8 +36,10 @@ contextBridge.exposeInMainWorld('relayDesktop', Object.freeze({
     return () => ipcRenderer.removeListener('relay:menu-command', listener);
   },
   setMenuState: state => ipcRenderer.send('relay:menu-state', state),
-  // Point and tell (#19): opens a local address in the preview window; what is picked there comes back here.
+  // Point and tell (#19): opens a local address in its own preview window, or brings that window forward (#142); what
+  // is picked there comes back here. closePreviews closes a workspace's windows showing the given addresses.
   openPreview: input => ipcRenderer.invoke('relay:preview:open', input),
+  closePreviews: input => ipcRenderer.invoke('relay:preview:close', input),
   onPreviewPick: callback => {
     const listener = (_event, pick) => callback(pick);
     ipcRenderer.on('relay:preview-pick', listener);

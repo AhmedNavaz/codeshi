@@ -7,6 +7,9 @@
 (root => {
   'use strict';
   const MODES = ['saver', 'smart', 'ultra'];
+  // Which version of these rules chose an agent. Smart results (#139) only compare tasks routed by the same version, so
+  // raise it whenever route(), classify() or the mode plans change what gets chosen.
+  const POLICY_VERSION = 1;
   const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
   const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
   const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
@@ -55,6 +58,14 @@
     return baseThreshold;
   }
 
+  // How soon a window must reset for its leftover allowance to be spent rather than kept (#153). Mid-window, the safety
+  // margin protects the days still to come; this close to a reset, what is left would only expire unused.
+  const BURNDOWN_HOURS = { weekly: 6, daily: 2, short: 0.5 };
+  function burndownHours(row) {
+    const period = windowPeriodHours(row);
+    return period >= 168 ? BURNDOWN_HOURS.weekly : period >= 24 ? BURNDOWN_HOURS.daily : BURNDOWN_HOURS.short;
+  }
+
   function assessQuota(usage, model = null, { now = Date.now(), threshold = 90, staleMs = 15 * 60 * 1000, adaptive = true, workload = null, tier = null } = {}) {
     model ||= usage?.defaultModel || null;
     const all = (usage?.available && Array.isArray(usage.windows) ? usage.windows : []).filter(row => row && !row.disabled);
@@ -74,7 +85,12 @@
     });
     const state = windows.some(row => row.state === 'exhausted') ? 'exhausted' : old || windows.some(row => row.state === 'stale') ? 'stale'
       : unresolvedModel || !observedAt || !windows.length || windows.some(row => row.state === 'unknown') ? 'unknown' : windows.some(row => row.state === 'near') ? 'near' : 'ok';
+    // Near its limit only in windows about to reset, with room in every other one: Auto may spend what is left (#153).
+    const resetsIn = row => { const ms = row.resetsAt ? Date.parse(row.resetsAt) : NaN; return Number.isFinite(ms) && ms > now ? (ms - now) / 3600000 : null; };
+    const nearRows = windows.filter(row => row.state === 'near');
+    const expiring = state === 'near' && nearRows.every(row => resetsIn(row) !== null && resetsIn(row) <= burndownHours(row)) ? nearRows.reduce((last, row) => !last || Date.parse(row.resetsAt) > Date.parse(last.resetsAt) ? row : last, null) : null;
     return { state, windows, observedAt, usedPercent: ['ok', 'near', 'exhausted'].includes(state) ? Math.max(...windows.map(row => row.usedPercent ?? 0)) : null,
+      ...(expiring ? { burndown: { label: expiring.label, resetsAt: expiring.resetsAt, remaining: Math.max(0, 100 - expiring.usedPercent) } } : {}),
       ...(['unknown', 'stale'].includes(state) ? { reason: state === 'stale' ? (usage?.timedOut ? 'Usage check timed out.' : (usage?.reason && usage.reason !== 'Usage needs a fresh reading.') ? usage.reason : 'Usage needs a fresh reading.') : usage?.reason || 'Fresh plan usage is not reported for this model.' } : {}) };
   }
   const quotaText = quota => !quota || ['unknown', 'stale'].includes(quota.state) ? `Plan usage ${quota?.state || 'unknown'}${quota?.reason ? ': ' + quota.reason : ''}`
@@ -111,6 +127,18 @@
     if (hours < 1) return `in ${Math.max(1, Math.round(hours * 60))}m`;
     if (hours < 6) return `in ${Math.round(hours)}h`;
     return new Date(ms).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+  }
+
+  // Says why an agent near its limit is still used (#153), for the run's reason and its activity row.
+  function remainderText(provider, quota, { asked = false, now = Date.now() } = {}) {
+    const name = agentNames[provider] || provider;
+    const tightest = (quota?.windows || []).filter(row => row.state === 'near').reduce((top, row) => !top || row.usedPercent > top.usedPercent ? row : top, null);
+    const row = !asked && quota?.burndown || tightest;
+    if (!row) return `Spending ${name}'s remaining allowance${asked ? ' as you asked' : ''}`;
+    const left = Math.max(0, Math.round(100 - (row.usedPercent ?? 100 - (row.remaining ?? 0)))), when = resetDayName(row.resetsAt, now);
+    return asked
+      ? `Spending ${name}'s remaining allowance as you asked (${row.label}: ${left}% left${when ? `, resets ${when}` : ''})`
+      : `Spending ${name}'s remaining ${row.label} allowance (${left}% left) before it resets${when ? ` ${when}` : ''}`;
   }
 
   // Work that needs the strongest reasoning, named so the reason can say what was recognised.
@@ -239,7 +267,9 @@
   // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels, usualSpend }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
   // limit is skipped, and allowance is spent where it resets soonest while respecting continuity.
-  function route({ text, attachments = 0, context = null, assessment = null, mode = 'smart', candidates = [], current = null, allowApi = false, quotaThreshold = 95, now = Date.now() }) {
+  // allowNear: you chose "Proceed with remaining allowance", so an agent past the safety threshold but not at its limit
+  // may still be chosen, after every agent with ordinary headroom.
+  function route({ text, attachments = 0, context = null, assessment = null, mode = 'smart', candidates = [], current = null, allowApi = false, allowNear = false, quotaThreshold = 95, now = Date.now() }) {
     mode = normalizeMode(mode) || 'smart';
     const task = assessment && TIERS.includes(assessment.tier) && typeof assessment.reason === 'string' ? assessment : classify(text, { attachments, context });
     const [tier, baseEffort] = plan[mode][task.tier];
@@ -264,6 +294,7 @@
       if (usable.length) return usable;
       // Weekly and model-specific windows count separately (#128): an exhausted Opus weekly window leaves Claude
       // usable at the next tier down (never light for deep work), and Ultra steps down one tier when needed.
+      let fallbackChoices = [];
       if (preferred) {
         const preferredTierIndex = TIERS.indexOf(modelTier(preferred));
         const nextTier = preferredTierIndex > 0 ? TIERS[preferredTierIndex - 1] : null;
@@ -272,12 +303,20 @@
           const fallbackPreferred = pickModel(fallbackRows, nextTier);
           if (fallbackPreferred) {
             const fallbackOptions = [fallbackPreferred, ...fallbackRows.filter(row => row !== fallbackPreferred)];
-            const fallbackChoices = fallbackOptions.map(model => decorate(model, true, preferred, choices[0].quota));
+            fallbackChoices = fallbackOptions.map(model => decorate(model, true, preferred, choices[0].quota));
             const fallbackUsable = fallbackChoices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
             if (fallbackUsable.length) return fallbackUsable;
           }
         }
       }
+      // Past the safety margin but not at the limit, allowance is still spent rather than the work paused (#153): when
+      // the window resets soon enough that it would expire unused, or when you chose "Proceed with remaining allowance".
+      // The strongest model comes first; a tier down is tried before pausing.
+      const spendable = row => row.quota.state === 'near' && (allowNear || Boolean(row.quota.burndown));
+      const remaining = choices.filter(spendable);
+      if (remaining.length) return remaining;
+      const remainingBelow = fallbackChoices.filter(spendable);
+      if (remainingBelow.length) return remainingBelow;
       skipped.push(`${agentNames[candidate.provider]}: ${quotaText(choices[0].quota)}`);
       return [];
     });
@@ -294,6 +333,9 @@
       return Math.min(15, Math.max(4, base * 0.35));
     };
     const score = candidate => {
+      // An agent near its limit comes last, and among those, the one with the most allowance left to spend: running out
+      // partway costs more than starting a new session.
+      if (candidate.quota.state === 'near') return -2000 + spendabilityOf(candidate);
       if (candidate.quota.state !== 'ok') return -1000 + continuityBonus(candidate);
       const stepPenalty = candidate.steppedDown ? 400 : 0;
       const roomPenalty = candidate.shortRoom && !candidate.shortRoom.resetsSoon ? 200 : 0;
@@ -301,9 +343,12 @@
     };
     const order = ['codex', 'claude', 'gemini'];
     const chosen = [...pool].sort((a, b) => score(b) - score(a) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
-    const model = chosen.selectedModel, effort = pickEffort(effortsOf(model), wantedEffort);
+    // On the last of an allowance, the top effort level isn't used: it can spend the rest in one turn (#153).
+    const spendingRemainder = chosen.quota.state === 'near';
+    const model = chosen.selectedModel, effort = pickEffort(effortsOf(model), spendingRemainder && wantedEffort === 'highest' ? 'high' : wantedEffort);
     const plannedHandoff = Boolean(chosen.shortRoom);
     const why = [task.reason[0].toUpperCase() + task.reason.slice(1)];
+    if (spendingRemainder) why.push(remainderText(chosen.provider, chosen.quota, { asked: allowNear && !chosen.quota.burndown, now }));
 
     // Explain stepping down one tier when a strong model's allowance was unavailable.
     if (chosen.steppedDown && chosen.steppedDownFrom && model) {
@@ -345,6 +390,7 @@
       if (allowanceNote) why.push(allowanceNote);
     }
 
+
     if (plannedHandoff) {
       why.push(`${agentNames[chosen.provider]} has ${Math.round(chosen.shortRoom.remaining)}% left before its reset (usual ${task.tier} run ~${Math.round(chosen.shortRoom.usual)}%), so a handoff is planned`);
     }
@@ -359,6 +405,7 @@
       reason: why.join(' · '),
       ...(chosen.steppedDown ? { steppedDown: true } : {}),
       ...(plannedHandoff ? { plannedHandoff: true } : {}),
+      ...(spendingRemainder ? { remainder: chosen.quota.burndown ? 'expiring' : 'asked' } : {}),
     };
     return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
@@ -461,5 +508,5 @@
     return results;
   }
 
-  root.relayRouting = { MODES, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, windowApplies, windowSpendability, bindingWindow, replay };
+  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);
