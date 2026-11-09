@@ -113,6 +113,23 @@ test('status checks never report a slow CLI as missing or make the conversation 
   const kept = (await known.status()).providers.claude;
   assert.equal(kept.available, true); assert.equal(kept.version, 'fake 1.0', 'A timed-out recheck keeps the last known result.'); assert.equal(kept.errorCategory, undefined);
 });
+test('status starts each CLI again only when the CLI changes, not on every refresh', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-status-'));
+  const broker = new Broker({ workspace: root, dataDir: path.join(root, 'data'), bins: { claude: f.bin, codex: f.bin } });
+  t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const calls = () => fs.readFileSync(f.root + '/calls', 'utf8').trim().split('\n').length;
+  await broker.status();
+  assert.equal(calls(), 2, 'Claude and Codex are each checked once');
+  // The window asks for status every 15 seconds while it is shown.
+  for (let i = 0; i < 3; i++) { broker.providerStatusCheckedAt -= 15000; await broker.status(); await broker.providerStatusPending; }
+  assert.equal(calls(), 2, 'an unchanged CLI is not started again');
+  fs.appendFileSync(f.bin, '\n// updated\n');
+  await broker.status(); await broker.providerStatusPending;
+  assert.equal(calls(), 4, 'an updated CLI is checked again');
+  broker.providerStatusCheckedAt -= 5 * 60 * 1000;
+  await broker.status(); await broker.providerStatusPending;
+  assert.equal(calls(), 6, 'and every CLI is checked again after five minutes');
+});
 test('Claude auth nonzero output keeps the existing parse behavior', { skip: scriptCLIs }, async t => {
   const f = fixture(t, { authCode: 1, output: '{"loggedIn":false,"authMethod":"api_key"}' });
   const result = await accountStatus('claude', { bin: f.bin });

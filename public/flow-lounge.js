@@ -46,6 +46,12 @@
   let snowClumps = [];
   let cachedObstacles = [];
   let lastObstacleUpdate = 0;
+  // Weather is ambient, so it is drawn at most 30 times a second. Its motion is set in steps of a 60 Hz frame: each
+  // drawn frame runs the steps for the time that has passed and draws the last, so a 120 Hz display neither speeds
+  // the weather up nor draws it more often.
+  const WEATHER_FRAME_MS = 1000 / 30, WEATHER_STEP_MS = 1000 / 60;
+  let lastWeatherFrame = null, weatherLag = 0;
+  const reducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
 
   function updateObstacleRects() {
     const rects = [];
@@ -200,11 +206,26 @@
   function drawWeather(time) {
     weatherAnimId = null;
     if (!weatherShown() || document.hidden || !weatherCtx || !weatherCanvas) return;
+    // Clear, and any weather while the system asks for reduced motion, is drawn once as an empty sky and then stops.
+    const still = weatherMode === "clear" || reducedMotion();
+    let steps = 1;
+    if (!still && lastWeatherFrame !== null) {
+      const since = time - lastWeatherFrame;
+      if (since < WEATHER_FRAME_MS - 1) {
+        weatherAnimId = safeRequestAnim(drawWeather);
+        return;
+      }
+      // After a long gap, such as a hidden window, the weather catches up by a few steps at most.
+      weatherLag = Math.min(weatherLag + since, 4 * WEATHER_STEP_MS);
+      steps = Math.floor(weatherLag / WEATHER_STEP_MS);
+      weatherLag -= steps * WEATHER_STEP_MS;
+    }
+    lastWeatherFrame = time;
     const ctx = weatherCtx;
     const w = weatherCanvas.width, h = weatherCanvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    if (weatherMode === "clear") {
+    if (still) {
       return;
     }
 
@@ -213,9 +234,18 @@
       updateObstacleRects();
     }
 
+    for (let step = 1; step <= steps; step++) stepWeather(step === steps ? ctx : null, w, h);
+
+    if (weatherShown()) weatherAnimId = safeRequestAnim(drawWeather);
+  }
+
+  // One 60 Hz step of rain or snow. It draws only when given the canvas context: the last step of a drawn frame.
+  function stepWeather(ctx, w, h) {
     if (weatherMode === "rain") {
-      ctx.lineWidth = 1.3;
-      ctx.strokeStyle = "rgba(147, 197, 253, 0.45)";
+      if (ctx) {
+        ctx.lineWidth = 1.3;
+        ctx.strokeStyle = "rgba(147, 197, 253, 0.45)";
+      }
 
       for (let i = 0; i < rainDrops.length; i++) {
         const d = rainDrops[i];
@@ -275,10 +305,12 @@
         } else {
           d.x = nextX;
           d.y = nextY;
-          ctx.beginPath();
-          ctx.moveTo(d.x, d.y);
-          ctx.lineTo(d.x + d.vx * (d.len / d.vy), d.y - d.len);
-          ctx.stroke();
+          if (ctx) {
+            ctx.beginPath();
+            ctx.moveTo(d.x, d.y);
+            ctx.lineTo(d.x + d.vx * (d.len / d.vy), d.y - d.len);
+            ctx.stroke();
+          }
         }
       }
 
@@ -295,6 +327,7 @@
           continue;
         }
 
+        if (!ctx) continue;
         ctx.fillStyle = `rgba(186, 230, 253, ${Math.max(0, sp.alpha)})`;
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, sp.r, 0, Math.PI * 2);
@@ -302,7 +335,7 @@
       }
 
       // Draw and update ripples on obstacles
-      ctx.lineWidth = 1;
+      if (ctx) ctx.lineWidth = 1;
       for (let i = rainRipples.length - 1; i >= 0; i--) {
         const rp = rainRipples[i];
         rp.rx += rp.growth;
@@ -312,6 +345,7 @@
           rainRipples.splice(i, 1);
           continue;
         }
+        if (!ctx) continue;
         ctx.strokeStyle = `rgba(186, 230, 253, ${Math.max(0, rp.alpha)})`;
         ctx.beginPath();
         if (ctx.ellipse) {
@@ -340,7 +374,7 @@
           continue;
         }
 
-        if (sn.y < -10 || sn.y > h + 10 || sn.x < -10 || sn.x > w + 10) continue;
+        if (!ctx || sn.y < -10 || sn.y > h + 10 || sn.x < -10 || sn.x > w + 10) continue;
 
         ctx.fillStyle = `rgba(255, 255, 255, ${Math.max(0, sn.alpha)})`;
         ctx.beginPath();
@@ -385,6 +419,7 @@
           continue;
         }
 
+        if (!ctx) continue;
         ctx.fillStyle = `rgba(255, 255, 255, ${Math.max(0, c.alpha)})`;
         ctx.beginPath();
         ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
@@ -536,15 +571,15 @@
         } else {
           f.x = nextX;
           f.y = nextY;
-          ctx.fillStyle = `rgba(255, 255, 255, ${f.alpha})`;
-          ctx.beginPath();
-          ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
-          ctx.fill();
+          if (ctx) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${f.alpha})`;
+            ctx.beginPath();
+            ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
     }
-
-    if (weatherShown()) weatherAnimId = safeRequestAnim(drawWeather);
   }
 
   function setWeatherMode(mode) {

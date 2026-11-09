@@ -40,6 +40,8 @@ import { verificationForRun } from './verification.mjs';
 import { applyOrchestration, checkPlanning, orchestrationAction, planningRequest, planningResult, restartedPlanning } from './orchestration.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
+// Which file a command is, and which version of it: installing, moving or updating a CLI changes this.
+const fileIdentity = file => { try { const stat = fs.statSync(file); return [file, stat.size, stat.mtimeMs, stat.ino]; } catch { return [file]; } };
 const transportFor = (provider, transport, configured) => transport === 'auto' ? provider === 'gemini' ? 'acp' : configured ? 'cli' : provider === 'codex' ? 'app-server' : 'sdk' : transport;
 const MODES = ['edit', 'read'];
 export const APPROVAL_POLICIES = ['ask', 'auto'];
@@ -796,10 +798,14 @@ export class Broker extends EventEmitter {
   }
 
   async status() {
-    if (!this.providerStatus || Date.now() - this.providerStatusCheckedAt >= 10000) {
+    // Checking starts every agent CLI with --version, and the window asks for status every 15 seconds while it is
+    // shown. So a result stands until a CLI is installed, moved or updated, or for five minutes.
+    const bins = Object.fromEntries(PROVIDERS.map(provider => [provider, resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot })]));
+    const identity = JSON.stringify(PROVIDERS.map(provider => fileIdentity(bins[provider])));
+    if (!this.providerStatus || identity !== this.providerStatusIdentity || Date.now() - this.providerStatusCheckedAt >= 5 * 60 * 1000) {
       if (!this.providerStatusPending) {
         this.providerStatusPending = Promise.all(PROVIDERS.map(async provider => {
-          const bin = resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot });
+          const bin = bins[provider];
           this.bins[provider] = bin;
           if (provider === 'gemini' && isAntigravityACP(bin)) return [provider, { installed: true, available: true, path: bin, authenticated: 'unknown', billingSource: 'unknown', capabilities: { ...capabilities(provider), readOnly: 'unavailable' } }];
           const result = bin ? await probeCli(bin, ['--version'], 4000) : null;
@@ -811,6 +817,7 @@ export class Broker extends EventEmitter {
         })).then(entries => {
           this.providerStatus = Object.fromEntries(entries);
           this.providerStatusCheckedAt = Date.now();
+          this.providerStatusIdentity = identity;
         }).finally(() => { this.providerStatusPending = null; });
         // A background check that nobody awaits must not become an unhandled rejection.
         this.providerStatusPending.catch(() => {});
