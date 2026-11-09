@@ -4,7 +4,7 @@ The first publication step was completed on 2026-11-08: created #131 (backend ta
 
 The 17 append-only updates from Issue 17 onward remain unpublished drafts. Preserve current issue states and shipped milestones; re-read each current issue body and comments before applying its draft so newer discussion is not overwritten.
 
-The canonical product split is in [ROADMAP.md](../ROADMAP.md#normal-and-flow-the-agreed-execution-split), with backend boundaries in the [core roadmap](core-roadmap.md#normal-and-flow-execution-contract). The implementation of #131 shipped in 0.34.1, described in [Task execution policy](execution-policy.md). Unified lifecycle selection in #12 and board/schedule execution in #132 remain follow-ups.
+The canonical product split is in [ROADMAP.md](roadmap-details.md#normal-and-flow-the-agreed-execution-split), with backend boundaries in the [core roadmap](core-roadmap.md#normal-and-flow-execution-contract). The implementation of #131 shipped in 0.34.1, described in [Task execution policy](execution-policy.md). Unified lifecycle selection in #12 and board/schedule execution in #132 remain follow-ups.
 
 ## November 2026 feedback tracking
 

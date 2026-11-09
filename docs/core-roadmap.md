@@ -10,7 +10,7 @@ Codeshi cannot increase a provider's subscription allowance, change its reset ru
 
 ## Flow feedback follow-ups
 
-The November 2026 reports extend existing work rather than implying that the focused Flow layout already manages every decision. See the [report-to-issue map](../ROADMAP.md#flow-feedback-follow-ups).
+The November 2026 reports extend existing work rather than implying that the focused Flow layout already manages every decision. See the [report-to-issue map](roadmap-details.md#flow-feedback-follow-ups).
 
 - **Fresh routing evidence (#134):** shipped in 0.35.0. Join or refresh account/usage probes on first Send within a bounded deadline, show probing phase in Flow, and progressively recheck completed readings before failing. Cover cold/stale caches, slow/concurrent probes and Stop without manufacturing fresh timestamps, permitting stale quota, or allowing duplicate submissions.
 - **Admission and handoff (#12, #135):** shipped in 0.35.0. Adaptive quota thresholds evaluate window duration, reset cadence, and workload size instead of static 90% cutoffs. Autonomous handoff execution in Flow mode transitions seamlessly under task execution policy (#131) without surfacing manual suggestion cards.
@@ -37,7 +37,7 @@ Before closing the issue, capture reproducible before/after profiles for idle No
 
 ## Normal and Flow execution contract
 
-Agreed direction, not released behavior: **Normal** is explicit agent/settings/task control; **Flow** delegates execution decisions for an authorized outcome. The [feature ownership matrix](../ROADMAP.md#normal-and-flow-the-agreed-execution-split) covers shipped capabilities and planned features. Native agent planning/tool loops, context handling, reviewed memory/skills, explicit queues and exact user-configured workflows remain available in Normal. Budgets, approvals and recovery protect both modes.
+Agreed direction, not released behavior: **Normal** is explicit agent/settings/task control; **Flow** delegates execution decisions for an authorized outcome. The [feature ownership matrix](roadmap-details.md#normal-and-flow-the-agreed-execution-split) covers shipped capabilities and planned features. Native agent planning/tool loops, context handling, reviewed memory/skills, explicit queues and exact user-configured workflows remain available in Normal. Budgets, approvals and recovery protect both modes.
 
 ### Backend mode policy and safe takeover
 
