@@ -4,7 +4,22 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-09
+
 ### Added
+
+- **Plan a message as steps with Orchestrate, in Flow and Normal mode** ([#97](https://github.com/AhmedNavaz/codeshi/issues/97), [#117](https://github.com/AhmedNavaz/codeshi/pull/117)).
+  - Ask connected agents to plan complex goals into discrete sequential steps with cost and timing previews before executing anything.
+  - Normal mode planning toggle in the composer arms read-only agent planning without requiring Flow routing.
+  - Dedicated **Plan** side panel tab on the right alongside Brief, Tasks, and Agents with custom workflow pipeline iconography.
+  - Inspect, reorder, edit, write, or discard step plans directly before running them.
+
+- **Workspace inline image previews in chat** ([#80](https://github.com/AhmedNavaz/codeshi/issues/80), [#150](https://github.com/AhmedNavaz/codeshi/pull/150)).
+  - Image files referenced in agent replies display inline thumbnails directly in the chat transcript.
+  - Clicking an image opens full-size previews in the preview pane with zoom and pan controls.
+
+- **Desktop preview vertical right-hand Stack and API inspector** ([#143](https://github.com/AhmedNavaz/codeshi/issues/143), [#147](https://github.com/AhmedNavaz/codeshi/pull/147)).
+  - Relocated the Development, Stack, and API inspectors to a vertical collapsible sidebar on the right side of the desktop preview, allowing the live application page to preserve full vertical layout height.
 
 - **Flow card improvements, binding windows and working agent parity** ([#107](https://github.com/AhmedNavaz/codeshi/issues/107)).
   - *What's next*: Replaced clipped separate-task text and cramped buttons with readable task titles, running lane activity (`Claude · on “...”`), accessible status text, a subtle pulsing indicator respecting `prefers-reduced-motion`, and dedicated "Open task" action buttons that keep background tasks reachable at narrow widths.
@@ -14,9 +29,9 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ### Fixed
 
-- **Project review survives long prerequisites and in-use ports** (#141). Prerequisite notes in a launch map are now trimmed, truncated to 120 characters and capped at ten per profile instead of rejecting the whole map, so preparation no longer fails with "List at most ten short prerequisites per profile." An occupied service port blocks only its own service (and anything that depends on it) rather than the entire launch, leaving unrelated services running; the Flow review card lists each busy port and offers **Attach to the running service** when a healthy server already answers its readiness URL, or **Use another port** to re-prepare the map. Codeshi still never adopts or terminates a process it did not start.
+- **Project review survives long prerequisites and in-use ports** ([#141](https://github.com/AhmedNavaz/codeshi/issues/141), [#148](https://github.com/AhmedNavaz/codeshi/pull/148)). Prerequisite notes in a launch map are now trimmed, truncated to 120 characters and capped at ten per profile instead of rejecting the whole map, so preparation no longer fails with "List at most ten short prerequisites per profile." An occupied service port blocks only its own service (and anything that depends on it) rather than the entire launch, leaving unrelated services running; the Flow review card lists each busy port and offers **Attach to the running service** when a healthy server already answers its readiness URL, or **Use another port** to re-prepare the map. Codeshi still never adopts or terminates a process it did not start.
 - **Smart routing near-quota graceful provider fallback in Flow mode** ([#144](https://github.com/AhmedNavaz/codeshi/issues/144)). In Flow mode with Smart routing, when a candidate provider's binding window is near its quota limit (e.g. weekly window at 97% used) at the pre-flight launch check, Codeshi now automatically re-routes to an eligible alternative subscription provider or model tier instead of hard-pausing prompt queue progression before launch. If no alternative provider or model has usable quota, the queue pauses with clear inline action controls to proceed with remaining allowance or switch providers directly without losing queue position.
-
+- **Test suite stability and teardown races** ([#146](https://github.com/AhmedNavaz/codeshi/pull/146), [#149](https://github.com/AhmedNavaz/codeshi/pull/149), [#151](https://github.com/AhmedNavaz/codeshi/pull/151)). Resolved race conditions in Codex async question tests, usage watcher broker closure waits, Windows file unlinking during test directory cleanup, and mock agent startup timers.
 ## [0.36.0] - 2026-11-08
 
 ### Added
@@ -726,3 +741,6 @@ First public release.
 [0.32.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.32.0
 [0.31.1]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.31.1
 [0.30.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.30.0
+
+[0.37.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.37.0
+[0.36.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.36.0
