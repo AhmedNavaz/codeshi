@@ -55,6 +55,8 @@ html:has(body.phone), body.phone { position: fixed; inset: 0; overflow: hidden; 
 .m-error { display: flex; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--danger-bg); color: var(--danger); font-size: 14px; }
 .m-error .icon { width: 18px; height: 18px; margin-top: 2px; }
 .m-note { color: var(--muted); font-size: 13px; line-height: 1.45; }
+/* A planner's reply (Orchestrate) reads as one line about the plan it proposed. */
+.m-plan { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
 .fold { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow: hidden; }
 .m-note.fold { -webkit-line-clamp: 2; }
 .fold.open { display: block; -webkit-line-clamp: unset; }

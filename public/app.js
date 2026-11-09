@@ -1080,6 +1080,12 @@
       const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the reviewer…')); body.append(raw);
       row.append(heading, body, actions); return row;
     }
+    if (!user && message.orchestrationId) {
+      const plan = state.conversation?.orchestrations?.find(item => item.id === message.orchestrationId);
+      body.append(element('p', '', window.relayOrchestration?.describe(plan) || (streaming ? 'Planning the steps…' : 'The planner’s response.')));
+      const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the planner…')); body.append(raw);
+      row.append(heading, body, actions); return row;
+    }
     const text=message.text || (streaming ? '' : 'No text response.');
     const parts=text.split(/```([^\n`]*)\n([\s\S]*?)```/g);
     replyImages = user || !message.id ? null : { scope: message.id, seen: new Set() };
@@ -1090,6 +1096,7 @@
     row.append(body);
     // A prompt stays at the top of its turn while the results scroll past (see .message-prompt). A long one shows its
     // first lines until opened, so it never fills the view; an opened one scrolls normally.
+    if (user && message.orchestrationId) row.insertBefore(element("div", "message-orchestrate-label", window.relayOrchestration?.label(state.conversation?.orchestrations?.find(item => item.id === message.orchestrationId)) || "Orchestrate"), body);
     if (user && message.retry) { row.classList.add("message-retry"); row.insertBefore(element("div", "message-retry-label", "Sent by Codeshi after the tests failed"), body); }
     if (user && !message.steer) {
       row.classList.add("message-prompt");
@@ -1145,7 +1152,7 @@
   function renderMessages(forceScroll = false) {
     const c = state.conversation, messages = c?.messages || [];
     const folders = state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path);
-    const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
+    const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.orchestrations?.map(plan => [plan.id, plan.status, window.relayOrchestration?.describe(plan)]), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
     const scope = JSON.stringify([state.projectId, c?.id, folders]);
     const noProvider=state.ready&&!messages.length&&!['codex','claude','gemini'].some(available);
     ui.empty.hidden = messages.length > 0 || !state.ready || noProvider || Boolean(state.taskDraft);
@@ -1170,6 +1177,7 @@
     const messageExtra = message => {
       let extra = "";
       if (message.reviewId) { const review = c?.reviews?.find(item => item.id === message.reviewId); extra += JSON.stringify([Boolean(review), review?.summary]); }
+      if (message.orchestrationId) { const plan = c?.orchestrations?.find(item => item.id === message.orchestrationId); extra += (message.role === "user" ? window.relayOrchestration?.label(plan) : window.relayOrchestration?.describe(plan)) || ""; }
       if (message.routing) extra += (window.relayModelPicker?.modelName?.(message.provider, message.routing.model) || "") + (window.relayRouting?.modeNames?.[message.routing.mode] || "");
       if (message.attachments?.length && window.relayFiles) extra += "attachments";
       if (!message.provider) extra += c?.provider || "";
@@ -1413,21 +1421,24 @@
   }
   // Auto (#12): Codeshi picks the agent, model and effort for each message when it is sent.
   const autoRouting = () => !state.localSelections[state.projectId] && state.conversation?.routing ? state.conversation.routing : null;
-  // With a mode given, says what that mode would do with the text before it is chosen (Flow mode, #107).
-  function routeFor(text, attachments = 0, mode = null) {
+  // With a mode given, says what that mode would do with the text before it is chosen (Flow mode, #107). Orchestrate (#12)
+  // asks the same rules who plans (plan: a read-only run) and who does each step (tier: as planned; only: the agent the
+  // person chose for that step).
+  function routeFor(text, attachments = 0, mode = null, { plan = false, tier = null, only = null } = {}) {
     const routing = autoRouting(); if ((!routing && !mode) || !window.relayRouting) return null;
     const project = state.projects.find(item => item.id === state.projectId);
-    const candidates = ["codex", "claude", "gemini"].map(provider => {
+    const candidates = ["codex", "claude", "gemini"].filter(provider => !only || provider === only).map(provider => {
       const info = connection(provider);
       const antigravity = info.account?.authMode === "google-oauth" || info.account?.source === "antigravity-acp";
       const folderCount = state.taskId || state.taskDraft ? 1 : foldersFor(project).length;
-      const unsupportedRead = state.mode === "read" && (antigravity || info.account?.capabilities?.readOnly === "unavailable");
+      const unsupportedRead = (state.mode === "read" || plan) && (antigravity || info.account?.capabilities?.readOnly === "unavailable");
       const unsupportedFolders = antigravity ? folderCount > 1 && info.account?.capabilities?.additionalDirectories !== true : folderCount > 6;
       const unsupported = provider === "gemini" && (unsupportedRead || unsupportedFolders);
       return { provider, eligible: !info.blocked && info.account?.authenticated !== false && !unsupported && (!state.conversation?.taskPolicy?.allowedProviders || state.conversation.taskPolicy.allowedProviders.includes(provider)), billingSource: info.account?.billingSource || "unknown", usage: window.relayUsage?.snapshot?.(provider), allowedModels: state.conversation?.taskPolicy?.allowedModels?.[provider] || null, models: window.relayModelPicker?.models?.(provider) || [] };
     });
     const previousRequest = state.conversation?.messages?.findLast(message => message.role === 'user' && !message.reviewId && !message.steer && !isContinuationPrompt(message))?.text || state.conversation?.context?.goal || '';
-    return window.relayRouting.route({ text, attachments, context: previousRequest, mode: mode || routing.mode, allowApi: routing?.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider });
+    const options = { text, attachments, context: previousRequest, mode: mode || routing.mode, allowApi: routing?.allowApi === true, candidates, current: state.conversation?.lastRun?.provider || state.provider, ...(tier ? { assessment: window.relayRouting.plannedStep(tier) } : {}) };
+    return plan ? window.relayRouting.planner(options) : window.relayRouting.route(options);
   }
   async function setRouting(choice) {
     if (!state.conversation) await ensureCanonicalConversation();
@@ -1908,7 +1919,8 @@
     }
     const incomplete = ["incomplete", "interrupted"].includes(state.conversation?.status);
     const lastMessage = state.conversation?.messages?.at(-1);
-    const canContinue = !running && state.conversation?.lastRun?.purpose !== 'review' && (incomplete || lastMessage?.role === "error");
+    // A review or a planning run is never continued: continuing would do the work with the conversation's own access.
+    const canContinue = !running && !['review', 'plan'].includes(state.conversation?.lastRun?.purpose) && (incomplete || lastMessage?.role === "error");
     const resume = state.conversation?.resume;
     // While Codeshi works out where a task goes after a limit (#91), that's what shows, not the choices it may not need.
     const switching = state.conversation?.limitSwitching;
@@ -2274,32 +2286,40 @@
     finally { state.pending = null; render(); }
   }
 
-  async function run(continuing = false) {
-    const attachments = continuing ? [] : window.relayFiles?.ids() || [];
-    const text = ui.input.value.trim() || (attachments.length ? "Please review the attached files." : "");
-    if (!continuing && text === '/compact') {
+  // again: Plan again (Orchestrate) sends a planned message once more, with its files, and leaves the message box as it is.
+  async function run(continuing = false, again = null) {
+    const attachments = again ? again.attachments : continuing ? [] : window.relayFiles?.ids() || [];
+    const text = again ? again.text : ui.input.value.trim() || (attachments.length ? "Please review the attached files." : "");
+    if (!continuing && !again && text === '/compact') {
       if (attachments.length) { showNotice('Remove attachments before compacting context. Your draft stays saved.'); return; }
       compactCurrentContext({ command: true });
       return;
     }
     if (window.relayFiles?.uploading()) return;
     if (state.pending || state.loading || state.projectSaving || isRunning() || isOtherRunning() || !state.ready || (!state.localSelections[state.projectId] && !(autoRouting() && !continuing) && connection(state.provider).blocked) || (!continuing && !text)) return;
+    const projectAtStart = state.projectId;
     // A local estimate, so a message nothing could take stops here. The server rates the task and makes the final choice.
-    const routed = continuing ? null : routeFor(text, attachments.length);
+    // With Orchestrate on, the server plans with the deepest work the routing mode allows, and the run is read-only.
+    const orchestrate = Boolean(again) || (!continuing && window.relayOrchestration?.armed() === true);
+    const routed = continuing ? null : routeFor(text, attachments.length, null, { plan: orchestrate });
     if (routed?.error) { showNotice(routed.error); return; }
     const provider = routed?.provider || state.provider, model = routed ? routed.model : state.model, effort = routed ? routed.effort : state.effort;
     const routing = routed ? { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } : undefined;
     const mode = state.mode;
     const approvalPolicy = state.approvalPolicy || 'ask';
-    const originalDraft = ui.input.value;
+    const originalDraft = again ? null : ui.input.value;
     const localChoice = state.localSelections[state.projectId] || null;
     if ((state.taskId || state.taskDraft) && localChoice) { showNotice("A task runs on your connected agents for now. Choose one, or send this from Main to use a local model."); return; }
     let automaticReview;
-    try { automaticReview = window.relayAutomaticReview?.submission({ text, attachments, provider, model, mode, approvalPolicy }, { continuing }) || null; }
+    try { automaticReview = again ? null : window.relayAutomaticReview?.submission({ text, attachments, provider, model, mode, approvalPolicy }, { continuing }) || null; }
     catch (error) { showNotice(error.message); return; }
     // An agent that works in one folder, in a workspace with several: the message waits for a choice of folder, then runs as a task there.
-    if (!continuing && !state.taskId && !state.taskDraft && !localChoice && !automaticReview && oneFolderOnly(provider) && foldersFor(currentProject()).length > 1) { askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId: crypto.randomUUID(), originalDraft }); return; }
-    const payloadKey = JSON.stringify([state.projectId,state.conversation?.id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
+    if (!continuing && !orchestrate && !state.taskId && !state.taskDraft && !localChoice && !automaticReview && oneFolderOnly(provider) && foldersFor(currentProject()).length > 1) { askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId: crypto.randomUUID(), originalDraft }); return; }
+    if (orchestrate && automaticReview) { showNotice("Review after doesn’t apply to planning. The plan reviews the combined changes after its last step."); return; }
+    // A new plan replaces the open one: with unsaved edits, the plan card asks first.
+    if (orchestrate && window.relayOrchestration && !(await window.relayOrchestration.mayReplace())) return;
+    if (orchestrate && (state.pending || isRunning() || state.projectId !== projectAtStart)) return;
+    const payloadKey = JSON.stringify([state.projectId,state.conversation?.id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview,orchestrate]);
     const requestId = state.retrySubmission?.key === payloadKey ? state.retrySubmission.id : crypto.randomUUID();
     state.retrySubmission = { ...(state.retrySubmission?.key === payloadKey ? state.retrySubmission : {}), key:payloadKey,id:requestId };
     const projectId = state.projectId;
@@ -2322,7 +2342,7 @@
       }
       if (!state.conversation) await ensureCanonicalConversation();
       const id = state.conversation.id;
-      state.retrySubmission.key = JSON.stringify([state.projectId,id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview]);
+      state.retrySubmission.key = JSON.stringify([state.projectId,id,continuing,text,provider,mode,approvalPolicy,model,effort,attachments,localChoice,automaticReview,orchestrate]);
       let accepted;
       if (localChoice) {
         if (!state.retrySubmission.localContext) {
@@ -2332,11 +2352,12 @@
           state.retrySubmission.localContext = catalog.context;
         }
         await post('/api/local-models/start', { model:localChoice.model, digest:localChoice.digest, task:continuing ? 'Continue the unfinished task from the saved conversation. Inspect current files first.' : text, ...(continuing ? { continuing:true } : {}), attachments, requestId, context:state.retrySubmission.localContext }, projectId);
-      } else accepted = await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
+      } else accepted = await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), ...(orchestrate ? { orchestrate: true } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
       state.retrySubmission = null;
       window.relayAutomaticReview?.accepted(projectId, automaticReview);
-      if (!continuing) window.relayFiles?.accepted(projectId, attachments);
-      if (!continuing && ui.input.value === originalDraft) {
+      if (orchestrate && !again) window.relayOrchestration?.accepted(projectId);
+      if (!continuing && !again) window.relayFiles?.accepted(projectId, attachments);
+      if (!continuing && !again && ui.input.value === originalDraft) {
         ui.input.value = "";
         storedWrite(draftKey(), "");
         storedWrite(draftKey(null), "");
@@ -2356,25 +2377,25 @@
       if (budget?.canExtend && window.relayLimits) {
         if (budget.limit === 'maxRepeatedFailures') {
           showNotice(error.message, async () => {
-            try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing); }
+            try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing, again); }
             catch (failure) { showNotice(failure.message); }
           }, "Extend budget", [{
             label: "Dismiss and retry",
             run: async () => {
               try {
                 await post(endpoint(state.conversation.id, "budget"), { action: 'reset', taskId: budget.taskId }, state.projectId);
-                run(continuing);
+                run(continuing, again);
               } catch (failure) { showNotice(failure.message); }
             }
           }]);
         } else {
-          showNotice(error.message, async () => { try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing); } catch (failure) { showNotice(failure.message); } }, "Allow more");
+          showNotice(error.message, async () => { try { await window.relayLimits.extend(budget.taskId, budget.limit); run(continuing, again); } catch (failure) { showNotice(failure.message); } }, "Allow more");
         }
       }
       else if (budget) showNotice(error.message);
       // The server knew the agent works in one folder before the page did: offer the folders rather than a retry that would fail again.
-      else if (error.details?.folderChoice && !continuing && !state.taskId && !state.taskDraft) askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId, originalDraft });
-      else showNotice(error.message, () => run(continuing));
+      else if (error.details?.folderChoice && !continuing && !orchestrate && !state.taskId && !state.taskDraft) askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId, originalDraft });
+      else showNotice(error.message, () => run(continuing, again));
       await refresh();
     } finally { state.pending = null; render(); ui.input.focus(); }
   }
@@ -2920,7 +2941,7 @@
   window.relayUI = {
     jumpToRun, jumpToMessage, loadEarlierMessages, loadToRun, loadToMessage,
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
-    commands, isRunning, filteredProjects, setRouting, routeFor, showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
+    commands, isRunning, filteredProjects, setRouting, routeFor, planAgain: again => run(false, again), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,
     prepareQuestionAnswer(conversationId, text, projectId = state.projectId) {
       const current = state.projectId === projectId && state.conversation?.id === conversationId && !state.taskDraft;

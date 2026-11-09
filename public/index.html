@@ -60,6 +60,8 @@
     <script src="/agent-review.js" defer></script>
     <script src="/automatic-review.js" defer></script>
     <link rel="stylesheet" href="/automatic-review.css" />
+    <script src="/orchestration.js" defer></script>
+    <link rel="stylesheet" href="/orchestration.css" />
     <script src="/rewind.js" defer></script>
     <script src="/alerts.js" defer></script>
     <script src="/project-commands.js" defer></script>
@@ -211,8 +213,25 @@
           <div id="connection-notice" class="connection-notice" role="status" hidden><span id="connection-notice-text"></span><div class="connection-notice-actions"><button id="connection-install" class="secondary-action" type="button" hidden>How to install ↗</button><button id="connection-action" type="button">Connect account</button></div></div>
           <div id="folder-ask" class="folder-ask" role="group" aria-labelledby="folder-ask-text" hidden><span id="folder-ask-text"></span><div id="folder-ask-choices" class="folder-ask-choices"></div></div>
           <section id="run-plan" class="run-plan" aria-label="The task plan" hidden><button id="run-plan-toggle" class="run-plan-summary" type="button" aria-expanded="false" aria-controls="run-plan-list"><span id="run-plan-ring" class="run-plan-ring" aria-hidden="true"></span><span id="run-plan-label" class="run-plan-label">Task plan</span><span id="run-plan-count" class="run-plan-count"></span><span id="run-plan-current" class="run-plan-current" aria-live="polite"></span><span id="run-plan-from" class="run-plan-from" hidden></span><svg class="icon run-plan-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><ol id="run-plan-list" class="run-plan-list" hidden></ol></section>
+          <section id="orchestration-card" class="orchestration-card" aria-labelledby="orchestration-title" hidden>
+            <header class="orchestration-head"><h2 id="orchestration-title" class="orchestration-title"></h2></header>
+            <div id="orchestration-body" class="orchestration-body">
+              <p id="orchestration-summary" class="orchestration-summary" hidden></p>
+              <p id="orchestration-status" class="orchestration-status" role="status" hidden></p>
+              <ol id="orchestration-steps" class="orchestration-steps"></ol>
+              <button id="orchestration-add" class="orchestration-add" type="button">Add step</button>
+            </div>
+            <footer id="orchestration-foot" class="orchestration-foot">
+              <div class="orchestration-facts"><label id="orchestration-review-option" class="orchestration-review-option"><input id="orchestration-review" type="checkbox" />Review the combined changes</label><span id="orchestration-cost" class="orchestration-cost"></span></div>
+              <p id="orchestration-queue" class="orchestration-queue" hidden></p>
+              <p id="orchestration-error" class="orchestration-error" role="alert" hidden></p>
+              <div id="orchestration-confirm" class="orchestration-confirm" role="group" aria-labelledby="orchestration-confirm-text" hidden><span id="orchestration-confirm-text" class="orchestration-confirm-text"></span><button id="orchestration-confirm-no" class="secondary-button" type="button">Keep editing</button><button id="orchestration-confirm-yes" class="primary-button" type="button">Replace it</button></div>
+              <div id="orchestration-actions" class="orchestration-actions"><button id="orchestration-discard" class="text-link orchestration-discard" type="button">Discard</button><button id="orchestration-write" class="secondary-button" type="button" hidden>Write the steps yourself</button><button id="orchestration-again" class="secondary-button" type="button" hidden>Plan again</button><button id="orchestration-revert" class="secondary-button" type="button" hidden>Revert</button><button id="orchestration-save" class="primary-button" type="button" hidden>Save changes</button></div>
+            </footer>
+          </section>
           <div id="automatic-review-status" class="automatic-review-status" role="status" hidden><span id="automatic-review-status-text"></span><button id="automatic-review-view" class="text-link" type="button" hidden>View review</button></div>
           <div id="automatic-review-armed" class="automatic-review-armed" hidden><span id="automatic-review-armed-text"></span><button id="automatic-review-change" class="text-link" type="button">Change</button><button id="automatic-review-remove" class="icon-button" type="button" aria-label="Remove review after this prompt">×</button></div>
+          <div id="orchestrate-armed" class="orchestrate-armed" hidden><span id="orchestrate-armed-text">Orchestrate: one read-only run plans the steps first. Nothing from this plan runs until you approve it.</span><button id="orchestrate-write" class="text-link" type="button">Write the steps yourself</button><button id="orchestrate-off" class="icon-button" type="button" aria-label="Don’t orchestrate this message">×</button></div>
           <div id="voice-status" class="voice-status" role="status" hidden><span class="voice-dot" aria-hidden="true"></span><span id="voice-status-text"></span><span id="voice-status-where" class="voice-status-where" hidden>On this Mac</span><span id="voice-status-actions" class="voice-status-actions"></span></div>
           <div id="usage-notice" class="connection-notice usage-notice" role="status" hidden><span id="usage-notice-text"></span><div class="connection-notice-actions"><button id="usage-notice-action" type="button" hidden></button><button id="usage-notice-dismiss" class="usage-notice-dismiss" type="button" aria-label="Dismiss this usage notice" title="Dismiss"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div></div>
           <form id="composer" class="composer">
@@ -231,6 +250,7 @@
               <div class="composer-controls">
                 <button id="attach-files" class="attach-files" type="button" title="Attach images or text files · also paste or drop files" aria-label="Attach images or text files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9M6 15l8-8"/></svg><span>Attach</span></button>
                 <button id="automatic-review-toggle" class="automatic-review-toggle" type="button" aria-pressed="false" aria-haspopup="dialog" aria-controls="automatic-review-dialog" title="Have another agent review after this prompt finishes">Review after</button>
+                <button id="orchestrate-toggle" class="orchestrate-toggle" type="button" aria-pressed="false" hidden title="Plan this message as steps. Auto keeps one agent for the steps and picks each step’s model and effort, unless that agent is near a limit.">Orchestrate</button>
                 <button id="model-picker-button" class="model-picker-button" type="button" aria-haspopup="dialog" aria-controls="model-picker-popover" aria-expanded="false"><i id="picked-agent-icon" class="agent-icon codex" aria-hidden="true"></i><span><span id="picked-agent">Codex</span><span id="picked-model">Provider default</span></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
                 <button id="effort-button" class="effort-button" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="effort-popover" hidden><span id="effort-bars" class="effort-bars" aria-hidden="true"></span><span id="effort-button-label">Default</span></button>
                 <span id="assistant-label" class="sr-only">Assistant</span>

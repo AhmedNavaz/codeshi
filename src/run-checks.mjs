@@ -51,10 +51,10 @@ export class RunChecks {
     }
   }
 
-  // The command marked for checks when a finished run should be checked: a complete routed run, with Check with tests on,
+  // The command marked for checks when a finished run should be checked: a complete routed run (not a planning run), with Check with tests on,
   // that changed files. A retry is always checked, so its result is known even if it changed nothing.
   wanted(c, run, status) {
-    if (!this.broker.execution.allows(c, run.execution, { action: 'check', sequence: Boolean(run.automaticReview) }) || this.closed || !this.tests || status !== 'complete' || run.review || run.local || !run.routing || c.routing?.check !== true) return null;
+    if (!this.broker.execution.allows(c, run.execution, { action: 'check', sequence: Boolean(run.automaticReview) }) || this.closed || !this.tests || status !== 'complete' || run.review || run.orchestrate || run.local || !run.routing || c.routing?.check !== true) return null;
     let command = null;
     try { command = this.tests.saved(); } catch { return null; }
     if (!command?.command) return null;

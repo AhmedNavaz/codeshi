@@ -80,7 +80,7 @@ function realXterm(){
 }
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -283,6 +283,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
   if(automaticReviewUI)vm.runInContext(fs.readFileSync(new URL('../public/automatic-review.js',import.meta.url),'utf8'),context,{filename:'public/automatic-review.js'});
+  if(orchestrationUI)vm.runInContext(fs.readFileSync(new URL('../public/orchestration.js',import.meta.url),'utf8'),context,{filename:'public/orchestration.js'});
   if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
   if(flowUI) {
     vm.runInContext(fs.readFileSync(new URL('../public/project-review.js',import.meta.url),'utf8'),context,{filename:'public/project-review.js'});
@@ -6188,4 +6189,406 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
   // 5. Plan items do not render detailed windows and freshness section
   assert.strictEqual(claudePlan.querySelector(".flow-plan-details"), null, "Claude plan does not have detailed windows breakdown");
   assert.strictEqual(geminiPlan.querySelector(".flow-plan-details"), null, "Gemini plan does not have detailed windows breakdown");
+});
+
+// Orchestrate (#12): in Flow, one read-only run plans a message as steps, and the plan is edited above the message box.
+const orchestrateBrowser = options => flowBrowser({ orchestrationUI: true, ...options });
+const planAt = '2026-11-08T10:00:00.000Z';
+const planSteps = () => [
+  { id: 's1', title: 'Add the API route', instructions: 'Add GET /api/items.', files: ['src/server.mjs'], tier: 'standard', dependsOn: [], agent: null },
+  { id: 's2', title: 'Show the items', instructions: 'List the items on the page.', files: ['public/app.js'], tier: 'light', dependsOn: ['s1'], agent: null },
+];
+const draftPlan = (fields = {}) => ({ id: 'plan-1', goal: 'Add a list of saved items', source: 'agent', status: 'draft', summary: 'Route, then page.', steps: planSteps(), review: true, revision: 1, planner: { provider: 'codex', model: 'model-one', effort: 'high' }, createdAt: planAt, updatedAt: planAt, ...fields });
+// The server's plan actions, and messages it accepts, on the fixture conversation.
+function planRoutes(ui, conversation, { lost = 0 } = {}) {
+  const actions = [], sends = [];
+  ui.setIntercept((request, next) => {
+    if (request.path.endsWith('/orchestration')) {
+      actions.push(clone(request.body)); const plan = conversation.orchestrations?.find(item => item.id === request.body.id);
+      if (request.body.action === 'create') conversation.orchestrations = [{ id: `plan-${actions.length + 10}`, goal: request.body.goal, source: 'manual', status: 'draft', summary: '', steps: [], review: true, revision: 0, createdAt: planAt, updatedAt: planAt }, ...(conversation.orchestrations || [])];
+      if (request.body.action === 'update') { if (request.body.revision !== plan.revision) return response({ error: 'This plan changed in another window. Your view now shows the latest version.' }, 409); Object.assign(plan, { steps: request.body.steps, review: request.body.review, revision: plan.revision + 1 }); }
+      if (request.body.action === 'discard') plan.status = 'discarded';
+      return response(conversation);
+    }
+    if (request.path.endsWith('/messages')) { sends.push(clone(request.body)); if (sends.length <= lost) throw Error('Response lost after acceptance.'); return response({ runId: `run-${sends.length}`, requestId: request.body.requestId }, 202); }
+    return next();
+  });
+  return { actions, sends };
+}
+const stepRows = ui => ui.$('orchestration-steps').querySelectorAll('.orchestration-step');
+const typeInto = (field, value) => { field.value = value; field.dispatchEvent(new UIEvent('input')); };
+async function expandStep(ui, index) {
+  const toggle = stepRows(ui)[index].querySelector('.orchestration-step-toggle');
+  if (toggle.getAttribute('aria-expanded') !== 'true') { toggle.click(); await flush(); }
+  return stepRows(ui)[index];
+}
+const option = (row, cls, key, value) => row.querySelectorAll(cls).find(button => button.dataset[key] === value);
+const sendMessage = async ui => { ui.$('message-input').dispatchEvent(new UIEvent('keydown', { key: 'Enter' })); await flush(); await flush(); };
+
+test('Orchestrate is part of Flow: outside it the toggle and the plan card step aside, and a plan with edits waits for you', async () => {
+  const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one');
+  Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, orchestrations: [draftPlan()] });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('message-input').value = 'Add a list of saved items'; ui.fire('message-input', 'input');
+  assert.equal(ui.$('orchestrate-toggle').hidden, true, 'In the normal view you choose the agent yourself.');
+  assert.equal(ui.$('orchestration-card').hidden, true);
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(ui.$('orchestrate-toggle').hidden, false); assert.equal(ui.$('orchestration-card').hidden, false);
+  ui.$('orchestrate-toggle').click(); await flush();
+  assert.equal(ui.window.relayOrchestration.armed(), true);
+  const row = await expandStep(ui, 0);
+  typeInto(row.querySelector('.orchestration-step-title'), 'Add the items route'); await flush();
+  assert.equal(ui.$('orchestration-save').hidden, false);
+  ui.window.relayFlow.leave(); await flush();
+  assert.equal(ui.$('orchestration-card').hidden, true, 'Its steps are routed by Flow, so the card waits there.');
+  assert.equal(ui.$('orchestrate-toggle').hidden, true); assert.equal(ui.$('orchestrate-armed').hidden, true);
+  assert.equal(ui.window.relayOrchestration.armed(), false, 'A message sent outside Flow is never planned.');
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(ui.window.relayOrchestration.armed(), false, 'Leaving Flow turned Orchestrate off for the drafted message.');
+  assert.equal(ui.$('orchestration-card').hidden, false);
+  assert.equal(stepRows(ui)[0].querySelector('.orchestration-step-title').value, 'Add the items route', 'The unsaved edit is still there.');
+  assert.equal(stepRows(ui)[0].querySelector('.orchestration-step-toggle').getAttribute('aria-expanded'), 'true');
+  assert.equal(ui.$('orchestration-save').hidden, false);
+  // A plan belongs to the main conversation. A task shows its own conversation, and a new task's draft starts from the
+  // main one: neither shows the plan, in the card or in What's next, and the edit waits for you to come back.
+  const page = ui.window.relayUI.getState();
+  page.taskDraft = { folderId: 'folder-1' }; ui.window.relayOrchestration.render();
+  assert.equal(ui.$('orchestration-card').hidden, true); assert.equal(ui.window.relayOrchestration.waiting(), null, 'What’s next leaves it out too.');
+  page.taskDraft = null; ui.window.relayOrchestration.render();
+  assert.equal(ui.$('orchestration-card').hidden, false); assert.equal(ui.$('orchestration-save').hidden, false, 'The edit is still unsaved.');
+  await ui.window.relayUI.setTask('parallel'); await flush();
+  assert.equal(ui.state().taskId, 'parallel'); assert.equal(ui.$('orchestration-card').hidden, true);
+  assert.doesNotMatch(flowText(ui, 'next'), /A plan of|waiting for the plan/);
+  await ui.window.relayUI.setTask(null); await flush();
+  assert.equal(ui.$('orchestration-card').hidden, false);
+  assert.equal(stepRows(ui)[0].querySelector('.orchestration-step-title').value, 'Add the items route', 'Back in the main conversation, the unsaved edit is still there.');
+  assert.equal(ui.$('orchestration-save').hidden, false);
+});
+
+test('In Flow, one read-only run plans the message with the deepest work the mode allows, and the thread and What’s next follow it', async () => {
+  const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one'), { sends } = planRoutes(ui, conversation);
+  ui.window.relayFlow.enter(); await flush();
+  conversation.routing = { mode: 'smart', allowApi: false, check: true }; await ui.window.relayUI.refresh(); await flush();
+  ui.$('message-input').value = 'Add a list of saved items'; ui.fire('message-input', 'input');
+  assert.match(fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8'), /id="orchestrate-toggle"[^>]*title="Plan this message as steps\. Auto keeps one agent for the steps and picks each step’s model and effort, unless that agent is near a limit\."/);
+  assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'false');
+  ui.$('orchestrate-toggle').click(); await flush();
+  assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('orchestrate-armed').hidden, false);
+  assert.equal(ui.$('orchestrate-armed-text').textContent, 'Orchestrate: one read-only run plans the steps first, with the deepest work Smart allows. Nothing from this plan runs until you approve it.');
+  conversation.routing.mode = 'ultra'; await ui.window.relayUI.refresh(); await flush();
+  assert.match(ui.$('orchestrate-armed-text').textContent, /the deepest work Ultra allows/);
+  conversation.routing.mode = 'smart'; await ui.window.relayUI.refresh(); await flush();
+  await sendMessage(ui);
+  assert.equal(sends.length, 1);
+  assert.deepEqual([sends[0].orchestrate, sends[0].text, sends[0].provider, sends[0].model, sends[0].effort, sends[0].routing], [true, 'Add a list of saved items', 'codex', 'model-one', 'high', { mode: 'smart', reason: 'Plans the steps', tier: 'deep', escalation: null }]);
+  assert.equal(sends[0].mode, 'edit', 'The server makes the planning run read-only; your own access setting is sent unchanged.');
+  assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'false', 'Orchestrate is for one message at a time.');
+
+  // While it plans: the card, the thread and What's next say so, and queued messages wait for the plan.
+  const label = () => ui.$('messages').querySelector('#message-plan-prompt').querySelector('.message-orchestrate-label').textContent;
+  Object.assign(conversation, { status: 'running', queue: [{ id: 'q1', text: 'Then tidy the README', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }] });
+  conversation.messages.push({ id: 'plan-prompt', role: 'user', text: 'Add a list of saved items', provider: 'codex', runId: 'plan-1', orchestrationId: 'plan-1', createdAt: planAt }, { id: 'plan-reply', role: 'assistant', text: JSON.stringify({ summary: 'Route, then page.', steps: planSteps() }), provider: 'codex', runId: 'plan-1', orchestrationId: 'plan-1', status: 'complete', createdAt: planAt });
+  conversation.orchestrations = [draftPlan({ status: 'planning', summary: '', steps: [], revision: 0 })];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('orchestrate-toggle').hidden, true, 'Nothing can be planned while a run is going.');
+  assert.equal(label(), 'Orchestrate · planning the steps');
+  assert.match(ui.$('messages').querySelector('#message-plan-reply').querySelector('.message-text').textContent, /^Planning the steps…/);
+  assert.equal(ui.$('orchestration-title').textContent, 'Plan · Planning…');
+  assert.equal(ui.$('orchestration-status').textContent, 'Codex · model-one is planning the steps, read-only. Nothing from this plan runs until you approve it.');
+  assert.equal(ui.$('orchestration-queue').textContent, '1 queued message waits until you approve or discard this plan.');
+  assert.deepEqual(['orchestration-discard', 'orchestration-again', 'orchestration-write'].map(id => ui.$(id).hidden), [true, true, true], 'A plan being made is stopped with Stop, like any run.');
+  assert.match(flowText(ui, 'next'), /Codex is planning the steps\. The plan opens above the message box\./);
+  assert.match(flowText(ui, 'next'), /Then · 1 queued message · waiting for the plan/);
+
+  // The plan arrives.
+  Object.assign(conversation, { status: 'complete', lastRun: { id: 'plan-1', provider: 'codex', purpose: 'plan', status: 'complete' } });
+  Object.assign(conversation.orchestrations[0], { status: 'draft', summary: 'Route, then page.', steps: planSteps(), revision: 1 });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(label(), 'Orchestrate · planned', 'The label says planning only while it lasts.');
+  const reply = ui.$('messages').querySelector('#message-plan-reply');
+  assert.match(reply.querySelector('.message-text').textContent, /^Proposed a plan of 2 steps: Route, then page\./, 'The thread shows what was proposed, not the raw reply.');
+  assert.equal(reply.querySelector('details').querySelector('pre').textContent, JSON.stringify({ summary: 'Route, then page.', steps: planSteps() }));
+  assert.equal(ui.$('orchestration-card').hidden, false);
+  assert.match(flowText(ui, 'next'), /A plan of 2 steps is waiting above the message box\. Nothing from it runs until you approve it\./);
+  assert.doesNotMatch(flowText(ui, 'next'), /Describe what you want/);
+  assert.equal(ui.$('continuation').hidden, true);
+  // A change to the plan alone, saved from another window, shows there too.
+  Object.assign(conversation.orchestrations[0], { steps: planSteps().slice(0, 1), revision: 2 });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(flowText(ui, 'next'), /A plan of 1 step is waiting above the message box\./);
+  // A reply that wasn't a plan.
+  Object.assign(conversation.orchestrations[0], { status: 'unstructured', summary: 'The planner’s reply could not be read as a plan.', steps: [] });
+  conversation.queue = [];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(label(), 'Orchestrate · not planned');
+  assert.equal(ui.$('orchestration-title').textContent, 'Plan · Not ready');
+  assert.match(flowText(ui, 'next'), /The plan isn’t ready\. Plan again or write the steps yourself, above the message box\./);
+  assert.equal(ui.$('orchestration-queue').hidden, true);
+});
+
+test('In a narrow window, What’s next’s chip says when a plan is being made, waits or isn’t ready', async () => {
+  const ui = await orchestrateBrowser({ wide: true }), conversation = ui.canonical.get('project-one');
+  ui.window.relayFlow.enter(); await flush();
+  Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, queue: [{ id: 'q1', text: 'Next thing', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }] });
+  await ui.window.relayUI.refresh(); await flush();
+  const chip = () => ui.$('flow-strip').querySelectorAll('.flow-chip').find(item => /^What’s next: /.test(item.getAttribute('aria-label'))).textContent;
+  assert.equal(chip(), '1 queued message');
+  for (const [status, text] of [['planning', 'Planning'], ['draft', 'Plan waiting'], ['failed', 'Plan not ready'], ['discarded', '1 queued message']]) {
+    conversation.orchestrations = [draftPlan({ status })]; await ui.window.relayUI.refresh(); await flush();
+    assert.equal(chip(), text, status);
+  }
+});
+
+test('The plan card shows each step as one row that opens to edit it, with the worst case and the actions pinned below the steps', async () => {
+  const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one'), { actions } = planRoutes(ui, conversation);
+  ui.window.relayFlow.enter(); await flush();
+  Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: true }, orchestrations: [draftPlan()] });
+  await ui.window.relayUI.refresh(); await flush();
+  const rows = () => stepRows(ui), error = () => ui.$('orchestration-error');
+  assert.equal(ui.$('orchestration-title').textContent, 'Plan · 2 steps');
+  assert.equal(ui.$('orchestration-summary').textContent, 'Route, then page.');
+  // The steps scroll; the worst case and the actions stay in view below them.
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8'), card = html.slice(html.indexOf('id="orchestration-card"'), html.indexOf('</section>', html.indexOf('id="orchestration-card"')));
+  const body = card.slice(card.indexOf('id="orchestration-body"'), card.indexOf('id="orchestration-foot"')), foot = card.slice(card.indexOf('id="orchestration-foot"'));
+  for (const id of ['orchestration-summary', 'orchestration-status', 'orchestration-steps', 'orchestration-add']) assert(body.includes(`id="${id}"`), `${id} scrolls with the steps.`);
+  for (const id of ['orchestration-review', 'orchestration-cost', 'orchestration-queue', 'orchestration-error', 'orchestration-confirm', 'orchestration-discard', 'orchestration-again', 'orchestration-write', 'orchestration-revert', 'orchestration-save']) assert(foot.includes(`id="${id}"`), `${id} is pinned below the steps.`);
+  const css = fs.readFileSync(new URL('../public/orchestration.css', import.meta.url), 'utf8');
+  assert.match(css, /\.orchestration-card \{[^}]*display: flex;[^}]*flex-direction: column;[^}]*max-height: min\(/);
+  assert.match(css, /\.orchestration-body \{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
+  assert.match(css, /\.orchestration-foot \{[^}]*flex: none;/);
+  assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b/i, 'Colours come from the theme tokens.');
+
+  // One dense row each: number, title, tier, and the agent and model routing chose.
+  assert.deepEqual(rows().map(row => row.querySelector('.orchestration-step-number').textContent), ['1', '2']);
+  assert.deepEqual(rows().map(row => row.querySelector('.orchestration-step-name').textContent), ['Add the API route', 'Show the items']);
+  assert.deepEqual(rows().map(row => row.querySelector('.orchestration-step-tier').getAttribute('aria-label')), ['Standard step', 'Light step']);
+  assert.deepEqual(rows().map(row => row.querySelector('.orchestration-step-tier').querySelectorAll('i').filter(bar => bar.className === 'on').length), [2, 1], 'The tier reads like the effort bars in the message box.');
+  assert.deepEqual(rows().map(row => row.querySelector('.orchestration-step-route').textContent), ['Auto: Codex · Model One · Low effort', 'Auto: Codex · Model One · Low effort'], 'Each step is routed on its own tier; Model One has no medium effort.');
+  assert.equal(rows()[0].querySelector('.orchestration-step-route').querySelector('.agent-icon').className, 'agent-icon codex');
+  assert.deepEqual(rows().map(row => row.querySelector('.orchestration-step-detail').hidden), [true, true], 'Rows start closed.');
+  assert.deepEqual(rows()[1].querySelectorAll('.orchestration-step-after').map(chip => chip.textContent), ['After step 1']);
+  for (const control of ['up', 'down', 'remove']) {
+    const button = rows()[1].querySelector(`.orchestration-step-${control}`);
+    assert.equal(button.textContent, '', 'Icons, like the message box, not text arrows.'); assert(button.classList.contains('icon-button')); assert.match(button.getAttribute('aria-label'), /step 2/);
+  }
+  // An untouched draft still has its actions.
+  assert.deepEqual(['orchestration-discard', 'orchestration-again', 'orchestration-revert', 'orchestration-save', 'orchestration-write'].map(id => ui.$(id).hidden), [false, false, true, true, true]);
+  assert.equal(ui.$('orchestration-cost').textContent, 'Worst case 5 runs: 2 steps, a retry each if the tests fail, and 1 review. Planning used 1 run.');
+  assert.equal(ui.$('orchestration-queue').hidden, true, 'Nothing is queued.');
+  conversation.queue = [{ id: 'q1', text: 'One', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }, { id: 'q2', text: 'Two', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('orchestration-queue').hidden, false); assert.equal(ui.$('orchestration-queue').textContent, '2 queued messages wait until you approve or discard this plan.');
+  // Review first defers the tests to the review, so no step is retried.
+  ui.state().status.verificationCadence = 'review-first'; ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  assert.equal(ui.$('orchestration-cost').textContent, 'Worst case 3 runs: 2 steps and 1 review. Planning used 1 run.');
+  ui.state().status.verificationCadence = 'as-needed'; ui.window.dispatchEvent(new UIEvent('relay-state')); await flush();
+  conversation.routing.check = false; await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('orchestration-cost').textContent, 'Worst case 3 runs: 2 steps and 1 review. Planning used 1 run.', 'Without Check with tests no step is retried.');
+  conversation.routing.check = true; await ui.window.relayUI.refresh(); await flush();
+
+  // A row opens to edit its title, instructions, files, tier, agent and the steps it waits for.
+  let row = await expandStep(ui, 0);
+  assert.equal(row.querySelector('.orchestration-step-detail').hidden, false); assert.equal(row.querySelector('.orchestration-step-toggle').getAttribute('aria-expanded'), 'true');
+  assert.equal(row.querySelector('.orchestration-step-title').value, 'Add the API route'); assert.equal(row.querySelector('.orchestration-step-instructions').value, 'Add GET /api/items.'); assert.equal(row.querySelector('.orchestration-step-files').value, 'src/server.mjs');
+  assert.deepEqual(row.querySelectorAll('.orchestration-tier-option').map(button => [button.dataset.tier, button.getAttribute('aria-pressed')]), [['light', 'false'], ['standard', 'true'], ['deep', 'false']]);
+  assert.deepEqual(row.querySelectorAll('.orchestration-agent-option').map(button => [button.dataset.provider, button.textContent, button.getAttribute('aria-pressed')]), [['', 'Auto', 'true'], ['codex', 'Codex', 'false'], ['claude', 'Claude', 'false'], ['gemini', 'Gemini', 'false']]);
+  assert.equal(row.querySelectorAll('.orchestration-after-option').length, 0, 'The first step can’t wait for another.');
+  typeInto(row.querySelector('.orchestration-step-title'), 'Add the items route'); await flush();
+  assert.equal(rows()[0].querySelector('.orchestration-step-name').textContent, 'Add the items route');
+  option(rows()[0], '.orchestration-tier-option', 'tier', 'deep').click(); await flush();
+  assert.equal(option(rows()[0], '.orchestration-tier-option', 'tier', 'deep').getAttribute('aria-pressed'), 'true');
+  assert.equal(rows()[0].querySelector('.orchestration-step-route').textContent, 'Auto: Codex · Model One · High effort');
+  assert.equal(rows()[0].querySelector('.orchestration-step-tier').getAttribute('aria-label'), 'Deep step');
+  row = await expandStep(ui, 1);
+  option(row, '.orchestration-agent-option', 'provider', 'claude').click(); await flush();
+  assert.equal(rows()[1].querySelector('.orchestration-step-route').textContent, 'Claude · Model One · Low effort');
+  assert.equal(rows()[1].querySelector('.orchestration-step-route').querySelector('.agent-icon').className, 'agent-icon claude');
+  assert.deepEqual(['orchestration-revert', 'orchestration-save'].map(id => ui.$(id).hidden), [false, false]);
+  ui.$('orchestration-add').click(); await flush();
+  assert.equal(rows().length, 3); assert.equal(rows()[2].querySelector('.orchestration-step-detail').hidden, false, 'A new step opens to be written.');
+  assert.equal(ui.$('orchestration-save').disabled, true, 'A new step needs a title and instructions first.'); assert.match(error().textContent, /Give step 3 a title/);
+  typeInto(rows()[2].querySelector('.orchestration-step-title'), 'Document it');
+  typeInto(rows()[2].querySelector('.orchestration-step-instructions'), 'Describe the route in the README.'); await flush();
+  assert.equal(ui.$('orchestration-save').disabled, false);
+  typeInto(rows()[2].querySelector('.orchestration-step-files'), Array.from({ length: 13 }, (_, index) => `file${index}.js`).join(', ')); await flush();
+  assert.match(error().textContent, /List at most 12 files/); assert.equal(ui.$('orchestration-save').disabled, true);
+  typeInto(rows()[2].querySelector('.orchestration-step-files'), ''); await flush();
+  assert.equal(ui.$('orchestration-save').disabled, false);
+  // An open row picks which earlier steps it waits for.
+  assert.deepEqual(rows()[2].querySelectorAll('.orchestration-after-option').map(button => [button.dataset.step, button.textContent, button.getAttribute('aria-pressed')]), [['s1', 'Step 1', 'false'], ['s2', 'Step 2', 'false']]);
+  option(rows()[2], '.orchestration-after-option', 'step', 's2').click(); await flush();
+  assert.deepEqual(rows()[2].querySelectorAll('.orchestration-step-after').map(chip => chip.textContent), ['After step 2']);
+  option(rows()[2], '.orchestration-after-option', 'step', 's2').click(); await flush();
+  assert.equal(option(rows()[2], '.orchestration-after-option', 'step', 's2').getAttribute('aria-pressed'), 'false', 'Picking it again lets it go.');
+  option(rows()[2], '.orchestration-after-option', 'step', 's1').click(); await flush();
+  assert.equal(option(rows()[2], '.orchestration-after-option', 'step', 's1').getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(rows()[2].querySelectorAll('.orchestration-step-after').map(chip => chip.textContent), ['After step 1']);
+  // Moving a step above one it waits for is caught, and the chip in its row clears it.
+  rows()[1].querySelector('.orchestration-step-up').click(); await flush();
+  assert.equal(error().textContent, 'Step 1 can only wait for an earlier step. Remove “After step 2” from it, or move it back.'); assert.equal(ui.$('orchestration-save').disabled, true);
+  const chip = rows()[0].querySelector('.orchestration-step-after');
+  assert.equal(chip.getAttribute('aria-invalid'), 'true'); assert.equal(chip.getAttribute('aria-label'), 'Remove “After step 2” from step 1');
+  chip.click(); await flush();
+  assert.equal(error().hidden, true); assert.equal(rows()[0].querySelector('.orchestration-step-after'), null); assert.equal(ui.$('orchestration-save').disabled, false);
+  ui.$('orchestration-review').checked = false; ui.fire('orchestration-review', 'change'); await flush();
+  assert.equal(ui.$('orchestration-cost').textContent, 'Worst case 6 runs: 3 steps and a retry each if the tests fail. Planning used 1 run.');
+  ui.$('orchestration-save').click(); await flush(); await flush();
+  const [first, second] = planSteps();
+  assert.deepEqual(actions.at(-1), { action: 'update', id: 'plan-1', revision: 1, review: false, steps: [
+    { ...second, dependsOn: [], agent: { provider: 'claude', model: null, effort: null } },
+    { ...first, title: 'Add the items route', tier: 'deep' },
+    { id: 's3', title: 'Document it', instructions: 'Describe the route in the README.', files: [], tier: 'standard', dependsOn: ['s1'], agent: null }] });
+  assert.equal(ui.$('orchestration-save').hidden, true); assert.equal(ui.$('orchestration-title').textContent, 'Plan · 3 steps');
+  assert.deepEqual(rows().map(row => row.querySelector('.orchestration-step-detail').hidden), [false, false, false], 'Saving keeps open rows open.');
+
+  // Another window saves a newer version: an untouched card shows it.
+  const server = conversation.orchestrations[0];
+  Object.assign(server, { steps: server.steps.map((item, index) => index === 2 ? { ...item, title: 'Document the route' } : item), revision: server.revision + 1 });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(rows()[2].querySelector('.orchestration-step-title').value, 'Document the route');
+  // With changes of its own, the card keeps them and says what happened; saving then brings in the newer version.
+  typeInto(rows()[2].querySelector('.orchestration-step-title'), 'Document it here');
+  Object.assign(server, { steps: server.steps.map((item, index) => index === 2 ? { ...item, title: 'Document the API' } : item), revision: server.revision + 1 });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(rows()[2].querySelector('.orchestration-step-title').value, 'Document it here');
+  assert.equal(ui.$('orchestration-status').textContent, 'This plan changed in another window. Revert to see the latest version.');
+  ui.$('orchestration-save').click(); await flush(); await flush();
+  assert.equal(rows()[2].querySelector('.orchestration-step-title').value, 'Document the API');
+  assert.equal(error().textContent, 'This plan changed in another window. Your view now shows the latest version.');
+  // Removing a step also removes what waited for it; Revert puts it back.
+  rows()[1].querySelector('.orchestration-step-remove').click(); await flush();
+  assert.equal(rows().length, 2); assert.equal(error().hidden, true); assert.equal(rows()[1].querySelector('.orchestration-step-after'), null);
+  ui.$('orchestration-revert').click(); await flush();
+  assert.equal(rows().length, 3); assert.deepEqual(rows()[2].querySelectorAll('.orchestration-step-after').map(item => item.textContent), ['After step 2']); assert.equal(ui.$('orchestration-save').hidden, true);
+  // A step added after a removal gets an id of its own, and a plan has at most five steps.
+  rows()[0].querySelector('.orchestration-step-remove').click(); await flush();
+  for (let added = 0; added < 3; added++) {
+    assert.equal(ui.$('orchestration-add').disabled, false); ui.$('orchestration-add').click(); await flush();
+    const row = rows().at(-1); typeInto(row.querySelector('.orchestration-step-title'), `Extra ${added + 1}`); typeInto(row.querySelector('.orchestration-step-instructions'), 'More work.'); await flush();
+  }
+  assert.equal(rows().length, 5); assert.equal(ui.$('orchestration-add').disabled, true);
+  ui.$('orchestration-save').click(); await flush(); await flush();
+  assert.deepEqual(actions.at(-1).steps.map(item => item.id), ['s1', 's3', 's4', 's5', 's6']);
+  ui.$('orchestration-discard').click(); await flush(); await flush();
+  assert.deepEqual(actions.at(-1), { action: 'discard', id: 'plan-1' }); assert.equal(ui.$('orchestration-card').hidden, true);
+});
+
+test('Plan again plans the same message and files again, never Continue, and a plan with unsaved edits is replaced only when you say so', async () => {
+  const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one'), { actions, sends } = planRoutes(ui, conversation, { lost: 1 });
+  ui.window.relayFlow.enter(); await flush();
+  const attachment = { id: 'file-1', name: 'sketch.png', kind: 'image', type: 'image/png', size: 10 };
+  Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, status: 'incomplete', lastRun: { id: 'plan-1', provider: 'codex', purpose: 'plan', status: 'failed', errorCategory: 'quota' },
+    orchestrations: [draftPlan({ status: 'failed', summary: 'Codex reached a usage limit while planning.', steps: [], revision: 0 })] });
+  conversation.messages.push({ id: 'plan-prompt', role: 'user', text: 'Add a list of saved items', provider: 'codex', runId: 'plan-1', orchestrationId: 'plan-1', attachments: [attachment], createdAt: planAt },
+    { id: 'plan-error', role: 'error', text: 'Codex reached a usage limit.', provider: 'codex', runId: 'plan-1', createdAt: planAt });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('continuation').hidden, true, 'Continuing a planning run would do the work with the conversation’s own access.');
+  assert.equal(ui.$('orchestration-title').textContent, 'Plan · Not ready'); assert.equal(ui.$('orchestration-status').textContent, 'Codex reached a usage limit while planning.');
+  assert.deepEqual(['orchestration-again', 'orchestration-write', 'orchestration-discard', 'orchestration-save'].map(id => ui.$(id).hidden), [false, false, false, true]);
+  ui.$('message-input').value = 'Something else I was writing'; ui.fire('message-input', 'input');
+  ui.$('orchestrate-toggle').click(); await flush();
+  // Review after, on for the message you're writing, belongs to that message and doesn't stop Plan again.
+  ui.window.relayAutomaticReview = { submission: () => ({ folderIds: [] }), accepted() {}, render() {} };
+  ui.$('orchestration-again').click(); await flush(); await flush();
+  delete ui.window.relayAutomaticReview;
+  assert.equal(sends.length, 1); assert.equal(sends[0].automaticReview, undefined);
+  // Its response was lost, so Retry sends the same Plan again, not the message box's draft.
+  ui.$('notice-retry').click(); await flush(); await flush();
+  assert.equal(sends.length, 2); assert.deepEqual(sends[1], sends[0]);
+  assert.equal(ui.window.relayOrchestration.armed(), true, 'Orchestrate stays on for the message you are writing.');
+  ui.$('orchestrate-toggle').click(); await flush();
+  assert.deepEqual([sends[0].orchestrate, sends[0].text, sends[0].attachments, sends[0].routing], [true, 'Add a list of saved items', ['file-1'], { mode: 'smart', reason: 'Plans the steps', tier: 'deep', escalation: null }], 'Routing chooses the planner again, with the files the message had.');
+  assert.equal(ui.$('message-input').value, 'Something else I was writing', 'Your draft stays as it was.');
+  // A plan you haven't changed is replaced without asking.
+  Object.assign(conversation, { status: 'complete', lastRun: { id: 'plan-1', provider: 'codex', purpose: 'plan', status: 'complete' }, orchestrations: [draftPlan()] });
+  conversation.messages = conversation.messages.filter(message => message.id !== 'plan-error');
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('orchestration-again').click(); await flush(); await flush();
+  assert.equal(sends.length, 3); assert.equal(ui.$('orchestration-confirm').hidden, true);
+  // With unsaved edits, the card asks first: for Plan again, for a new planned message and for writing the steps yourself.
+  typeInto((await expandStep(ui, 0)).querySelector('.orchestration-step-title'), 'Add the items route'); await flush();
+  ui.$('orchestration-again').click(); await flush(); await flush();
+  assert.equal(sends.length, 3); assert.equal(ui.$('orchestration-confirm').hidden, false);
+  assert.equal(ui.$('orchestration-confirm-text').textContent, 'A new plan replaces this one and your unsaved changes.');
+  assert.equal(ui.$('orchestration-actions').hidden, true, 'The card’s own actions wait for the answer.');
+  ui.$('orchestration-confirm-no').click(); await flush();
+  assert.equal(ui.$('orchestration-confirm').hidden, true); assert.equal(sends.length, 3); assert.equal(ui.$('orchestration-actions').hidden, false);
+  assert.equal(stepRows(ui)[0].querySelector('.orchestration-step-title').value, 'Add the items route', 'Keep editing keeps the edits.');
+  ui.$('message-input').value = 'Plan the settings page instead'; ui.fire('message-input', 'input');
+  ui.$('orchestrate-toggle').click(); await flush();
+  await sendMessage(ui);
+  assert.equal(sends.length, 3); assert.equal(ui.$('orchestration-confirm').hidden, false); assert.equal(ui.$('message-input').value, 'Plan the settings page instead');
+  ui.$('orchestration-confirm-yes').click(); await flush(); await flush();
+  assert.equal(sends.length, 4); assert.deepEqual([sends[3].orchestrate, sends[3].text], [true, 'Plan the settings page instead']);
+  assert.equal(ui.$('orchestration-confirm').hidden, true);
+  Object.assign(conversation, { orchestrations: [draftPlan({ id: 'plan-5' })] }); await ui.window.relayUI.refresh(); await flush();
+  typeInto((await expandStep(ui, 1)).querySelector('.orchestration-step-instructions'), 'List them with an empty state.'); await flush();
+  ui.$('message-input').value = 'Tidy the settings page'; ui.fire('message-input', 'input');
+  ui.$('orchestrate-toggle').click(); await flush();
+  ui.$('orchestrate-write').click(); await flush(); await flush();
+  assert.equal(actions.length, 0); assert.equal(ui.$('orchestration-confirm').hidden, false);
+  ui.$('orchestration-confirm-yes').click(); await flush(); await flush();
+  assert.deepEqual(actions.at(-1), { action: 'create', goal: 'Tidy the settings page' }); assert.equal(sends.length, 4);
+  assert.equal(ui.$('orchestration-title').textContent, 'Plan · No steps yet'); assert.equal(ui.$('message-input').value, '', 'The message became the plan.');
+  assert.equal(ui.$('orchestration-cost').textContent, 'Add the steps this plan needs.');
+});
+
+test('Orchestrate is offered only from the main conversation with a connected agent that can plan read-only, and not with Review after', async () => {
+  const ui = await orchestrateBrowser({ automaticReviewUI: true }), sends = [];
+  automaticReviewRoutes(ui, (request, next) => { if (request.path.endsWith('/messages')) { sends.push(clone(request.body)); return response({ runId: 'run-1', requestId: request.body.requestId }, 202); }
+    if (request.path.endsWith('/orchestration')) return response({ error: 'Wait for the planner to finish.' }, 409); return next(); });
+  ui.window.relayFlow.enter(); await flush();
+  ui.canonical.get('project-one').routing = { mode: 'smart', allowApi: false, check: false }; await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('orchestrate-toggle').hidden, false);
+  const page = ui.window.relayUI.getState();
+  page.taskId = 'parallel'; ui.window.relayOrchestration.render();
+  assert.equal(ui.$('orchestrate-toggle').hidden, true, 'Tasks plan from the main conversation for now.');
+  page.taskId = null; page.localSelections['project-one'] = { model: 'fixture-local:8b' }; ui.window.relayOrchestration.render();
+  assert.equal(ui.$('orchestrate-toggle').hidden, true, 'A local model is chosen by hand, so Routing does not plan.');
+  delete page.localSelections['project-one']; ui.window.relayOrchestration.render();
+  assert.equal(ui.$('orchestrate-toggle').hidden, false);
+  // Review after belongs to the steps' combined changes, not to the planning run.
+  await armAutomaticReview(ui, 'Build a safe checkout flow');
+  ui.$('orchestrate-toggle').click(); await flush();
+  await sendMessage(ui);
+  assert.equal(sends.length, 0); assert.match(ui.$('notice-text').textContent, /Review after doesn’t apply to planning/);
+  // Without a card on screen, a plan the server won't start says why in the notice.
+  ui.$('orchestrate-write').click(); await flush(); await flush();
+  assert.equal(ui.$('notice-text').textContent, 'Wait for the planner to finish.'); assert.equal(ui.$('orchestration-card').hidden, true);
+});
+
+test('Continue after a stop is never planned, and Orchestrate stays on for the next message', async () => {
+  const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one');
+  ui.window.relayFlow.enter(); await flush();
+  Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, status: 'incomplete', lastRun: { provider: 'codex', errorCategory: 'quota' } });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('message-input').value = 'Plan the next part'; ui.fire('message-input', 'input');
+  ui.$('orchestrate-toggle').click(); await flush();
+  assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'true');
+  assert.equal(ui.$('continuation').hidden, false, 'An ordinary run that stopped can be continued.');
+  ui.$('continue-button').click(); await flush();
+  const continuation = ui.requests.filter(request => request.path.endsWith('/continue'));
+  assert.equal(continuation.length, 1); assert.equal(continuation[0].body.orchestrate, undefined);
+  assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'true', 'Continuing finishes the stopped work; the drafted message is still to be planned.');
+});
+
+test('Orchestrate plans only with an agent that has a read-only mode: Gemini CLI can, Gemini through Antigravity can’t', async () => {
+  const ui = await orchestrateBrowser({ moreProjects: true, providers: { codex: { available: false }, claude: { available: false }, gemini: { available: true } }, authenticated: { codex: false, claude: false, gemini: true }, billingSource: { gemini: 'subscription' } }), sends = [];
+  let account = null;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/providers/gemini/account' && account) return response(account);
+    if (request.path.endsWith('/messages')) { sends.push(clone(request.body)); return response({ runId: 'run-1', requestId: request.body.requestId }, 202); }
+    return next();
+  });
+  await ui.window.relayUI.selectProject('project-two'); await flush();
+  ui.window.relayFlow.enter(); await flush();
+  ui.canonical.get('project-two').routing = { mode: 'smart', allowApi: false, check: false }; await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.window.relayUI.routeFor('Add a list of saved items', 0, null, { plan: true })?.provider, 'gemini', 'Gemini CLI reads with restricted tools, so it can plan.');
+  account = { installed: true, available: true, authenticated: true, authMode: 'google-oauth', source: 'antigravity-acp', capabilities: { additionalDirectories: true, readOnly: 'unavailable' }, billingSource: 'subscription', usage: 'unknown' };
+  await ui.window.relayUI.refreshAccounts({ force: true }); await flush();
+  ui.$('message-input').value = 'Add a list of saved items'; ui.fire('message-input', 'input');
+  assert.equal(ui.window.relayUI.routeFor('Add a list of saved items', 0)?.provider, 'gemini', 'Antigravity still takes an ordinary message.');
+  ui.$('orchestrate-toggle').click(); await flush();
+  await sendMessage(ui);
+  assert.equal(sends.length, 0); assert.match(ui.$('notice-text').textContent, /no connected agent/);
 });
