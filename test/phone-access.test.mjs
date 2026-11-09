@@ -73,7 +73,8 @@ test('the phone keeps its own appearance and leaves the computer\'s alone', asyn
     vm.runInNewContext(source, { window, localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }, document: { documentElement: { setAttribute: (_, value) => { attributes.theme = value; } }, querySelector: () => bar } });
     return { attributes, storage, media, changes, theme: window.relayPhoneTheme };
   };
-  assert.equal(load(null, true).attributes.theme, 'graphite'); assert.equal(load(null, false).attributes.theme, 'light');
+  assert.equal(load(null, true).attributes.theme, 'dark'); assert.equal(load(null, false).attributes.theme, 'light');
+  assert.equal(load('graphite', false).attributes.theme, 'graphite', 'Graphite stays a choice of its own.'); assert.equal(load('graphite', false).attributes.bar, '#161513');
   assert.equal(load('light', true).attributes.theme, 'light', 'A choice beats the phone\'s own setting.');
   assert.equal(load('nonsense', false).theme.choice(), 'system');
   const phone = load(null, true);
@@ -83,7 +84,7 @@ test('the phone keeps its own appearance and leaves the computer\'s alone', asyn
   assert.equal(phone.attributes.theme, 'light', 'A Light or Dark choice stays as it is.');
   phone.theme.choose('system'); phone.media.matches = false; phone.changes[0]();
   assert.equal(phone.attributes.theme, 'light'); phone.media.matches = true; phone.changes[0]();
-  assert.equal(phone.attributes.theme, 'graphite', 'System follows the phone.');
+  assert.equal(phone.attributes.theme, 'dark', 'System follows the phone.'); assert.equal(phone.attributes.bar, '#0a0a0a');
 });
 
 test('phone page logic: a step reads as one plain line, whatever form it was saved in', () => {

@@ -1,6 +1,6 @@
 /* Design tokens. Every component in styles.css and workbench.css reads these.
-   The palette is the logo's: Dark is Ink (warm black surfaces, cream text) and Light is Paper (cream surfaces, ink
-   text). Vermilion, the seal's colour, is the one accent, for primary actions, selection and focus. Errors use
+   The palette is the logo's: Graphite is Ink (warm black surfaces, cream text), Dark is a near-black take on it for low
+   light and OLED screens, and Light is Paper (cream surfaces, ink text). Vermilion, the seal's colour, is the one accent, for primary actions, selection and focus. Errors use
    crimson, so a failure never reads as the accent. */
 :root {
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
@@ -8,7 +8,17 @@
   --radius: 6px;
   --radius-lg: 10px;
   --titlebar-height: 40px;
-  --statusbar-height: 24px;
+  --statusbar-height: 28px;
+  /* The UI type scale. Body text in the conversation keeps its own size; these are for the chrome around it. */
+  --font-ui-xs: 11.5px;   /* badges, chips and counts */
+  --font-ui-sm: 12px;     /* secondary lines, metadata */
+  --font-ui-md: 12.5px;   /* status bar, dense lists, small buttons */
+  --font-ui-base: 13.5px; /* list titles, buttons, settings rows */
+  --font-ui-lg: 15px;     /* dialog and panel titles */
+  /* Control heights: small for inline and status bar actions, medium for buttons in panels, large for dialog actions. */
+  --control-sm: 24px;
+  --control-md: 28px;
+  --control-lg: 32px;
   --sidebar-width: 300px;
   --inspector-width-default: 380px;
   --content-width: 780px;
@@ -58,6 +68,14 @@
   --icon-terminal: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 7 5 5-5 5M12 18h7'/%3E%3C/svg%3E");
 }
 
+:root[data-ui-size="large"] {
+  --font-ui-xs: 12.5px;
+  --font-ui-sm: 13px;
+  --font-ui-md: 13.5px;
+  --font-ui-base: 14.5px;
+  --font-ui-lg: 16px;
+}
+
 :root,
 :root[data-theme="graphite"] {
   color-scheme: dark;
@@ -96,7 +114,7 @@
   --text: #d6cec2;
   --text-strong: #f4ede1;
   --muted: #aaa194;
-  --faint: #958c80;
+  --faint: #a39a8d;
   --accent: #d9381e;
   --accent-strong: #c2301a;
   --on-accent: #ffffff;
@@ -130,6 +148,34 @@
   --backdrop: #0c0a088c;
   --shadow-sm: 0 1px 2px #0000004d;
   --shadow-lg: 0 16px 48px #00000080, 0 0 0 1px #ffffff0a;
+}
+
+:root[data-theme="dark"] {
+  /* Near-black: neutral surfaces a step apart so panels, code and bubbles stay distinct; text, accent and status colours
+     are Graphite's. Every token not listed here comes from Graphite above. */
+  --bg: #111111;
+  --sidebar: #0a0a0a;
+  --statusbar-bg: #0a0a0a;
+  --panel-bg: #0a0a0a;
+  --overlay-bg: #1a1a1a;
+  --surface-raised: #181818;
+  --surface-input: #1c1c1c;
+  --surface-strong: #2e2e2e;
+  --bubble-bg: #1f1f1f;
+  --code-bg: #0a0a0a;
+  --code-inline-bg: #ffffff12;
+  --hover: #ffffff0d;
+  --list-active: #262626;
+  --chip-bg: #ffffff10;
+  --border: #232323;
+  --border-strong: #353535;
+  --input-border: #383838;
+  --text: #d9d4cc;
+  --text-strong: #f5efe4;
+  --muted: #aaa49b;
+  --faint: #9b958c;
+  --backdrop: #000000a6;
+  --shadow-lg: 0 16px 48px #000000a6, 0 0 0 1px #ffffff0f;
 }
 
 :root[data-theme="light"] {
@@ -166,7 +212,7 @@
   --text: #3d362f;
   --text-strong: #1d1a17;
   --muted: #655c52;
-  --faint: #71675c;
+  --faint: #6a6055;
   --accent: #d9381e;
   --accent-strong: #bf3019;
   --on-accent: #ffffff;

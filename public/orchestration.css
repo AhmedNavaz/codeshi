@@ -99,3 +99,18 @@
 .plan-panel-actions { display: flex; gap: 8px; margin-top: 4px; }
 @media (max-width: 1100px) { .plan-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: var(--statusbar-height); width: min(var(--inspector-width, var(--inspector-width-default)), 80vw); box-shadow: var(--shadow-lg); } }
 @media (max-width: 760px) { .plan-panel { top: 44px; width: min(360px, 100vw); } }
+
+/* A plan running as tasks: one row per step with its task's state; a row opens that task. */
+.orchestration-progress { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; min-width: 0; }
+.orchestration-progress-step { display: grid; min-width: 0; }
+.orchestration-progress-open { display: flex; align-items: center; gap: 6px; height: 28px; min-width: 0; padding: 0 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; }
+.orchestration-progress-open:hover:enabled { background: var(--hover); }
+.orchestration-progress-open:disabled { cursor: default; opacity: .7; }
+.orchestration-progress-open .agent-icon { flex: none; }
+.orchestration-progress-state { flex: none; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.orchestration-progress-step[data-status=running] .orchestration-progress-state { color: var(--accent); }
+.orchestration-progress-step:is([data-status=complete], [data-status=integrated], [data-status=kept]) .orchestration-progress-state { color: var(--success); }
+.orchestration-progress-step:is([data-status=failed], [data-status=blocked], [data-status=lost]) .orchestration-progress-state { color: var(--danger); }
+.orchestration-progress-reason { padding: 0 6px 4px 28px; color: var(--faint); font-size: 11.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.orchestration-folder-option { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; }
+.orchestration-folder-option select { min-width: 0; max-width: 60%; font: 12px var(--font); }

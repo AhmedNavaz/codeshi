@@ -22,19 +22,21 @@ summary::-webkit-details-marker { display: none; }
 
 .icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 
-/* Buttons */
+/* Buttons. Three heights, from the tokens in editor-theme.css: small (--control-sm) for inline and status bar actions,
+   medium (--control-md) for buttons in panels and rows, large (--control-lg) for the actions that close a dialog. */
 .primary-button, .secondary-button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 28px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius);
-  font-size: 12px; font-weight: 500; white-space: nowrap;
+  height: var(--control-md); padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius);
+  font-size: var(--font-ui-md); font-weight: 500; white-space: nowrap;
 }
+:is(.panel-dialog-foot, .compact-dialog .form-actions, .memory-dialog .form-actions) :is(.primary-button, .secondary-button) { height: var(--control-lg); padding: 0 14px; }
 .primary-button { color: var(--on-accent); background: var(--accent); }
 .primary-button:hover:enabled { background: var(--accent-strong); }
 .secondary-button { color: var(--text); background: transparent; border-color: var(--border-strong); }
 .secondary-button:hover:enabled { background: var(--hover); }
 .icon-button {
-  display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; padding: 0;
-  border: 0; border-radius: 5px; background: transparent; color: var(--muted);
+  display: inline-grid; place-items: center; flex: none; width: var(--control-md); height: var(--control-md); padding: 0;
+  border: 0; border-radius: var(--radius); background: transparent; color: var(--muted);
 }
 .icon-button:hover:enabled { color: var(--text); background: var(--hover); }
 .refresh-button[aria-busy="true"] .icon { animation: spin .8s linear infinite; }
@@ -56,9 +58,9 @@ summary::-webkit-details-marker { display: none; }
 .workspace-toggle { display: none; }
 .sidebar-heading {
   display: flex; align-items: center; gap: 6px; height: 28px; margin-top: 2px; padding: 0 8px 0 16px;
-  color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); font-size: var(--font-ui-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
 }
-.count-badge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: 10px; line-height: 16px; letter-spacing: 0; text-align: center; }
+.count-badge { min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: var(--font-ui-xs); line-height: 18px; letter-spacing: 0; text-align: center; }
 .new-workspace { margin-left: auto; width: 22px; height: 22px; }
 .workspace-search { position: relative; display: block; flex: none; margin: 2px 10px 8px; }
 .workspace-search .icon { position: absolute; left: 8px; top: 50%; width: 14px; height: 14px; transform: translateY(-50%); color: var(--faint); pointer-events: none; }
@@ -69,10 +71,10 @@ summary::-webkit-details-marker { display: none; }
 .workspace-search input::placeholder { color: var(--faint); }
 .workspace-search input:focus { outline: none; border-color: var(--focus); }
 .workspace-list { flex: 1; min-height: 0; overflow: auto; padding: 0 6px 12px; }
-.empty-list { padding: 8px 10px; color: var(--muted); font-size: 12px; }
+.empty-list { padding: 8px 10px; color: var(--muted); font-size: var(--font-ui-md); }
 .workspace-group { margin: 1px 0; }
 .workspace-item {
-  display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px;
+  display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 1px; width: 100%; min-height: 30px; padding: 4px 8px;
   border: 0; border-radius: 5px; background: transparent; color: var(--text); text-align: left;
 }
 .workspace-item:disabled { opacity: 1; }
@@ -81,21 +83,23 @@ summary::-webkit-details-marker { display: none; }
 .workspace-item-heading { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .workspace-project-icon { width: 16px; height: 16px; flex: none; background: currentColor; color: var(--faint); -webkit-mask: var(--icon-folder) center / 16px no-repeat; mask: var(--icon-folder) center / 16px no-repeat; }
 .workspace-item.active .workspace-project-icon { color: var(--link); }
-.workspace-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.workspace-item-meta { flex: none; color: var(--faint); font-size: 11px; }
+.workspace-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-ui-base); line-height: 20px; }
+.workspace-item-meta { display: block; min-width: 0; padding-left: 24px; overflow: hidden; color: var(--faint); font-size: var(--font-ui-sm); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-item-meta.waiting .workspace-meta-state { color: var(--warning); }
+.workspace-item-meta.single :is(.workspace-meta-folders, .workspace-meta-separator) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .workspace-folder-disclosure > summary::before {
   content: ""; width: 14px; height: 14px; flex: none; background: currentColor; transition: transform .12s ease;
   -webkit-mask: var(--icon-chevron-right) center / 12px no-repeat; mask: var(--icon-chevron-right) center / 12px no-repeat;
 }
 /* Workspace rows: actions appear on hover or focus, replacing the meta text. */
 .workspace-row { position: relative; }
-.workspace-item-meta.single:not(.running) { display: none; }
-.workspace-item-meta.single.running { font-size: 0; }
-.workspace-item-meta.running::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--link); vertical-align: middle; animation: pulse 1.4s ease-in-out infinite; }
-.workspace-row .workspace-options { position: absolute; top: 50%; right: 4px; width: 22px; height: 22px; transform: translateY(-50%); opacity: 0; }
+.workspace-item-meta.single:not(.running, .waiting) { display: none; }
+.workspace-item-meta.running .workspace-meta-state::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--link); vertical-align: middle; animation: pulse 1.4s ease-in-out infinite; }
+.workspace-row .workspace-options { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; opacity: 0; }
 .workspace-options::before, .folder-options::before { content: ""; width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--icon-more) center / contain no-repeat; mask: var(--icon-more) center / contain no-repeat; }
 .workspace-row:hover .workspace-options, .workspace-row:focus-within .workspace-options { opacity: 1; }
-.workspace-row:hover .workspace-item-meta, .workspace-row:focus-within .workspace-item-meta { visibility: hidden; }
+/* The actions sit at the end of the name's line, which makes room for them; the second line stays readable. */
+.workspace-row:hover .workspace-item-heading, .workspace-row:focus-within .workspace-item-heading { padding-right: 24px; }
 /* Folders of the active multi-folder workspace; the selected one drives Files and Git. */
 .workspace-folders { list-style: none; margin: 1px 0 4px; padding: 0; }
 .workspace-folder-pick { display: flex; align-items: center; gap: 7px; width: 100%; height: 24px; padding: 0 8px 0 32px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; text-align: left; }
@@ -128,7 +132,7 @@ summary::-webkit-details-marker { display: none; }
 .remove-workspace:hover:enabled { color: var(--danger); background: var(--danger-bg); }
 .remove-workspace-dialog { width: min(440px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow); }
 .remove-workspace-dialog::backdrop { background: var(--backdrop); }
-.remove-workspace-dialog h2 { margin: 0; color: var(--text-strong); font-size: 16px; }
+.remove-workspace-dialog h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
 .remove-workspace-dialog p { margin: 14px 0 20px; color: var(--muted); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .remove-workspace-dialog strong { color: var(--text-strong); }
 .remove-workspace-dialog .project-error { color: var(--danger); }
@@ -611,8 +615,12 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 @container composer (max-width: 560px) { .composer-toolbar { flex-wrap: wrap; justify-content: flex-start; gap: 2px; } .composer-controls { display: contents; } }
 @container composer (max-width: 860px) { #picked-agent { display: none; } }
 @container composer (max-width: 700px) { #effort-button-label { display: none; } }
-@container composer (max-width: 690px) { .composer-controls .picker.mode-control select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
-@container composer (max-width: 600px) { .composer-controls .picker:is(.approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
+/* Before the row would wrap, the access and permissions pickers shrink to their icons, access first. The widths
+   are where the full row stops fitting; Orchestrate adds a button, so its thresholds sit higher. */
+@container composer (max-width: 800px) { .composer-controls .picker.mode-control select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
+@container composer (max-width: 670px) { .composer-controls .picker:is(.approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
+@container composer (max-width: 880px) { .composer:has(#orchestrate-toggle:not([hidden])) .composer-controls .picker.mode-control select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
+@container composer (max-width: 740px) { .composer:has(#orchestrate-toggle:not([hidden])) .composer-controls .picker:is(.approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; } }
 /* During a run Stop and Queue (and Add to run) take the place of Send. The pickers can't change during a run, so they
    show as icons; Add to run loses its label only when space is short. */
 .composer:has(#stop-button:not([hidden])) .composer-controls .picker:is(.mode-control, .approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; }
@@ -746,15 +754,15 @@ button.commit-hash:hover { text-decoration: underline; }
 /* Status bar */
 .status-bar {
   grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0;
-  height: var(--statusbar-height); padding: 0 6px; border-top: 1px solid var(--border); background: var(--statusbar-bg); color: var(--muted); font-size: 11px;
+  height: var(--statusbar-height); padding: 0 6px; border-top: 1px solid var(--border); background: var(--statusbar-bg); color: var(--muted); font-size: var(--font-ui-md);
 }
 .status-group { display: flex; align-items: center; gap: 2px; min-width: 0; }
-.provider-status { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px; border-radius: 3px; white-space: nowrap; cursor: pointer; }
+.provider-status { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 7px; border-radius: 4px; white-space: nowrap; cursor: pointer; }
 .provider-status:hover { background: var(--hover); }
 .provider-name { color: var(--text); }
 .provider-status.selected .provider-name { color: var(--text-strong); font-weight: 600; }
 .provider-status:has(.usage-meter:not([hidden])) .provider-state { display: none; }
-.usage-meter { display: inline-flex; align-items: center; gap: 5px; height: 20px; margin-left: 4px; padding: 0 6px; border: 0; border-radius: 3px; background: none; color: var(--text); font-size: 11px; font-variant-numeric: tabular-nums; }
+.usage-meter { display: inline-flex; align-items: center; gap: 5px; height: 22px; margin-left: 4px; padding: 0 7px; border: 0; border-radius: 4px; background: none; color: var(--text); font-size: var(--font-ui-md); font-variant-numeric: tabular-nums; }
 .usage-meter:hover, .usage-meter[aria-expanded="true"] { background: var(--hover); }
 .usage-label { color: var(--faint); }
 .usage-value { color: var(--text); }
@@ -763,8 +771,8 @@ button.commit-hash:hover { text-decoration: underline; }
 .status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--faint); }
 .status-dot.available { background: var(--success); }
 .status-dot.attention { background: var(--warning); }
-.status-button { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px; border: 0; border-radius: 3px; background: none; color: var(--muted); font-size: 11px; }
-.status-button .icon { width: 13px; height: 13px; }
+.status-button { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 7px; border: 0; border-radius: 4px; background: none; color: var(--muted); font-size: var(--font-ui-md); }
+.status-button .icon { width: 14px; height: 14px; }
 .status-button:hover { color: var(--text); background: var(--hover); }
 /* Software update in the status bar. Update to <version> and Restart to update are filled accent buttons that act on a
    click, with a chevron beside them for the release notes and Skip. The download shows as a ring that fills, and
@@ -800,8 +808,8 @@ button.commit-hash:hover { text-decoration: underline; }
 .update-progress.indeterminate > span { width: 30%; animation: update-slide 1.2s ease-in-out infinite; }
 @keyframes update-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 .appearance-options { display: inline-flex; }
-.appearance-options button { display: inline-grid; place-items: center; width: 22px; height: 20px; padding: 0; border: 0; border-radius: 3px; background: none; color: var(--faint); }
-.appearance-options button .icon { width: 13px; height: 13px; }
+.appearance-options button { display: inline-grid; place-items: center; width: 24px; height: 22px; padding: 0; border: 0; border-radius: 3px; background: none; color: var(--faint); }
+.appearance-options button .icon { width: 14px; height: 14px; }
 .appearance-options button:hover { color: var(--text); background: var(--hover); }
 .appearance-options button[aria-pressed="true"] { color: var(--text-strong); background: var(--chip-bg); }
 .appearance-status { margin: 0 6px 0 0; color: var(--warning); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -815,7 +823,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .import-dialog[open] { display: flex; flex-direction: column; }
 .import-dialog::backdrop, #workbench::backdrop { background: var(--backdrop); }
 .import-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 12px 14px 20px; border-bottom: 1px solid var(--border); }
-.import-dialog h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 600; }
+.import-dialog h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
 .import-dialog header p { max-width: 720px; margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .import-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px 10px 20px; border-bottom: 1px solid var(--border); }
 .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius); background: var(--chip-bg); }
@@ -886,7 +894,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .export-dialog { width: min(560px, calc(100vw - 32px)); max-width: none; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .export-dialog::backdrop { background: var(--backdrop); }
 .export-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 12px 14px 20px; border-bottom: 1px solid var(--border); }
-.export-dialog h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 600; }
+.export-dialog h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
 .export-dialog header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .export-body { display: grid; gap: 14px; padding: 16px 20px; }
 .export-options { display: grid; gap: 10px; }
@@ -1162,7 +1170,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .panel-heading { container-type: inline-size; }
 /* Written as .panel-tabs .panel-tab so it outranks the older icon-only rule for .panel-tab further down. */
 .panel-tabs .panel-tab { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; height: 100%; padding: 0 8px; }
-.panel-tab-label { font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+.panel-tab-label { font-size: var(--font-ui-sm); font-weight: 500; white-space: nowrap; }
 /* Four labelled tabs need about 270px. In a narrower panel only the current tab keeps its label, so it is always named. */
 @container (max-width: 275px) { .panel-tab:not([aria-selected="true"]) .panel-tab-label { display: none; } .panel-tabs .panel-tab:not([aria-selected="true"]) { width: 32px; padding: 0; } .panel-tabs .panel-tab[aria-selected="true"] { padding: 0 6px; } .panel-tabs { gap: 0; } }
 
@@ -1174,26 +1182,26 @@ button.commit-hash:hover { text-decoration: underline; }
 .panel-section.flash { background: var(--hover); border-radius: 8px; }
 .panel-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 4px; }
 .panel-section-head .icon-button { width: 24px; height: 24px; color: var(--muted); }
-.panel-section-title { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
-.panel-count { padding: 0 6px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: 11px; font-weight: 600; line-height: 17px; }
-.panel-lead { margin: 6px 0 10px; color: var(--muted); font-size: 12px; line-height: 1.55; }
-.panel-empty { margin: 2px 0 4px; color: var(--muted); font-size: 12px; line-height: 1.55; }
-.panel-muted { color: var(--faint); font-size: 11.5px; line-height: 1.5; }
+.panel-section-title { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text-strong); font-size: var(--font-ui-base); font-weight: 600; }
+.panel-count { padding: 0 6px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: var(--font-ui-xs); font-weight: 600; line-height: 18px; }
+.panel-lead { margin: 6px 0 10px; color: var(--muted); font-size: var(--font-ui-md); line-height: 1.55; }
+.panel-empty { margin: 2px 0 4px; color: var(--muted); font-size: var(--font-ui-md); line-height: 1.55; }
+.panel-muted { color: var(--faint); font-size: var(--font-ui-sm); line-height: 1.5; }
 .panel-section-foot { margin-top: 6px; }
 .panel-list { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
 .panel-list:empty { display: none; }
-.panel-group-title { margin: 8px 0 4px; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
-.panel-row { position: relative; display: grid; gap: 2px; margin: 0 -8px; padding: 6px 8px; border-radius: 6px; font-size: 12px; line-height: 1.45; }
+.panel-group-title { margin: 8px 0 4px; color: var(--faint); font-size: var(--font-ui-xs); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+.panel-row { position: relative; display: grid; gap: 2px; margin: 0 -8px; padding: 6px 8px; border-radius: 6px; font-size: var(--font-ui-md); line-height: 1.45; }
 .panel-row:hover, .panel-row:focus-within { background: var(--hover); }
 .panel-row-title { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--text); }
 .panel-row-text { min-width: 0; overflow-wrap: anywhere; color: var(--text); white-space: pre-wrap; }
 .panel-row-text.clamp { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .panel-row-text.clamp.expanded { display: block; -webkit-line-clamp: none; }
-.panel-row-more { padding: 0; border: 0; background: none; color: var(--link); font-size: 11px; }
+.panel-row-more { padding: 0; border: 0; background: none; color: var(--link); font-size: var(--font-ui-sm); }
 .panel-row-more:hover { text-decoration: underline; }
 .panel-row-title .secondary-button { flex: none; height: 24px; margin-left: auto; padding: 0 10px; font-size: 11.5px; }
-.panel-row-time { flex: none; margin-left: auto; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-.panel-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; min-width: 0; color: var(--faint); font-size: 11px; }
+.panel-row-time { flex: none; margin-left: auto; color: var(--faint); font-size: var(--font-ui-sm); font-variant-numeric: tabular-nums; }
+.panel-row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; min-width: 0; color: var(--faint); font-size: var(--font-ui-sm); }
 .panel-row-meta:empty { display: none; }
 .panel-row-meta .ok { color: var(--success); }
 .panel-row-meta .bad, .panel-row-meta.bad { color: var(--warning); }
@@ -1260,24 +1268,24 @@ button.commit-hash:hover { text-decoration: underline; }
 .activity-remember:hover { color: var(--text); background: var(--hover); }
 
 /* The current task: what it is, who worked on it, three numbers, then its limits as bars once any is set. */
-.task-card { display: grid; gap: 7px; font-size: 12px; }
+.task-card { display: grid; gap: 8px; font-size: var(--font-ui-md); }
 .task-card-head, .task-card-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-.task-prompt { min-width: 0; overflow: hidden; color: var(--text-strong); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.task-prompt { min-width: 0; overflow: hidden; color: var(--text-strong); font-size: var(--font-ui-base); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .task-agents { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--text); }
 .task-agents .message-avatar { width: 14px; height: 14px; }
 .task-agents .message-avatar::before { width: 12px; height: 12px; }
 .task-arrow { margin: 0 2px; color: var(--faint); }
-.status-pill { flex: none; padding: 0 7px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.status-pill { flex: none; padding: 0 8px; border-radius: 10px; background: var(--chip-bg); color: var(--muted); font-size: var(--font-ui-xs); font-weight: 600; line-height: 20px; white-space: nowrap; }
 .status-pill.working { color: var(--link); }
 .status-pill.done { color: var(--success); }
 .status-pill.stopped { color: var(--warning); }
 .status-pill.failed { color: var(--danger); }
 .stat-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .stat { display: grid; gap: 1px; min-width: 0; padding: 7px 9px; border-radius: 6px; background: var(--surface-raised); }
-.stat strong { overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.stat span { overflow: hidden; color: var(--faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.stat strong { overflow: hidden; color: var(--text-strong); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.stat span { overflow: hidden; color: var(--faint); font-size: var(--font-ui-xs); text-overflow: ellipsis; white-space: nowrap; }
 .task-limits { display: grid; gap: 5px; margin-top: 2px; }
-.limit-row { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--muted); font-size: 11.5px; }
+.limit-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--muted); font-size: var(--font-ui-md); }
 .limit-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .limit-bar { position: relative; height: 4px; border-radius: 2px; background: var(--chip-bg); overflow: hidden; }
 .limit-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--used, 0%); border-radius: 2px; background: var(--success); }
@@ -1292,9 +1300,9 @@ button.commit-hash:hover { text-decoration: underline; }
 .task-card-line, .task-agents { flex-wrap: wrap; }
 .results-body { display: grid; gap: 8px; font-size: 12px; }
 .results-controls { display: flex; flex-wrap: wrap; gap: 6px 10px; }
-.results-control { display: grid; gap: 2px; min-width: 0; color: var(--faint); font-size: 10.5px; }
+.results-control { display: grid; gap: 2px; min-width: 0; color: var(--faint); font-size: var(--font-ui-xs); }
 .results-select { max-width: 100%; min-height: 24px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-raised); color: var(--text); font: inherit; font-size: 11.5px; }
-.results-table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.results-table { width: 100%; border-collapse: collapse; font-size: var(--font-ui-sm); font-variant-numeric: tabular-nums; }
 .results-table th, .results-table td { padding: 3px 4px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
 .results-table th:first-child { text-align: left; color: var(--text); font-weight: 500; }
 .results-table tr:first-child th { color: var(--faint); font-weight: 500; }
@@ -1316,7 +1324,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .panel-dialog > form { display: contents; }
 .panel-dialog::backdrop { background: var(--backdrop); }
 .panel-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex: none; padding: 16px 12px 12px 20px; border-bottom: 1px solid var(--border); }
-.panel-dialog-head h2 { margin: 0 0 3px; color: var(--text-strong); font-size: 15px; font-weight: 600; }
+.panel-dialog-head h2 { margin: 0 0 3px; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
 .panel-dialog-head p { margin: 0; }
 .panel-dialog-body { min-height: 0; overflow: auto; padding: 14px 20px; }
 .panel-dialog-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; padding: 10px 20px 14px; border-top: 1px solid var(--border); }
@@ -1329,7 +1337,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .limit-agent { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-size: 12px; }
 .memory-dialog { width: min(480px, calc(100vw - 48px)); padding: 18px 20px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); }
 .memory-dialog::backdrop { background: var(--backdrop); }
-.memory-dialog h2 { margin: 0 0 4px; color: var(--text-strong); font-size: 15px; font-weight: 600; }
+.memory-dialog h2 { margin: 0 0 4px; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
 .memory-fields { display: flex; gap: 12px; margin: 10px 0; }
 .memory-fields select { height: 28px; padding: 0 6px; border: 1px solid var(--input-border); border-radius: var(--radius); background: var(--surface-input); color: var(--text); font: inherit; font-size: 12px; }
 .memory-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
@@ -1379,7 +1387,7 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 /* Side panels: Agents and Git toggle from the top right of the header. An open panel shows the same two as tabs at
    its top, the selected one joined to the panel like a folder tab. Tabs and toggles keep one size in every state. */
 .panel-toggles { display: inline-flex; align-items: center; gap: 2px; }
-.panel-toggle { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.panel-toggle { display: inline-flex; align-items: center; gap: 6px; height: var(--control-md); padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: var(--font-ui-md); white-space: nowrap; }
 .panel-toggle .icon { width: 15px; height: 15px; }
 .panel-toggle:hover:enabled { background: var(--hover); color: var(--text); }
 .panel-toggle:disabled { opacity: .45; }

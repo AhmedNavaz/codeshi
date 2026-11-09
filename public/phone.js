@@ -986,7 +986,7 @@
     }
     if (!S.projects.length) host.append(node('p', 'sheet-text', 'Add a workspace in Codeshi on your computer.'));
     const foot = node('div', 'sheet-foot');
-    foot.append(segmented('Appearance', [['system', 'System'], ['light', 'Light'], ['graphite', 'Dark']], window.relayPhoneTheme?.choice() || 'system', value => { window.relayPhoneTheme?.choose(value); drawSheet(); }));
+    foot.append(segmented('Appearance', [['system', 'System'], ['light', 'Light'], ['dark', 'Dark'], ['graphite', 'Graphite']], window.relayPhoneTheme?.choice() || 'system', value => { window.relayPhoneTheme?.choose(value); drawSheet(); }));
     foot.append(node('p', '', 'Work and sign-ins stay on your computer. Review, merging, files and the terminal are there too.'));
     const move = button('Move to another browser', () => attempt(async () => {
       const response = await phoneFetch('/phone/handover', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' });

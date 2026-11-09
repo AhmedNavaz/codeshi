@@ -1,9 +1,11 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), api = window.relayUI, dialog = $('setup-dialog'), desktop = window.relayDesktop;
-  // First run: a welcome, three short steps and a summary, then the app.
+  // First run: a welcome, four short steps and a summary, then the app. The workspace comes first, so everything after
+  // it is about a real project: then the way you want to work (Normal or Flow), the agents, and your defaults.
   // Existing profiles open normally after updates. The step number is saved so setup can resume.
-  const steps = ['Agents', 'Preferences', 'Project'], titles = ['Connect your agents', 'Make it yours', 'Start your first project'], last = steps.length - 1;
+  const steps = ['Workspace', 'Working style', 'Agents', 'Defaults'], titles = ['Start with your workspace', 'Choose your working style', 'Connect your agents', 'Make it yours'], last = steps.length - 1;
+  const STEP = { workspace: 0, style: 1, agents: 2, defaults: 3 };
   const installGuides = { claude: 'https://code.claude.com/docs/en/overview', codex: 'https://github.com/openai/codex', gemini: 'https://antigravity.google/docs/install' };
   const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
   const button = (text, fn, cls = 'secondary-button') => { const el = node('button', text, cls); el.type = 'button'; el.addEventListener('click', () => perform(fn)); return el; };
@@ -15,7 +17,7 @@
   let connectionSignature = '';
   const connectionState = () => { const state = api.getState(); return JSON.stringify([state.accounts, state.accountsChecking, state.accountChecks]); };
   let preferences, screen = 'welcome', reviewing = false, shownStep = -1, advancedOpen = false;
-  let step = 0, busy = false, revision = 0, catalog = {}, draft = {provider:'codex',model:null,effort:null,mode:'edit',billing:'subscription'}, projectName = '', projectPaths = '', created = '';
+  let step = 0, busy = false, revision = 0, catalog = {}, draft = {provider:'codex',model:null,effort:null,mode:'edit',billing:'subscription',view:'normal'}, projectName = '', projectPaths = '', created = '', createdId = '', readiness = null;
   function progress() {
     const completed = preferences?.onboarding?.completedAt;
     // The sidebar launcher is for unfinished setup only; Settings › Setup guide reopens it later.
@@ -39,7 +41,15 @@
   function reveal() { const shell = document.querySelector('.app-shell'); shell?.classList.remove('app-reveal'); shell?.classList.add('app-reveal'); }
   function leave() { dialog.close(); reveal(); }
   async function dismiss() { await save({dismissed:true}); leave(); }
-  async function complete() { await save({completed:true}); leave(); }
+  // The working style chosen in setup is the view Codeshi opens in. Flow needs a workspace, so without one it is
+  // remembered and Flow opens with the first workspace.
+  function applyView() {
+    try { localStorage.setItem('throughline:flow', draft.view === 'flow' ? 'on' : 'off'); } catch { /* A convenience only. */ }
+    const flow = window.relayFlow;
+    if (!flow || !api.getState().projectId) return;
+    if (draft.view === 'flow' && !flow.isOn?.()) flow.enter?.(); else if (draft.view !== 'flow' && flow.isOn?.()) flow.leave?.();
+  }
+  async function complete() { await save({completed:true}); leave(); if (!reviewing) applyView(); }
   async function openLink(url) { if (desktop) await desktop.openExternal(url); else window.open(url,'_blank','noopener,noreferrer'); }
   function show(name) {
     screen = name; dialog.dataset.screen = name; shownStep = -1;
@@ -63,11 +73,12 @@
       const state = api.getState(), connected = state.accounts?.[draft.provider]?.authenticated === true, count = state.projects.length;
       const summary = node('ul',undefined,'onboarding-summary');
       const item = (done, title, text) => { const row = node('li',undefined,done ? 'done' : 'todo'); row.append(node('strong',title),node('span',text)); summary.append(row); };
-      item(connected,`${providerName(draft.provider)} starts the conversation`,connected ? 'Connected with your own account.' : 'Connect it in Settings before your first message.');
-      item(true,{light:'Light theme',graphite:'Dark theme'}[window.relayTheme?.preference()] || 'System theme',draft.mode === 'read' ? 'New workspaces start read only.' : 'Agents can edit files in your workspaces.');
       item(count > 0,count ? (created ? `${created} is ready` : `${count} workspace${count === 1 ? ' is' : 's are'} ready`) : 'No workspace yet',count ? 'Your conversation is waiting.' : 'Choose your project folders from the sidebar.');
+      item(true,draft.view === 'flow' ? 'You start in Flow' : 'You start in Normal',draft.view === 'flow' ? 'Codeshi chooses the agent and model for each message.' : 'You choose the agent, model and effort for each message.');
+      item(connected,draft.view === 'flow' ? `${providerName(draft.provider)} is connected` : `${providerName(draft.provider)} starts the conversation`,connected ? 'Connected with your own account.' : 'Connect it in Settings before your first message.');
+      item(true,{light:'Light theme',dark:'Dark theme',graphite:'Graphite theme'}[window.relayTheme?.preference()] || 'System theme',draft.mode === 'read' ? 'New workspaces start read only.' : 'Agents can edit files in your workspaces.');
       const open = button('Open Codeshi',()=>complete(),'primary-button onboarding-cta');
-      host.append(node('p','You can change any of this later in Settings.','onboarding-tagline'),summary,open); open.focus();
+      host.append(node('p','You can change any of this later in Settings, and switch between Normal and Flow at any time.','onboarding-tagline'),summary,open); open.focus();
     }
   }
   function renderStep() {
@@ -78,14 +89,17 @@
     $('setup-step-status').textContent = `Step ${step + 1} of ${steps.length}`;
     $('close-setup').textContent = reviewing ? 'Close' : 'Skip for now';
     const heading = node('h2',titles[step],'onboarding-step-title'); heading.tabIndex = -1; host.append(heading);
-    if (step === 0) agents(host);
-    if (step === 1) preferencesStep(host,version);
-    if (step === 2) project(host);
+    if (step === STEP.workspace) workspace(host,version);
+    if (step === STEP.style) workingStyle(host);
+    if (step === STEP.agents) agents(host);
+    if (step === STEP.defaults) preferencesStep(host,version);
     if (entering) heading.focus();
   }
   function agents(host) {
     connectionSignature = connectionState();
-    host.append(node('p',`Codeshi works with Claude Code, Codex and Gemini on ${computer}, signed in with your own accounts. Choose which one starts the conversation; you can switch at any time without losing the thread.`,'setup-description'));
+    host.append(node('p',draft.view === 'flow'
+      ? `Codeshi works with Claude Code, Codex and Gemini on ${computer}, signed in with your own accounts. In Flow, Codeshi chooses the agent for each message from the ones you connect, so connect every account you have.`
+      : `Codeshi works with Claude Code, Codex and Gemini on ${computer}, signed in with your own accounts. Choose which one starts the conversation; you can switch at any time without losing the thread.`,'setup-description'));
     const cards = node('div',undefined,'setup-agent-grid'); host.append(cards);
     for (const provider of ['claude','codex','gemini']) {
       const account = api.getState().accounts?.[provider], check = api.getState().accountChecks?.[provider], selected = draft.provider === provider, plan = account?.planType || account?.subscriptionType;
@@ -117,12 +131,12 @@
     const themes = node('div',undefined,'setup-theme-grid');
     // System shows both palettes, as it follows the computer.
     const sample = value => {
-      if (value === 'system') { const pair = node('span',undefined,'theme-preview-pair'); pair.append(sample('graphite'),sample('light')); return pair; }
-      const preview = node('span',undefined,value === 'light' ? 'theme-preview light' : 'theme-preview'), rail = node('i'), canvas = node('span',undefined,'theme-preview-canvas'); rail.append(node('b'),node('b'),node('b'));
+      if (value === 'system') { const pair = node('span',undefined,'theme-preview-pair'); pair.append(sample('dark'),sample('light')); return pair; }
+      const preview = node('span',undefined,`theme-preview ${value}`), rail = node('i'), canvas = node('span',undefined,'theme-preview-canvas'); rail.append(node('b'),node('b'),node('b'));
       canvas.append(node('b','acme-shop'),node('em','✓ Tests pass'),node('i'),node('i'),node('small','Ask anything about your project…')); preview.append(rail,canvas); return preview;
     };
     // Choosing saves at once, as in the status bar and Settings, and all three show the same preference.
-    for (const [value,label,text] of [['system','System','Follows your computer'],['graphite','Dark','Warm black surfaces'],['light','Light','Cream paper surfaces']]) {
+    for (const [value,label,text] of [['system','System','Follows your computer'],['light','Light','Cream paper surfaces'],['dark','Dark','Near-black surfaces'],['graphite','Graphite','Warm black surfaces']]) {
       const choice = button('',()=>window.relayTheme?.choose(value),'setup-theme'); choice.setAttribute('data-appearance',value); choice.setAttribute('aria-pressed',String(window.relayTheme?.preference() === value));
       choice.append(sample(value),node('strong',label),node('span',text,'muted')); themes.append(choice);
     }
@@ -155,25 +169,107 @@
   async function createWorkspace(folders, name) {
     const project = await api.post('/api/projects',{folders,...(name ? {name} : {})},null);
     await api.refreshProjects(); await api.selectProject(project.id);
-    created = project.name || 'Your workspace'; projectPaths = ''; projectName = ''; render();
+    created = project.name || 'Your workspace'; createdId = project.id; readiness = null; projectPaths = ''; projectName = ''; render();
   }
-  function project(host) {
+  async function addFolders(folders) {
+    await api.post('/api/projects/' + encodeURIComponent(createdId) + '/folders',folders.length === 1 ? {path:folders[0]} : {folders},null);
+    await api.refreshProjects(); readiness = null; render();
+  }
+  // What each folder is, from what is already on disk: whether Git tracks it, on which branch and with how many
+  // changes, and the kind of project its top-level files suggest. Nothing is installed or run.
+  const KINDS = [['package.json','JavaScript or TypeScript'],['Cargo.toml','Rust'],['go.mod','Go'],['pyproject.toml','Python'],['requirements.txt','Python'],['Gemfile','Ruby'],['pom.xml','Java'],['build.gradle','Java or Kotlin'],['build.gradle.kts','Kotlin'],['Package.swift','Swift'],['pubspec.yaml','Dart or Flutter'],['composer.json','PHP'],['mix.exs','Elixir'],['deno.json','Deno'],['CMakeLists.txt','C or C++']];
+  async function inspect(projectId, version) {
+    const project = api.getState().projects.find(entry => entry.id === projectId), folders = project?.folders || [];
+    const git = await api.api('/api/git',{},projectId).catch(() => null);
+    const rows = await Promise.all(folders.map(async folder => {
+      const repo = git?.repositories?.find(entry => entry.folderId === folder.id);
+      const listing = await api.api('/api/files?folderId=' + encodeURIComponent(folder.id),{},projectId).catch(() => null);
+      const names = new Set((listing?.entries || []).map(entry => entry.name)), extra = (listing?.entries || []).some(entry => /\.(csproj|sln)$/.test(entry.name)) ? ['.NET'] : [];
+      const kinds = [...new Set([...KINDS.filter(([file]) => names.has(file)).map(([,kind]) => kind), ...extra])];
+      return { name: folder.displayName || folder.name, path: folder.path, available: folder.available !== false && Boolean(listing), git: repo?.available ? `Git · ${repo.branch}${repo.totalChanges ? ` · ${repo.totalChanges} change${repo.totalChanges === 1 ? '' : 's'}` : ' · no changes'}` : 'Not a Git repository', tracked: Boolean(repo?.available), kinds };
+    }));
+    if (createdId === projectId && revision === version) { readiness = rows; render(); }
+  }
+  function workspace(host, version) {
     const count = api.getState().projects.length;
-    host.append(node('p','Choose the folders for your project. After setup, you can review earlier Claude Code and Codex conversations linked to those folders.','setup-description'));
-    if (created) host.append(node('p',`${created} is ready. You can add more folders to it later in workspace settings.`,'setup-ready'));
-    else if (count) host.append(node('p',`${count} workspace${count === 1 ? ' is' : 's are'} ready. Your saved chats stay as they are.`,'setup-ready'));
-    const grid = node('div',undefined,'setup-start-grid');
-    const card = (cls, title, text, fn) => { const el = button('',fn,'setup-start-card ' + cls); el.append(node('i',undefined,'setup-start-icon'),node('strong',title),node('span',text)); grid.append(el); return el; };
-    if (desktop) card('setup-folder-card',created ? 'Open another folder' : 'Open a project folder',`Pick a folder on ${computer}. It becomes a workspace with its own conversation.`,async()=>{const picked=await desktop.pickFolder();if(picked)await createWorkspace(Array.isArray(picked)?picked:[picked]);});
-    host.append(grid);
-    const name = field('Workspace name (optional)','input',projectName), paths = field('Folder paths, one per line','textarea',projectPaths); paths.input.rows = 2; paths.input.placeholder = '~/projects/frontend\n~/projects/backend'; name.input.maxLength = 120;
-    name.input.addEventListener('input',()=>{projectName=name.input.value;}); paths.input.addEventListener('input',()=>{projectPaths=paths.input.value;});
+    host.append(node('p','A workspace is one project: one or more folders, such as a frontend and a backend, with one conversation for all of them. Agents work only inside its folders.','setup-description'));
+    if (createdId) {
+      host.append(node('p',`${created} is ready.`,'setup-ready'));
+      const list = node('ul',undefined,'setup-readiness'); list.setAttribute('aria-label','Folders in ' + created);
+      if (!readiness) { list.append(node('li','Checking the folders…','setup-footnote')); inspect(createdId,version); }
+      else for (const row of readiness) {
+        const item = node('li',undefined,'setup-readiness-row'); item.dataset.ready = String(row.available);
+        const text = node('div',undefined,'setup-readiness-text'); text.append(node('strong',row.name),node('span',row.path,'setup-readiness-path'));
+        const facts = node('div',undefined,'setup-readiness-facts');
+        facts.append(node('span',row.available ? row.git : 'Folder not found',`setup-chip${row.available && row.tracked ? ' positive' : row.available ? '' : ' warning'}`));
+        for (const kind of row.kinds) facts.append(node('span',kind,'setup-chip'));
+        item.append(text,facts); list.append(item);
+      }
+      host.append(list);
+      if (desktop) host.append(button('Add more folders',async()=>{const picked=await desktop.pickFolder();if(picked)await addFolders(Array.isArray(picked)?picked:[picked]);}));
+      return;
+    }
+    if (count) host.append(node('p',`${count} workspace${count === 1 ? ' is' : 's are'} ready. Your saved chats stay as they are. Continue to keep using ${count === 1 ? 'it' : 'them'}, or create another below.`,'setup-ready'));
+    const name = field('Workspace name (optional)','input',projectName); name.input.maxLength = 120; name.input.placeholder = 'Named after the first folder if you leave it empty';
+    name.input.addEventListener('input',()=>{projectName=name.input.value;}); host.append(name.wrap);
+    const create = folders => createWorkspace(folders,projectName.trim());
+    if (desktop) {
+      // Choose folders, or drop them here from Finder or Explorer.
+      const zone = button('',async()=>{const picked=await desktop.pickFolder();if(picked)await create(Array.isArray(picked)?picked:[picked]);},'setup-drop');
+      zone.append(node('i',undefined,'setup-start-icon'),node('strong','Choose project folders'),node('span',`Pick one or more folders on ${computer}, or drop them here.`));
+      zone.addEventListener('dragover',event=>{event.preventDefault();zone.classList.add('dragging');});
+      zone.addEventListener('dragleave',()=>zone.classList.remove('dragging'));
+      zone.addEventListener('drop',event=>{
+        event.preventDefault(); zone.classList.remove('dragging');
+        const paths = [...new Set([...(event.dataTransfer?.files || [])].map(file => desktop.pathForFile?.(file) || '').filter(Boolean))];
+        if (!paths.length) { error('Drop folders from Finder or Explorer, or choose them with the button.'); return; }
+        perform(()=>create(paths));
+      });
+      host.append(zone);
+    }
+    const paths = field('Folder paths, one per line','textarea',projectPaths); paths.input.rows = 2; paths.input.placeholder = '~/projects/frontend\n~/projects/backend';
+    paths.input.addEventListener('input',()=>{projectPaths=paths.input.value;});
     const manual = node('details',undefined,'setup-advanced setup-paths'); manual.open = !desktop || Boolean(projectPaths);
-    manual.append(node('summary','Enter folder paths instead'),name.wrap,paths.wrap,button('Create workspace',async()=>{const folders=[...new Set(projectPaths.split('\n').map(text=>text.trim()).filter(Boolean))];if(!folders.length)throw Error('Enter at least one project folder.');await save();await createWorkspace(folders,projectName.trim());}));
+    manual.append(node('summary','Enter folder paths instead'),paths.wrap,button('Create workspace',async()=>{const folders=[...new Set(projectPaths.split('\n').map(text=>text.trim()).filter(Boolean))];if(!folders.length)throw Error('Enter at least one project folder.');await save();await create(folders);}));
     host.append(manual);
+    if (!count) host.append(node('p','You can also skip this and add folders later from the sidebar.','setup-footnote'));
+  }
+  // Normal and Flow side by side: a small picture of each layout and three short lines, so the choice reads at a glance.
+  const STYLES = [
+    ['normal','Normal','Full control',['You choose the agent and model','Every panel: Git, terminal, tasks','Asks before switching agents']],
+    ['flow','Flow','Outcome first',['Codeshi chooses the agent and model','Just the chat, with simple cards','Switches agents itself near a limit']],
+  ];
+  // The layout in miniature: Normal has the sidebar, the chat over a terminal, and a side panel; Flow has the chat between two columns of cards.
+  function styleArt(value) {
+    const art = node('span',undefined,'setup-style-art ' + value), part = (cls,bars) => { const el = node('i',undefined,cls); for (let n = 0; n < bars; n++) el.append(node('b')); return el; };
+    art.setAttribute('aria-hidden','true');
+    const chat = part('art-chat',3); chat.append(node('em'));
+    if (value === 'flow') art.append(part('art-cards',2),chat,part('art-cards',2));
+    else { const main = node('span',undefined,'art-main'); main.append(chat,part('art-terminal',2)); art.append(part('art-rail',4),main,part('art-panel',3)); }
+    return art;
+  }
+  function workingStyle(host) {
+    host.append(node('p','Two ways to work with the same agents and the same conversation. Pick the one to start with.','setup-description'));
+    const grid = node('div',undefined,'setup-style-grid'); grid.setAttribute('role','radiogroup'); grid.setAttribute('aria-label','Working style');
+    for (const [value,label,tagline,points] of STYLES) {
+      const card = button('',()=>{draft.view=value;render();},'setup-style'); card.dataset.view = value;
+      card.setAttribute('role','radio'); card.setAttribute('aria-checked',String(draft.view === value)); card.tabIndex = draft.view === value ? 0 : -1;
+      const head = node('span',undefined,'setup-style-head'), names = node('span',undefined,'setup-style-names'), check = node('i',undefined,'setup-style-check'); check.setAttribute('aria-hidden','true');
+      names.append(node('strong',label),node('span',tagline,'setup-style-tagline')); head.append(names,check);
+      const list = node('span',undefined,'setup-style-points');
+      for (const text of points) list.append(node('span',text));
+      card.append(styleArt(value),head,list); grid.append(card);
+    }
+    // Arrow keys move between the two, as in any radio group.
+    grid.addEventListener('keydown',event=>{
+      if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) return;
+      event.preventDefault(); draft.view = draft.view === 'flow' ? 'normal' : 'flow'; render();
+      document.querySelector(`.setup-style[data-view="${draft.view}"]`)?.focus();
+    });
+    host.append(grid,node('p','You can switch at any time with the Flow button in the header, or in Settings › General.','setup-footnote'));
   }
   async function open({review = false} = {}) {
-    await ready; draft = {...preferences.defaults}; error();
+    await ready; draft = {view:'normal',...preferences.defaults}; error();
     reviewing = review; step = review ? 0 : Math.min(preferences.onboarding?.step || 0, last); hideLaunch(); show('flow');
   }
   $('open-setup').addEventListener('click',()=>perform(()=>open()));
@@ -188,10 +284,10 @@
   });
   $('setup-back').addEventListener('click',()=>perform(()=>step === 0 && !reviewing ? show('welcome') : move(Math.max(0,step-1))));
   $('setup-next').addEventListener('click',()=>perform(async()=>{if(step<last)return move(step+1);if(reviewing)return complete();await save();show('done');}));
-  window.addEventListener('relay-state',()=>{if(dialog.open && screen === 'flow' && step===0 && !busy && connectionSignature!==connectionState())render();});
-  window.addEventListener('relay-account',()=>{if(dialog.open && screen === 'flow' && step===0 && !busy)render();});
+  window.addEventListener('relay-state',()=>{if(dialog.open && screen === 'flow' && step===STEP.agents && !busy && connectionSignature!==connectionState())render();});
+  window.addEventListener('relay-account',()=>{if(dialog.open && screen === 'flow' && step===STEP.agents && !busy)render();});
   const ready = api.api('/api/preferences',{},null).then(value=>{
-    preferences = value; step = Math.min(value.onboarding?.step || 0, last); draft = {...value.defaults}; progress();
+    preferences = value; step = Math.min(value.onboarding?.step || 0, last); draft = {view:'normal',...value.defaults}; progress();
     if (value.firstRun) show('welcome');
     return value;
   }).catch(e=>{preferences={defaults:draft,onboarding:{step:0}};api.showNotice('Setup preferences could not be loaded. '+e.message);}).finally(()=>{hideLaunch();window.dispatchEvent(new CustomEvent('relay-setup-ready'));});

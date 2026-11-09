@@ -603,3 +603,65 @@ test('specialist roles are recorded and attributed in task ledger usageByRole (#
   assert.equal(byRole.frontend.runs, 1);
   assert.equal(byRole.qa.runs, 1);
 });
+
+// Run as tasks (#108): an approved plan's steps start as tasks, with the agent each row showed and the conversation's own
+// access, waiting for the steps they depend on. Nothing starts unless every step can.
+test('a saved plan runs its steps as tasks that wait for the steps they depend on, and closes as one group', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), app = await f.launch(), api = client(app);
+  const [plan] = (await api.plan({ action: 'create', goal: 'Add the items API and page.' })).body.orchestrations;
+  const steps = [step('s1'), step('s2', { dependsOn: ['s1'] }), step('s3', { agent: { provider: 'codex', model: null, effort: null } })];
+  assert.equal((await api.plan({ action: 'update', id: plan.id, revision: 0, steps })).status, 200);
+  const codex = { provider: 'codex', model: null, effort: null }, assignments = { s1: codex, s2: codex, s3: codex };
+  // A stale view, a step without an agent, or an agent other than the one the step names starts nothing.
+  assert.equal((await api.plan({ action: 'run', id: plan.id, revision: 0, assignments })).status, 409);
+  const missing = await api.plan({ action: 'run', id: plan.id, revision: 1, assignments: { s1: codex, s3: codex } });
+  assert.equal(missing.status, 400); assert.match(missing.body.error, /Choose an agent for step 2/);
+  const changed = await api.plan({ action: 'run', id: plan.id, revision: 1, assignments: { ...assignments, s3: { provider: 'claude' } } });
+  assert.equal(changed.status, 409); assert.match(changed.body.error, /Step 3’s agent changed/);
+  assert.deepEqual(api.c().parallelTasks || [], []);
+  assert.equal(api.c().orchestrations[0].status, 'draft');
+
+  const ran = await api.plan({ action: 'run', id: plan.id, revision: 1, assignments });
+  assert.equal(ran.status, 200, JSON.stringify(ran.body).slice(0, 300));
+  const running = api.c().orchestrations[0], tasks = api.c().parallelTasks;
+  assert.equal(running.status, 'running');
+  assert.deepEqual(Object.keys(running.tasks), ['s1', 's2', 's3']);
+  assert.deepEqual(tasks.map(task => [task.title, task.plan.number, task.accessMode, task.approvalPolicy]), [1, 2, 3].map(n => [`${n}. Step s${n}`, n, api.c().mode, api.c().approvalPolicy || 'ask']));
+  assert.deepEqual(tasks[1].dependsOn, [running.tasks.s1]);
+  assert.equal(tasks[0].dependsOn, null);
+  assert.equal((await api.plan({ action: 'run', id: plan.id, revision: running.revision, assignments })).status, 409, 'A plan runs once.');
+
+  await until(() => api.c().parallelTasks.every(task => task.status === 'complete'), 30000);
+  const prompts = f.captures().map(capture => JSON.stringify(capture.payload));
+  for (const n of [1, 2, 3]) assert.ok(prompts.some(text => text.includes(`step ${n} of 3`)), `Step ${n} was asked for its own part.`);
+  assert.ok(prompts.some(text => text.includes('Do s2.') && text.includes('Step 1: Step s1')), 'Step 2 knows the step it builds on.');
+
+  // A step's task can't split again: only the workspace chat has tasks.
+  const lane = api.broker().tasks.lanes.get(running.tasks.s1), laneC = lane.c;
+  const own = lane.broker.orchestrationAction(laneC, { action: 'create', goal: 'Split again.' }).orchestrations[0];
+  lane.broker.orchestrationAction(laneC, { action: 'update', id: own.id, revision: 0, steps: [step('s1')] });
+  assert.throws(() => lane.broker.orchestrationAction(laneC, { action: 'run', id: own.id, revision: 1, assignments: { s1: codex } }), /can’t split into more tasks/);
+
+  const closed = await api.plan({ action: 'close', id: plan.id });
+  assert.equal(closed.status, 200, JSON.stringify(closed.body).slice(0, 300));
+  assert.equal(api.c().orchestrations[0].status, 'closed');
+  assert.ok(api.c().parallelTasks.every(task => task.closed));
+});
+
+test('stopping a plan stops the working step and cancels the steps that have not started', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), app = await f.launch(), api = client(app);
+  f.scenario({ hang: true });
+  const [plan] = (await api.plan({ action: 'create', goal: 'Two steps in order.' })).body.orchestrations;
+  assert.equal((await api.plan({ action: 'update', id: plan.id, revision: 0, steps: [step('s1'), step('s2', { dependsOn: ['s1'] })] })).status, 200);
+  const codex = { provider: 'codex', model: null, effort: null };
+  assert.equal((await api.plan({ action: 'run', id: plan.id, revision: 1, assignments: { s1: codex, s2: codex } })).status, 200);
+  await until(() => api.c().parallelTasks[0].status === 'running');
+  assert.equal(api.c().parallelTasks[1].status, 'waiting');
+  assert.equal((await api.plan({ action: 'close', id: plan.id })).status, 409, 'A plan with work going on is stopped before it closes.');
+  const stopped = await api.plan({ action: 'stop', id: plan.id });
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body).slice(0, 300));
+  assert.equal(api.c().orchestrations[0].status, 'stopped');
+  assert.equal(api.c().parallelTasks[1].status, 'cancelled');
+  await until(() => api.c().parallelTasks[0].status === 'stopped');
+  assert.match(api.c().messages.at(-1).text, /Stopped the plan: 1 step stopped, 1 that hadn’t started cancelled/);
+});

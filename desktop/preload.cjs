@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const token = process.argv.find(value => value.startsWith('--relay-token='))?.slice(14);
 // "development" when the app runs from source rather than an installed release.
 const channel = process.argv.includes('--relay-channel=development') ? 'development' : 'release';
@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('relayDesktop', Object.freeze({
   token,
   channel,
   pickFolder: () => ipcRenderer.invoke('relay:pick-folder'),
+  // The path of a file or folder dropped on the page, for setup's drop zone. Empty when it has no path on disk.
+  pathForFile: file => { try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
   openExternal: url => ipcRenderer.invoke('relay:open-external',url),
   platform: process.platform,
   getLaunchState: () => ipcRenderer.invoke('relay:launch'),

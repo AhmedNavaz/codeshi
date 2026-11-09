@@ -21,7 +21,7 @@ test('the macOS menu bar has Codeshi, File, Edit, View, Agent, Workspace, Window
   assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','close']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','pasteAndMatchStyle','delete','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces','-','Speech']);
   assert.deepEqual(labels(item('View').submenu),['Show Git Activity','Show Files','Terminal','Flow Mode','Focus Message Box','-','Appearance','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen']);
-  assert.deepEqual(labels(item('Appearance').submenu),['System','Dark','Light']);
+  assert.deepEqual(labels(item('Appearance').submenu),['System','Light','Dark','Graphite']);
   assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Alerts','-','Hand Off Near Usage Limits']);
   assert.deepEqual(labels(item('Workspace').submenu),['Frontend','R&D','-','Workspace Settings…','Remove Workspace…']);
   assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New']);
@@ -36,7 +36,7 @@ test('menu items enable and tick from the page, the saved appearance and Keep Aw
   // Until the page reports, nothing that needs a workspace is offered.
   const starting=menu({state:null});
   for(const label of pageItems)assert(disabled(starting.item(label)),label);
-  for(const label of ['Settings…','Setup Guide','New Workspace','Filter Workspaces','Keep Awake','System','Dark','Light','Codeshi Guide','Report a Bug'])assert(!disabled(starting.item(label)),label);
+  for(const label of ['Settings…','Setup Guide','New Workspace','Filter Workspaces','Keep Awake','System','Light','Dark','Graphite','Codeshi Guide','Report a Bug'])assert(!disabled(starting.item(label)),label);
   assert.deepEqual(starting.labels(starting.item('Workspace').submenu),['Workspace Settings…','Remove Workspace…']);
   const open=menu();
   for(const label of pageItems.filter(label=>label!=='Stop Run'&&label!=='continue'))assert(!disabled(open.item(label)),label);
@@ -50,7 +50,7 @@ test('menu items enable and tick from the page, the saved appearance and Keep Aw
   // The agent and appearance are radio choices; files, Git activity, Keep Awake and the open workspace are ticks.
   assert.deepEqual(['Use Codex','Use Claude Code'].map(label=>[open.item(label).type,open.item(label).checked]),[['radio',true],['radio',false]]);
   const claude=menu({state:{...page,agent:'claude'}});assert.deepEqual(['Use Codex','Use Claude Code'].map(label=>claude.item(label).checked),[false,true]);
-  for(const [appearance,checked] of [['system','System'],['graphite','Dark'],['light','Light']]){const shown=menu({appearance});assert.deepEqual(['System','Dark','Light'].map(label=>shown.item(label).checked),['System','Dark','Light'].map(label=>label===checked),appearance);assert.equal(shown.item(checked).type,'radio');}
+  for(const [appearance,checked] of [['system','System'],['light','Light'],['dark','Dark'],['graphite','Graphite']]){const shown=menu({appearance});assert.deepEqual(['System','Light','Dark','Graphite'].map(label=>shown.item(label).checked),['System','Light','Dark','Graphite'].map(label=>label===checked),appearance);assert.equal(shown.item(checked).type,'radio');}
   assert.deepEqual(['Show Files','Show Git Activity'].map(label=>[open.item(label).type,open.item(label).checked]),[['checkbox',true],['checkbox',false]]);
   const toggled=menu({state:{...page,files:false,git:true}});assert.deepEqual(['Show Files','Show Git Activity'].map(label=>toggled.item(label).checked),[false,true]);
   assert.deepEqual([open.item('Keep Awake').type,open.item('Keep Awake').checked,menu({keepAwake:true}).item('Keep Awake').checked],['checkbox',false,true]);
@@ -62,7 +62,7 @@ test('menu items enable and tick from the page, the saved appearance and Keep Aw
 
 test('page items and in-app release notes send commands, and external Help links open fixed GitHub pages',()=>{
   const {all,sent,opened,item}=menu();
-  const commands={'Review Changes with Other Agent…':['review'],'Ask a Friend…':['ask-friend'],'Settings…':['settings'],'Setup Guide':['setup-guide'],'New Workspace':['new-workspace'],'Add Folder to Workspace…':['add-folder'],'Previous Chats…':['previous-chats'],'Export Conversation…':['export'],'Find in Conversation':['find'],'Find Next':['find-next'],'Find Previous':['find-previous'],'Filter Workspaces':['filter-workspaces'],'Show Git Activity':['git'],'Show Files':['files'],'Focus Message Box':['focus-message'],System:['appearance','system'],Dark:['appearance','graphite'],Light:['appearance','light'],'Use Codex':['agent','codex'],'Use Claude Code':['agent','claude'],'Stop Run':['stop'],continue:['continue'],'Keep Awake':['keep-awake'],Frontend:['workspace',1],'R&D':['workspace',2],'Workspace Settings…':['workspace-settings'],'Remove Workspace…':['remove-workspace']};
+  const commands={'Review Changes with Other Agent…':['review'],'Ask a Friend…':['ask-friend'],'Settings…':['settings'],'Setup Guide':['setup-guide'],'New Workspace':['new-workspace'],'Add Folder to Workspace…':['add-folder'],'Previous Chats…':['previous-chats'],'Export Conversation…':['export'],'Find in Conversation':['find'],'Find Next':['find-next'],'Find Previous':['find-previous'],'Filter Workspaces':['filter-workspaces'],'Show Git Activity':['git'],'Show Files':['files'],'Focus Message Box':['focus-message'],System:['appearance','system'],Light:['appearance','light'],Dark:['appearance','dark'],Graphite:['appearance','graphite'],'Use Codex':['agent','codex'],'Use Claude Code':['agent','claude'],'Stop Run':['stop'],continue:['continue'],'Keep Awake':['keep-awake'],Frontend:['workspace',1],'R&D':['workspace',2],'Workspace Settings…':['workspace-settings'],'Remove Workspace…':['remove-workspace']};
   commands['What’s New']=['whats-new'];
   commands.Terminal=['terminal'];
   commands['Flow Mode']=['flow'];

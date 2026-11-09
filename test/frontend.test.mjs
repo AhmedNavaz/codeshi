@@ -81,7 +81,7 @@ function realXterm(){
 }
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,githubUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -284,6 +284,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(searchUI)vm.runInContext(fs.readFileSync(new URL('../public/conversation-search.js',import.meta.url),'utf8'),context,{filename:'public/conversation-search.js'});
   if(reviewsUI)vm.runInContext(fs.readFileSync(new URL('../public/agent-review.js',import.meta.url),'utf8'),context,{filename:'public/agent-review.js'});
   if(automaticReviewUI)vm.runInContext(fs.readFileSync(new URL('../public/automatic-review.js',import.meta.url),'utf8'),context,{filename:'public/automatic-review.js'});
+  if(githubUI)vm.runInContext(fs.readFileSync(new URL('../public/github-context.js',import.meta.url),'utf8'),context,{filename:'public/github-context.js'});
   if(orchestrationUI)vm.runInContext(fs.readFileSync(new URL('../public/orchestration.js',import.meta.url),'utf8'),context,{filename:'public/orchestration.js'});
   if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
   if(flowUI) {
@@ -403,7 +404,7 @@ test('known signed-out provider offers account setup and blocks Send and Continu
   const conversation=ui.canonical.get('project-one');conversation.status='incomplete';conversation.lastRun={provider:'codex',errorCategory:'auth'};await ui.window.relayUI.refresh();
   assert.equal(ui.$('continue-button').disabled,true);ui.fire('composer','submit');ui.$('continue-button').click();await flush();
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue)$/.test(request.path)).length,0);
-  ui.$('connection-action').click();await flush();assert.equal(ui.$('settings').open,true);assert.equal(ui.$('settings-title').textContent,'Accounts');
+  ui.$('connection-action').click();await flush();assert.equal(ui.$('settings').open,true);assert.equal(ui.$('settings-title').textContent,'Agents & accounts');
   assert.equal(ui.$('message-input').value,'Keep this draft while I sign in');
 });
 
@@ -432,7 +433,7 @@ test('both missing providers show one setup next action while offline collaborat
   assert.equal(ui.$('provider-empty-state').hidden,false);assert.equal(ui.$('empty-state').hidden,true);assert.equal(ui.$('connection-notice').hidden,true);
   assert.equal(ui.$('conversation-state').textContent,'Connection required');assert.equal(ui.$('ask-friend').disabled,false);assert.equal(ui.$('relay-settings').disabled,false);
   assert.equal(ui.requests.filter(request=>request.path.startsWith('/api/providers/')).length,0,'Installed-false providers are not probed during startup.');
-  ui.$('connect-assistant').click();await flush();assert.equal(ui.$('settings').open,true);assert.equal(ui.$('settings-title').textContent,'Accounts');
+  ui.$('connect-assistant').click();await flush();assert.equal(ui.$('settings').open,true);assert.equal(ui.$('settings-title').textContent,'Agents & accounts');
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue|connect)$/.test(request.path)).length,0);
 });
 
@@ -530,6 +531,7 @@ test('Settings retries a connection that has not been checked successfully yet',
 
 test('setup shows progress while it refreshes connections, and none after a check has failed',async()=>{
   const ui=await browser({empty:true,existing:false,setup:true,accountErrors:['codex']});ui.document.querySelector('.onboarding-cta').click();await flush();
+  ui.$('setup-next').click();await flush();ui.$('setup-next').click();await flush();assert.match(ui.$('setup-content').textContent,/Connect your agents/);
   const status=provider=>ui.document.querySelectorAll('.setup-agent').find(card=>card.dataset.provider===provider).querySelector('.setup-account-state').textContent;
   assert.equal(status('codex'),'Not verified','A failed check does not look like it is still running.');assert.match(status('claude'),/^Connected/);
   const held=deferred();ui.setIntercept((request,next)=>/^\/api\/providers\/(codex|claude)\/account$/.test(request.path)?held.promise.then(next):next());
@@ -556,6 +558,10 @@ for(const billingSource of ['api','unknown'])test('known '+billingSource+' billi
 test('workspace header, folder metadata and idle state have distinct concise information',async()=>{
   const ui=await browser({moreProjects:true});assert.equal(ui.$('conversation-title').textContent,'Example workspace');assert.equal(ui.$('conversation-subtitle').textContent,'Conversation');assert.equal(ui.$('conversation-state').textContent,'Ready');assert.equal(ui.$('workspace-count').textContent,'2');
   assert.deepEqual(ui.document.querySelectorAll('.workspace-item-meta').map(item=>item.textContent),['2 folders','1 folder']);
+  // The name has a line to itself; the folder count sits on the line below it, and a lone folder's count is for screen readers only.
+  const metas=ui.document.querySelectorAll('.workspace-item-meta');
+  assert.equal(metas[0].querySelector('.workspace-meta-folders').textContent,'2 folders');assert.equal(metas[1].className.includes('single'),true);
+  assert.equal(ui.document.querySelectorAll('.workspace-item')[0].querySelector('.workspace-item-heading .workspace-item-meta'),null,'The count is not on the name line.');
   assert.doesNotMatch(ui.$('workspace-list').textContent,/shared chat|Switch assistants|One conversation/i);assert.doesNotMatch(ui.$('conversation-subtitle').textContent,/folder|switch|shared/i);
   const conversation=ui.canonical.get('project-one');conversation.lastRun={provider:'claude',effectiveModel:'previous-provider-model'};await ui.window.relayUI.refresh();assert.doesNotMatch(ui.$('conversation-subtitle').textContent,/previous-provider-model/,'A model used by the other provider cannot label the current selection.');
 });
@@ -779,13 +785,13 @@ test('background discovery failures stay quiet, and a failed dismissal does not 
 
 test('the setup launcher shows only while setup is unfinished, and Settings reopens the guide',async()=>{
   const fresh=await browser({setup:true,savedPreferences:{onboarding:{step:1}}});assert.equal(fresh.$('open-setup').hidden,false);assert.equal(fresh.$('setup-dialog').open,false,'Setup does not interrupt someone who already has workspaces.');
-  fresh.$('open-setup').click();await flush();assert.equal(fresh.$('setup-dialog').dataset.screen,'flow','Resuming skips the welcome.');assert.match(fresh.$('setup-step-status').textContent,/2 of 3/);assert.equal(fresh.$('close-setup').textContent,'Skip for now');
+  fresh.$('open-setup').click();await flush();assert.equal(fresh.$('setup-dialog').dataset.screen,'flow','Resuming skips the welcome.');assert.match(fresh.$('setup-step-status').textContent,/2 of 4/);assert.equal(fresh.$('close-setup').textContent,'Skip for now');
   fresh.$('close-setup').click();await flush();assert.equal(fresh.$('setup-dialog').open,false);assert.equal(fresh.$('open-setup').hidden,true,'Closing setup removes the sidebar launcher.');
   const done=await browser({setup:true,workbench:true,savedPreferences:{onboarding:{step:2,completedAt:'2026-10-29T00:00:00.000Z'}}});assert.equal(done.$('open-setup').hidden,true);
   done.$('relay-settings').click();await flush();assert.equal(done.$('settings').open,true);done.$('open-setup-guide').click();await flush();
-  assert.equal(done.$('settings').open,false);assert.equal(done.$('setup-dialog').open,true);assert.match(done.$('setup-step-status').textContent,/1 of 3/,'The guide starts from the beginning once setup is complete.');
+  assert.equal(done.$('settings').open,false);assert.equal(done.$('setup-dialog').open,true);assert.match(done.$('setup-step-status').textContent,/1 of 4/,'The guide starts from the beginning once setup is complete.');
   assert.equal(done.$('close-setup').textContent,'Close');assert.equal(done.$('setup-back').disabled,true);
-  done.$('setup-next').click();await flush();done.$('setup-next').click();await flush();assert.equal(done.$('setup-next').textContent,'Done');
+  done.$('setup-next').click();await flush();done.$('setup-next').click();await flush();done.$('setup-next').click();await flush();assert.equal(done.$('setup-next').textContent,'Done');
   done.$('setup-next').click();await flush();assert.equal(done.$('setup-dialog').open,false,'Reviewing skips the welcome and the summary.');
 });
 
@@ -1077,31 +1083,42 @@ const pressedCards=ui=>ui.document.querySelectorAll('.setup-theme').filter(card=
 const appearanceSaves=ui=>ui.requests.filter(request=>request.path==='/api/appearance'&&request.method==='POST').map(request=>request.body.theme);
 const appearanceButton=(ui,value)=>{const button=ui.document.querySelectorAll('[data-appearance]').find(item=>item.dataset.appearance===value);assert(button,'Missing appearance choice: '+value);return button;};
 
-test('first run welcomes, walks through three steps and a summary, saves real choices and never starts a provider run',async()=>{
+test('first run welcomes, walks through the workspace, the working style, the agents and defaults, saves real choices and never starts a provider run',async()=>{
   const ui=await browser({empty:true,existing:false,setup:true,insights:true,theme:true}),dialog=ui.$('setup-dialog');
   await flush();
   assert.equal(dialog.open,true);assert.equal(dialog.dataset.screen,'welcome');assert.equal(ui.$('setup-flow').hidden,true);assert.match(ui.$('setup-hero-content').textContent,/Your workspace for AI coding agents/);
   assert.equal(ui.$('launch-screen').classList.contains('done'),true,'The launch screen gives way once setup knows what to show.');
   ui.document.querySelector('.onboarding-cta').click();await flush();
-  assert.equal(dialog.dataset.screen,'flow');assert.equal(ui.$('setup-hero').hidden,true);assert.match(ui.$('setup-step-status').textContent,/1 of 3/);assert.match(ui.$('setup-content').textContent,/your subscription/);
+  assert.equal(dialog.dataset.screen,'flow');assert.equal(ui.$('setup-hero').hidden,true);assert.match(ui.$('setup-step-status').textContent,/1 of 4/);
+  assert.match(ui.$('setup-content').textContent,/Start with your workspace/,'Setup starts with the workspace.');assert.match(ui.$('setup-content').textContent,/add folders later from the sidebar/);
   ui.$('setup-back').click();await flush();assert.equal(dialog.dataset.screen,'welcome','Back from the first step returns to the welcome.');ui.document.querySelector('.onboarding-cta').click();await flush();
+  ui.$('setup-next').click();await flush();
+  assert.match(ui.$('setup-content').textContent,/Choose your working style/);
+  const styles=()=>ui.document.querySelectorAll('.setup-style');
+  assert.deepEqual(styles().map(card=>card.dataset.view),['normal','flow']);assert.deepEqual(styles().map(card=>card.getAttribute('aria-checked')),['true','false'],'Normal is chosen until you pick.');
+  assert.match(styles()[1].textContent,/Codeshi chooses/);assert.match(styles()[0].textContent,/You choose/);
+  styles().find(card=>card.dataset.view==='flow').click();await flush();assert.deepEqual(styles().map(card=>card.getAttribute('aria-checked')),['false','true']);
+  ui.$('setup-next').click();await flush();
+  assert.match(ui.$('setup-content').textContent,/Connect your agents/);assert.match(ui.$('setup-content').textContent,/your subscription/);assert.match(ui.$('setup-content').textContent,/In Flow, Codeshi chooses the agent/);
   ui.document.querySelectorAll('.setup-agent-select').find(button=>button.textContent.startsWith('Claude')).click();await flush();ui.$('setup-next').click();await flush();
   assert.match(ui.$('setup-content').textContent,/Make it yours/);
   const model=ui.labelledInput('Default model');model.value='model-one';model.dispatchEvent(new UIEvent('change'));
   const effort=ui.labelledInput('Reasoning effort');effort.value='high';effort.dispatchEvent(new UIEvent('change'));
   ui.document.querySelectorAll('.setup-access-option').find(button=>button.dataset.mode==='read').click();await flush();
   assert.deepEqual(pressedCards(ui),['System'],'A new profile starts on System.');
+  assert.deepEqual(ui.document.querySelectorAll('.setup-theme').map(card=>card.dataset.appearance),['system','light','dark','graphite']);
   ui.document.querySelectorAll('.setup-theme').find(button=>button.dataset.appearance==='light').click();await flush();
-  ui.$('setup-next').click();await flush();assert.match(ui.$('setup-content').textContent,/Choose the folders/);assert.equal(ui.document.querySelector('.setup-import-card'),null);
   ui.$('close-setup').click();await flush();assert.equal(dialog.open,false);
   const saved=ui.requests.filter(request=>request.path==='/api/preferences'&&request.method==='POST').at(-1).body;
-  assert.deepEqual(saved.defaults,{provider:'claude',model:'model-one',effort:'high',mode:'read',billing:'subscription'});assert.equal(saved.theme,undefined);
+  assert.deepEqual(saved.defaults,{provider:'claude',model:'model-one',effort:'high',mode:'read',billing:'subscription',view:'flow'});assert.equal(saved.theme,undefined);
   assert.deepEqual(ui.requests.filter(request=>request.path==='/api/appearance'&&request.method==='POST').map(request=>request.body.theme),['light'],'The theme is saved once, the same way as from the status bar.');
-  assert.equal(saved.onboarding.step,2);assert.equal(saved.onboarding.dismissed,true);
-  ui.$('open-setup').click();await flush();assert.equal(dialog.dataset.screen,'flow');assert.match(ui.$('setup-step-status').textContent,/3 of 3/,'Setup resumes where it was left.');
+  assert.equal(saved.onboarding.step,3);assert.equal(saved.onboarding.dismissed,true);
+  ui.$('open-setup').click();await flush();assert.equal(dialog.dataset.screen,'flow');assert.match(ui.$('setup-step-status').textContent,/4 of 4/,'Setup resumes where it was left.');
   ui.$('setup-next').click();await flush();assert.equal(dialog.dataset.screen,'done');
-  assert.match(ui.$('setup-hero-content').textContent,/Claude Code starts the conversation/);assert.match(ui.$('setup-hero-content').textContent,/Light theme/);assert.match(ui.$('setup-hero-content').textContent,/read only/);
+  const summary=ui.$('setup-hero-content').textContent;
+  assert.match(summary,/You start in Flow/);assert.match(summary,/Claude Code/);assert.match(summary,/Light theme/);assert.match(summary,/read only/);assert.match(summary,/No workspace yet/);
   ui.document.querySelector('.onboarding-cta').click();await flush();assert.equal(dialog.open,false);assert.equal(ui.$('setup-progress').textContent,'Review');
+  assert.equal(ui.storage.get('throughline:flow'),'on','Flow opens with the first workspace.');
   assert.equal(ui.window.relayBillingConfirmed,undefined,'Setup does not accept API charges.');
   assert.equal(ui.requests.filter(request=>/\/(?:messages|continue|connect)$/.test(request.path)).length,0);
   const completed=ui.requests.filter(request=>request.path==='/api/preferences'&&request.method==='POST').at(-1).body;assert.equal(completed.onboarding.completed,true);
@@ -1110,21 +1127,22 @@ test('first run welcomes, walks through three steps and a summary, saves real ch
 test('a new profile paints the system appearance first and follows the OS while System is selected',async()=>{
   for(const systemDark of [false,true]){
     const ui=await browser({theme:true,systemDark});
-    assert.equal(ui.document.documentElement.palettes[0],systemDark?'graphite':'light','The palette set before the stylesheets load already matches the OS.');
-    assert.equal(ui.window.relayTheme.preference(),'system');assert.deepEqual(pressedAppearance(ui),['system']);assert.equal(themeColor(ui),systemDark?'#161513':'#f4efe6');
-    ui.setSystemDark(!systemDark);assert.equal(palette(ui),systemDark?'light':'graphite');assert.equal(themeColor(ui),systemDark?'#f4efe6':'#161513');
-    ui.setSystemDark(systemDark);assert.equal(palette(ui),systemDark?'graphite':'light');assert.deepEqual(pressedAppearance(ui),['system']);
+    assert.equal(ui.document.documentElement.palettes[0],systemDark?'dark':'light','The palette set before the stylesheets load already matches the OS.');
+    assert.equal(ui.window.relayTheme.preference(),'system');assert.deepEqual(pressedAppearance(ui),['system']);assert.equal(themeColor(ui),systemDark?'#0a0a0a':'#f4efe6');
+    ui.setSystemDark(!systemDark);assert.equal(palette(ui),systemDark?'light':'dark');assert.equal(themeColor(ui),systemDark?'#f4efe6':'#0a0a0a');
+    ui.setSystemDark(systemDark);assert.equal(palette(ui),systemDark?'dark':'light');assert.deepEqual(pressedAppearance(ui),['system']);
     assert.deepEqual(appearanceSaves(ui),[],'Following the OS never saves a choice.');assert.equal(ui.storage.get('ai-relay:appearance'),'system','The preference is cached, not the palette it resolved to.');
   }
 });
 
-test('a saved Light or Dark choice ignores OS changes, and returning to System adopts the OS at once',async()=>{
+test('a saved Light, Dark or Graphite choice ignores OS changes, and returning to System adopts the OS at once',async()=>{
   const ui=await browser({theme:true,systemDark:true,savedPreferences:{appearance:'light'}});
   assert.equal(palette(ui),'light');assert.deepEqual(pressedAppearance(ui),['light']);
   ui.setSystemDark(false);ui.setSystemDark(true);assert.equal(palette(ui),'light','A manual choice ignores the OS.');
-  appearanceButton(ui,'system').click();assert.equal(palette(ui),'graphite');assert.equal(themeColor(ui),'#161513');assert.deepEqual(pressedAppearance(ui),['system']);
-  appearanceButton(ui,'graphite').click();ui.setSystemDark(false);assert.equal(palette(ui),'graphite');
-  await flush();assert.deepEqual(appearanceSaves(ui),['system','graphite']);assert.equal(ui.storage.get('ai-relay:appearance'),'graphite');
+  appearanceButton(ui,'system').click();assert.equal(palette(ui),'dark','System uses the near-black Dark when the OS is dark.');assert.equal(themeColor(ui),'#0a0a0a');assert.deepEqual(pressedAppearance(ui),['system']);
+  appearanceButton(ui,'graphite').click();ui.setSystemDark(false);assert.equal(palette(ui),'graphite');assert.equal(themeColor(ui),'#161513');
+  appearanceButton(ui,'dark').click();ui.setSystemDark(true);ui.setSystemDark(false);assert.equal(palette(ui),'dark');
+  await flush();assert.deepEqual(appearanceSaves(ui),['system','graphite','dark']);assert.equal(ui.storage.get('ai-relay:appearance'),'dark');
 });
 
 test('the preference this browser cached paints first, then the saved preference replaces it',async()=>{
@@ -1135,29 +1153,31 @@ test('the preference this browser cached paints first, then the saved preference
 });
 
 test('an appearance chosen in the status bar survives reopening the setup checklist',async()=>{
-  const ui=await browser({theme:true,setup:true,savedPreferences:{appearance:'graphite',onboarding:{step:1}}});
+  const ui=await browser({theme:true,setup:true,savedPreferences:{appearance:'graphite',onboarding:{step:3}}});
   appearanceButton(ui,'light').click();await flush();assert.equal(palette(ui),'light');
   ui.window.relaySetup.open();await flush();
   assert.deepEqual(pressedCards(ui),['Light'],'Setup shows the choice made in the status bar.');
-  ui.$('setup-next').click();await flush();assert.match(ui.$('setup-content').textContent,/Choose the folders/);
+  ui.$('setup-next').click();await flush();assert.equal(ui.$('setup-dialog').dataset.screen,'done');
   assert.equal(palette(ui),'light','Moving through setup keeps the choice made since the page loaded.');assert.deepEqual(appearanceSaves(ui),['light']);
 });
 
 test('Settings, setup, the status bar and other windows agree on one appearance preference',async()=>{
-  const ui=await browser({theme:true,setup:true,workbench:true,systemDark:true,savedPreferences:{onboarding:{step:1}}});
+  const ui=await browser({theme:true,setup:true,workbench:true,systemDark:true,savedPreferences:{onboarding:{step:3}}});
   ui.$('relay-settings').click();await flush();
   assert.equal(ui.$('settings-title').textContent,'General');assert.equal(ui.$('workbench').open,false,'Settings is separate from Ask a friend.');
   await ui.window.relaySettings.open('preferences');await flush();
   assert.equal(ui.$('settings-title').textContent,'General');
+  await ui.window.relaySettings.open('appearance');await flush();
+  assert.equal(ui.$('settings-title').textContent,'Appearance');
   const settings=ui.$('settings-content').querySelectorAll('[data-appearance]');
-  assert.deepEqual(settings.map(button=>button.textContent),['System','Dark','Light']);assert.deepEqual(pressedAppearance(ui,ui.$('settings-content')),['system']);
+  assert.deepEqual(settings.map(button=>button.textContent),['System','Light','Dark','Graphite']);assert.deepEqual(pressedAppearance(ui,ui.$('settings-content')),['system']);
   settings.find(button=>button.dataset.appearance==='light').click();await flush();
   assert.equal(palette(ui),'light');assert.deepEqual([...new Set(pressedAppearance(ui))],['light'],'The status bar shows the choice made in Settings.');
   ui.$('open-setup-guide').click();await flush();assert.equal(ui.$('setup-dialog').open,true);
-  const cards=ui.document.querySelectorAll('.setup-theme');assert.deepEqual(cards.map(card=>card.dataset.appearance),['system','graphite','light']);
+  const cards=ui.document.querySelectorAll('.setup-theme');assert.deepEqual(cards.map(card=>card.dataset.appearance),['system','light','dark','graphite']);
   assert.deepEqual(pressedCards(ui),['Light']);
   cards.find(card=>card.dataset.appearance==='system').click();await flush();
-  assert.equal(palette(ui),'graphite');assert.deepEqual([...new Set(pressedAppearance(ui))],['system'],'Setup, Settings and the status bar show the same choice.');
+  assert.equal(palette(ui),'dark');assert.deepEqual([...new Set(pressedAppearance(ui))],['system'],'Setup, Settings and the status bar show the same choice.');
   ui.$('setup-next').click();await flush();assert.equal(ui.window.relayTheme.preference(),'system');
   // A choice made in another window arrives through storage. That window already saved it.
   ui.window.dispatchEvent(new UIEvent('storage',{key:'ai-relay:appearance',newValue:'light'}));
@@ -1166,23 +1186,23 @@ test('Settings, setup, the status bar and other windows agree on one appearance 
   assert.equal(ui.requests.some(request=>request.path==='/api/preferences'&&request.method==='POST'&&request.body.theme!==undefined),false);
 });
 
-test('setup resumes its folder step without importing, and failed saves keep the current step',async()=>{
+test('setup resumes its saved step without importing, and failed saves keep the current step',async()=>{
   const ui=await browser({empty:true,existing:false,setup:true,insights:true,savedPreferences:{onboarding:{step:3,dismissed:true}}});
-  assert.equal(ui.$('setup-dialog').open,false);ui.$('open-setup').click();await flush();assert.match(ui.$('setup-step-status').textContent,/3 of 3/,'A step saved by the earlier four-step setup resumes at the last step.');
+  assert.equal(ui.$('setup-dialog').open,false);ui.$('open-setup').click();await flush();assert.match(ui.$('setup-step-status').textContent,/4 of 4/,'A saved step resumes where it was left.');
   assert.equal(ui.document.querySelector('.setup-import-card'),null);assert.equal(ui.$('import-dialog').open,false);
   assert.equal(ui.requests.some(request=>request.path==='/api/import-sources'),false,'Onboarding does not discover or import chats.');
   ui.setIntercept((request,next)=>request.path==='/api/preferences'&&request.method==='POST'?response({error:'Preferences could not be written.'},503):next());
-  ui.$('setup-back').click();await flush();assert.match(ui.$('setup-step-status').textContent,/3 of 3/);assert.equal(ui.$('setup-error').hidden,false);assert.match(ui.$('setup-error').textContent,/could not be written/);
+  ui.$('setup-back').click();await flush();assert.match(ui.$('setup-step-status').textContent,/4 of 4/);assert.equal(ui.$('setup-error').hidden,false);assert.match(ui.$('setup-error').textContent,/could not be written/);
 });
 
 test('onboarding finishes folder setup and the summary before discovering project conversations',async()=>{
   const ui=await browser({empty:true,existing:false,desktop:true,setup:true,insights:true}),setup=ui.$('setup-dialog');
   ui.document.querySelector('.onboarding-cta').click();await flush();
-  ui.$('setup-next').click();await flush();ui.$('setup-next').click();await flush();
-  assert.equal(ui.document.querySelector('.setup-import-card'),null);ui.pickedFolders.push('/workspace/example/frontend');ui.document.querySelector('.setup-folder-card').click();await flush();
+  assert.equal(ui.document.querySelector('.setup-import-card'),null);ui.pickedFolders.push('/workspace/example/frontend');ui.document.querySelector('.setup-drop').click();await flush();await flush();
   assert.equal(setup.open,true);assert.equal(setup.dataset.screen,'flow');assert.match(ui.$('setup-content').textContent,/frontend is ready/);
+  assert.equal(ui.document.querySelectorAll('.setup-readiness-row').length,1,'Setup shows what the new folder is.');assert.match(ui.document.querySelector('.setup-readiness-row').textContent,/frontend/);
   assert.equal(ui.$('previous-chats-notice').hidden,true);assert.equal(ui.requests.some(request=>request.path==='/api/import-sources'),false);
-  ui.$('setup-next').click();await flush();assert.equal(setup.dataset.screen,'done');assert.equal(setup.open,true);assert.match(ui.$('setup-hero-content').textContent,/frontend is ready/);
+  for(let index=0;index<4;index++){ui.$('setup-next').click();await flush();}assert.equal(setup.dataset.screen,'done');assert.equal(setup.open,true);assert.match(ui.$('setup-hero-content').textContent,/frontend is ready/);
   assert.equal(ui.requests.some(request=>request.path==='/api/import-sources'),false,'Discovery waits until the user enters the workspace.');
   ui.document.querySelector('.onboarding-cta').click();await flush();assert.equal(setup.open,false);
   assert.equal(ui.requests.filter(request=>request.path==='/api/preferences'&&request.method==='POST').at(-1).body.onboarding.completed,true);
@@ -1635,6 +1655,10 @@ test('a paste or drop while an attachment is uploading is added after it instead
   assert.deepEqual(names,['first.txt','second.txt','third.txt'],'Each file is uploaded once, in the order it was added.');
   assert.deepEqual(ui.$('attachment-list').querySelectorAll('.attachment-name').map(node=>node.textContent),['first.txt','second.txt','third.txt']);
   assert.equal(ui.$('attachment-status').textContent,'3 attached · sent with your next message');assert.equal(ui.$('send-button').disabled,false);
+  ui.$('attachment-list').querySelector('.attachment-remove').click();
+  assert.equal(ui.$('attachment-status').textContent,'2 attached · sent with your next message','Removing a file corrects the count.');
+  ui.$('attachment-list').querySelector('.attachment-remove').click();ui.$('attachment-list').querySelector('.attachment-remove').click();
+  assert.equal(ui.$('attachment-status').hidden,true,'With nothing attached, the line goes away.');assert.equal(ui.$('attachment-status').textContent,'');
 });
 
 test('a problem with a file that waited its turn still shows after the files behind it are added',async()=>{
@@ -1935,6 +1959,38 @@ test('commands are added and edited in a short form, stay with their workspace, 
   ui.$('message-input').value='';ui.$('command-fix').click();
   assert.match(ui.$('message-input').value,/^The web command failed with exit code 1\. Find the cause and fix it\.\n\nCommand: npm test \(in Frontend\)\n\nEnd of its output:\n```\n<script>untrusted<\/script>\nAssertionError/);
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
+});
+
+test('Add from GitHub reads an issue or pull request into the message box without sending it', async () => {
+  const ui=await browser({githubUI:true});
+  const folders=ui.window.relayUI.getState().projects.find(project=>project.id===ui.window.relayUI.getState().projectId).folders;
+  let reply=()=>response({kind:'pull',number:7,repo:'acme/app',text:'The pull request below was read from GitHub for context.\n\n# GitHub pull request acme/app#7: Fix login',removed:{secrets:1,paths:0},truncated:false});
+  ui.setIntercept((request,next)=>request.path==='/api/git/github-context'?reply(request):next());
+  assert.equal(ui.$('github-context-open').disabled,false);
+  ui.$('github-context-open').click();
+  assert.equal(ui.$('github-context-dialog').open,true);
+  assert.equal(ui.$('github-context-folder-label').hidden,folders.length<2,'The repository choice appears only with several folders.');
+  ui.$('github-context-form').dispatchEvent(new UIEvent('submit'));await flush();
+  assert.match(ui.$('github-context-error').textContent,/issue or pull request number/);
+  assert.equal(ui.requests.filter(request=>request.path==='/api/git/github-context').length,0,'An empty reference asks instead of reading.');
+
+  ui.$('message-input').value='Fix what the review asks for.';
+  ui.$('github-context-reference').value=' #7 ';
+  ui.$('github-context-form').dispatchEvent(new UIEvent('submit'));await flush();await flush();
+  const sent=ui.requests.filter(request=>request.path==='/api/git/github-context');
+  assert.equal(sent.length,1);assert.equal(sent[0].body.reference,'#7');assert.equal(sent[0].body.folderId,ui.$('github-context-folder').value);
+  assert.equal(sent[0].projectId,ui.window.relayUI.getState().projectId,'It reads for the open workspace.');
+  assert.equal(ui.$('github-context-dialog').open,false);
+  assert.equal(ui.$('message-input').value,'Fix what the review asks for.\n\nThe pull request below was read from GitHub for context.\n\n# GitHub pull request acme/app#7: Fix login');
+  assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
+
+  reply=()=>response({error:'This branch has no pull request on GitHub yet.'},404);
+  ui.$('github-context-open').click();ui.$('github-context-branch').click();await flush();await flush();
+  assert.equal(ui.requests.filter(request=>request.path==='/api/git/github-context').at(-1).body.reference,'');
+  assert.equal(ui.$('github-context-dialog').open,true);
+  assert.equal(ui.$('github-context-error').textContent,'This branch has no pull request on GitHub yet.');
+  assert.equal(ui.$('github-context-add').disabled,false,'It can be tried again.');
+  ui.$('github-context-cancel').click();assert.equal(ui.$('github-context-dialog').open,false);
 });
 
 const panelFixture = () => ({ ledgerTask: { id: 't1', prompt: 'Add promo codes to checkout', agents: { claude: {}, codex: {} }, workingMs: 150000, runs: 2, handoffs: 1, retries: 0, reviews: 0, status: 'complete', verification: 'passed', usage: { input: 1200, output: 50, cacheRead: 300, cacheWrite: null, reasoning: null, runs: 2, runsWithTokens: 1, partialRuns: 0 } } });
@@ -3660,10 +3716,10 @@ test('the search bar at the top finds workspaces, files in every workspace and a
   ui.runTimers();await flush();await flush();
   assert.deepEqual(searches,['sett']);
   assert.deepEqual(results.querySelectorAll('.command-group').map(node=>node.textContent),['Files','Actions']);
-  assert.deepEqual(labels(),['settings.js','Settings','Alert settings: banners, sounds, the Dock and the menu bar','Voice settings']);
+  assert.deepEqual(labels(),['settings.js','Settings','General settings: view and keep awake','Appearance settings: theme and text size','Routing and handoff settings','Testing settings','Phone and remote access settings','Update settings','Alert settings: banners, sounds, the Dock and the menu bar','Voice settings']);
   assert.match(results.querySelectorAll('.command-result')[0].textContent,/Other workspace · src/);
   search.value='>sett';ui.fire('workspace-search','input');ui.runTimers();await flush();
-  assert.deepEqual(labels(),['Settings','Alert settings: banners, sounds, the Dock and the menu bar','Voice settings'],'A leading > shows actions only.');assert.deepEqual(searches,['sett'],'Actions-only searches look up no files.');
+  assert.deepEqual(labels(),['Settings','General settings: view and keep awake','Appearance settings: theme and text size','Routing and handoff settings','Testing settings','Phone and remote access settings','Update settings','Alert settings: banners, sounds, the Dock and the menu bar','Voice settings'],'A leading > shows actions only.');assert.deepEqual(searches,['sett'],'Actions-only searches look up no files.');
   search.dispatchEvent(new UIEvent('keydown',{key:'Enter',preventDefault(){}}));
   assert.equal(settings,1);assert.equal(search.value,'','Running a result clears the search.');assert.equal(results.hidden,true);
   search.value='sett';ui.fire('workspace-search','input');ui.runTimers();await flush();await flush();
@@ -4782,9 +4838,9 @@ test('Settings has its own pages, keeps Ask a friend separate and opens Accounts
   ui.$('relay-settings').click(); await flush();
   assert.equal(ui.$('settings').open, true); assert.equal(ui.$('workbench').open, false);
   assert.equal(ui.$('settings-title').textContent, 'General'); assert.deepEqual(pages(), ['general']);
-  assert.deepEqual(ui.$('settings-nav').querySelectorAll('[data-page]').map(button => button.textContent), ['General', 'Accounts', 'Alerts', 'Voice']);
+  assert.deepEqual(ui.$('settings-nav').querySelectorAll('[data-page]').map(button => button.textContent), ['General', 'Appearance', 'Agents & accounts', 'Routing & handoffs', 'Testing', 'Phone & remote', 'Voice', 'Alerts', 'Updates']);
   navigate('accounts');
-  assert.deepEqual(pages(), ['accounts']); assert.equal(ui.$('settings-title').textContent, 'Accounts');
+  assert.deepEqual(pages(), ['accounts']); assert.equal(ui.$('settings-title').textContent, 'Agents & accounts');
   assert.equal(ui.$('settings-nav').querySelectorAll('[data-page]').find(button => button.dataset.page === 'accounts').getAttribute('aria-current'), 'page');
   assert.deepEqual(ui.document.querySelectorAll('.settings-account').map(row => row.dataset.provider), ['codex', 'claude', 'gemini']);
   ui.$('settings-close').click(); assert.equal(ui.$('settings').open, false);
@@ -4792,7 +4848,34 @@ test('Settings has its own pages, keeps Ask a friend separate and opens Accounts
   assert.equal(ui.$('workbench').open, true); assert.equal(ui.$('settings').open, false);
   assert.match(ui.$('workbench-content').textContent, /Share with a person/); assert.equal(ui.$('workbench-content').querySelectorAll('.settings-row').length, 0);
   ui.$('workbench').close(); ui.$('connection-action').click(); await flush();
-  assert.equal(ui.$('settings').open, true); assert.equal(ui.$('settings-title').textContent, 'Accounts');
+  assert.equal(ui.$('settings').open, true); assert.equal(ui.$('settings-title').textContent, 'Agents & accounts');
+});
+
+test('Settings puts each subject on its own page, switches the view from General and remembers a larger text size', async () => {
+  const ui = await browser({ workbench: true, theme: true, flowUI: true, desktop: true });
+  const page = name => ui.$('settings-content').querySelectorAll('.settings-page').find(section => section.dataset.page === name);
+  const labels = name => page(name).querySelectorAll('.settings-row-label').map(label => label.textContent);
+  await ui.window.relaySettings.open('general'); await flush();
+  assert.deepEqual(labels('general').slice(0, 2), ['View', 'Keep awake']);
+  assert.deepEqual(labels('appearance'), ['Theme', 'Text size']);
+  assert.deepEqual(labels('routing'), ['Offer a handoff near a usage limit', 'Hand off automatically', 'Context limit', 'Custom context limit']);
+  assert.deepEqual(labels('testing'), ['Testing cadence']);
+  assert.equal(labels('general').includes('Theme'), false, 'General no longer holds the theme.');
+  // Places other parts of the app link to open the page that holds them.
+  await ui.window.relaySettings.open('remote'); await flush(); assert.equal(ui.$('settings-title').textContent, 'Phone & remote');
+  await ui.window.relaySettings.open('handoff'); await flush(); assert.equal(ui.$('settings-title').textContent, 'Routing & handoffs');
+  await ui.window.relaySettings.open('general', 'Updates'); await flush(); assert.equal(ui.$('settings-title').textContent, 'Updates');
+  ui.$('settings-search').value = 'graphite'; ui.fire('settings-search', 'input');
+  assert.deepEqual(ui.$('settings-content').querySelectorAll('.settings-page').filter(section => !section.hidden).map(section => section.dataset.page), ['appearance'], 'Search finds a setting on its page.');
+  ui.$('settings-search').value = ''; ui.fire('settings-search', 'input');
+  await ui.window.relaySettings.open('appearance'); await flush();
+  const larger = page('appearance').querySelectorAll('button').find(button => button.textContent === 'Larger'); larger.click(); await flush();
+  assert.equal(ui.document.documentElement.getAttribute('data-ui-size'), 'large'); assert.equal(ui.storage.get('codeshi:text-size'), 'large');
+  page('appearance').querySelectorAll('button').find(button => button.textContent === 'Default').click(); await flush();
+  assert.equal(ui.document.documentElement.getAttribute('data-ui-size'), null);
+  await ui.window.relaySettings.open('general'); await flush();
+  const view = page('general').querySelectorAll('button').filter(button => ['Normal', 'Flow'].includes(button.textContent));
+  assert.deepEqual(view.map(button => button.getAttribute('aria-pressed')), ['true', 'false']);
 });
 
 test('Settings searches across pages, restores its page on Escape and handles no matches', async () => {
@@ -6839,4 +6922,46 @@ test('Orchestrate plans only with an agent that has a read-only mode: Gemini CLI
   ui.$('orchestrate-toggle').click(); await flush();
   await sendMessage(ui);
   assert.equal(sends.length, 0); assert.match(ui.$('notice-text').textContent, /no connected agent/);
+});
+
+// Run as tasks (#108): a saved plan runs with exactly the agents its rows show, then the card follows each step's task.
+test('Run as tasks sends the agents the plan shows, then the card follows each step and closes as one plan', async () => {
+  const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one'), { actions } = planRoutes(ui, conversation);
+  ui.window.relayFlow.enter(); await flush();
+  Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, orchestrations: [draftPlan()] });
+  await ui.window.relayUI.refresh(); await flush();
+  const run = ui.$('orchestration-run'), ids = conversation.orchestrations[0].steps.map(step => step.id);
+  assert.equal(run.hidden, false);
+  assert.match(ui.$('orchestration-run-note').textContent, /own task, with the agent shown and this conversation’s access/);
+  if (!ui.$('orchestration-folder-option').hidden) {
+    assert.equal(run.disabled, true, 'With several folders, the steps need a folder first.');
+    const select = ui.$('orchestration-folder'); select.value = select.querySelectorAll('option')[1].value; select.dispatchEvent(new UIEvent('change')); await flush();
+  }
+  assert.equal(run.disabled, false);
+  run.click(); await flush();
+  const sent = actions.at(-1);
+  assert.equal(sent.action, 'run'); assert.equal(sent.id, 'plan-1'); assert.equal(sent.revision, 1);
+  assert.deepEqual(Object.keys(sent.assignments), ids);
+  assert.ok(Object.values(sent.assignments).every(pick => pick.provider === 'codex' && pick.model === 'model-one'), JSON.stringify(sent.assignments));
+  assert.ok(sent.folderId);
+
+  // Running: one row per step with its task's state; Stop for the plan, no editing.
+  const task = (n, status, extra = {}) => ({ id: `task-${n}`, title: `${n}. Step`, status, provider: 'codex', folderId: sent.folderId, folderName: 'one', plan: { id: 'plan-1', stepId: ids[n - 1], number: n }, ...extra });
+  Object.assign(conversation.orchestrations[0], { status: 'running', tasks: { [ids[0]]: 'task-1', [ids[1]]: 'task-2' } });
+  conversation.parallelTasks = [task(1, 'running'), task(2, 'waiting', { reason: 'Waiting for “1. Step”.' })];
+  await ui.window.relayUI.refresh(); await flush();
+  const progress = () => ui.$('orchestration-progress').querySelectorAll('.orchestration-progress-state').map(item => item.textContent);
+  assert.equal(ui.$('orchestration-title').textContent, 'Plan · Running · 0 of 2 done');
+  assert.deepEqual(progress(), ['Working', 'Waiting']);
+  assert.equal(ui.$('orchestration-progress').querySelector('.orchestration-progress-reason').textContent, 'Waiting for “1. Step”.');
+  assert.deepEqual(['orchestration-stop', 'orchestration-close', 'orchestration-run', 'orchestration-discard', 'orchestration-steps'].map(id => ui.$(id).hidden), [false, true, true, true, true]);
+  ui.$('orchestration-stop').click(); await flush();
+  assert.deepEqual([actions.at(-1).action, actions.at(-1).id], ['stop', 'plan-1']);
+
+  conversation.parallelTasks = [task(1, 'complete'), task(2, 'complete')];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('orchestration-title').textContent, 'Plan · Finished · 2 of 2 done');
+  assert.deepEqual([ui.$('orchestration-stop').hidden, ui.$('orchestration-close').hidden], [true, false]);
+  ui.$('orchestration-close').click(); await flush();
+  assert.equal(actions.at(-1).action, 'close');
 });

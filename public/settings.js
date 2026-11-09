@@ -1,16 +1,16 @@
 (() => {
   'use strict';
-  // Settings (⌘,): how Codeshi looks and behaves, on four pages. General has the theme, what happens while agents
-  // work and updates; Accounts each agent's account; Alerts how Codeshi tells you about work while you're in
-  // another app; Voice speaking and reading aloud. Every setting is one row in a titled group: what it is and what it
+  // Settings (⌘,): how Codeshi looks and behaves, one page per subject: General (the view and the computer while
+  // agents work), Appearance, Agents & accounts, Routing & handoffs, Testing, Phone & remote, Voice, Alerts and Updates. Every setting is one row in a titled group: what it is and what it
   // does on the left, its control on the right. The search box finds a setting on any page. Other modules draw their
   // own groups with the kit below, so every page reads the same way. Ask a friend is a dialog of its own.
   const $ = id => document.getElementById(id), api = () => window.relayUI;
   const modal = $('settings'), content = $('settings-content'), nav = $('settings-nav'), search = $('settings-search'), error = $('settings-error'), title = $('settings-title');
   if (!modal || !content) return;
-  const PAGES = [['general', 'General'], ['accounts', 'Accounts'], ['alerts', 'Alerts'], ['voice', 'Voice']];
+  const PAGES = [['general', 'General'], ['appearance', 'Appearance'], ['accounts', 'Agents & accounts'], ['routing', 'Routing & handoffs'], ['testing', 'Testing'], ['phone', 'Phone & remote'], ['voice', 'Voice'], ['alerts', 'Alerts'], ['updates', 'Updates']];
   // Places in Settings by the names other parts of the app used before it had these pages.
-  const ALIASES = { preferences: 'general', connections: 'accounts' }, HEADINGS = { Alerts: 'alerts', Voice: 'voice', Updates: 'general', Appearance: 'general', Testing: 'general' };
+  const ALIASES = { preferences: 'general', connections: 'accounts', remote: 'phone', handoff: 'routing', context: 'routing' };
+  const HEADINGS = { Alerts: 'alerts', Voice: 'voice', Updates: 'updates', Appearance: 'appearance', Testing: 'testing', 'Remote access': 'phone', 'While agents work': 'general' };
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const providerName = provider => ({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini' })[provider];
   const openExternal = async url => { if (window.relayDesktop?.openExternal) await window.relayDesktop.openExternal(url); else window.open(url, '_blank', 'noopener,noreferrer'); };
@@ -67,18 +67,19 @@
     details(parent, summary) { const details = node('details', undefined, 'settings-details'); details.append(node('summary', summary)); parent.append(details); return details; },
   };
 
-  // General: the theme, what happens while agents work, and updates.
+  // General: which view you work in, and what the computer does while agents work.
   function general(host) {
-    const look = kit.group(host, 'Appearance'), theme = node('div', undefined, 'segmented');
-    theme.setAttribute('role', 'group'); theme.setAttribute('aria-label', 'Theme');
-    for (const [value, text] of [['system', 'System'], ['graphite', 'Dark'], ['light', 'Light']]) {
-      const choice = node('button', text); choice.type = 'button'; choice.setAttribute('data-appearance', value);
-      choice.setAttribute('aria-pressed', String(window.relayTheme?.preference() === value)); choice.addEventListener('click', () => window.relayTheme?.choose(value)); theme.append(choice);
-    }
-    kit.row(look, { label: 'Theme', description: 'System follows your computer’s light or dark setting.', keywords: 'appearance dark light mode colour color', control: theme });
-    const themeStatus = kit.note(host, ''); themeStatus.id = 'appearance-status'; themeStatus.setAttribute('role', 'status');
-    const work = kit.group(host, 'While agents work'), bridge = window.relayDesktop;
+    const view = kit.group(host, 'View'), flow = window.relayFlow, current = flow?.isOn?.() ? 'flow' : 'normal';
+    const choices = kit.segmented([['normal', 'Normal'], ['flow', 'Flow']], current, value => {
+      if ((value === 'flow') === Boolean(flow?.isOn?.())) return;
+      const changed = value === 'flow' ? flow?.enter?.() : flow?.leave?.();
+      if (changed !== false) { modal.close(); return; }
+      render('general');
+    }, 'View');
+    kit.row(view, { label: 'View', description: 'Normal gives you every panel and lets you choose the agent, model and effort for each message. Flow is just the chat with plain-language cards either side, and Codeshi chooses for you. You can also switch with the Flow button in the header.', keywords: 'flow normal mode view layout routing default start', control: choices });
+    const bridge = window.relayDesktop;
     if (bridge?.getKeepAwake && bridge?.setKeepAwake) {
+      const work = kit.group(host, 'While agents work');
       const box = kit.toggle(work, { label: 'Keep awake', description: 'Keep the computer awake while an agent works or waits for a usage limit to reset, then let it sleep as usual.', keywords: 'sleep display power', checked: keepAwake?.enabled === true, disabled: !keepAwake, onChange: value => perform(async () => {
         box.disabled = true;
         try { keepAwake = await bridge.setKeepAwake(value); }
@@ -87,6 +88,23 @@
       box.id = 'settings-keep-awake';
       if (!keepAwake) bridge.getKeepAwake().then(state => { keepAwake = state; box.checked = state.enabled === true; box.disabled = false; }).catch(() => { if (box.isConnected) { error.textContent = 'Keep awake could not be loaded. Close Settings and try again.'; error.hidden = false; } });
     }
+  }
+  // Appearance: the theme and the size of text around the conversation.
+  function appearance(host) {
+    const look = kit.group(host, 'Appearance'), theme = node('div', undefined, 'segmented');
+    theme.setAttribute('role', 'group'); theme.setAttribute('aria-label', 'Theme');
+    for (const [value, text] of [['system', 'System'], ['light', 'Light'], ['dark', 'Dark'], ['graphite', 'Graphite']]) {
+      const choice = node('button', text); choice.type = 'button'; choice.setAttribute('data-appearance', value);
+      choice.setAttribute('aria-pressed', String(window.relayTheme?.preference() === value)); choice.addEventListener('click', () => window.relayTheme?.choose(value)); theme.append(choice);
+    }
+    kit.row(look, { label: 'Theme', description: 'Light is cream paper. Dark is near-black, for low light and OLED screens. Graphite is the warm dark. System switches between Light and Dark with your computer.', keywords: 'appearance theme dark light graphite black oled mode colour color', control: theme });
+    const themeStatus = kit.note(host, ''); themeStatus.id = 'appearance-status'; themeStatus.setAttribute('role', 'status');
+    const size = kit.segmented([['default', 'Default'], ['large', 'Larger']], window.relayTheme?.textSize?.() || 'default', value => { window.relayTheme?.setTextSize?.(value); render('appearance'); }, 'Text size');
+    kit.row(look, { label: 'Text size', description: 'Larger raises the sidebar, panels, Settings and the status bar by about a point. Messages keep their size.', keywords: 'font typography scale bigger smaller readable size zoom', control: size });
+  }
+  // Routing & handoffs: what happens near a usage limit, and when an agent's memory is refreshed.
+  function routing(host) {
+    const work = kit.group(host, 'Handoffs and context');
     if (window.relayFlow?.isOn?.()) {
       const routing = window.relayRouting, mode = routing.normalizeMode?.(api().getState().conversation?.routing?.mode) || api().getState().conversation?.routing?.mode || 'smart';
       kit.row(work, { label: 'Flow handoff', description: `Follows ${routing.modeNames[mode]} routing: at ${routing.handoffThresholds[mode]}% used, continue with another eligible subscription agent with confirmed room. Change the mode in Flow’s routing card.`, keywords: 'handoff hand off automatic routing limit quota switch agent' });
@@ -113,6 +131,9 @@
       api().api('/api/preferences').then(value => { savedLimit = value.contextLimit ?? 'auto'; limit.value = typeof savedLimit === 'number' && ![50000, 100000, 150000].includes(savedLimit) ? 'custom' : String(savedLimit); custom.hidden = limit.value !== 'custom'; customRow.hidden = custom.hidden; if (typeof savedLimit === 'number') custom.value = String(savedLimit); limit.disabled = false; }).catch(() => {});
       kit.note(work.parentNode, 'Auto targets 120,000 tokens after recent provider activity and 75,000 after a longer pause, capped at 75% of the reported model window. Cache lifetime uses provider reports when available and otherwise a conservative five-minute estimate; cache hits are not guaranteed. Custom limits stay fixed. Older unmeasured sessions refresh once. Recorded activity supplies a labeled byte estimate when native readings are missing. Native agents manage compaction during a run. Compact context or /compact schedules a manual refresh without a model call.');
     }
+  }
+  // Testing: when agents run broad checks.
+  function testing(host) {
     const testing = kit.group(host, 'Testing');
     let savedCadence = 'as-needed';
     const cadence = kit.select(testing, {
@@ -132,14 +153,17 @@
     cadence.id = 'settings-testing-cadence';
     api().api('/api/preferences').then(value => { savedCadence = value.verificationCadence || 'as-needed'; cadence.value = savedCadence; cadence.disabled = false; }).catch(() => { if (cadence.isConnected) { error.textContent = 'Testing preferences could not be loaded. Close Settings and try again.'; error.hidden = false; } });
     kit.note(testing.parentNode, 'Applies to new turns in every workspace, in Normal and Flow. Running agents keep their starting setting. Review first defers Codeshi’s routine automatic test command and repair loop; explicitly selected build/review workflows and required repository checks still apply. Agents receive guidance, not a command block, and must report deferred verification honestly.');
-    if (window.relayUpdater) { const updates = node('div', undefined, 'settings-section'); host.append(updates); window.relayUpdater.settings(updates, kit); }
-    window.relayPhone?.settings(host, kit);
+  }
+  function phone(host) { if (window.relayPhone) window.relayPhone.settings(host, kit); else kit.note(host, 'Phone access is not available here.'); }
+  function updates(host) {
+    if (window.relayUpdater) { const part = node('div', undefined, 'settings-section'); host.append(part); window.relayUpdater.settings(part, kit); }
+    else kit.note(host, 'Updates are handled where you installed Codeshi.');
   }
   // Turned on from the offer at a usage limit.
   window.addEventListener('relay-handoff-preferences', () => { handoff = null; });
   async function saveHandoff(patch) {
     await perform(async () => { handoff = await api().post('/api/handoff-preferences', patch); });
-    if (sections.general) render('general');
+    if (sections.routing) render('routing');
   }
 
   // Accounts: one row for each agent, with its status, plan and usage, what to do next, and its details on request.
@@ -229,7 +253,7 @@
     if (window.relayRecap) { const part = node('div', undefined, 'settings-section'); host.append(part); window.relayRecap.settings(part, kit); }
   }
   function voice(host) { if (window.relayVoice) { const part = node('div', undefined, 'settings-section'); host.append(part); window.relayVoice.settings(part, kit); } else kit.note(host, 'Voice is not available here.'); }
-  const DRAW = { general, accounts, alerts, voice };
+  const DRAW = { general, appearance, accounts, routing, testing, phone, voice, alerts, updates };
 
   // Every page is drawn when Settings opens, so search can look through all of them; one shows at a time.
   function render(name) {

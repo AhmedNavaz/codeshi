@@ -66,7 +66,7 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command('Flow Mode', ['flow'], { type: 'checkbox', checked: page.flow, accelerator: 'CmdOrCtrl+Shift+F', enabled: page.workspace && !page.running && !page.flowLocked }),
     command('Focus Message Box', ['focus-message'], { accelerator: 'CmdOrCtrl+L', enabled: page.workspace }),
     separator(),
-    { label: 'Appearance', submenu: [['system', 'System'], ['graphite', 'Dark'], ['light', 'Light']].map(([value, label]) => command(label, ['appearance', value], { id: `appearance-${value}`, type: 'radio', checked: appearance === value })) },
+    { label: 'Appearance', submenu: [['system', 'System'], ['light', 'Light'], ['dark', 'Dark'], ['graphite', 'Graphite']].map(([value, label]) => command(label, ['appearance', value], { id: `appearance-${value}`, type: 'radio', checked: appearance === value })) },
     separator(),
     ...packaged ? [] : [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, separator()],
     { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, separator(), { role: 'togglefullscreen' },

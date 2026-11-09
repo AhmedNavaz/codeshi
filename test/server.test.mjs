@@ -506,14 +506,21 @@ test('a new profile follows the system appearance, and Light or Dark saved by an
   }
 });
 
-test('System, Light and Dark are saved through both appearance requests and survive a restart',async t=>{
+test('System, Light, Dark and Graphite are saved through both appearance requests and survive a restart',async t=>{
   const f=await fixture(t);
-  for(const theme of ['light','system','graphite']){const saved=await post(`${f.url}/api/appearance`,{theme});assert.equal(saved.status,200);assert.deepEqual(await saved.json(),{theme});assert.equal(await savedAppearance(f.url),theme);}
-  assert.equal((await post(`${f.url}/api/appearance`,{theme:'dark'})).status,400,'Dark is saved as graphite.');assert.equal(await savedAppearance(f.url),'graphite');
+  for(const theme of ['light','system','dark','graphite']){const saved=await post(`${f.url}/api/appearance`,{theme});assert.equal(saved.status,200);assert.deepEqual(await saved.json(),{theme});assert.equal(await savedAppearance(f.url),theme);}
+  assert.equal((await post(`${f.url}/api/appearance`,{theme:'black'})).status,400,'Only the four choices are saved.');assert.equal(await savedAppearance(f.url),'graphite','Graphite keeps the key the earlier Dark used.');
   const system=await post(`${f.url}/api/preferences`,{theme:'system'});assert.equal(system.status,200);assert.equal((await system.json()).theme,'system');
   assert.equal((await post(`${f.url}/api/preferences`,{theme:'auto'})).status,400);assert.equal(await savedAppearance(f.url),'system');
   await post(`${f.url}/api/appearance`,{theme:'light'});await f.app.close();const next=await f.launch();
   assert.equal(await savedAppearance(next.url),'light');assert.equal(next.app.getAppearancePreference(),'light');
+});
+
+test('setup saves the working style it starts in, Normal or Flow, and nothing else',async t=>{
+  const f=await fixture(t);
+  const flow=await post(`${f.url}/api/preferences`,{defaults:{view:'flow'}});assert.equal(flow.status,200);assert.equal((await flow.json()).defaults.view,'flow');
+  assert.equal((await post(`${f.url}/api/preferences`,{defaults:{view:'grid'}})).status,400);
+  const kept=await (await fetch(`${f.url}/api/preferences`,{headers:{'X-AI-Relay':'1'}})).json();assert.equal(kept.defaults.view,'flow');assert.equal(kept.defaults.provider,'codex','Other defaults are unchanged.');
 });
 
 test('the desktop app hears about each saved appearance, whichever request saved it',async t=>{

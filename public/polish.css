@@ -13,7 +13,7 @@
 .compact-dialog { width: min(460px, calc(100vw - 32px)); padding: 22px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .compact-dialog::backdrop { background: var(--backdrop); }
 .compact-dialog header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
-.compact-dialog h2 { margin: 0; font-size: 16px; color: var(--text-strong); }
+.compact-dialog h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
 .compact-dialog p { font-size: 13px; line-height: 1.65; }
 .compact-dialog label { display: grid; gap: 8px; font-size: 12px; color: var(--muted); }
 .compact-dialog input { width: 100%; height: 34px; margin: 8px 0 12px; padding: 0 10px; border: 1px solid var(--input-border); border-radius: 5px; background: var(--surface-input); color: var(--text-strong); }

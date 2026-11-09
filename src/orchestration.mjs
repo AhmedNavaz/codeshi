@@ -160,6 +160,23 @@ export function stepBrief(plan, step, { artifacts = {}, sourceRevision = null } 
   };
 }
 
+// What a step's task is asked (#108). It runs as its own task, in a fresh session, so it gets the plan's goal, its own
+// step and the steps it builds on, and is told to do only its part.
+export function stepPrompt(plan, step, number) {
+  const brief = stepBrief(plan, step), steps = plan.steps || [], position = new Map(steps.map((item, index) => [item.id, index + 1]));
+  const goal = plan.goal.length > 4000 ? `${plan.goal.slice(0, 3999).trimEnd()}…` : plan.goal;
+  return [
+    `You are doing step ${number} of ${steps.length} in a plan. Each step runs as its own task, and other agents do the other steps, so do only this one.`,
+    '', 'The plan is for:', goal,
+    ...(plan.summary ? ['', `Plan: ${plan.summary}`] : []),
+    ...(step.dependsOn.length ? ['', 'This step builds on these steps, which have finished:', ...step.dependsOn.map(id => `- Step ${position.get(id)}: ${steps.find(item => item.id === id)?.title || ''}`)] : []),
+    '', `Step ${number}: ${step.title}${brief.role !== 'builder' ? ` (${brief.role})` : ''}`, step.instructions,
+    ...(step.files.length ? ['', `Files or folders it expects to change: ${step.files.join(', ')}`] : []),
+    ...(step.check ? ['', `Acceptance check: ${step.check}`] : []),
+    ...(brief.upstreamArtifacts.length ? ['', 'From the steps before it:', ...brief.upstreamArtifacts.map(item => `- Step ${position.get(item.stepId)} (${item.kind}): ${String(item.content).slice(0, 2000)}`)] : []),
+  ].join('\n');
+}
+
 // Record and validate a structured artifact tied to source revision.
 export function recordArtifact(plan, { stepId, kind, content, revision, role = null }) {
   if (!plan) fail('No plan provided.', 400);
@@ -280,6 +297,10 @@ export function applyOrchestration(c, record) {
   if (record.type === 'orchestration_result') Object.assign(plan, record.result, { revision: plan.revision + 1, updatedAt: record.at });
   if (record.type === 'orchestration_update') Object.assign(plan, { steps: record.steps, review: record.review, revision: plan.revision + 1, updatedAt: record.at });
   if (record.type === 'orchestration_discard') Object.assign(plan, { status: 'discarded', updatedAt: record.at });
+  // Running its steps as tasks (#108): which task does which step, and whether the plan was stopped or closed.
+  if (record.type === 'orchestration_run') Object.assign(plan, { status: 'running', tasks: record.tasks, folderId: record.folderId, startedAt: record.at, updatedAt: record.at });
+  if (record.type === 'orchestration_stop') Object.assign(plan, { status: 'stopped', updatedAt: record.at });
+  if (record.type === 'orchestration_close') Object.assign(plan, { status: 'closed', updatedAt: record.at });
   if (record.type === 'orchestration_artifact') {
     plan.artifacts ||= {};
     plan.artifacts[record.stepId] = {
@@ -329,10 +350,31 @@ export function orchestrationAction(broker, c, input = {}) {
     broker.record(c, { type: 'orchestration_plan', id, plan: { id, goal, source: 'manual', status: 'draft', summary: '', steps: [], review: true, revision: 0, artifacts: {}, stepOutcomes: {} } });
     return broker.view(c);
   }
-  if (!['update', 'discard', 'artifact', 'outcome'].includes(input.action)) fail('Choose update, discard, artifact, outcome or create.');
+  if (!['update', 'discard', 'artifact', 'outcome', 'run', 'stop', 'close'].includes(input.action)) fail('Choose update, discard, artifact, outcome, run, stop, close or create.');
   const plan = (c.orchestrations || []).find(item => item.id === input.id);
   if (!plan) fail('That plan is no longer in this conversation.', 404);
   if (plan.status === 'planning') fail('Wait for the planner to finish.', 409);
+  if (input.action === 'run') {
+    // Only the workspace chat has tasks, so a step's task can't run a plan of its own and split again.
+    if (!broker.tasks) fail('A task started by a plan can’t split into more tasks. Run plans from the workspace chat.', 409);
+    if (plan.status !== 'draft') fail('This plan has already run, or can no longer run. Start a new one.', 409);
+    if (input.revision !== plan.revision) fail('This plan changed in another window. Your view now shows the latest version.', 409);
+    if (!plan.steps?.length) fail('Add the steps this plan needs first.');
+    const started = broker.tasks.fromPlan(c, plan, input, (step, number) => stepPrompt(plan, step, number));
+    broker.record(c, { type: 'orchestration_run', id: plan.id, tasks: started.tasks, folderId: started.folderId });
+    broker.message(c, 'system', `Running the plan as ${plan.steps.length} task${plan.steps.length === 1 ? '' : 's'}. Each step shows under Tasks; steps that depend on others wait for them.`);
+    setTimeout(() => broker.queue.tick(c), 0);
+    return broker.view(c);
+  }
+  if (input.action === 'stop' || input.action === 'close') {
+    if (!broker.tasks || !['running', 'stopped'].includes(plan.status)) fail('This plan isn’t running.', 409);
+    if (input.action === 'close') { broker.tasks.closePlan(c, plan); broker.record(c, { type: 'orchestration_close', id: plan.id }); return broker.view(c); }
+    const { stopped, cancelled } = broker.tasks.stopPlan(c, plan);
+    broker.record(c, { type: 'orchestration_stop', id: plan.id });
+    const parts = [stopped && `${stopped} step${stopped === 1 ? '' : 's'} stopped`, cancelled && `${cancelled} that hadn’t started cancelled`].filter(Boolean);
+    broker.message(c, 'system', `Stopped the plan${parts.length ? `: ${parts.join(', ')}` : ''}. Finished steps keep their work, and a step in its own copy still waits for you to review and merge it.`);
+    return broker.view(c);
+  }
   if (input.action === 'discard' && OPEN_PLANS.includes(plan.status)) { broker.record(c, { type: 'orchestration_discard', id: plan.id }); setTimeout(() => broker.queue.tick(c), 0); return broker.view(c); }
   if (input.action === 'artifact') {
     const step = (plan.steps || []).find(s => s.id === input.stepId);

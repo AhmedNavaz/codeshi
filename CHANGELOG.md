@@ -2,6 +2,27 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.39.0] - 2026-11-10
+
+### Added
+- **Add a GitHub issue or pull request to your message** ([#18](https://github.com/AhmedNavaz/codeshi/issues/18)). **GitHub** in the composer, beside **Attach**, takes an issue or pull request number or link, or **This branch’s pull request**, and puts it in the message box for you to read and send. A pull request comes with its reviews, the review comments on the code and its checks, with the part of each failing job’s log that shows the failure. It reads through your own `gh` login, only when you click, and never writes to GitHub. Secrets and local paths are removed first, as in exports.
+- **Run a plan as tasks** ([#108](https://github.com/AhmedNavaz/codeshi/issues/108)). A saved Orchestrate plan has **Run as tasks**, which starts each step as its own task beside the Workspace chat, with the agent, model and effort the step shows and the chat's own access. Steps wait for the steps they run after, count toward **Tasks at once** and the task limits, and work directly, in their own copy or waiting their turn like any task. If any step can't start, none does. The steps are grouped under the plan in **Tasks**, the Plan panel follows each one, **Stop plan** stops the working steps and cancels the rest, and **Close plan** closes them together. A step's task can't split into more tasks.
+- **A near-black Dark theme** ([#127](https://github.com/AhmedNavaz/codeshi/issues/127)). The themes are now **Light**, **Dark** and **Graphite**. Dark is new: near-black surfaces with cream text, for low light and OLED screens. Graphite is the warm dark that was called Dark before, and a saved Graphite choice keeps its look. **System** switches between Light and the new Dark, so if you use System on a dark computer, Codeshi now shows the near-black Dark; choose Graphite to keep the warm look. The status bar, Settings, setup, the desktop menu and the phone page all offer the four choices.
+- **Text size** in **Settings › Appearance** ([#127](https://github.com/AhmedNavaz/codeshi/issues/127)): **Larger** makes the sidebar, panels, Settings and the status bar about a point larger. Messages keep their size.
+- **Setup starts with your workspace and asks how you want to work** ([#129](https://github.com/AhmedNavaz/codeshi/issues/129)). The four steps are now: your workspace, your working style, your agents, then your defaults. Name the workspace and choose its folders, or drop them on the window. Codeshi then shows each folder's Git branch and number of changes, and the kind of project its files suggest. **Choose your working style** puts Normal and Flow side by side, each with a small picture of its layout and three short lines: who chooses the agent and model, what you see, and what happens near a usage limit. Codeshi opens in the one you pick, and you can switch at any time with the Flow button or in **Settings › General**.
+
+### Changed
+- **Settings has a page for each subject** ([#130](https://github.com/AhmedNavaz/codeshi/issues/130)): **General** (Normal or Flow, and Keep awake), **Appearance**, **Agents & accounts**, **Routing & handoffs** (handoff offers and the context limit), **Testing**, **Phone & remote**, **Voice**, **Alerts** and **Updates**. Before, General held most of these. Search still finds a setting on any page, and **Remote access**, the command search and the connection prompts open the page that holds the setting.
+- **Larger, steadier text and controls** ([#127](https://github.com/AhmedNavaz/codeshi/issues/127), [#130](https://github.com/AhmedNavaz/codeshi/issues/130)). The sidebar, the Tasks and side panels, the status bar and Settings use one type scale, with nothing below 11.5 px and status bar text at 12.5 px. The status bar is a little taller. Buttons use three heights (24, 28 and 32 px), and dialog titles share one size. Faint text is a little brighter in every theme, so it stays readable on selected rows.
+- **Entering Flow takes a moment to say what it is.** The seal lands, then the word **Flow** and one line, "Let it flow. Watch it ship.", before the cards appear. It takes under two seconds. Leaving Flow is as quick as before, and with reduced motion the view just changes.
+- **Workspace rows in the sidebar use two lines** ([#127](https://github.com/AhmedNavaz/codeshi/issues/127)). The name has the first line to itself, and the folder count, **running** and approvals waiting sit on the line below. Neither cuts off the other, and the row's menu button no longer hides them.
+
+### Fixed
+- The message box's bottom row stays on one line when the window is narrower. **Can edit files**, then the permissions picker, shrink to their icons before anything moves to a second line.
+- Attachments leave the message box the moment you send or queue a message, together with its text, instead of staying until Auto finishes choosing an agent. The message shows its attachments in the chat at once, and they come back to the box if the message is refused.
+- Removing an attachment corrects the "attached" count under the message box, and removing the last one clears the line.
+- In Flow's **What's next**, the step being worked on is an ordinary row like the others, with a filled mark and stronger text, instead of a separate highlighted box that looked like the working agent's row in **What's left on your plans**.
+
 ## [0.38.2] - 2026-11-10
 
 ### Added
@@ -787,3 +808,4 @@ First public release.
 [0.37.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.37.0
 [0.36.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.36.0
 [0.38.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.38.0
+[0.39.0]: https://github.com/AhmedNavaz/codeshi/releases/tag/v0.39.0

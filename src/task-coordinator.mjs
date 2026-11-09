@@ -11,6 +11,8 @@ import { applyPlan, checkCombined, createWorktree, folderIdentity, integrationPl
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
 const STOPPED = { complete: 'complete', interrupted: 'stopped', incomplete: 'failed' };
+// The tasks one waits for: none, one (as a task started by hand saves it) or several (a plan step after more than one step).
+const waitsFor = task => task.dependsOn ? [].concat(task.dependsOn) : [];
 const line = text => { const first = String(text || '').trim().split('\n')[0]; return first.length > 80 ? `${first.slice(0, 79).trimEnd()}…` : first; };
 
 export class TaskCoordinator {
@@ -79,7 +81,7 @@ export class TaskCoordinator {
     return { ...plan, running, limit, full: running >= limit };
   }
 
-  start(c, input = {}, { queueExecution = null, prepareReview = false } = {}) {
+  start(c, input = {}, { queueExecution = null, prepareReview = false, held = false, plan = null } = {}) {
     input = { ...input, purpose: prepareReview ? 'project-review' : null, ...(prepareReview ? { mode: 'read', approvalPolicy: 'ask' } : {}) };
     if (this.closed) throw fail('Codeshi is stopping.', 503);
     const text = typeof input.text === 'string' ? input.text.trim() : '';
@@ -99,11 +101,12 @@ export class TaskCoordinator {
     this.main.execution.assert(c, execution, { action: input.routing ? 'routing' : 'manual', ...(prepareReview && input.routing ? {} : { provider, model, effort }) });
     const attachments = Array.isArray(input.attachments) ? input.attachments : [];
     this.main.attachments.select(attachments);
-    const dependsOn = input.dependsOn || null;
-    if (dependsOn) { const before = this.find(c, dependsOn); if (['discarded', 'cancelled'].includes(before.status)) throw fail(`“${before.title}” was ${before.status}, so nothing can wait for it.`); }
+    // One task to wait for, or several for a plan step that waits for more than one earlier step.
+    const dependsOn = Array.isArray(input.dependsOn) ? (input.dependsOn.length ? [...new Set(input.dependsOn)] : null) : input.dependsOn || null;
+    for (const id of waitsFor({ dependsOn })) { const before = this.find(c, id); if (['discarded', 'cancelled'].includes(before.status)) throw fail(`“${before.title}” was ${before.status}, so nothing can wait for it.`); }
     const folder = this.plan(c, { ...input, provider, accessMode: mode, approvalPolicy }).folder;
     // Ownership is saved before anything can start, so a crash at any point finds a task it can recover.
-    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(text), ...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
+    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(plan ? { plan } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
     this.main.record(c, { type: 'parallel_task', task });
     const saved = this.find(c, task.id);
     this.tick(c);
@@ -121,6 +124,60 @@ export class TaskCoordinator {
     this.main.queue.act(c, { action: 'remove', id: item.id });
     return task;
   }
+  // An approved Orchestrate plan, each step started as its own task (#108). Every step is checked before any is recorded,
+  // and the tasks are recorded held, so a plan that can't start starts nothing. Each step gets exactly the agent, model and
+  // effort the plan showed, and the conversation's own access and permission setting, never more. Steps wait for the
+  // steps they depend on, and Tasks at once and the task limits decide when each starts, as for any task.
+  fromPlan(c, plan, input = {}, prompt) {
+    const folders = this.main.workspaceFolders, folderId = input.folderId || (folders.length === 1 ? folders[0].id : null);
+    if (!folderId || !folders.some(folder => folder.id === folderId)) throw fail('Choose the folder these steps work in.', 400);
+    const mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', assignments = input.assignments && typeof input.assignments === 'object' ? input.assignments : {};
+    const chosen = plan.steps.map((step, index) => {
+      const pick = assignments[step.id], number = index + 1;
+      if (!pick || typeof pick !== 'object' || typeof pick.provider !== 'string') throw fail(`Choose an agent for step ${number}.`, 400);
+      const provider = pick.provider, model = pick.model || null, effort = pick.effort || null;
+      if (step.agent && (provider !== step.agent.provider || (step.agent.model && model !== step.agent.model) || (step.agent.effort && effort !== step.agent.effort))) throw fail(`Step ${number}’s agent changed. Check the plan again before running it.`);
+      this.main.checkRunSettings(provider, mode, approvalPolicy);
+      this.main.validateSelection(model, 'auto', effort);
+      const allowed = this.main.budget.allows(c, provider, model);
+      if (!allowed.allowed) throw fail(`Step ${number}: ${allowed.reason}`);
+      return { step, number, provider, model, effort };
+    });
+    // Each attempt has its own request IDs, so a plan that failed to start can be run again; the plan's status stops a double run.
+    const ids = {}, made = [], attempt = randomUUID().slice(0, 8);
+    try {
+      for (const { step, number, provider, model, effort } of chosen) {
+        const task = this.start(c, { text: prompt(step, number), title: `${number}. ${step.title}`, provider, model, effort, mode, approvalPolicy, folderId, requestId: `plan-${plan.id}-${attempt}-${step.id}`, dependsOn: step.dependsOn.map(id => ids[id]), executionRevision: input.executionRevision }, { held: true, plan: { id: plan.id, stepId: step.id, number } });
+        ids[step.id] = task.id; made.push(task.id);
+      }
+    } catch (error) {
+      for (const id of made) { const task = this.find(c, id); if (task.status === 'waiting') this.finish(c, task, { status: 'cancelled' }); }
+      throw error;
+    }
+    for (const id of made) this.update(c, this.find(c, id), { held: false, reason: 'Starting' });
+    this.tick(c);
+    return { tasks: ids, folderId };
+  }
+  planTasks(c, plan) { return Object.values(plan.tasks || {}).map(id => (c.parallelTasks || []).find(task => task.id === id)).filter(Boolean); }
+  // Stopping a plan stops the steps that are working and cancels the ones that haven't started. Steps that finished keep
+  // their work: a step in its own copy still waits to be reviewed and merged.
+  stopPlan(c, plan) {
+    let stopped = 0, cancelled = 0;
+    for (const task of this.planTasks(c, plan)) {
+      const lane = this.lanes.get(task.id);
+      if (lane?.broker.running && lane.c) { if (lane.broker.stop(lane.c.id).stopped) stopped++; }
+      else if (task.status === 'waiting') { this.finish(c, task, { status: 'cancelled' }); cancelled++; }
+    }
+    return { stopped, cancelled };
+  }
+  // Closing a plan closes all its tasks at once, but only when none is working and nothing is left unmerged.
+  closePlan(c, plan) {
+    const tasks = this.planTasks(c, plan);
+    if (tasks.some(task => this.lanes.get(task.id)?.broker.running || task.status === 'waiting')) throw fail('Stop the plan before closing it.');
+    const unmerged = tasks.filter(task => task.mode === 'worktree' && !ENDED.has(task.status) && !['lost', 'detached'].includes(task.status));
+    if (unmerged.length) throw fail(`Merge or discard ${unmerged.map(task => `“${task.title}”`).join(', ')} first, so ${unmerged.length === 1 ? 'its changes aren’t' : 'their changes aren’t'} left behind.`);
+    for (const task of tasks) if (!task.closed) this.update(c, task, { closed: true });
+  }
   tickAll() { for (const c of this.main.conversations.values()) if (c.parallelTasks?.some(task => task.status === 'waiting')) this.tick(c); }
   tick(c) {
     if (this.closed || this.ticking) return;
@@ -129,9 +186,12 @@ export class TaskCoordinator {
       for (const task of (c.parallelTasks || []).filter(item => item.status === 'waiting' && !item.held)) {
         const wait = reason => { if (task.reason !== reason) this.update(c, task, { reason }); };
         if (!this.available(task)) { this.update(c, task, { status: 'detached', reason: `${task.folderName} is no longer in this workspace.` }); continue; }
-        if (task.dependsOn) {
-          const before = this.find(c, task.dependsOn), finished = before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete');
-          if (!finished) { wait(before.mode === 'worktree' && before.status === 'complete' ? `Waiting for “${before.title}” to be merged.` : `Waiting for “${before.title}”.`); continue; }
+        const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !(before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete')));
+        if (pending) {
+          // A step that ended without finishing can't be built on, so this one says what it needs instead of waiting quietly.
+          const ended = { stopped: 'stopped', failed: 'did not finish', discarded: 'was discarded', cancelled: 'was cancelled', lost: 'lost its copy', detached: 'lost its folder', blocked: 'is blocked' }[pending.status];
+          wait(ended ? `Waiting for “${pending.title}”, which ${ended}. Continue it in its task, or cancel this one.` : pending.mode === 'worktree' && pending.status === 'complete' ? `Waiting for “${pending.title}” to be merged.` : `Waiting for “${pending.title}”.`);
+          continue;
         }
         try { this.admit(c, task); } catch (error) { wait(error.message); continue; }
         let plan;

@@ -123,7 +123,7 @@
 .setup-field-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 
 /* Preferences */
-.setup-theme-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.setup-theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .setup-theme { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 10px 14px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface-raised); color: var(--text); text-align: left; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
 .setup-theme[aria-pressed="true"] { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
 .setup-theme strong { margin: 8px 4px 0; color: var(--text-strong); font-size: 13px; font-weight: 600; }
@@ -145,6 +145,11 @@
 .theme-preview.light .theme-preview-canvas em { color: #2b7530; }
 .theme-preview.light .theme-preview-canvas small { border-color: #d9cfbf; color: #71675c; }
 /* System shows both palettes, split along the diagonal. */
+.theme-preview.dark { border-color: #353535; background: #111111; color: #d9d4cc; }
+.theme-preview.dark > i { background: #0a0a0a; border-color: #232323; }
+.theme-preview.dark :is(i b, .theme-preview-canvas i) { background: #2e2e2e; }
+.theme-preview.dark > i b:first-child { background: #d9381e; }
+.theme-preview.dark .theme-preview-canvas small { border-color: #353535; color: #938d84; }
 .theme-preview-pair { display: grid; width: 100%; }
 .theme-preview-pair > .theme-preview { grid-area: 1 / 1; }
 .theme-preview-pair > .light { clip-path: polygon(100% 0, 100% 100%, 0 100%); }
@@ -165,6 +170,58 @@
 .setup-start-card strong { color: var(--text-strong); font-size: 14.5px; font-weight: 600; }
 .setup-start-card span { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
 .setup-paths .secondary-button { margin-top: 4px; }
+/* Workspace step: a drop zone that is also the folder picker, then what each folder turned out to be. */
+.setup-drop { display: grid; grid-template-columns: 40px 1fr; align-items: start; column-gap: 14px; row-gap: 4px; width: 100%; padding: 22px; border: 1.5px dashed var(--border-strong); border-radius: 16px; background: var(--surface-raised); color: var(--text); text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+.setup-drop:hover, .setup-drop:focus-visible, .setup-drop.dragging { border-color: var(--focus); background: color-mix(in srgb, var(--accent) 6%, var(--surface-raised)); }
+.setup-drop strong { color: var(--text-strong); font-size: 14.5px; font-weight: 600; }
+.setup-drop span { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.setup-readiness { display: grid; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+.setup-readiness-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); }
+.setup-readiness-text { display: grid; gap: 2px; min-width: 0; }
+.setup-readiness-text strong { color: var(--text-strong); font-size: 13.5px; font-weight: 600; }
+.setup-readiness-path { overflow: hidden; color: var(--faint); font-family: var(--mono); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.setup-readiness-facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.setup-chip { padding: 0 9px; border-radius: 10px; background: var(--chip-bg); color: var(--muted); font-size: 12px; line-height: 22px; white-space: nowrap; }
+.setup-chip.positive { color: var(--success); background: var(--success-bg); }
+.setup-chip.warning { color: var(--warning); background: var(--warning-bg); }
+/* Working style: Normal and Flow side by side, each with a small picture of its layout and three short lines. */
+.setup-style-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.setup-style { display: flex; flex-direction: column; align-items: stretch; gap: 14px; padding: 12px 12px 18px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--surface-raised); color: var(--text); text-align: left; cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s; }
+.setup-style:hover { border-color: var(--focus); transform: translateY(-1px); }
+.setup-style[aria-checked="true"] { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.setup-style-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 8px; }
+.setup-style-names { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.setup-style-names strong { color: var(--text-strong); font-size: 17px; font-weight: 600; }
+.setup-style-tagline { color: var(--link); font-size: 12px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
+.setup-style-check { position: relative; flex: none; width: 18px; height: 18px; border: 1.5px solid var(--border-strong); border-radius: 50%; }
+.setup-style[aria-checked="true"] .setup-style-check { border-color: var(--focus); background: var(--focus); }
+.setup-style[aria-checked="true"] .setup-style-check::after { content: ""; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px; border: solid #fff; border-width: 0 1.75px 1.75px 0; transform: rotate(45deg); }
+.setup-style-points { display: grid; gap: 7px; padding: 0 8px; }
+.setup-style-points > span { position: relative; padding-left: 16px; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.setup-style-points > span::before { content: ""; position: absolute; left: 2px; top: .55em; width: 5px; height: 5px; border-radius: 50%; background: var(--border-strong); }
+.setup-style[aria-checked="true"] .setup-style-points > span { color: var(--text); }
+.setup-style[aria-checked="true"] .setup-style-points > span::before { background: var(--focus); }
+/* The pictures use the theme's own surfaces, so they match the app the person is about to see. */
+.setup-style-art { display: flex; gap: 6px; height: 128px; padding: 10px; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.setup-style-art i, .setup-style-art .art-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.setup-style-art i { padding: 8px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
+.setup-style-art b { display: block; flex: none; height: 4px; border-radius: 2px; background: var(--border-strong); }
+.setup-style-art b:nth-child(2n) { width: 68%; }
+.setup-style-art .art-rail { width: 20%; }
+.setup-style-art .art-rail b:first-child { background: var(--focus); }
+.setup-style-art .art-main { flex: 1; }
+.setup-style-art .art-panel { width: 22%; }
+.setup-style-art .art-chat { flex: 1; }
+.setup-style-art .art-chat b:nth-child(2) { align-self: flex-end; width: 46%; background: var(--focus); opacity: .75; }
+.setup-style-art .art-chat em { flex: none; height: 12px; margin-top: auto; border: 1px solid var(--border-strong); border-radius: 4px; }
+.setup-style-art .art-terminal { flex: none; height: 30px; padding: 7px; }
+.setup-style-art .art-terminal b { height: 3px; }
+.setup-style-art.flow { gap: 10px; padding: 12px 14px; }
+.setup-style-art.flow .art-cards { width: 21%; padding: 0; border: 0; background: none; }
+.setup-style-art.flow .art-cards b { flex: 1; height: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); width: auto; }
+.setup-style-art.flow .art-cards b:first-child { border-left: 2px solid var(--focus); }
+.setup-style-art.flow .art-chat { border-color: var(--border-strong); }
+@media (prefers-reduced-motion: reduce) { .setup-drop, .setup-style { transition: none; } }
 
 /* After setup, the app arrives with a short settle instead of appearing all at once. */
 .app-shell.app-reveal { animation: ob-reveal .6s cubic-bezier(.2,.8,.2,1) both; }
@@ -184,7 +241,7 @@
   #setup-steps { grid-column: 1 / -1; grid-row: 2; }
   .setup-step { width: auto; flex: 1; }
   #setup-title { font-size: 34px; }
-  .setup-agent-grid, .setup-theme-grid, .setup-access, .setup-field-pair { grid-template-columns: 1fr; }
+  .setup-agent-grid, .setup-theme-grid, .setup-access, .setup-field-pair, .setup-style-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .setup-dialog *, .setup-dialog::before, .setup-dialog[open], .launch-screen img, .app-shell.app-reveal { animation: none !important; transition: none !important; }

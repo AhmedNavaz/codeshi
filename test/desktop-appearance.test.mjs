@@ -14,7 +14,7 @@ function nativeTheme(dark) {
 }
 
 test('a new window starts with the background of the saved appearance',()=>{
-  for(const [preference,dark,source,color] of [['system',true,'system','#1c1a18'],['system',false,'system','#fbf8f3'],['light',true,'light','#fbf8f3'],['graphite',false,'dark','#1c1a18']]){
+  for(const [preference,dark,source,color] of [['system',true,'system','#111111'],['system',false,'system','#fbf8f3'],['light',true,'light','#fbf8f3'],['dark',false,'dark','#111111'],['graphite',false,'dark','#1c1a18'],['graphite',true,'dark','#1c1a18']]){
     const native=nativeTheme(dark),appearance=createAppearance({nativeTheme:native});appearance.set(preference);
     assert.equal(native.themeSource,source);assert.equal(appearance.background(),color,`${preference} with a ${dark?'dark':'light'} OS`);
   }
@@ -22,10 +22,11 @@ test('a new window starts with the background of the saved appearance',()=>{
 
 test('the window follows System through OS changes, keeps a manual choice, and adopts the OS again on returning to System',()=>{
   const native=nativeTheme(true),backgrounds=[],appearance=createAppearance({nativeTheme:native,onBackground:color=>backgrounds.push(color)});
-  appearance.set('system');native.setSystem(false);assert.equal(backgrounds.at(-1),'#fbf8f3');native.setSystem(true);assert.equal(backgrounds.at(-1),'#1c1a18');
+  appearance.set('system');native.setSystem(false);assert.equal(backgrounds.at(-1),'#fbf8f3');native.setSystem(true);assert.equal(backgrounds.at(-1),'#111111','System uses the near-black Dark.');
   appearance.set('light');assert.equal(backgrounds.at(-1),'#fbf8f3');
   native.setSystem(false);native.setSystem(true);assert.equal(native.themeSource,'light');assert.equal(backgrounds.at(-1),'#fbf8f3','A manual choice ignores the OS.');
-  appearance.set('system');assert.equal(native.themeSource,'system');assert.equal(backgrounds.at(-1),'#1c1a18','Returning to System adopts the dark OS at once.');
-  appearance.set('graphite');native.setSystem(false);assert.equal(native.themeSource,'dark');assert.equal(backgrounds.at(-1),'#1c1a18');
+  appearance.set('system');assert.equal(native.themeSource,'system');assert.equal(backgrounds.at(-1),'#111111','Returning to System adopts the dark OS at once.');
+  appearance.set('graphite');native.setSystem(false);assert.equal(native.themeSource,'dark');assert.equal(backgrounds.at(-1),'#1c1a18','Graphite keeps its warm background.');
+  appearance.set('dark');assert.equal(backgrounds.at(-1),'#111111');
   appearance.set('system');assert.equal(backgrounds.at(-1),'#fbf8f3');
 });

@@ -1,6 +1,7 @@
 import { workspaceGit, workspaceGitDiff } from './workspace-git.mjs';
 import { commitChanges, committer, stageChanges, unstageChanges } from './workspace-commit.mjs';
 import { listFiles, readExplorerFile, searchFiles } from './file-explorer.mjs';
+import { githubContext } from './github-context.mjs';
 
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 // Git activity, with the name and email a commit from the panel would use.
@@ -11,8 +12,16 @@ async function gitActivity(folders) {
 }
 const gitActions = { '/api/git/stage': stageChanges, '/api/git/unstage': unstageChanges, '/api/git/commit': commitChanges };
 
-export function createWorkspaceRoutes({ registry, body, json }) {
+export function createWorkspaceRoutes({ registry, body, json, readGitHub = githubContext }) {
   return async ({ req, res, url }) => {
+    // An issue or pull request read through the person's gh login, cleaned and returned for the message box. Read only.
+    if (url.pathname === '/api/git/github-context') {
+      if (req.method !== 'POST') fail('Use POST to read GitHub context.', 405);
+      const projectId = url.searchParams.get('projectId');
+      if (!projectId) fail('Select a workspace first.');
+      const input = await body(req, 16 * 1024), project = registry.get(projectId);
+      json(res, 200, await readGitHub(project.folders, { reference: typeof input.reference === 'string' ? input.reference.slice(0, 500) : '', folderId: typeof input.folderId === 'string' ? input.folderId : '' })); return true;
+    }
     // The search bar finds files across all workspaces.
     if (url.pathname === '/api/file-search') {
       if (req.method !== 'GET') fail('File search is read only.', 405);

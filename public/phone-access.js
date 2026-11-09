@@ -5,7 +5,7 @@
   const entry = document.getElementById('connect-phone');
   if (entry) {
     // In Flow the entry opens Flow's own remote-access sheet; otherwise it goes to the section in Settings.
-    entry.addEventListener('click', async () => { if (window.relayFlow?.remoteAccess?.() === true) return; focusPhone = true; await window.relaySettings?.open('general'); load(true); });
+    entry.addEventListener('click', async () => { if (window.relayFlow?.remoteAccess?.() === true) return; focusPhone = true; await window.relaySettings?.open('phone'); load(true); });
   }
   // The section draws only while it can be seen: in Settings, or wherever else hosts it and says so.
   let shown = null;

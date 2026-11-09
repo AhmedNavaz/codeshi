@@ -706,14 +706,20 @@
   function stage(change, seal, done) {
     if (!veil || typeof veil.animate !== 'function' || reducedMotion() || document.documentElement.dataset.smokeTest === 'true') { try { change(); } finally { done(); } return; }
     veil.hidden = false; veil.classList.toggle('with-seal', seal);
-    const mark = veil.querySelector('img');
-    if (mark) mark.style.opacity = '0';
-    const fadeIn = veil.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'ease-out', fill: 'forwards' });
+    const mark = veil.querySelector('img'), title = veil.querySelector('.flow-veil-title'), line = veil.querySelector('.flow-veil-line');
+    const fadeIn = veil.animate([{ opacity: 0 }, { opacity: 1 }], { duration: seal ? 260 : 150, easing: 'ease-out', fill: 'forwards' });
     fadeIn.onfinish = () => {
-      const changed = change() !== false;
-      if (changed && seal && mark?.animate) mark.animate([{ opacity: 0, transform: 'scale(.55) rotate(-10deg)' }, { opacity: 1, transform: 'scale(1) rotate(0)', offset: .45 }, { opacity: 1, transform: 'scale(1)', offset: .75 }, { opacity: 0, transform: 'scale(1.05)' }], { duration: 700, easing: 'cubic-bezier(.2, .8, .2, 1)' });
-      const fadeOut = veil.animate([{ opacity: 1 }, { opacity: 0 }], { duration: changed && seal ? 380 : 160, delay: changed && seal ? 320 : 0, easing: 'ease-in', fill: 'forwards' });
-      fadeOut.onfinish = () => { veil.hidden = true; done(); };
+      const changed = change() !== false, welcome = changed && seal, shown = [];
+      veil.classList.toggle('with-seal', welcome);
+      // Going in: the seal lands, then the word and one line saying what Flow does rise in after it, and stay long enough to read.
+      if (welcome) {
+        const ease = 'cubic-bezier(.2, .8, .2, 1)', rise = [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'translateY(0)' }];
+        if (mark?.animate) shown.push(mark.animate([{ opacity: 0, transform: 'scale(.55) rotate(-10deg)' }, { opacity: 1, transform: 'scale(1) rotate(0)' }], { duration: 380, easing: ease, fill: 'forwards' }));
+        if (title?.animate) shown.push(title.animate(rise, { duration: 300, delay: 140, easing: ease, fill: 'both' }));
+        if (line?.animate) shown.push(line.animate(rise, { duration: 300, delay: 220, easing: ease, fill: 'both' }));
+      }
+      const fadeOut = veil.animate([{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: welcome ? 'scale(1.03)' : 'scale(1)' }], { duration: welcome ? 340 : 160, delay: welcome ? 1200 : 0, easing: 'ease-in', fill: 'forwards' });
+      fadeOut.onfinish = () => { veil.hidden = true; veil.classList.remove('with-seal'); for (const animation of shown) animation.cancel?.(); done(); };
     };
   }
   // The status line's elapsed time moves while a run works.

@@ -125,13 +125,58 @@
 
   function route(step) {
     const routed = api.routeFor(step.instructions || step.title || 'Plan step', 0, null, { tier: step.tier, only: step.agent?.provider || null });
+    // assignment: exactly what Run as tasks sends for this step, so a step runs with the agent its row shows.
     if (!routed) {
       const p = step.agent?.provider || state().provider;
-      const m = (step.agent ? step.agent.model : state().model) || 'default model';
-      return { provider: p, text: `${names[p] || p} · ${m}` };
+      const model = step.agent ? step.agent.model : state().model || null, effort = step.agent ? step.agent.effort : state().effort || null;
+      return { provider: p, text: `${names[p] || p} · ${model || 'default model'}`, assignment: { provider: p, model: model || null, effort: effort || null } };
     }
-    if (routed.error) return { provider: 'auto', text: routed.error };
-    return { provider: routed.provider, text: `${step.agent ? '' : 'Auto: '}${choiceText(routed)}` };
+    if (routed.error) return { provider: 'auto', text: routed.error, assignment: null };
+    return { provider: routed.provider, text: `${step.agent ? '' : 'Auto: '}${choiceText(routed)}`, assignment: { provider: routed.provider, model: routed.model || null, effort: routed.effort || null } };
+  }
+  // The plan the card shows: one still being made or edited, or one whose steps run as tasks until it is closed (#108).
+  const RUN = ['running', 'stopped'];
+  const runningPlan = () => { const plan = conversation()?.orchestrations?.[0]; return plan && RUN.includes(plan.status) ? plan : null; };
+  const TASK_LABEL = { waiting: 'Waiting', running: 'Working', complete: 'Finished', stopped: 'Stopped', failed: 'Did not finish', integrated: 'Merged', kept: 'Kept as a branch', discarded: 'Discarded', cancelled: 'Cancelled', blocked: 'Blocked', lost: 'Copy gone', detached: 'Folder removed' };
+  const LIVE = ['waiting', 'running'];
+  const folders = () => state().projects?.find(project => project.id === state().projectId)?.folders || [];
+  const planTasks = plan => (plan.steps || []).map((step, index) => ({ step, number: index + 1, task: (conversation()?.parallelTasks || []).find(task => task.id === plan.tasks?.[step.id]) || null }));
+  function runPlan() {
+    const plan = openPlan(); if (!plan || !edit || edit.dirty || busy) return;
+    const assignments = {};
+    for (const [index, step] of plan.steps.entries()) {
+      const routed = route(step);
+      if (!routed.assignment) { failure = `Step ${index + 1}: ${routed.text}`; render(); return; }
+      assignments[step.id] = routed.assignment;
+    }
+    const folderId = folders().length === 1 ? folders()[0].id : $('orchestration-folder').value;
+    if (!folderId) { failure = 'Choose the folder these steps work in.'; render(); return; }
+    action({ action: 'run', id: plan.id, revision: plan.revision, folderId, assignments, executionRevision: conversation()?.execution?.defaults?.revision ?? 0 }, () => { edit = null; drawn = null; api.announce(`The plan is running as ${plural(plan.steps.length, 'task')}.`); });
+  }
+  // A running plan: each step with its task's state, a way to open it, and Stop or Close for the whole plan.
+  function renderRun(plan) {
+    const rows = planTasks(plan), live = rows.some(row => row.task && LIVE.includes(row.task.status)), done = rows.filter(row => row.task && ['complete', 'integrated', 'kept'].includes(row.task.status)).length;
+    $('orchestration-title').textContent = plan.status === 'stopped' ? 'Plan · Stopped' : live ? `Plan · Running · ${done} of ${rows.length} done` : `Plan · Finished · ${done} of ${rows.length} done`;
+    $('orchestration-summary').textContent = clip(plan.summary || plan.goal || ''); $('orchestration-summary').hidden = !$('orchestration-summary').textContent;
+    const status = $('orchestration-status'), waitingMerge = rows.filter(row => row.task?.hasWorktree && ['complete', 'stopped', 'failed'].includes(row.task.status)).length;
+    status.textContent = waitingMerge ? `${plural(waitingMerge, 'step')} worked in ${waitingMerge === 1 ? 'its own copy and waits' : 'their own copies and wait'} for you to review and merge. Steps that depend on ${waitingMerge === 1 ? 'it start after it is' : 'them start after they are'} merged.` : '';
+    status.hidden = !status.textContent;
+    const list = $('orchestration-progress'); list.hidden = false;
+    list.replaceChildren(...rows.map(({ step, number, task }) => {
+      const item = node('li', 'orchestration-progress-step'), open = node('button', 'orchestration-progress-open'); open.type = 'button';
+      item.dataset.status = task?.status || 'missing';
+      const icon = node('i', `agent-icon ${task?.runningProvider || task?.provider || 'auto'}`); icon.setAttribute('aria-hidden', 'true');
+      open.append(node('span', 'orchestration-step-number', String(number)), node('span', 'orchestration-step-name', step.title), icon, node('span', 'orchestration-progress-state', task ? (TASK_LABEL[task.status] || task.status) : 'Closed'));
+      open.title = task?.reason || `Open step ${number}’s task`; open.disabled = !task || busy;
+      open.setAttribute('aria-label', `Step ${number}, ${step.title}: ${task ? TASK_LABEL[task.status] || task.status : 'closed'}. Open its task.`);
+      open.addEventListener('click', () => { if (task) api.setTask(task.id).catch(error => api.showNotice(error.message)); });
+      item.append(open);
+      if (task?.reason && task.status === 'waiting') item.append(node('span', 'orchestration-progress-reason', task.reason));
+      return item;
+    }));
+    $('orchestration-stop').hidden = !live || plan.status === 'stopped'; $('orchestration-stop').disabled = busy;
+    $('orchestration-close').hidden = live; $('orchestration-close').disabled = busy;
+    showError(failure);
   }
   function changed(structure = false) { edit.dirty = true; failure = null; if (structure) edit.structure++; render(); }
   // Moving a step keeps focus on the control that moved it.
@@ -249,10 +294,26 @@
     $('orchestration-add').disabled = busy || edit.steps.length >= LIMITS.steps;
     $('orchestration-review').checked = edit.review;
     $('orchestration-review').disabled = busy;
+    // Run as tasks, once the plan is saved: the steps start as tasks with the agents shown, and the conversation's access.
+    const many = folders().length > 1, ready = !edit.dirty && edit.steps.length > 0 && !problem(edit.steps);
+    $('orchestration-run').hidden = !edit.steps.length || edit.dirty;
+    $('orchestration-run').disabled = busy || !ready || (many && !$('orchestration-folder').value);
+    $('orchestration-folder-option').hidden = !many || edit.dirty || !edit.steps.length;
+    if (many) {
+      const select = $('orchestration-folder'), current = select.value, key = JSON.stringify(folders().map(folder => folder.id));
+      if (select.dataset.key !== key) {
+        select.dataset.key = key;
+        select.replaceChildren(node('option', '', 'Choose a folder'), ...folders().map(folder => { const option = node('option', '', folder.displayName || folder.name); option.value = folder.id; return option; }));
+        select.firstChild.value = ''; select.value = folders().some(folder => folder.id === current) ? current : '';
+      }
+    }
+    const note = $('orchestration-run-note');
+    note.hidden = $('orchestration-run').hidden;
+    note.textContent = note.hidden ? '' : 'Run as tasks starts each step as its own task, with the agent shown and this conversation’s access. A step waits for the steps it runs after. If other work is using the folder, a step runs in its own copy from the last commit, which you review and merge, or waits when the folder isn’t in Git.';
   }
 
   function renderCard() {
-    const plan = openPlan(), card = $('orchestration-card'), empty = $('plan-empty'), actions = $('plan-empty-actions');
+    const plan = openPlan() || runningPlan(), card = $('orchestration-card'), empty = $('plan-empty'), actions = $('plan-empty-actions');
     // In a task the card waits, with any unsaved changes, for the person to come back to the main conversation.
     if (!onMain()) {
       if (card) card.hidden = true;
@@ -282,6 +343,15 @@
     $('orchestration-confirm').hidden = !asking; $('orchestration-actions').hidden = Boolean(asking);
     $('orchestration-confirm-text').textContent = asking ? 'A new plan replaces this one and your unsaved changes.' : '';
     for (const id of ['orchestration-steps', 'orchestration-add', 'orchestration-review-option', 'orchestration-cost']) if ($(id)) $(id).hidden = !draft;
+    const running = RUN.includes(plan.status);
+    $('orchestration-progress').hidden = !running; $('orchestration-stop').hidden = $('orchestration-close').hidden = !running;
+    $('orchestration-run').hidden = $('orchestration-run-note').hidden = $('orchestration-folder-option').hidden = true;
+    if (running) {
+      $('orchestration-discard').hidden = $('orchestration-again').hidden = $('orchestration-write').hidden = true;
+      $('orchestration-save').hidden = $('orchestration-revert').hidden = true;
+      edit = null; drawn = null; $('orchestration-steps').replaceChildren();
+      renderRun(plan); return;
+    }
     const status = $('orchestration-status'), summary = $('orchestration-summary');
     if (!draft) {
       edit = null; drawn = null; $('orchestration-steps').replaceChildren();
@@ -339,6 +409,10 @@
     if (!edit || $('orchestration-save').disabled) return;
     action({ action: 'update', id: edit.planId, revision: edit.revision, review: edit.review, steps: edit.steps }, () => { edit = null; drawn = null; api.announce('Plan saved.'); });
   });
+  $('orchestration-run').addEventListener('click', runPlan);
+  $('orchestration-folder').addEventListener('change', () => render());
+  $('orchestration-stop').addEventListener('click', () => { const plan = runningPlan(); if (plan) action({ action: 'stop', id: plan.id }, () => api.announce('Plan stopped.')); });
+  $('orchestration-close').addEventListener('click', () => { const plan = runningPlan(); if (plan) action({ action: 'close', id: plan.id }, () => api.announce('Plan closed.')); });
   $('orchestration-discard').addEventListener('click', () => { const plan = openPlan(); if (plan) action({ action: 'discard', id: plan.id }, () => { edit = null; api.announce('Plan discarded.'); }); });
   let lastProject = null;
   window.addEventListener('relay-state', () => {

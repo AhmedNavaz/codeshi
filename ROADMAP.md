@@ -11,9 +11,9 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 | # | Feature | What's left | Issue |
 | --- | --- | --- | --- |
 | 1 | **Lower battery and resource use** | Measure idle, streaming, Lounge and preview workloads, fix what the measurements show, and set energy budgets. The Lounge's first mitigation shipped in 0.38.0; nothing is measured yet | [#152](https://github.com/AhmedNavaz/codeshi/issues/152) |
-| 2 | **Onboarding redesign** | Set up the workspace first, then choose Normal or Flow from a clear side-by-side comparison. [Scope](docs/roadmap-details.md#onboarding-and-execution-mode-selection) | [#129](https://github.com/AhmedNavaz/codeshi/issues/129) |
-| 3 | **Interface polish** | A near-black Dark theme beside Graphite and Light, larger small text, and workspace indicators that don't clip. [Scope](docs/roadmap-details.md#interface-polish-typography-scale-and-settings-structure) | [#127](https://github.com/AhmedNavaz/codeshi/issues/127) |
-| 4 | **Settings in clear categories** | Split the overloaded General tab into sections and make buttons, dialogs and spacing consistent across the app | [#130](https://github.com/AhmedNavaz/codeshi/issues/130) |
+| 2 | **Onboarding redesign** | Workspace-first setup and the Normal or Flow choice shipped in 0.39.0. Left: a keyboard and screen-reader pass over the new steps. [Scope](docs/roadmap-details.md#onboarding-and-execution-mode-selection) | [#129](https://github.com/AhmedNavaz/codeshi/issues/129) |
+| 3 | **Interface polish** | The near-black Dark theme, the text scale and two-line workspace rows shipped in 0.39.0. Left: contrast checks for every badge state in each theme. [Scope](docs/roadmap-details.md#interface-polish-typography-scale-and-settings-structure) | [#127](https://github.com/AhmedNavaz/codeshi/issues/127) |
+| 4 | **Settings in clear categories** | A page for each subject and three button heights shipped in 0.39.0. Left: one header and footer layout for every dialog | [#130](https://github.com/AhmedNavaz/codeshi/issues/130) |
 | 5 | **Notarized macOS builds** | Downloads that open without a security prompt, with notification banners. Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
 | 6 | **One routing policy for the whole task** | Handoffs, retries and reviewers choose model and effort by the same Smart, Saver or Ultra policy as the first assignment, using verified model capabilities. [Scope](docs/roadmap-details.md#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
 | 7 | **Evidence that routing and context changes help** | Budgeted live comparisons against a manually chosen agent, and long real tasks measured before and after. No savings are claimed until then | [#84](https://github.com/AhmedNavaz/codeshi/issues/84), [#139](https://github.com/AhmedNavaz/codeshi/issues/139), [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
@@ -25,9 +25,9 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 | 1 | **Flow manages a whole outcome** | Flow runs a bounded outcome under the backend task policy, with takeover, recovery and end-to-end tests. The focused view, cards and project review have shipped. [Agreed split](docs/roadmap-details.md#normal-and-flow-the-agreed-execution-split) | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
 | 2 | **More agents and models** | Grok, DeepSeek, Qwen and free cloud tiers on your own accounts. Gemini and local Ollama models have shipped | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | 3 | **Plans** | Visual cards on a canvas, drafted from a goal or an uploaded project document, then edited, assigned and run. Orchestrate's step plans shipped in 0.37.0 | [#97](https://github.com/AhmedNavaz/codeshi/issues/97) |
-| 4 | **Parallel tasks from one request** | Split a big request into tasks that run side by side, by you or proposed by the agent. Running a queued prompt as a task shipped in 0.27.0 | [#108](https://github.com/AhmedNavaz/codeshi/issues/108) |
+| 4 | **Parallel tasks from one request** | A split proposed by the agent, a total for the group, and a measured comparison with one agent working in order. Running an Orchestrate plan as tasks shipped in 0.39.0 | [#108](https://github.com/AhmedNavaz/codeshi/issues/108) |
 | 5 | **Specialist roles** | Role-specific briefs and a gated integration step applied to runs. Roles, artifacts and checks on Orchestrate steps shipped in 0.38.0 | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
-| 6 | **GitHub in the conversation** | Issues, pull requests and failing CI checks as context, then a pull request from the conversation. [Scope](docs/roadmap-details.md#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
+| 6 | **GitHub in the conversation** | Open a pull request from the conversation. Issues, pull requests and failing checks as context shipped in 0.39.0. [Scope](docs/roadmap-details.md#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
 | 7 | **Concurrent tasks, finished** | Tasks in the recap, with local models, reviews and undo; shared files, imports, patches and restores that cannot race | [#88](https://github.com/AhmedNavaz/codeshi/issues/88) |
 | 8 | **Skills through each agent's own skill system** | The same skill on at least two agents, including after a handoff, with usage measured with and without it | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
 | 9 | **Task limits checked on a paid API account** | Everything else has shipped; it has only been tested with simulated providers | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
@@ -67,9 +67,9 @@ Larger ideas that need design work first, so join the issue before building. The
 
 ## Recently shipped
 
+- **0.39.0:** GitHub issues and pull requests in your message, Orchestrate plans run as tasks, a near-black Dark theme and text size, workspace-first setup, and Settings with a page for each subject.
 - **0.38.0:** Smart results, the Lounge, a preview window per interface, roles on Orchestrate steps, long conversations folded into the brief, and allowance that is about to reset.
 - **0.37.0:** Orchestrate plans in Flow and Normal, inline image previews, the preview window's Stack and API inspector, and fallback to another agent near a limit.
-- **0.36.0:** Run and review your project from Flow, per-agent model limits for tasks, and context measurements.
 
 The full list is in [shipped features](docs/shipped.md).
 

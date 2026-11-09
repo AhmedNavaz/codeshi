@@ -20,19 +20,26 @@
   function save(id) { try { localStorage.setItem(key(id), JSON.stringify(files(id))); } catch {} }
   // Thumbnails are only drawn for draft attachments, so each one goes once no draft holds its image.
   function pruneThumbnails() { const kept = new Set([...drafts.values()].flat().map(file => file.id)); for (const id of thumbnails.keys()) if (!kept.has(id)) thumbnails.delete(id); }
-  function status(text = '') { $('attachment-status').textContent = text; $('attachment-status').hidden = !text; }
+  // counted is true while the line shows how many files are attached, so removing one can correct or clear it.
+  let counted = false;
+  function status(text = '', count = false) { counted = count && Boolean(text); $('attachment-status').textContent = text; $('attachment-status').hidden = !text; }
+  const attachedLine = id => files(id).length ? files(id).length + ' attached · sent with your next message' : '';
+  // Attachments leave the message box the moment their message is sent, like its text, and come back if it is refused.
+  // They stay saved in the draft until the message is accepted.
+  const held = new Map();
+  const shown = (id = api.getState().projectId) => { const hidden = held.get(id); return hidden ? files(id).filter(file => !hidden.has(file.id)) : files(id); };
   function update() {
     const state = api.getState(), list = $('attachment-list'); list.replaceChildren();
-    for (const file of files()) {
+    for (const file of shown()) {
       const chip = el('div', 'attachment-chip');
       const open = button('', 'attachment-open', () => openSaved(file, state.projectId));
       open.append(el('span', 'file-glyph ' + (file.kind === 'image' ? 'image' : 'code'), file.kind === 'image' ? '▧' : '≡'), el('span', 'attachment-name', file.name), el('small', '', size(file.bytes)));
       if (file.kind === 'image' && thumbnails.has(file.id)) { const thumb=el('img','attachment-thumbnail'); thumb.src=thumbnails.get(file.id); thumb.alt=''; open.firstChild.remove(); open.prepend(thumb); }
-      const remove = button('', 'attachment-remove', () => { drafts.set(state.projectId, files(state.projectId).filter(f => f.id !== file.id)); save(state.projectId); pruneThumbnails(); update(); });
+      const remove = button('', 'attachment-remove', () => { drafts.set(state.projectId, files(state.projectId).filter(f => f.id !== file.id)); save(state.projectId); pruneThumbnails(); if (counted) status(attachedLine(state.projectId), true); update(); });
       remove.setAttribute('aria-label', 'Remove ' + file.name); remove.disabled = Boolean(state.pending);
       chip.append(open, remove); list.append(chip);
     }
-    list.hidden = !files().length;
+    list.hidden = !shown().length;
     $('attach-files').disabled = !state.ready || Boolean(state.pending) || uploads.has(state.projectId);
     $('attach-files').title = 'Attach up to 6 files · PNG, JPEG, GIF, WebP (5 MB) or text/code (64 KB) · paste or drop also works';
     api.renderControls();
@@ -47,7 +54,7 @@
       if (!--queue.count) {
         uploads.delete(id); update();
         const errors = [...queue.errors].join(' ');
-        if (id === api.getState().projectId) status(errors || files(id).length + ' attached · sent with your next message');
+        if (id === api.getState().projectId) status(errors || attachedLine(id), !errors);
         else if (errors) api.showNotice(errors);
       }
     }
@@ -228,7 +235,9 @@
       focusLine(line, endLine, id);
     },
     ids: () => files().map(file => file.id), uploading: () => uploads.has(api.getState().projectId), addFiles, addSnapshots,
-    accepted(id, ids) { drafts.set(id, files(id).filter(file => !ids.includes(file.id))); save(id); pruneThumbnails(); if (id === api.getState().projectId) { status(); closePreview(); update(); } },
+    take(id, ids) { held.set(id, new Set(ids)); const taken = files(id).filter(file => ids.includes(file.id)); if (id === api.getState().projectId) { status(); update(); } return taken; },
+    giveBack(id) { if (!held.delete(id)) return; if (id === api.getState().projectId) { status(attachedLine(id), true); update(); } },
+    accepted(id, ids) { held.delete(id); drafts.set(id, files(id).filter(file => !ids.includes(file.id))); save(id); pruneThumbnails(); if (id === api.getState().projectId) { status(); closePreview(); update(); } },
     renderMessageAttachments(row, attachments = []) { if (!attachments.length) return; const host = el('div','message-attachments'), id = api.getState().projectId; for (const file of attachments) { const chip = button((file.kind === 'image' ? '▧ ' : '≡ ') + file.name + ' · ' + size(file.bytes),'saved-attachment',() => openSaved(file,id)); host.append(chip); } row.append(host); },
   };
   sync();

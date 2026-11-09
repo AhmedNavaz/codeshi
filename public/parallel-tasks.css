@@ -2,25 +2,25 @@
 .task-section { display: flex; flex-direction: column; flex: 1; min-height: 0; border-top: 1px solid var(--border); margin-top: 4px; overflow: hidden; }
 .task-section[hidden] { display: none; }
 .task-section-heading { display: flex; align-items: center; gap: 8px; flex: none; padding: 7px 12px 5px 10px; }
-.task-section-heading > button:first-child { display: flex; align-items: center; gap: 7px; flex: 1; padding: 0; border: 0; background: none; color: var(--text); font-size: 11px; font-weight: 600; text-align: left; }
+.task-section-heading > button:first-child { display: flex; align-items: center; gap: 7px; flex: 1; padding: 0; border: 0; background: none; color: var(--text); font-size: var(--font-ui-sm); font-weight: 600; text-align: left; }
 .task-section-heading .icon-button { width: 24px; height: 24px; }
 .task-section-heading .icon-button .icon { width: 14px; height: 14px; }
 .task-list { flex: 1; min-height: 0; margin: 0; padding: 0 6px 6px; overflow: hidden auto; list-style: none; }
 .task-list[hidden] { display: none; }
-.task-list-empty { padding: 2px 8px 6px 28px; color: var(--faint); font-size: 12px; line-height: 1.45; }
-.task-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12.5px; text-align: left; }
+.task-list-empty { padding: 2px 8px 6px 28px; color: var(--faint); font-size: var(--font-ui-md); line-height: 1.45; }
+.task-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: var(--font-ui-base); text-align: left; }
 .task-row:hover { background: var(--hover); color: var(--text); }
 .task-row.active { background: var(--list-active); color: var(--text-strong); }
 .task-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-row-side { flex: none; max-width: 42%; overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.task-row-side { flex: none; max-width: 42%; overflow: hidden; color: var(--faint); font-size: var(--font-ui-sm); text-overflow: ellipsis; white-space: nowrap; }
 .task-row-icon { flex: none; width: 14px; height: 14px; background: var(--faint); -webkit-mask: var(--icon-tasks) center / contain no-repeat; mask: var(--icon-tasks) center / contain no-repeat; }
 .task-row[data-status="running"] .task-row-icon { background: var(--link); }
 .task-row[data-status="complete"] .task-row-icon, .task-row[data-status="integrated"] .task-row-icon { background: var(--success); -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); }
 .task-row[data-status="failed"] .task-row-icon, .task-row[data-status="blocked"] .task-row-icon, .task-row[data-status="lost"] .task-row-icon { background: var(--danger); }
 .task-row[data-status="stopped"] .task-row-icon, .task-row[data-status="detached"] .task-row-icon { background: var(--warning); }
 .task-row[data-status="waiting"] .task-row-title { color: var(--faint); }
-.task-row-badge { flex: none; min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--warning); color: var(--bg); font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; }
-.task-row-review { flex: none; padding: 0 5px; border-radius: 8px; background: var(--chip-bg); color: var(--link); font-size: 10.5px; font-weight: 600; line-height: 16px; }
+.task-row-badge { flex: none; min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--warning); color: var(--bg); font-size: var(--font-ui-xs); font-weight: 700; line-height: 17px; text-align: center; }
+.task-row-review { flex: none; padding: 0 5px; border-radius: 8px; background: var(--chip-bg); color: var(--link); font-size: var(--font-ui-xs); font-weight: 600; line-height: 17px; }
 /* The main conversation belongs to the whole workspace, so it reads differently from the tasks under it. */
 .task-row-holder:has(.task-row-main) { margin-bottom: 3px; padding-bottom: 3px; border-bottom: 1px solid var(--border); }
 .task-row-holder:has(.task-row-main):last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
@@ -95,3 +95,6 @@ summary.task-merge-head { cursor: pointer; }
 .task-row-draft { cursor: default; color: var(--text-strong); }
 .task-row-draft-icon { flex: none; width: 14px; height: 14px; background: var(--link); -webkit-mask: var(--icon-pencil) center / contain no-repeat; mask: var(--icon-pencil) center / contain no-repeat; }
 .task-section-heading .icon-button[hidden] { display: none; }
+/* A plan's steps, grouped under the plan (#108). */
+.task-group { padding: 8px 8px 2px; overflow: hidden; color: var(--faint); font-size: var(--font-ui-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.task-row-step .task-row { padding-left: 18px; }

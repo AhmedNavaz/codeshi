@@ -55,7 +55,17 @@
     // A folder shows its own tasks. The main conversation spans every folder, so it shows with the workspace.
     const shown = level === 'folder' ? tasks().filter(task => task.folderId === chosen) : tasks();
     const blank = state.taskDraft ? (() => { const row = node('li', 'task-row-holder'), item = node('div', 'task-row task-row-draft active'), mark = node('span', 'task-row-draft-icon'); mark.setAttribute('aria-hidden', 'true'); item.setAttribute('aria-current', 'true'); item.append(mark, node('span', 'task-row-title task-row-draft-title', draftTitle())); row.append(item); return [row]; })() : [];
-    const rows = [...(level === 'folder' ? [] : [mainRow(state)]), ...blank, ...shown.map(task => taskRow(task, state, level))];
+    // A plan's steps show together under the plan's name (#108), in step order, where its first step would be.
+    const grouped = [], seen = new Set();
+    for (const task of shown) {
+      if (!task.plan) { grouped.push(taskRow(task, state, level)); continue; }
+      if (seen.has(task.plan.id)) continue;
+      seen.add(task.plan.id);
+      const plan = state.conversation?.orchestrations?.find(item => item.id === task.plan.id), header = node('li', 'task-group', `Plan · ${plan?.summary || plan?.goal || 'Steps'}`);
+      header.title = header.textContent;
+      grouped.push(header, ...shown.filter(item => item.plan?.id === task.plan.id).sort((a, b) => a.plan.number - b.plan.number).map(item => { const row = taskRow(item, state, level); row.classList.add('task-row-step'); return row; }));
+    }
+    const rows = [...(level === 'folder' ? [] : [mainRow(state)]), ...blank, ...grouped];
     // The + is for a folder: at the workspace level, nothing says where a task would go.
     $('new-task').hidden = level === 'workspace';
     if (!rows.length) { const folder = (state.projects?.find(project => project.id === state.projectId)?.folders || []).find(item => item.id === chosen); rows.push(node('li', 'task-list-empty', `No tasks in ${folder?.displayName || folder?.name || 'this folder'} yet.`)); }

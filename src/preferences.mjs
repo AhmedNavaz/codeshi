@@ -2,10 +2,12 @@ import { verificationCadence, verificationCadences } from './verification.mjs';
 import { contextLimit, validateContextLimit } from './context-rollover.mjs';
 
 const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
-// Dark is saved as graphite, the name of its palette. System applies until a choice is saved.
-export const appearances = ['system', 'graphite', 'light'];
+// Graphite is the warm dark that earlier versions called Dark and keeps its saved key, so a saved choice never changes
+// meaning; Dark is the near-black palette. System follows the OS between Light and Dark until a choice is saved.
+export const appearances = ['system', 'light', 'dark', 'graphite'];
 export const appearance = config => appearances.includes(config.appearance) ? config.appearance : 'system';
-export const defaultPreferences = { provider: 'codex', model: null, effort: null, mode: 'edit', billing: 'subscription' };
+// view is the layout setup chose for new workspaces: Normal (every panel, manual choices) or Flow (routed, cards).
+export const defaultPreferences = { provider: 'codex', model: null, effort: null, mode: 'edit', billing: 'subscription', view: 'normal' };
 export function preferencePatch(input, previous = {}) {
   const patch = {};
   if (input.contextLimit !== undefined) patch.contextLimit = validateContextLimit(input.contextLimit);
@@ -14,7 +16,7 @@ export function preferencePatch(input, previous = {}) {
     patch.verificationCadence = input.verificationCadence;
   }
   if (input.theme !== undefined) {
-    if (!appearances.includes(input.theme)) fail('Choose System, Light or Dark.');
+    if (!appearances.includes(input.theme)) fail('Choose System, Light, Dark or Graphite.');
     patch.appearance = input.theme;
   }
   if (input.defaults !== undefined) {
@@ -23,6 +25,7 @@ export function preferencePatch(input, previous = {}) {
     const next = { ...defaultPreferences, ...previous.defaults };
     for (const key of Object.keys(defaultPreferences)) if (value[key] !== undefined) next[key] = value[key];
     if (!['codex', 'claude', 'gemini'].includes(next.provider) || !['read', 'edit'].includes(next.mode) || !['subscription', 'api'].includes(next.billing)) fail('Choose a supported assistant, access level and billing preference.');
+    if (!['normal', 'flow'].includes(next.view)) fail('Choose Normal or Flow.');
     if (next.model !== null && (typeof next.model !== 'string' || !next.model.trim() || next.model.length > 200)) fail('Choose a model or Provider default.');
     if (next.effort !== null && !['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(next.effort)) fail('Choose a supported effort or Provider default.');
     patch.defaults = next;

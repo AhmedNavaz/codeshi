@@ -292,9 +292,12 @@
       const heading = element('span','workspace-item-heading'), mark = element('span','workspace-project-icon',''); mark.setAttribute('aria-hidden','true'); heading.append(mark,element('span','workspace-item-title',project.name));
       // Pending approvals stay visible here while another workspace is open (#46).
       const waiting = active ? state.conversation?.pendingApprovals?.length || 0 : project.pendingApprovals || 0;
-      const folders = foldersFor(project); const meta = folders.length + (folders.length === 1 ? ' folder' : ' folders') + (waiting ? ` · ${waiting} waiting for approval` : project.runningConversationId ? ' · running' : '');
-      // Single-folder counts are noise; the text stays for screen readers and a running workspace shows a pulse.
-      const metaNode = element('span','workspace-item-meta' + (folders.length === 1 ? ' single' : '') + (project.runningConversationId ? ' running' : ''),meta);
+      const folders = foldersFor(project), doing = waiting ? `${waiting} waiting for approval` : project.runningConversationId ? 'running' : '';
+      // The second line: the folder count and what the workspace is doing, under the name so neither clips the other.
+      // A single-folder count is noise, so it stays for screen readers only, and an idle single-folder row is one line.
+      const metaNode = element('span','workspace-item-meta' + (folders.length === 1 ? ' single' : '') + (project.runningConversationId ? ' running' : '') + (waiting ? ' waiting' : ''));
+      metaNode.append(element('span','workspace-meta-folders',folders.length + (folders.length === 1 ? ' folder' : ' folders')));
+      if (doing) metaNode.append(element('span','workspace-meta-separator',' · '),element('span','workspace-meta-state',doing));
       button.append(heading,metaNode);
       if (waiting) { const badge = element('span','workspace-approval-badge',String(waiting)); badge.title = `${waiting} approval${waiting === 1 ? '' : 's'} waiting`; badge.setAttribute('aria-hidden','true'); heading.append(badge); }
       button.addEventListener('click',()=>{ setSidebarLevel(project.id,'workspace'); selectProject(project.id); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); }); const row = element('div','workspace-row');
@@ -1422,13 +1425,13 @@
     if (state.localSelections[projectId]) { showNotice("Queue a cloud agent. Local models start from Continue locally."); return; }
     const routed = routeFor(text, attachments.length);
     if (routed?.error) { showNotice(routed.error); return; }
-    state.pending = "queue"; takeDraft(); renderControls();
+    state.pending = "queue"; takeDraft(); window.relayFiles?.take?.(projectId, attachments); renderControls();
     const added = await queueAction({ executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, action: "add", text, provider: routed?.provider || state.provider, model: (routed ? routed.model : state.model) || null, effort: (routed ? routed.effort : state.effort) || null, mode: state.mode, approvalPolicy: state.approvalPolicy || "ask", attachments, billingConfirmed: window.relayBillingConfirmed === true, ...(routed ? { routing: { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } } : {}) });
     if (added) {
       window.relayFiles?.accepted(projectId, attachments);
       draftAccepted();
       announce("Added to the queue.");
-    } else returnDraft(draft);
+    } else { returnDraft(draft); window.relayFiles?.giveBack?.(projectId); }
     state.pending = null; renderControls();
   }
   // Auto (#12): Codeshi picks the agent, model and effort for each message when it is sent.
@@ -2347,7 +2350,8 @@
     const taken = !continuing && !again;
     if (taken) {
       takeDraft();
-      state.sending = { projectId, conversationId: state.taskDraft ? null : state.conversation?.id || null, after: state.conversation?.messages?.at(-1)?.id || null, message: { role: "user", text, createdAt: new Date().toISOString() } };
+      const sent = window.relayFiles?.take?.(projectId, attachments) || [];
+      state.sending = { projectId, conversationId: state.taskDraft ? null : state.conversation?.id || null, after: state.conversation?.messages?.at(-1)?.id || null, message: { role: "user", text, createdAt: new Date().toISOString(), ...(sent.length ? { attachments: sent } : {}) } };
     }
     let accepting = false;
     render(taken);
@@ -2393,7 +2397,7 @@
       await refresh();
       render(true);
     } catch (error) {
-      if (taken && !accepting) { state.sending = null; returnDraft(originalDraft); }
+      if (taken && !accepting) { state.sending = null; returnDraft(originalDraft); window.relayFiles?.giveBack?.(projectId); }
       // A task limit can be raised for this task, by the person, right here.
       const budget = error.details?.budget;
       if (budget?.canExtend && window.relayLimits) {
@@ -2716,9 +2720,14 @@
     ...(window.relayDesktop?.openPreview ? [{ label: "Preview your app and point at what to change", run: () => { if (window.relayFlow?.isOn()) { window.relayProjectReview?.open(); return; } const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
     { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
-    { label: "General: appearance, keep awake, handoff and updates", run: () => window.relaySettings?.open("general") },
-    { label: "Alert settings: banners, sounds, the Dock and the menu bar", run: () => window.relaySettings?.open("preferences", "Alerts") },
-    { label: "Voice settings", run: () => window.relaySettings?.open("preferences", "Voice") },
+    { label: "General settings: view and keep awake", run: () => window.relaySettings?.open("general") },
+    { label: "Appearance settings: theme and text size", run: () => window.relaySettings?.open("appearance") },
+    { label: "Routing and handoff settings", run: () => window.relaySettings?.open("routing") },
+    { label: "Testing settings", run: () => window.relaySettings?.open("testing") },
+    { label: "Phone and remote access settings", run: () => window.relaySettings?.open("phone") },
+    { label: "Update settings", run: () => window.relaySettings?.open("updates") },
+    { label: "Alert settings: banners, sounds, the Dock and the menu bar", run: () => window.relaySettings?.open("alerts") },
+    { label: "Voice settings", run: () => window.relaySettings?.open("voice") },
   ];
   let commandActive = 0, commandItems = [], commandFiles = { query: "", files: [] }, fileSearch = 0, fileTimer = null;
   const commandQuery = () => { const raw = $("workspace-search").value.trim(); return raw.startsWith(">") ? { actionsOnly: true, text: raw.slice(1).trim().toLowerCase() } : { actionsOnly: false, text: raw.toLowerCase() }; };
@@ -2817,7 +2826,7 @@
       return true;
     },
     "open-workspace": id => { if (typeof id !== "string" || !state.projects.some(project => project.id === id)) return false; if (id !== state.projectId) selectProject(id); return true; },
-    appearance: value => { if (!["system", "graphite", "light"].includes(value)) return false; window.relayTheme?.choose(value); return true; },
+    appearance: value => { if (!["system", "light", "dark", "graphite"].includes(value)) return false; window.relayTheme?.choose(value); return true; },
     "workspace-settings": () => { if (covered() || !state.projectId) return false; openWorkspaceOptions(state.projectId); return true; },
     "toggle-sidebar": () => !covered() && Boolean(window.relayLayout?.toggleSidebar()),
     flow: () => !covered() && Boolean(window.relayFlow?.toggle()),

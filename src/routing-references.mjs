@@ -9,7 +9,7 @@ const clip = (value, limit) => {
   const text = String(value || '');
   return text.length > limit ? `${text.slice(0, limit)}\n[Excerpt truncated]` : text;
 };
-async function command(bin, args, { cwd, signal }) {
+export async function command(bin, args, { cwd, signal, timeout = 4000, maxBuffer = 512 * 1024 }) {
   // Resolve gh from absolute PATH entries; Windows otherwise also searches the project directory.
   if (bin === 'gh') {
     const env = commandEnvironment(), search = (env.PATH || env.Path || '').split(path.delimiter);
@@ -23,7 +23,7 @@ async function command(bin, args, { cwd, signal }) {
     bin = found;
   }
   return new Promise((resolve, reject) => {
-    const child = execFile(bin, args, { cwd, signal, timeout: 4000, maxBuffer: 512 * 1024, shell: false,
+    const child = execFile(bin, args, { cwd, signal, timeout, maxBuffer, shell: false,
       env: { ...commandEnvironment(), GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' } },
     (error, stdout) => error ? reject(error) : resolve(stdout));
     child.stdin?.end();

@@ -63,7 +63,7 @@
 .flow-utility-hint { margin: -6px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
 .flow-appearance { display: grid; gap: 8px; }
 .flow-utility-label { color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.flow-utility .appearance-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); }
+.flow-utility .appearance-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); }
 .flow-utility .appearance-options button { display: flex; flex-direction: column; justify-content: center; gap: 6px; width: auto; height: 48px; border-radius: 9px; color: var(--muted); font-size: 10px; }
 .flow-utility .appearance-options button .sr-only { position: static; width: auto; height: auto; margin: 0; padding: 0; overflow: visible; clip: auto; clip-path: none; white-space: normal; }
 .flow-utility .appearance-options button[aria-pressed="true"] { background: var(--bg); color: var(--text-strong); box-shadow: var(--shadow-sm); }
@@ -418,61 +418,21 @@
   line-height: 1.4;
 }
 
-.flow-step.active {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas:
-    "mark text badge"
-    ".    meta meta";
-  align-items: center;
-  gap: 4px 10px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised));
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--text-strong);
-  margin: 4px 0;
-  transition: border-color .15s, background .15s, box-shadow .15s;
-}
+/* The step being worked on stays an ordinary row in the list: only its mark fills and its text gets stronger, so it
+   lines up with the other steps and does not read as a second "agent working" box. */
+.flow-step.active { color: var(--text-strong); }
 .flow-step.active .flow-step-mark {
-  grid-area: mark;
-  width: 12px;
-  height: 12px;
-  margin: 0;
   border-color: var(--accent);
   background: var(--accent);
-  box-shadow: 0 0 8px var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
   animation: pulse 1.4s ease-in-out infinite;
 }
-.flow-step.active .flow-step-text {
-  grid-area: text;
-  font-weight: 600;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text-strong);
-  word-break: break-word;
-}
-.flow-step.active .flow-step-working-badge {
-  grid-area: badge;
-  margin-left: auto;
-}
-.flow-step.active .flow-step-meta {
-  grid-area: meta;
-  font-size: 11.5px;
-  color: var(--faint);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.flow-step.active[aria-label*="Stopped at"] {
-  border-color: var(--border-strong);
-  background: var(--surface-raised);
-  box-shadow: none;
-}
+.flow-step.active .flow-step-text { font-weight: 600; }
+.flow-step.active[aria-label*="Stopped at"] { color: var(--text); }
 .flow-step.active[aria-label*="Stopped at"] .flow-step-mark {
+  background: transparent;
+  box-shadow: none;
   animation: none;
-  box-shadow: inset 0 0 0 2.5px var(--surface-raised);
 }
 .flow-subhead { margin: 4px 0 0; color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .flow-queue { counter-reset: queued; }
@@ -503,8 +463,13 @@
 /* Going in and out: a veil covers the change of layout, and on the way in the seal appears on it for a moment. */
 .flow-veil { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: var(--bg); opacity: 0; pointer-events: none; }
 .flow-veil[hidden] { display: none; }
-.flow-veil img { width: 96px; height: 96px; opacity: 0; }
-.flow-veil:not(.with-seal) img { display: none; }
+.flow-veil::before { content: ""; position: absolute; inset: 0; background: radial-gradient(34% 38% at 50% 46%, var(--glow-seal, rgb(217 56 30 / .13)), transparent 72%); opacity: 0; transition: opacity .5s ease; }
+.flow-veil.with-seal::before { opacity: 1; }
+.flow-veil-stage { position: relative; display: grid; justify-items: center; gap: 6px; padding: 0 24px; text-align: center; }
+.flow-veil img { width: 96px; height: 96px; margin-bottom: 14px; opacity: 0; }
+.flow-veil-title { color: var(--text-strong); font-size: 30px; font-weight: 600; letter-spacing: -.01em; opacity: 0; }
+.flow-veil-line { max-width: 52ch; color: var(--muted); font-size: 14.5px; line-height: 1.5; opacity: 0; }
+.flow-veil:not(.with-seal) .flow-veil-stage { display: none; }
 @keyframes flow-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 /* Flow details: a focused sheet rather than the workbench's dock and tab strip. Native modal behavior keeps
