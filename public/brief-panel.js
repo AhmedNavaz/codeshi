@@ -86,7 +86,7 @@
     panel.hidden = !open;
     if (keep) remember(open ? 'brief' : 'none');
     if (open) {
-      window.relayAgents?.close(); window.relayGit?.close(); window.relayReviews?.closePanel?.(); window.relayTimeline?.close(); window.relayTasks?.close();
+      window.relayAgents?.close(); window.relayGit?.close(); window.relayReviews?.closePanel?.(); window.relayTimeline?.close(); window.relayTasks?.close(); window.relayOrchestration?.closePanel?.();
       load();
       if (section) { const target = $(`brief-${section}`); target?.scrollIntoView?.({ block: 'start' }); target?.classList.add('flash'); setTimeout(() => target?.classList.remove('flash'), 1200); }
     }

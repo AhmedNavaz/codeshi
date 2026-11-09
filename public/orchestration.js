@@ -1,6 +1,6 @@
-// Orchestrate (#12, stage 3): in Flow, a message can be planned as a few steps. Turned on for one message, one read-only
-// run plans it with the deepest work the routing mode allows; the plan then opens as a card above the message box. Each
-// step is one row (number, title, tier, and the agent and model routing chose) that opens to edit it, and the worst case
+// Orchestrate (#12, stage 3): a message can be planned as a few steps. Turned on for one message, one read-only
+// run plans it with the deepest work allowed; the plan then opens in the Plan side panel. Each
+// step is one row (number, title, tier, and the agent and model chosen) that opens to edit it, and the worst case
 // and the actions stay pinned below the steps. Nothing from a plan runs until it is approved, and queued messages wait
 // for it. The server checks every saved plan again.
 (() => {
@@ -11,9 +11,13 @@
   const TIERS = [['light', 'Light'], ['standard', 'Standard'], ['deep', 'Deep']];
   const AGENTS = [['', 'Auto'], ['codex', 'Codex'], ['claude', 'Claude'], ['gemini', 'Gemini']];
   const OPEN = ['planning', 'draft', 'unstructured', 'failed', 'interrupted'];
+  const PANEL_KEY = 'throughline:side-panel';
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
   const clip = (text, size = 280) => text.length > size ? `${text.slice(0, size - 1).trimEnd()}…` : text;
+  const read = () => { try { return localStorage.getItem(PANEL_KEY) || 'agents'; } catch { return 'agents'; } };
+  const remember = value => { try { localStorage.setItem(PANEL_KEY, value); } catch { /* A convenience only. */ } };
+
   // failure: what the server last refused, shown until the plan is changed again. asking: the answer to "replace this
   // plan?", while the card asks it. opened: the rows open for editing, kept for the plan across refreshes and saves.
   let armedFor = null, edit = null, drawn = null, busy = false, failure = null, asking = null, opened = { planId: null, ids: new Set() };
@@ -21,16 +25,32 @@
   const state = () => api.getState();
   const conversation = () => state().conversation;
   const inFlow = () => window.relayFlow?.isOn?.() === true;
-  // Orchestrate uses Routing's rules, and its steps are routed by Flow, so it's offered only in Flow, from the main conversation.
   // A plan belongs to the main conversation. A new task's draft starts from it, so it carries the plans too.
   const onMain = () => !state().taskId && !state().taskDraft;
-  const available = () => { const s = state(); return Boolean(inFlow() && s.ready && s.conversation?.routing && !s.localSelections?.[s.projectId] && onMain()); };
+  const available = () => { const s = state(); return Boolean(s.ready && !s.localSelections?.[s.projectId] && onMain()); };
   const armed = () => armedFor !== null && armedFor === state().projectId && available();
   const openPlan = () => { const plan = conversation()?.orchestrations?.[0]; return plan && OPEN.includes(plan.status) ? plan : null; };
-  const modeName = () => window.relayRouting?.modeNames?.[conversation()?.routing?.mode] || 'the routing mode';
+  const modeName = () => (conversation()?.routing ? (window.relayRouting?.modeNames?.[conversation()?.routing?.mode] || 'the routing mode') : (names[state().provider] || 'your selected agent'));
   const copy = plan => ({ planId: plan.id, revision: plan.revision, review: plan.review !== false, steps: JSON.parse(JSON.stringify(plan.steps || [])), dirty: false, structure: 0 });
   const effortText = effort => effort ? `${effort[0].toUpperCase()}${effort.slice(1)} effort` : '';
   const choiceText = routed => [names[routed.provider] || routed.provider, routed.modelName || 'default model', effortText(routed.effort)].filter(Boolean).join(' · ');
+
+  function setOpen(open, keep = true) {
+    const p = $('plan-panel');
+    if (!p) return;
+    p.hidden = !open;
+    if (keep) remember(open ? 'plan' : 'none');
+    if (open) {
+      window.relayAgents?.close?.();
+      window.relayGit?.close?.();
+      window.relayReviews?.closePanel?.();
+      window.relayTimeline?.close?.();
+      window.relayTasks?.close?.();
+      window.relayBrief?.close?.();
+      render();
+    }
+    window.dispatchEvent(new CustomEvent('relay-side-panel'));
+  }
 
   // The same checks the server makes, so a problem shows before saving.
   function problem(steps) {
@@ -63,7 +83,6 @@
     failure = null;
     try { await api.post(`/api/conversations/${encodeURIComponent(c.id)}/orchestration`, input); success?.(); return true; }
     catch (error) {
-      // Without a card on screen (a plan written from the message box), the message box's notice says what went wrong.
       if ($('orchestration-card').hidden) api.showNotice(error.message); else failure = error.message;
       if (/another window/.test(error.message)) edit = null;
       return false;
@@ -89,6 +108,7 @@
     const fromDraft = goal === $('message-input').value.trim();
     if (await action({ action: 'create', goal })) {
       armedFor = null;
+      setOpen(true);
       if (fromDraft) { $('message-input').value = ''; $('message-input').dispatchEvent(new CustomEvent('input')); }
       api.announce('An empty plan is ready. Add its steps.');
     }
@@ -102,7 +122,11 @@
 
   function route(step) {
     const routed = api.routeFor(step.instructions || step.title || 'Plan step', 0, null, { tier: step.tier, only: step.agent?.provider || null });
-    if (!routed) return { provider: 'auto', text: 'Routing is off' };
+    if (!routed) {
+      const p = step.agent?.provider || state().provider;
+      const m = (step.agent ? step.agent.model : state().model) || 'default model';
+      return { provider: p, text: `${names[p] || p} · ${m}` };
+    }
     if (routed.error) return { provider: 'auto', text: routed.error };
     return { provider: routed.provider, text: `${step.agent ? '' : 'Auto: '}${choiceText(routed)}` };
   }
@@ -210,13 +234,25 @@
   }
 
   function renderCard() {
-    const plan = openPlan(), card = $('orchestration-card');
+    const plan = openPlan(), card = $('orchestration-card'), empty = $('plan-empty'), actions = $('plan-empty-actions');
     // In a task the card waits, with any unsaved changes, for the person to come back to the main conversation.
-    if (!onMain()) { card.hidden = true; asking?.(false); return; }
-    if (!plan) { card.hidden = true; edit = null; drawn = null; failure = null; asking?.(false); return; }
-    // Outside Flow the card waits, with any unsaved changes, for the person to come back.
-    card.hidden = !inFlow();
-    if (card.hidden) { asking?.(false); return; }
+    if (!onMain()) {
+      if (card) card.hidden = true;
+      if (empty) empty.hidden = false;
+      if (actions) actions.hidden = false;
+      asking?.(false);
+      return;
+    }
+    if (!plan) {
+      if (card) card.hidden = true;
+      if (empty) empty.hidden = false;
+      if (actions) actions.hidden = false;
+      edit = null; drawn = null; failure = null; asking?.(false);
+      return;
+    }
+    if (empty) empty.hidden = true;
+    if (actions) actions.hidden = true;
+    if (card) card.hidden = false;
     const draft = plan.status === 'draft', planning = plan.status === 'planning', queued = conversation()?.queue?.length || 0;
     card.dataset.status = plan.status;
     $('orchestration-queue').textContent = queued ? `${plural(queued, 'queued message')} ${queued === 1 ? 'waits' : 'wait'} until you approve or discard this plan.` : '';
@@ -227,7 +263,7 @@
     // While the card asks whether to replace the plan, its own actions wait for the answer.
     $('orchestration-confirm').hidden = !asking; $('orchestration-actions').hidden = Boolean(asking);
     $('orchestration-confirm-text').textContent = asking ? 'A new plan replaces this one and your unsaved changes.' : '';
-    for (const id of ['orchestration-steps', 'orchestration-add', 'orchestration-review-option', 'orchestration-cost']) $(id).hidden = !draft;
+    for (const id of ['orchestration-steps', 'orchestration-add', 'orchestration-review-option', 'orchestration-cost']) if ($(id)) $(id).hidden = !draft;
     const status = $('orchestration-status'), summary = $('orchestration-summary');
     if (!draft) {
       edit = null; drawn = null; $('orchestration-steps').replaceChildren();
@@ -253,18 +289,21 @@
     $('orchestrate-toggle').hidden = !show;
     $('orchestrate-toggle').setAttribute('aria-pressed', String(armed()));
     $('orchestrate-armed').hidden = !(show && armed());
-    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run plans the steps first, with the deepest work ${modeName()} allows. Nothing from this plan runs until you approve it.`;
+    const agentOrMode = conversation()?.routing ? `with the deepest work ${modeName()} allows` : `with ${names[state().provider] || state().provider}`;
+    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run plans the steps first, ${agentOrMode}. Nothing from this plan runs until you approve it.`;
     $('orchestrate-write').disabled = busy;
     renderCard();
   }
 
   $('orchestrate-toggle').addEventListener('click', () => {
     armedFor = armed() ? null : state().projectId;
+    if (armed()) setOpen(true);
     render(); api.renderControls();
     api.announce(armed() ? 'Orchestrate is on for this message. One read-only run plans the steps first.' : 'Orchestrate is off.');
   });
   $('orchestrate-off').addEventListener('click', () => { armedFor = null; render(); api.renderControls(); });
   $('orchestrate-write').addEventListener('click', () => writeYourself($('message-input').value));
+  $('plan-panel-write')?.addEventListener('click', () => writeYourself($('message-input')?.value || ''));
   $('orchestration-write').addEventListener('click', () => writeYourself(openPlan()?.goal));
   $('orchestration-again').addEventListener('click', planAgain);
   $('orchestration-confirm-yes').addEventListener('click', () => asking?.(true));
@@ -283,10 +322,18 @@
     action({ action: 'update', id: edit.planId, revision: edit.revision, review: edit.review, steps: edit.steps }, () => { edit = null; drawn = null; api.announce('Plan saved.'); });
   });
   $('orchestration-discard').addEventListener('click', () => { const plan = openPlan(); if (plan) action({ action: 'discard', id: plan.id }, () => { edit = null; api.announce('Plan discarded.'); }); });
-  window.addEventListener('relay-state', render);
+  let lastProject = null;
+  window.addEventListener('relay-state', () => {
+    const projectId = api.getState().projectId;
+    if (projectId !== lastProject) {
+      lastProject = projectId;
+      if (!projectId) setOpen(false, false);
+      else if ($('plan-panel')?.hidden && read() === 'plan' && window.matchMedia?.('(min-width: 1101px)').matches) setOpen(true, false);
+    }
+    render();
+  });
   window.addEventListener('relay-account', render);
-  // Leaving Flow turns Orchestrate off for the drafted message; the card itself waits there.
-  window.addEventListener('relay-flow', () => { if (!inFlow()) armedFor = null; render(); });
+  window.addEventListener('relay-flow', render);
 
   window.relayOrchestration = {
     armed, render, mayReplace,
@@ -305,6 +352,10 @@
       if (plan.status === 'planning') return 'Orchestrate · planning the steps';
       return plan.steps?.length ? 'Orchestrate · planned' : 'Orchestrate · not planned';
     },
+    openPanel: () => setOpen(true),
+    closePanel: () => { if (!$('plan-panel')?.hidden) setOpen(false, false); },
+    togglePanel: () => setOpen($('plan-panel')?.hidden),
+    isOpen: () => !$('plan-panel')?.hidden,
   };
   render();
 })();

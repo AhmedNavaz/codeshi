@@ -215,19 +215,19 @@ test('a planning run is read-only, leaves the conversation settings alone and sa
   assert.deepEqual(notices.map(notice => [notice.kind, notice.title, notice.body]), [['finished', 'Plan ready', 'Codex proposed a plan. Nothing from it runs until you approve it.']]);
 });
 
-test('Orchestrate plans only with routing on, from the main conversation', { skip: scriptCLIs }, async t => {
+test('Orchestrate plans without routing in normal mode, from the main conversation', { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app);
   f.scenario({ output: JSON.stringify(reply) });
-  // Without routing the page never offers it, and the server refuses it too.
+  // In normal mode without routing, planning succeeds using the composer's provider.
   const unrouted = await api.post('messages', { text: 'Plan it.', provider: 'codex', orchestrate: true });
-  assert.equal(unrouted.status, 400); assert.match(unrouted.body.error, /Orchestrate plans with routing on/);
-  assert.throws(() => api.broker().start(api.c(), { text: 'Plan it.', provider: 'codex', orchestrate: true }), error => error.status === 400 && /routing on/.test(error.message));
+  assert.equal(unrouted.status, 202);
+  await api.broker().running?.done;
   // A task's own conversation plans from the main conversation instead.
   const lane = new Broker({ workspace: f.workspace, dataDir: path.join(f.root, 'lane'), bins: f.bins, lane: true });
   t.after(() => lane.close());
   const task = lane.get(lane.create().id);
-  assert.throws(() => lane.start(task, { text: 'Plan it.', provider: 'codex', orchestrate: true, routing: { mode: 'smart', reason: 'Plans the steps', tier: 'deep' } }), error => error.status === 400 && /main conversation/.test(error.message));
-  assert.equal(f.captures().length, 0);
+  assert.throws(() => lane.start(task, { text: 'Plan it.', provider: 'codex', orchestrate: true }), error => error.status === 400 && /main conversation/.test(error.message));
+  assert.equal(f.captures().length, 1);
 });
 
 test('Gemini plans only where it has a read-only mode, so never through Antigravity', { skip: scriptCLIs }, async t => {

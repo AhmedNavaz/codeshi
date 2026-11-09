@@ -3592,7 +3592,7 @@ test('routing assessment keeps Stop available while Send waits and preserves the
 test('the sidebar, side panel and bottom panel resize with keyboard handles; the old Files divider and its saved height are removed',async()=>{
   const ui=await browser({layoutUI:true,stored:{'throughline:layout':JSON.stringify({inspector:999,commands:300,workspaces:500})}});
   const root=ui.document.documentElement,handles=ui.document.querySelectorAll('.resize-handle');
-  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel']);
+  assert.deepEqual(handles.map(handle=>handle.getAttribute('aria-label')).sort(),['Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the side panel','Resize the sidebar','Resize the terminal and Run panel']);
   assert.equal(JSON.parse(ui.storage.get('throughline:layout')).workspaces,undefined,'An old divider height cannot push tasks down.');
   assert.equal(root.style['--inspector-width'],'720px','Saved sizes come back, within their limits.');assert.equal(ui.$('bottom-panel').style.height,'300px','The Run panel’s height carries over to the shared panel.');
   assert.deepEqual(Object.keys(JSON.parse(ui.storage.get('throughline:layout')||'{}')).filter(key=>['terminal','commands'].includes(key)),[]);
@@ -6225,26 +6225,23 @@ async function expandStep(ui, index) {
 const option = (row, cls, key, value) => row.querySelectorAll(cls).find(button => button.dataset[key] === value);
 const sendMessage = async ui => { ui.$('message-input').dispatchEvent(new UIEvent('keydown', { key: 'Enter' })); await flush(); await flush(); };
 
-test('Orchestrate is part of Flow: outside it the toggle and the plan card step aside, and a plan with edits waits for you', async () => {
+test('Orchestrate is available in Normal mode: toggle arms planning, plan opens in side panel, and a plan with edits waits for you', async () => {
   const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one');
   Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, orchestrations: [draftPlan()] });
   await ui.window.relayUI.refresh(); await flush();
   ui.$('message-input').value = 'Add a list of saved items'; ui.fire('message-input', 'input');
-  assert.equal(ui.$('orchestrate-toggle').hidden, true, 'In the normal view you choose the agent yourself.');
-  assert.equal(ui.$('orchestration-card').hidden, true);
-  ui.window.relayFlow.enter(); await flush();
-  assert.equal(ui.$('orchestrate-toggle').hidden, false); assert.equal(ui.$('orchestration-card').hidden, false);
+  assert.equal(ui.$('orchestrate-toggle').hidden, false, 'In normal mode Orchestrate is available.');
+  assert.equal(ui.$('orchestration-card').hidden, false);
+  assert.equal(ui.$('plan-panel').hidden, true, 'Side panel is closed until opened or armed.');
   ui.$('orchestrate-toggle').click(); await flush();
   assert.equal(ui.window.relayOrchestration.armed(), true);
+  assert.equal(ui.$('plan-panel').hidden, false, 'Arming opens the Plan side panel.');
   const row = await expandStep(ui, 0);
   typeInto(row.querySelector('.orchestration-step-title'), 'Add the items route'); await flush();
   assert.equal(ui.$('orchestration-save').hidden, false);
-  ui.window.relayFlow.leave(); await flush();
-  assert.equal(ui.$('orchestration-card').hidden, true, 'Its steps are routed by Flow, so the card waits there.');
-  assert.equal(ui.$('orchestrate-toggle').hidden, true); assert.equal(ui.$('orchestrate-armed').hidden, true);
-  assert.equal(ui.window.relayOrchestration.armed(), false, 'A message sent outside Flow is never planned.');
-  ui.window.relayFlow.enter(); await flush();
-  assert.equal(ui.window.relayOrchestration.armed(), false, 'Leaving Flow turned Orchestrate off for the drafted message.');
+  ui.$('orchestrate-toggle').click(); await flush();
+  assert.equal(ui.window.relayOrchestration.armed(), false);
+  assert.equal(ui.$('orchestrate-armed').hidden, true);
   assert.equal(ui.$('orchestration-card').hidden, false);
   assert.equal(stepRows(ui)[0].querySelector('.orchestration-step-title').value, 'Add the items route', 'The unsaved edit is still there.');
   assert.equal(stepRows(ui)[0].querySelector('.orchestration-step-toggle').getAttribute('aria-expanded'), 'true');
@@ -6256,6 +6253,7 @@ test('Orchestrate is part of Flow: outside it the toggle and the plan card step 
   assert.equal(ui.$('orchestration-card').hidden, true); assert.equal(ui.window.relayOrchestration.waiting(), null, 'What’s next leaves it out too.');
   page.taskDraft = null; ui.window.relayOrchestration.render();
   assert.equal(ui.$('orchestration-card').hidden, false); assert.equal(ui.$('orchestration-save').hidden, false, 'The edit is still unsaved.');
+  ui.window.relayFlow.enter(); await flush();
   await ui.window.relayUI.setTask('parallel'); await flush();
   assert.equal(ui.state().taskId, 'parallel'); assert.equal(ui.$('orchestration-card').hidden, true);
   assert.doesNotMatch(flowText(ui, 'next'), /A plan of|waiting for the plan/);

@@ -2874,7 +2874,7 @@
   $("header-menu").addEventListener("click", event => { if (event.target?.closest?.("button")) $("header-menu").hidePopover?.(); });
   // The tabs at the top of a side panel switch to the other panel.
   // The side panel's tabs: Agents, Brief, Tasks, Git and Timeline, each opened by its own module.
-  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), timeline: () => window.relayTimeline?.open() };
+  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), timeline: () => window.relayTimeline?.open(), plan: () => window.relayOrchestration?.openPanel?.() };
   const showSidePanel = name => { const panel = $(`${name}-panel`); if (panel?.hidden !== false) sidePanelOpeners[name]?.(); };
   document.querySelectorAll(".panel-tab").forEach(tab => tab.addEventListener("click", () => showSidePanel(tab.dataset.panel)));
   $("run-plan-toggle").addEventListener("click", () => {

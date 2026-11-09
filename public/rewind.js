@@ -172,7 +172,7 @@
     if (!panel) return;
     panel.hidden = !open;
     if (keep) remember(open ? 'timeline' : 'none');
-    if (open) { window.relayAgents?.close(); window.relayGit?.close(); window.relayBrief?.close(); window.relayTasks?.close(); window.relayReviews?.closePanel?.(); loadTimeline(); }
+    if (open) { window.relayAgents?.close(); window.relayGit?.close(); window.relayBrief?.close(); window.relayTasks?.close(); window.relayReviews?.closePanel?.(); window.relayOrchestration?.closePanel?.(); loadTimeline(); }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
   $('refresh-timeline')?.addEventListener('click', () => loadTimeline(true));

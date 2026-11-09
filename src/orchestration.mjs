@@ -26,10 +26,9 @@ export function planningRequest(goal) {
 export const OPEN_PLANS = ['planning', 'draft', 'unstructured', 'failed', 'interrupted'];
 export const openPlan = c => { const plan = c.orchestrations?.[0]; return plan && OPEN_PLANS.includes(plan.status) ? plan : null; };
 
-// Orchestrate needs routing, which picks the planner and then each step's agent, and plans from the main conversation, which
-// holds the plan. Review after belongs to the steps' combined changes, not to the planning run.
-export function checkPlanning(broker, { routing, automaticReview }) {
-  if (!routing) fail('Orchestrate plans with routing on. Turn on Flow, then send the message again.');
+// Orchestrate plans from the main conversation, which holds the plan. Review after belongs to the steps' combined
+// changes, not to the planning run.
+export function checkPlanning(broker, { routing = null, automaticReview = null } = {}) {
   if (!broker.tasks) fail('Orchestrate plans from the main conversation. Switch to it to plan this message.');
   if (automaticReview !== null && automaticReview !== undefined) fail('Review after doesn\u2019t apply to planning. The plan reviews the combined changes after its last step.');
 }
