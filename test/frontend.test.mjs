@@ -6605,7 +6605,7 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'false');
   ui.$('orchestrate-toggle').click(); await flush();
   assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('orchestrate-armed').hidden, false);
-  assert.equal(ui.$('orchestrate-armed-text').textContent, 'Orchestrate: one read-only run plans the steps first, with the deepest work Smart allows. Nothing from this plan runs until you approve it.');
+  assert.equal(ui.$('orchestrate-armed-text').textContent, 'Orchestrate: one read-only run plans the steps first, with the deepest work Smart allows. Attach a brief or spec to plan from it. Nothing from this plan runs until you approve it.');
   conversation.routing.mode = 'ultra'; await ui.window.relayUI.refresh(); await flush();
   assert.match(ui.$('orchestrate-armed-text').textContent, /the deepest work Ultra allows/);
   conversation.routing.mode = 'smart'; await ui.window.relayUI.refresh(); await flush();
@@ -6802,6 +6802,51 @@ test('The plan card shows each step as one row that opens to edit it, with the w
   assert.deepEqual(actions.at(-1).steps.map(item => item.id), ['s1', 's3', 's4', 's5', 's6']);
   ui.$('orchestration-discard').click(); await flush(); await flush();
   assert.deepEqual(actions.at(-1), { action: 'discard', id: 'plan-1' }); assert.equal(ui.$('orchestration-card').hidden, true);
+});
+
+test('A plan from a document says which documents it came from, shows where each phase starts, and takes up to 12 steps', async () => {
+  const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one'), { actions } = planRoutes(ui, conversation);
+  ui.window.relayFlow.enter(); await flush();
+  const steps = Array.from({ length: 11 }, (_, index) => ({ id: `s${index + 1}`, title: `Part ${index + 1}`, instructions: 'Build it.', files: [], tier: 'standard', dependsOn: [], agent: null, phase: index < 2 ? 'Contract' : 'Build' }));
+  Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, orchestrations: [draftPlan({ documents: ['brief.md', 'notes.txt'], steps })] });
+  await ui.window.relayUI.refresh(); await flush();
+  const rows = () => stepRows(ui), phases = () => rows().map(row => { const label = row.querySelector('.orchestration-step-phase'); return label.hidden ? '' : label.textContent; });
+  assert.deepEqual([ui.$('orchestration-documents').hidden, ui.$('orchestration-documents').textContent], [false, 'Planned from brief.md and notes.txt.']);
+  conversation.orchestrations[0].status = 'planning'; await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('orchestration-documents').textContent, 'Planning from brief.md and notes.txt.');
+  conversation.orchestrations[0].status = 'draft'; await ui.window.relayUI.refresh(); await flush();
+  assert.deepEqual(phases(), ['Contract', '', 'Build', '', '', '', '', '', '', '', ''], 'A phase is named where it starts.');
+  // A step's phase is edited with the step, and the names follow.
+  let row = await expandStep(ui, 2), field = row.querySelector('.orchestration-step-phase-field');
+  assert.deepEqual([field.value, field.maxLength, field.getAttribute('aria-label')], ['Build', 40, 'Step 3 phase']);
+  typeInto(field, 'Contract'); await flush();
+  assert.deepEqual(phases().slice(0, 4), ['Contract', '', '', 'Build']);
+  typeInto(field, ''); await flush();
+  assert.deepEqual(phases().slice(0, 4), ['Contract', '', '', 'Build'], 'A step with no phase stays in the one before it.');
+  ui.$('orchestration-save').click(); await flush();
+  assert.equal('phase' in actions.at(-1).steps[2], false, 'An emptied phase is sent as none.');
+  assert.equal(actions.at(-1).steps[3].phase, 'Build');
+  // A plan from a document takes up to 12 steps.
+  assert.equal(ui.$('orchestration-add').disabled, false);
+  ui.$('orchestration-add').click(); await flush();
+  assert.deepEqual([rows().length, ui.$('orchestration-add').disabled], [12, true]);
+  ui.$('orchestration-add').dispatchEvent(new UIEvent('click')); await flush();
+  assert.equal(rows().length, 12, 'A click that still reaches the handler does not add a 13th.');
+  // While it runs, each phase is named where it starts.
+  const plan = conversation.orchestrations[0];
+  Object.assign(plan, { status: 'running', tasks: Object.fromEntries(plan.steps.map((item, index) => [item.id, `task-${index + 1}`])) });
+  conversation.parallelTasks = plan.steps.map((item, index) => ({ id: `task-${index + 1}`, title: `${index + 1}. ${item.title}`, status: 'waiting', provider: 'codex', plan: { id: plan.id, stepId: item.id, number: index + 1 } }));
+  await ui.window.relayUI.refresh(); await flush();
+  assert.deepEqual(ui.$('orchestration-progress').querySelectorAll('.orchestration-progress-phase').map(label => label.textContent), ['Contract', 'Build']);
+  assert.equal(ui.$('orchestration-documents').textContent, 'Planned from brief.md and notes.txt.');
+  // A plan from a message has no documents, no phases to edit, and at most 5 steps.
+  conversation.orchestrations = [draftPlan({ id: 'plan-2' })]; conversation.parallelTasks = [];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.$('orchestration-documents').hidden, true);
+  row = await expandStep(ui, 0);
+  assert.equal(row.querySelector('.orchestration-step-phase-field'), null);
+  for (let added = 2; added < 5; added++) { ui.$('orchestration-add').click(); await flush(); }
+  assert.deepEqual([rows().length, ui.$('orchestration-add').disabled], [5, true]);
 });
 
 test('Plan again plans the same message and files again, never Continue, and a plan with unsaved edits is replaced only when you say so', async () => {

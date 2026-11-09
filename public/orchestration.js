@@ -6,7 +6,10 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), api = window.relayUI;
-  const LIMITS = { steps: 5, title: 120, instructions: 4000, files: 12 };
+  const LIMITS = { steps: 5, documentSteps: 12, phase: 40, title: 120, instructions: 4000, files: 12 };
+  // A plan made from requirements documents (#97) may have more steps, grouped in phases.
+  const stepLimit = plan => plan?.documents?.length ? LIMITS.documentSteps : LIMITS.steps;
+  const listed = names => names.length < 3 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
   const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
   const TIERS = [['light', 'Light'], ['standard', 'Standard'], ['deep', 'Deep']];
   const AGENTS = [['', 'Auto'], ['codex', 'Codex'], ['claude', 'Claude'], ['gemini', 'Gemini']];
@@ -63,6 +66,7 @@
       if (!step.title.trim() || step.title.trim().length > LIMITS.title) return `Give step ${number} a title of at most ${LIMITS.title} characters.`;
       if (!step.instructions.trim() || step.instructions.trim().length > LIMITS.instructions) return `Give step ${number} instructions of at most ${LIMITS.instructions.toLocaleString('en-US')} characters.`;
       if (step.files.length > LIMITS.files) return `List at most ${LIMITS.files} files or folders for step ${number}, each as a path.`;
+      if ((step.phase || '').trim().length > LIMITS.phase) return `Give step ${number} a phase of at most ${LIMITS.phase} characters.`;
       const later = step.dependsOn.find(id => !(numbers.get(id) < number));
       if (later) return `Step ${number} can only wait for an earlier step. Remove “After step ${numbers.get(later)}” from it, or move it back.`;
     }
@@ -162,8 +166,12 @@
     status.textContent = waitingMerge ? `${plural(waitingMerge, 'step')} worked in ${waitingMerge === 1 ? 'its own copy and waits' : 'their own copies and wait'} for you to review and merge. Steps that depend on ${waitingMerge === 1 ? 'it start after it is' : 'them start after they are'} merged.` : '';
     status.hidden = !status.textContent;
     const list = $('orchestration-progress'); list.hidden = false;
+    let phase = '';
     list.replaceChildren(...rows.map(({ step, number, task }) => {
       const item = node('li', 'orchestration-progress-step'), open = node('button', 'orchestration-progress-open'); open.type = 'button';
+      const own = (step.phase || '').trim();
+      if (own && own !== phase) item.append(node('span', 'orchestration-progress-phase', own));
+      if (own) phase = own;
       item.dataset.status = task?.status || 'missing';
       const icon = node('i', `agent-icon ${task?.runningProvider || task?.provider || 'auto'}`); icon.setAttribute('aria-hidden', 'true');
       open.append(node('span', 'orchestration-step-number', String(number)), node('span', 'orchestration-step-name', step.title), icon, node('span', 'orchestration-progress-state', task ? (TASK_LABEL[task.status] || task.status) : 'Closed'));
@@ -209,6 +217,7 @@
   }
   function stepRow(step, index) {
     const number = index + 1, row = node('li', 'orchestration-step'), line = node('div', 'orchestration-step-line'), open = opened.ids.has(step.id);
+    const phaseName = node('span', 'orchestration-step-phase'); phaseName.hidden = true;
     row.dataset.step = step.id;
     const toggle = node('button', 'orchestration-step-toggle'); toggle.type = 'button'; toggle.setAttribute('aria-expanded', String(open));
     const detail = node('div', 'orchestration-step-detail'); detail.id = `orchestration-step-detail-${step.id}`; detail.hidden = !open; toggle.setAttribute('aria-controls', detail.id);
@@ -244,17 +253,26 @@
     const check = field('input', 'orchestration-step-check', step.check || '', `Step ${number} acceptance check`, 'Acceptance check command (e.g. npm test)', value => { step.check = value.trim() || null; changed(); }); check.maxLength = 300;
     const after = segment(`Steps that step ${number} waits for`, 'orchestration-afters-choice');
     const options = node('div', 'orchestration-step-options');
+    // A plan from a document groups its steps in phases; a step with none stays in the phase before it.
+    if (openPlan()?.documents?.length || step.phase) {
+      const phase = field('input', 'orchestration-step-phase-field', step.phase || '', `Step ${number} phase`, 'Phase, such as Contract or Build', value => { if (value.trim()) step.phase = value; else delete step.phase; changed(); });
+      phase.maxLength = LIMITS.phase; options.append(labelled('Phase', phase));
+    }
     options.append(labelled('Role', roles), labelled('Tier', tiers), labelled('Agent', agents), labelled('Artifact', artifacts), labelled('Check', check), labelled('Runs after', after));
     detail.append(title, instructions, files, options);
-    row.append(line, detail);
+    row.append(phaseName, line, detail);
     return row;
   }
   function labelled(text, control) { const wrap = node('div', 'orchestration-option'); wrap.append(node('span', 'orchestration-option-label', text), control); return wrap; }
   // What changes as the person edits: names, tiers, routing, waits, cost and whether the plan can be saved.
   function refreshDerived(plan) {
     const rows = $('orchestration-steps').children, numbers = new Map(edit.steps.map((step, index) => [step.id, index + 1]));
+    let phase = '';
     edit.steps.forEach((step, index) => {
       const row = rows[index]; if (!row) return;
+      const own = (step.phase || '').trim(), phaseName = row.querySelector('.orchestration-step-phase');
+      phaseName.textContent = own && own !== phase ? own : ''; phaseName.hidden = !phaseName.textContent;
+      if (own) phase = own;
       const name = row.querySelector('.orchestration-step-name'); name.textContent = step.title.trim() || 'Untitled step'; name.classList.toggle('untitled', !step.title.trim());
       const roleBadge = row.querySelector('.orchestration-step-role');
       if (roleBadge) { roleBadge.textContent = roleNames[step.role] || 'Builder'; roleBadge.dataset.role = step.role || 'builder'; }
@@ -291,7 +309,7 @@
     $('orchestration-save').hidden = $('orchestration-revert').hidden = !edit.dirty;
     $('orchestration-save').disabled = busy || Boolean(issue);
     $('orchestration-revert').disabled = busy;
-    $('orchestration-add').disabled = busy || edit.steps.length >= LIMITS.steps;
+    $('orchestration-add').disabled = busy || edit.steps.length >= stepLimit(plan);
     $('orchestration-review').checked = edit.review;
     $('orchestration-review').disabled = busy;
     // Run as tasks, once the plan is saved: the steps start as tasks with the agents shown, and the conversation's access.
@@ -333,6 +351,8 @@
     if (actions) actions.hidden = true;
     if (card) card.hidden = false;
     const draft = plan.status === 'draft', planning = plan.status === 'planning', queued = conversation()?.queue?.length || 0;
+    const documents = $('orchestration-documents');
+    documents.textContent = plan.documents?.length ? `${planning ? 'Planning' : 'Planned'} from ${listed(plan.documents)}.` : ''; documents.hidden = !documents.textContent;
     card.dataset.status = plan.status;
     $('orchestration-queue').textContent = queued ? `${plural(queued, 'queued message')} ${queued === 1 ? 'waits' : 'wait'} until you approve or discard this plan.` : '';
     $('orchestration-queue').hidden = !queued;
@@ -378,7 +398,7 @@
     $('orchestrate-toggle').setAttribute('aria-pressed', String(armed()));
     $('orchestrate-armed').hidden = !(show && armed());
     const agentOrMode = conversation()?.routing ? `with the deepest work ${modeName()} allows` : `with ${names[state().provider] || state().provider}`;
-    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run plans the steps first, ${agentOrMode}. Nothing from this plan runs until you approve it.`;
+    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run plans the steps first, ${agentOrMode}. Attach a brief or spec to plan from it. Nothing from this plan runs until you approve it.`;
     $('orchestrate-write').disabled = busy;
     renderCard();
   }
@@ -397,7 +417,7 @@
   $('orchestration-confirm-yes').addEventListener('click', () => asking?.(true));
   $('orchestration-confirm-no').addEventListener('click', () => asking?.(false));
   $('orchestration-add').addEventListener('click', () => {
-    if (!edit || edit.steps.length >= LIMITS.steps) return;
+    if (!edit || edit.steps.length >= stepLimit(openPlan())) return;
     const next = Math.max(0, ...edit.steps.map(step => Number(step.id.slice(1)) || 0)) + 1, id = `s${next}`;
     edit.steps.push({ id, title: '', instructions: '', files: [], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [] });
     opened.ids.add(id); changed(true);
