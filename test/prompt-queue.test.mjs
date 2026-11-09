@@ -130,3 +130,20 @@ test('choosing and editing model and effort for queued prompts survives restarts
   assert.equal(again.lastRun.model, 'manual-model');
   assert.equal(again.lastRun.effort, 'high');
 });
+test("switch_provider changes the provider of a queued prompt and resumes without losing position (#144)", { skip: scriptCLIs }, async t => {
+  const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
+  broker.start(c, { text: "Hold the workspace", provider: "codex", mode: "edit" });
+  const qId = add(broker, c, "Queued task", { provider: "codex" }).queue[0].id;
+  assert.equal(c.queue[0].provider, "codex");
+
+  broker.queueAction(c, { action: "pause" });
+  assert.equal(Boolean(c.queuePaused), true);
+
+  broker.queueAction(c, { action: "switch_provider", id: qId, provider: "claude" });
+  assert.equal(c.queue[0].provider, "claude");
+  assert.equal(c.queuePaused, null, "Switching provider resumes the queue");
+
+  env.release();
+  await idle(broker, c);
+  assert.deepEqual(env.requests().slice(1), [["claude", "Queued task"]]);
+});

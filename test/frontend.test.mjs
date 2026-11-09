@@ -5458,9 +5458,9 @@ test('Flow keeps waiting tasks and completed task threads reachable while view c
     return next();
   });
   await ui.window.relayUI.refresh(); await flush();
-  const action = text => ui.$('flow-card-next').querySelectorAll('button').find(button => button.textContent === text);
+  const action = text => ui.$('flow-card-next').querySelectorAll('.flow-task').find(item => item.textContent.includes(text))?.querySelector('button') || ui.$('flow-card-next').querySelectorAll('button').find(button => button.textContent === text);
   assert.equal(ui.window.relayFlow.leave(), false);
-  assert.match(flowText(ui, 'next'), /Running beside this chat\s*Docs\s*website · waiting to start\s*Search\s*website · finished/, 'Tasks beside the chat are listed with where and how they stand.');
+  assert.match(flowText(ui, 'next'), /Running beside this chat\s*Docs\s*website · waiting to start\s*Open task\s*Search\s*website · finished\s*Open task/, 'Tasks beside the chat are listed with where and how they stand with Open task buttons.');
   action('Docs').click(); await flush();
   assert.match(ui.$('task-banner').textContent, /website · Waiting/);
   ui.$('task-banner').querySelectorAll('button').find(button => button.textContent === 'Cancel').click(); await flush();
@@ -6010,4 +6010,119 @@ test('Normal reset controls wait only for the chosen task agent, while Flow may 
     assert(scheduled); assert.equal(scheduled.body.providers.includes('claude'), delegated);
     assert.equal(scheduled.body.providers[0], 'codex');
   }
+});
+
+test('Flow card feedback: unclipped tasks, active agent parity, binding windows and expandable quota (#107)', async () => {
+  const later = hours => new Date(Date.now() + hours * 3600e3).toISOString();
+  const ui = await flowBrowser({
+    providers: { gemini: { available: true } },
+    authenticated: { codex: true, claude: true, gemini: true },
+    usage: {
+      claude: { available: true, fetchedAt: Date.now() - 120000, windows: [
+        { id: "five", label: "5-hour", usedPercent: 30, resetsAt: later(3) },
+        { id: "weekly", label: "Weekly", usedPercent: 75, resetsAt: later(48) },
+        { id: "opus", label: "Weekly · Opus", scope: "opus", usedPercent: 95, resetsAt: later(48) }
+      ] },
+      codex: { available: true, fetchedAt: Date.now() - 60000, windows: [
+        { id: "week", label: "Weekly", usedPercent: 88, resetsAt: later(24) }
+      ] },
+      gemini: { available: true, windows: [] }
+    }
+  });
+  const chat = ui.canonical.get("project-one");
+  await ui.window.relayUI.refreshAccounts(); await flush();
+  ui.window.relayFlow.enter(); await flush();
+
+  // 1. Simultaneous tasks with active agent highlighting parity across main and separate tasks
+  chat.status = "running";
+  chat.activeRun = { id: "run-main", provider: "codex", phase: "tool", startedAt: new Date().toISOString(), plan: { steps: [{ text: "Index files", status: "active" }] } };
+  const parallelRunning = {
+    id: "task-lane-1",
+    title: "Refactor backend API endpoints with comprehensive schema verification",
+    folderName: "backend",
+    status: "running",
+    runningProvider: "claude",
+    runningStep: "Update controller validations",
+    runningPhase: "tool",
+    conversationId: "lane-backend-1"
+  };
+  chat.parallelTasks = [parallelRunning];
+  await ui.window.relayUI.refresh(); await flush();
+
+  // Both Codex (main run) and Claude (separate task) are highlighted
+  const plansCard = ui.$("flow-card-plans");
+  const codexPlan = plansCard.querySelectorAll(".flow-plan").find(p => p.dataset.provider === "codex");
+  const claudePlan = plansCard.querySelectorAll(".flow-plan").find(p => p.dataset.provider === "claude");
+  const geminiPlan = plansCard.querySelectorAll(".flow-plan").find(p => p.dataset.provider === "gemini");
+
+  assert(codexPlan.classList.contains("flow-plan-active"), "Main running agent Codex has .flow-plan-active");
+  assert(codexPlan.querySelector(".flow-plan-working-badge"), "Codex shows Working badge");
+  assert(claudePlan.classList.contains("flow-plan-active"), "Separate lane running agent Claude has .flow-plan-active");
+  assert(claudePlan.querySelector(".flow-plan-working-badge"), "Claude shows Working badge");
+  assert.equal(geminiPlan.classList.contains("flow-plan-active"), false, "Idle agent Gemini does not have .flow-plan-active");
+  assert.equal(geminiPlan.querySelector(".flow-plan-working-badge"), null, "Idle agent Gemini has no Working badge");
+
+  // What’s next card has unclipped task title, recorded lane activity and clear Open task action button
+  const nextCard = ui.$("flow-card-next");
+  const taskRow = nextCard.querySelector(".flow-task");
+  assert(taskRow, "Task row rendered");
+  assert(taskRow.classList.contains("flow-task-running"), "Running lane has .flow-task-running");
+  const titleEl = taskRow.querySelector(".flow-task-title");
+  assert.equal(titleEl.textContent, "Refactor backend API endpoints with comprehensive schema verification", "Task title is unclipped");
+  assert.match(taskRow.querySelector(".flow-task-meta").textContent, /backend · Claude · on “Update controller validations”/, "Recorded lane activity is visible");
+  assert(taskRow.querySelector(".flow-pulse-dot"), "Lane has pulsing dot indicator");
+  const openBtn = taskRow.querySelector(".flow-task-action");
+  assert(openBtn, "Clear Open task action button exists");
+  assert.equal(openBtn.textContent, "Open task");
+  assert.match(openBtn.getAttribute("aria-label"), /Open task: Refactor backend API/, "Accessible aria label exists");
+
+  // 2. Handoff moves the working mark
+  chat.activeRun = { id: "run-handoff", provider: "gemini", phase: "responding", startedAt: new Date().toISOString() };
+  await ui.window.relayUI.refresh(); await flush();
+  const planFor = provider => plansCard.querySelectorAll(".flow-plan").find(p => p.dataset.provider === provider);
+  assert.equal(planFor("codex").classList.contains("flow-plan-active"), false, "Codex loses active mark after handoff");
+  assert(planFor("gemini").classList.contains("flow-plan-active"), "Gemini gains active mark after handoff");
+  assert(planFor("claude").classList.contains("flow-plan-active"), "Claude retains active mark while its lane runs");
+
+  // 3. Finish, failure, and Stop clear working marks
+  chat.status = "interrupted";
+  chat.activeRun = null;
+  parallelRunning.status = "complete";
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(planFor("codex").classList.contains("flow-plan-active"), false, "Marks cleared on stop");
+  assert.equal(planFor("claude").classList.contains("flow-plan-active"), false, "Lane marks cleared on complete");
+  assert.equal(planFor("gemini").classList.contains("flow-plan-active"), false);
+  assert.equal(plansCard.querySelectorAll(".flow-plan-working-badge").length, 0, "No working badges remain");
+
+  // 4. How it's working now: distinguishes routing assessor, reviewer, wait reason, and composer
+  // A) Routing assessor
+  chat.status = "running";
+  chat.activeRun = { id: "run-assess", provider: "claude", purpose: "routing", phase: "probing", startedAt: new Date().toISOString() };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(ui.$("flow-status-text").textContent, /Routing assessor: Claude is checking usage/);
+  assert.match(flowText(ui, "working"), /Assessors*Claude: checking account & plan usage/);
+
+  // B) Reviewer
+  chat.activeRun = { id: "run-rev", provider: "codex", purpose: "review", phase: "tool", startedAt: new Date().toISOString() };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(ui.$("flow-status-text").textContent, /Reviewer: Codex is reviewing changes/);
+  assert.match(flowText(ui, "working"), /Reviewers*Codex: reviewing changes/);
+
+  // C) Wait reason
+  chat.status = "incomplete";
+  chat.activeRun = null;
+  chat.resume = { providers: ["claude"], resetsAt: later(2) };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(flowText(ui, "working"), /Waitings*Claude usage limit to reset/);
+
+  // D) Idle composer
+  delete chat.resume;
+  chat.status = "complete";
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(flowText(ui, "working"), /Composer/);
+  assert.doesNotMatch(flowText(ui, "working"), /Next message/);
+
+  // 5. Plan items do not render detailed windows and freshness section
+  assert.strictEqual(claudePlan.querySelector(".flow-plan-details"), null, "Claude plan does not have detailed windows breakdown");
+  assert.strictEqual(geminiPlan.querySelector(".flow-plan-details"), null, "Gemini plan does not have detailed windows breakdown");
 });

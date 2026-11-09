@@ -313,3 +313,32 @@ test('adaptive quota thresholds: weekly windows expand headroom up to 97-98% bas
   const quota = assessQuota({ available: true, checkedAt: new Date(now).toISOString(), windows: [weeklyRow] }, null, { threshold: 90, now, tier: 'standard' });
   assert.equal(quota.state, 'ok', 'Weekly capacity remains spendable rather than hard-failing at static 90%');
 });
+test("pre-flight quota check falls back to alternative provider when selected provider is near limit (#144)", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "throughline-fallback-"));
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+  const bins = {
+    codex: path.join(root, "codex.mjs"),
+    claude: path.join(root, "claude.mjs"),
+  };
+  fs.writeFileSync(bins.codex, `#!${process.execPath}\nimport ${JSON.stringify(new URL("./mock-cli.mjs", import.meta.url).href)};\n`, { mode: 0o700 });
+  fs.writeFileSync(bins.claude, `#!${process.execPath}\nimport ${JSON.stringify(new URL("./mock-cli.mjs", import.meta.url).href)};\n`, { mode: 0o700 });
+  const broker = new Broker({ workspace, dataDir: path.join(root, "data"), bins });
+  t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  const codexUsage = { available: true, checkedAt: new Date().toISOString(), windows: [{ id: "primary", label: "5-hour", usedPercent: 62 }, { id: "secondary", label: "Weekly", usedPercent: 97 }] };
+  const claudeUsage = { available: true, checkedAt: new Date().toISOString(), windows: [{ id: "five_hour", label: "5-hour", usedPercent: 10 }, { id: "seven_day", label: "Weekly", usedPercent: 20 }] };
+
+  broker.checks.usage = async provider => provider === "codex" ? codexUsage : claudeUsage;
+  broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: "subscription" });
+  broker.handoff.modelRows = async provider => provider === "codex" ? [{ id: "o3-mini", displayName: "o3-mini" }] : [{ id: "claude-3-5-sonnet", displayName: "Sonnet" }];
+
+  const c = broker.get(broker.create().id);
+  const run = { id: "test-run", taskId: "test-task", routing: { mode: "smart", reason: "A focused change", tier: "standard" }, message: { text: "Fix a bug" }, billingConfirmed: false };
+
+  const fallback = await broker.findRoutingFallback(c, run, { failedProvider: "codex", failedModel: "o3-mini", failedQuota: { state: "near" }, usage: codexUsage });
+  assert(fallback, "Fallback candidate was found");
+  assert.equal(fallback.provider, "claude");
+  assert.equal(fallback.model, "claude-3-5-sonnet");
+  assert.equal(fallback.quota.state, "ok");
+});

@@ -64,16 +64,30 @@ export class PromptQueue {
       const item = this.item(c, input.id);
       const text = typeof input.text === 'string' ? input.text.trim() : item.text;
       if (!text || text.length > 100000) throw Object.assign(new Error('Enter a message between 1 and 100,000 characters.'), { status: 400 });
-      const model = input.model !== undefined ? (input.model || null) : item.model;
-      const effort = input.effort !== undefined ? (input.effort || null) : item.effort;
+      const provider = input.provider && broker.availableProviders().includes(input.provider) ? input.provider : item.provider;
+      const model = input.model !== undefined ? (input.model || null) : (provider !== item.provider ? null : item.model);
+      const effort = input.effort !== undefined ? (input.effort || null) : (provider !== item.provider ? null : item.effort);
+      broker.checkRunSettings(provider, item.mode, item.approvalPolicy);
       broker.validateSelection(model, 'auto', effort);
-      const clearRouting = Boolean(item.routing && (input.clearRouting || (input.model !== undefined && input.model !== item.model)));
+      const clearRouting = Boolean(item.routing && (input.clearRouting || (input.model !== undefined && input.model !== item.model) || provider !== item.provider));
       if (clearRouting && item.execution) {
         const previous = broker.execution.current(c, item.execution.taskId);
         if (previous) broker.record(c, { type: 'execution_policy', policy: { ...previous, mode: 'normal', automation: Object.fromEntries(Object.keys(previous.automation).map(action => [action, false])), revision: previous.revision + 1, authorization: { source: 'explicit-queue-selection', at: new Date().toISOString() } } });
         broker.record(c, { type: 'queue_execution', id: item.id, execution: broker.execution.token(c, item.execution.taskId) });
       }
-      broker.record(c, { type: 'queue_update', id: input.id, text, ...(input.model !== undefined ? { model } : {}), ...(input.effort !== undefined ? { effort } : {}), ...(clearRouting ? { clearRouting: true } : {}) });
+      broker.record(c, { type: 'queue_update', id: input.id, text, ...(input.provider !== undefined && input.provider !== item.provider ? { provider } : {}), ...(input.model !== undefined || provider !== item.provider ? { model } : {}), ...(input.effort !== undefined || provider !== item.provider ? { effort } : {}), ...(clearRouting ? { clearRouting: true } : {}) });
+    } else if (action === 'switch_provider') {
+      const item = this.item(c, input.id);
+      const targetProvider = input.provider;
+      if (!broker.availableProviders().includes(targetProvider)) throw Object.assign(new Error(`Provider ${targetProvider} is not available.`), { status: 400 });
+      broker.checkRunSettings(targetProvider, item.mode, item.approvalPolicy);
+      if (item.execution) {
+        const previous = broker.execution.current(c, item.execution.taskId);
+        if (previous) broker.record(c, { type: 'execution_policy', policy: { ...previous, mode: 'normal', automation: Object.fromEntries(Object.keys(previous.automation).map(action => [action, false])), revision: previous.revision + 1, authorization: { source: 'explicit-queue-selection', at: new Date().toISOString() } } });
+        broker.record(c, { type: 'queue_execution', id: item.id, execution: broker.execution.token(c, item.execution.taskId) });
+      }
+      broker.record(c, { type: 'queue_update', id: item.id, provider: targetProvider, model: null, effort: null, clearRouting: true });
+      if (c.queuePaused) broker.record(c, { type: 'queue_resume' });
     } else if (action === 'move') {
       this.item(c, input.id);
       const index = Number(input.index);
@@ -85,8 +99,8 @@ export class PromptQueue {
     } else if (action === 'pause') {
       if (!c.queuePaused) this.pause(c, 'You paused the queue.');
     } else if (action === 'resume') {
-      if (c.queuePaused) broker.record(c, { type: 'queue_resume' });
-    } else throw Object.assign(new Error('Choose add, update, move, remove, pause or resume.'), { status: 400 });
+      if (c.queuePaused) broker.record(c, { type: 'queue_resume', ...(input.proceedWithNearQuota ? { proceedWithNearQuota: true } : {}) });
+    } else throw Object.assign(new Error('Choose add, update, move, remove, pause, resume or switch_provider.'), { status: 400 });
     // An open handoff offer keeps saying what would really move.
     if (c.handoffOffer) c.handoffOffer.queue = this.cover(c, c.handoffOffer.from.provider, c.handoffOffer.to);
     broker.emit('update', { conversationId: c.id });
@@ -102,8 +116,9 @@ export class PromptQueue {
     const digest = queueDigest(item);
     this.held.add(c.id);
     try {
-      const input = { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, requestId: `queue-${item.id}` };
-      const options = { execution: item.execution, queued: item.id, verifyExecution: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || current && queueDigest(current) !== digest || !current && !c.requests[`queue-${item.id}`]) throw Object.assign(new Error('The queue changed or was paused before the provider started.'), { status: 409 }); }, verifyRouting: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || !current || queueDigest(current) !== digest) throw Object.assign(new Error('The queued prompt changed or the queue was paused during assessment.'), { status: 409 }); } };
+      const proceedWithNearQuota = Boolean(c.queueResumeProceed || item.proceedWithNearQuota);
+      const input = { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, proceedWithNearQuota, requestId: `queue-${item.id}` };
+      const options = { execution: item.execution, queued: item.id, proceedWithNearQuota, verifyExecution: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || current && queueDigest(current) !== digest || !current && !c.requests[`queue-${item.id}`]) throw Object.assign(new Error('The queue changed or was paused before the provider started.'), { status: 409 }); }, verifyRouting: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || !current || queueDigest(current) !== digest) throw Object.assign(new Error('The queued prompt changed or the queue was paused during assessment.'), { status: 409 }); } };
       const { runId } = item.routing ? await broker.dispatch(c, input, options) : broker.start(c, input, options);
       broker.record(c, { type: 'queue_started', id: item.id, runId });
       broker.emit('update', { conversationId: c.id });

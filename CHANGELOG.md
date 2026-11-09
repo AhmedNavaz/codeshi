@@ -4,6 +4,18 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Added
+
+- **Flow card improvements, binding windows and working agent parity** ([#107](https://github.com/AhmedNavaz/codeshi/issues/107)).
+  - *What's next*: Replaced clipped separate-task text and cramped buttons with readable task titles, running lane activity (`Claude · on “...”`), accessible status text, a subtle pulsing indicator respecting `prefers-reduced-motion`, and dedicated "Open task" action buttons that keep background tasks reachable at narrow widths.
+  - *How it's working now*: Removed redundant "Next message" information. Leads with the task actually running, agent/model, active phase, and reason for handoffs or waits while distinguishing composer agent, routing assessor, reviewer, and task lanes.
+  - *What's left on your plans*: Names binding windows and model scopes (e.g. `Weekly limit for Opus`) instead of generic weekly labels.
+  - *Highlight working agent parity*: Highlights all agents actively working across main runs and separate task lanes, transfers the indicator on handoffs, and clears it on completion, failure, or manual stop.
+
+### Fixed
+
+- **Smart routing near-quota graceful provider fallback in Flow mode** ([#144](https://github.com/AhmedNavaz/codeshi/issues/144)). In Flow mode with Smart routing, when a candidate provider's binding window is near its quota limit (e.g. weekly window at 97% used) at the pre-flight launch check, Codeshi now automatically re-routes to an eligible alternative subscription provider or model tier instead of hard-pausing prompt queue progression before launch. If no alternative provider or model has usable quota, the queue pauses with clear inline action controls to proceed with remaining allowance or switch providers directly without losing queue position.
+
 ## [0.36.0] - 2026-11-08
 
 ### Added

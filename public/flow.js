@@ -226,6 +226,26 @@
     if (current?.check) extras.push(api.getState().status?.verificationCadence === 'review-first' ? 'Routine automatic tests wait while you review. A selected build/review workflow still checks.' : 'After a run changes files, your tests run; if they fail, it tries once more, one step up.');
     return [option.does, ...extras].join(' ');
   }
+  const limitParts = label => { const [period, ...scope] = String(label || "").split(" · "); return { period, scope: scope.join(" · ") }; };
+  function limitName(label) {
+    const { period, scope } = limitParts(label), name = /^(?:\d+-hour|Weekly|Daily|Current)$/.test(period) ? `${period} limit` : period;
+    return scope ? `${name} for ${scope}` : name;
+  }
+  function activeWorkingProviders() {
+    const state = api.getState(), c = state.conversation;
+    const working = new Set();
+    if (api.isRunning() && c?.status === "running" && c?.activeRun) {
+      const p = c.activeRun.connection === "local" ? "local" : c.activeRun.provider;
+      if (p) working.add(p);
+    }
+    for (const task of (c?.parallelTasks || [])) {
+      if (task.status === "running") {
+        const p = task.runningProvider || task.provider || task.activeRun?.provider;
+        if (p) working.add(p);
+      }
+    }
+    return working;
+  }
   const draft = () => ({ text: $('message-input')?.value.trim() || '', files: window.relayFiles?.ids?.().length || 0 });
   const continuationPattern = /^Continue the unfinished task from this shared conversation\.[^.]*\.?\s*/i;
   function cleanRouteError(error) {
@@ -236,18 +256,60 @@
     msg = msg.replace(/\s*API-billed agents need separate consent\.?$/i, '');
     return msg || 'No connected agent is available.';
   }
-  function nextLine() {
-    const state = api.getState(), c = state.conversation;
-    if (api.isRunning()) { const run = c?.activeRun; return run?.purpose === 'routing' ? (run?.phase === 'probing' ? 'Checking account and plan usage before choosing an agent.' : 'Assessing the task before choosing an agent, model and effort.') : `${agentName(run?.provider, run?.connection === 'local')} is working on it now.`; }
-    if (c?.resume) return 'Waiting for a usage limit to reset, then it carries on.';
-    if (routing()) {
-      const { text, files } = draft();
-      const cleanDraft = text.replace(continuationPattern, '').trim();
-      const error = (cleanDraft || files) && api.routeFor(cleanDraft, files)?.error;
-      return error ? `Codeshi can’t choose yet. ${cleanRouteError(error)}` : 'Codeshi picks the agent, model and effort when you send.';
+  function updateWorkingFacts(state, c, current) {
+    workingFacts.replaceChildren();
+    const run = c?.activeRun, running = api.isRunning();
+    const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running");
+
+    if (running && run) {
+      const agent = agentName(run.provider, run.connection === "local");
+      const model = run.model ? (window.relayModelPicker?.modelName?.(run.provider, run.model) || run.model) : "";
+      const step = currentStep(run.plan?.steps || []);
+      const elapsed = elapsedWords(run.startedAt);
+
+      if (run.purpose === "routing") {
+        const row = node("div");
+        row.append(node("dt", undefined, "Assessor"), node("dd", undefined, `${agent}${model ? ` (${model})` : ""}: ${run.phase === "probing" ? "checking account & plan usage" : "assessing task"}${elapsed ? ` · ${elapsed}` : ""}`));
+        workingFacts.append(row);
+      } else if (run.purpose === "review") {
+        const row = node("div");
+        row.append(node("dt", undefined, "Reviewer"), node("dd", undefined, `${agent}${model ? ` (${model})` : ""}: reviewing changes${elapsed ? ` · ${elapsed}` : ""}`));
+        workingFacts.append(row);
+      } else {
+        const row = node("div");
+        const phaseText = phaseWords[run.phase] || run.phase || "working";
+        row.append(node("dt", undefined, "Running"), node("dd", undefined, `${agent}${model ? ` · ${model}` : ""}${run.effort ? ` (${run.effort} effort)` : ""}: ${phaseText}${step ? ` on “${clip(step.text, 50)}”` : ""}${elapsed ? ` · ${elapsed}` : ""}`));
+        workingFacts.append(row);
+      }
+    } else if (c?.resume || c?.limitSwitching) {
+      const row = node("div");
+      const waitAgent = agentName(c?.resume?.providers?.[0] || "agent");
+      const reset = c?.resume?.resetsAt ? resetWords(c.resume.resetsAt) : "";
+      row.append(node("dt", undefined, "Waiting"), node("dd", undefined, `${waitAgent} usage limit to reset${reset ? ` (${reset})` : ""}`));
+      workingFacts.append(row);
+    } else if (c?.handoffOffer) {
+      const row = node("div");
+      row.append(node("dt", undefined, "Handoff"), node("dd", undefined, `Moving from ${agentName(c.handoffOffer.from.provider)} to ${agentName(c.handoffOffer.to.provider)}: ${c.handoffOffer.reason || "usage threshold reached"}`));
+      workingFacts.append(row);
+    } else {
+      const row = node("div");
+      const composerAgent = agentNames[state.provider] || state.provider;
+      const composerModel = state.model ? (window.relayModelPicker?.modelName?.(state.provider, state.model) || state.model) : "";
+      row.append(node("dt", undefined, "Composer"), node("dd", undefined, `${composerAgent}${composerModel ? ` · ${composerModel}` : ""}${routing() ? " (routed on Send)" : ""}`));
+      workingFacts.append(row);
     }
-    const model = state.model ? window.relayModelPicker?.modelName?.(state.provider, state.model) || state.model : null;
-    return `Your next message goes to ${agentNames[state.provider] || 'the agent'}${model ? `, ${model}` : ''}.`;
+
+    if (runningLanes.length) {
+      const row = node("div");
+      const laneNames = runningLanes.map(t => `“${t.title}” (${agentNames[t.runningProvider || t.provider] || "agent"})`).join(", ");
+      row.append(node("dt", undefined, "Task lanes"), node("dd", undefined, laneNames));
+      workingFacts.append(row);
+    }
+
+    const testRow = node("div"), testVal = node("dd");
+    testVal.append(testingControl);
+    testRow.append(node("dt", undefined, "Testing"), testVal);
+    workingFacts.append(testRow);
   }
   async function setReviewFirst(enabled) {
     if (testingPending) return;
@@ -287,24 +349,27 @@
     row.append(node('dt', undefined, term), value); workingFacts.append(row);
   }
   function renderWorking(card) {
-    const state = api.getState(), current = routing(), currentMode = canonicalMode(current?.mode);
-    const signature = JSON.stringify([current, routingPending, state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence]);
+    const state = api.getState(), c = state.conversation, current = routing(), currentMode = canonicalMode(current?.mode);
+    const running = api.isRunning() ? (c?.activeRun?.connection === "local" ? "local" : c?.activeRun?.provider) : null;
+    const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running").map(t => [t.id, t.runningProvider, t.status]);
+    const signature = JSON.stringify([current, routingPending, state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence, running, c?.activeRun?.phase, c?.activeRun?.purpose, c?.resume, c?.handoffOffer, runningLanes]);
     if (signature === card.signature) return;
     card.signature = signature;
     if (!card.body.childNodes.length) {
       card.body.append(workingMode, workingFacts);
-      card.foot.append(button('flow-button', 'Agent settings', () => window.relayAgents?.open?.()));
+      card.foot.append(button("flow-button", "Agent settings", () => window.relayAgents?.open?.()));
     }
+    updateWorkingFacts(state, c, current);
     const option = modes.find(item => item.mode === currentMode);
-    workingMode.dataset.mode = option ? option.mode : routingPending ? 'pending' : 'off';
-    workingModeName.textContent = option ? option.name : routingPending ? 'Turning on…' : 'Off';
+    workingMode.dataset.mode = option ? option.mode : routingPending ? "pending" : "off";
+    workingModeName.textContent = option ? option.name : routingPending ? "Turning on…" : "Off";
     workingModeText.textContent = modeSentence(current);
-    const reviewFirst = state.status?.verificationCadence === 'review-first';
-    testingSwitch.setAttribute('aria-checked', String(reviewFirst));
+    const reviewFirst = state.status?.verificationCadence === "review-first";
+    testingSwitch.setAttribute("aria-checked", String(reviewFirst));
     testingSwitch.disabled = testingPending || !state.ready || !state.status;
-    testingSwitch.setAttribute('aria-busy', String(testingPending));
-    testingDescription.textContent = reviewFirst ? 'Small safeguards now; verify when you ask to finalize.' : 'Checks as needed, focused on what changed.';
-    testingDescription.title = 'Applies to new turns in every workspace. Running agents keep their starting setting. Required checks and selected build/review workflows still apply.';
+    testingSwitch.setAttribute("aria-busy", String(testingPending));
+    testingDescription.textContent = reviewFirst ? "Small safeguards now; verify when you ask to finalize." : "Checks as needed, focused on what changed.";
+    testingDescription.title = "Applies to new turns in every workspace. Running agents keep their starting setting. Required checks and selected build/review workflows still apply.";
   }
 
   // The same model-aware five-hour headline and secondary allowance shown in Agents.
@@ -315,14 +380,13 @@
     const state = api.getState();
     return ['codex', 'claude', 'gemini'].filter(provider => state.accounts?.[provider]?.authenticated === true).map(provider => {
       const usage = window.relayUsage?.snapshot?.(provider), summary = window.relayUsage?.summary?.(provider);
-      const allWindows = (usage?.windows?.length ? usage.windows : (summary?.rows || [])).filter(w => Number.isFinite(w.usedPercent));
-      return { provider, reported: usage?.available !== false, primary: summary?.primary || null, secondary: summary?.secondary || null, warning: summary?.warning || null, allWindows };
+      return { provider, reported: usage?.available !== false, primary: summary?.primary || null, secondary: summary?.secondary || null, warning: summary?.warning || null };
     });
   }
   function renderPlans(card) {
     const state = api.getState(), rows = planRows();
-    const running = api.isRunning() ? (state.conversation?.activeRun?.connection === 'local' ? 'local' : state.conversation?.activeRun?.provider) : null;
-    const signature = JSON.stringify([rows, state.provider, running]);
+    const working = activeWorkingProviders();
+    const signature = JSON.stringify([rows, state.provider, [...working].sort()]);
     if (signature === card.signature) return;
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
@@ -336,11 +400,11 @@
       const item = node('li', 'flow-plan'), head = node('div', 'flow-plan-head'), icon = node('i', `agent-icon ${row.provider}`);
       item.dataset.provider = row.provider; icon.setAttribute('aria-hidden', 'true');
       head.append(icon, node('strong', undefined, agentNames[row.provider]));
-      const isWorking = row.provider === running;
+      const isWorking = working.has(row.provider);
       if (isWorking) {
         item.classList.add('flow-plan-active');
         const badge = node('span', 'flow-plan-working-badge');
-        badge.setAttribute('aria-label', 'Working');
+        badge.setAttribute('aria-label', `${agentNames[row.provider]} is working`);
         const dot = node('span', 'flow-pulse-dot');
         dot.setAttribute('aria-hidden', 'true');
         badge.append(dot);
@@ -359,13 +423,16 @@
         meter.setAttribute('role', 'img');
         meter.setAttribute('aria-label', `${percent}% of ${agentNames[row.provider]}’s ${row.primary.label} allowance left`);
         const reset = resetWords(row.primary.resetsAt);
-        item.append(head, meter, node('span', 'flow-plan-when', `${row.primary.label} limit${reset ? ` · ${reset}` : ''}`));
+        const bindingName = limitName(row.primary.label);
+        item.append(head, meter, node('span', 'flow-plan-when', `${bindingName}${reset ? ` · ${reset}` : ''}`));
         if (row.secondary) {
-          const otherReset = resetWords(row.secondary.resetsAt), other = node('span', 'flow-plan-secondary', `${row.secondary.label} · ${remaining(row.secondary)}% left${otherReset ? ` · ${otherReset}` : ''}`);
+          const otherReset = resetWords(row.secondary.resetsAt);
+          const other = node('span', 'flow-plan-secondary', `${row.secondary.label} · ${remaining(row.secondary)}% left${otherReset ? ` · ${otherReset}` : ''}`);
           other.dataset.level = level(remaining(row.secondary));
           item.append(other);
         }
       }
+
       item.tabIndex = 0;
       item.setAttribute('role', 'button');
       item.setAttribute('aria-label', `${agentNames[row.provider]} limits. Click to view all limits in overlay.`);
@@ -384,7 +451,8 @@
       list.append(item);
     }
     body.append(list);
-    const chosen = (running && rows.some(row => row.provider === running)) ? running : (rows.some(row => row.provider === state.provider) ? state.provider : rows[0].provider);
+    const runningProvider = [...working][0];
+    const chosen = (runningProvider && rows.some(row => row.provider === runningProvider)) ? runningProvider : (rows.some(row => row.provider === state.provider) ? state.provider : rows[0].provider);
     const allLimitsBtn = button('flow-button', 'All limits', (e) => window.relayUsage?.open?.(chosen, e.currentTarget || allLimitsBtn));
     allLimitsBtn.title = 'View detailed limits in an overlay window';
     card.foot.append(allLimitsBtn);
@@ -436,28 +504,44 @@
       for (const task of others) {
         const item = node('li', 'flow-task');
         if (task.status === 'running') item.classList.add('flow-task-running');
-        const actionBtn = button('flow-button flow-task-button', task.title, () => selectTask(task.id));
-        actionBtn.title = `Switch to “${task.title}”`;
+
+        const titleRow = node('div', 'flow-task-head');
+        const titleEl = node('strong', 'flow-task-title', task.title);
+        titleEl.title = task.title;
+        titleRow.append(titleEl);
+
         const meta = node('div', 'flow-task-meta');
         if (task.folderName) meta.append(node('span', 'flow-task-folder', `${task.folderName} · `));
+
+        const taskProvider = task.runningProvider || task.provider;
         if (task.status === 'running') {
           const badge = node('span', 'flow-task-status flow-task-status-running');
           const dot = node('span', 'flow-pulse-dot');
           dot.setAttribute('aria-hidden', 'true');
-          badge.append(dot, node('span', 'flow-task-status-text', 'Working as extra task'));
+          const activityText = taskProvider ? `${agentNames[taskProvider] || taskProvider}${task.runningStep ? ` · on “${clip(task.runningStep, 35)}”` : task.runningPhase ? ` · ${phaseWords[task.runningPhase] || task.runningPhase}` : ' · Working as extra task'}` : 'Working as extra task';
+          badge.append(dot, node('span', 'flow-task-status-text', activityText));
           meta.append(badge);
         } else {
           meta.append(node('span', 'flow-task-status', taskWords(task)));
         }
-        item.append(actionBtn, meta);
+
+        const actionBtn = button('flow-button flow-task-button flow-task-action', 'Open task', () => selectTask(task.id));
+        actionBtn.title = `Switch to “${task.title}”`;
+        actionBtn.setAttribute('aria-label', `Open task: ${task.title}`);
+
+        item.append(titleRow, meta, actionBtn);
         list.append(item);
       }
       if (state.taskId) {
         const item = node('li', 'flow-task');
-        const actionBtn = button('flow-button flow-task-button', 'Workspace chat', () => selectTask(null));
+        const titleRow = node('div', 'flow-task-head');
+        titleRow.append(node('strong', 'flow-task-title', 'Workspace chat'));
         const meta = node('div', 'flow-task-meta');
         meta.append(node('span', 'flow-task-status', 'the whole workspace'));
-        item.append(actionBtn, meta);
+        const actionBtn = button('flow-button flow-task-button flow-task-action', 'Workspace chat', () => selectTask(null));
+        actionBtn.title = 'Switch to workspace chat';
+        actionBtn.setAttribute('aria-label', 'Open workspace chat');
+        item.append(titleRow, meta, actionBtn);
         list.append(item);
       }
       body.append(list);
@@ -504,14 +588,29 @@
     if (waiting.length) return { text: waiting.some(item => item.kind === 'question') ? `${agentName(c.activeRun?.provider, c.activeRun?.connection === 'local')} has a question for you` : 'Waiting for your approval', live: true, attention: true };
     if (api.isRunning()) {
       const run = c.activeRun, agent = agentName(run?.provider, run?.connection === 'local'), step = currentStep(run?.plan?.steps || []), elapsed = elapsedWords(run?.startedAt);
+      if (run?.purpose === 'routing') {
+        return { text: `Routing assessor: ${agent} is ${run.phase === 'probing' ? 'checking usage' : 'assessing the task'}${elapsed ? ` · ${elapsed}` : ''}`, live: true };
+      }
+      if (run?.purpose === 'review') {
+        return { text: `Reviewer: ${agent} is reviewing changes${elapsed ? ` · ${elapsed}` : ''}`, live: true };
+      }
       const doing = step ? `is on “${clip(step.text, 70)}”` : `is ${phaseWords[run?.phase] || 'working'}`;
       return { text: `${agent} ${doing}${elapsed ? ` · ${elapsed}` : ''}`, live: true };
     }
     if (c.resume || c.limitSwitching) return { text: 'Waiting for a usage limit to reset', live: true };
     const last = c.lastRun;
+    if (last && (last.status === 'interrupted' || last.errorCategory === 'quota' || last.status === 'incomplete' || last.status === 'failed')) {
+      return { text: last.status === 'interrupted' ? 'Stopped' : last.errorCategory === 'quota' ? 'Stopped at a usage limit' : 'The last run didn’t finish', live: false, attention: last.status !== 'interrupted' };
+    }
+    const runningLanes = (c.parallelTasks || []).filter(task => task.status === 'running');
+    if (runningLanes.length) {
+      const lane = runningLanes[0];
+      const laneAgent = agentName(lane.runningProvider || lane.provider);
+      return { text: `Task lane “${clip(lane.title, 40)}” working (${laneAgent})`, live: true };
+    }
     if (!last) return { text: 'Ready', live: false };
     if (last.status === 'complete') { const files = c.checkpoints?.[last.id]?.files; return { text: `Done${files ? ` · ${plural(files, 'file')} changed` : ''}`, live: false }; }
-    return { text: last.status === 'interrupted' ? 'Stopped' : last.errorCategory === 'quota' ? 'Stopped at a usage limit' : 'The last run didn’t finish', live: false, attention: last.status !== 'interrupted' };
+    return { text: 'Ready', live: false };
   }
   function renderStatus() {
     if (!status) return;
@@ -525,7 +624,8 @@
     if (text) text.textContent = line.text + context + compact; else status.textContent = line.text + context + compact;
     status.title = run ? `${run.compactions || 0} native compaction notifications observed. ${typeof native?.used === 'number' ? 'Context snapshot observed ' + (native.observedAt || 'at an unknown time') : 'Native context usage not reported.'}${run.context?.restoredAfterCompaction ? ' Task context restored in the same native session.' : ''}` : '';
     status.dataset.live = String(Boolean(line.live)); status.dataset.attention = String(Boolean(line.attention));
-    status.dataset.provider = (api.isRunning() && run?.provider) || '';
+    const workingProviders = activeWorkingProviders();
+    status.dataset.provider = (api.isRunning() && run?.provider) || (workingProviders.size ? [...workingProviders][0] : '');
   }
 
   // ---- A narrow window: the cards leave the sides and become a row of chips under the header; one opens at a time.

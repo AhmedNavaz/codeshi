@@ -218,7 +218,17 @@ export class TaskCoordinator {
 
   public(task) {
     const lane = this.lanes.get(task.id), { text, attachments, requestId, folderPath, commonDir, repoRoot, preparationSource, workspaceFolders, ...shown } = task;
-    return { ...shown, approvals: lane?.broker.pendingCount() || 0, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status) };
+    const active = lane?.c?.activeRun;
+    const runningProvider = (lane?.broker?.running && active?.provider) || (task.status === "running" && (active?.provider || lane?.c?.provider || task.provider)) || null;
+    return {
+      ...shown,
+      runningProvider,
+      runningModel: active?.model || null,
+      runningPhase: active?.phase || null,
+      runningStep: active?.plan?.steps?.find(s => s.status === "active")?.text || null,
+      approvals: lane?.broker.pendingCount() || 0,
+      hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status)
+    };
   }
   list(c) { return (c.parallelTasks || []).filter(task => !task.closed).map(task => this.public(task)); }
   // One task's conversation, as the page shows it. Undo works on the real folders from the main conversation, so a lane doesn't offer it.

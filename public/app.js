@@ -1433,6 +1433,32 @@
     $("prompt-queue-toggle").title = c.queuePaused ? "Resume queue" : "Pause queue";
     $("prompt-queue-toggle").setAttribute("aria-label", c.queuePaused ? "Resume queue" : "Pause queue");
     $("prompt-queue-toggle").disabled = Boolean(state.pending);
+    const pausedActions = $("prompt-queue-paused-actions");
+    if (pausedActions) {
+      const isQuotaPaused = Boolean(c.queuePaused && (/routing paused|quota/i.test(c.queuePaused.reason) || /% used/i.test(c.queuePaused.reason)));
+      pausedActions.hidden = !isQuotaPaused || !queue.length;
+      if (isQuotaPaused && queue.length) {
+        pausedActions.replaceChildren();
+        const proceedBtn = element("button", "pill-button queue-proceed-button", "Proceed with remaining allowance");
+        proceedBtn.type = "button";
+        proceedBtn.title = "Start the next prompt using the remaining allowance";
+        proceedBtn.disabled = Boolean(state.pending);
+        proceedBtn.addEventListener("click", () => queueAction({ action: "resume", proceedWithNearQuota: true }));
+        pausedActions.append(proceedBtn);
+
+        const blockedMatch = c.queuePaused.reason.match(/Routing paused before starting (\w+)/i);
+        const blockedProvider = blockedMatch ? blockedMatch[1].toLowerCase() : (queue[0]?.provider || null);
+        const available = (state.conversation?.availableProviders || ["codex", "claude", "gemini"]).filter(p => p !== blockedProvider);
+        for (const alt of available) {
+          const switchBtn = element("button", "pill-button queue-switch-button", `Switch to ${label(alt)}`);
+          switchBtn.type = "button";
+          switchBtn.title = `Switch the first queued message to ${label(alt)} and resume`;
+          switchBtn.disabled = Boolean(state.pending);
+          switchBtn.addEventListener("click", () => queueAction({ action: "switch_provider", id: queue[0].id, provider: alt }));
+          pausedActions.append(switchBtn);
+        }
+      }
+    }
     const icon = (name, text, handler, disabled = false) => { const button = element("button", `icon-button queue-action queue-${name}`); button.type = "button"; button.title = text; button.setAttribute("aria-label", text); button.disabled = disabled || Boolean(state.pending); button.addEventListener("click", handler); return button; };
     $("prompt-queue-list").replaceChildren(...queue.map((item, index) => {
       const row = element("li", "prompt-queue-item"), body = element("div", "prompt-queue-body");
@@ -1443,20 +1469,35 @@
       if (state.queueEditing === item.id) {
         const editor = element("textarea", "prompt-queue-editor"); editor.value = item.text; editor.rows = 3; editor.setAttribute("aria-label", "Edit queued message");
         const controls = element("div", "prompt-queue-edit-controls");
+        const providerSelect = element("select", "prompt-queue-select prompt-queue-provider"); providerSelect.setAttribute("aria-label", "Assistant");
+        const availableProviders = state.conversation?.availableProviders || ["codex", "claude", "gemini"];
+        for (const prov of availableProviders) {
+          const opt = element("option", "", label(prov));
+          opt.value = prov;
+          providerSelect.append(opt);
+        }
+        providerSelect.value = item.provider;
         const modelSelect = element("select", "prompt-queue-select prompt-queue-model"); modelSelect.setAttribute("aria-label", "Model");
         const effortSelect = element("select", "prompt-queue-select prompt-queue-effort"); effortSelect.setAttribute("aria-label", "Reasoning effort");
-        const models = window.relayModelPicker?.models?.(item.provider) || []; if (!models.length) window.relayModelPicker?.preload?.()?.then?.(() => { state.queueSignature = null; renderQueue(); });
-        const baseOpt = element("option", "", `Let ${label(item.provider)} choose`); baseOpt.value = ""; modelSelect.append(baseOpt);
-        for (const row of models.filter(row => row.value !== "default")) {
-          const opt = element("option", "", row.displayName || row.name || row.id || row.value);
-          opt.value = row.id || row.model || row.value;
-          modelSelect.append(opt);
-        }
-        if (item.model && !models.some(row => (row.id || row.model || row.value) === item.model)) {
-          const opt = element("option", "", item.model); opt.value = item.model; modelSelect.append(opt);
-        }
-        modelSelect.value = item.model || "";
+        const populateModels = prov => {
+          const models = window.relayModelPicker?.models?.(prov) || [];
+          if (!models.length) window.relayModelPicker?.preload?.()?.then?.(() => { state.queueSignature = null; renderQueue(); });
+          modelSelect.replaceChildren();
+          const baseOpt = element("option", "", `Let ${label(prov)} choose`); baseOpt.value = ""; modelSelect.append(baseOpt);
+          for (const row of models.filter(row => row.value !== "default")) {
+            const opt = element("option", "", row.displayName || row.name || row.id || row.value);
+            opt.value = row.id || row.model || row.value;
+            modelSelect.append(opt);
+          }
+          if (prov === item.provider && item.model && !models.some(row => (row.id || row.model || row.value) === item.model)) {
+            const opt = element("option", "", item.model); opt.value = item.model; modelSelect.append(opt);
+          }
+          modelSelect.value = prov === item.provider ? (item.model || "") : "";
+        };
+        populateModels(item.provider);
         const updateEffortOptions = () => {
+          const chosenProv = providerSelect.value;
+          const models = window.relayModelPicker?.models?.(chosenProv) || [];
           const chosen = modelSelect.value;
           const selected = models.find(row => (row.id || row.model || row.value) === chosen) || (!chosen && models.find(row => row.isDefault || row.value === "default"));
           const supported = (selected?.supportedEffortLevels || selected?.supportedReasoningEfforts?.map(r => r.reasoningEffort) || []).filter(Boolean);
@@ -1468,7 +1509,7 @@
             opt.value = eff;
             effortSelect.append(opt);
           }
-          if (item.effort && !supported.includes(item.effort) && chosen === (item.model || "")) {
+          if (chosenProv === item.provider && item.effort && !supported.includes(item.effort) && chosen === (item.model || "")) {
             const opt = element("option", "", (item.effort === "xhigh" ? "X-High" : item.effort[0].toUpperCase() + item.effort.slice(1)) + " (saved)");
             opt.value = item.effort;
             effortSelect.append(opt);
@@ -1476,16 +1517,21 @@
           effortSelect.disabled = !supported.length;
           effortSelect.value = supported.includes(item.effort) && chosen === (item.model || "") ? item.effort : (chosen === (item.model || "") && item.effort ? item.effort : "");
         };
+        providerSelect.addEventListener("change", () => {
+          populateModels(providerSelect.value);
+          updateEffortOptions();
+        });
         updateEffortOptions();
         modelSelect.addEventListener("change", updateEffortOptions);
-        controls.append(modelSelect, effortSelect);
+        controls.append(providerSelect, modelSelect, effortSelect);
         const save = element("button", "pill-button", "Save"), cancel = element("button", "pill-button", "Cancel"); save.type = cancel.type = "button";
         save.addEventListener("click", async () => {
           const payload = { action: "update", id: item.id, text: editor.value };
+          if (providerSelect.value !== item.provider) payload.provider = providerSelect.value;
           const newModel = modelSelect.value || null;
           const newEffort = effortSelect.value || null;
-          if (newModel !== (item.model || null)) payload.model = newModel;
-          if (newEffort !== (item.effort || null)) payload.effort = newEffort;
+          if (newModel !== (item.model || null) || providerSelect.value !== item.provider) payload.model = newModel;
+          if (newEffort !== (item.effort || null) || providerSelect.value !== item.provider) payload.effort = newEffort;
           if (await queueAction(payload)) { state.queueEditing = null; renderQueue(); }
         });
         cancel.addEventListener("click", () => { state.queueEditing = null; renderQueue(); });

@@ -14,7 +14,7 @@ import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
 import { normalizeUsage, readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
 import { claudeRequestContext, contextReading, restoreAfterCompaction } from './context-state.mjs';
-import { observeReading, observeRunSize, usageWatch } from './usage-watch.mjs';
+import { observeReading, observeRunSize, usageWatch, usualWindowSpend } from './usage-watch.mjs';
 import { contextControlView, estimateContext, findMessage, managedContextVersion, milestoneMemory, observationsFor, REFRESH_HISTORY, rolloverDecision, sessionSeed } from './context-rollover.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
@@ -212,7 +212,7 @@ export class Broker extends EventEmitter {
 
   // Waiting for a usage limit to reset (#32).
   get waitingResumes() { return this.resume.waiting; }
-  availableProviders() { return PROVIDERS.filter(provider => resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot })); }
+  availableProviders() { const hasConfigured = Object.keys(this.configuredBins).length > 0; return PROVIDERS.filter(provider => { if (hasConfigured && !this.configuredBins[provider]) return false; return resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot }); }); }
   checkRunSettings(provider, mode, approvalPolicy) { checkSettings(provider, mode, approvalPolicy); }
   usageOptions(provider) { return { bin: resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot }), workspace: this.workspace, googleRoot: this.googleRoot, refresh: true }; }
   scheduleResume(c, input = {}) { return this.resume.schedule(c, input); }
@@ -325,13 +325,13 @@ export class Broker extends EventEmitter {
     if (record.type === 'parallel_task') c.parallelTasks = [...(c.parallelTasks || []), record.task];
     if (record.type === 'parallel_task_update') { const task = c.parallelTasks?.find(item => item.id === record.id); if (task) Object.assign(task, record.changes); }
     if (record.type === 'queue_add') c.queue = [...c.queue, record.item?.routing?.mode ? { ...record.item, routing: { ...record.item.routing, mode: normalizeRoutingMode(record.item.routing.mode) } } : record.item];
-    if (record.type === 'queue_update') c.queue = c.queue.map(item => { if (item.id !== record.id) return item; const updated = { ...item }; if (record.text !== undefined) updated.text = record.text; if ('model' in record) updated.model = record.model; if ('effort' in record) updated.effort = record.effort; if (record.clearRouting) delete updated.routing; return updated; });
+    if (record.type === 'queue_update') c.queue = c.queue.map(item => { if (item.id !== record.id) return item; const updated = { ...item }; if (record.text !== undefined) updated.text = record.text; if ('provider' in record) updated.provider = record.provider; if ('model' in record) updated.model = record.model; if ('effort' in record) updated.effort = record.effort; if (record.clearRouting) delete updated.routing; return updated; });
     if (record.type === 'queue_move') { const item = c.queue.find(entry => entry.id === record.id); if (item) { const rest = c.queue.filter(entry => entry !== item); rest.splice(record.index, 0, item); c.queue = rest; } }
-    if (record.type === 'queue_remove' || record.type === 'queue_started') c.queue = c.queue.filter(item => item.id !== record.id);
+    if (record.type === 'queue_remove' || record.type === 'queue_started') { delete c.queueResumeProceed; c.queue = c.queue.filter(item => item.id !== record.id); }
     // One record, so a restart finds each prompt with one owner: moved or not, never both (#93).
     if (record.type === 'queue_moved') { const moves = new Map(record.moves.map(move => [move.id, move])); c.queue = c.queue.map(item => { const move = moves.get(item.id); if (!move) return item; const { routing, ...rest } = item; const { id, ...fields } = move; return { ...rest, ...(routing && !('routing' in fields) ? { routing } : {}), ...fields }; }); }
     if (record.type === 'queue_pause') c.queuePaused = { reason: record.reason, at: record.at };
-    if (record.type === 'queue_resume') c.queuePaused = null;
+    if (record.type === 'queue_resume') { c.queuePaused = null; if (record.proceedWithNearQuota) c.queueResumeProceed = true; else delete c.queueResumeProceed; }
     if (record.type === 'resume_end' && c.resume?.id === record.id) { c.resume = null; c.resumeEnded = { id: record.id, outcome: record.outcome, provider: record.provider || null, at: record.at }; }
     if (['settings', 'submission'].includes(record.type) && !record.review && !record.local) {
       c.effort = record.effort ?? null;
@@ -810,7 +810,50 @@ export class Broker extends EventEmitter {
 
   dispatch(c, input, options = {}) { return this.router.start(c, input, options); }
 
-  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null, executionRevision }, { execution = null, executionAction = 'manual', verifyExecution, review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null, assessedTask = null, routingEvidence = null } = {}) {
+  async findRoutingFallback(c, run, { failedProvider, failedModel, failedQuota, usage = null } = {}) {
+    if (!run?.routing) return null;
+    const mode = run.routing.mode || 'smart';
+    const text = run.message?.text || c.messages.find(m => m.runId === run.id && m.role === 'user')?.text || '';
+    const assessment = run.routing.assessment || null;
+    const allowApi = run.billingConfirmed === true;
+    const threshold = 90;
+    const candidates = [];
+    const providers = this.availableProviders();
+    for (const provider of providers) {
+      const options = this.usageOptions(provider);
+      let account, provUsage, models;
+      try {
+        account = await this.handoff.account(provider, { bin: options.bin, workspace: this.workspace, googleRoot: this.googleRoot });
+        if (!account?.installed || account.authenticated === false || (!allowApi && account.billingSource !== 'subscription') || !this.handoff.supportsWorkspace(provider, account, run)) continue;
+        if (provider === failedProvider && usage) { provUsage = usage; } else { provUsage = this.router?.readings?.get(provider)?.usage; if (!provUsage && c.quotaReadings?.[provider]) { provUsage = { available: true, windows: c.quotaReadings[provider].windows, checkedAt: c.quotaReadings[provider].observedAt }; } if (!provUsage) provUsage = await this.checks.usage(provider, options); }
+        this.observeQuota(c, provider, provUsage);
+        models = await this.handoff.modelRows(provider);
+      } catch { continue; }
+      const allowed = m => (!run.execution || this.execution.allows(c, run.execution, { action: 'routing', provider, model: m }) || this.execution.allows(c, run.execution, { action: 'manual', provider, model: m })) && !this.budget.refusal(c, { task: { id: run.taskId, relation: 'continuation' }, provider, model: m, previousProvider: failedProvider });
+      let allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
+      if (provider === failedProvider && failedModel) {
+        allowedModels = allowedModels.filter(id => id !== failedModel);
+      }
+      if (models.length ? !allowedModels.length : !allowed(null)) continue;
+      const usualSpend = usualWindowSpend(c, provider);
+      candidates.push({ provider, models: models.filter(m => !allowedModels.length || allowedModels.includes(m.id || m.model || m.value)), billingSource: account.billingSource, usage: provUsage, eligible: true, ...(allowedModels.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
+    }
+    if (!candidates.length) return null;
+    const choice = globalThis.relayRouting.route({ text, attachments: run.message?.attachments?.length || 0, assessment, mode, candidates, current: failedProvider, allowApi, quotaThreshold: threshold });
+    if (!choice || choice.error || choice.quota?.state !== 'ok') return null;
+    const chosenRow = candidates.find(item => item.provider === choice.provider);
+    return {
+      provider: choice.provider,
+      model: choice.model,
+      effort: choice.effort,
+      steppedDown: choice.steppedDown || false,
+      routing: { mode, reason: choice.reason, tier: choice.tier },
+      usage: chosenRow?.usage || null,
+      quota: choice.quota
+    };
+  }
+
+  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null, executionRevision, proceedWithNearQuota = false }, { execution = null, executionAction = 'manual', verifyExecution, review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null, assessedTask = null, routingEvidence = null, proceedWithNearQuota: optionProceedWithNearQuota = false } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
     if (local) { if (review || typeof verifyLocal !== 'function') throw Object.assign(new Error('Invalid local run.'), { status: 400 }); provider = 'codex'; model = local.model; transport = 'app-server'; effort = null; fresh = true; }
     checkSettings(provider, mode, approvalPolicy);
@@ -883,7 +926,7 @@ export class Broker extends EventEmitter {
     try { if (review) verifyReview(); baseline = review ? { kind: 'review', git: true, digest: review.snapshot.digest, capturedAt: new Date().toISOString() } : workspaceBaseline(this.workspace, this.workspaceFolders); } catch (error) { lease.release(); throw error; }
     const run = { id: runId, taskId: task.id, c, provider, mode, approvalPolicy, child: null, terminalSuccess: false, failed: false, stopped: false,
       stderr: '', tools: new Map(), approvals: new Map(), currentClaudeMessage: null, killTimer: null, done: null, lease, review, local, resume: resume || null, queued: queued || null, limitChain, billingConfirmed: billingConfirmed === true, errorCategory: null, workspaceSignature: this.workspaceSignature,
-      execution, executionOptions, model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview, verification: prepared.metadata.verification };
+      execution, executionOptions, model, effort, steerable: !review && actualTransport !== 'cli', steers: new Map(), routing, baseline, retryOf, automaticReview, verification: prepared.metadata.verification, proceedWithNearQuota: Boolean(proceedWithNearQuota || optionProceedWithNearQuota || c.queueResumeProceed) };
     let finish;
     run.done = new Promise(resolve => { finish = resolve; });
     try {
@@ -978,12 +1021,49 @@ export class Broker extends EventEmitter {
           } catch { /* Unavailable stays unknown, with no assumed capacity. */ }
           finally { clearTimeout(timer); }
           if (run.stopped) return complete(null, null, new Error('Run stopped.'));
-          const quota = globalThis.relayRouting.assessQuota(usage, model, { threshold: 95 });
+          const quota = globalThis.relayRouting.assessQuota(usage, model, { threshold: 95, tier: routing?.tier, workload: usualWindowSpend(c, provider) });
           this.observeQuota(c, provider, usage);
           this.record(c, { type: 'run_metadata', metadata: { routingQuota: quota } });
-          if (['near', 'exhausted', 'stale'].includes(quota.state)) throw Object.assign(new Error(`Routing paused before starting ${provider}: ${globalThis.relayRouting.quotaText(quota)}. Refresh plan usage or choose a model manually.`), { category: 'routing' });
-          // Unknown usage remains explicit. Send is a manual request, unlike a background retry or automatic handoff,
-          // which require confirmed allowance. The selected agent/model never changes during this final check.
+          if (['near', 'exhausted', 'stale'].includes(quota.state)) {
+            if (quota.state === 'near' && run.proceedWithNearQuota) {
+              this.message(c, 'activity', `Proceeding with remaining ${provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex'} allowance as requested (${globalThis.relayRouting.quotaText(quota)}).`, provider);
+            } else if (['near', 'exhausted'].includes(quota.state)) {
+              const fallback = await this.findRoutingFallback(c, run, { failedProvider: provider, failedModel: model, failedQuota: quota, usage });
+              if (fallback) {
+                const previousProvider = provider, previousModel = model;
+                provider = fallback.provider;
+                model = fallback.model;
+                effort = fallback.effort;
+                run.provider = provider;
+                run.model = model;
+                run.effort = effort;
+                run.routing = { ...run.routing, ...(fallback.routing || {}), steppedDown: fallback.steppedDown || false, fallbackFrom: previousProvider };
+                lease.release();
+                lease = this.acquireMutation(`provider:${provider}`);
+                run.lease = lease;
+                bin = resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot });
+                this.bins[provider] = bin;
+                actualTransport = transportFor(provider, transport, this.configuredBins[provider]);
+                run.steerable = !review && actualTransport !== 'cli';
+                sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
+                const account = this.configuredBins[provider] ? { authenticated: true, authMode: "test", billingSource: "subscription" } : await accountStatus(provider, { bin, workspace: this.workspace, googleRoot: this.googleRoot });
+                this.record(c, { type: 'run_metadata', metadata: { account: { authenticated: account.authenticated, authMode: account.authMode, billingSource: account.billingSource } } });
+                run.billingSource = account.billingSource;
+                prepared = prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode, session: { sessionReason: 'cross-agent-handoff', previousProvider }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: true, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+                this.record(c, { type: 'run_metadata', metadata: { routingFallback: { from: previousProvider, fromModel: previousModel, to: provider, toModel: model, reason: `${previousProvider} quota is ${quota.state} (${globalThis.relayRouting.quotaText(quota)})` } } });
+                if (c.activeRun) { c.activeRun.provider = provider; c.activeRun.model = model; c.activeRun.effort = effort; }
+                this.message(c, 'activity', `${previousProvider === 'codex' ? 'Codex' : previousProvider === 'claude' ? 'Claude' : 'Gemini'} is near its quota limit (${globalThis.relayRouting.quotaText(quota)}). Smart routing switched to ${provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex'}${model ? ` (${model})` : ''}.`, provider);
+                if (fallback.usage) this.observeQuota(c, provider, fallback.usage);
+                if (fallback.quota) this.record(c, { type: 'run_metadata', metadata: { routingQuota: fallback.quota } });
+                Object.assign(executionOptions, { provider, model, effort });
+                this.emit('update', { conversationId: c.id });
+              } else {
+                throw Object.assign(new Error(`Routing paused before starting ${provider}: ${globalThis.relayRouting.quotaText(quota)}. Refresh plan usage or choose a model manually.`), { category: 'routing', quotaState: quota.state });
+              }
+            } else {
+              throw Object.assign(new Error(`Routing paused before starting ${provider}: ${globalThis.relayRouting.quotaText(quota)}. Refresh plan usage or choose a model manually.`), { category: 'routing', quotaState: quota.state });
+            }
+          }
         } else if (!review && !local && run.billingSource === 'subscription') this.readQuota(c, provider);
         if (!review) await this.checkpoints.before(c, run);
         if (run.stopped) return complete(null, null, new Error('Run stopped.'));
