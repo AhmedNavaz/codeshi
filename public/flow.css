@@ -72,12 +72,29 @@
 .flow-utility .status-button:hover { background: var(--surface-raised); color: var(--text-strong); }
 .flow-utility #connect-phone { border: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text); }
 .flow-utility #relay-settings::after { content: "↗"; margin-left: auto; color: var(--faint); }
+/* The update button and its chevron share one row: the action fills it and the chevron for release notes and Skip
+   sits at its end. They keep the accent fill and its text colour here, also on hover. */
+.flow-connect { grid-template-columns: minmax(0, 1fr) auto; column-gap: 1px; }
+.flow-connect > * { grid-column: 1 / -1; }
+.flow-connect > .update-status:has(+ .update-more:not([hidden])) { grid-column: 1; border-radius: 10px 0 0 10px; }
+.flow-connect > .update-more { grid-column: 2; justify-content: center; width: 36px; margin-left: 0; padding: 0; border-radius: 0 10px 10px 0; }
+.flow-connect > .update-status:is([data-status="available"], [data-status="ready"]), .flow-connect > .update-more { color: var(--on-accent); }
+.flow-connect > .update-status:is([data-status="available"], [data-status="ready"]):hover, .flow-connect > .update-more:hover, .flow-connect > .update-more[aria-expanded="true"] { color: var(--on-accent); background: var(--accent-strong); }
 .flow-preferences { display: grid; gap: 28px; }
 .flow-preferences .flow-utility { margin-top: 0; padding-top: 16px; }
 
 /* The sides: cards without frames, each with a seal-red tick, in the row under the header. The rails never act as drag regions. */
-.flow-side { grid-row: 2; display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; padding: 0 16px 24px; overflow: auto; }
+.flow-side { grid-row: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 0 0 24px; overflow: hidden; }
 .flow-side[hidden] { display: none; }
+/* Only the cards scroll. The utility section and the divider above it stay fixed at the foot of the rail. */
+.flow-side-cards { flex: 1 1 auto; display: flex; flex-direction: column; gap: 12px; min-height: 0; padding: 0 16px 16px; overflow: auto; }
+.flow-side-cards > .flow-card { flex: none; }
+.flow-side > .flow-utility { margin: 0 16px; }
+/* A very short window has no room for both, so the whole rail scrolls as one. */
+@media (max-height: 620px) {
+  .flow-side { overflow: auto; }
+  .flow-side-cards { flex: none; overflow: visible; }
+}
 #app-shell.flow .flow-side { animation: flow-in .5s cubic-bezier(.2, .8, .2, 1) both; }
 .flow-left { grid-column: 1; }
 .flow-right { grid-column: 3; animation-delay: .06s; }

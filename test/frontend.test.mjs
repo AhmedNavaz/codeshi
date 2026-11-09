@@ -5108,8 +5108,10 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
   assert.equal(shell.classList.contains('flow'), true);
   assert.equal(ui.$('agents-panel').hidden, true, 'The side panel steps aside.');
   assert.equal(ui.$('flow-left').hidden, false); assert.equal(ui.$('flow-right').hidden, false); assert.equal(ui.$('flow-strip').hidden, true, 'A wide window keeps the cards at the sides.');
-  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-card-next', 'flow-card-plans', 'flow-card-results', 'flow-space']);
-  assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-card-working', 'flow-card-files', 'flow-card-preview', 'flow-connect']);
+  assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-left-cards', 'flow-space'], 'The cards scroll in their own area and the utility section stays at the foot.');
+  assert.deepEqual(ui.$('flow-left').children[0].children.map(card => card.id), ['flow-card-next', 'flow-card-plans', 'flow-card-results']);
+  assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-right-cards', 'flow-connect']);
+  assert.deepEqual(ui.$('flow-right').children[0].children.map(card => card.id), ['flow-card-working', 'flow-card-files', 'flow-card-preview']);
   assert.equal(ui.$('toggle-flow').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('flow-status').hidden, false); assert.equal(ui.$('flow-status-text').textContent, 'Ready');
   assert.equal(ui.$('toggle-flow-label').textContent, 'Leave Flow'); assert.equal(ui.$('flow-brand').hidden, false); assert.equal(ui.$('flow-brand-workspace').textContent, 'Example workspace');
   assert.equal(ui.$('message-input').placeholder, 'What should we build next?', 'Flow has its own voice in the message box.');
@@ -5332,7 +5334,7 @@ test('a narrow window keeps the Flow cards out of the chat as chips, and one ope
   ui.$('flow-strip').querySelectorAll('.flow-chip')[1].click(); await flush();
   assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-plans', 'Another chip swaps the open card.');
   ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
-  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children.map(card => card.id).join(','), 'flow-card-working,flow-card-files,flow-card-preview,flow-connect', 'The cards go back to their sides.');
+  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children[0].children.map(card => card.id).join(','), 'flow-card-working,flow-card-files,flow-card-preview', 'The cards go back to their sides.'); assert.equal(ui.$('flow-right').children[1].id, 'flow-connect');
   assert.equal(ui.$('flow-card-working').querySelectorAll('button').some(item => /hide/i.test(item.getAttribute('aria-label') || '')), false, 'Cards have no close button.');
   assert.equal(ui.window.relayFlow.cards().length, 6);
 });

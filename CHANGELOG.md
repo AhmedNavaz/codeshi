@@ -4,6 +4,12 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-11-10
+
+### Fixed
+- In Flow, **Your space** and **Stay connected** stay fixed at the foot of their side. Only the cards above the divider scroll, and they no longer push those sections out of view.
+- In Flow, the chevron for release notes and **Skip this version** sits at the end of the update button, on the same row, instead of on a row of its own below it. The button's label keeps its light colour on the accent fill.
+
 ## [0.38.0] - 2026-11-10
 
 ### Added

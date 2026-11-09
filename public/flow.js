@@ -213,8 +213,14 @@
     if (!headerMarker) return;
     headerMarker.parentNode.insertBefore(header, headerMarker); headerMarker.remove(); headerMarker = null;
   }
+  // Each rail scrolls its cards in their own area, so the utility section under the divider stays put at the foot.
+  const scrollers = new Map([left, right].map(side => { const scroller = node('div', 'flow-side-cards'); scroller.id = `${side.id}-cards`; return [side, scroller]; }));
   function place() {
-    for (const side of [left, right]) side.replaceChildren(...CARDS.filter(card => card.side === side && peeking !== card.id).map(card => cards.get(card.id).element));
+    for (const side of [left, right]) {
+      const scroller = scrollers.get(side);
+      scroller.replaceChildren(...CARDS.filter(card => card.side === side && peeking !== card.id).map(card => cards.get(card.id).element));
+      side.replaceChildren(scroller);
+    }
     if (peeking !== 'space') { left.append(space); right.append(connect); }
   }
 
