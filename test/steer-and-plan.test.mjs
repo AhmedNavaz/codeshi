@@ -128,7 +128,8 @@ test('the broker records a note added to the run inside that run, queues it firs
   // Only complete lines: the mock agent may be writing the next one.
   const requests = () => fs.existsSync(captures) ? fs.readFileSync(captures, 'utf8').split('\n').slice(0, -1).map(JSON.parse).map(entry => entry.context.currentRequest) : [];
   broker.start(c, { text: 'Hold the workspace', provider: 'codex', mode: 'edit' });
-  await until(() => requests().length);
+  // The mock agent is a new Node process, which can take a few seconds to start while the whole suite runs.
+  await until(() => requests().length, 2000);
   const run = broker.running;
   assert.equal(broker.view(c).canAddToRun, false, 'The plain CLI connection cannot take notes.');
   await assert.rejects(broker.addToRun(c, { text: 'Also the docs' }), /cannot take more input/);

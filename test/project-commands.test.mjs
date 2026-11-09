@@ -23,7 +23,11 @@ function fixture(t, options = {}) {
   const registry = new ProjectRegistry({ dataRoot: path.join(root, 'data'), lock: false });
   const project = registry.add({ folders: [frontend, backend] });
   const commands = new ProjectCommands({ registry, stopGrace: 40, ...options });
-  t.after(async () => { await commands.close(); await registry.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => {
+    await commands.close(); await registry.close();
+    // On Windows a command's own process can hold its folder for a moment after its shell has gone. Only the promise version retries that.
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
   const config = (command = 'printf done', folder = project.folders[0], directory = '') => ({ folderId: folder.id, directory, command });
   return { root, frontend, backend, registry, project, commands, config };
 }

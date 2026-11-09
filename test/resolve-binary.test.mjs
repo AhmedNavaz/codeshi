@@ -205,6 +205,8 @@ test('relative and empty PATH entries never discover executables inside the targ
 });
 
 test('Broker status probes and actual runs use the same selected executable', { skip: process.platform === 'win32' && 'Windows cannot start a script as a stand-in agent CLI' }, async t => {
+  // Hooks run in the order they're added, so this closes the broker, and the work it saves in the folder, before the folder is removed.
+  let broker; t.after(() => broker?.close());
   const f = setup(t);
   const workspace = path.join(f.root, 'project');
   fs.mkdirSync(workspace);
@@ -218,8 +220,7 @@ test('Broker status probes and actual runs use the same selected executable', { 
     + `console.log(JSON.stringify({type:'item.completed',item:{id:'answer',type:'agent_message',text:'Resolved binary ran.'}}));\n`
     + `console.log(JSON.stringify({type:'turn.completed'}));\n`;
   const selected = f.executable(path.join(f.root, 'selected binary', 'codex.mjs'), source);
-  const broker = new Broker({ workspace, dataDir: path.join(f.root, 'history'), bins: { codex: selected, claude: selected } });
-  t.after(() => broker.close());
+  broker = new Broker({ workspace, dataDir: path.join(f.root, 'history'), bins: { codex: selected, claude: selected } });
   const status = await broker.status();
   assert.equal(status.providers.codex.available, true);
   assert.equal(status.providers.codex.version, 'resolver-fixture 1.0');
