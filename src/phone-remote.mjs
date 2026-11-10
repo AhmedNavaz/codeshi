@@ -3,6 +3,7 @@ import { Readable, Writable } from 'node:stream';
 import { atomicJSON } from './patches.mjs';
 import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open, MAX_PACKET, handoverCode, handoverMeeting, handoverKeys, handoverShared } from '../public/phone-firebase.mjs';
 import { TRANSFER_ENCODING, conversationRoute, encodeConversation } from '../public/phone-transfer.mjs';
+import { pushSubscription } from './web-push.mjs';
 
 const FIVE_MINUTES = 300_000, SESSION = 7 * 24 * 60 * 60_000, ACTIVE_WINDOW = 45_000;
 const fail = (message, status = 400) => { throw Object.assign(Error(message), { status }); };
@@ -46,7 +47,7 @@ export function phoneRemoteRequest({ handle, local }, input) {
   });
 }
 
-export function createRemotePhoneAccess({ config, storeFile, handle, local, clientFactory, now = Date.now } = {}) {
+export function createRemotePhoneAccess({ config, storeFile, handle, local, clientFactory, push = null, now = Date.now } = {}) {
   let settings = null, setupError = null;
   if (config) { try { settings = firebaseConfig(config); } catch (error) { setupError = error.message; } }
   let client = null, enabled = false, invite = null, error = null, generation = 0, transition = Promise.resolve(), lastTraffic = null;
@@ -56,9 +57,10 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
   const isActiveNow = room => room.state === 'active' && room.activeNow !== false && Boolean(room.lastSeenAt && now() - room.lastSeenAt < ACTIVE_WINDOW);
   const serializedRooms = () => [...rooms.values()]
     .filter(room => room.state === 'active' && !room.handoverFrom && room.secret && now() < room.expiresAt)
-    .map(({ id, secret, owner, peer, name, code, expiresAt, lastSeenAt, approvedAt, deviceId }) => ({
+    .map(({ id, secret, owner, peer, name, code, expiresAt, lastSeenAt, approvedAt, deviceId, push }) => ({
       id, secret, owner: owner || null, peer, name, code, state: 'active', expiresAt,
       lastSeenAt: lastSeenAt || null, approvedAt: approvedAt || null, deviceId: deviceId || null,
+      ...(push ? { push } : {}),
     }));
   function persist(authPatch = null) {
     if (!storeFile) return;
@@ -87,7 +89,7 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
       invite: invite && now() < invite.expiresAt ? { url: invite.url, qr: invite.qr, expiresAt: invite.expiresAt } : null,
       devices: [...rooms.values()].filter(room => room.state !== 'waiting' && !room.meetingFor).map(room => ({
         id: room.id, name: room.name, code: room.code, state: room.state, expiresAt: room.expiresAt,
-        lastSeenAt: room.lastSeenAt || null, activeNow: isActiveNow(room),
+        lastSeenAt: room.lastSeenAt || null, activeNow: isActiveNow(room), notifications: Boolean(room.push),
       })) };
   }
   async function publish(room, value) {
@@ -215,6 +217,21 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
         }
         reply = { id: request.id, status: 200, body: { url: `${settings.phoneURL}/#remote=${id}.${secret}`, ...(next.meetingId ? { code } : {}), expiresAt } };
       } catch (failure) { await remove(next, { persistStore: false }); reply = { id: request.id, status: 503, body: { error: failure.message } }; }
+    } else if (request.kind === 'push') {
+      // Lock-screen notifications (#23). The phone asks for this computer's public key, then hands over the
+      // subscription its browser made with it. It belongs to this connection only and goes when the connection does.
+      room.lastSeenAt = now(); room.activeNow = true;
+      if (!push) reply = { id: request.id, status: 409, body: { error: 'This version of Codeshi can’t send notifications.' } };
+      else if (request.action === 'subscribe') {
+        const subscription = pushSubscription(request.subscription);
+        if (!subscription) reply = { id: request.id, status: 400, body: { error: 'This browser’s notification service isn’t supported.' } };
+        else { room.push = subscription; persist(); reply = { id: request.id, status: 200, body: { subscribed: true } }; }
+      } else if (request.action === 'unsubscribe') { room.push = null; persist(); reply = { id: request.id, status: 200, body: { subscribed: false } }; }
+      else {
+        let key = null; try { key = push.publicKey(); } catch { /* Reported below. */ }
+        reply = key ? { id: request.id, status: 200, body: { key, subscribed: Boolean(room.push), endpoint: room.push?.endpoint || null } }
+          : { id: request.id, status: 503, body: { error: 'Codeshi couldn’t make its notification key on the computer.' } };
+      }
     } else if (request.kind === 'api') {
       room.lastSeenAt = now(); room.activeNow = true;
       try {
@@ -341,7 +358,7 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
           code: typeof entry.code === 'string' ? entry.code : '',
           state: 'active', expiresAt: entry.expiresAt, lastSeenAt: entry.lastSeenAt || null,
           approvedAt: entry.approvedAt || null, deviceId: entry.deviceId || null,
-          activeNow: false, seen: new Map(), requests: 0,
+          push: pushSubscription(entry.push), activeNow: false, seen: new Map(), requests: 0,
         });
       }
       transition = transition.then(async () => {
@@ -383,6 +400,18 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
       for (const room of rooms.values()) if (room.state === 'active') publish(room, { event: 'update', ...(changed ? { projectsChanged: true } : {}) }).catch(() => { error = 'Remote connection interrupted. Retrying…'; });
     }, 2000); eventTimer.unref();
   }
+  // One alert, chosen by alertPush, to each approved phone that turned notifications on and isn't looking at Codeshi
+  // right now: an open page already shows it and plays its sound. A phone that unsubscribed is forgotten.
+  async function alert(plan) {
+    if (!enabled || !push || !plan?.message) return 0;
+    const targets = [...rooms.values()].filter(room => room.state === 'active' && room.push && now() < room.expiresAt && !isActiveNow(room));
+    const results = await Promise.all(targets.map(async room => {
+      const subscription = room.push, result = await push.send(subscription, plan.message, { urgency: plan.urgency, ttl: plan.ttl });
+      if (result === 'gone' && room.push === subscription) { room.push = null; persist(); }
+      return result === 'sent';
+    }));
+    return results.filter(Boolean).length;
+  }
   const manage = input => { const next = transition.then(() => action(input)); transition = next.catch(() => {}); return next; };
-  return { status, manage, notify, close: async () => { clearTimeout(eventTimer); const next = transition.then(() => shutdown()); transition = next.catch(() => {}); await next; } };
+  return { status, manage, notify, alert, close: async () => { clearTimeout(eventTimer); const next = transition.then(() => shutdown()); transition = next.catch(() => {}); await next; } };
 }

@@ -17,7 +17,7 @@ import { randomBytes } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
 import { createReviewRoutes } from './agent-review-routes.mjs';
 import { createCheckpointRoutes } from './checkpoint-routes.mjs';
-import { alertPreferences, alertSound, mergeAlertPreferences } from './alerts.mjs';
+import { alertPreferences, alertPush, alertSound, mergeAlertPreferences } from './alerts.mjs';
 import { createLocalRoutes } from './local-models.mjs';
 import { createTaskRoutes } from './task-routes.mjs';
 import { atomicJSON } from './patches.mjs';
@@ -26,6 +26,7 @@ import { verificationCadence } from './verification.mjs';
 import { contextLimit } from './context-rollover.mjs';
 import { createPhoneAccess } from './phone-access.mjs';
 import { createRemotePhoneAccess } from './phone-remote.mjs';
+import { createWebPush } from './web-push.mjs';
 import { phoneConversation } from './phone-conversation.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -371,8 +372,14 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const phoneBridge = { handle: (req, res) => server.emit('request', req, res), local: () => ({ port: server.address()?.port, accessToken }) };
   let remotePhoneConfig = phoneOptions?.remoteConfig;
   if (!remotePhoneConfig) { try { remotePhoneConfig = JSON.parse(fs.readFileSync(path.join(root, 'remote', 'firebase-public.json'), 'utf8')); } catch { /* Local Wi-Fi pairing works without a remote service. */ } }
-  const remotePhone = createRemotePhoneAccess({ config: remotePhoneConfig, storeFile: path.join(registry.dataRoot, 'phone-firebase-auth.json'), ...phoneBridge, ...(phoneOptions?.remoteClientFactory ? { clientFactory: phoneOptions.remoteClientFactory } : {}) });
+  const remotePhone = createRemotePhoneAccess({ config: remotePhoneConfig, storeFile: path.join(registry.dataRoot, 'phone-firebase-auth.json'), ...phoneBridge, ...(phoneOptions?.remoteClientFactory ? { clientFactory: phoneOptions.remoteClientFactory } : {}),
+    push: createWebPush({ keyFile: path.join(registry.dataRoot, 'phone-push-key.json'), ...(phoneOptions?.pushFetch ? { fetch: phoneOptions.pushFetch } : {}) }) });
   registry.on('update', () => remotePhone.notify()); registry.on('projects', () => remotePhone.notify('projects'));
+  // A paired phone's lock screen, for the moments chosen in the Phone row of Settings › Alerts.
+  registry.on('notify', notice => {
+    const plan = alertPush(notice, notificationPreferences());
+    if (plan) remotePhone.alert(plan).catch(error => console.error('Codeshi could not notify a phone:', error.message));
+  });
   const phoneAccess = createPhoneAccess({ ...phoneOptions, ...phoneBridge, remote: remotePhone });
   let closePromise;
   // force drops requests still in flight, such as account checks, for a desktop quit or restart, where the page goes away anyway.

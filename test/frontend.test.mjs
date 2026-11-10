@@ -4573,7 +4573,7 @@ test('alerts play their sound once, only when allowed, and Settings chooses whic
   const { posts } = alertSettings(ui);
   await ui.window.relaySettings.open('alerts'); await flush();
   assert.equal(ui.$('settings-title').textContent, 'Alerts');
-  assert.deepEqual(ui.document.querySelectorAll('tr').map(row => row.dataset.channel).filter(Boolean), ['sound'], 'In a browser, only sounds apply.');
+  assert.deepEqual(ui.document.querySelectorAll('tr').map(row => row.dataset.channel).filter(Boolean), ['sound', 'phone'], 'In a browser, sounds apply, and a paired phone is notified by the server.');
   assert.equal(ui.document.querySelectorAll('p').some(line => line.textContent === 'Banners and the Dock icon are part of the desktop app.'), true);
   const master = ui.labelledInput('Sound'), box = label => ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === label);
   assert.equal(master.checked, false); assert.equal(box('Sound when a task finishes').disabled, true, 'Each moment waits for sounds to be turned on, keeping its choice.');
@@ -4590,7 +4590,7 @@ test('alerts play their sound once, only when allowed, and Settings chooses whic
 // A stand-in for the saved alert settings, which records each change and keeps it the way the server does.
 function alertSettings(ui) {
   const every = { attention: true, finished: true, stopped: true }, posts = [];
-  let saved = { banner: { on: true, ...every, panel: false }, sound: { on: false, ...every, volume: 70, background: false }, bounce: { on: true, ...every }, badge: { on: true, ...every }, statusItem: true };
+  let saved = { banner: { on: true, ...every, panel: false }, sound: { on: false, ...every, volume: 70, background: false }, bounce: { on: true, ...every }, badge: { on: true, ...every }, phone: { on: true, ...every }, statusItem: true };
   const reply = data => ({ ok: true, status: 200, text: async () => JSON.stringify(data), json: async () => clone(data) });
   ui.setIntercept((request, next) => {
     if (request.path !== '/api/notifications') return next();
@@ -4606,6 +4606,7 @@ test('Alerts in Settings turn each way on or off for each moment, with the banne
   const rows = ui.document.querySelectorAll('tr').filter(row => row.dataset.channel);
   assert.deepEqual(rows.map(row => [row.dataset.channel, row.querySelectorAll('th')[0].textContent, row.querySelectorAll('input').map(input => input.checked)]), [
     ['banner', 'Banner', [true, true, true, true]], ['sound', 'Sound', [false, true, true, true]], ['bounce', 'Bounce the Dock icon', [true, true, true, true]], ['badge', 'Badge on the Dock icon', [true, true, true, true]],
+    ['phone', 'Phone notification', [true, true, true, true]],
   ]);
   assert.deepEqual(ui.document.querySelectorAll('th').filter(column => column.scope === 'col').map(column => [column.textContent, column.title]), [['Needs you', 'An approval, a question or a handoff offer'], ['Finished', 'A task finishes, or continues by itself after a usage limit'], ['Stopped', 'An error, a usage limit or failing tests']]);
   const box = label => ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === label);

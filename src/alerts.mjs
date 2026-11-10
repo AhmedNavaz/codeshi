@@ -1,12 +1,12 @@
 // Alerts: how Codeshi tells you about work while you are in another app. Every alert is one of three moments: an
 // agent needs you, a task finished or a task stopped. Each way of telling you (a banner, a sound, the Dock icon
-// bouncing and a count on the Dock icon) is turned on or off as a whole, and for each moment. The menu bar status is
+// bouncing, a count on the Dock icon and a notification on a paired phone) is turned on or off as a whole, and for each moment. The menu bar status is
 // one more switch: it shows what is happening all the time rather than announcing it. The desktop app follows these
 // rules for banners and the Dock, and the page plays the sounds, so sounds also work in the browser.
 import { randomUUID } from 'node:crypto';
 
 export const MOMENTS = ['attention', 'finished', 'stopped'];
-export const CHANNELS = ['banner', 'sound', 'bounce', 'badge'];
+export const CHANNELS = ['banner', 'sound', 'bounce', 'badge', 'phone'];
 // Which moment each kind of alert belongs to. Progress reports, such as continuing after a usage limit resets or
 // waiting for another reset, show and count like their moment but play no sound.
 const MOMENT_OF = { approval: 'attention', handoff: 'attention', finished: 'finished', started: 'finished', stopped: 'stopped', failed: 'stopped', expired: 'stopped', waiting: 'stopped' };
@@ -21,6 +21,8 @@ export const alertDefaults = Object.freeze({
   sound: Object.freeze({ on: false, ...every(true), volume: 70, background: false }),
   bounce: Object.freeze({ on: true, ...every(true) }),
   badge: Object.freeze({ on: true, ...every(true) }),
+  // A phone paired Away from home gets a lock-screen notification only after it turns them on itself.
+  phone: Object.freeze({ on: true, ...every(true) }),
   statusItem: true,
 });
 const copy = value => ({ ...value, ...Object.fromEntries(CHANNELS.map(channel => [channel, { ...value[channel] }])) });
@@ -74,6 +76,21 @@ export function alertPlan(notice, preferences, { focused = false, panelAvailable
   const moment = momentOf(notice?.kind), on = channel => Boolean(moment && preferences?.[channel]?.on && preferences[channel][moment]);
   const banner = !focused && on('banner'), panel = banner && preferences.banner.panel === true && panelAvailable;
   return { moment, badge: !focused && on('badge'), bounce: !focused && on('bounce'), notification: banner && !panel, panel, sound: !QUIET.has(notice?.kind) && on('sound') && preferences.sound.volume > 0 };
+}
+
+// What a phone's lock screen shows for one alert, or null for none. Anyone holding the phone can read it, so it says
+// only what kind of thing happened and in which workspace: never a command, a file, a question or the agent's reply.
+const PHONE_TITLE = { approval: 'Waiting for you', handoff: 'Handoff offered', finished: 'Finished', started: 'Continuing', stopped: 'Stopped', failed: 'Stopped', expired: 'Request expired', waiting: 'Waiting for a usage reset' };
+export function alertPush(notice, preferences) {
+  const moment = momentOf(notice?.kind);
+  if (!moment || !preferences?.phone?.on || !preferences.phone[moment]) return null;
+  const workspace = typeof notice.projectName === 'string' ? notice.projectName.trim().slice(0, 80) : '';
+  return {
+    moment, urgency: moment === 'attention' ? 'high' : 'normal',
+    // An approval keeps waiting, so its notification may arrive later; a finished run is old news after an hour.
+    ttl: moment === 'attention' ? 12 * 3600 : 3600,
+    message: { title: PHONE_TITLE[notice.kind], body: workspace, tag: `${moment}:${notice.projectId || ''}`, ...(typeof notice.projectId === 'string' ? { projectId: notice.projectId } : {}) },
+  };
 }
 
 // What the page is told for one alert, or null for no sound. Each moment has its own sound.

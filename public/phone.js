@@ -131,6 +131,7 @@
       adoptSettings();
       render();
       offerHomeScreen();
+      offerNotifications();
     } catch (error) {
       // A task that's gone: back to the main conversation. Anything else keeps what's on screen, and the header says so.
       if (error.status >= 400 && error.status < 500 && S.thread) { S.thread = null; rememberView(); changedView(); refreshConversation(); }
@@ -991,11 +992,14 @@
     foot.append(node('p', '', 'Work and sign-ins stay on your computer. Review, merging, files and the terminal are there too.'));
     const move = button('Move to another browser', () => attempt(moveToAnotherBrowser), 'link');
     const home = homeScreenAvailable() ? button('Add to Home Screen', () => homeScreenSheet(), 'link') : null;
+    const alerts = notificationsAvailable() ? button('Notifications', () => attempt(notificationsSheet), 'link') : null;
     const leave = button('Disconnect this phone', () => attempt(async () => {
       if (!leave.classList.contains('armed')) { leave.classList.add('armed'); leave.textContent = 'Tap again to disconnect'; setTimeout(() => { leave.classList.remove('armed'); leave.textContent = 'Disconnect this phone'; }, 3000); return; }
+      // Notifications belong to the connection, so they end with it.
+      if (pushSupported()) { try { await (await (await navigator.serviceWorker.getRegistration('/'))?.pushManager.getSubscription())?.unsubscribe(); } catch { /* The computer forgets it anyway. */ } }
       try { await phoneFetch('/phone/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' }); } finally { location.replace('/'); }
     }), 'link danger');
-    foot.append(...(home ? [home] : []), move, leave); host.append(foot);
+    foot.append(...(home ? [home] : []), ...(alerts ? [alerts] : []), move, leave); host.append(foot);
   }
   async function moveToAnotherBrowser() {
     const response = await phoneFetch('/phone/handover', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' });
@@ -1070,6 +1074,82 @@
   }
   window.addEventListener('codeshi-install-ready', () => { if (sheetView?.title === 'Add to Home Screen') drawSheet(); });
   window.addEventListener('appinstalled', () => { remember(HOME_STEP, 'installed'); if (sheetView?.title === 'Add to Home Screen') closeSheet(); });
+
+  // ---- Lock-screen notifications (#23). Away from home only, as browsers allow them only over HTTPS. The computer
+  // sends each one straight to the phone's push service, encrypted for this browser, saying only what happened and in
+  // which workspace. On iPhone only a Home Screen icon can receive them.
+  const NOTIFY_STEP = 'codeshi:notifications-step';
+  const pushSupported = () => Boolean(transport?.remote && window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window);
+  const needsHomeScreen = () => Boolean(transport?.remote && !pushSupported() && /^ios/.test(homeScreenDevice() || '') && !standalone());
+  const notificationsAvailable = () => pushSupported() || needsHomeScreen();
+  const keyText = buffer => buffer ? btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : '';
+  const keyBytes = text => Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0));
+  async function pushCall(body) {
+    const response = await phoneFetch('/phone/push', body ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: JSON.stringify(body) } : {});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Your computer didn’t answer. Try again.');
+    return data;
+  }
+  async function pushState() {
+    if (!pushSupported()) return { supported: false };
+    const registration = await navigator.serviceWorker.getRegistration('/'), subscription = await registration?.pushManager.getSubscription();
+    const computer = await pushCall();
+    return { supported: true, permission: Notification.permission, on: Boolean(subscription && computer.subscribed && computer.endpoint === subscription.endpoint) };
+  }
+  async function turnOnNotifications() {
+    // iPhone asks only while handling the tap itself, so this comes before anything that waits on the network.
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') { await notificationsSheet(); return; }
+    const { key } = await pushCall();
+    const registration = await navigator.serviceWorker.register('/phone-sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    // A subscription made for another computer's key can't receive this one's notifications.
+    if (subscription && keyText(subscription.options?.applicationServerKey) !== key) { await subscription.unsubscribe(); subscription = null; }
+    subscription ||= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+    await pushCall({ action: 'subscribe', subscription: subscription.toJSON() });
+    remember(NOTIFY_STEP, 'on');
+    toast('Notifications are on.');
+    await notificationsSheet();
+  }
+  async function turnOffNotifications() {
+    try { await (await (await navigator.serviceWorker.getRegistration('/'))?.pushManager.getSubscription())?.unsubscribe(); }
+    finally { await pushCall({ action: 'unsubscribe' }); }
+    toast('Notifications are off.');
+    await notificationsSheet();
+  }
+  async function notificationsSheet() {
+    remember(NOTIFY_STEP, recall(NOTIFY_STEP) || 'shown');
+    const state = await pushState();
+    openSheet('Notifications', body => {
+      const actions = node('div', 'card-actions');
+      if (!state.supported) {
+        body.append(node('p', 'sheet-text', 'On iPhone, notifications come to Codeshi’s Home Screen icon. Add it to your Home Screen, open Codeshi from there, then turn notifications on.'));
+        if (homeScreenAvailable()) actions.append(button('Add to Home Screen', () => homeScreenSheet(), 'big primary'));
+      } else if (state.permission === 'denied') {
+        body.append(node('p', 'sheet-text', 'Notifications are blocked for Codeshi on this phone. On iPhone, allow them in Settings › Notifications › Codeshi. On Android, in the browser’s settings for this site.'));
+      } else {
+        body.append(node('p', 'sheet-text', state.on
+          ? 'On. When an agent needs you, or a run finishes or stops, your computer sends a notification here while Codeshi isn’t open.'
+          : 'Get a notification on your lock screen when an agent needs you, or a run finishes or stops, while Codeshi isn’t open.'));
+        body.append(node('p', 'sheet-note', 'A notification says only what happened and in which workspace, never a command, a file or a reply. Your computer sends it through Apple’s or Google’s push service, encrypted for this phone. Choose the moments under Phone in Settings › Alerts on your computer.'));
+        actions.append(state.on ? button('Turn off', () => attempt(turnOffNotifications), 'big') : button('Turn on notifications', () => attempt(turnOnNotifications), 'big primary'));
+      }
+      if (actions.childElementCount) body.append(actions);
+    });
+  }
+  // Offered once, after the Home Screen step is done or doesn't apply, and never over another sheet.
+  let notificationsOffered = false;
+  function offerNotifications() {
+    if (notificationsOffered || !pushSupported() || Notification.permission !== 'default' || recall(NOTIFY_STEP) || (homeScreenAvailable() && !recall(HOME_STEP))) return;
+    notificationsOffered = true;
+    setTimeout(() => { if (!sheet.open && !document.hidden && !recall(NOTIFY_STEP)) attempt(notificationsSheet); }, 1500);
+  }
+  // A tapped notification, while Codeshi is already open, moves to its workspace.
+  navigator.serviceWorker?.addEventListener?.('message', event => {
+    const id = event.data?.type === 'codeshi-open-workspace' ? event.data.projectId : null;
+    if (id && id !== S.projectId && S.projects.some(item => item.id === id)) { closeSheet(); attempt(() => selectProject(id, recall(`codeshi:phone-thread:${id}`) || null)); }
+  });
   $('where').addEventListener('click', () => {
     openSheet('Workspaces', whereSheet, () => JSON.stringify([S.projects.map(item => [item.id, item.name, item.pendingApprovals, item.runningConversationId]), tasks().map(task => [task.id, task.title, task.status, task.approvals]), S.thread, S.draft]));
     scheduleProjects();

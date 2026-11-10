@@ -22,7 +22,7 @@
   }
   function deviceDescription(device, durationText) {
     const lead = device.activeNow ? 'Active now' : device.lastSeenAt ? `Allowed · last seen ${seenAgo(device.lastSeenAt)}` : 'Allowed · not open right now';
-    return `${lead} · ${durationText}`;
+    return `${lead}${device.notifications ? ' · notifications on' : ''} · ${durationText}`;
   }
   function updateEntry(state) {
     if (!entry) return;

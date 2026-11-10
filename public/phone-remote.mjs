@@ -97,6 +97,11 @@ function activate() {
           const result = await request({ kind: 'handover' });
           return new Response(JSON.stringify(result.body || {}), { status: result.status || 200, headers: { 'Content-Type': 'application/json' } });
         }
+        if (path === '/phone/push') {
+          const input = options.body ? JSON.parse(options.body) : {};
+          const result = await request({ kind: 'push', ...(input.action === 'subscribe' ? { action: 'subscribe', subscription: input.subscription } : input.action === 'unsubscribe' ? { action: 'unsubscribe' } : {}) });
+          return new Response(JSON.stringify(result.body || {}), { status: result.status || 200, headers: { 'Content-Type': 'application/json' } });
+        }
         if (path === '/phone/session' || path.startsWith('/phone/session?')) {
           const url = new URL(path, 'https://phone.local');
           const result = await request({ kind: 'session', ...(url.searchParams.get('active') === '0' ? { active: false } : {}) });
@@ -207,6 +212,9 @@ async function start() {
   config = firebaseConfig(await (await fetch('/remote-config.json', { cache: 'no-store' })).json());
   sessionKey = `codeshi:remote-session:${config.projectId}`;
   const fragment = new URLSearchParams(location.hash.slice(1)).get('remote');
+  // A tapped notification opens its workspace (see phone-sw.js).
+  const workspace = new URLSearchParams(location.search).get('workspace');
+  if (workspace && /^[A-Za-z0-9_-]{1,128}$/.test(workspace)) { try { localStorage.setItem('codeshi:phone-project', workspace); } catch { /* Opens the last workspace instead. */ } }
   history.replaceState(null, '', location.pathname);
   const saved = read(sessionKey), match = fragment?.match(/^([a-f0-9]{64})\.([a-f0-9]{64})$/);
   const session = match ? { room: match[1], secret: match[2] } : saved;

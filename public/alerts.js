@@ -76,7 +76,8 @@
     if (host) render();
   }
   // The ways that apply here. Banners and the Dock icon belong to the desktop app; other systems flash the taskbar
-  // button instead of bouncing an icon and have no badge or menu bar status. In a browser, only sounds apply.
+  // button instead of bouncing an icon and have no badge or menu bar status. In a browser, only sounds apply here. A
+  // paired phone's lock screen (#23) applies everywhere, as the server sends it.
   function ways() {
     const desktop = window.relayDesktop, platform = desktop ? desktop.platform || 'darwin' : null, mac = platform === 'darwin';
     return { mac, desktop: Boolean(desktop), rows: [
@@ -84,6 +85,7 @@
       ['sound', 'Sound'],
       ...desktop ? [['bounce', mac ? 'Bounce the Dock icon' : 'Flash the taskbar button']] : [],
       ...mac ? [['badge', 'Badge on the Dock icon']] : [],
+      ['phone', 'Phone notification'],
     ] };
   }
   function checkbox(checked, change, { label, disabled = false } = {}) {
@@ -103,12 +105,13 @@
     if (!settings) { kit.note(host, 'Loading alert settings…'); return; }
     const { mac, desktop, rows } = ways();
     const group = kit.group(host, 'Ways to alert you', 'How Codeshi tells you that an agent needs you, finished or stopped while you’re in another app. Turn each way on or off, and choose the moments it’s for.');
-    const matrix = node('div', undefined, 'settings-row alert-matrix'); matrix.dataset.keywords = 'banner notification sound bounce dock badge needs you finished stopped approval';
+    const matrix = node('div', undefined, 'settings-row alert-matrix'); matrix.dataset.keywords = 'banner notification sound bounce dock badge phone lock screen push needs you finished stopped approval';
     const table = node('table', undefined, 'alert-table'), head = node('tr'), body = node('tbody');
     head.append(node('th'));
     for (const [, name, , covers] of MOMENTS) { const column = node('th', name); column.scope = 'col'; column.title = covers; head.append(column); }
     const thead = node('thead'); thead.append(head);
     for (const [channel, name] of rows) {
+      if (!settings[channel]) continue; // A server from before this way existed doesn't send it.
       const row = node('tr'), way = settings[channel], label = node('label', undefined, 'alert-way'), title = node('th');
       row.dataset.channel = channel; if (!way.on) row.dataset.off = '';
       title.scope = 'row';
@@ -126,7 +129,8 @@
       body.append(row);
     }
     table.append(thead, body);
-    matrix.append(table, node('p', 'Needs you: an approval, a question or a handoff offer. Stopped: an error, a usage limit or failing tests.', 'alert-legend'));
+    matrix.append(table, node('p', 'Needs you: an approval, a question or a handoff offer. Stopped: an error, a usage limit or failing tests.', 'alert-legend'),
+      node('p', 'Phone notification: on the lock screen of a phone connected Away from home, once you turn them on from Notifications at the bottom of its workspace list. It comes while Codeshi isn’t open on the phone, and says only what happened and in which workspace.', 'alert-legend'));
     group.append(matrix);
 
     const options = kit.group(host, desktop ? 'Banners and sounds' : 'Sounds');

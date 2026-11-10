@@ -7,7 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const config = firebaseConfig(JSON.parse(fs.readFileSync(path.join(root, 'remote/firebase-public.json'), 'utf8')));
 const output = path.join(root, 'remote/dist');
 fs.mkdirSync(output, { recursive: true });
-const assets = ['phone.js', 'phone-remote.mjs', 'phone-firebase.mjs', 'phone-transfer.mjs', 'phone-logic.js', 'phone-theme.js', 'routing.js', 'phone.css', 'editor-theme.css', 'mark.svg', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
+const assets = ['phone.js', 'phone-remote.mjs', 'phone-firebase.mjs', 'phone-transfer.mjs', 'phone-logic.js', 'phone-theme.js', 'routing.js', 'phone.css', 'editor-theme.css', 'mark.svg', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png', 'phone-sw.js'];
 const permitted = new Set([...assets, 'index.html', 'remote-config.json']);
 if (fs.readdirSync(output).some(name => !permitted.has(name))) throw Error('The generated phone directory contains unexpected files. Inspect it before building or deploying.');
 // This dedicated static host serves the small phone interface only. No desktop app, projects, credentials,

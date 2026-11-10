@@ -561,7 +561,7 @@ test('a note for the working run is refused clearly when nothing is running',asy
 
 test('desktop alert preferences default to on and silent, reject other values and persist',async t=>{
   const f=await fixture(t),every={attention:true,finished:true,stopped:true};
-  assert.deepEqual(f.app.getNotificationPreferences(),{banner:{on:true,...every,panel:false},sound:{on:false,...every,volume:70,background:false},bounce:{on:true,...every},badge:{on:true,...every},statusItem:true},'The menu bar status shows unless hidden; the panel near the top of the screen only when asked for.');
+  assert.deepEqual(f.app.getNotificationPreferences(),{banner:{on:true,...every,panel:false},sound:{on:false,...every,volume:70,background:false},bounce:{on:true,...every},badge:{on:true,...every},phone:{on:true,...every},statusItem:true},'The menu bar status shows unless hidden; the panel near the top of the screen only when asked for.');
   f.app.setNotificationPreferences({sound:{on:true}});assert.equal(f.app.getNotificationPreferences().sound.on,true);
   f.app.setNotificationPreferences({banner:{on:false,panel:true},bounce:{finished:false}});assert.throws(()=>f.app.setNotificationPreferences({banner:{on:'no'}}),/on or off/);
   assert.throws(()=>f.app.setNotificationPreferences({enabled:false}),/Unknown alert setting/,'Only known preferences are saved.');
@@ -576,7 +576,7 @@ test('alert settings saved by an earlier version keep working and are saved in t
   const next=await f.launch(),before=next.app.getNotificationPreferences();
   assert.deepEqual([before.banner.on,before.bounce.on,before.banner.panel,before.sound.on,before.sound.finished,before.sound.volume],[false,false,true,true,false,40]);
   next.app.setNotificationPreferences({badge:{on:false}});
-  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(settings,'utf8')).notifications).sort(),['badge','banner','bounce','sound','statusItem']);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(settings,'utf8')).notifications).sort(),['badge','banner','bounce','phone','sound','statusItem']);
 });
 
 test('alerts tell the page which sound to play, as chosen per moment, and sound settings are checked and kept', { timeout: 10000 }, async t => {

@@ -10,6 +10,7 @@ test('alerts default to banners and the Dock for every moment, with sounds off u
     sound: { on: false, attention: true, finished: true, stopped: true, volume: 70, background: false },
     bounce: { on: true, attention: true, finished: true, stopped: true },
     badge: { on: true, attention: true, finished: true, stopped: true },
+    phone: { on: true, attention: true, finished: true, stopped: true },
     statusItem: true,
   });
   const read = alertPreferences(); read.banner.on = false;
