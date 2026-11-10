@@ -15,8 +15,8 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 | 3 | **Interface polish** | The near-black Dark theme, the text scale and two-line workspace rows shipped in 0.39.0. Left: contrast checks for every badge state in each theme. [Scope](docs/roadmap-details.md#interface-polish-typography-scale-and-settings-structure) | [#127](https://github.com/AhmedNavaz/codeshi/issues/127) |
 | 4 | **Settings in clear categories** | A page for each subject and three button heights shipped in 0.39.0. Left: one header and footer layout for every dialog | [#130](https://github.com/AhmedNavaz/codeshi/issues/130) |
 | 5 | **Notarized macOS builds** | Downloads that open without a security prompt, with notification banners. Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
-| 6 | **One routing policy for the whole task** | Handoffs, retries and reviewers choose model and effort by the same Smart, Saver or Ultra policy as the first assignment, using verified model capabilities. [Scope](docs/roadmap-details.md#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
-| 7 | **Evidence that routing and context changes help** | Budgeted live comparisons against a manually chosen agent, and long real tasks measured before and after. No savings are claimed until then | [#84](https://github.com/AhmedNavaz/codeshi/issues/84), [#139](https://github.com/AhmedNavaz/codeshi/issues/139), [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
+| 6 | **One routing policy for the whole task** | Retries, reviewers and subtasks choose model and effort by the same Smart, Saver or Ultra policy as the first assignment, using verified model capabilities. Since 0.41.0, choosing an agent and handing a task off use the same usage line. [Scope](docs/roadmap-details.md#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
+| 7 | **Evidence that routing and context changes help** | Budgeted live comparisons against a manually chosen agent, and long real tasks measured before and after. An Orchestrate plan's total for planning and every step shipped in 0.41.0. No savings are claimed until then | [#84](https://github.com/AhmedNavaz/codeshi/issues/84), [#139](https://github.com/AhmedNavaz/codeshi/issues/139), [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
 
 ## Next
 
@@ -24,7 +24,7 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 | --- | --- | --- | --- |
 | 1 | **Flow manages a whole outcome** | Flow runs a bounded outcome under the backend task policy, with takeover, recovery and end-to-end tests. The focused view, cards and project review have shipped. [Agreed split](docs/roadmap-details.md#normal-and-flow-the-agreed-execution-split) | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
 | 2 | **More agents and models** | Grok, DeepSeek, Qwen and free cloud tiers on your own accounts. Gemini and local Ollama models have shipped | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
-| 3 | **Plans** | Visual cards on a canvas, drafted from a goal or an uploaded project document, then edited, assigned and run. Orchestrate's step plans shipped in 0.37.0 | [#97](https://github.com/AhmedNavaz/codeshi/issues/97) |
+| 3 | **Plans** | Plans drafted from an uploaded project document, a board, and cards you place yourself. Orchestrate's step plans shipped in 0.37.0, and 0.41.0 shows them as a full-window chart with an outline and reads Word documents as attachments | [#97](https://github.com/AhmedNavaz/codeshi/issues/97) |
 | 4 | **Parallel tasks from one request** | A split proposed by the agent, a total for the group, and a measured comparison with one agent working in order. Running an Orchestrate plan as tasks shipped in 0.39.0 | [#108](https://github.com/AhmedNavaz/codeshi/issues/108) |
 | 5 | **Specialist roles** | Role-specific briefs and a gated integration step applied to runs. Roles, artifacts and checks on Orchestrate steps shipped in 0.38.0 | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
 | 6 | **GitHub in the conversation** | Open a pull request from the conversation. Issues, pull requests and failing checks as context shipped in 0.39.0. [Scope](docs/roadmap-details.md#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
@@ -40,8 +40,8 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 | --- | --- | --- |
 | Hands-free voice conversations: conversation mode with "send" by voice, shipped in Flow on macOS in 0.40.0. Left: answering approvals by voice, other platforms | First version shipped in 0.40.0 | [#72](https://github.com/AhmedNavaz/codeshi/issues/72) |
 | Project memory: a recheck when a branch or dependency changes, and reviewed suggestions. Copy to AGENTS.md shipped in 0.40.0 | First version shipped in 0.26.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
-| Rewind stage 3: commits on the Timeline and optional conversation rewind | Stages 1 and 2 shipped in 0.20.0 and 0.28.0 | [#20](https://github.com/AhmedNavaz/codeshi/issues/20) |
-| Phone lock-screen notifications and iPhone Live Activities | Remote access shipped in 0.27.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
+| Rewind stage 3: commits on the Timeline. Rewinding the conversation with a checkpoint shipped in 0.41.0 | Stages 1 and 2 shipped in 0.20.0 and 0.28.0 | [#20](https://github.com/AhmedNavaz/codeshi/issues/20) |
+| iPhone Live Activities, which need a native app. Lock-screen notifications shipped in 0.41.0 | Remote access shipped in 0.27.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
 | Suggest the right feature at the right moment, from local rules | Planned | [#106](https://github.com/AhmedNavaz/codeshi/issues/106) |
 | Voice input on Windows | Help wanted | [#73](https://github.com/AhmedNavaz/codeshi/issues/73) |
 | Status in the Windows notification area | Help wanted | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
@@ -65,10 +65,10 @@ Larger ideas that need design work first, so join the issue before building. The
 
 ## Recently shipped
 
+- **0.41.0:** Orchestrate plans as a full-window chart, lock-screen notifications on your phone, rewinding the conversation with a checkpoint, a total for a whole plan, Word documents as attachments, and one usage line for assigning and handing off a task.
 - **0.40.0:** hands-free voice conversations in Flow, selected terminal output added to your message, Remote access on the Home Screen, Copy to AGENTS.md for project memory, a Lounge that fills the window with rain and snow sounds, and installed packages in a task's own copy.
 - **0.39.0:** GitHub issues and pull requests in your message, Orchestrate plans run as tasks, a near-black Dark theme and text size, workspace-first setup, and Settings with a page for each subject.
 - **0.38.0:** Smart results, the Lounge, a preview window per interface, roles on Orchestrate steps, long conversations folded into the brief, and allowance that is about to reset.
-- **0.37.0:** Orchestrate plans in Flow and Normal, inline image previews, the preview window's Stack and API inspector, and fallback to another agent near a limit.
 
 The full list is in [shipped features](docs/shipped.md).
 

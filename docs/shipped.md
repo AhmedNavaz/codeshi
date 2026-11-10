@@ -134,3 +134,9 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | A task in its own copy has your installed packages ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
 | The Lounge fills the window, with rain and snow sounds ([#14](https://github.com/AhmedNavaz/codeshi/issues/14)) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
 | Lower energy use in the Lounge, games and setup, from measurements ([#152](https://github.com/AhmedNavaz/codeshi/issues/152), first fixes) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
+| Orchestrate plans as a full-window chart, with an outline and a Plan button beside Flow ([#97](https://github.com/AhmedNavaz/codeshi/issues/97)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
+| Lock-screen notifications on a phone connected Away from home ([#23](https://github.com/AhmedNavaz/codeshi/issues/23)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
+| Rewind the conversation along with a restored checkpoint ([#20](https://github.com/AhmedNavaz/codeshi/issues/20)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
+| One total for an Orchestrate plan: planning and every step ([#84](https://github.com/AhmedNavaz/codeshi/issues/84)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
+| One usage line for choosing an agent and for handing a task off ([#12](https://github.com/AhmedNavaz/codeshi/issues/12)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
+| Word documents (.docx) attached as their text ([#157](https://github.com/AhmedNavaz/codeshi/pull/157)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
