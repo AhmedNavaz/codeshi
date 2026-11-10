@@ -1,0 +1,281 @@
+/* Lounge puzzles (#14): Codle, 2048, Minesweeper, Sudoku, Pairs and Fifteen. Built from page elements, coloured
+   from the theme's tokens, and still between moves: the only motion is a short entrance when something changes. */
+
+/* Tiles on the Lounge grid */
+.flow-lounge-tile[data-activity="codle"], .flow-lounge-tile-art[data-activity="codle"] { --tile: var(--success); }
+.flow-lounge-tile[data-activity="2048"], .flow-lounge-tile-art[data-activity="2048"] { --tile: var(--accent); }
+.flow-lounge-tile[data-activity="mines"], .flow-lounge-tile-art[data-activity="mines"] { --tile: var(--danger); }
+.flow-lounge-tile[data-activity="sudoku"], .flow-lounge-tile-art[data-activity="sudoku"] { --tile: var(--link); }
+.flow-lounge-tile[data-activity="pairs"], .flow-lounge-tile-art[data-activity="pairs"] { --tile: var(--warning); }
+.flow-lounge-tile[data-activity="fifteen"], .flow-lounge-tile-art[data-activity="fifteen"] { --tile: var(--text-strong); }
+.flow-lounge-glyph[data-icon="codle"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='4' width='5.4' height='5.4' rx='1'/%3E%3Crect x='9.3' y='4' width='5.4' height='5.4' rx='1'/%3E%3Crect x='16.1' y='4' width='5.4' height='5.4' rx='1'/%3E%3Crect x='2.5' y='14.6' width='5.4' height='5.4' rx='1'/%3E%3Crect x='9.3' y='14.6' width='5.4' height='5.4' rx='1'/%3E%3Cpath d='M16.6 17.4l1.6 1.6 2.9-3.2'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="2048"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='9' width='6' height='6' rx='1.2'/%3E%3Cpath d='M10.5 12h3.5M12.6 10.3l1.7 1.7-1.7 1.7'/%3E%3Crect x='16' y='6.5' width='5.5' height='11' rx='1.4'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="mines"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='5.5'/%3E%3Cpath d='M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M5.5 18.5l1.8-1.8M16.7 7.3l1.8-1.8'/%3E%3Cpath d='M10 10.2a2.4 2.4 0 0 1 1.6-.9'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="sudoku"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2.5'/%3E%3Cpath d='M9 3v18M15 3v18M3 9h18M3 15h18'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="pairs"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='6' width='9.5' height='13.5' rx='2'/%3E%3Cpath d='M15 4.5h4.5a2 2 0 0 1 2 2V16a2 2 0 0 1-2 2H15'/%3E%3Cpath d='M5.6 12.7l1.6-1.6 1.6 1.6-1.6 1.6z'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="fifteen"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='5' height='5' rx='1'/%3E%3Crect x='9.5' y='3' width='5' height='5' rx='1'/%3E%3Crect x='16' y='3' width='5' height='5' rx='1'/%3E%3Crect x='3' y='9.5' width='5' height='5' rx='1'/%3E%3Crect x='9.5' y='9.5' width='5' height='5' rx='1'/%3E%3Crect x='16' y='9.5' width='5' height='5' rx='1'/%3E%3Crect x='3' y='16' width='5' height='5' rx='1'/%3E%3Crect x='9.5' y='16' width='5' height='5' rx='1'/%3E%3Cpath d='M16.5 18.5h4M19 16.8l1.6 1.7-1.6 1.7'/%3E%3C/svg%3E"); }
+
+/* Shared: figures and level choice on one row, the board centred in the room left, the foot below.
+   The stage is measured (a size container), and each board takes as much of it as suits the game, up to a cap,
+   so a board grows with the window without filling a large screen. 100cqw and 100cqh are the stage's own size. */
+.flow-lounge-puzzle { --puzzle-gap: 3px; }
+.flow-lounge-puzzle-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; flex: none; }
+.flow-lounge-puzzle-stage { display: flex; align-items: center; justify-content: center; gap: 24px; flex: 1 1 0; min-width: 0; min-height: 300px; container-type: size; }
+.flow-lounge-puzzle-board { position: relative; display: flex; flex-direction: column; gap: var(--puzzle-gap); outline: none; user-select: none; -webkit-user-select: none; }
+.flow-lounge-puzzle-board:focus-visible { outline: 2px solid var(--focus); outline-offset: 6px; border-radius: 10px; }
+.flow-lounge-puzzle-board > [role="row"] { display: flex; gap: var(--puzzle-gap); }
+.flow-lounge-puzzle-status { min-height: 1.5em; }
+.flow-lounge-puzzle-levels { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; }
+.flow-lounge-puzzle-level { height: 26px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.flow-lounge-puzzle-level:hover { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-strong); }
+.flow-lounge-puzzle-level.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text-strong); }
+.flow-lounge-puzzle-level:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@keyframes flow-puzzle-pop { 0% { transform: scale(.82); opacity: .4; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes flow-puzzle-bump { 0% { transform: scale(1); } 45% { transform: scale(1.1); } 100% { transform: scale(1); } }
+
+/* Codle: six rows of five letters, then a keyboard that remembers what each letter scored. */
+.flow-lounge-codle { align-items: center; }
+.flow-lounge-codle .flow-lounge-foot { align-self: stretch; }
+/* The keyboard sits under the board too, so the board's stage may be shorter than the others'. */
+.flow-lounge-codle .flow-lounge-puzzle-stage { align-self: stretch; min-height: 210px; }
+/* Six rows of squares as tall as the stage allows, between 32 and 76 pixels each. */
+.flow-lounge-codle-board { --puzzle-gap: 6px; --cell: clamp(32px, min((100cqh - 5 * 6px) / 6, (100cqw - 4 * 6px) / 5), 76px); }
+.flow-lounge-codle-cell {
+  display: grid;
+  place-items: center;
+  width: var(--cell);
+  height: var(--cell);
+  box-sizing: border-box;
+  border: 2px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text-strong);
+  font-size: calc(var(--cell) * .46);
+  font-weight: 700;
+  text-transform: uppercase;
+  transition: background-color .25s ease, border-color .25s ease, color .25s ease;
+}
+.flow-lounge-codle-cell[data-state="typed"] { border-color: var(--border-strong); animation: flow-puzzle-bump .12s ease-out; }
+.flow-lounge-codle-row.current .flow-lounge-codle-cell[data-state="empty"] { border-color: color-mix(in srgb, var(--border-strong) 70%, var(--border)); }
+.flow-lounge-codle-cell[data-state="correct"] { border-color: var(--success); background: var(--success); color: var(--bg); }
+.flow-lounge-codle-cell[data-state="present"] { border-color: var(--warning); background: var(--warning); color: var(--bg); }
+.flow-lounge-codle-cell[data-state="absent"] { border-color: transparent; background: color-mix(in srgb, var(--text) 16%, var(--bg)); color: var(--text-strong); }
+/* The letters of a guess turn one after another. */
+.flow-lounge-codle-row.revealed .flow-lounge-codle-cell:nth-child(2) { transition-delay: .06s; }
+.flow-lounge-codle-row.revealed .flow-lounge-codle-cell:nth-child(3) { transition-delay: .12s; }
+.flow-lounge-codle-row.revealed .flow-lounge-codle-cell:nth-child(4) { transition-delay: .18s; }
+.flow-lounge-codle-row.revealed .flow-lounge-codle-cell:nth-child(5) { transition-delay: .24s; }
+.flow-lounge-codle-keys { display: grid; gap: 6px; justify-items: center; flex: none; }
+.flow-lounge-codle-keyrow { display: flex; gap: 5px; }
+.flow-lounge-codle-key {
+  min-width: 42px;
+  height: clamp(36px, 5.6vh, 48px);
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-raised) 70%, var(--bg));
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .2s ease, color .2s ease, border-color .2s ease;
+}
+.flow-lounge-codle-key.wide { min-width: 68px; font-size: 12px; }
+.flow-lounge-codle-key:hover { border-color: var(--border-strong); }
+.flow-lounge-codle-key[data-state="correct"] { border-color: var(--success); background: var(--success); color: var(--bg); }
+.flow-lounge-codle-key[data-state="present"] { border-color: var(--warning); background: var(--warning); color: var(--bg); }
+.flow-lounge-codle-key[data-state="absent"] { border-color: transparent; background: transparent; color: var(--faint); }
+
+/* 2048: the numbers warm towards the accent as they grow. */
+.flow-lounge-2048-board {
+  --puzzle-gap: 10px;
+  width: clamp(260px, min(100cqw, 100cqh), 540px);
+  padding: 10px;
+  box-sizing: border-box;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--text) 9%, var(--bg));
+  container-type: inline-size;
+  touch-action: none;
+}
+.flow-lounge-2048-cell {
+  display: grid;
+  place-items: center;
+  flex: 1 1 0;
+  aspect-ratio: 1;
+  min-width: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text) 5%, var(--bg));
+  color: var(--text-strong);
+  font-size: 9cqi;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.flow-lounge-2048-cell.fresh { animation: flow-puzzle-pop .16s ease-out; }
+.flow-lounge-2048-cell.merged { animation: flow-puzzle-bump .16s ease-out; }
+.flow-lounge-2048-cell[data-value="2"] { background: color-mix(in srgb, var(--accent) 7%, var(--bg)); }
+.flow-lounge-2048-cell[data-value="4"] { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
+.flow-lounge-2048-cell[data-value="8"] { background: color-mix(in srgb, var(--accent) 24%, var(--bg)); }
+.flow-lounge-2048-cell[data-value="16"] { background: color-mix(in srgb, var(--accent) 34%, var(--bg)); }
+.flow-lounge-2048-cell[data-value="32"] { background: color-mix(in srgb, var(--accent) 46%, var(--bg)); }
+.flow-lounge-2048-cell[data-value="64"] { background: color-mix(in srgb, var(--accent) 58%, var(--bg)); color: #fff; }
+.flow-lounge-2048-cell:is([data-value="128"], [data-value="256"], [data-value="512"]) { background: color-mix(in srgb, var(--accent) 72%, var(--warning)); color: #fff; font-size: 8cqi; }
+.flow-lounge-2048-cell:is([data-value="1024"], [data-value="2048"], [data-value="big"]) { background: var(--accent); color: #fff; font-size: 6.5cqi; box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 60%, transparent); }
+
+/* Minesweeper */
+/* Squares as large as the field fits in the stage, between 20 and 46 pixels. The board sets --rows and --cols. */
+.flow-lounge-mines-board {
+  --puzzle-gap: 2px;
+  --cell: clamp(20px, min((100cqw - (var(--cols, 9) - 1) * 2px) / var(--cols, 9), (100cqh - (var(--rows, 9) - 1) * 2px) / var(--rows, 9)), 46px);
+}
+.flow-lounge-mines-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--cell);
+  height: var(--cell);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 14%, var(--bg));
+  color: var(--text-strong);
+  font-size: calc(var(--cell) * .5);
+  font-weight: 700;
+  cursor: pointer;
+}
+.flow-lounge-mines-cell[data-state="hidden"]:hover, .flow-lounge-mines-cell[data-state="flag"]:hover { background: color-mix(in srgb, var(--text) 20%, var(--bg)); }
+.flow-lounge-mines-cell[data-state="open"] { background: color-mix(in srgb, var(--text) 3%, var(--bg)); cursor: default; }
+.flow-lounge-mines-cell[data-n="1"] { color: var(--link); }
+.flow-lounge-mines-cell[data-n="2"] { color: var(--success); }
+.flow-lounge-mines-cell[data-n="3"] { color: var(--danger); }
+.flow-lounge-mines-cell[data-n="4"] { color: color-mix(in srgb, var(--link) 60%, var(--text-strong)); }
+.flow-lounge-mines-cell:is([data-n="5"], [data-n="6"], [data-n="7"], [data-n="8"]) { color: var(--warning); }
+.flow-lounge-mines-cell:is([data-state="flag"], [data-state="wrong"], [data-state="mine"], [data-state="boom"])::after {
+  content: "";
+  width: 62%;
+  height: 62%;
+  background: currentColor;
+  mask: var(--mark) center / contain no-repeat;
+  -webkit-mask: var(--mark) center / contain no-repeat;
+}
+.flow-lounge-mines-cell:is([data-state="flag"], [data-state="wrong"]) { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 21V3.5'/%3E%3Cpath d='M6 4h12l-3 4.5 3 4.5H6z' fill='black'/%3E%3C/svg%3E"); color: var(--accent); }
+.flow-lounge-mines-cell[data-state="wrong"] { background: var(--danger-bg); color: var(--muted); text-decoration: line-through; }
+.flow-lounge-mines-cell:is([data-state="mine"], [data-state="boom"]) { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='5.5'/%3E%3Cpath d='M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1'/%3E%3C/svg%3E"); color: var(--text-strong); background: color-mix(in srgb, var(--text) 8%, var(--bg)); }
+.flow-lounge-mines-cell[data-state="boom"] { background: var(--danger); color: #fff; }
+/* The square the keyboard is on. It shows only while the board has the keys, so a mouse player never sees it. */
+.flow-lounge-mines-board:focus-visible .flow-lounge-mines-cell.cursor,
+.flow-lounge-mines-board:focus .flow-lounge-mines-cell.cursor:not(:hover) { box-shadow: inset 0 0 0 2px var(--focus); }
+.flow-lounge-mines-board:focus-visible { outline: none; }
+.flow-lounge-mines-board[data-over="won"] .flow-lounge-mines-cell[data-state="open"] { background: color-mix(in srgb, var(--success) 10%, var(--bg)); }
+
+/* Sudoku: thin lines between squares, thick between boxes, and the pad of digits beside the grid. */
+.flow-lounge-sudoku-board {
+  --puzzle-gap: 0px;
+  /* As tall as the stage, leaving room beside it for the pad of digits. */
+  width: clamp(300px, min(100cqh, 100cqw - 226px), 640px);
+  flex: none;
+  overflow: hidden;
+  border: 2px solid var(--text-strong);
+  border-radius: 10px;
+  background: var(--bg);
+  container-type: inline-size;
+}
+.flow-lounge-sudoku-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 1 1 0;
+  aspect-ratio: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--link);
+  font-size: 6.2cqi;
+  font-weight: 500;
+  cursor: pointer;
+}
+.flow-lounge-sudoku-cell[data-c="8"] { border-right: 0; }
+.flow-lounge-sudoku-cell[data-r="8"] { border-bottom: 0; }
+.flow-lounge-sudoku-cell:is([data-c="2"], [data-c="5"]) { border-right: 2px solid var(--text-strong); }
+.flow-lounge-sudoku-cell:is([data-r="2"], [data-r="5"]) { border-bottom: 2px solid var(--text-strong); }
+.flow-lounge-sudoku-cell[data-given="true"] { color: var(--text-strong); font-weight: 650; }
+/* Neutral highlights, so the chosen square never looks like the red of a wrong digit: its row, column and box
+   lightly, the same digit elsewhere more, and the square itself most, with the focus ring. */
+.flow-lounge-sudoku-cell.peer { background: color-mix(in srgb, var(--text) 7%, var(--bg)); }
+.flow-lounge-sudoku-cell.same { background: color-mix(in srgb, var(--text) 16%, var(--bg)); }
+.flow-lounge-sudoku-cell.selected { background: color-mix(in srgb, var(--text) 22%, var(--bg)); box-shadow: inset 0 0 0 2px var(--focus); }
+.flow-lounge-sudoku-cell[data-error="true"] { background: var(--danger-bg); color: var(--danger); }
+.flow-lounge-sudoku-board[data-done="true"] .flow-lounge-sudoku-cell { background: color-mix(in srgb, var(--success) 9%, var(--bg)); }
+.flow-lounge-sudoku-notes { display: grid; grid-template-columns: repeat(3, 1fr); width: 100%; height: 100%; color: var(--muted); font-size: 2.2cqi; font-weight: 500; line-height: 1; }
+.flow-lounge-sudoku-notes span { display: grid; place-items: center; }
+.flow-lounge-sudoku-pad { display: grid; grid-template-columns: repeat(3, 62px); gap: 8px; flex: none; }
+.flow-lounge-sudoku-digit, .flow-lounge-sudoku-tool {
+  height: 62px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-raised) 70%, var(--bg));
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 21px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.flow-lounge-sudoku-tool { height: 40px; grid-column: span 3; font-size: 13px; }
+.flow-lounge-sudoku-digit:hover:not(:disabled), .flow-lounge-sudoku-tool:hover { border-color: var(--border-strong); }
+.flow-lounge-sudoku-digit:disabled { opacity: .35; cursor: default; }
+.flow-lounge-sudoku-tool.active { border-color: var(--link); background: color-mix(in srgb, var(--link) 16%, var(--bg)); }
+
+/* Pairs: cards that turn over. */
+.flow-lounge-pairs-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; width: clamp(280px, min(100cqw, 100cqh), 580px); container-type: inline-size; }
+.flow-lounge-pairs-card { aspect-ratio: 1; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; perspective: 600px; }
+.flow-lounge-pairs-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 12px; }
+.flow-lounge-pairs-inner { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
+.flow-lounge-pairs-card:not([data-state="down"]) .flow-lounge-pairs-inner { transform: rotateY(180deg); }
+.flow-lounge-pairs-back, .flow-lounge-pairs-face { position: absolute; inset: 0; display: grid; place-items: center; box-sizing: border-box; border-radius: 12px; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.flow-lounge-pairs-back {
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent) 22%, transparent) 0 18%, transparent 19%),
+    color-mix(in srgb, var(--surface-raised) 80%, var(--bg));
+}
+.flow-lounge-pairs-card:hover .flow-lounge-pairs-back { border-color: var(--border-strong); }
+.flow-lounge-pairs-face { transform: rotateY(180deg); border: 1px solid var(--border-strong); background: var(--bg); color: var(--text-strong); font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace); font-size: 6.5cqi; font-weight: 600; }
+.flow-lounge-pairs-card[data-state="matched"] { cursor: default; }
+.flow-lounge-pairs-card[data-state="matched"] .flow-lounge-pairs-face { border-color: color-mix(in srgb, var(--success) 55%, transparent); background: var(--success-bg); color: var(--success); }
+
+/* Fifteen */
+.flow-lounge-fifteen-board {
+  --puzzle-gap: 8px;
+  width: clamp(260px, min(100cqw, 100cqh), 520px);
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--text) 9%, var(--bg));
+  container-type: inline-size;
+}
+.flow-lounge-fifteen-cell {
+  display: grid;
+  place-items: center;
+  flex: 1 1 0;
+  aspect-ratio: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text-strong);
+  font-size: 9cqi;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.flow-lounge-fifteen-cell:hover { border-color: var(--border-strong); }
+.flow-lounge-fifteen-cell[data-home="true"] { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.flow-lounge-fifteen-cell[data-blank="true"] { border-color: transparent; background: transparent; cursor: default; }
+.flow-lounge-fifteen-board[data-done="true"] .flow-lounge-fifteen-cell:not([data-blank="true"]) { border-color: var(--success); background: var(--success-bg); color: var(--success); }
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-lounge-codle-cell, .flow-lounge-codle-key, .flow-lounge-pairs-inner, .flow-lounge-fifteen-cell { transition: none; }
+  .flow-lounge-codle-row.revealed .flow-lounge-codle-cell { transition-delay: 0s !important; }
+  .flow-lounge-codle-cell[data-state="typed"], .flow-lounge-2048-cell.fresh, .flow-lounge-2048-cell.merged { animation: none; }
+}

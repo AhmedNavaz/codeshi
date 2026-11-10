@@ -46,7 +46,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'], '/plan-view.js': ['plan-view.js', 'text/javascript; charset=utf-8'], '/plan-view.css': ['plan-view.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
-  '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow-lounge.js': ['flow-lounge.js', 'text/javascript; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
+  '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow-lounge.js': ['flow-lounge.js', 'text/javascript; charset=utf-8'], '/flow-lounge-puzzles.js': ['flow-lounge-puzzles.js', 'text/javascript; charset=utf-8'], '/flow-lounge-puzzles.css': ['flow-lounge-puzzles.css', 'text/css; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
   '/project-review.js': ['project-review.js', 'text/javascript; charset=utf-8'], '/project-review.css': ['project-review.css', 'text/css; charset=utf-8'],
   '/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'], '/alerts.css': ['alerts.css', 'text/css; charset=utf-8'],
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],

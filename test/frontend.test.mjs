@@ -293,6 +293,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(flowUI) {
     vm.runInContext(fs.readFileSync(new URL('../public/project-review.js',import.meta.url),'utf8'),context,{filename:'public/project-review.js'});
     vm.runInContext(fs.readFileSync(new URL('../public/flow.js',import.meta.url),'utf8'),context,{filename:'public/flow.js'});
+    vm.runInContext(fs.readFileSync(new URL('../public/flow-lounge-puzzles.js',import.meta.url),'utf8'),context,{filename:'public/flow-lounge-puzzles.js'});
     vm.runInContext(fs.readFileSync(new URL('../public/flow-lounge.js',import.meta.url),'utf8'),context,{filename:'public/flow-lounge.js'});
   }
   if(alertsUI)vm.runInContext(fs.readFileSync(new URL('../public/alerts.js',import.meta.url),'utf8'),context,{filename:'public/alerts.js'});
@@ -6110,7 +6111,7 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
 
   // The stage opens on a grid of the things to play, each with a title, a description and a line of facts.
   const tile = id => ui.$('flow-lounge-tile-' + id);
-  const ids = ['breakout', 'snake', 'trivia', 'typing'];
+  const ids = ['breakout', 'snake', 'trivia', 'typing', 'codle', '2048', 'mines', 'sudoku', 'pairs', 'fifteen'];
   assert.deepEqual([...ui.window.relayFlowLounge.activities().map(a => a.id)], ids);
   assert.equal(ui.$('flow-lounge-home').hidden, false); assert.equal(ui.$('flow-lounge-view').hidden, true);
   assert.equal(ui.window.relayFlowLounge.current(), null);
@@ -6129,7 +6130,7 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   assert.match(ui.$('flow-card-lounge-quote').textContent, /“.+”/);
 
   // Choosing a tile fills the stage with that one activity; All activities goes back to the grid.
-  const panelIds = { breakout: 'arcade', snake: 'zen', trivia: 'trivia', typing: 'typing' };
+  const panelIds = { breakout: 'arcade', snake: 'zen', trivia: 'trivia', typing: 'typing', codle: 'codle', 2048: '2048', mines: 'mines', sudoku: 'sudoku', pairs: 'pairs', fifteen: 'fifteen' };
   const shown = () => ids.filter(id => !ui.$('flow-card-lounge-' + panelIds[id]).hidden);
   assert.deepEqual(shown(), [], 'Nothing is open until a tile is chosen.');
   tile('trivia').click();
@@ -6241,6 +6242,99 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   // Leaving Flow mode hides the Lounge toggle
   ui.window.relayFlow.leave(); await flush();
   assert.equal(ui.$('toggle-flow-lounge').hidden, true);
+});
+
+test('Flow Lounge puzzles: Codle, 2048, Minesweeper, Sudoku, Pairs and Fifteen play from their boards and keep still between moves', async () => {
+  const ui = await flowBrowser({ desktop: true });
+  ui.window.relayFlow.enter(); await flush();
+  ui.$('toggle-flow-lounge').click(); await flush();
+  const lounge = ui.window.relayFlowLounge;
+  const card = id => ui.$('flow-card-lounge-' + id);
+  const board = id => card(id).querySelector('.flow-lounge-puzzle-board');
+  const key = (el, k, extra = {}) => { const e = new UIEvent('keydown', { key: k, target: el, ...extra }); el.dispatchEvent(e); return e; };
+  const statusOf = id => card(id).querySelector('.flow-lounge-puzzle-status').textContent;
+  const cells = (id, cls) => card(id).querySelectorAll('.' + cls);
+
+  // Codle: opening hands the keys to the board; letters fill the current row and Enter scores it.
+  ui.$('flow-lounge-tile-codle').click();
+  assert.equal(lounge.current(), 'codle'); assert.equal(ui.document.activeElement, board('codle'));
+  assert.equal(card('codle').querySelector('.flow-lounge-puzzle-status').getAttribute('aria-live'), 'polite');
+  for (const k of 'cac') assert.equal(key(board('codle'), k).defaultPrevented, true);
+  key(board('codle'), 'Enter');
+  assert.match(statusOf('codle'), /Not enough letters/);
+  key(board('codle'), 'Backspace');
+  for (const k of 'chex') key(board('codle'), k);
+  assert.equal(key(board('codle'), 'Enter', { metaKey: true }).defaultPrevented, false, 'Command keys stay the app\'s');
+  assert.equal(key(board('codle'), 'Escape').defaultPrevented, false, 'Escape is left for the Lounge');
+  key(board('codle'), 'Enter');
+  // C, A, C, Backspace, then C, H, E, X: the X doesn't fit, so the guess is CACHE.
+  const firstRow = cells('codle', 'flow-lounge-codle-cell').slice(0, 5);
+  assert.equal(firstRow.map(c => c.textContent).join(''), 'CACHE');
+  assert.ok(firstRow.every(c => ['correct', 'present', 'absent'].includes(c.getAttribute('data-state'))), 'each letter of a guess is scored');
+  assert.match(statusOf('codle'), /^CACHE: C (right|elsewhere|not in the word), .* left\.$|^Solved in 1 of 6/);
+  assert.ok(card('codle').querySelectorAll('.flow-lounge-codle-key').some(k => k.getAttribute('data-key') === 'C' && k.getAttribute('data-state') !== 'unused'), 'the keyboard remembers C');
+
+  // 2048: sixteen squares with two tiles to start; arrow keys slide them.
+  lounge.open('2048');
+  assert.equal(ui.document.activeElement, board('2048'));
+  const tiles = () => cells('2048', 'flow-lounge-2048-cell').filter(c => c.textContent).length;
+  assert.equal(cells('2048', 'flow-lounge-2048-cell').length, 16); assert.equal(tiles(), 2);
+  for (const k of ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown']) assert.equal(key(board('2048'), k).defaultPrevented, true);
+  assert.ok(tiles() >= 2 && tiles() <= 6, 'each move that slides adds one tile, and merges take some away');
+
+  // Minesweeper: the first square opened is never a mine and opens its clear neighbours; the clock stops on leaving.
+  lounge.open('mines');
+  assert.equal(cells('mines', 'flow-lounge-mines-cell').length, 81);
+  key(board('mines'), ' ');
+  const opened = () => cells('mines', 'flow-lounge-mines-cell').filter(c => c.getAttribute('data-state') === 'open').length;
+  assert.ok(opened() >= 9, 'the first square and its neighbours are clear');
+  key(board('mines'), 'ArrowRight'); key(board('mines'), 'f');
+  assert.equal(board('mines').getAttribute('aria-activedescendant'), 'flow-lounge-mines-41');
+  lounge.home();
+  const timeAfterLeaving = card('mines').querySelector('.flow-lounge-puzzle-figures').textContent;
+  assert.match(timeAfterLeaving, /Time0:0\d/);
+
+  // Sudoku: a puzzle is made when it's first opened, with the easy level's 40 givens and a single solution.
+  lounge.open('sudoku');
+  const sudokuCells = cells('sudoku', 'flow-lounge-sudoku-cell');
+  assert.equal(sudokuCells.length, 81);
+  assert.equal(sudokuCells.filter(c => c.getAttribute('data-given') === 'true').length, 40);
+  const blank = sudokuCells.findIndex(c => c.getAttribute('data-given') === 'false');
+  // A click on a square reaches the board, which listens for all of them (this stand-in DOM doesn't bubble).
+  board('sudoku').dispatchEvent(new UIEvent('click', { target: sudokuCells[blank] }));
+  assert.equal(sudokuCells[blank].classList.contains('selected'), true);
+  assert.equal(board('sudoku').getAttribute('aria-activedescendant'), 'flow-lounge-sudoku-' + blank);
+  key(board('sudoku'), 'ArrowDown'); key(board('sudoku'), 'ArrowUp');
+  assert.equal(sudokuCells[blank].classList.contains('selected'), true);
+  key(board('sudoku'), 'n'); key(board('sudoku'), '5');
+  assert.match(sudokuCells[blank].getAttribute('aria-label'), /notes 5/);
+  key(board('sudoku'), 'n'); key(board('sudoku'), '5');
+  assert.equal(sudokuCells[blank].textContent, '5');
+  assert.match(sudokuCells[blank].getAttribute('aria-label'), /^5/);
+  key(board('sudoku'), 'Backspace');
+  assert.equal(sudokuCells[blank].textContent, '');
+
+  // Pairs: cards show their symbol only while up; two cards make a move.
+  lounge.open('pairs');
+  const pairCards = cells('pairs', 'flow-lounge-pairs-card');
+  assert.equal(pairCards.length, 16); assert.equal(ui.document.activeElement, pairCards[0]);
+  assert.ok(pairCards.every(c => c.getAttribute('aria-label').endsWith('face down')));
+  assert.ok(card('pairs').querySelectorAll('.flow-lounge-pairs-face').every(f => f.textContent === ''), 'a face-down card can\'t be read');
+  pairCards[0].click(); pairCards[1].click();
+  assert.match(card('pairs').querySelector('.flow-lounge-puzzle-figures').textContent, /Moves1/);
+
+  // Fifteen: fifteen tiles and a gap, shuffled out of order.
+  lounge.open('fifteen');
+  const squares = cells('fifteen', 'flow-lounge-fifteen-cell');
+  assert.equal(squares.length, 16); assert.equal(squares.filter(c => c.getAttribute('data-blank') === 'true').length, 1);
+  assert.notEqual(squares.map(c => c.textContent).join(','), '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,');
+
+  // Leaving the Lounge and coming back finds each game where it was.
+  ui.$('toggle-flow-lounge').click(); await flush();
+  ui.$('toggle-flow-lounge').click(); await flush();
+  assert.equal(cells('codle', 'flow-lounge-codle-cell').slice(0, 5).map(c => c.textContent).join(''), 'CACHE');
+  assert.equal(cells('sudoku', 'flow-lounge-sudoku-cell').filter(c => c.getAttribute('data-given') === 'true').length, 40);
+  ui.window.relayFlow.leave(); await flush();
 });
 
 test('opening a long workspace of 10,000 messages opens promptly, pages latest, maintains scroll position on scroll up, searches unloaded history, jumps to unloaded runs, and streams live runs while paged', async () => {

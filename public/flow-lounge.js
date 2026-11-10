@@ -84,6 +84,7 @@
         // Lounge stage: the grid of activities, the open activity's board, controls and content blocks
         ".flow-lounge-tile",
         ".flow-lounge-canvas",
+        ".flow-lounge-puzzle-board",
         ".flow-lounge-trivia-q",
         ".flow-lounge-trivia-opt",
         ".flow-lounge-trivia-feedback",
@@ -1940,6 +1941,9 @@
     { id: "typing", title: "Typing test", kind: "Practice", keys: "Keyboard", icon: "typing",
       description: "Type real code snippets and see your words per minute and accuracy as you go.",
       build: () => buildTypingCard(), focus: () => typingInputEl, stat: () => "" },
+    // The puzzles (flow-lounge-puzzles.js) bring their own panels. Each keeps its state while the Lounge is closed
+    // and has no animation loop, so it costs nothing until you press a key or click.
+    ...(Array.isArray(window.relayLoungePuzzles?.activities) ? window.relayLoungePuzzles.activities : []),
   ];
   const bestLine = game => { const best = getBestScore(game); return best ? `Best ${best}` : ""; };
 
@@ -2017,6 +2021,11 @@
     // A game you leave waits, paused, where you left it.
     if (except !== "breakout") setBreakoutPaused(true);
     if (except !== "snake") setSnakePaused(true);
+    pausePuzzles(except);
+  }
+  // A puzzle's clock runs only while you can see it: leaving it, the Lounge stepping aside or closing all stop it.
+  function pausePuzzles(except) {
+    for (const a of ACTIVITIES) if (a.id !== except && typeof a.pause === "function") try { a.pause(); } catch {}
   }
 
   function openActivity(id) {
@@ -2109,6 +2118,7 @@
     if (snakeAnimId) { safeCancelAnim(snakeAnimId); snakeAnimId = null; }
     if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
     if (quoteTimer) { safeClearInterval(quoteTimer); quoteTimer = null; }
+    pausePuzzles();
 
     syncWeather();
     hideStage();
@@ -2125,6 +2135,7 @@
     if (breakoutAnimId) { safeCancelAnim(breakoutAnimId); breakoutAnimId = null; }
     if (snakeAnimId) { safeCancelAnim(snakeAnimId); snakeAnimId = null; }
     if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
+    pausePuzzles();
 
     syncWeather();
     hideStage();
