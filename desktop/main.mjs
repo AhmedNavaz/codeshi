@@ -1,4 +1,4 @@
-import {app,BaseWindow,BrowserWindow,Menu,Notification,Tray,WebContentsView,dialog,ipcMain,nativeImage,nativeTheme,screen,session,shell,powerSaveBlocker} from 'electron';
+import {app,BaseWindow,BrowserWindow,Menu,Notification,Tray,WebContentsView,contentTracing,dialog,ipcMain,nativeImage,nativeTheme,screen,session,shell,powerSaveBlocker} from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -22,6 +22,7 @@ import {english} from '../src/i18n.mjs';
 import {createOverlay} from './overlay.mjs';
 import {closeWithin,writeShutdownLog} from './shutdown.mjs';
 import {createPreview} from './preview.mjs';
+import {createTraceRecorder} from './trace.mjs';
 import {APP_ID,ensureStartMenuShortcut} from './windows.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const smoke=process.argv.includes('--smoke-test');
@@ -59,7 +60,19 @@ else {
     const appearance=createAppearance({nativeTheme,onBackground:color=>{if(win&&!win.isDestroyed())win.setBackgroundColor(color);}});
     // The menu bar shows what the page last reported, the saved appearance and Keep Awake.
     let page=null,awake=false;
-    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),
+    // Help › Record Performance Trace: ten seconds of tracing for every Codeshi process, kept on this computer (trace.mjs).
+    const tracer=createTraceRecorder({tracing:contentTracing,metrics:()=>app.getAppMetrics(),directory:path.join(app.getPath('userData'),'performance-traces'),onChange:()=>updateMenu()});
+    const recordTrace=async()=>{
+      const {t}=text,owner=win&&!win.isDestroyed()?win:undefined;
+      try{
+        const {file,summary}=await tracer.record(),{cpu}=summary;
+        const answer=await dialog.showMessageBox(owner,{type:'info',message:t('Performance trace saved'),
+          detail:t('Over {seconds} seconds, Codeshi used this much of one CPU core: pages {pages}%, graphics {graphics}%, the app itself {app}%, other helpers {other}%. The trace stays on this computer. It holds timings, script names and request addresses, not chat text.',{seconds:summary.seconds,pages:cpu.pages,graphics:cpu.graphics,app:cpu.app,other:cpu.other}),
+          buttons:[process.platform==='darwin'?t('Show in Finder'):t('Show in Folder'),t('OK')],defaultId:1,cancelId:1});
+        if(answer.response===0)shell.showItemInFolder(file);
+      }catch(error){dialog.showErrorBox(t('The performance trace was not saved'),error?.message||String(error));}
+    };
+    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),tracing:tracer.isRecording(),recordTrace,
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
       send:(...command)=>{if(win&&!win.isDestroyed())win.webContents.send('relay:menu-command',...command);updateMenu();}})));
     app.setAboutPanelOptions({applicationName:'Codeshi',applicationVersion:app.getVersion(),version:''});

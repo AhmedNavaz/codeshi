@@ -59,7 +59,9 @@
   // the weather up nor draws it more often.
   const WEATHER_FRAME_MS = 1000 / 30, WEATHER_STEP_MS = 1000 / 60;
   let lastWeatherFrame = null, weatherLag = 0;
-  const reducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  // Asked once: the weather checks it on every frame, and a new query each time cost more than the drawing it decided.
+  const motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)") || null;
+  const reducedMotion = () => Boolean(motionQuery?.matches);
 
   function updateObstacleRects() {
     const rects = [];
@@ -278,9 +280,10 @@
     }
   }
 
-  // Weather can stay on outside the Lounge, in Flow only, when the person keeps it on from the weather card.
-  // The weather keeps falling over Flow's cards after you leave the Lounge; turning Flow off ends it.
-  const weatherShown = () => (active && !receded) || Boolean(window.relayFlow?.isOn?.());
+  // Weather falls only while the Lounge is open. A full-window canvas redrawn 30 times a second costs about a tenth of
+  // a core with the GPU work on top, so it stops when you leave the Lounge or it recedes for an approval or a finished
+  // run, and starts again where it was when you come back. The choice of Rain, Snow or Clear is kept meanwhile.
+  const weatherShown = () => active && !receded;
   function syncWeather() {
     syncSound();
     if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }

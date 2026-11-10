@@ -24,7 +24,7 @@ test('the macOS menu bar has Codeshi, File, Edit, View, Agent, Workspace, Window
   assert.deepEqual(labels(item('Appearance').submenu),['System','Light','Dark','Graphite']);
   assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Alerts','-','Hand Off Near Usage Limits']);
   assert.deepEqual(labels(item('Workspace').submenu),['Frontend','R&D','-','Workspace Settings…','Remove Workspace…']);
-  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New']);
+  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','Record Performance Trace','-','Roadmap','What’s New']);
   // These are the page's own shortcuts plus ⌘, ⌘N and ⌘G, which the page leaves to the menu.
   assert.deepEqual(Object.fromEntries(all.filter(entry=>entry.accelerator).map(entry=>[entry.label,entry.accelerator])),{'Settings…':'CmdOrCtrl+,','New Workspace':'CmdOrCtrl+N','Find in Conversation':'CmdOrCtrl+F','Find Next':'CmdOrCtrl+G','Filter Workspaces':'CmdOrCtrl+K','Show Git Activity':'CmdOrCtrl+Shift+G',Terminal:'Ctrl+`','Flow Mode':'CmdOrCtrl+Shift+F','Focus Message Box':'CmdOrCtrl+L','Stop Run':'CmdOrCtrl+.','Voice Input':'Alt+Cmd+V',Frontend:'CmdOrCtrl+1','R&D':'CmdOrCtrl+2'});
   for(const role of ['reload','forceReload','toggleDevTools'])assert(!roles.includes(role),`A packaged app leaves out ${role}.`);
@@ -75,8 +75,8 @@ test('page items and in-app release notes send commands, and external Help links
   const repository='https://github.com/AhmedNavaz/codeshi';
   const pages={'Codeshi Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`};
   for(const [label,url] of Object.entries(pages)){opened.length=0;item(label).click();assert.deepEqual(opened,[url],label);}
-  // The five alert and status switches and the five handoff choices are handled by the desktop app itself and tested separately.
-  assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+10,'Every other item is a standard role.');
+  // The five alert and status switches, the five handoff choices and Record Performance Trace are handled by the desktop app itself and tested separately.
+  assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+11,'Every other item is a standard role.');
   for(const entry of all)assert(!(entry.role&&entry.click),`${entry.role} keeps its native behaviour.`);
   const intel=[];menu({arch:'x64',osVersion:'15.7.1',open:url=>intel.push(url)}).item('Report a Bug').click();assert.match(intel[0],/&system=macOS\+15\.7\.1%2C\+Intel$/);
 });
@@ -86,7 +86,7 @@ for(const platform of ['win32','linux'])test(`on ${platform} the menus have no a
   assert.deepEqual(labels(template),['File','Edit','View','Agent','Workspace','windowMenu','help']);
   assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Settings…','-','close','quit']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','delete','-','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces']);
-  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','Setup Guide','-','Report a Bug','Share Design Feedback','-','Roadmap','What’s New','-','about']);
+  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','Setup Guide','-','Report a Bug','Share Design Feedback','Record Performance Trace','-','Roadmap','What’s New','-','about']);
   for(const role of ['services','hide','hideOthers','unhide','pasteAndMatchStyle'])assert(!roles.includes(role),role);
   // & marks a keyboard mnemonic in Windows and Linux menus, so a workspace name doubles it to show it.
   assert.equal(item('workspace-2').label,'R&&D');assert.equal(menu().item('workspace-2').label,'R&D');
@@ -124,6 +124,19 @@ test('the Agent menu chooses when a handoff is offered near a usage limit, and w
   open.item('Never Offer').click();open.item('Offer at 80%').click();automatic.click();
   assert.deepEqual(changes,[{threshold:0},{threshold:80},{automatic:true}]);
   assert.equal(disabled(menu({handoff:{threshold:0,automatic:true}}).item('Hand Off Automatically to Subscription Agents')),true,'Automatic handoff needs offers to be on.');
+});
+
+test('Help records a performance trace in the desktop app, in the installed app too, and shows that it is recording',()=>{
+  let recorded=0;
+  const {item,labels,sent,opened}=menu({recordTrace:()=>recorded++});
+  const help=labels(item('help').submenu);
+  assert.equal(help[help.indexOf('Share Design Feedback')+1],'Record Performance Trace','It sits with Report a Bug and Share Design Feedback.');
+  item('Record Performance Trace').click();
+  assert.equal(recorded,1);
+  assert.deepEqual([sent,opened],[[],[]],'The desktop app records it; the page is not asked and nothing opens.');
+  const busy=menu({tracing:true});
+  assert.equal(busy.item('Recording Performance Trace…').enabled,false,'While it records, the item says so and cannot start a second one.');
+  assert(!busy.all.some(entry=>entry.label==='Record Performance Trace'));
 });
 
 test('the installed app offers Check for Updates… after About, which asks the page to check and show the answer',()=>{

@@ -55,7 +55,7 @@ class Element extends Events {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
 
-function lounge({ reducedMotion = false, ledge = false, painted = true, height = 800, random = null } = {}) {
+function lounge({ reducedMotion = false, ledge = false, painted = true, height = 800, random = null, onMatchMedia = () => {} } = {}) {
   const document = new Events();
   document.hidden = false;
   document.body = new Element('body', document);
@@ -84,7 +84,7 @@ function lounge({ reducedMotion = false, ledge = false, painted = true, height =
   let flowOn = true;
   Object.assign(window, {
     innerWidth: 1200, innerHeight: height,
-    matchMedia: query => ({ matches: reducedMotion && query === '(prefers-reduced-motion: reduce)', addEventListener() {}, removeEventListener() {} }),
+    matchMedia: query => { onMatchMedia(query); return { matches: reducedMotion && query === '(prefers-reduced-motion: reduce)', addEventListener() {}, removeEventListener() {} }; },
     relayUI: { getState: () => ({ conversation: null }), isRunning: () => false },
     relayFlow: { isOn: () => flowOn },
   });
@@ -304,12 +304,17 @@ test('weather keeps one loop at most through hide, recede, Flow on and off, weat
   second(ui, 60);
   assert.deepEqual(ui.loops(), { drawWeather: 1 });
   ui.api.recede('attention'); second(ui, 60, 2000);
-  assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'weather kept on goes on over Flow while the Lounge has receded');
-  ui.setFlow(false); second(ui, 60, 4000);
+  assert.deepEqual(ui.loops(), {}, 'the weather stops while the Lounge has receded for an approval');
+  ui.setHidden(true); ui.setHidden(false); second(ui, 60, 3000);
+  assert.deepEqual(ui.loops(), {}, 'showing the window again does not start it while receded');
+  ui.api.resume(); second(ui, 60, 4000);
+  assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'returning to the Lounge starts it again');
+  assert.equal(ui.api.getWeatherMode(), 'rain', 'with the same weather as before');
+  ui.setFlow(false); second(ui, 60, 6000);
   assert.deepEqual(ui.loops(), {}, 'leaving Flow stops the weather');
-  ui.setHidden(true); ui.setHidden(false); second(ui, 60, 6000);
-  assert.deepEqual(ui.loops(), {}, 'showing the window again does not start it outside Flow');
   ui.setFlow(true); second(ui, 60, 8000);
+  assert.deepEqual(ui.loops(), {}, 'Flow alone does not bring the weather back');
+  ui.api.enter(); second(ui, 60, 9000);
   assert.deepEqual(ui.loops(), { drawWeather: 1 });
   ui.api.setWeatherMode('clear'); second(ui, 60, 10000);
   assert.deepEqual(ui.loops(), {}, 'Clear stops after clearing');
@@ -317,6 +322,26 @@ test('weather keeps one loop at most through hide, recede, Flow on and off, weat
   for (let i = 0; i < 3; i++) { ui.api.exit(); ui.api.enter(); }
   second(ui, 60, 12000);
   assert.deepEqual(ui.loops(), { drawWeather: 1 });
+});
+
+test('weather stops when you leave the Lounge, and its canvas goes with it', () => {
+  const ui = lounge();
+  ui.api.enter(); ui.api.setWeatherMode('snow'); second(ui, 60, 0, 2);
+  assert.ok(ui.document.getElementById('flow-lounge-weather-canvas'), 'snow falls in the Lounge');
+  ui.api.exit(); second(ui, 60, 3000, 2);
+  assert.deepEqual(ui.loops(), {}, 'nothing waits for a frame after leaving');
+  assert.equal(ui.document.getElementById('flow-lounge-weather-canvas'), null, 'Flow keeps no full-window canvas');
+  ui.api.enter(); second(ui, 60, 6000);
+  assert.equal(ui.api.getWeatherMode(), 'snow', 'coming back keeps the choice');
+  assert.deepEqual(ui.loops(), { drawWeather: 1 });
+});
+
+test('the weather asks about reduced motion once, not on every frame', () => {
+  let queries = 0;
+  const ui = lounge({ onMatchMedia: () => queries++ });
+  ui.api.enter(); ui.api.setWeatherMode('rain'); second(ui, 60, 0, 2);
+  assert.ok(drawnFrames(ui.weather()) > 30, 'the rain was drawn');
+  assert.equal(queries, 1, 'one query when the script starts');
 });
 
 test('the setup screen glow drifts once rather than for as long as setup is open', () => {

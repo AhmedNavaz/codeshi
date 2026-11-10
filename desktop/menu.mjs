@@ -26,7 +26,7 @@ function system(platform, osVersion, arch) {
   return `${name} ${osVersion}, ${platform === 'darwin' ? arch === 'arm64' ? 'Apple Silicon' : 'Intel' : arch}`;
 }
 
-export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = alertDefaults, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open, text: words = english }) {
+export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = alertDefaults, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open, tracing = false, recordTrace = () => {}, text: words = english }) {
   // The menus' words are in the interface language (#27); names of workspaces and agents stay as they are.
   const { t } = words, page = state || initial, mac = platform === 'darwin', separator = () => ({ type: 'separator' });
   const command = (label, name, options = {}) => ({ label, ...options, click: () => send(...name) });
@@ -111,6 +111,8 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     separator(),
     link(t('Report a Bug'), report),
     link(t('Share Design Feedback'), `${repository}/issues/new?template=ux_feedback.yml`),
+    // Measures Codeshi itself while it seems slow or warm, and saves the trace on this computer.
+    tracing ? { label: t('Recording Performance Trace…'), enabled: false } : { label: t('Record Performance Trace'), click: () => recordTrace() },
     separator(),
     link(t('Roadmap'), `${repository}/blob/main/ROADMAP.md`),
     command(t('What’s New'), ['whats-new'], { id: 'whats-new' }),
