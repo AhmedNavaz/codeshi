@@ -49,6 +49,12 @@
   let snowClumps = [];
   let cachedObstacles = [];
   let lastObstacleUpdate = 0;
+  // Weather is ambient, so it is drawn at most 30 times a second. Its motion is set in steps of a 60 Hz frame: each
+  // drawn frame runs the steps for the time that has passed and draws the last, so a 120 Hz display neither speeds
+  // the weather up nor draws it more often.
+  const WEATHER_FRAME_MS = 1000 / 30, WEATHER_STEP_MS = 1000 / 60;
+  let lastWeatherFrame = null, weatherLag = 0;
+  const reducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
 
   function updateObstacleRects() {
     const rects = [];
@@ -276,11 +282,26 @@
   function drawWeather(time) {
     weatherAnimId = null;
     if (!weatherShown() || document.hidden || !weatherCtx || !weatherCanvas) return;
+    // Clear, and any weather while the system asks for reduced motion, is drawn once as an empty sky and then stops.
+    const still = weatherMode === "clear" || reducedMotion();
+    let steps = 1;
+    if (!still && lastWeatherFrame !== null) {
+      const since = time - lastWeatherFrame;
+      if (since < WEATHER_FRAME_MS - 1) {
+        weatherAnimId = safeRequestAnim(drawWeather);
+        return;
+      }
+      // After a long gap, such as a hidden window, the weather catches up by a few steps at most.
+      weatherLag = Math.min(weatherLag + since, 4 * WEATHER_STEP_MS);
+      steps = Math.floor(weatherLag / WEATHER_STEP_MS);
+      weatherLag -= steps * WEATHER_STEP_MS;
+    }
+    lastWeatherFrame = time;
     const ctx = weatherCtx;
     const w = weatherCanvas.width, h = weatherCanvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    if (weatherMode === "clear") {
+    if (still) {
       return;
     }
 
@@ -289,9 +310,18 @@
       updateObstacleRects();
     }
 
+    for (let step = 1; step <= steps; step++) stepWeather(step === steps ? ctx : null, w, h);
+
+    if (weatherShown()) weatherAnimId = safeRequestAnim(drawWeather);
+  }
+
+  // One 60 Hz step of rain or snow. It draws only when given the canvas context: the last step of a drawn frame.
+  function stepWeather(ctx, w, h) {
     if (weatherMode === "rain") {
-      ctx.lineWidth = 1.3;
-      ctx.strokeStyle = "rgba(147, 197, 253, 0.45)";
+      if (ctx) {
+        ctx.lineWidth = 1.3;
+        ctx.strokeStyle = "rgba(147, 197, 253, 0.45)";
+      }
 
       for (let i = 0; i < rainDrops.length; i++) {
         const d = rainDrops[i];
@@ -348,15 +378,28 @@
           d.y = -15 - Math.random() * 25;
           d.x = Math.random() * (w + 200) - 100;
           d.passThrough = Math.random() < 0.35;
+          d.trail = 0;
         } else {
           d.x = nextX;
           d.y = nextY;
-          ctx.beginPath();
-          ctx.moveTo(d.x, d.y);
-          ctx.lineTo(d.x + d.vx * (d.len / d.vy), d.y - d.len);
-          ctx.stroke();
+          if (ctx) {
+            // A frame is drawn every second step or so. The streak also covers the way the drop fell since the last
+            // drawn frame, as the 60 Hz frames between them did together, so the rain reads as streaks, not dashes.
+            // It is fainter by as much as it is longer, so the rain gives off the same light as at 60 frames a second.
+            const len = d.len + (d.trail || 0);
+            ctx.globalAlpha = d.len / len;
+            ctx.beginPath();
+            ctx.moveTo(d.x, d.y);
+            ctx.lineTo(d.x + d.vx * (len / d.vy), d.y - len);
+            ctx.stroke();
+            d.trail = 0;
+          } else {
+            d.trail = (d.trail || 0) + d.vy;
+          }
         }
       }
+
+      if (ctx) ctx.globalAlpha = 1;
 
       // Draw and update splashes
       for (let i = rainSplashes.length - 1; i >= 0; i--) {
@@ -371,6 +414,7 @@
           continue;
         }
 
+        if (!ctx) continue;
         ctx.fillStyle = `rgba(186, 230, 253, ${Math.max(0, sp.alpha)})`;
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, sp.r, 0, Math.PI * 2);
@@ -378,7 +422,7 @@
       }
 
       // Draw and update ripples on obstacles
-      ctx.lineWidth = 1;
+      if (ctx) ctx.lineWidth = 1;
       for (let i = rainRipples.length - 1; i >= 0; i--) {
         const rp = rainRipples[i];
         rp.rx += rp.growth;
@@ -388,6 +432,7 @@
           rainRipples.splice(i, 1);
           continue;
         }
+        if (!ctx) continue;
         ctx.strokeStyle = `rgba(186, 230, 253, ${Math.max(0, rp.alpha)})`;
         ctx.beginPath();
         if (ctx.ellipse) {
@@ -416,7 +461,7 @@
           continue;
         }
 
-        if (sn.y < -10 || sn.y > h + 10 || sn.x < -10 || sn.x > w + 10) continue;
+        if (!ctx || sn.y < -10 || sn.y > h + 10 || sn.x < -10 || sn.x > w + 10) continue;
 
         ctx.fillStyle = `rgba(255, 255, 255, ${Math.max(0, sn.alpha)})`;
         ctx.beginPath();
@@ -461,6 +506,7 @@
           continue;
         }
 
+        if (!ctx) continue;
         ctx.fillStyle = `rgba(255, 255, 255, ${Math.max(0, c.alpha)})`;
         ctx.beginPath();
         ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
@@ -612,15 +658,15 @@
         } else {
           f.x = nextX;
           f.y = nextY;
-          ctx.fillStyle = `rgba(255, 255, 255, ${f.alpha})`;
-          ctx.beginPath();
-          ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
-          ctx.fill();
+          if (ctx) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${f.alpha})`;
+            ctx.beginPath();
+            ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
     }
-
-    if (weatherShown()) weatherAnimId = safeRequestAnim(drawWeather);
   }
 
   function setWeatherMode(mode) {
@@ -640,6 +686,21 @@
       t.setAttribute("aria-pressed", String(match));
     });
     refreshTiles();
+  }
+
+  // Breakout and Snake move in steps of a 60 Hz frame, as the weather does, so they play at the same speed on a 60 Hz
+  // and a 120 Hz display. A game's clock tells how many steps the time since its last frame covers.
+  const GAME_STEP_MS = 1000 / 60;
+  const gameClock = () => ({ last: null, lag: 0 });
+  function gameSteps(clock, time) {
+    // The first frame after a game starts, resumes or comes back into view takes one step, as every frame used to.
+    if (clock.last === null || !(time >= clock.last)) { clock.last = time; clock.lag = 0; return 1; }
+    // A frame up to a millisecond early still counts as a step, and after a stall a game catches up by a few at most.
+    clock.lag = Math.min(clock.lag + time - clock.last, 4 * GAME_STEP_MS);
+    clock.last = time;
+    const steps = Math.floor((clock.lag + 1) / GAME_STEP_MS);
+    clock.lag -= steps * GAME_STEP_MS;
+    return steps;
   }
 
   // ==========================================
@@ -676,6 +737,7 @@
   // ==========================================
   let breakoutState = null;
   let breakoutAnimId = null;
+  let breakoutClock = gameClock();
   let breakoutScoreEl = null;
   let breakoutBestEl = null;
   let breakoutStatusEl = null;
@@ -747,6 +809,7 @@
 
   function loopBreakout() {
     if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
+    breakoutClock = gameClock();
     breakoutAnimId = safeRequestAnim(drawBreakout);
   }
 
@@ -830,19 +893,26 @@
     }
   }
 
-  function drawBreakout() {
+  function drawBreakout(time) {
     breakoutAnimId = null;
     if (!active || receded || document.hidden || !breakoutCtx || !breakoutCanvas) return;
+    const s = breakoutState;
+    const moving = Boolean(s && breakoutStarted && !breakoutPaused && !s.gameOver && !s.won);
+    const steps = moving ? gameSteps(breakoutClock, time) : 0;
+    // On a display faster than 60 Hz, a frame between two steps has nothing new to draw.
+    if (moving && !steps) {
+      breakoutAnimId = safeRequestAnim(drawBreakout);
+      return;
+    }
     const ctx = breakoutCtx;
     ctx.clearRect(0, 0, 320, 200);
 
-    const s = breakoutState;
     if (s) {
       if (!breakoutStarted && !s.gameOver && !s.won) {
         s.ball.x = s.paddle.x + s.paddle.w / 2;
         s.ball.y = s.paddle.y - s.ball.r - 1;
       } else {
-        stepBreakout();
+        for (let step = 0; step < steps; step++) stepBreakout();
       }
 
       // Draw bricks
@@ -949,6 +1019,7 @@
   // ==========================================
   let snakeState = null;
   let snakeAnimId = null;
+  let snakeClock = gameClock();
   let snakeScoreEl = null;
   let snakeBestEl = null;
   let snakeStatusEl = null;
@@ -972,7 +1043,9 @@
       nextDir: { x: 1, y: 0 },
       score: 0,
       gameOver: false,
-      lastTick: 0,
+      // Time played, counted in 60 Hz steps, and when the snake last moved. Its first move comes at once.
+      played: 0,
+      lastTick: -Infinity,
       tickRate: 110,
     };
 
@@ -1018,6 +1091,7 @@
 
   function loopSnake() {
     if (snakeAnimId) safeCancelAnim(snakeAnimId);
+    snakeClock = gameClock();
     snakeAnimId = safeRequestAnim(drawSnake);
   }
 
@@ -1029,11 +1103,13 @@
     if (!paused) loopSnake();
   }
 
-  function stepSnake(time) {
+  // One 60 Hz step of Snake. The snake moves once its tick has passed.
+  function stepSnake() {
     const s = snakeState;
     if (!s || !snakeStarted || snakePaused || s.gameOver) return;
-    if (time - s.lastTick < s.tickRate) return;
-    s.lastTick = time;
+    s.played += GAME_STEP_MS;
+    if (s.played - s.lastTick < s.tickRate) return;
+    s.lastTick = s.played;
 
     s.dir = s.nextDir;
     const head = { x: s.snake[0].x + s.dir.x, y: s.snake[0].y + s.dir.y };
@@ -1065,12 +1141,19 @@
   function drawSnake(time) {
     snakeAnimId = null;
     if (!active || receded || document.hidden || !snakeCtx || !snakeCanvas) return;
+    const s = snakeState;
+    const moving = Boolean(s && snakeStarted && !snakePaused && !s.gameOver);
+    const steps = moving ? gameSteps(snakeClock, time) : 0;
+    // On a display faster than 60 Hz, a frame between two steps has nothing new to draw.
+    if (moving && !steps) {
+      snakeAnimId = safeRequestAnim(drawSnake);
+      return;
+    }
     const ctx = snakeCtx;
     ctx.clearRect(0, 0, 300, 195);
 
-    const s = snakeState;
     if (s) {
-      if (snakeStarted) stepSnake(time);
+      for (let step = 0; step < steps; step++) stepSnake();
 
       // A faint grid so the snake's lanes read at full size.
       ctx.fillStyle = "rgba(148, 163, 184, 0.09)";
@@ -1644,6 +1727,9 @@
     if (snakeAnimId) safeCancelAnim(snakeAnimId);
     if (weatherAnimId) safeCancelAnim(weatherAnimId);
     breakoutAnimId = snakeAnimId = weatherAnimId = null;
+    // A game coming back into view goes on from where it was, not from where the hidden time would have taken it.
+    breakoutClock = gameClock();
+    snakeClock = gameClock();
     if (active && !receded && !document.hidden) {
       breakoutAnimId = safeRequestAnim(drawBreakout);
       snakeAnimId = safeRequestAnim(drawSnake);

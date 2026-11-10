@@ -41,6 +41,8 @@ import { verificationForRun } from './verification.mjs';
 import { applyOrchestration, checkPlanning, orchestrationAction, planningRequest, planningResult, restartedPlanning } from './orchestration.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
+// Which file a command is, and which version of it: installing, moving or updating a CLI changes this.
+const fileIdentity = file => { try { const stat = fs.statSync(file); return [file, stat.size, stat.mtimeMs, stat.ino]; } catch { return [file]; } };
 const transportFor = (provider, transport, configured) => transport === 'auto' ? provider === 'gemini' ? 'acp' : configured ? 'cli' : provider === 'codex' ? 'app-server' : 'sdk' : transport;
 const MODES = ['edit', 'read'];
 export const APPROVAL_POLICIES = ['ask', 'auto'];
@@ -809,21 +811,30 @@ export class Broker extends EventEmitter {
   }
 
   async status() {
-    if (!this.providerStatus || Date.now() - this.providerStatusCheckedAt >= 10000) {
+    // Checking starts an agent CLI with --version, and the window asks for status every 15 seconds while it is shown.
+    // So a check that succeeded stands for five minutes, or until the CLI is installed, moved or updated. A check that
+    // failed or timed out is made again after ten seconds, so a CLI that starts working is seen as soon as before.
+    const bins = Object.fromEntries(PROVIDERS.map(provider => [provider, resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot })]));
+    const identities = Object.fromEntries(PROVIDERS.map(provider => [provider, JSON.stringify(fileIdentity(bins[provider]))]));
+    const checks = this.providerChecks || {}, now = performance.now();
+    const due = PROVIDERS.filter(provider => !this.providerStatus?.[provider] || checks[provider]?.identity !== identities[provider] || now - checks[provider].at >= (checks[provider].ok ? 5 * 60 * 1000 : 10000));
+    if (due.length) {
       if (!this.providerStatusPending) {
         this.providerStatusPending = Promise.all(PROVIDERS.map(async provider => {
-          const bin = resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot });
+          if (!due.includes(provider)) return [provider, this.providerStatus[provider], checks[provider]];
+          const bin = bins[provider];
           this.bins[provider] = bin;
-          if (provider === 'gemini' && isAntigravityACP(bin)) return [provider, { installed: true, available: true, path: bin, authenticated: 'unknown', billingSource: 'unknown', capabilities: { ...capabilities(provider), readOnly: 'unavailable' } }];
+          const check = ok => ({ identity: identities[provider], ok, at: performance.now() });
+          if (provider === 'gemini' && isAntigravityACP(bin)) return [provider, { installed: true, available: true, path: bin, authenticated: 'unknown', billingSource: 'unknown', capabilities: { ...capabilities(provider), readOnly: 'unavailable' } }, check(true)];
           const result = bin ? await probeCli(bin, ['--version'], 4000) : null;
           // A CLI that is slow to answer is still installed: keep its last known status, or treat it as usable but unverified.
-          if (result?.timedOut && this.providerStatus?.[provider]) return [provider, this.providerStatus[provider]];
+          if (result?.timedOut && this.providerStatus?.[provider]) return [provider, this.providerStatus[provider], check(false)];
           const usable = result?.status === 0 || Boolean(result?.timedOut);
           const agyBlocked = provider === 'gemini' && isAgy(bin) && Boolean(this.configuredBins[provider]);
-          return [provider, { available: usable && !agyBlocked, version: clip(result?.stdout?.trim(), 200), path: bin, installed: usable, ...(result?.timedOut && { errorCategory: 'timeout' }), authenticated: 'unknown', billingSource: 'unknown', authMode: 'unknown', usage: 'unknown', capabilities: capabilities(provider, this.configuredBins[provider] ? 'cli' : 'auto') }];
+          return [provider, { available: usable && !agyBlocked, version: clip(result?.stdout?.trim(), 200), path: bin, installed: usable, ...(result?.timedOut && { errorCategory: 'timeout' }), authenticated: 'unknown', billingSource: 'unknown', authMode: 'unknown', usage: 'unknown', capabilities: capabilities(provider, this.configuredBins[provider] ? 'cli' : 'auto') }, check(result?.status === 0)];
         })).then(entries => {
-          this.providerStatus = Object.fromEntries(entries);
-          this.providerStatusCheckedAt = Date.now();
+          this.providerStatus = Object.fromEntries(entries.map(([provider, status]) => [provider, status]));
+          this.providerChecks = Object.fromEntries(entries.map(([provider, , check]) => [provider, check]));
         }).finally(() => { this.providerStatusPending = null; });
         // A background check that nobody awaits must not become an unhandled rejection.
         this.providerStatusPending.catch(() => {});

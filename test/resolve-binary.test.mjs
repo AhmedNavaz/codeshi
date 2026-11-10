@@ -227,7 +227,7 @@ test('Broker status probes and actual runs use the same selected executable', { 
   assert.equal(broker.bins.codex, selected);
   await broker.status();
   assert.equal(fs.readFileSync(capture, 'utf8').trim().split('\n').length, 2);
-  broker.providerStatusCheckedAt = 0;
+  for (const check of Object.values(broker.providerChecks)) check.at -= 5 * 60 * 1000;
   await Promise.all([broker.status(), broker.status()]);
   const c = broker.get(broker.create().id);
   broker.start(c, { text: 'Run the selected binary', provider: 'codex', mode: 'read' });

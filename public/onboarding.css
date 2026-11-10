@@ -11,7 +11,7 @@
 .setup-dialog { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; color: var(--text); background: var(--bg); overflow: hidden; }
 .setup-dialog::backdrop { background: var(--bg); }
 .setup-dialog[open] { display: flex; flex-direction: column; animation: ob-fade .4s ease both; }
-.setup-dialog::before { content: ""; position: absolute; inset: -10%; pointer-events: none; background: radial-gradient(38% 42% at 18% 12%, var(--glow-seal), transparent 70%), radial-gradient(34% 38% at 58% 46%, var(--glow-paper), transparent 70%), radial-gradient(40% 44% at 88% 92%, var(--glow-ember), transparent 70%); animation: ob-drift 18s ease-in-out infinite alternate; }
+.setup-dialog::before { content: ""; position: absolute; inset: -10%; pointer-events: none; background: radial-gradient(38% 42% at 18% 12%, var(--glow-seal), transparent 70%), radial-gradient(34% 38% at 58% 46%, var(--glow-paper), transparent 70%), radial-gradient(40% 44% at 88% 92%, var(--glow-ember), transparent 70%); animation: ob-drift 18s ease-in-out forwards; }
 .setup-dialog > * { position: relative; }
 .onboarding-drag { position: absolute; top: 0; left: 0; right: 0; height: 44px; z-index: 1; }
 .mac-titlebar .onboarding-drag, .mac-titlebar .onboarding-header { -webkit-app-region: drag; }
