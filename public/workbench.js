@@ -19,7 +19,10 @@
   const post = (path, value = {}, projectId) => api().post('/api/collaboration' + path, value, projectId ?? projectScope);
   const get = (path, projectId) => api().api('/api/collaboration' + path, {}, projectId ?? projectScope);
   const providerName = provider => provider === 'gemini' ? 'Gemini' : provider === 'codex' ? 'Codex' : 'Claude';
-  const bytes = count => count < 1024 ? `${count} B` : `${(count / 1024).toFixed(count < 10240 ? 1 : 0)} KB`;
+  const bytes = count => count < 1024 ? `${count} B` : count < 1048576 ? `${(count / 1024).toFixed(count < 10240 ? 1 : 0)} KB` : `${(count / 1048576).toFixed(1)} MB`;
+  // A binary file travels as base64 (#25). Its size and, for the four image types Codeshi shows, its type come from the first bytes.
+  const base64Size = value => Math.floor(value.length * 3 / 4) - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
+  const imageType = value => { let head = ''; try { head = atob(value.slice(0, 16)); } catch { return null; } return head.startsWith('\x89PNG') ? 'image/png' : head.startsWith('\xff\xd8\xff') ? 'image/jpeg' : head.startsWith('GIF8') ? 'image/gif' : head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP' ? 'image/webp' : null; };
   const date = value => { if (!value) return ''; const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
   const download = (name, value) => { const a = node('a'), url = URL.createObjectURL(new Blob([describe(value)], { type: 'application/json' })); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
   async function perform(fn) {
@@ -175,7 +178,12 @@
     for (const [key, label] of [['goal', 'Goal'], ['problem', 'Problem'], ['expectedOutcome', 'Expected outcome']]) if (value[key]) { const block = node('div', undefined, 'preview-text'); block.append(node('h4', label), node('p', value[key])); parent.append(block); }
     for (const [key, label] of [['decisions', 'Decisions'], ['tasks', 'Unfinished tasks']]) if (value[key]?.length) { parent.append(node('h4', label)); list(parent, value[key]); }
     if (messageCount) { const included = details(parent, `Read ${messageCount} selected message${messageCount === 1 ? '' : 's'}`); for (const message of value.messages) { const entry = node('article', undefined, 'preview-message'); entry.append(node('h4', message.provider ? providerName(message.provider) : message.role), node('p', message.text)); included.append(entry); } }
-    if (fileCount) { parent.append(node('h4', 'Included source')); for (const file of value.files) { const entry = details(parent, `${file.path} · ${bytes(new Blob([file.content]).size)}`); output(entry, file.content); } }
+    if (fileCount) { parent.append(node('h4', 'Included source')); for (const file of value.files) {
+      if (!file.encoding) { output(details(parent, `${file.path} · ${bytes(new Blob([file.content]).size)}`), file.content); continue; }
+      const entry = details(parent, `${file.path} · Binary · ${bytes(base64Size(file.content))}`), type = imageType(file.content);
+      if (type) { const figure = node('figure', undefined, 'binary-side'), frame = node('div', undefined, 'binary-frame image'), image = node('img'); image.src = `data:${type};base64,${file.content}`; image.alt = file.path; frame.append(image); figure.append(frame); entry.append(figure); }
+      entry.append(node('p', 'A binary file is shared exactly as it is. It can’t be shown here as text.', 'muted'));
+    } }
     const absent = value.baseline.filter(file => file.sha256 === null); if (absent.length) { parent.append(node('h4', 'Permitted new files')); list(parent, absent.map(file => file.path)); }
   }
   function showApproved(parent, handoff) {
@@ -232,16 +240,85 @@
     const changes = section('Review file changes');
     const status = { applicable: 'Ready to apply', stale: 'Files changed since this request', applied: 'Already applied', 'recovery-required': 'Recovery required', instructions: 'Explanation only' }[preview.status] || preview.status; changes.append(badge(status, preview.status === 'stale' ? 'warning' : preview.status === 'applied' ? 'positive' : ''));
     for (const conflict of preview.conflicts || []) { const box = node('p', undefined, 'scan-warning'); box.append(node('strong', conflict.path + ': '), document.createTextNode(conflict.reason || 'The local file no longer matches the approved baseline.')); changes.append(box); }
-    for (const file of preview.files) { const detail = details(changes, `${{ create: 'Add', replace: 'Update', delete: 'Delete' }[file.operation] || file.operation} ${file.path}`); detail.open = true; output(detail, file.diff || `BEFORE\n${file.before ?? '(absent)'}\nAFTER\n${file.after ?? '(deleted)'}`); }
+    for (const file of preview.files) { const detail = details(changes, `${{ create: 'Add', replace: 'Update', delete: 'Delete' }[file.operation] || file.operation} ${file.path}`); detail.open = true; if (file.binary) binaryChange(detail, file); else output(detail, file.diff || `BEFORE\n${file.before ?? '(absent)'}\nAFTER\n${file.after ?? '(deleted)'}`); }
     if (!preview.files.length) changes.append(node('p', 'This solution contains an explanation and no file changes.'));
     if (preview.status === 'applicable' && preview.files.length) { const ack = check('I reviewed these changes and want to apply this exact solution.'); changes.append(ack.l); actions(changes, button('Apply reviewed patch', async () => { if (!ack.i.checked) throw Error('Check the approval box after reviewing the diff.'); await post(`/solutions/${record.id}/apply`, { approvedIntegrity: record.solution.integrity }); await api().refresh(); const latest = await get(`/solutions/${record.id}`); await reviewSolution(latest); notice(content, 'The reviewed changes were applied. A recovery checkpoint has been saved.'); }, 'primary')); }
     if (preview.application) { const recovery = details(changes, 'Recover the affected files', 'Restore the files changed by this solution. Newer local edits are preserved when a safe restore is not possible.'); actions(recovery, button('Recover affected files', async () => { const result = await post(`/solutions/${record.id}/recover`); await api().refresh(); await reviewSolution(result); notice(content, result.status === 'recovery-conflict' ? 'Some files contain newer changes and were preserved. Review the recovery details.' : 'The affected files were recovered.', result.status === 'recovery-conflict' ? 'info' : 'success'); })); diagnostics(recovery, preview.application, 'Recovery checkpoint details'); }
+    if (preview.files.length) await testsPanel(section('Run your tests', 'Run your project’s own Test command on the applied patch. Nothing runs until you confirm it.'), record);
     const verify = section('Local checks', 'Run a reviewed syntax or whitespace check against your local files.');
     const target = field('Workspace-relative JavaScript file'); target.i.placeholder = 'src/app.js'; verify.append(target.l);
     async function verifyWith(argv) { const result = await post(`/solutions/${record.id}/verify`, { argv, reviewed: true }); verificationResult(verify, result); }
     actions(verify, button('Check JavaScript syntax', () => { if (!target.i.value.trim()) throw Error('Enter a JavaScript file path to check.'); return verifyWith(['node', '--check', target.i.value.trim()]); }), button('Check Git whitespace', () => verifyWith(['git', 'diff', '--check'])));
-    for (const result of record.verification || []) verificationResult(verify, result);
+    for (const result of record.verification || []) if (result.source !== 'tests') verificationResult(verify, result);
     diagnostics(overview, { solutionId: record.id, requestId: record.handoffId, integrity: record.solution.integrity }, 'Solution details');
+  }
+  // The project's own tests on an applied patch (#10). The command is the one marked for tests in Run, never one from the
+  // friend; the run is that command's usual session, so it shows in Run as well. A failure undoes nothing on its own: the
+  // latest failed result offers Undo this patch, the same recovery as below.
+  const seconds = ms => ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.floor(ms / 60000)}m ${Math.round(ms % 60000 / 1000)}s`;
+  async function testsPanel(parent, record) {
+    const box = node('div', undefined, 'solution-tests'); parent.append(box); let watch = null;
+    const draw = async () => {
+      clearTimeout(watch); const plan = await get(`/solutions/${record.id}/tests`); if (!box.isConnected) return; box.replaceChildren();
+      // The latest results come first, so a failure and its Undo sit right under the heading.
+      const results = plan.results.slice(-3).reverse(), failed = results[0] && !results[0].passed && results[0].status !== 'stopped' && plan.status !== 'not-applied';
+      results.forEach((result, index) => {
+        const card = node('article', undefined, 'verification-result');
+        card.append(badge({ passed: 'Passed', failed: 'Failed', stopped: 'Stopped' }[result.status] || result.status, result.passed ? 'positive' : 'warning'));
+        const line = node('p', undefined, 'verification-command'); line.append(node('code', result.command)); card.append(line);
+        card.append(node('p', [result.folder, seconds(result.durationMs || 0), result.status === 'failed' && result.exitCode !== null ? `exit code ${result.exitCode}` : '', date(result.completedAt)].filter(Boolean).join(' · '), 'muted'));
+        if (index === 0 && failed) actions(card, button('Undo this patch', async () => { const undone = await post(`/solutions/${record.id}/recover`); await api().refresh(); await reviewSolution(undone); notice(content, undone.status === 'recovery-conflict' ? 'Some files have newer changes and were kept. Review the recovery details.' : 'The patch was undone.', undone.status === 'recovery-conflict' ? 'info' : 'success'); }));
+        if (result.output?.trim()) { const shown = details(card, 'End of the output'); shown.open = index === 0 && !result.passed; output(shown, result.output); }
+        box.append(card);
+      });
+      const where = plan.command ? `${plan.command.folder || 'its folder'}${plan.command.directory ? '/' + plan.command.directory : ''}` : '';
+      const commandLine = () => { const line = node('p', undefined, 'verification-command'); line.append(node('code', plan.command.command)); box.append(line, node('p', `${plan.command.name} · runs in ${where}`, 'muted')); };
+      if (plan.status === 'not-applied') box.append(node('p', 'Apply the patch first. Then you can run your tests on it here.', 'muted'));
+      else if (plan.status === 'no-command') {
+        box.append(node('p', 'No command is marked for tests yet. Choose one in Run, then come back here.', 'muted'));
+        actions(box, button('Choose a Test command', () => { modal.close(); window.relayCommands?.open({ test: true }); }));
+      } else if (plan.status === 'running') {
+        box.append(badge('Running', '')); commandLine();
+        box.append(node('p', `Started ${date(plan.running.startedAt)}. Its output also shows in Run.`, 'muted'));
+        actions(box, button('Stop', async () => { await post(`/solutions/${record.id}/tests/stop`); await draw(); }), button('Show in Run', () => { modal.close(); window.relayPanel?.show('run'); }));
+        // While it runs, look again every 2 seconds, and only while this review is on screen.
+        const poll = () => { watch = setTimeout(async () => {
+          if (!box.isConnected || !modal.open) return;
+          try { const next = await get(`/solutions/${record.id}/tests`); if (next.status === 'running') { poll(); return; } await draw(); const latest = next.results.at(-1); if (latest) api().announce?.(latest.status === 'passed' ? 'The tests passed.' : latest.status === 'stopped' ? 'The tests were stopped.' : 'The tests failed. The patch is still applied.'); }
+          catch {}
+        }, 2000); }; poll();
+      } else {
+        commandLine();
+        if (!plan.covers) box.append(node('p', `This patch changed files in ${plan.elsewhere.join(', ')}, but the Test command runs in ${plan.command.folder || 'another folder'}, so the tests may not cover it.`, 'scan-warning'));
+        if (plan.files.length) {
+          const warning = node('div', undefined, 'scan-warning'); warning.append(node('p', 'The tests will run this patch’s version of these files, so read them in the diff above first:'));
+          const ul = node('ul', undefined, 'workbench-list'); for (const file of plan.files) { const li = node('li'); li.append(node('code', file.path), document.createTextNode(` · ${file.reason}`)); ul.append(li); } warning.append(ul); box.append(warning);
+        }
+        const ack = check(plan.files.length ? 'I read those files and want to run this command on the patched code.' : 'Run this command on the patched code.'); box.append(ack.l);
+        actions(box, button(plan.results.length ? 'Run tests again' : 'Run tests', async () => { if (!ack.i.checked) throw Error('Check the box to confirm the command first.'); await post(`/solutions/${record.id}/tests`, { reviewed: true, command: { id: plan.command.id, command: plan.command.command, folderId: plan.command.folderId, directory: plan.command.directory } }); await draw(); }, 'primary'));
+      }
+    };
+    await draw();
+  }
+  // A binary change can't be a diff, so it's shown side by side: what each version is, its size and hash, and
+  // images as pictures. What a diff would have shown is flagged instead: a program, or a code file that isn't text.
+  function binaryChange(parent, file) {
+    const after = file.binary.after, grid = node('div', undefined, file.binary.before?.image || after?.image ? 'binary-change' : 'binary-change compact');
+    for (const [label, side] of [['Before', file.binary.before], ['After', after]]) {
+      const figure = node('figure', undefined, 'binary-side');
+      const frame = node('div', undefined, side?.image ? 'binary-frame image' : 'binary-frame');
+      if (side?.image) { const image = node('img'); image.src = side.image; image.alt = `${label}: ${file.path}`; frame.append(image); }
+      else frame.textContent = side ? side.kind : label === 'Before' ? 'No file yet' : 'Deleted';
+      figure.append(frame);
+      const caption = node('figcaption'); caption.append(node('strong', label));
+      if (side) caption.append(document.createTextNode(` · ${side.kind} · ${bytes(side.bytes)} `), node('code', side.sha256.slice(0, 12), 'binary-hash'));
+      figure.append(caption); grid.append(figure);
+    }
+    parent.append(grid);
+    if (after?.program) parent.append(node('p', 'This file is a program. Open or run it only if you trust the person who sent it.', 'scan-warning'));
+    if (after?.binary && after.textName) parent.append(node('p', `${file.path.split('/').at(-1)} usually holds text, but this version is binary, so its changes can’t be shown as lines. Check the readable text below before applying it.`, 'scan-warning'));
+    else if (after?.binary && !after.image && !after.program) parent.append(node('p', 'Binary files can’t be compared line by line. Apply this one only if you expected this change.', 'muted'));
+    if (after?.readable) output(details(parent, 'Readable text in this file'), after.readable);
   }
   function verificationResult(parent, result) { const box = node('article', undefined, 'verification-result'); box.append(badge(result.passed ? 'Passed' : 'Failed', result.passed ? 'positive' : 'warning'), node('p', (result.argv || []).join(' '), 'verification-command')); if (result.stdout?.trim()) output(box, result.stdout); if (result.stderr?.trim()) output(box, result.stderr); if (!result.stdout?.trim() && !result.stderr?.trim()) box.append(node('p', result.passed ? 'No issues reported.' : 'The check did not complete successfully.', 'muted')); parent.append(box); }
 

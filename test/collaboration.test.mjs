@@ -8,10 +8,11 @@ import test from 'node:test';
 import { noSymlinks } from './platform.mjs';
 import { ProjectRegistry } from '../src/projects.mjs';
 import { gitExecutable } from '../src/resolve-binary.mjs';
-import { CollaborationService } from '../src/collaboration.mjs';
+import { CollaborationService, testInputs } from '../src/collaboration.mjs';
+import { ProjectCommands } from '../src/project-commands.mjs';
 import { atomicJSON } from '../src/patches.mjs';
 import { readWorkspaceFile } from '../src/workspace-files.mjs';
-import { sha256,canonicalStringify,sealPackage,sealSolution,validatePublicPackage,validateSolution,validateRelativePath,scanSecrets,MAX_FILE_BYTES } from '../src/collaboration-format.mjs';
+import { sha256,canonicalStringify,sealPackage,sealSolution,validatePublicPackage,validateSolution,validateRelativePath,scanSecrets,MAX_FILE_BYTES,MAX_BINARY_BYTES } from '../src/collaboration-format.mjs';
 
 function setup(t,{git=false}={}) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'ai-relay-collaboration-'));
@@ -86,11 +87,12 @@ test('stale preview approval and stale patch application never overwrite changed
   assert.equal(env.service.previewSolution(env.first.id,solution.id).status,'stale');await assert.rejects(env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity}),{status:409});assert.equal(existsContent(env.owner,'app.js'),'still newer work\n');
 });
 
-test('rejects traversal, private paths, symlinks, binary, oversized files and malformed public schemas',{skip:noSymlinks},async t=>{
+test('rejects traversal, private paths, symlinks, oversized files and malformed public schemas',{skip:noSymlinks},async t=>{
   const env=setup(t);fs.writeFileSync(path.join(env.owner,'app.js'),'original');
   for(const relative of ['../x','/absolute','a/../../x','a\\x','a//x','.git/config','.env','.env.production','.data/a','.codex/auth.json','.claude/projects/a','key.pem','a/%2e%2e/x','C:/x'])assert.throws(()=>validateRelativePath(relative),{status:400});
-  fs.symlinkSync(path.join(env.owner,'app.js'),path.join(env.owner,'link.js'));fs.symlinkSync(env.friend,path.join(env.owner,'outside'));fs.writeFileSync(path.join(env.owner,'binary.bin'),Buffer.from([0,1,2,3]));fs.writeFileSync(path.join(env.owner,'bad-utf8.txt'),Buffer.from([255]));fs.writeFileSync(path.join(env.owner,'big.txt'),'x'.repeat(MAX_FILE_BYTES+1));
-  for(const file of ['link.js','outside/created.txt','binary.bin','bad-utf8.txt','big.txt'])assert.throws(()=>env.service.prepare(env.first.id,env.conversation.id,{mode:'source',files:[file]}),{status:400});
+  fs.symlinkSync(path.join(env.owner,'app.js'),path.join(env.owner,'link.js'));fs.symlinkSync(env.friend,path.join(env.owner,'outside'));fs.writeFileSync(path.join(env.owner,'binary.bin'),Buffer.from([0,1,2,3]));fs.writeFileSync(path.join(env.owner,'bad-utf8.txt'),Buffer.from([255]));fs.writeFileSync(path.join(env.owner,'big.txt'),'x'.repeat(MAX_FILE_BYTES+1));fs.writeFileSync(path.join(env.owner,'huge.bin'),Buffer.alloc(MAX_BINARY_BYTES+1));
+  for(const file of ['binary.bin','bad-utf8.txt'])assert.equal(env.service.prepare(env.first.id,env.conversation.id,{mode:'source',files:[file]}).package.files[0].encoding,'base64');
+  for(const file of ['link.js','outside/created.txt','huge.bin','big.txt'])assert.throws(()=>env.service.prepare(env.first.id,env.conversation.id,{mode:'source',files:[file]}),{status:400});
   const handoff=await request(env);const malformed={...handoff.package,projectId:env.first.id};assert.throws(()=>validatePublicPackage(malformed),/Unsupported field/);
   const solution=returned(handoff,[]);assert.throws(()=>validateSolution({...solution,integrity:'0'.repeat(64)}),/integrity/);
   assert.throws(()=>sealSolution({...solution,patch:{format:'unified-diff',files:[]}}),/Only ai-relay/);
@@ -148,4 +150,163 @@ test('git whitespace verification disables configured clean and process filters'
   const sentinel=path.join(env.root,'filter-executed');const script=path.join(env.root,'bad-filter.cjs');fs.writeFileSync(script,'require("node:fs").writeFileSync('+JSON.stringify(sentinel)+',"should never run")');
   execFileSync(gitExecutable(),['config','filter.evil.clean',process.execPath+' '+script],{cwd:env.owner});execFileSync(gitExecutable(),['config','filter.evil.process',process.execPath+' '+script],{cwd:env.owner});fs.writeFileSync(path.join(env.owner,'.gitattributes'),'app.js filter=evil\n');fs.writeFileSync(path.join(env.owner,'app.js'),'export const n = 2;  \n');
   const result=await env.service.verify(env.first.id,solution.id,{argv:['git','diff','--check'],reviewed:true});assert.equal(result.passed,false);assert.equal(fs.existsSync(sentinel),false);assert.match(result.stdout+result.stderr,/trailing whitespace/);
+});
+
+// Binary files (#25).
+const png=(...body)=>Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0,0,0,13,...body]);
+const base64=bytes=>Buffer.from(bytes).toString('base64');
+function returnedFiles(handoff,files){return returned(handoff,files,{patch:{format:'ai-relay.files.v1',files}});}
+
+test('binary files round trip: shared, returned, previewed, applied and recovered byte for byte',async t=>{
+  const env=setup(t);const logo=png(1,2,3,255,0,7);const icon=png(9,9,0,9);const friendLogo=png(4,5,6,0,0,1,2);
+  fs.writeFileSync(path.join(env.owner,'app.js'),'export const logo = "logo.png";\n');fs.writeFileSync(path.join(env.owner,'logo.png'),logo);
+  const handoff=await request(env,{files:['app.js','logo.png'],newPaths:['assets/icon.png']});
+  const shared=handoff.package.files.find(file=>file.path==='logo.png');
+  assert.equal(shared.encoding,'base64');assert.equal(shared.content,base64(logo));assert.equal(shared.sha256,createHash('sha256').update(logo).digest('hex'));
+  assert.equal(handoff.package.files.find(file=>file.path==='app.js').encoding,undefined);
+  assert.equal(handoff.package.inventory.files.find(file=>file.path==='logo.png').bytes,logo.length);
+  const imported=await env.service.importRequest(env.second.id,handoff.package);
+  const note=env.registry.broker(env.second.id).get(imported.conversationId).messages.at(-1).text;
+  assert(!note.includes(base64(logo)));assert.match(note,/binary file, not shown/);
+  fs.writeFileSync(path.join(env.friend,'app.js'),'export const logo = "assets/icon.png";\n');fs.writeFileSync(path.join(env.friend,'logo.png'),friendLogo);fs.mkdirSync(path.join(env.friend,'assets'));fs.writeFileSync(path.join(env.friend,'assets/icon.png'),icon);
+  assert.equal(env.service.buildSolution(env.second.id,handoff.id,{files:['app.js'],explanation:'Text only.'}).patch.format,'ai-relay.text.v1');
+  const solution=env.service.buildSolution(env.second.id,handoff.id,{files:['app.js','logo.png','assets/icon.png'],explanation:'New logo and icon.'});
+  assert.equal(solution.patch.format,'ai-relay.files.v1');assert.equal(solution.patch.files.find(file=>file.path==='app.js').encoding,undefined);
+  const received=env.service.receiveSolution(env.first.id,solution);const preview=env.service.previewSolution(env.first.id,received.id);
+  assert.equal(preview.status,'applicable');
+  const changed=preview.files.find(file=>file.path==='logo.png');assert.equal(changed.diff,'');assert.equal(changed.before,null);
+  assert.equal(changed.binary.before.kind,'PNG image');assert.equal(changed.binary.before.bytes,logo.length);assert.equal(changed.binary.before.image,'data:image/png;base64,'+base64(logo));
+  assert.equal(changed.binary.after.sha256,sha256(new Uint8Array(friendLogo)));assert.equal(changed.binary.after.program,undefined);
+  const created=preview.files.find(file=>file.path==='assets/icon.png');assert.equal(created.operation,'create');assert.equal(created.binary.before,null);
+  assert.match(preview.files.find(file=>file.path==='app.js').diff,/assets\/icon\.png/);
+  await env.service.applySolution(env.first.id,received.id,{approvedIntegrity:solution.integrity});
+  assert(fs.readFileSync(path.join(env.owner,'logo.png')).equals(friendLogo));assert(fs.readFileSync(path.join(env.owner,'assets/icon.png')).equals(icon));
+  if(process.platform!=='win32')assert.equal(fs.statSync(path.join(env.owner,'assets/icon.png')).mode&0o777,0o644);
+  const reopened=new CollaborationService({registry:env.registry,dataRoot:env.dataRoot});
+  assert.equal((await reopened.recoverApplication(env.first.id,received.id)).status,'recovered');
+  assert(fs.readFileSync(path.join(env.owner,'logo.png')).equals(logo));assert.equal(fs.existsSync(path.join(env.owner,'assets/icon.png')),false);
+  assert.equal(existsContent(env.owner,'app.js'),'export const logo = "logo.png";\n');
+});
+
+test('a binary file changed after a request is stale, and recovery keeps newer binary edits',async t=>{
+  const env=setup(t);const logo=png(1,0);fs.writeFileSync(path.join(env.owner,'logo.png'),logo);
+  const handoff=await request(env,{files:['logo.png']});const base=handoff.package.baseline[0].sha256;
+  const solution=returnedFiles(handoff,[{path:'logo.png',baseHash:base,content:base64(png(2,0)),encoding:'base64'}]);env.service.receiveSolution(env.first.id,solution);
+  fs.writeFileSync(path.join(env.owner,'logo.png'),png(3,0));
+  assert.equal(env.service.previewSolution(env.first.id,solution.id).status,'stale');await assert.rejects(env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity}),{status:409});
+  assert(fs.readFileSync(path.join(env.owner,'logo.png')).equals(png(3,0)));
+  fs.writeFileSync(path.join(env.owner,'logo.png'),logo);await env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity});
+  fs.writeFileSync(path.join(env.owner,'logo.png'),png(4,0));
+  const result=await env.service.recoverApplication(env.first.id,solution.id);assert.equal(result.status,'recovery-conflict');assert(fs.readFileSync(path.join(env.owner,'logo.png')).equals(png(4,0)));
+});
+
+test('binary content must be real binary, standard base64, within 1 MiB and in the files format',async t=>{
+  const env=setup(t);fs.writeFileSync(path.join(env.owner,'app.js'),'original');fs.writeFileSync(path.join(env.owner,'logo.png'),png(1,0));
+  const handoff=await request(env,{files:['app.js','logo.png']});const hash=new Map(handoff.package.baseline.map(file=>[file.path,file.sha256]));
+  // Text sent as base64 would have no diff to review, so it could hide a change.
+  assert.throws(()=>returnedFiles(handoff,[{path:'app.js',baseHash:hash.get('app.js'),content:base64(Buffer.from('steal()')),encoding:'base64'}]),/sent as text/);
+  assert.throws(()=>returned(handoff,[{path:'logo.png',baseHash:hash.get('logo.png'),content:base64(png(2,0)),encoding:'base64'}]),/files\.v1/);
+  assert.throws(()=>returnedFiles(handoff,[{path:'logo.png',baseHash:hash.get('logo.png'),content:'AAF=',encoding:'base64'}]),/standard base64/);
+  assert.throws(()=>returnedFiles(handoff,[{path:'logo.png',baseHash:hash.get('logo.png'),content:'not base64!',encoding:'base64'}]),/standard base64/);
+  assert.throws(()=>returnedFiles(handoff,[{path:'logo.png',baseHash:hash.get('logo.png'),content:'0001',encoding:'hex'}]),/Unsupported file encoding/);
+  assert.throws(()=>returnedFiles(handoff,[{path:'logo.png',baseHash:hash.get('logo.png'),content:null,encoding:'base64'}]),/files\.v1|base64/);
+  assert.throws(()=>validateSolution({...returnedFiles(handoff,[]),patch:{format:'ai-relay.files.v1',files:[{path:'logo.png',baseHash:hash.get('logo.png'),content:base64(Buffer.alloc(MAX_BINARY_BYTES+1)),encoding:'base64'}]}}),/1 MiB|2 MiB/);
+  const altered=structuredClone(handoff.package);altered.files.find(file=>file.path==='logo.png').content=base64(png(9,0));assert.throws(()=>validatePublicPackage(altered),/hash|inventory|integrity/);
+  // A tampered recovery checkpoint can't smuggle text in as base64 either.
+  const good=returnedFiles(handoff,[{path:'logo.png',baseHash:hash.get('logo.png'),content:base64(png(2,0)),encoding:'base64'}]);env.service.receiveSolution(env.first.id,good);await env.service.applySolution(env.first.id,good.id,{approvedIntegrity:good.integrity});
+  const filename=env.service.patches.filename(env.first.id,good.id),checkpoint=JSON.parse(fs.readFileSync(filename,'utf8'));
+  checkpoint.operations[0].before={content:base64(Buffer.from('text')),encoding:'base64',sha256:sha256('text')};atomicJSON(filename,checkpoint);
+  await assert.rejects(env.service.recoverApplication(env.first.id,good.id),/Invalid recovery snapshot/);
+});
+
+test('secret scanning reads the strings inside a binary file, not its base64',()=>{
+  const token='ghp_'+'x'.repeat(36);
+  const leaking={files:[{path:'cache.bin',encoding:'base64',content:base64(Buffer.concat([Buffer.from([0,1]),Buffer.from('token='+token),Buffer.from([0])])),sha256:'0'.repeat(64)}]};
+  assert(scanSecrets(leaking).some(warning=>warning.code==='credential'&&warning.location==='files[0].content'));
+  // Base64 that only looks like a key is not a finding.
+  const lookalike=Buffer.concat([Buffer.from([0]),Buffer.from('AIza'+'A'.repeat(35),'base64')]);
+  assert.equal(scanSecrets({files:[{path:'a.bin',encoding:'base64',content:base64(lookalike),sha256:'0'.repeat(64)}]}).length,0);
+});
+
+test('the review flags a program, and a code file whose new version is binary shows its readable text',async t=>{
+  const env=setup(t);fs.writeFileSync(path.join(env.owner,'app.js'),'export const safe = true;\n');
+  const handoff=await request(env,{files:['app.js'],newPaths:['bin/tool']});const hash=new Map(handoff.package.baseline.map(file=>[file.path,file.sha256]));
+  const hidden=Buffer.concat([Buffer.from('export const safe = true;\n// '),Buffer.from([0]),Buffer.from('\nsteal();\n')]);
+  const solution=returnedFiles(handoff,[{path:'app.js',baseHash:hash.get('app.js'),content:base64(hidden),encoding:'base64'},{path:'bin/tool',baseHash:null,content:base64(Buffer.from([0x7f,0x45,0x4c,0x46,2,1,1,0])),encoding:'base64'}]);
+  env.service.receiveSolution(env.first.id,solution);const preview=env.service.previewSolution(env.first.id,solution.id);
+  const code=preview.files.find(file=>file.path==='app.js');assert.equal(code.binary.before.kind,'Text');assert.equal(code.binary.after.textName,true);assert.match(code.binary.after.readable,/steal\(\)/);assert.match(code.binary.after.readable,/\u2400/);
+  const tool=preview.files.find(file=>file.path==='bin/tool');assert.equal(tool.binary.after.kind,'Linux program');assert.equal(tool.binary.after.program,true);assert.equal(tool.binary.after.readable,undefined);
+});
+
+// #10: the project's own tests on an applied patch.
+async function appliedFix(env,files=[['app.js','broken\n','fixed\n']]) {
+  for(const [name,before] of files){fs.mkdirSync(path.dirname(path.join(env.owner,name)),{recursive:true});fs.writeFileSync(path.join(env.owner,name),before);}
+  const handoff=await request(env,{files:files.map(([name])=>name)}),hash=new Map(handoff.package.baseline.map(file=>[file.path,file.sha256]));
+  const solution=returned(handoff,files.map(([name,,after])=>({path:name,baseHash:hash.get(name),content:after})));env.service.receiveSolution(env.first.id,solution);
+  return solution;
+}
+const until=async(check,ms=5000)=>{const end=Date.now()+ms;while(!check()){if(Date.now()>end)throw new Error('Timed out.');await new Promise(resolve=>setTimeout(resolve,20));}};
+
+test('tests run only the command marked in Run, after the patch is applied and the exact command is confirmed',async t=>{
+  const env=setup(t),commands=new ProjectCommands({registry:env.registry,stopGrace:20});t.after(()=>commands.close());
+  const solution=await appliedFix(env);
+  assert.equal(env.service.testPlan(env.first.id,solution.id).status,'not-applied');
+  await env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity});
+  let plan=env.service.testPlan(env.first.id,solution.id);assert.equal(plan.status,'no-command');assert.equal(plan.command,null);
+  await assert.rejects(env.service.runTests(env.first.id,solution.id,{reviewed:true,command:{}}),{status:404});
+  const folderId=env.registry.get(env.first.id).folders[0].id;
+  commands.save(env.first.id,{name:'Test',folderId,command:'grep -q fixed app.js',test:true});
+  plan=env.service.testPlan(env.first.id,solution.id);assert.equal(plan.status,'ready');assert.equal(plan.command.command,'grep -q fixed app.js');assert.equal(plan.covers,true);assert.deepEqual(plan.files,[{path:'app.js',reason:'named in the Test command'}]);assert(!('folderPath' in plan.command));
+  const {id,command,directory}=plan.command;
+  await assert.rejects(env.service.runTests(env.first.id,solution.id,{command:{id,command,folderId,directory}}),/Review the Test command/);
+  await assert.rejects(env.service.runTests(env.first.id,solution.id,{reviewed:true,command:{id,command:'rm -rf .',folderId,directory}}),{status:409});
+  const started=await env.service.runTests(env.first.id,solution.id,{reviewed:true,command:{id,command,folderId,directory}});assert.equal(started.status,'running');
+  await assert.rejects(env.service.runTests(env.first.id,solution.id,{reviewed:true,command:{id,command,folderId,directory}}),/already running/);
+  assert.equal(commands.state(env.first.id).sessions[id].command,'grep -q fixed app.js','it runs as the Run panel’s own Test session');
+  await env.service.testing.get(solution.id).finished;
+  const record=env.service.getSolution(env.first.id,solution.id),result=record.verification.at(-1);
+  assert.equal(result.source,'tests');assert.equal(result.status,'passed');assert.equal(result.passed,true);assert.equal(result.exitCode,0);assert.equal(result.command,'grep -q fixed app.js');
+  assert.equal(env.service.testPlan(env.first.id,solution.id).results.length,1);
+  const notes=env.broker.get(env.conversation.id).messages.filter(message=>message.role==='system').map(message=>message.text);
+  assert.match(notes.at(-1),/^Tests on friend solution .*: grep -q fixed app\.js passed in \d+s\. No AI was used\.$/);
+});
+
+test('failing tests keep the patch and its recovery checkpoint, and stopping is recorded as stopped',async t=>{
+  const env=setup(t),commands=new ProjectCommands({registry:env.registry,stopGrace:20});t.after(()=>commands.close());
+  const solution=await appliedFix(env);await env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity});
+  const folderId=env.registry.get(env.first.id).folders[0].id,saved=commands.save(env.first.id,{name:'Test',folderId,command:'echo nope; exit 3',test:true});
+  const confirm={reviewed:true,command:{id:saved.id,command:saved.command,folderId,directory:''}};
+  await env.service.runTests(env.first.id,solution.id,confirm);await env.service.testing.get(solution.id).finished;
+  let result=env.service.getSolution(env.first.id,solution.id).verification.at(-1);
+  assert.equal(result.status,'failed');assert.equal(result.exitCode,3);assert.match(result.output,/nope/);
+  assert.equal(existsContent(env.owner,'app.js'),'fixed\n','nothing is undone on its own');assert.equal(env.service.getSolution(env.first.id,solution.id).status,'applied');
+  assert.match(env.broker.get(env.conversation.id).messages.at(-1).text,/failed \(exit code 3\).*can be undone/);
+  commands.save(env.first.id,{id:saved.id,name:'Test',folderId,command:'sleep 30',test:true});
+  await env.service.runTests(env.first.id,solution.id,{...confirm,command:{...confirm.command,command:'sleep 30'}});
+  await until(()=>commands.state(env.first.id).sessions[saved.id]?.status==='running');
+  const after=await env.service.stopTests(env.first.id,solution.id);assert.equal(after.status,'ready');
+  result=after.results.at(-1);assert.equal(result.status,'stopped');assert.equal(result.passed,false);
+  const undone=await env.service.recoverApplication(env.first.id,solution.id);assert.equal(undone.status,'recovered');assert.equal(existsContent(env.owner,'app.js'),'broken\n');
+  assert.equal(env.service.testPlan(env.first.id,solution.id).status,'not-applied');
+});
+
+test('the confirmation names patched files that decide what the tests run',async t=>{
+  const env=setup(t),commands=new ProjectCommands({registry:env.registry,stopGrace:20});t.after(()=>commands.close());
+  const solution=await appliedFix(env,[['app.js','a\n','b\n'],['package.json','{}\n','{"scripts":{"test":"curl x"}}\n'],['test/app.test.js','old\n','new\n'],['vitest.config.mjs','x\n','y\n'],['scripts/check.sh','x\n','y\n'],['README.md','x\n','y\n']]);
+  await env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity});
+  commands.save(env.first.id,{name:'Test',folderId:env.registry.get(env.first.id).folders[0].id,command:'sh scripts/check.sh && npm test',test:true});
+  assert.deepEqual(env.service.testPlan(env.first.id,solution.id).files,[
+    {path:'package.json',reason:'decides what the command runs'},{path:'test/app.test.js',reason:'a test file'},{path:'vitest.config.mjs',reason:'test or build settings'},{path:'scripts/check.sh',reason:'named in the Test command'}]);
+  for(const [file,reason] of [['src/foo.spec.ts','a test file'],['pkg/thing_test.go','a test file'],['tests/test_api.py','a test file'],['conftest.py','test or build settings'],['Makefile','decides what the command runs'],['src/app.js',null],['src/testing.js',null],['latest/notes.md',null]])assert.equal(testInputs(file),reason,file);
+  assert.equal(testInputs('check.sh','./check.sh --fast'),'named in the Test command');assert.equal(testInputs('check.sh','./recheck.sh'),null);
+});
+
+test('a Test command in another folder is flagged as not covering the patch',async t=>{
+  const env=setup(t),commands=new ProjectCommands({registry:env.registry,stopGrace:20});t.after(()=>commands.close());
+  const solution=await appliedFix(env,[['app.js','a\n','b\n']]);
+  await env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity});
+  const elsewhere=fs.mkdtempSync(path.join(env.root,'tests-'));env.registry.addFolder(env.first.id,{path:elsewhere});
+  const folders=env.registry.get(env.first.id).folders;assert.equal(folders.length,2);
+  commands.save(env.first.id,{name:'Test',folderId:folders[1].id,command:'true',test:true});
+  const plan=env.service.testPlan(env.first.id,solution.id);assert.equal(plan.covers,false);assert.equal(plan.elsewhere.length,1);
 });

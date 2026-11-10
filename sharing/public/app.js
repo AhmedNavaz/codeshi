@@ -30,7 +30,7 @@ import { sealSolution, validateSolution } from '/format.mjs';
     return response;
   }
   function download(value, filename, type = 'application/json') {
-    const blob = new Blob([typeof value === 'string' ? value : JSON.stringify(value, null, 2)], { type });
+    const blob = value instanceof Blob ? value : new Blob([typeof value === 'string' ? value : JSON.stringify(value, null, 2)], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = filename; a.click();
@@ -45,7 +45,7 @@ import { sealSolution, validateSolution } from '/format.mjs';
   async function solution() {
     const base = imported || template();
     const patch = JSON.parse($('patch').value);
-    if (!patch || patch.format !== 'ai-relay.text.v1' || !Array.isArray(patch.files)) throw new Error('Use the documented exact patch JSON format.');
+    if (!patch || !['ai-relay.text.v1', 'ai-relay.files.v1'].includes(patch.format) || !Array.isArray(patch.files)) throw new Error('Use the documented exact patch JSON format.');
     if (!$('explanation').value.trim()) throw new Error('Add an explanation before returning a solution.');
     const value = await seal({ ...base, handoffId: request.package.id, explanation: $('explanation').value.trim(),
       assumptions: $('assumptions').value.split('\n').map(s => s.trim()).filter(Boolean),
@@ -77,9 +77,9 @@ import { sealSolution, validateSolution } from '/format.mjs';
     $('no-source').hidden = pkg.files.length > 0;
     for (const file of pkg.files) {
       const row = document.createElement('div'); row.className = 'source-file';
-      const name = document.createElement('span'); name.textContent = file.path;
+      const name = document.createElement('span'); name.textContent = file.encoding ? `${file.path} (binary)` : file.path;
       const button = document.createElement('button'); button.textContent = 'Download source';
-      button.onclick = async () => { try { download(await (await api(`/source?path=${encodeURIComponent(file.path)}`)).text(), file.path.split('/').at(-1), 'text/plain'); } catch (error) { notice(error.message, true); } };
+      button.onclick = async () => { try { const response = await api(`/source?path=${encodeURIComponent(file.path)}`); download(file.encoding ? await response.blob() : await response.text(), file.path.split('/').at(-1), 'text/plain'); } catch (error) { notice(error.message, true); } };
       row.append(name, button); $('files').append(row);
     }
     $('inventory').textContent = JSON.stringify({ inventory: pkg.inventory, baseline: pkg.baseline }, null, 2);

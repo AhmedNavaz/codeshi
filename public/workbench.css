@@ -107,6 +107,18 @@
 .connection-card > .workbench-details > summary { padding: 10px 0 0; color: var(--muted); font-size: 12px; font-weight: 400; }
 .connection-card > .workbench-details[open] > summary { padding-bottom: 8px; border-bottom: 0; }
 .connection-card > .workbench-details > label, .connection-card > .workbench-details > .workbench-actions { margin-left: 0 !important; margin-right: 0 !important; }
+/* A binary file in a returned solution (#25): Before and After side by side, images as pictures. */
+.binary-change { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px; }
+.binary-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin: 0; }
+.workbench-details > .binary-side { margin: 12px; }
+.binary-frame { display: flex; align-items: center; justify-content: center; height: 168px; padding: 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); color: var(--muted); font-size: 12px; text-align: center; }
+.binary-change.compact .binary-frame { height: 72px; }
+.binary-frame.image { border-style: solid; border-color: var(--border); background: repeating-conic-gradient(var(--surface-strong) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
+.binary-frame img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.binary-side figcaption { color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.binary-side figcaption strong { color: var(--text-strong); font-weight: 600; }
+.binary-hash { color: var(--faint); font: 11px var(--mono); }
+.workbench-details > .scan-warning { margin: 0 12px 12px !important; }
 .verification-result { margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
 #workbench .verification-command { color: var(--muted); font: 12px/1.7 var(--mono); }
 

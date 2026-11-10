@@ -1,7 +1,13 @@
 // Portable deterministic public formats. No filesystem, network, or provider access.
 export const MAX_PACKAGE_BYTES = 2 * 1024 * 1024;
 export const MAX_FILE_BYTES = 256 * 1024;
+// Binary files (#25) travel as base64, so a 1 MiB file takes about 1.4 MiB of the 2 MiB package.
+export const MAX_BINARY_BYTES = 1024 * 1024;
+// Text-only patches keep the original format, so older versions still read them. A patch
+// with a binary file uses files.v1, which an older version refuses with a clear error.
 export const PATCH_FORMAT = 'ai-relay.text.v1';
+export const FILES_PATCH_FORMAT = 'ai-relay.files.v1';
+export const PATCH_FORMATS = [PATCH_FORMAT, FILES_PATCH_FORMAT];
 const encoder = new TextEncoder();
 const hashPattern = /^[a-f0-9]{64}$/;
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -19,8 +25,9 @@ export function canonicalStringify(value) {
 }
 
 // SHA-256 is synchronous and identical in Node and an isolated browser renderer.
+// Text is hashed as its UTF-8 bytes, so a file's hash is the same whether it is sent as text or bytes.
 export function sha256(value) {
-  const input = encoder.encode(String(value));
+  const input = value instanceof Uint8Array ? value : encoder.encode(String(value));
   const length = Math.ceil((input.length + 9) / 64) * 64;
   const bytes = new Uint8Array(length); bytes.set(input); bytes[input.length] = 128;
   const view = new DataView(bytes.buffer);
@@ -38,6 +45,36 @@ export function sha256(value) {
     [a,b,c,d,e,f,g,j].forEach((n,i)=>{h[i]=(h[i]+n)>>>0;});
   }
   return h.map(n=>n.toString(16).padStart(8,'0')).join('');
+}
+
+const base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+export function encodeBase64(bytes) {
+  let raw = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) raw += String.fromCharCode.apply(null, bytes.subarray(index, index + 0x8000));
+  return btoa(raw);
+}
+// Standard padded base64 only, with one spelling per byte sequence, so the integrity hash names exactly one file.
+export function decodeBase64(value) {
+  assert(typeof value === 'string' && base64Pattern.test(value), 'Binary content must be standard base64.');
+  const raw = atob(value), bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index++) bytes[index] = raw.charCodeAt(index);
+  assert(encodeBase64(bytes) === value, 'Binary content must be standard base64.');
+  return bytes;
+}
+// A file is text when it has no NUL byte and is valid UTF-8; everything else is binary.
+export function isTextBytes(bytes) {
+  if (bytes.includes(0)) return false;
+  try { new TextDecoder('utf-8', { fatal:true, ignoreBOM:true }).decode(bytes); return true; } catch { return false; }
+}
+// The exact bytes of a shared, patched or saved file, checked against the limits. Text must be sent as
+// text: base64 has no diff to review, so text sent that way could hide a change from the person applying it.
+export function fileBytes(file, where = file?.path || 'file') {
+  if (file.encoding === undefined) { text(file.content, where, MAX_FILE_BYTES); return encoder.encode(file.content); }
+  assert(file.encoding === 'base64', 'Unsupported file encoding: ' + where);
+  const bytes = decodeBase64(file.content);
+  assert(bytes.length <= MAX_BINARY_BYTES, 'Binary files are limited to 1 MiB: ' + where);
+  assert(!isTextBytes(bytes), 'Text files must be sent as text, not base64: ' + where);
+  return bytes;
 }
 
 export function validateRelativePath(value) {
@@ -74,7 +111,7 @@ export function buildInventory(value) {
   const fields = ['goal','problem','expectedOutcome','decisions','tasks'].map(name => ({ name, bytes: byteLength(canonicalStringify(value[name])), sha256: sha256(canonicalStringify(value[name])) }));
   if(value.folderLayout)fields.push({name:'folderLayout',bytes:byteLength(canonicalStringify(value.folderLayout)),sha256:sha256(canonicalStringify(value.folderLayout))});
   return { fields, messages: value.messages.map((m,index) => ({ index, role:m.role, bytes:byteLength(canonicalStringify(m)), sha256:sha256(canonicalStringify(m)) })),
-    files: value.files.map(f => ({ path:f.path, bytes:byteLength(f.content), sha256:f.sha256 })), baseline:value.baseline.map(f=>({path:f.path,sha256:f.sha256})) };
+    files: value.files.map(f => ({ path:f.path, bytes:f.encoding === undefined ? byteLength(f.content) : fileBytes(f).length, sha256:f.sha256 })), baseline:value.baseline.map(f=>({path:f.path,sha256:f.sha256})) };
 }
 export function sealPackage(value) {
   const { integrity, inventory, ...body } = value;
@@ -104,7 +141,7 @@ export function validatePublicPackage(input) {
   const baselines=new Map();
   value.baseline.forEach(f=>{keys(f,['path','sha256'],'baseline');validateRelativePath(f.path);assert(!baselines.has(f.path),'Duplicate baseline path.');assert(hashOrNull(f.sha256),'Invalid baseline hash.');baselines.set(f.path,f.sha256);});
   const seen=new Set();
-  value.files.forEach(f=>{keys(f,['path','content','sha256'],'source file');validateRelativePath(f.path);assert(!seen.has(f.path),'Duplicate source path.');seen.add(f.path);text(f.content,f.path,MAX_FILE_BYTES);assert(sha256(f.content)===f.sha256,'Source file hash does not match: '+f.path);assert(baselines.get(f.path)===f.sha256,'Approved source and baseline must match: '+f.path);});
+  value.files.forEach(f=>{keys(f,['path','content','sha256','encoding'],'source file');validateRelativePath(f.path);assert(!seen.has(f.path),'Duplicate source path.');seen.add(f.path);assert(typeof f.content==='string',f.path+' must have content.');assert(sha256(fileBytes(f))===f.sha256,'Source file hash does not match: '+f.path);assert(baselines.get(f.path)===f.sha256,'Approved source and baseline must match: '+f.path);});
   assert(value.mode==='source'||!value.files.length,'Context-only packages cannot contain source files.');
   assert(canonicalStringify(value.inventory)===canonicalStringify(buildInventory(value)),'The inventory must describe the exact approved package.');
   checkIntegrity(value);
@@ -117,8 +154,10 @@ export function validateSolution(input, { handoffId } = {}) {
   assert(typeof value.handoffId==='string' && uuidPattern.test(value.handoffId),'A valid handoff ID is required.');
   if(handoffId)assert(value.handoffId===handoffId,'Solution belongs to a different handoff.');
   text(value.explanation,'explanation');texts(value.assumptions,'assumptions');texts(value.verification,'contributor-reported verification');
-  keys(value.patch,['format','files'],'patch');assert(value.patch.format===PATCH_FORMAT,'Only ai-relay.text.v1 full-file text patches are supported.');list(value.patch.files,'patch files',128);
-  const seen=new Set();value.patch.files.forEach(f=>{keys(f,['path','baseHash','content'],'patch file');validateRelativePath(f.path);assert(!seen.has(f.path),'Duplicate patch path.');seen.add(f.path);assert(hashOrNull(f.baseHash),'Invalid patch baseline hash.');assert(f.content===null||typeof f.content==='string','Patch content must be text or null for deletion.');if(f.content!==null)text(f.content,f.path,MAX_FILE_BYTES);assert(f.baseHash!==null||f.content!==null,'Deleting an absent file is unsupported.');});
+  keys(value.patch,['format','files'],'patch');assert(PATCH_FORMATS.includes(value.patch.format),'Only ai-relay.text.v1 and ai-relay.files.v1 full-file patches are supported.');list(value.patch.files,'patch files',128);
+  const seen=new Set();value.patch.files.forEach(f=>{keys(f,['path','baseHash','content','encoding'],'patch file');validateRelativePath(f.path);assert(!seen.has(f.path),'Duplicate patch path.');seen.add(f.path);assert(hashOrNull(f.baseHash),'Invalid patch baseline hash.');assert(f.content===null||typeof f.content==='string','Patch content must be text, base64 bytes, or null for deletion.');
+    if(f.encoding!==undefined)assert(value.patch.format===FILES_PATCH_FORMAT&&f.content!==null,'Binary content needs the ai-relay.files.v1 format: '+f.path);
+    if(f.content!==null)fileBytes(f);assert(f.baseHash!==null||f.content!==null,'Deleting an absent file is unsupported.');});
   checkIntegrity(value);return value;
 }
 
@@ -132,6 +171,13 @@ const detectors = [
 export function scanSecrets(value) {
   const warnings=[];
   function walk(item, location) {
+    // A binary file's readable strings are scanned, not its base64, which would only match by chance.
+    if(item&&typeof item==='object'&&item.encoding==='base64'&&typeof item.content==='string'){
+      let readable='';try{const bytes=decodeBase64(item.content);for(let index=0;index<bytes.length;index+=0x8000)readable+=String.fromCharCode.apply(null,bytes.subarray(index,index+0x8000));}catch{}
+      walk(readable,location?location+'.content':'content');
+      Object.entries(item).forEach(([key,entry])=>{if(!['integrity','sha256','baseHash','content'].includes(key))walk(entry,location?location+'.'+key:key);});
+      return;
+    }
     if(typeof item==='string')for(const [code,pattern] of detectors){pattern.lastIndex=0;if(pattern.test(item))warnings.push({code,location,message:code==='absolute-path'?'A machine-specific absolute path needs review.':'Possible secret material needs removal or review.'});}
     else if(Array.isArray(item))item.forEach((entry,index)=>walk(entry,location+'['+index+']'));
     else if(item&&typeof item==='object')Object.entries(item).forEach(([key,entry])=>{if(!['integrity','sha256','baseHash'].includes(key))walk(entry,location?location+'.'+key:key);});

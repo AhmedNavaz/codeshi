@@ -30,7 +30,7 @@ export async function collaborationRoute({req,res,url,registry,collaboration:c,s
   else if(path==='/handoffs/import'&&method==='POST')result=await c.importRequest(projectId,input.package,{folderMapping:input.folderMapping});
   else if(path==='/solutions/receive'&&method==='POST')result=await c.receiveSolution(projectId,input.solution);
   else {
-    const match=path.match(/^\/(handoffs|solutions)\/([a-zA-Z0-9-]+)(?:\/(build|publish|retrieve|revoke|preview|apply|recover|verify))?$/);
+    const match=path.match(/^\/(handoffs|solutions)\/([a-zA-Z0-9-]+)(?:\/(build|publish|retrieve|revoke|preview|apply|recover|verify|tests|tests\/stop))?$/);
     if(!match)fail('Not found.',404);const [,type,id,action]=match;
     if(!action&&method==='GET')result=type==='handoffs'?c.getHandoff(projectId,id):c.getSolution(projectId,id);
     else if(type==='handoffs'&&method==='POST') {
@@ -58,6 +58,8 @@ export async function collaborationRoute({req,res,url,registry,collaboration:c,s
       else if(method==='POST'&&action==='apply')result=await c.applySolution(projectId,id,input);
       else if(method==='POST'&&action==='recover')result=await c.recoverApplication(projectId,id);
       else if(method==='POST'&&action==='verify')result=await c.verify(projectId,id,input);
+      else if(action==='tests')result=method==='GET'?c.testPlan(projectId,id):await c.runTests(projectId,id,input);
+      else if(method==='POST'&&action==='tests/stop')result=await c.stopTests(projectId,id);
       else fail('Unsupported solution action.',404);
     } else fail('Unsupported action.',405);
   }

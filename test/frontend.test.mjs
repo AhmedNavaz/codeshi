@@ -7473,3 +7473,43 @@ test('General has no language choice while English is the only language (#27)', 
   assert.equal(ui.$('settings-language'), null);
   assert.equal(ui.$('settings-content').querySelectorAll('.settings-row-label').some(label => label.textContent === 'Language'), false);
 });
+
+// #10: after applying a friend's patch, the review offers the project's own Test command, names the patched files that
+// decide what it runs, and offers Undo this patch when the latest run failed.
+test('Run tests on an applied patch confirms the saved command and offers undo after a failure', async () => {
+  const ui = await browser({ workbench: true }), reply = data => ({ ok: true, status: 200, text: async () => JSON.stringify(data), json: async () => clone(data) });
+  const record = { id: 'sol-1', handoffId: 'req-1', status: 'applied', receivedAt: '2026-11-10T10:00:00.000Z', verification: [], solution: { explanation: 'Fix the parser', assumptions: [], verification: [], integrity: 'x', patch: { files: [{ path: 'package.json' }, { path: 'src/parse.js' }] } } };
+  const command = { id: 'test', name: 'Test', command: 'npm test', folderId: 'f1', directory: '', folder: 'throughline' };
+  let plan = { status: 'ready', command, files: [{ path: 'package.json', reason: 'decides what the command runs' }], elsewhere: [], covers: true, running: null, results: [] };
+  const posts = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/sharing/config') return reply({ baseUrl: null });
+    if (request.path === '/api/collaboration/handoffs') return reply([]);
+    if (request.path === '/api/collaboration/solutions') return reply([record]);
+    if (request.path === '/api/collaboration/solutions/sol-1/preview') return reply({ status: 'applied', files: [{ path: 'package.json', operation: 'replace', diff: '+ x' }], conflicts: [], application: { status: 'applied' } });
+    if (request.path === '/api/collaboration/solutions/sol-1/tests' && request.method === 'GET') return reply(plan);
+    if (request.path === '/api/collaboration/solutions/sol-1/tests') { posts.push(request.body); plan = { ...plan, status: 'running', running: { startedAt: '2026-11-10T10:05:00.000Z' } }; return reply({ status: 'running' }); }
+    return next();
+  });
+  ui.window.relayFriend.open('solutions'); await flush();
+  ui.findButton('Review changes').click(); await flush();
+  const section = () => ui.document.querySelectorAll('.solution-tests')[0];
+  assert.match(section().textContent, /npm test/);
+  assert.match(section().textContent, /Test · runs in throughline/);
+  assert.match(section().textContent, /package\.json · decides what the command runs/);
+  ui.findButton('Run tests').click(); await flush();
+  assert.equal(posts.length, 0, 'nothing runs before the box is checked');
+  assert.match(ui.$('workbench-error').textContent, /Check the box/);
+  ui.labelledInput('I read those files').checked = true;
+  ui.findButton('Run tests').click(); await flush();
+  assert.deepEqual(clone(posts), [{ reviewed: true, command: { id: 'test', command: 'npm test', folderId: 'f1', directory: '' } }]);
+  assert.ok(ui.findButton('Stop'));
+  plan = { ...plan, status: 'ready', running: null, results: [{ source: 'tests', status: 'failed', passed: false, command: 'npm test', folder: 'throughline', durationMs: 4200, exitCode: 1, output: '1 failing', completedAt: '2026-11-10T10:05:04.000Z' }] };
+  ui.runTimers(); await flush(); await flush();
+  assert.match(section().textContent, /Failed/);
+  assert.match(section().textContent, /exit code 1/);
+  assert.ok(ui.findButton('Undo this patch'));
+  assert.ok(ui.findButton('Run tests again'));
+  const text = section().textContent; assert.ok(text.indexOf('Undo this patch') < text.indexOf('End of the output'), 'Undo sits above the output');
+  assert.ok(text.indexOf('Failed') < text.indexOf('I read those files'), 'the latest result comes before the next run');
+});

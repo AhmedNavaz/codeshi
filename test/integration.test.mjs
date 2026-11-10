@@ -43,12 +43,19 @@ test('HTTP acceptance: both providers unavailable, private friend patch reviewed
  const applied=await owner.local(`/api/collaboration/solutions/${solution.id}/apply`,'POST',{approvedIntegrity:solution.integrity});assert.equal(applied.status,'applied');
  const duplicate=await owner.local(`/api/collaboration/solutions/${solution.id}/apply`,'POST',{approvedIntegrity:solution.integrity});assert.equal(duplicate.application.createdAt,applied.application.createdAt);
  const verified=await owner.local(`/api/collaboration/solutions/${solution.id}/verify`,'POST',{argv:['node','--check','main.js'],reviewed:true});assert.equal(verified.passed,true);
+ assert.equal((await owner.local(`/api/collaboration/solutions/${solution.id}/tests`)).status,'no-command');
+ const folderId=owner.app.registry.get(owner.projectId).folders[0].id,testCommand=await owner.local('/api/commands/save','POST',{name:'Test',folderId,command:'grep -q "value = 3" main.js',test:true});
+ const testPlan=await owner.local(`/api/collaboration/solutions/${solution.id}/tests`);assert.equal(testPlan.status,'ready');assert.equal(testPlan.command.command,testCommand.command);
+ await assert.rejects(owner.local(`/api/collaboration/solutions/${solution.id}/tests`,'POST',{reviewed:true,command:{...testPlan.command,command:'echo imported'}}),e=>e.status===409);
+ assert.equal((await owner.local(`/api/collaboration/solutions/${solution.id}/tests`,'POST',{reviewed:true,command:testPlan.command})).status,'running');
+ let tested;for(let i=0;i<250&&!(tested=await owner.local(`/api/collaboration/solutions/${solution.id}/tests`)).results.length;i++)await new Promise(r=>setTimeout(r,20));
+ assert.equal(tested.results.at(-1).status,'passed');assert.equal(tested.status,'ready');
  assert.equal(git(workspace,'show',':main.js'),indexBefore);assert.equal(fs.readFileSync(path.join(workspace,'helper.js'),'utf8'),exported.files.find(f=>f.path==='helper.js').content);assert.equal(fs.readFileSync(path.join(workspace,'unrelated.txt'),'utf8'),'keep this user work\n');
  await owner.local(`/api/collaboration/solutions/${solution.id}/recover`,'POST',{});assert.equal(fs.readFileSync(path.join(workspace,'main.js'),'utf8'),baseline);
  const stale=sealSolution({...solution,id:crypto.randomUUID()});await owner.local('/api/collaboration/solutions/receive','POST',{solution:stale});fs.appendFileSync(path.join(workspace,'main.js'),'// newer work\n');
  const conflict=await owner.local(`/api/collaboration/solutions/${stale.id}/preview`);assert.equal(conflict.status,'stale');await assert.rejects(owner.local(`/api/collaboration/solutions/${stale.id}/apply`,'POST',{approvedIntegrity:stale.integrity}),e=>e.status===409);assert.match(fs.readFileSync(path.join(workspace,'main.js'),'utf8'),/newer work/);
  await owner.local(`/api/collaboration/handoffs/${approved.id}/revoke`,'POST',{});const revoked=await fetch(sharingURL+`/api/requests/${remoteId}/package`,{headers:{Authorization:'Bearer '+caps.get('view')}});assert.equal(revoked.status,410);
- const history=await owner.local('/api/conversations/'+conversation.id);assert.ok(history.messages.some(m=>/Friend solution received/.test(m.text)));assert.ok(history.messages.some(m=>/Local verification/.test(m.text)));assert.equal(calls,0);
+ const history=await owner.local('/api/conversations/'+conversation.id);assert.ok(history.messages.some(m=>/Friend solution received/.test(m.text)));assert.ok(history.messages.some(m=>/Local verification/.test(m.text)));assert.ok(history.messages.some(m=>/^Tests on friend solution .* passed in/.test(m.text)));assert.equal(calls,0);
 });
 
 test('desktop session token protects local APIs while keeping static UI loadable',async t=>{

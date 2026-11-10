@@ -82,6 +82,11 @@ export function createSharingServer({ dataDir = path.join(root, '.data'), create
         const file = record.package.files.find(item => item.path === url.searchParams.get('path'));
         if (!file) throw fail('Approved source not found.', 404);
         // Source names are lookup keys inside approved JSON, never filesystem paths.
+        // A binary file (#25) is sent as its bytes, still only as a download.
+        if (file.encoding === 'base64') {
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="approved-source.bin"' });
+          return res.end(Buffer.from(file.content, 'base64'));
+        }
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': 'attachment; filename="approved-source.txt"' });
         return res.end(file.content);
       }

@@ -217,3 +217,22 @@ test('HTTP body limit rejects oversized uploads before saving content', async t 
   }
   assert.equal(rejected, true); assert.equal(f.app.store.records.size, 0);
 });
+
+test('a binary source downloads as its bytes and a binary solution returns intact (#25)', async t => {
+  const f = await fixture(t);
+  const logo = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 255]);
+  const content = logo.toString('base64'), hash = sha256(new Uint8Array(logo));
+  const pkg = sealPackage({ schema: 'ai-relay.handoff', version: 1, id: randomUUID(), createdAt: new Date().toISOString(),
+    mode: 'source', goal: 'Replace the logo', problem: 'It is blurry.', expectedOutcome: 'A sharp logo.', decisions: [], tasks: [], messages: [],
+    files: [{ path: 'assets/logo.png', content, sha256: hash, encoding: 'base64' }], baseline: [{ path: 'assets/logo.png', sha256: hash }] });
+  const client = new SharingClient({ baseUrl: f.url, storePath: path.join(f.directory, 'local', 'delivery.json') });
+  const record = await client.publish(pkg, { requestId: pkg.id });
+  const base = `/api/requests/${record.remoteId}`;
+  const source = await request(f.url, `${base}/source?path=assets%2Flogo.png`, record.viewToken);
+  assert.equal(source.headers.get('content-type'), 'application/octet-stream');
+  assert(Buffer.from(await source.arrayBuffer()).equals(logo));
+  const sharp = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 3, 4, 5]).toString('base64');
+  const returned = solution(pkg, { patch: { format: 'ai-relay.files.v1', files: [{ path: 'assets/logo.png', baseHash: hash, content: sharp, encoding: 'base64' }] } });
+  assert.equal((await request(f.url, `${base}/solutions`, record.submitToken, 'POST', returned)).status, 201);
+  assert.deepEqual((await client.retrieve(record)).solutions, [returned]);
+});
