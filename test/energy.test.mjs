@@ -54,7 +54,7 @@ class Element extends Events {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
 
-function lounge({ reducedMotion = false, ledge = false, height = 800, random = null, keepWeather = true } = {}) {
+function lounge({ reducedMotion = false, ledge = false, height = 800, random = null } = {}) {
   const document = new Events();
   document.hidden = false;
   document.body = new Element('body', document);
@@ -80,7 +80,7 @@ function lounge({ reducedMotion = false, ledge = false, height = 800, random = n
   });
   let nextFrame = 0;
   const frames = new Map();
-  const storage = new Map(keepWeather ? [] : [['throughline:lounge-keep-weather', '0']]);
+  const storage = new Map();
   const context = vm.createContext({
     window, document, console,
     requestAnimationFrame: fn => { frames.set(++nextFrame, fn); return nextFrame; },
@@ -274,18 +274,6 @@ test('weather keeps one loop at most through hide, recede, Flow on and off, weat
   for (let i = 0; i < 3; i++) { ui.api.exit(); ui.api.enter(); }
   second(ui, 60, 12000);
   assert.deepEqual(ui.loops(), { drawWeather: 1 });
-});
-
-test('with weather not kept outside the Lounge, leaving it stops the weather', () => {
-  const ui = lounge({ keepWeather: false });
-  ui.api.enter(); ui.api.setWeatherMode('rain'); second(ui, 60);
-  assert.deepEqual(ui.loops(), { drawWeather: 1 });
-  ui.api.recede('attention'); second(ui, 60, 2000);
-  assert.deepEqual(ui.loops(), {}, 'a receded Lounge draws nothing');
-  ui.api.resume(); second(ui, 60, 4000);
-  assert.deepEqual(ui.loops(), { drawWeather: 1 });
-  ui.api.exit(); second(ui, 60, 6000);
-  assert.deepEqual(ui.loops(), {});
 });
 
 test('the setup screen glow drifts once rather than for as long as setup is open', () => {
