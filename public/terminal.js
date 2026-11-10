@@ -66,6 +66,55 @@
     catch (error) { message(`That link didn’t open. ${String(error?.message || error).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')}`); }
   }
 
+  // Add to message (#71) puts terminal output in the message box as a code block that names its folder: the selection,
+  // or with nothing selected, the screen as it shows. It only happens when asked, and nothing reaches an agent until
+  // the message is sent. Output over 200 lines keeps its first 50 and last 150, where a command and its error usually
+  // are, and at most 16,000 characters. Likely secrets are left in and pointed out, with the patterns conversation
+  // export looks for (src/collaboration-format.mjs).
+  const OUTPUT_LINES = 200, OUTPUT_HEAD = 50, OUTPUT_CHARS = 16000, OUTPUT_CHARS_HEAD = 4000;
+  const secretPatterns = [
+    /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/,
+    /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
+    /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-(?:ant-)?[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{16,})\b/,
+    /\b(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|authorization)\s*[:=]\s*["']?(?:Bearer\s+)?[A-Za-z0-9_./+=-]{16,}/i,
+  ];
+  // The screen as it shows, with a line the terminal wrapped joined back into one.
+  function screenText(term) {
+    const buffer = term.buffer?.active, lines = [];
+    if (!buffer) return '';
+    for (let row = buffer.viewportY; row < buffer.viewportY + term.rows; row++) {
+      const line = buffer.getLine(row);
+      if (!line) break;
+      if (line.isWrapped && lines.length) lines[lines.length - 1] += line.translateToString(false); else lines.push(line.translateToString(false));
+    }
+    return lines.join('\n');
+  }
+  function shorten(text) {
+    let lines = String(text).replace(/\r\n?/g, '\n').split('\n').map(line => line.trimEnd()), cut = false;
+    while (lines.length && !lines[0]) lines.shift();
+    while (lines.length && !lines.at(-1)) lines.pop();
+    if (lines.length > OUTPUT_LINES) { lines = [...lines.slice(0, OUTPUT_HEAD), `… ${lines.length - OUTPUT_LINES} lines left out …`, ...lines.slice(OUTPUT_HEAD - OUTPUT_LINES)]; cut = true; }
+    let body = lines.join('\n');
+    if (body.length > OUTPUT_CHARS) { body = `${body.slice(0, OUTPUT_CHARS_HEAD)}\n… ${body.length - OUTPUT_CHARS} characters left out …\n${body.slice(OUTPUT_CHARS_HEAD - OUTPUT_CHARS)}`; cut = true; }
+    return { body, cut };
+  }
+  const selectionOf = view => view?.term.hasSelection?.() ? String(view.term.getSelection?.() || '') : '';
+  function addOutput(view = views.get(focusedPane(activeTab())?.id)) {
+    const input = $('message-input');
+    if (!view || !input) return;
+    const selected = selectionOf(view), { body, cut } = shorten(selected.trim() ? selected : screenText(view.term));
+    if (!body) { message('There is no output to add yet.', 'progress'); return; }
+    const folder = sessions(view.projectId).find(item => item.id === view.id)?.folderName || 'the workspace';
+    // The fence is longer than any run of backticks in the output, so the output can't end the block early.
+    const fence = '`'.repeat(Math.max(3, ...(body.match(/`+/g) || []).map(run => run.length + 1)));
+    const block = `Terminal output from \`${folder}\`:\n\n${fence}text\n${body}\n${fence}`;
+    input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${block}\n` : `${block}\n`;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus?.(); input.setSelectionRange?.(input.value.length, input.value.length);
+    message('');
+    api.showNotice?.(`${selected.trim() ? 'The selected terminal output' : 'The terminal screen'} is in the message box. Nothing is sent until you send the message.${cut ? ' It was shortened: the start and end are kept.' : ''}${secretPatterns.some(pattern => pattern.test(body)) ? ' It may contain a secret, such as a token, key or password. Check it before you send.' : ''}`);
+  }
+
   // A workspace's tabs in the order they opened, each with its panes in order.
   const sessions = (id = projectId()) => lists.get(id) || [];
   const layout = (id = projectId()) => { if (!layouts.has(id)) layouts.set(id, { tab: null, focus: new Map() }); return layouts.get(id); };
@@ -115,6 +164,9 @@
     // The pane last clicked or typed in is the one End and New session act on.
     const use = () => { const current = sessions(view.projectId).find(item => item.id === view.id); if (current && layout(view.projectId).focus.get(current.tabId) !== view.id) { layout(view.projectId).focus.set(current.tabId, view.id); if (view.projectId === projectId()) render(); } };
     host.addEventListener('mousedown', use); host.addEventListener('focusin', use);
+    // The Add to message button says whether it takes the selection or the screen; a right-click offers it too.
+    term.onSelectionChange?.(() => { if (view.projectId === projectId()) renderCapture(); });
+    host.addEventListener('contextmenu', event => { event.preventDefault(); use(); openContext(view, event); });
     // Input is sent in order, batched while a request is in flight.
     const send = async () => {
       if (view.sending || !view.queue || !live(sessions(view.projectId).find(item => item.id === view.id))) return;
@@ -185,6 +237,7 @@
     $('terminal-new').title = sessions(id).length >= MAX_SESSIONS ? 'A workspace keeps up to 8 terminals' : folders.length > 1 ? 'New terminal in a folder you choose (⌃⇧`)' : 'New terminal (⌃⇧`)';
     $('terminal-split').hidden = !open; $('terminal-split').disabled = busy || !open || open.panes.length > 1 || !live(pane) || sessions(id).length >= MAX_SESSIONS;
     $('terminal-end').hidden = !live(pane); $('terminal-end').disabled = busy;
+    renderCapture();
     $('terminal-restart').hidden = !pane || live(pane); $('terminal-restart').disabled = busy;
     $('terminal-start').hidden = list.length > 0 || folders.length < 2;
     showNotice();
@@ -243,6 +296,35 @@
   }
   const closeTab = tab => end(tab.panes.map(pane => pane.id));
 
+  // Add to message stays for a shell that exited, since its output does.
+  const captureKeys = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⇧⌘L' : 'Ctrl+Shift+L';
+  function renderCapture() {
+    const pane = focusedPane(activeTab()), button = $('terminal-capture');
+    if (!button) return;
+    button.hidden = !pane;
+    button.title = `${selectionOf(views.get(pane?.id)).trim() ? 'Add the selection to your message' : 'Add the terminal screen to your message'} (${captureKeys})`;
+  }
+  $('terminal-capture')?.addEventListener('click', () => addOutput());
+  // A right-click in a pane offers Add to message, and Copy when text is selected.
+  const context = element('div', 'terminal-menu terminal-context'); context.setAttribute('role', 'menu'); context.setAttribute('aria-label', 'Terminal output'); context.hidden = true; panel.append(context);
+  function closeContext() { context.hidden = true; }
+  function openContext(view, event) {
+    const selected = selectionOf(view), item = (label, act) => { const button = element('button', 'terminal-menu-item'); button.type = 'button'; button.setAttribute('role', 'menuitem'); button.append(element('span', 'terminal-menu-name', label)); button.addEventListener('click', () => { closeContext(); act(); }); return button; };
+    context.replaceChildren(item(selected.trim() ? 'Add selection to message' : 'Add screen to message', () => addOutput(view)), ...(selected ? [item('Copy', () => { navigator.clipboard?.writeText(selected).catch(() => message('The selection could not be copied.')); view.term.focus(); })] : []));
+    context.hidden = false;
+    const width = context.offsetWidth || 200, height = context.offsetHeight || 64;
+    context.style.left = `${Math.max(4, Math.min(event.clientX, (window.innerWidth || 0) - width - 4))}px`; context.style.top = `${Math.max(4, Math.min(event.clientY, (window.innerHeight || 0) - height - 4))}px`;
+  }
+  context.addEventListener('keydown', event => { if (event.key === 'Escape') { closeContext(); focusPane(); } });
+  document.addEventListener('mousedown', event => { if (!context.hidden && !event.target?.closest?.('.terminal-context')) closeContext(); });
+  // ⇧⌘L (Ctrl+Shift+L elsewhere) adds from the pane you're in, beside ⌘L for the message box. It is taken before the
+  // shell sees it.
+  document.addEventListener('keydown', event => {
+    const mac = captureKeys === '⇧⌘L';
+    if (!(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) || !event.shiftKey || event.altKey || String(event.key).toLowerCase() !== 'l' || panel.hidden || !event.target?.closest?.('#terminal-panel')) return;
+    event.preventDefault(); event.stopPropagation(); closeContext(); addOutput();
+  }, true);
+
   // + opens a shell in the workspace's folder, or, with several folders, offers them.
   const menu = $('terminal-new-menu');
   function closeMenu() { menu.hidden = true; $('terminal-new').setAttribute('aria-expanded', 'false'); }
@@ -298,7 +380,7 @@
   let lastProject = null;
   window.addEventListener('relay-state', () => {
     if (projectId() === lastProject) return;
-    lastProject = projectId(); closeMenu(); notice = '';
+    lastProject = projectId(); closeMenu(); closeContext(); notice = '';
     if (shown()) load(); else render();
   });
   window.relayTerminal = { toggle, open: () => window.relayPanel?.show('terminal'), close: () => { if (window.relayPanel?.isOpen('terminal')) window.relayPanel.hide(); }, isOpen: () => shown() };

@@ -4131,6 +4131,48 @@ test('links in the terminal open in the browser through the desktop app, also wh
   assert.deepEqual(inputs, []);
 });
 
+test('Add to message puts the terminal selection, or the screen, in the message box as a code block, shortened and with secrets pointed out', async () => {
+  const { ui, term, inputs, print } = await realShell();
+  const input = ui.$('message-input'), button = ui.$('terminal-capture'), said = () => ui.$('notice-text')?.textContent || ui.$('notice').textContent;
+  assert.equal(button.hidden, false);
+  assert.match(button.title, /^Add the terminal screen to your message/);
+  await print('$ npm test\r\nFAIL test/a.test.mjs\r\n  expected 1, got 2\r\n');
+  // Nothing selected: the screen as it shows, without its empty rows, naming the folder.
+  input.value = 'Why does this fail?';
+  button.click(); await flush();
+  assert.equal(input.value, 'Why does this fail?\n\nTerminal output from `Frontend`:\n\n```text\n$ npm test\nFAIL test/a.test.mjs\n  expected 1, got 2\n```\n');
+  assert.match(said(), /^The terminal screen is in the message box\. Nothing is sent until you send the message\.$/);
+  assert.deepEqual(inputs, [], 'Adding output types nothing into the shell.');
+  // A selection is taken instead, and the button says so. The test's terminal is never laid out, so it has no
+  // selection of its own; this stands in for one.
+  let selection = 'FAIL test/a.test.mjs';
+  term.hasSelection = () => Boolean(selection); term.getSelection = () => selection;
+  ui.$('terminal-tabs').querySelector('.terminal-tab-pick').click();
+  assert.match(button.title, /^Add the selection to your message/);
+  input.value = '';
+  button.click(); await flush();
+  assert.equal(input.value, 'Terminal output from `Frontend`:\n\n```text\nFAIL test/a.test.mjs\n```\n');
+  assert.match(said(), /^The selected terminal output is in the message box/);
+  selection = '';
+  // Output holding backticks gets a longer fence, and a likely secret is left in and pointed out.
+  term.reset(); await print('```js\r\nAPI_KEY=abcdefghijklmnop1234\r\n');
+  input.value = '';
+  button.click(); await flush();
+  assert.equal(input.value, 'Terminal output from `Frontend`:\n\n````text\n```js\nAPI_KEY=abcdefghijklmnop1234\n````\n');
+  assert.match(said(), /It may contain a secret, such as a token, key or password\. Check it before you send\.$/);
+  // A long selection keeps its first 50 and last 150 lines.
+  selection = Array.from({ length: 300 }, (_, index) => `line ${index + 1}`).join('\n');
+  input.value = '';
+  button.click(); await flush();
+  const lines = input.value.split('\n');
+  assert.equal(lines.length, 2 + 1 + 201 + 1 + 1);
+  assert.deepEqual([lines[3], lines[52], lines[53], lines[54], lines[203]], ['line 1', 'line 50', '… 100 lines left out …', 'line 151', 'line 300']);
+  assert.match(said(), /It was shortened: the start and end are kept\.$/);
+  // The detector matches the one conversation export uses.
+  const page = fs.readFileSync(new URL('../public/terminal.js', import.meta.url), 'utf8'), shared = fs.readFileSync(new URL('../src/collaboration-format.mjs', import.meta.url), 'utf8');
+  for (const [, source] of shared.matchAll(/\['(?:private-key|credential)', (\/.+\/)g?i?\],/g)) assert(page.includes(source), `The terminal should look for ${source}`);
+});
+
 test('in a web browser, a link in the terminal opens in a new tab, under the same rules', async () => {
   const { ui, print, links, click, notice } = await realShell();
   const tabs = []; ui.window.open = (...args) => { tabs.push(args); return null; };

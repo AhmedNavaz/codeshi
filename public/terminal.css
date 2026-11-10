@@ -3,7 +3,7 @@
    panel's header holds +, Split and End. */
 .terminal-panel { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .terminal-panel[hidden] { display: none; }
-.bottom-panel { --terminal-split-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='2'/%3E%3Cpath d='M12 4.5v15'/%3E%3C/svg%3E"); }
+.bottom-panel { --terminal-capture-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 14.5a2 2 0 0 1-2 2H8.5L4 20V6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z'/%3E%3Cpath d='M12 7.5v6M9 10.5h6'/%3E%3C/svg%3E"); --terminal-split-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='2'/%3E%3Cpath d='M12 4.5v15'/%3E%3C/svg%3E"); }
 
 /* The header: New session when the shell in use has ended, then +, Split and End. */
 .terminal-tools { gap: 2px; }
@@ -16,6 +16,8 @@
 .terminal-menu-item:hover, .terminal-menu-item:focus-visible { background: var(--hover); outline: none; }
 .terminal-menu-name { font-size: 12.5px; font-weight: 500; }
 .terminal-menu-path { overflow: hidden; color: var(--faint); font: 11px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.terminal-capture::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--terminal-capture-icon) center / contain no-repeat; mask: var(--terminal-capture-icon) center / contain no-repeat; }
+.terminal-menu.terminal-context { position: fixed; top: 0; right: auto; left: 0; min-width: 190px; }
 .terminal-split::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--terminal-split-icon) center / contain no-repeat; mask: var(--terminal-split-icon) center / contain no-repeat; }
 .terminal-restart { height: 24px; margin-right: 4px; background: var(--accent); color: var(--on-accent); }
 .terminal-restart:hover:enabled { background: var(--accent-strong); }
