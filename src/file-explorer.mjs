@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { validateRelativePath } from './collaboration-format.mjs';
-import { describeAttachment, attachmentLimits } from './attachments.mjs';
+import { inspectAttachment, attachmentLimits } from './attachments.mjs';
 
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 const allowed = value => { try { validateRelativePath(value); return true; } catch { return false; } };
@@ -37,8 +37,8 @@ export function readExplorerFile(folder, relative) {
     if (stat.size > attachmentLimits.imageBytes) fail('Preview supports images up to 5 MB and text/code up to 64 KB.', 413);
     const bytes = Buffer.alloc(stat.size + 1), length = fs.readSync(fd, bytes, 0, bytes.length, 0);
     if (length !== stat.size) fail('The file changed while reading. Try again.', 409);
-    const contents = bytes.subarray(0, length), meta = describeAttachment(path.basename(relative), contents);
-    return { ...meta, folderId: folder.id, path: relative, data: contents.toString('base64'), ...(meta.kind === 'text' ? { text: contents.toString('utf8') } : {}) };
+    const contents = bytes.subarray(0, length), { text, ...meta } = inspectAttachment(path.basename(relative), contents);
+    return { ...meta, folderId: folder.id, path: relative, data: contents.toString('base64'), ...(meta.kind === 'text' ? { text } : {}) };
   } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
