@@ -7,7 +7,7 @@ import { Broker } from '../src/broker.mjs';
 import { continuationRequest } from '../src/context.mjs';
 import { runClaude } from '../src/providers.mjs';
 import { applyBudgetRecord } from '../src/task-budget.mjs';
-import { ledgerFromRecords, normalizeUsage, readLedger, sumUsage, taskIdentity } from '../src/task-ledger.mjs';
+import { combineUsage, ledgerFromRecords, normalizeUsage, readLedger, summarizePlans, sumUsage, taskIdentity } from '../src/task-ledger.mjs';
 
 const at = minute => `2026-11-05T10:${String(minute).padStart(2, '0')}:00.000Z`;
 const submission = (id, minute, extra = {}, text = 'Build it') => ({ type: 'submission', id, provider: 'claude', model: 'haiku', mode: 'edit', at: at(minute), message: { role: 'user', text, runId: id }, ...extra });
@@ -261,4 +261,52 @@ test('the ledger ignores a torn last line, skips streaming text, and treats a mi
   fs.writeFileSync(file, [submission('a', 0), { type: 'message_delta', id: 'gone', text: 'x' }, end(1)].map(value => JSON.stringify(value)).join('\n') + '\n{"type":"mess');
   assert.equal((await readLedger(file)).runs[0].status, 'complete');
   assert.deepEqual((await readLedger(path.join(root, 'missing.jsonl'))).runs, []);
+});
+
+test('an Orchestrate plan adds up its planning run and every step, while each stays its own task (#84)', () => {
+  const planning = ledgerFromRecords([
+    submission('plan', 0, { mode: 'read', orchestration: { goal: 'Build it' } }),
+    metadata(1, { usage: { input_tokens: 40, output_tokens: 10 } }), end(1),
+  ]).tasks.map(task => ({ ...task }));
+  assert.equal(planning[0].plan.id, 'plan');
+  assert.equal(planning[0].plan.part, 'planning');
+  assert.equal(planning[0].taskClass, null, 'A planning run is not a question to compare with other questions.');
+  assert.deepEqual(Object.keys(planning[0].roles), ['planning']);
+  // Steps run as tasks beside the conversation; the coordinator tags each with its plan.
+  const step = (id, number, records) => ledgerFromRecords(records).tasks.map(task => ({ ...task, plan: { id: 'plan', part: 'step', stepId: `s${number}`, number } }));
+  const first = step('one', 1, [
+    submission('one', 2), metadata(3, { usage: { input_tokens: 100, output_tokens: 20 } }), end(3, 'complete'),
+    { type: 'check', runId: 'one', check: { status: 'failed' } },
+    submission('one-retry', 4, { retryOf: 'one' }), metadata(5, { usage: { input_tokens: 50, output_tokens: 5 } }), end(5),
+    { type: 'check', runId: 'one-retry', check: { status: 'passed' } },
+  ]);
+  const second = step('two', 2, [submission('two', 6, { provider: 'codex' }), end(8)]);
+  const unrelated = ledgerFromRecords([submission('other', 9), metadata(9, { usage: { input_tokens: 999, output_tokens: 1 } }), end(10)]).tasks;
+  const [total, ...rest] = summarizePlans([...planning, ...first, ...second, ...unrelated]);
+  assert.equal(rest.length, 0, 'A task outside a plan has no plan total.');
+  assert.equal(total.id, 'plan');
+  assert.equal(total.planned, true);
+  assert.equal(total.steps, 2);
+  assert.equal(total.runs, 4);
+  assert.equal(total.retries, 1);
+  assert.equal(total.workingMs, 5 * 60000, 'Working time only: 1 + 1 + 1 + 2 minutes, not the gaps between runs.');
+  assert.equal(total.usage.input, 190);
+  assert.equal(total.usage.output, 35);
+  assert.equal(total.usage.runs, 4);
+  assert.equal(total.usage.runsWithTokens, 3, 'The step that reported nothing stays unreported, not zero.');
+  assert.equal(total.usage.reportedBy.input, 3);
+  assert.equal(total.roles.planning.usage.input, 40);
+  assert.equal(total.roles.builder.runs, 3);
+  assert.deepEqual(total.providers, ['claude', 'codex']);
+  assert.deepEqual(total.tests, { passed: 1, failed: 0, unverified: 1 });
+  assert.equal(total.endedAt, at(8));
+});
+
+test('a plan nobody planned and whose steps reported no tokens keeps its tokens unknown', () => {
+  const tasks = ledgerFromRecords([submission('a', 0), end(1)]).tasks.map(task => ({ ...task, plan: { id: 'manual', part: 'step', stepId: 's1', number: 1 } }));
+  const [total] = summarizePlans(tasks);
+  assert.equal(total.planned, false);
+  assert.equal(total.usage.input, null);
+  assert.equal(total.usage.runsWithTokens, 0);
+  assert.equal(combineUsage([]).input, null);
 });

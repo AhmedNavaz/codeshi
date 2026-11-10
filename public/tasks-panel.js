@@ -60,11 +60,18 @@
       const tile = node('div', 'stat'); tile.append(node('strong', '', value), node('span', '', label)); tile.title = title; tiles.append(tile);
     }
     card.replaceChildren(head, line, tiles);
-    const roleNames = { builder: 'Builder', assessment: 'Routing assessment', review: 'Reviewer', 'read-only': 'Read-only work' };
+    const roleNames = { builder: 'Builder', assessment: 'Routing assessment', review: 'Reviewer', 'read-only': 'Read-only work', planning: 'Planning' };
     for (const [role, measured] of Object.entries(task.roles || {})) {
       card.append(node('p', 'panel-muted', `${roleNames[role] || role}: ${plural(measured.runs, 'run')} · ${duration(measured.workingMs)} · ${usageText(measured.usage)}`));
     }
     if (task.roles?.assessment || task.roles?.review) card.append(node('p', 'panel-muted', 'These calls are included in the total. Provider-internal planning, summaries and delegated work cannot be separated by role.'));
+    // A plan's planning run and each step are tasks of their own; this adds the whole plan up (#84).
+    const plan = task.plan && (ledger?.plans || []).find(item => item.id === task.plan.id);
+    if (plan) {
+      const tokens = plan.usage?.runsWithTokens ? (plan.usage.input || 0) + (plan.usage.output || 0) + (plan.usage.cacheWrite || 0) : null;
+      const part = task.plan.part === 'planning' ? 'This is a plan’s planning run.' : `This is step ${task.plan.number} of a plan.`;
+      card.append(node('p', 'panel-muted', `${part} The whole plan: ${[plan.planned ? 'planning' : '', plan.steps ? plural(plan.steps, 'step') : ''].filter(Boolean).join(' and ')} · ${plural(plan.runs, 'run')} · ${duration(plan.workingMs)} · ${tokens === null ? 'tokens not reported' : `${plan.usage.runsWithTokens < plan.usage.runs || plan.usage.partialRuns ? 'at least ' : ''}${compact(tokens)} new tokens`}.`));
+    }
     // Limits only appear once one is set, as bars against what this task has used.
     if (state && state.taskId === task.id) {
       const limits = state.limits, bars = node('div', 'task-limits');
@@ -116,7 +123,8 @@
     list.replaceChildren(...tasks.map(task => {
       // Not `task-row`: that's the sidebar's one-line task row, and these rows wrap over three lines.
       const row = node('li', 'panel-row ledger-row'), title = node('div', 'panel-row-title');
-      const prompt = node('span', 'task-row-prompt', `${task.folder ? `${task.folder}: ` : ''}${task.prompt || 'Task'}`);
+      const part = task.plan ? (task.plan.part === 'planning' ? 'Planning: ' : `Plan step ${task.plan.number}: `) : '';
+      const prompt = node('span', 'task-row-prompt', `${task.folder ? `${task.folder}: ` : ''}${part}${task.prompt || 'Task'}`);
       prompt.title = prompt.textContent;
       title.append(prompt, node('span', 'panel-row-time', duration(task.workingMs)));
       const meta = node('div', 'panel-row-meta'), tests = TESTS[task.verification] || TESTS.unverified;

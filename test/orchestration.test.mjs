@@ -636,6 +636,12 @@ test('a saved plan runs its steps as tasks that wait for the steps they depend o
   for (const n of [1, 2, 3]) assert.ok(prompts.some(text => text.includes(`step ${n} of 3`)), `Step ${n} was asked for its own part.`);
   assert.ok(prompts.some(text => text.includes('Do s2.') && text.includes('Step 1: Step s1')), 'Step 2 knows the step it builds on.');
 
+  // The ledger adds the steps up as one plan (#84), while each step stays its own task. This plan was written by hand.
+  const ledger = await api.broker().ledger(api.c());
+  assert.deepEqual(ledger.tasks.filter(task => task.plan).map(task => [task.plan.id, task.plan.part, task.plan.number]).sort((a, b) => a[2] - b[2]), [1, 2, 3].map(n => [plan.id, 'step', n]));
+  assert.equal(ledger.plans.length, 1);
+  assert.deepEqual([ledger.plans[0].id, ledger.plans[0].planned, ledger.plans[0].steps, ledger.plans[0].runs], [plan.id, false, 3, 3]);
+
   // A step's task can't split again: only the workspace chat has tasks.
   const lane = api.broker().tasks.lanes.get(running.tasks.s1), laneC = lane.c;
   const own = lane.broker.orchestrationAction(laneC, { action: 'create', goal: 'Split again.' }).orchestrations[0];

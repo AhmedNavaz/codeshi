@@ -411,7 +411,7 @@ export class TaskCoordinator {
   async ledgers(options = {}) {
     const lists = await Promise.all(this.all().filter(({ task }) => task.conversationId).map(async ({ task }) => {
       const ledger = await readLedger(path.join(this.directory(task), 'journal', `${task.conversationId}.jsonl`), options);
-      return ledger.tasks.map(item => ({ ...item, parallelTask: task.id, folder: task.folderName }));
+      return ledger.tasks.map(item => ({ ...item, parallelTask: task.id, folder: task.folderName, ...(task.plan ? { plan: { id: task.plan.id, part: 'step', stepId: task.plan.stepId, number: task.plan.number } } : {}) }));
     }));
     return lists.flat();
   }

@@ -258,3 +258,15 @@ test('measured comparisons pair manual and routed evaluations on the same reposi
   assert.match(text, /\| small-edit → routing-assessment \| codex \| live \| 3 \/ 3 \| compared \|/);
   assert.match(text, /-30\.0%/);
 });
+
+test('an Orchestrate plan’s planning run and steps are left out of Smart results rather than counted as single tasks', () => {
+  const log = journal();
+  log.many(3, { group: 'smart' });
+  const tasks = ledgerFromRecords(log.records).tasks;
+  tasks[0] = { ...tasks[0], plan: { id: 'p', part: 'planning' } };
+  tasks[1] = { ...tasks[1], plan: { id: 'p', part: 'step', stepId: 's1', number: 1 } };
+  const result = smartResults(tasks, { now: log.now() + 1000, days: null });
+  assert.equal(result.observed.smart.tasks, 1);
+  assert.equal(result.excluded['part-of-a-plan'], 2);
+  assert.deepEqual(result.tasks.filter(row => row.plan).map(row => [row.plan, row.excludedBecause]).sort(), [['planning', 'part-of-a-plan'], ['step', 'part-of-a-plan']]);
+});

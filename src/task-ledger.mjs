@@ -133,7 +133,7 @@ function routingOf(record) {
 // rate every task whichever way its agent was chosen; only the result is kept, never the request.
 const taskClass = record => {
   const text = String(record.message?.text || '');
-  if (!text || record.retryOf || record.review || text === continuationRequest) return null;
+  if (!text || record.retryOf || record.review || record.orchestration || text === continuationRequest) return null;
   return { kind: record.mode === 'read' ? 'question' : 'change', size: globalThis.relayRouting.classify(text, { attachments: record.message?.attachments?.length || 0 }).tier };
 };
 
@@ -171,7 +171,8 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
     else if (record.type === 'routing_assessment_metadata') record = { ...record, type: 'review_budget' };
     else if (record.type === 'routing_assessment_end') record = { ...record, type: 'review_result' };
     if (record.type === 'submission') {
-      active = open(record.id, record, record.review ? { relation: 'review' } : {});
+      // An Orchestrate planning run is the first part of its plan, whose id is the planning run's (#84).
+      active = open(record.id, record, record.review ? { relation: 'review' } : record.orchestration ? { role: 'planning', planId: record.id } : {});
       // An agent's session total carries over only into a run that resumed that session.
       if (record.resetSession || record.context?.sessionMode !== 'resumed') totals.delete(record.provider);
       else if (!totals.has(record.provider)) totals.set(record.provider, Object.fromEntries([...FIELDS, 'costEstimateUSD'].map(key => [key, null])));
@@ -276,14 +277,14 @@ export function summarizeTasks(runs) {
     for (const agent of Object.values(agents)) agent.usage = sumUsage(agent.usage);
     // A task that stopped while routing was still assessing has no builder, so the assessment says how it was chosen.
     const chosen = builders[0] || list.find(run => run.relation === 'assessment') || first;
-    const priced = list.filter(run => run.costBasis === 'api-estimate');
+    const priced = list.filter(run => run.costBasis === 'api-estimate'), planning = list.find(run => run.planId);
     return {
       routing: chosen.routing || null, taskClass: builders.find(run => run.taskClass)?.taskClass || null, workspace: first.workspace || null, contextPolicy: first.context?.policy || null,
       models: list.map(run => ({ provider: run.provider, model: run.effectiveModel || run.model || null, effort: run.effort || null, role: run.role || runRole(run), local: run.local || undefined })),
       billing: [...new Set(list.map(run => run.billingSource || 'unknown'))].sort(),
       // Agents' own dollar figures, kept only where the run was billed per use. They are estimates, not charges.
       apiEstimateUSD: { total: priced.length ? priced.reduce((sum, run) => sum + run.costEstimateUSD, 0) : null, runs: priced.length, billedRuns: list.filter(run => run.billingSource === 'api').length },
-      id, ...(first.prompt ? { prompt: first.prompt } : {}), startedAt: list.map(run => run.startedAt).filter(Boolean).sort()[0] || null,
+      id, ...(first.prompt ? { prompt: first.prompt } : {}), ...(planning ? { plan: { id: planning.planId, part: 'planning' } } : {}), startedAt: list.map(run => run.startedAt).filter(Boolean).sort()[0] || null,
       endedAt: list.every(run => run.endedAt) ? list.map(run => run.endedAt).sort().at(-1) : null, status: final.status,
       // Only the time agents worked: waiting for a limit to reset falls between runs and isn't counted.
       workingMs: list.reduce((sum, run) => sum + (run.elapsedMs || 0), 0),
@@ -294,6 +295,52 @@ export function summarizeTasks(runs) {
       verification: latest?.status === 'passed' ? 'passed' : latest?.status === 'failed' ? 'failed' : 'unverified', latestCheck: latest,
     };
   });
+}
+
+// Totals added across tasks. A field stays unknown only when no task reported it; reportedBy says how many runs did.
+export function combineUsage(list) {
+  const known = list.filter(Boolean), total = sumUsage([]);
+  for (const usage of known) {
+    for (const key of FIELDS) {
+      if (typeof usage[key] === 'number') total[key] = (total[key] || 0) + usage[key];
+      total.reportedBy[key] += usage.reportedBy?.[key] || 0;
+    }
+    total.runs += usage.runs || 0; total.runsWithTokens += usage.runsWithTokens || 0; total.partialRuns += usage.partialRuns || 0;
+  }
+  return total;
+}
+
+// One total for each Orchestrate plan (#84): its planning run and every step's task, including the step's own retries,
+// handoffs, follow-ups and reviews. Each step is still its own task in the ledger; this adds them up so a plan's
+// coordination cost is visible beside its builders'. Tests are each step's latest result, not a sum of repeats.
+export function summarizePlans(tasks) {
+  const plans = new Map();
+  for (const task of tasks) if (task.plan?.id) { if (!plans.has(task.plan.id)) plans.set(task.plan.id, []); plans.get(task.plan.id).push(task); }
+  return [...plans].map(([id, list]) => {
+    const roles = {}, steps = new Map();
+    for (const task of list) {
+      for (const [role, measured] of Object.entries(task.roles || {})) {
+        const into = roles[role] ||= { runs: 0, workingMs: 0, usage: [] };
+        into.runs += measured.runs; into.workingMs += measured.workingMs; into.usage.push(measured.usage);
+      }
+      if (task.plan.stepId) steps.set(task.plan.stepId, task);
+    }
+    for (const measured of Object.values(roles)) measured.usage = combineUsage(measured.usage);
+    const sum = pick => list.reduce((total, task) => total + (pick(task) || 0), 0), priced = list.filter(task => task.apiEstimateUSD?.runs);
+    const tests = [...steps.values()].map(task => task.verification);
+    return {
+      id, planned: list.some(task => task.plan.part === 'planning'), steps: steps.size, tasks: list.length,
+      startedAt: list.map(task => task.startedAt).filter(Boolean).sort()[0] || null,
+      endedAt: list.every(task => task.endedAt) ? list.map(task => task.endedAt).sort().at(-1) : null,
+      running: list.some(task => task.status === 'running'),
+      workingMs: sum(task => task.workingMs), runs: sum(task => task.runs), retries: sum(task => task.retries), continuations: sum(task => task.continuations),
+      reviews: sum(task => task.reviews), interventions: sum(task => task.interventions), usage: combineUsage(list.map(task => task.usage)), roles,
+      providers: [...new Set(list.flatMap(task => (task.models || []).map(model => model.local ? 'local' : model.provider)))].sort(),
+      billing: [...new Set(list.flatMap(task => task.billing || []))].sort(),
+      apiEstimateUSD: { total: priced.length ? priced.reduce((total, task) => total + task.apiEstimateUSD.total, 0) : null, runs: sum(task => task.apiEstimateUSD?.runs), billedRuns: sum(task => task.apiEstimateUSD?.billedRuns) },
+      tests: { passed: tests.filter(value => value === 'passed').length, failed: tests.filter(value => value === 'failed').length, unverified: tests.filter(value => value !== 'passed' && value !== 'failed').length },
+    };
+  }).sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
 }
 
 // One result for a task that ran across agents (#94), from what was recorded and with no model call. It only exists once a

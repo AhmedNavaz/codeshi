@@ -56,7 +56,7 @@ export function taskRow(task, { prompts = false } = {}) {
   return {
     id: task.id, startedAt: task.startedAt, endedAt: task.endedAt, group: task.routing?.mode || 'manual', ...(task.routing?.selectedBy ? { selectedBy: task.routing.selectedBy } : {}),
     policy: task.routing?.policy ?? null, kind: task.taskClass?.kind || null, size: task.taskClass?.size || null, contextPolicy: task.contextPolicy || null,
-    status: task.status, verification: task.verification, verified: verified(task), firstAttemptSuccess: task.firstAttemptSuccess ?? null,
+    ...(task.plan ? { plan: task.plan.part } : {}), status: task.status, verification: task.verification, verified: verified(task), firstAttemptSuccess: task.firstAttemptSuccess ?? null,
     workingMs: task.workingMs || 0, newTokens: newTokens(task.usage), cacheRead: task.usage?.cacheRead ?? null, runs: task.runs, runsWithTokens: task.usage?.runsWithTokens ?? 0,
     retries: task.retries || 0, interventions: task.interventions || 0, reviews: task.reviews || 0,
     assessments: task.roles?.assessment ? { runs: task.roles.assessment.runs, workingMs: task.roles.assessment.workingMs, newTokens: newTokens(task.roles.assessment.usage) } : null,
@@ -183,6 +183,8 @@ export function smartResults(tasks, { now = Date.now(), days = 30, baseline = nu
   for (const row of inRange) row.included = true;
   for (const row of inRange) {
     if (excludedIds.has(row.id)) leaveOut(row, 'left-out-by-you');
+    // A plan's planning run and steps are parts of one piece of work, not tasks comparable with a single routed or manual one.
+    else if (row.plan) leaveOut(row, 'part-of-a-plan');
     else if (!finished(row)) leaveOut(row, 'still-running');
   }
   const counted = inRange.filter(row => row.included);

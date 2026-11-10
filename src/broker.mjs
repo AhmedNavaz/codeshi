@@ -12,7 +12,7 @@ import { prepareContext, emptyContext, validateContext, continuationRequest } fr
 import { classifyError, capabilities, accountStatus } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
-import { normalizeUsage, readLedger, taskIdentity, taskResult } from './task-ledger.mjs';
+import { normalizeUsage, readLedger, summarizePlans, taskIdentity, taskResult } from './task-ledger.mjs';
 import { smartResults } from './smart-results.mjs';
 import { claudeRequestContext, contextReading, restoreAfterCompaction } from './context-state.mjs';
 import { observeReading, observeRunSize, usageWatch, usualWindowSpend } from './usage-watch.mjs';
@@ -555,7 +555,11 @@ export class Broker extends EventEmitter {
     if (this.tasks) tasks.push(...await this.tasks.ledgers({ prompts }));
     return smartResults(tasks, { ...options, prompts });
   }
-  async ledger(c, options = {}) { const ledger = await readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options); return this.tasks ? { ...ledger, tasks: [...ledger.tasks, ...await this.tasks.ledgers(options)].sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt))) } : ledger; }
+  async ledger(c, options = {}) {
+    const ledger = await readLedger(path.join(this.dataDir, `${c.id}.jsonl`), options);
+    const tasks = this.tasks ? [...ledger.tasks, ...await this.tasks.ledgers(options)].sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt))) : ledger.tasks;
+    return { ...ledger, tasks, plans: summarizePlans(tasks) };
+  }
 
   compactContext(c, { provider = c.provider } = {}, viewOptions = {}) {
     if (!PROVIDERS.includes(provider)) throw Object.assign(new Error('Choose a supported agent.'), { status: 400 });
