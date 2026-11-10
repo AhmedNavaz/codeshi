@@ -49,6 +49,11 @@
   let snowClumps = [];
   let cachedObstacles = [];
   let lastObstacleUpdate = 0;
+  // Set when the page scrolls: the surfaces are measured again before the next drawn frame, not on every scroll event.
+  let obstaclesStale = false;
+  // Steps of rain so far: the wind leans the rain a little more and less as it goes.
+  let rainSteps = 0;
+  const RAIN_DROPS = 150;
   // Weather is ambient, so it is drawn at most 30 times a second. Its motion is set in steps of a 60 Hz frame: each
   // drawn frame runs the steps for the time that has passed and draws the last, so a 120 Hz display neither speeds
   // the weather up nor draws it more often.
@@ -58,74 +63,151 @@
 
   function updateObstacleRects() {
     const rects = [];
-    const elementRects = new Map();
+    obstaclesStale = false;
     try {
+      // The boxes a person sees: a prompt's bubble rather than the sticky row that holds it, the composer's frame rather
+      // than the box inside it, a game's board rather than the area around it. Each must still be painted (below).
       const selectors = [
-        // Center panel: user prompts, agent bubbles, code blocks, composer
+        // Center panel: prompt bubbles, code blocks, the composer
         ".message-user .message-text",
-        ".message-assistant .message-text",
-        ".message-prompt",
         ".code-block",
-        ".composer-input",
+        ".composer",
         ".starter-prompts button",
         // Standard Flow cards and their buttons, so weather lands on them outside the Lounge too
         "#flow-left .flow-card",
         "#flow-right .flow-card",
-        "#flow-left .flow-card-head",
-        "#flow-right .flow-card-head",
         "#flow-left .flow-button",
         "#flow-right .flow-button",
-        "#flow-left .flow-step",
         "#flow-right .flow-plan",
-        // Lounge stage: the grid of activities, the open activity's bar, controls and content blocks
+        // Lounge stage: the grid of activities, the open activity's board, controls and content blocks
         ".flow-lounge-tile",
-        ".flow-lounge-view-bar",
-        ".flow-lounge-canvas-wrap",
-        ".flow-lounge-score-pill",
+        ".flow-lounge-canvas",
         ".flow-lounge-trivia-q",
         ".flow-lounge-trivia-opt",
-        ".flow-lounge-trivia-meta",
         ".flow-lounge-trivia-feedback",
-        ".flow-lounge-ambient",
         ".flow-lounge-typing-snippet",
         ".flow-lounge-typing-input",
-        ".flow-lounge-typing-stats",
         "button.flow-lounge-btn",
-        // Top bar buttons & controls
+        // Top bar buttons
         "#toggle-flow-lounge",
-        "#leave-flow",
-        ".command-bar"
+        "#leave-flow"
       ];
+      const viewW = window.innerWidth || 1200, viewH = window.innerHeight || 800;
+      const seen = new Set();
+      const styles = new Map(), clips = new Map(), backdrops = new Map();
+      const styleOf = el => {
+        if (!styles.has(el)) styles.set(el, getComputedStyle(el));
+        return styles.get(el);
+      };
+      // The fill behind an element: the nearest ancestor that paints one.
+      const backdropOf = el => {
+        if (!el) return "";
+        if (!backdrops.has(el)) {
+          const fill = styleOf(el).backgroundColor;
+          backdrops.set(el, colourAlpha(fill) >= 0.06 ? fill : backdropOf(el.parentElement));
+        }
+        return backdrops.get(el);
+      };
+      // The part of the window the element's scrolling ancestors leave in view.
+      const clipOf = el => {
+        if (!el) return { left: 0, right: viewW, top: 0, bottom: viewH };
+        if (!clips.has(el)) {
+          const outer = clipOf(el.parentElement), style = styleOf(el);
+          let clip = outer;
+          if ((style.overflowX || "visible") !== "visible" || (style.overflowY || "visible") !== "visible") {
+            const box = el.getBoundingClientRect();
+            clip = { left: Math.max(outer.left, box.left), right: Math.min(outer.right, box.right), top: Math.max(outer.top, box.top), bottom: Math.min(outer.bottom, box.bottom) };
+          }
+          clips.set(el, clip);
+        }
+        return clips.get(el);
+      };
       selectors.forEach(sel => {
         document.querySelectorAll(sel).forEach(el => {
-          if (!el || el.hidden || el.offsetParent === null) return;
+          if (!el || el.hidden || seen.has(el)) return;
+          seen.add(el);
           const r = el.getBoundingClientRect();
-          elementRects.set(el, r);
-          if (r.width > 20 && r.height > 8) {
-            rects.push({ el: el, left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+          if (!(r.width > 20 && r.height > 8) || r.top < 0 || r.top > viewH || r.right < 0 || r.left > viewW) return;
+          // Hidden or faded out, as a card is while it slides away.
+          if (typeof el.checkVisibility === "function"
+            ? !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, checkOpacity: true, checkVisibilityCSS: true })
+            : el.offsetParent === null) return;
+          const style = styleOf(el);
+          // Nothing to land on unless the element is painted: a top border, a fill or a gradient that shows against what
+          // is behind it. A fill or gradient in the page's own colour, as behind a sticky prompt, is an edge no one sees.
+          const behind = backdropOf(el.parentElement);
+          const edged = parseFloat(style.borderTopWidth) >= 0.5 && !["none", "hidden"].includes(style.borderTopStyle) && colourShows(style.borderTopColor, behind);
+          const image = String(style.backgroundImage || "none");
+          const pictured = image !== "none" && (/url\(/.test(image) || (image.match(COLOUR_PATTERN) || []).some(stop => colourShows(stop, behind)));
+          const filled = colourShows(style.backgroundColor, behind);
+          if (!edged && !pictured && !filled) return;
+          // Scrolled out of its panel: the top edge can't be seen, or only part of it can.
+          const clip = clipOf(el.parentElement);
+          if (r.top < clip.top - 0.5 || r.top >= clip.bottom) return;
+          // Rounded corners: the ledge starts where the edge is nearly level.
+          const corner = value => Math.min(parseFloat(value) || 0, r.height / 2, r.width / 2) * 0.3;
+          const left = Math.max(r.left + corner(style.borderTopLeftRadius), clip.left);
+          const right = Math.min(r.right - corner(style.borderTopRightRadius), clip.right);
+          if (right - left < 12) return;
+          // Covered by something else, as Flow's cards are while the Lounge fills the window.
+          if (typeof document.elementFromPoint === "function") {
+            for (const at of [0.15, 0.5, 0.85]) {
+              const top = document.elementFromPoint(left + (right - left) * at, Math.min(r.top + 2, r.bottom - 1));
+              if (!top || !(top === el || el.contains(top) || top.contains(el))) return;
+            }
           }
+          rects.push({ el: el, left, right, top: r.top, bottom: r.bottom, elLeft: r.left });
         });
       });
     } catch {}
     cachedObstacles = rects;
 
-    // Synchronize settled snow attached to live DOM elements (e.g. on scroll or layout shift)
-    for (let i = 0; i < settledSnow.length; i++) {
+    // Settled snow moves with its surface (on scroll or a layout shift) and goes when that surface is no longer in view.
+    const ledges = new Map(rects.map(obs => [obs.el, obs]));
+    for (let i = settledSnow.length - 1; i >= 0; i--) {
       const sn = settledSnow[i];
-      if (sn.el) {
-        try {
-          let r = elementRects.get(sn.el);
-          if (!r) {
-            r = sn.el.getBoundingClientRect();
-            elementRects.set(sn.el, r);
-          }
-          if (r && r.width > 0 && r.height > 0) {
-            sn.x = r.left + sn.relX;
-            sn.y = r.top + sn.relY;
-          }
-        } catch {}
+      if (!sn.el) continue;
+      const obs = ledges.get(sn.el);
+      const x = obs ? obs.elLeft + sn.relX : 0;
+      if (!obs || x < obs.left - 2 || x > obs.right + 2) {
+        settledSnow.splice(i, 1);
+        continue;
       }
+      sn.x = x;
+      sn.y = obs.top + sn.relY;
     }
+  }
+
+  // The colours a browser writes in computed styles: rgb() and rgba(), color(srgb …) from color-mix(), or transparent.
+  const COLOUR_PATTERN = /rgba?\([^)]*\)|color\(srgb[^)]*\)|transparent/g;
+
+  // A computed colour as [red, green, blue, alpha], with channels 0–255 and alpha 0–1; null when it can't be read.
+  function parseColour(value) {
+    const text = String(value || "").trim();
+    if (!text || text === "transparent") return [0, 0, 0, 0];
+    const alphaOf = (number, percent) => number === undefined ? 1 : Number(number) / (percent ? 100 : 1);
+    const legacy = text.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+)(%?))?\s*\)$/);
+    if (legacy) return [Number(legacy[1]), Number(legacy[2]), Number(legacy[3]), alphaOf(legacy[4], legacy[5])];
+    const srgb = text.match(/^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+)(%?))?\s*\)$/);
+    if (srgb) return [srgb[1] * 255, srgb[2] * 255, srgb[3] * 255, alphaOf(srgb[4], srgb[5])];
+    return null;
+  }
+
+  // How opaque a computed colour is: 0 for transparent, 1 for solid.
+  function colourAlpha(value) {
+    const colour = parseColour(value);
+    return colour ? colour[3] : 1;
+  }
+
+  // Whether a colour painted over the backdrop changes it enough to see: a few levels in one channel at least.
+  // A colour or backdrop that can't be read counts as showing, as long as the colour isn't nearly transparent.
+  function colourShows(value, backdrop) {
+    const colour = parseColour(value);
+    if (colour && colour[3] < 0.05) return false;
+    const under = parseColour(backdrop);
+    if (!colour || !under || under[3] === 0) return colourAlpha(value) >= 0.05;
+    const change = Math.max(...[0, 1, 2].map(i => Math.abs(colour[i] - under[i]))) * colour[3];
+    return change >= 4;
   }
 
   function initWeatherSystem() {
@@ -144,17 +226,7 @@
 
     // Initialize raindrops across the entire view
     rainDrops = [];
-    for (let i = 0; i < 110; i++) {
-      rainDrops.push({
-        x: Math.random() * (w + 200) - 100,
-        y: Math.random() * h,
-        vx: -1.2,
-        vy: Math.random() * 6 + 14,
-        len: Math.random() * 8 + 12,
-        alpha: Math.random() * 0.35 + 0.35,
-        passThrough: Math.random() < 0.35
-      });
-    }
+    for (let i = 0; i < RAIN_DROPS; i++) rainDrops.push(newRainDrop(w, h, true));
     rainSplashes = [];
     rainRipples = [];
 
@@ -176,6 +248,24 @@
     snowClumps = [];
 
     updateObstacleRects();
+  }
+
+  // A raindrop at its own distance: a near one is longer, faster, thicker and brighter, a far one short, slow and faint.
+  // Far drops fall behind everything and land only at the bottom of the window; most near ones splash on the first
+  // surface they meet.
+  function newRainDrop(w, h, anywhere) {
+    const z = Math.random();
+    return {
+      z,
+      x: Math.random() * (w + 240) - 120,
+      y: anywhere ? Math.random() * h : -15 - Math.random() * 25,
+      vy: 12 + z * 12 + Math.random() * 2,
+      len: 10 + z * 18 + Math.random() * 4,
+      width: 0.6 + z * 0.9,
+      alpha: 0.16 + z * 0.42,
+      lands: z > 0.4 && Math.random() < 0.8,
+      trail: 0
+    };
   }
 
   function resizeWeatherCanvas() {
@@ -305,7 +395,7 @@
       return;
     }
 
-    if (time - lastObstacleUpdate > 800) {
+    if (obstaclesStale || time - lastObstacleUpdate > 800) {
       lastObstacleUpdate = time;
       updateObstacleRects();
     }
@@ -318,67 +408,65 @@
   // One 60 Hz step of rain or snow. It draws only when given the canvas context: the last step of a drawn frame.
   function stepWeather(ctx, w, h) {
     if (weatherMode === "rain") {
+      // Rain is pale and thin, like light caught on falling water; darker on the light theme so it still shows.
+      const light = document.documentElement?.getAttribute?.("data-theme") === "light";
+      const colour = light ? "rgb(72, 98, 134)" : "rgb(198, 216, 238)";
       if (ctx) {
-        ctx.lineWidth = 1.3;
-        ctx.strokeStyle = "rgba(147, 197, 253, 0.45)";
+        ctx.strokeStyle = colour;
+        ctx.fillStyle = colour;
+        ctx.lineCap = "round";
       }
+      // One wind for all the rain, so every streak leans the same way; it eases up and down slowly.
+      const slant = 0.07 + 0.03 * Math.sin(rainSteps++ * 0.005);
 
       for (let i = 0; i < rainDrops.length; i++) {
         const d = rainDrops[i];
-        const nextX = d.x + d.vx;
+        const nextX = d.x - slant * d.vy;
         const nextY = d.y + d.vy;
 
-        // Check collision with obstacle tops (prompt bubbles, buttons, text blocks)
+        // A near drop lands on the first visible top edge it crosses.
         let hit = false;
         let hitY = h;
-        for (let j = 0; j < cachedObstacles.length; j++) {
-          const obs = cachedObstacles[j];
-          if (nextX >= obs.left && nextX <= obs.right && d.y < obs.top && nextY >= obs.top) {
-            // Allow ~35% of drops to pass past this ledge into deeper content/cards
-            if (d.passThrough || Math.random() < 0.35) {
-              continue;
+        if (d.lands) {
+          for (let j = 0; j < cachedObstacles.length; j++) {
+            const obs = cachedObstacles[j];
+            if (nextX >= obs.left && nextX <= obs.right && d.y < obs.top && nextY >= obs.top) {
+              hit = true;
+              hitY = obs.top;
+              break;
             }
-            hit = true;
-            hitY = obs.top;
-            break;
           }
         }
 
-        if (hit || nextY >= h) {
-          const splashY = hit ? hitY : h;
-          // Spawn 2-3 splash particles bouncing off the button / prompt / text block
-          const splashCount = Math.floor(Math.random() * 2) + 2;
-          for (let s = 0; s < splashCount; s++) {
+        // Every drop that reaches the bottom of the window lands there, far ones too, so the rain meets a floor.
+        if (!hit && nextY >= h) {
+          hit = true;
+          hitY = h - 2;
+        }
+
+        if (hit) {
+          // A small crown: two or three fine droplets thrown up and a thin ring that spreads along the edge.
+          const count = d.lands ? (Math.random() < 0.5 ? 3 : 2) : 1;
+          for (let s = 0; s < count; s++) {
             rainSplashes.push({
-              x: nextX + (Math.random() - 0.5) * 4,
-              y: splashY,
-              vx: (Math.random() - 0.5) * 3.2,
-              vy: -Math.random() * 2.0 - 0.8,
-              r: Math.random() * 1.1 + 0.7,
-              alpha: 0.75,
-              decay: Math.random() * 0.05 + 0.04
-            });
-          }
-
-          // Spawn expanding subtle water ripple ring on the hit surface
-          if (rainRipples.length < 50) {
-            rainRipples.push({
               x: nextX,
-              y: splashY,
-              rx: 1.5,
-              ry: 0.8,
-              maxR: Math.random() * 4 + 4,
-              alpha: 0.65,
-              growth: 0.5,
-              decay: 0.05
+              y: hitY,
+              floor: hitY,
+              vx: (Math.random() - 0.5) * 2.6 - slant * 3,
+              vy: -(0.9 + Math.random() * 1.5),
+              r: 0.45 + Math.random() * 0.45,
+              alpha: Math.min(0.2 + d.alpha, 0.8),
+              decay: 0.05 + Math.random() * 0.04
             });
           }
+          if (rainRipples.length < 50) {
+            rainRipples.push({ x: nextX, y: hitY, rx: 1, maxR: 3 + d.z * 4, alpha: 0.15 + d.alpha * 0.5, growth: 0.45, decay: 0.04 });
+          }
+        }
 
-          // Reset drop to top with staggered start
-          d.y = -15 - Math.random() * 25;
-          d.x = Math.random() * (w + 200) - 100;
-          d.passThrough = Math.random() < 0.35;
-          d.trail = 0;
+        if (hit) {
+          // A new drop starts above the view.
+          Object.assign(d, newRainDrop(w, h, false));
         } else {
           d.x = nextX;
           d.y = nextY;
@@ -386,22 +474,28 @@
             // A frame is drawn every second step or so. The streak also covers the way the drop fell since the last
             // drawn frame, as the 60 Hz frames between them did together, so the rain reads as streaks, not dashes.
             // It is fainter by as much as it is longer, so the rain gives off the same light as at 60 frames a second.
-            const len = d.len + (d.trail || 0);
-            ctx.globalAlpha = d.len / len;
+            const len = d.len + d.trail;
+            const fade = d.len / len;
+            // The streak trails behind the drop, up and into the wind: faint along its length, brighter at the head.
+            ctx.lineWidth = d.width;
+            ctx.globalAlpha = d.alpha * fade * 0.55;
             ctx.beginPath();
             ctx.moveTo(d.x, d.y);
-            ctx.lineTo(d.x + d.vx * (len / d.vy), d.y - len);
+            ctx.lineTo(d.x + slant * len, d.y - len);
+            ctx.stroke();
+            ctx.globalAlpha = d.alpha * fade;
+            ctx.beginPath();
+            ctx.moveTo(d.x, d.y);
+            ctx.lineTo(d.x + slant * len * 0.4, d.y - len * 0.4);
             ctx.stroke();
             d.trail = 0;
           } else {
-            d.trail = (d.trail || 0) + d.vy;
+            d.trail += d.vy;
           }
         }
       }
 
-      if (ctx) ctx.globalAlpha = 1;
-
-      // Draw and update splashes
+      // Droplets of a splash rise, fall back and are gone when they reach the surface again.
       for (let i = rainSplashes.length - 1; i >= 0; i--) {
         const sp = rainSplashes[i];
         sp.x += sp.vx;
@@ -409,39 +503,39 @@
         sp.vy += 0.25; // gravity
         sp.alpha -= sp.decay;
 
-        if (sp.alpha <= 0) {
+        if (sp.alpha <= 0 || sp.y > sp.floor) {
           rainSplashes.splice(i, 1);
           continue;
         }
 
         if (!ctx) continue;
-        ctx.fillStyle = `rgba(186, 230, 253, ${Math.max(0, sp.alpha)})`;
+        ctx.globalAlpha = sp.alpha;
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, sp.r, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // Draw and update ripples on obstacles
-      if (ctx) ctx.lineWidth = 1;
+      // The ring a drop leaves on a surface: flat, thin and quick to fade.
+      if (ctx) ctx.lineWidth = 0.8;
       for (let i = rainRipples.length - 1; i >= 0; i--) {
         const rp = rainRipples[i];
         rp.rx += rp.growth;
-        rp.ry += rp.growth * 0.45;
         rp.alpha -= rp.decay;
         if (rp.alpha <= 0 || rp.rx >= rp.maxR) {
           rainRipples.splice(i, 1);
           continue;
         }
         if (!ctx) continue;
-        ctx.strokeStyle = `rgba(186, 230, 253, ${Math.max(0, rp.alpha)})`;
+        ctx.globalAlpha = rp.alpha;
         ctx.beginPath();
         if (ctx.ellipse) {
-          ctx.ellipse(rp.x, rp.y, rp.rx, rp.ry, 0, 0, Math.PI * 2);
+          ctx.ellipse(rp.x, rp.y, rp.rx, rp.rx * 0.28, 0, 0, Math.PI * 2);
         } else {
           ctx.arc(rp.x, rp.y, rp.rx, 0, Math.PI * 2);
         }
         ctx.stroke();
       }
+      if (ctx) ctx.globalAlpha = 1;
     } else if (weatherMode === "snow") {
       // 1. Draw settled snow on ledges & bottom (slow to fade, keeps collecting)
       for (let i = settledSnow.length - 1; i >= 0; i--) {
@@ -484,7 +578,7 @@
           if (c.x >= obs.left && c.x <= obs.right && c.y >= obs.top && (c.y - c.vy) < obs.top) {
             clumpHit = true;
             if (settledSnow.length < 500) {
-              const relX = c.x - obs.left;
+              const relX = c.x - obs.elLeft;
               settledSnow.push({
                 el: obs.el,
                 relX: relX,
@@ -527,7 +621,7 @@
         let hitObs = null;
         for (let j = 0; j < cachedObstacles.length; j++) {
           const obs = cachedObstacles[j];
-          if (nextX >= obs.left - 2 && nextX <= obs.right + 2 && f.y < obs.top && nextY >= obs.top) {
+          if (nextX >= obs.left && nextX <= obs.right && f.y < obs.top && nextY >= obs.top) {
             // Allow ~32% of flakes to drift past upper elements into deeper UI layers/cards
             if (f.passThrough || Math.random() < 0.32) {
               continue;
@@ -540,8 +634,8 @@
 
         if (hit) {
           const obs = hitObs;
-          const relX = nextX - obs.left;
-          const width = obs.right - obs.left;
+          // Kept relative to the element, so the snow moves with it; the ledge can be narrower than the element.
+          const relX = nextX - obs.elLeft;
 
           // Count local settled flakes near this landing spot to determine mound height & accumulation
           let localCount = 0;
@@ -552,8 +646,8 @@
             }
           }
 
-          const distToLeft = relX;
-          const distToRight = width - relX;
+          const distToLeft = nextX - obs.left;
+          const distToRight = obs.right - nextX;
           const isNearEdge = distToLeft < 7 || distToRight < 7;
 
           // When snow builds up or lands near the edge: it rolls / slides sideways!
@@ -563,7 +657,7 @@
             const newRelX = relX + dir * slideAmount;
 
             // Did it slide off the edge of the obstacle? (Dropping from sideways!)
-            if (newRelX < 0 || newRelX > width) {
+            if (obs.elLeft + newRelX < obs.left || obs.elLeft + newRelX > obs.right) {
               const dropX = dir < 0 ? obs.left - 2 : obs.right + 2;
               snowClumps.push({
                 x: dropX,
@@ -606,7 +700,7 @@
                   el: obs.el,
                   relX: newRelX,
                   relY: -1 - stackH,
-                  x: obs.left + newRelX,
+                  x: obs.elLeft + newRelX,
                   y: obs.top - 1 - stackH,
                   r: Math.random() * 1.1 + 0.9,
                   alpha: Math.random() * 0.2 + 0.75,
@@ -1717,7 +1811,7 @@
       }
     });
     window.addEventListener("scroll", () => {
-      if (weatherShown()) updateObstacleRects();
+      if (weatherShown()) obstaclesStale = true;
     }, { passive: true, capture: true });
   }
 

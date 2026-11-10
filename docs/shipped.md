@@ -127,3 +127,10 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | A near-black Dark theme beside Graphite and Light, a Larger text size, and two-line workspace rows ([#127](https://github.com/AhmedNavaz/codeshi/issues/127)) | [0.39.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.39.0) |
 | Setup that starts with your workspace and a side-by-side choice of Normal or Flow ([#129](https://github.com/AhmedNavaz/codeshi/issues/129)) | [0.39.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.39.0) |
 | Settings with a page for each subject ([#130](https://github.com/AhmedNavaz/codeshi/issues/130)) | [0.39.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.39.0) |
+| Hands-free voice conversations in Flow on macOS: send by voice, keep talking while the agent works, hear the reply ([#72](https://github.com/AhmedNavaz/codeshi/issues/72), first version) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
+| Add selected terminal output to your message ([#71](https://github.com/AhmedNavaz/codeshi/issues/71)) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
+| Remote access on the phone's Home Screen, paired with a short code ([#115](https://github.com/AhmedNavaz/codeshi/issues/115)) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
+| Copy project memory to a folder's AGENTS.md ([#21](https://github.com/AhmedNavaz/codeshi/issues/21)) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
+| A task in its own copy has your installed packages ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
+| The Lounge fills the window, with rain and snow sounds ([#14](https://github.com/AhmedNavaz/codeshi/issues/14)) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |
+| Lower energy use in the Lounge, games and setup, from measurements ([#152](https://github.com/AhmedNavaz/codeshi/issues/152), first fixes) | [0.40.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.40.0) |

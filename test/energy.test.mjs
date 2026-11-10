@@ -32,6 +32,7 @@ class Element extends Events {
   set className(value) { this.classes.clear(); for (const name of String(value).split(/\s+/).filter(Boolean)) this.classes.add(name); }
   get textContent() { return this.text + this.children.map(child => child.textContent).join(''); }
   set textContent(value) { this.text = String(value); this.children = []; }
+  get parentElement() { return this.parentNode; }
   get isConnected() { for (let node = this; node; node = node.parentNode) if (node === this.document.body) return true; return false; }
   append(...nodes) { for (const item of nodes) { const child = typeof item === 'string' ? Object.assign(new Element('#text', this.document), { text: item }) : item; child.remove(); child.parentNode = this; this.children.push(child); } }
   prepend(...nodes) { this.append(...nodes); }
@@ -54,10 +55,12 @@ class Element extends Events {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
 
-function lounge({ reducedMotion = false, ledge = false, height = 800, random = null } = {}) {
+function lounge({ reducedMotion = false, ledge = false, painted = true, height = 800, random = null } = {}) {
   const document = new Events();
   document.hidden = false;
   document.body = new Element('body', document);
+  // The page's own colour, behind everything.
+  document.body.computed = { backgroundColor: 'rgb(17, 17, 17)', backgroundImage: 'none', borderTopStyle: 'none', borderTopWidth: '0px' };
   document.createElement = tag => new Element(tag, document);
   document.querySelectorAll = selector => document.body.querySelectorAll(selector);
   document.getElementById = id => [...document.body.walk()].find(node => node.id === id) || null;
@@ -66,8 +69,15 @@ function lounge({ reducedMotion = false, ledge = false, height = 800, random = n
   }
   // A ledge for rain to splash on and snow to settle on, as the composer is in the app.
   if (ledge) {
-    const composer = new Element('div', document); composer.className = 'composer-input';
+    const composer = new Element('div', document); composer.className = 'composer';
     composer.getBoundingClientRect = () => ({ left: 100, right: 1100, top: 400, bottom: 440, width: 1000, height: 40 });
+    // Painted, it has a border a person can see. Unpainted, it is only a box in the layout, or one whose fill and
+    // gradient are the page's own colour, as the sticky row behind a prompt is.
+    composer.computed = painted === true
+      ? { borderTopWidth: '1px', borderTopStyle: 'solid', borderTopColor: 'rgba(255, 255, 255, 0.12)', backgroundColor: 'rgb(24, 24, 27)', backgroundImage: 'none', borderTopLeftRadius: '10px', borderTopRightRadius: '10px' }
+      : painted === 'page'
+        ? { borderTopWidth: '0px', borderTopStyle: 'none', borderTopColor: 'rgb(255, 255, 255)', backgroundColor: 'rgb(17, 17, 17)', backgroundImage: 'linear-gradient(rgb(17, 17, 17) calc(100% - 14px), rgba(0, 0, 0, 0))' }
+        : { borderTopWidth: '0px', borderTopStyle: 'none', borderTopColor: 'rgb(255, 255, 255)', backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none' };
     document.body.append(composer);
   }
   const window = new Events();
@@ -83,6 +93,7 @@ function lounge({ reducedMotion = false, ledge = false, height = 800, random = n
   const storage = new Map();
   const context = vm.createContext({
     window, document, console,
+    getComputedStyle: element => element.computed || { backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none', borderTopStyle: 'none', borderTopWidth: '0px' },
     requestAnimationFrame: fn => { frames.set(++nextFrame, fn); return nextFrame; },
     cancelAnimationFrame: id => frames.delete(id),
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
@@ -123,19 +134,24 @@ test('Lounge weather draws at most 30 frames a second, at the same speed on 60 H
 });
 
 for (const hz of [120, 50]) test(`Lounge rain falls at its 60 Hz speed on a ${hz} Hz display`, () => {
-  // With Math.random fixed at 0.5, every drop starts at x 600, y 1500 (half the height) and falls 17 px a 60 Hz step.
+  // With Math.random fixed at 0.5, every drop starts at x 600, y 1500 (half the height) and falls 19 px a 60 Hz step.
+  // The wind carries it left by 7 to 10 hundredths of its fall.
   const ui = lounge({ height: 3000, random: 0.5 });
   ui.api.enter(); ui.api.setWeatherMode('rain');
   second(ui, hz);
   const drops = lastScene(ui.weather()).filter(([name]) => name === 'moveTo');
-  assert.equal(drops.length, 110, 'each drop is drawn once in a frame');
+  assert.equal(drops.length, 2 * 150, 'each drop is drawn once in a frame: its streak and its brighter head');
   // One second is 60 steps after the first frame's step, give or take the step still to come.
-  for (const [, x, y] of drops) { assert.ok(Math.abs(x - (600 - 1.2 * 61)) <= 1.2 * 1.5, `x ${x}`); assert.ok(Math.abs(y - (1500 + 17 * 61)) <= 17 * 1.5, `y ${y}`); }
+  for (const [, x, y] of drops) {
+    assert.ok(Math.abs(y - (1500 + 19 * 61)) <= 19 * 1.5, `y ${y}`);
+    assert.ok(600 - x >= 0.07 * 19 * 59.5 && 600 - x <= 0.1 * 19 * 62.5, `x ${x}`);
+  }
 });
 
 test('Lounge rain streaks cover the way each drop fell between drawn frames, fainter by as much as they are longer', () => {
-  // With Math.random fixed at 0.5, every drop falls 17 px a 60 Hz step and its streak is 16 px long. At 60 Hz the
-  // streaks of two frames in a row leave a 1 px gap; drawn every second step, a streak is 17 px longer to leave the same.
+  // With Math.random fixed at 0.5, every drop falls 19 px a 60 Hz step, its streak is 21 px long and it is drawn at
+  // 0.37: the streak at 0.55 of that and the head, the lowest two fifths, at all of it. Drawn every second step, a
+  // streak is 19 px longer, so the streaks of two frames in a row overlap as they do at 60 Hz.
   const ui = lounge({ height: 3000, random: 0.5 });
   ui.api.enter(); ui.api.setWeatherMode('rain');
   second(ui, 60);
@@ -146,20 +162,47 @@ test('Lounge rain streaks cover the way each drop fell between drawn frames, fai
     else if (name === 'moveTo') from = args;
     else if (name === 'lineTo' && from) strokes.push({ length: from[1] - args[1], alpha });
   }
-  assert.equal(strokes.length, 110);
-  for (const { length, alpha } of strokes) {
-    assert.ok(Math.abs(length - 33) < 1e-6, `a streak is ${length} px long`);
-    assert.ok(Math.abs(alpha * length - 16) < 1e-6, `drawn at ${alpha}, a ${length} px streak gives off the light of a 16 px one`);
-  }
-  assert.equal(calls.filter(([name]) => name === 'globalAlpha').at(-1)[1], 1, 'splashes and ripples are drawn as before');
+  assert.equal(strokes.length, 2 * 150);
+  strokes.forEach(({ length, alpha }, i) => {
+    if (i % 2 === 0) {
+      assert.ok(Math.abs(length - 40) < 1e-6, `a streak is ${length} px long`);
+      assert.ok(Math.abs(alpha * length - 0.37 * 0.55 * 21) < 1e-6, `drawn at ${alpha}, a ${length} px streak gives off the light of a 21 px one`);
+    } else {
+      assert.ok(Math.abs(length - 16) < 1e-6, `a head is ${length} px long`);
+      assert.ok(Math.abs(alpha * 40 - 0.37 * 21) < 1e-6, `a head is drawn at ${alpha}`);
+    }
+  });
+  assert.equal(calls.filter(([name]) => name === 'globalAlpha').at(-1)[1], 1, 'what is drawn next is not faint');
   // A drop that reaches the bottom starts again above the view, at y -27.5 here. Its next streak covers only the way
-  // it fell since, so it never reaches above that.
+  // it fell since: a step of 19 px and its own 21 px, so it reaches no higher than y -29.5.
   const low = lounge({ height: 100, random: 0.5 });
   low.api.enter(); low.api.setWeatherMode('rain');
   second(low, 60);
   const tops = low.weather().filter(([name]) => name === 'lineTo').map(([, , y]) => y);
   assert.ok(tops.length > 300 && tops.some(y => y < 0), 'drops fell through the view several times');
-  assert.ok(Math.min(...tops) >= -27.5, `a streak reached up to y ${Math.min(...tops)}`);
+  assert.ok(Math.min(...tops) >= -29.5 - 1e-6, `a streak reached up to y ${Math.min(...tops)}`);
+});
+
+test('rain and snow land only on a surface a person can see', () => {
+  // The composer's box is in the layout either way. Without a border or a fill of its own there is no edge to see,
+  // so drops fall past it and no snow settles along it.
+  // A fill and gradient in the page's own colour, as the sticky row behind a prompt has, is no edge either.
+  // The bottom of the window (800 px here) is a floor every drop splashes on.
+  const rings = ui => ui.weather().filter(call => call[0] === 'ellipse');
+  const ledge = ui => rings(ui).filter(([, , y]) => y < 790);
+  const seen = lounge({ ledge: true }), unseen = lounge({ ledge: true, painted: false }), page = lounge({ ledge: true, painted: 'page' });
+  for (const ui of [seen, unseen, page]) { ui.api.enter(); ui.api.setWeatherMode('rain'); second(ui, 60, 0, 3); }
+  assert.ok(ledge(seen).length > 0, 'drops splash on the painted composer');
+  assert.equal(ledge(unseen).length, 0, 'nothing splashes on a box that is not painted');
+  assert.equal(ledge(page).length, 0, 'nothing splashes on a box painted in the page colour');
+  for (const ui of [seen, unseen, page]) assert.ok(rings(ui).some(([, , y]) => y === 798), 'drops splash at the bottom of the window');
+  // Every splash above the floor is on the top edge, inside the rounded corners (a 10 px radius brings the ledge in by 3 px).
+  for (const [, x, y] of ledge(seen)) { assert.equal(y, 400); assert.ok(x >= 103 && x <= 1097, `x ${x}`); }
+  const settled = ui => lastScene(ui.weather()).filter(([name, , y]) => name === 'arc' && y > 390 && y < 400).length;
+  for (const ui of [seen, unseen, page]) { ui.api.setWeatherMode('snow'); second(ui, 60, 4000, 20); }
+  assert.ok(settled(seen) > 5, 'snow settles along the painted composer');
+  assert.ok(settled(unseen) <= 2, 'only flakes falling past are near the unpainted one');
+  assert.ok(settled(page) <= 2, 'only flakes falling past are near the one painted in the page colour');
 });
 
 // Starts a lounge game with its card's Start button and plays it on a display of the given refresh rate. Returns the
