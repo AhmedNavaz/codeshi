@@ -6,6 +6,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ### Changed
 - **A task in its own copy has your installed packages** ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)). Each `node_modules` the folder's `.gitignore` leaves out is cloned into the task's copy before the agent starts, so its builds and tests can run there. On disks that can clone it takes about a second and no extra space, and installing in the task doesn't touch the folder's own; elsewhere it's linked, and the task card says it's shared. `.env` files are never copied, and the task card names the ones the copy lacks. None of this becomes part of the task's changes.
+- **Screenshots an agent takes show in the chat, side by side.** Every agent is now told to save a picture it wants you to see inside the workspace and put it in its reply, instead of leaving it in a temporary folder for you to find. Images on lines of their own share a row, two or three across depending on the width of the chat, and a single image keeps its full size. Clicking one still opens it in the preview.
 
 ## [0.39.0] - 2026-11-10
 

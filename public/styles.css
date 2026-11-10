@@ -296,6 +296,8 @@ summary::-webkit-details-marker { display: none; }
 .message-image-open:hover { border-color: var(--border-strong); }
 .message-image-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .message-image-picture { display: block; max-width: 100%; max-height: 320px; object-fit: contain; }
+.message-gallery:not([data-count="0"]):not([data-count="1"]) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; align-items: start; justify-items: start; }
+.message-gallery .message-image { margin: 0; max-width: 100%; line-height: 0; }
 .message-text pre code { padding: 0; background: none; }
 .message-text pre code { color: var(--syntax-text); }
 .tok-keyword, .tok-tag { color: var(--syntax-keyword); }

@@ -6333,6 +6333,11 @@ test('images in replies show inline from the workspace, open in the preview on c
   assert.deepEqual(shown(bold).map(([alt]) => alt), ['Before', 'home.png']);
   assert.deepEqual(bold.querySelectorAll('strong').flatMap(node => node.querySelectorAll('.message-image')), [], 'Images in bold text still go under the line, not inside the bold text.');
   assert.deepEqual(shown(ui.$('message-many-80')).map(([alt]) => alt), ['Shot 1', 'Shot 2', 'Shot 3', 'Shot 4', 'Shot 5', 'Shot 6'], 'A reply shows at most six images; the rest stay links.');
+  const galleries = ui.$('message-many-80').querySelectorAll('.message-gallery');
+  assert.equal(galleries.length, 1, 'Lines that are only images share one gallery, so they sit side by side.');
+  assert.equal(galleries[0].getAttribute('data-count'), '6');
+  assert.deepEqual(reply.querySelectorAll('.message-gallery').map(node => node.getAttribute('data-count')), ['1'], 'A single image on its own line keeps its full size.');
+  assert.equal(bold.querySelectorAll('.message-gallery').length, 0, 'Images inside a sentence stay under their line.');
 
   // Clicking an image opens it in the file preview, larger.
   reply.querySelectorAll('.message-image-open')[0].click(); await flush();

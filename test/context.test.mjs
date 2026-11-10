@@ -34,6 +34,7 @@ test('handoffs preserve primary and recent real user instructions instead of fil
   assert.equal(prepared.metadata.protectedUserMessages, 2); assert.equal(value.continuation.previousErrorCategory, 'quota');
   assert.equal(value.continuation.sessionMode, 'fresh'); assert.equal(value.continuation.sessionReason, 'cross-agent-handoff');
   assert.equal(prepared.metadata.bytes, Buffer.byteLength(prepared.prompt)); assert(prepared.metadata.bytes <= 192000);
+  assert.match(prepared.prompt.slice(0, prepared.prompt.indexOf('\n')), /save it inside a workspace folder .* as a Markdown image/, 'Every agent is told how to make a screenshot show in the chat.');
   assert.equal(prepared.metadata.includedMessages + prepared.metadata.omittedMessages, c.messages.length);
 });
 

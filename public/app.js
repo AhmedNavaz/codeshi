@@ -619,6 +619,13 @@
     if (entry.done) show(entry.src); else entry.promise.then(show);
     return figure;
   }
+  // A line that is only workspace images. Lines like this that follow each other share one gallery, so several
+  // screenshots sit side by side instead of one to a row.
+  const IMAGE_ONLY_LINE = /^\s*(?:!\[[^\]\n]*\]\((?:[^()\n]|\([^()\n]*\))+\)\s*)+$/;
+  function imageOnlyLine(line) {
+    if (!replyImages || !IMAGE_ONLY_LINE.test(line)) return false;
+    return [...line.matchAll(/!\[[^\]\n]*\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g)].every(match => imagePath(match[1].trim()));
+  }
   function renderInline(parent, text, inLink = false, found = null) {
     const top = !found;
     found ||= [];
@@ -706,10 +713,18 @@
   function tableCells(row) { return row.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()); }
   function renderProse(parent, text) {
     const lines = text.split("\n"), tableRow = /^\s*\|.*\|\s*$/, tableRule = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
-    let block = null, list = null;
+    let block = null, list = null, gallery = null;
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
       if (!line.trim()) { block = list = null; continue; }
+      if (imageOnlyLine(line)) {
+        block = list = null;
+        if (gallery) gallery.append(document.createTextNode(" ")); else { gallery = element("p", "message-gallery"); parent.append(gallery); }
+        renderInline(gallery, line);
+        gallery.setAttribute("data-count", String(gallery.querySelectorAll(".message-image").length));
+        continue;
+      }
+      gallery = null;
       if (tableRow.test(line) && tableRule.test(lines[index + 1] || "")) {
         block = list = null;
         const wrap = element("div", "md-table"), table = element("table"), head = element("thead"), body = element("tbody"), headRow = element("tr");
