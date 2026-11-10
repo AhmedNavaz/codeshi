@@ -81,7 +81,9 @@ export class HandoffMonitor {
       ? run.mode !== 'read' && (this.broker.workspaces.length <= 1 || account.capabilities?.additionalDirectories === true)
       : this.broker.workspaces.length <= 6;
   }
-  async routedDestination(c, run, exclude) {
+  // atLimit: the run already stopped at its limit, so moving costs no more than waiting and the destination needs only
+  // to be under the line. Before the limit, it also needs room under the line for a usual run (#12).
+  async routedDestination(c, run, exclude, { atLimit = false } = {}) {
     const candidates = [], { mode, threshold } = this.policy(run);
     // Continue the original task, rather than classifying the synthetic "continue" prompt as a new request.
     const request = c.messages.find(message => message.role === 'user' && message.text !== continuationRequest &&
@@ -105,13 +107,13 @@ export class HandoffMonitor {
       candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
     }
     const choice = globalThis.relayRouting.route({ text: request?.text || '', attachments: request?.attachments?.length || 0, assessment: run.routing?.assessment || null, mode, candidates, quotaThreshold: threshold });
-    if (choice.error || choice.quota.state !== 'ok') return null;
-    const { quota, bindingWindow, ...routing } = choice;
+    if (choice.error || choice.quota.state !== 'ok' || !atLimit && !choice.handoffLine?.fits) return null;
+    const { quota, bindingWindow, handoffLine, ...routing } = choice;
     return { provider: choice.provider, model: choice.model, effort: choice.effort, routing, mode: run.mode, approvalPolicy: run.approvalPolicy,
       billingSource: 'subscription', usedPercent: quota.usedPercent, quota: quota.state, quotaEvidence: quota };
   }
-  async destination(c, run, exclude = []) {
-    if (this.policy(run).mode) return this.routedDestination(c, run, exclude);
+  async destination(c, run, exclude = [], { atLimit = false } = {}) {
+    if (this.policy(run).mode) return this.routedDestination(c, run, exclude, { atLimit });
     const threshold = this.policy(run).threshold;
     let best = null;
     for (const provider of this.broker.availableProviders().filter(value => value !== run.provider && !exclude.includes(value))) {
@@ -161,9 +163,16 @@ export class HandoffMonitor {
     this.observe(c, run.provider, usage);
     // The model the run is really using, which is known once it starts even when the agent's default was left selected.
     const model = c.activeRun?.effectiveModel || c.model || usage?.defaultModel;
-    const assessment = assessQuota(usage, model, { threshold: preferences.threshold, now: Date.now(), tier: run.routing?.tier || null });
     const top = highest(usage, model);
-    if (!top || !['near', 'exhausted'].includes(assessment.state)) return;
+    if (preferences.mode) {
+      // A routed run moves by the same test that chose it (#12): kept while it fits under its mode's line, so a task
+      // started past the line because no other agent fitted isn't moved at its first check.
+      const fit = globalThis.relayRouting.handoffFit(usage, model, { mode: preferences.mode, current: true, tier: run.routing?.tier || null, usual: usualWindowSpend(c, run.provider) });
+      if (!top || fit.fits || !['near', 'exhausted'].includes(fit.quota.state)) return;
+    } else {
+      const assessment = assessQuota(usage, model, { threshold: preferences.threshold, now: Date.now(), tier: run.routing?.tier || null });
+      if (!top || !['near', 'exhausted'].includes(assessment.state)) return;
+    }
     const offer = await this.prepareOffer(c, run, top);
     if (!offer) return;
     if (preferences.automatic && !run.automaticReview && offer.to.billingSource === 'subscription' && offer.to.quota === 'ok') {
@@ -279,7 +288,7 @@ export class HandoffMonitor {
     const done = result => { c.limitSwitching = null; this.broker.emit('update', { conversationId: c.id }); return result; };
     const from = names[run.provider], tried = [...(run.limitChain || []), run.provider];
     try {
-      const [to, resets] = await Promise.all([this.destination(c, run, tried), this.resetsAt(c, run)]);
+      const [to, resets] = await Promise.all([this.destination(c, run, tried, { atLimit: true }), this.resetsAt(c, run)]);
       const limit = `${from} reached its usage limit${resets ? `, which resets ${resets}` : ''}`;
       // The person may have sent something while this was being worked out; theirs goes ahead.
       if (this.closed || this.broker.running || c.lastRun?.id !== run.id || !this.broker.execution.allows(c, run.execution, { action: 'handoff' })) return done(true);

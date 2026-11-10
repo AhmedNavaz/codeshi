@@ -9,7 +9,8 @@
   const MODES = ['saver', 'smart', 'ultra'];
   // Which version of these rules chose an agent. Smart results (#139) only compare tasks routed by the same version, so
   // raise it whenever route(), classify() or the mode plans change what gets chosen.
-  const POLICY_VERSION = 1;
+  // 2: new work and handoffs share each mode's handoff line (#12).
+  const POLICY_VERSION = 2;
   const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
   const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
   const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
@@ -32,15 +33,19 @@
     return 5;
   }
 
+  // What one run usually spends of a window before any run was measured: a few points of a week, more of five hours.
+  function defaultSpend(row, tier = null) {
+    const periodHours = windowPeriodHours(row);
+    return periodHours >= 168 ? (tier === 'deep' ? 3 : 2) : periodHours >= 24 ? 4 : (tier === 'deep' ? 8 : 5);
+  }
+
   function adaptiveThreshold(row, baseThreshold = 90, { now = Date.now(), workload = null, tier = null } = {}) {
     if (baseThreshold <= 0) return 0;
     const periodHours = windowPeriodHours(row);
     const resetMs = row?.resetsAt ? Date.parse(row.resetsAt) : NaN;
     const hasReset = Number.isFinite(resetMs) && resetMs > now;
     const hoursLeft = hasReset ? Math.max(0.1, (resetMs - now) / 3600000) : null;
-    const expectedSpend = typeof workload === 'number' && Number.isFinite(workload) && workload > 0
-      ? workload
-      : (periodHours >= 168 ? (tier === 'deep' ? 3 : 2) : periodHours >= 24 ? 4 : (tier === 'deep' ? 8 : 5));
+    const expectedSpend = typeof workload === 'number' && Number.isFinite(workload) && workload > 0 ? workload : defaultSpend(row, tier);
 
     if (hasReset && hoursLeft !== null) {
       if (periodHours >= 168) {
@@ -78,7 +83,8 @@
     const windows = rows.map(row => {
       const usedPercent = Number.isFinite(row.usedPercent) && row.usedPercent >= 0 ? row.usedPercent : null;
       const resetPassed = row.resetsAt && Date.parse(row.resetsAt) <= now;
-      const effectiveThreshold = adaptive ? adaptiveThreshold(row, threshold, { now, workload, tier }) : threshold;
+      // workload may be a function of the window, so a weekly window is judged by what a run spends of a week.
+      const effectiveThreshold = adaptive ? adaptiveThreshold(row, threshold, { now, workload: typeof workload === 'function' ? workload(row) : workload, tier }) : threshold;
       return { id: row.id || null, label: row.label || row.id || 'Plan limit', usedPercent, resetsAt: row.resetsAt || null,
         ...(row.scope ? { scope: row.scope } : {}), ...(Array.isArray(row.scopes) ? { scopes: row.scopes } : {}),
         state: old || resetPassed ? 'stale' : usedPercent === null ? 'unknown' : usedPercent >= 100 ? 'exhausted' : usedPercent >= effectiveThreshold ? 'near' : 'ok' };
@@ -264,6 +270,24 @@
     return null;
   }
 
+  // Each mode's handoff line (#12): the share of a limit at which a routed task moves to another agent. Choosing an agent
+  // for new work and deciding whether a running task moves apply this one test, so a task is never started on an agent
+  // it would leave at its first usage check. The agent already on the task fits up to the line, and past it while the
+  // only windows over it reset soon (#153). Moving means the next agent re-reads the task, so another agent fits only
+  // with room under the line for what a run of this size usually spends there. The line rises near a reset, as the
+  // safety margin does. usual is a candidate's measured spend (usualWindowSpend); tier is the task's size.
+  function handoffFit(usage, model, { mode, current = false, tier = null, usual = null, now = Date.now() } = {}) {
+    const line = handoffThresholds[normalizeMode(mode)] ?? null;
+    if (!line) return { fits: true, line: null };
+    const spend = row => usualForWindow({ usualSpend: usual }, row, tier) ?? defaultSpend(row, tier);
+    const quota = assessQuota(usage, model, { threshold: line, now, tier, workload: spend });
+    if (current && quota.state === 'near' && quota.burndown) return { fits: true, line, quota, reason: 'expiring' };
+    if (quota.state !== 'ok') return { fits: false, line, quota, reason: quota.state };
+    if (current) return { fits: true, line, quota };
+    const tight = quota.windows.find(row => adaptiveThreshold(row, line, { now, workload: spend(row), tier }) - row.usedPercent < spend(row));
+    return tight ? { fits: false, line, quota, reason: 'room', window: { label: tight.label, usedPercent: tight.usedPercent, usual: spend(tight) } } : { fits: true, line, quota };
+  }
+
   // Chooses for one message. candidates: [{ provider, models, billingSource, usage, eligible, allowedModels, usualSpend }].
   // Only eligible agents are chosen; without allowApi, only agents billed to a subscription. An agent at 95% of a
   // limit is skipped, and allowance is spent where it resets soonest while respecting continuity.
@@ -284,10 +308,11 @@
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
       const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && modelId(row) !== 'default' && !row.hidden && distance(row) === distance(preferred))] : [null];
       const decorate = (model, steppedDown = false, steppedDownFrom = null, steppedDownQuota = null) => {
-        const quota = assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now, tier: task.tier, workload: usualForWindow(candidate, null, task.tier) });
+        const quota = assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now, tier: task.tier, workload: row => usualForWindow(candidate, row, task.tier) });
         const binding = bindingWindow(quota, now);
         const shortRoom = checkUsualRoom(candidate, quota, task.tier, now);
-        return { ...candidate, selectedModel: model, quota, bindingWindow: binding, shortRoom, steppedDown, steppedDownFrom, steppedDownQuota };
+        const line = handoffFit(candidate.usage, model && modelId(model), { mode, current: candidate.provider === current, tier: task.tier, usual: candidate.usualSpend ?? candidate.usualPercent ?? null, now });
+        return { ...candidate, selectedModel: model, quota, bindingWindow: binding, shortRoom, line, steppedDown, steppedDownFrom, steppedDownQuota };
       };
       const choices = options.map(model => decorate(model));
       const usable = choices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
@@ -342,7 +367,11 @@
       return spendabilityOf(candidate) + continuityBonus(candidate) - stepPenalty - roomPenalty;
     };
     const order = ['codex', 'claude', 'gemini'];
-    const chosen = [...pool].sort((a, b) => score(b) - score(a) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
+    // An agent the task could keep comes before one it would leave at the first usage check (#12). Past the line, an
+    // agent is still used when no other fits: allowance short of the limit is not unusable, and with nowhere to move
+    // the task stays.
+    const fits = candidate => candidate.line.fits ? 0 : 1;
+    const chosen = [...pool].sort((a, b) => fits(a) - fits(b) || score(b) - score(a) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
     // On the last of an allowance, the top effort level isn't used: it can spend the rest in one turn (#153).
     const spendingRemainder = chosen.quota.state === 'near';
     const model = chosen.selectedModel, effort = pickEffort(effortsOf(model), spendingRemainder && wantedEffort === 'highest' ? 'high' : wantedEffort);
@@ -380,6 +409,7 @@
       const allowanceNote = previous ? explainAllowance(chosen, previous) : null;
       if (!before?.eligible || !previous) why.push(`${agentNames[current]} isn’t available under your rules`);
       else if (previous.shortRoom && !previous.shortRoom.resetsSoon) why.push(`${agentNames[current]} has ${Math.round(previous.shortRoom.remaining)}% left and usually spends ~${Math.round(previous.shortRoom.usual)}% on a ${task.tier} run`);
+      else if (!previous.line.fits && chosen.line.fits && previous.quota.state === 'ok') why.push(`${agentNames[current]} is at ${Math.round(previous.line.quota.usedPercent)}% of a limit, past ${modeNames[mode]}’s ${previous.line.line}% handoff line`);
       else if (allowanceNote) why.push(allowanceNote);
       else if (previous.quota.usedPercent >= 80) why.push(`${agentNames[current]} is at ${Math.round(previous.quota.usedPercent)}% of its limit`);
       else if (previous.quota.state !== 'ok') why.push(`${agentNames[current]} has no confirmed allowance`);
@@ -390,6 +420,13 @@
       if (allowanceNote) why.push(allowanceNote);
     }
 
+
+    // Kept or chosen past the line only because no other agent fits: say so, so a later move isn't a surprise.
+    if (!chosen.line.fits && !spendingRemainder && chosen.quota.state === 'ok') {
+      why.push(chosen.line.reason === 'room'
+        ? `${agentNames[chosen.provider]} has little room under ${modeNames[mode]}’s ${chosen.line.line}% handoff line, and no agent has more`
+        : `${agentNames[chosen.provider]} is past ${modeNames[mode]}’s ${chosen.line.line}% handoff line, and no other agent has room under it`);
+    }
 
     if (plannedHandoff) {
       why.push(`${agentNames[chosen.provider]} has ${Math.round(chosen.shortRoom.remaining)}% left before its reset (usual ${task.tier} run ~${Math.round(chosen.shortRoom.usual)}%), so a handoff is planned`);
@@ -407,7 +444,7 @@
       ...(plannedHandoff ? { plannedHandoff: true } : {}),
       ...(spendingRemainder ? { remainder: chosen.quota.burndown ? 'expiring' : 'asked' } : {}),
     };
-    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, escalation: escalate(chosen.provider, chosen.models, choice) };
+    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, handoffLine: { percent: chosen.line.line, fits: chosen.line.fits }, escalation: escalate(chosen.provider, chosen.models, choice) };
   }
 
   // Who plans an orchestrated message: the deepest work each mode allows, under the same allowance rules as any message.
@@ -508,5 +545,5 @@
     return results;
   }
 
-  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, classify, triage, modelTier, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
+  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, modelTier, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);

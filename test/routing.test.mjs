@@ -144,6 +144,51 @@ test('Auto keeps the agent that did the last run while continuity is worth its p
   assert.match(route({ text, mode: 'smart', candidates: agents({ claude: { billingSource: 'unknown' } }), current: 'claude' }).reason, /Claude isn’t available under your rules/, 'Unknown billing is not treated as free.');
 });
 
+test('new work and handoffs share each mode’s line: a task never starts on an agent it would leave at its first check (#12)', () => {
+  const { handoffFit } = globalThis.relayRouting;
+  const text = 'Add a loading spinner to the checkout button';
+  const reading = usedPercent => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent }] });
+  for (const [mode, line] of [['saver', 80], ['smart', 90], ['ultra', 95]]) {
+    const name = `${mode} at ${line}%`;
+    // The boundary is the line itself, for the agent on the task and in the choice alike.
+    assert.equal(handoffFit(reading(line - 0.5), 'gpt-codex', { mode, current: true }).fits, true, name);
+    assert.equal(handoffFit(reading(line), 'gpt-codex', { mode, current: true }).fits, false, name);
+    assert.equal(handoffFit(reading(line + 1), 'gpt-codex', { mode, current: true }).fits, false, name);
+
+    // Past the line with another agent under it: the other agent gets the work, rather than a start and a move.
+    const past = route({ text, mode, candidates: agents({ claude: { usedPercent: line + 1 }, codex: { usedPercent: line - 10 } }), current: 'claude', allowNear: true });
+    assert.equal(past.provider, 'codex', name); assert.equal(past.handoffLine.fits, true, name);
+    if (line + 1 < 95) assert.match(past.reason, new RegExp(`Claude is at ${line + 1}% of a limit, past \\w+’s ${line}% handoff line`), name);
+
+    // With no agent under the line, allowance short of the limit is still used, and the reason says why. The same
+    // reading then gives the running task nowhere to move, so it stays.
+    const alone = route({ text, mode, candidates: agents({ claude: { usedPercent: line + 1 }, codex: { eligible: false } }), current: 'claude', allowNear: true });
+    assert.equal(alone.provider, 'claude', name); assert.equal(alone.handoffLine.fits, false, name);
+    if (line + 1 < 95) assert.match(alone.reason, /Claude is past \w+’s \d+% handoff line, and no other agent has room under it/, name);
+    const destination = route({ text, mode, candidates: agents({ claude: { eligible: false }, codex: { usedPercent: line + 2 } }), quotaThreshold: line });
+    assert(destination.error || destination.quota.state !== 'ok' || !destination.handoffLine.fits, `${name}: nowhere to move.`);
+
+    // Moving costs a re-read: an agent just under the line has no room for a usual run there, so the task keeps its agent
+    // rather than moving now and again at the next check.
+    const close = route({ text, mode, candidates: agents({ claude: { usedPercent: line - 1 }, codex: { usedPercent: line - 2 } }), current: 'claude' });
+    assert.equal(close.provider, 'claude', name);
+    assert.equal(handoffFit(reading(line - 2), 'gpt-codex', { mode, tier: 'standard' }).reason, 'room', name);
+    assert.equal(handoffFit(reading(line - 6), 'gpt-codex', { mode, tier: 'standard' }).fits, true, `${name}: room for a usual run.`);
+    // Measured spend counts: an agent that usually spends a point a run fits two points under the line.
+    assert.equal(handoffFit(reading(line - 2), 'gpt-codex', { mode, tier: 'standard', usual: 1 }).fits, true, name);
+  }
+  // The reported case: Claude at 91% of a week that resets tomorrow has the most allowance to spend, but a Smart run there
+  // would hand off at its first check. Codex has a week to go and room under the line, so it takes the task.
+  const week = (usedPercent, days) => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: 'Weekly', usedPercent, resetsAt: new Date(Date.now() + days * 86400000).toISOString() }] });
+  const reported = agents({ claude: { usage: week(91, 1), usualSpend: { weekly: 8 } }, codex: { usage: week(80, 6), usualSpend: { weekly: 8 } } });
+  const chosen = route({ text, mode: 'smart', candidates: reported, current: 'claude' });
+  assert.equal(chosen.provider, 'codex'); assert.match(chosen.reason, /Claude is at 91% of a limit, past Smart’s 90% handoff line/);
+  assert.equal(handoffFit(week(91, 1), 'opus', { mode: 'smart', current: true, tier: 'standard', usual: { weekly: 8 } }).fits, false, 'The check that would move it agrees.');
+  // The line rises near a reset, as the safety margin does, so a weekly window about to reset still fits.
+  const weekly = { available: true, checkedAt: new Date().toISOString(), windows: [{ label: 'Weekly', usedPercent: 92, resetsAt: new Date(Date.now() + 3600000).toISOString() }] };
+  assert.equal(handoffFit(weekly, 'gpt-codex', { mode: 'smart', current: true }).fits, true);
+});
+
 test('before a standard or deep task starts, usual run spend is compared with the binding window', () => {
   const now = Date.parse('2026-11-08T12:00:00Z');
   const text = 'Refactor the payment module';
@@ -342,7 +387,7 @@ test('the broker saves the Auto mode with the workspace and records what Auto ch
   broker.start(c, { text: 'Fix the typo in the README', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light', extra: 'ignored' } });
   await broker.running.done;
   const prompt = c.messages.find(message => message.role === 'user');
-  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', policy: 1, tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
+  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', policy: 2, tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
   assert.deepEqual(c.lastRun.routing, { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' });
   broker.queueAction(c, { action: 'pause' });
   broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' } });

@@ -235,6 +235,28 @@ test('a routed run hands off by its routing mode, without asking: Cost saving at
   quality.release(); await run.done;
 });
 
+test('a routed run past its line stays while no agent has room under it, and moves once one does (#12)', { skip: scriptCLIs }, async t => {
+  for (const [mode, line] of [['saver', 80], ['smart', 90], ['ultra', 95]]) {
+    const env = setup(t);
+    env.broker.execution.setDefault(env.c, { mode: 'flow', routingMode: mode });
+    env.usage.codex = line + 1; env.usage.claude = line + 2;
+    // Ultra's line is also the start check's 95%, so past it a run starts only on "Proceed with remaining allowance".
+    env.broker.start(env.c, { text: 'Build the feature', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode, reason: 'A test', tier: 'standard' }, proceedWithNearQuota: true });
+    const run = await until(() => env.requests().length && env.broker.running, `the ${mode} run`);
+    await env.broker.handoff.check(run);
+    assert.equal(env.broker.running, run, `${mode}: both agents are past the line, so the task stays.`); assert.equal(env.c.handoffOffer, null);
+    // Just under the line, Claude would cross it on a usual run: moving would cost a re-read for nothing.
+    env.usage.claude = line - 1;
+    await env.broker.handoff.check(run);
+    assert.equal(env.broker.running, run, `${mode}: no room under the line, no move.`); assert.equal(env.c.handoffOffer, null);
+    env.usage.claude = 20;
+    await env.broker.handoff.check(run);
+    await run.done;
+    assert.equal(env.broker.running?.provider, 'claude', `${mode}: with room under the line, the task moves.`);
+    await env.broker.running.done;
+  }
+});
+
 test('with automatic handoff allowed, a Codex run stopped on a limit continues on an agent with room, as a handoff and not an error', { skip: scriptCLIs }, async t => {
   const env = setup(t, { preferences: allowed });
   env.usage.codex = 100; env.usage.claude = 20;

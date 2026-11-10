@@ -870,7 +870,8 @@ export class Broker extends EventEmitter {
     const text = run.message?.text || c.messages.find(m => m.runId === run.id && m.role === 'user')?.text || '';
     const assessment = run.routing.assessment || null;
     const allowApi = run.billingConfirmed === true;
-    const threshold = 90;
+    // The mode's handoff line, so the fallback never starts an agent the running task would leave at its first check (#12).
+    const threshold = globalThis.relayRouting.handoffThresholds[globalThis.relayRouting.normalizeMode(mode)] ?? 90;
     const candidates = [];
     const providers = this.availableProviders();
     for (const provider of providers) {
