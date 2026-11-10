@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { alertDefaults, alertPlan, alertPreferences, alertSound, mergeAlertPreferences, momentOf } from '../src/alerts.mjs';
+import { alertDefaults, alertPlan, alertPreferences, alertSound, mergeAlertPreferences, momentOf, progressPillOn } from '../src/alerts.mjs';
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
@@ -12,6 +12,7 @@ test('alerts default to banners and the Dock for every moment, with sounds off u
     badge: { on: true, attention: true, finished: true, stopped: true },
     phone: { on: true, attention: true, finished: true, stopped: true },
     statusItem: true,
+    progressPill: false,
   });
   const read = alertPreferences(); read.banner.on = false;
   assert.equal(alertDefaults.banner.on, true, 'Reading settings never changes the defaults.');
@@ -75,4 +76,17 @@ test('the page is told which sound to play, at what volume and whether only when
   assert.equal(alertSound({ kind: 'expired' }, preferences).sound, 'stopped');
   assert.equal(alertSound({ kind: 'waiting' }, preferences), null, 'Waiting for another reset reports progress, quietly.');
   assert.equal(alertSound({ kind: 'finished' }, alertPreferences()), null, 'Sounds are off until turned on.');
+});
+
+test('the progress pill is a choice of its own, whichever way banners show and with or without the menu bar status (#75)', () => {
+  assert.equal(progressPillOn(alertPreferences()), false, 'Off for settings saved before it existed.');
+  const on = mergeAlertPreferences(alertPreferences(), { progressPill: true });
+  assert.equal(progressPillOn(on), true, 'With banners as notifications.');
+  assert.equal(progressPillOn(mergeAlertPreferences(on, { banner: { panel: true } })), true);
+  assert.equal(progressPillOn(mergeAlertPreferences(on, { banner: { on: false }, statusItem: false })), true, 'Without banners or the menu bar status.');
+  assert.equal(alertPreferences({ progressPill: true }).progressPill, true);
+  assert.equal(alertPreferences({ progressPill: 'yes' }).progressPill, false);
+  assert.throws(() => mergeAlertPreferences(on, { progressPill: 'yes' }), /on or off/);
+  assert.throws(() => mergeAlertPreferences(on, { banner: { progress: true } }), /on or off/);
+  assert.equal(progressPillOn(null), false);
 });

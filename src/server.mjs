@@ -80,6 +80,8 @@ async function body(req, limit = 3 * 1024 * 1024) {
 }
 
 export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, onLanguage = () => {}, systemLanguages = null, localesDir = defaultLocales, voice, phoneOptions } = {}) {
+  // A data folder with no workspaces and no settings yet is a new installation.
+  const dataFolder = path.resolve(dataRoot || dataDir || path.join(root, '.data')), fresh = !fs.existsSync(path.join(dataFolder, 'projects.json')) && !fs.existsSync(path.join(dataFolder, 'settings.json'));
   const registry = new ProjectRegistry({ dataRoot: dataRoot || dataDir || path.join(root, '.data'), bins, lock });
   for (const folder of [...(workspace ? [workspace] : []), ...workspaces]) registry.add({ path: folder });
   const collaboration = new CollaborationService({ registry, dataRoot: registry.dataRoot });
@@ -93,6 +95,9 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     return saved;
   };
   let config=readSettings()||{};
+  // A new installation shows the progress pill (#75). It is saved at once, so it stays on after workspaces are added;
+  // an installation from before the pill existed keeps it off until it is turned on.
+  if(fresh){config={notifications:{progressPill:true}};atomicJSON(settingsFile,config);}
   registry.conversationDefaults = () => config.defaults;
   registry.verificationCadence = () => verificationCadence(config);
   registry.contextLimit = () => contextLimit(config);

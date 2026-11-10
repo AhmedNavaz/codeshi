@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-IMlYO4PmuS5EePvQBTyRjGnrtrmrwMSeqI5I1eU2yIM='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-5eJ1QpR/yU3Ozru7+zOF5JMKORGkPLSupYAoXoJSUoo='">
 <title>Codeshi alert</title>
 <style>
   /* Codeshi's Paper and Ink colours (public/editor-theme.css), with the seal's vermilion for the mark. */
@@ -27,7 +27,16 @@
   #dismiss { flex: none; width: 26px; height: 26px; border: 0; border-radius: 13px; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; }
   #dismiss:hover, #open:hover strong { color: var(--text); }
   #dismiss:hover { background: var(--hover); }
-  @media (prefers-reduced-motion: no-preference) { #alert:not([hidden]) { animation: drop .18s ease-out; } @keyframes drop { from { transform: translateY(-6px); opacity: 0; } } }
+  @media (prefers-reduced-motion: no-preference) { #alert:not([hidden]):not([data-kind="progress"]) { animation: drop .18s ease-out; } @keyframes drop { from { transform: translateY(-6px); opacity: 0; } } }
+  /* Progress while agents work (#75): a quieter, one-line pill that may stay on screen for a long time, so it has no
+     blur to redraw, and a plain dot on its シ. */
+  [data-kind="progress"]#alert { min-height: 38px; padding: 3px 4px 3px 12px; border-radius: 19px; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 3px 12px rgba(0, 0, 0, .14); }
+  [data-kind="progress"] #open { gap: 8px; }
+  [data-kind="progress"] .mark, [data-kind="progress"] .mark-shi { width: 18px; height: 18px; }
+  [data-kind="progress"] .text { display: flex; align-items: baseline; gap: 8px; }
+  [data-kind="progress"] strong { flex: 0 1 auto; font-weight: 500; }
+  [data-kind="progress"] span.body { flex: 0 3 auto; min-width: 72px; }
+  [data-kind="progress"] #dismiss { width: 24px; height: 24px; border-radius: 12px; }
 </style>
 </head>
 <body>
@@ -38,10 +47,13 @@
 <script>
   const alert = document.getElementById('alert');
   window.relayOverlay.onAlert(value => {
+    const progress = value.kind === 'progress';
     alert.dataset.kind = value.kind || '';
+    // Progress changes often and is routine, so it is never announced; an alert is.
+    if (progress) alert.removeAttribute('role'); else alert.setAttribute('role', 'alert');
     document.getElementById('title').textContent = value.projectName ? `${value.title} · ${value.projectName}` : value.title;
     document.getElementById('body').textContent = value.body || (value.kind === 'approval' ? 'Open Codeshi to review the request.' : '');
-    document.getElementById('open').setAttribute('aria-label', `${value.title}${value.projectName ? ` in ${value.projectName}` : ''}. Open in Codeshi.`);
+    document.getElementById('open').setAttribute('aria-label', progress ? `${value.title}${value.body ? `, ${value.body}` : ''}. Open in Codeshi.` : `${value.title}${value.projectName ? ` in ${value.projectName}` : ''}. Open in Codeshi.`);
     alert.hidden = false;
   });
   document.getElementById('open').addEventListener('click', () => window.relayOverlay.open());

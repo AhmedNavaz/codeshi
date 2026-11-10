@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
-import { alertMenu, currentAction, overlayBounds, statusClickTarget, statusMenu, statusSnapshot, statusTitle, statusTooltip, taskbarIsLight } from '../desktop/status.mjs';
+import { alertMenu, currentAction, overlayBounds, progressLine, progressTrack, statusClickTarget, statusMenu, statusSnapshot, statusTitle, statusTooltip, taskbarIsLight } from '../desktop/status.mjs';
 import { alertPreferences } from '../src/alerts.mjs';
 import { createOverlay } from '../desktop/overlay.mjs';
 
@@ -160,4 +160,85 @@ test('an alert taken away while the panel’s page loads never shows, and of sev
   for (const callback of second.panel.loaded) callback();
   assert.deepEqual([second.panel.sent, second.panel.shown], [['Task failed'], 1]);
   second.overlay.dispose();
+});
+
+// Two workspaces whose runs have their own ids, as real runs do.
+const busy = (shopSteps, apiSteps = null) => statusSnapshot(registry([
+  { id: 'shop', name: 'acme-shop', c: conversation('s', { activeRun: { id: 'r1', provider: 'codex', phase: 'tool' }, messages: shopSteps.map(text => ({ role: 'activity', runId: 'r1', text })) }), running: { provider: 'codex', approvals: new Map() } },
+  ...(apiSteps ? [{ id: 'api', name: 'payments-api', c: conversation('a', { activeRun: { id: 'r2', provider: 'claude', phase: 'tool' }, messages: apiSteps.map(text => ({ role: 'activity', runId: 'r2', text })) }), running: { provider: 'claude', approvals: new Map() } }] : []),
+]));
+
+test('the progress pill reads like the menu bar for one run, and gives the count and the latest step for several (#75)', () => {
+  const one = busy(['$ npm test']);
+  assert.deepEqual(one.rows.map(row => row.key), ['run:r1'], 'Each running row names its run.');
+  let track = progressTrack(undefined, one);
+  assert.deepEqual(progressLine(one, track.latest), { title: 'Codex · Running tests', detail: 'acme-shop', projectId: 'shop' });
+  // Payments starts; it is the latest to change.
+  const two = busy(['$ npm test'], ['Read\n{"file_path":"/w/a.js"}']);
+  track = progressTrack(track, two);
+  assert.deepEqual(progressLine(two, track.latest), { title: '2 working', detail: 'payments-api: Claude · Reading files', projectId: 'api' });
+  // Then the shop's step changes, and the pill names it.
+  const edited = busy(['$ npm test', 'Edit\n{"file_path":"/w/cart.js","old_string":"a","new_string":"b"}'], ['Read\n{"file_path":"/w/a.js"}']);
+  track = progressTrack(track, edited);
+  assert.equal(progressLine(edited, track.latest).detail, 'acme-shop: Codex · Editing · 1 file changed');
+  // Nothing running, or only dismissed runs, says nothing.
+  const quiet = statusSnapshot(registry([{ id: 'idle', name: 'idle', c: conversation('i') }]));
+  assert.equal(progressLine(quiet, progressTrack(track, quiet).latest), null);
+  assert.equal(progressTrack(track, quiet).latest, null, 'A run that ended is forgotten.');
+  assert.equal(progressLine(two, null, undefined, new Set(['run:r1', 'run:r2'])), null);
+  assert.equal(progressLine(two, null, undefined, new Set(['run:r1'])).title, '2 working', 'A run started since the × brings the pill back.');
+});
+
+test('the progress pill shows only away from Codeshi, stays put as its words change, gives way to alerts and hides with its × until another run (#75)', () => {
+  const panel = { sent: [], shown: 0, bounds: 0, hidden: 0 }, handlers = {}, opened = [];
+  class Panel {
+    constructor() { panel.window = this; this.webContents = { isLoading: () => false, once() {}, send: (_channel, content) => panel.sent.push(`${content.kind}: ${content.title}${content.body ? ` | ${content.body}` : ''}`), setWindowOpenHandler() {}, on() {} }; }
+    setAlwaysOnTop() {} setVisibleOnAllWorkspaces() {} loadFile() {} setBounds() { panel.bounds++; } hide() { panel.hidden++; } destroy() {} isDestroyed() { return false; } showInactive() { panel.shown++; }
+  }
+  const screen = { getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 25, width: 1440, height: 875 } }) };
+  let focused = false;
+  const overlay = createOverlay({ BrowserWindow: Panel, screen, ipcMain: { on: (name, callback) => { handlers[name] = callback; }, off() {} }, root: '/app', open: target => opened.push(target), mac: true, isFocused: () => focused });
+  const click = name => handlers[name]({ sender: panel.window.webContents });
+  const one = busy(['$ npm test']);
+  overlay.progress(one, { enabled: false });
+  assert.equal(panel.sent.length, 0, 'Off until turned on.');
+  focused = true; overlay.progress(one, { enabled: true });
+  assert.equal(panel.sent.length, 0, 'Not while Codeshi is in front.');
+  focused = false; overlay.refresh();
+  assert.deepEqual([panel.sent, panel.shown, panel.bounds], [['progress: Codex · Running tests | acme-shop'], 1, 1]);
+  overlay.progress(one, { enabled: true });
+  assert.equal(panel.sent.length, 1, 'The same words are not sent again.');
+  overlay.progress(busy(['$ npm test'], ['Grep\n{"pattern":"x"}']), { enabled: true });
+  assert.deepEqual([panel.sent.at(-1), panel.shown, panel.bounds], ['progress: 2 working | payments-api: Claude · Searching the project', 1, 1], 'Changed in place, without moving or showing again.');
+  // An alert takes the panel, and the pill comes back when it goes, without the panel hiding in between.
+  overlay.show({ kind: 'finished', title: 'Task finished', projectName: 'docs' });
+  assert.equal(panel.sent.at(-1), 'finished: Task finished');
+  overlay.progress(busy(['$ npm test'], ['Read\n{"file_path":"/w/a.js"}']), { enabled: true });
+  assert.equal(panel.sent.at(-1), 'finished: Task finished', 'Progress waits while an alert shows.');
+  const hidden = panel.hidden; overlay.hide();
+  assert.deepEqual([panel.sent.at(-1), panel.hidden], ['progress: 2 working | payments-api: Claude · Reading files', hidden]);
+  // Clicking opens the workspace it names.
+  click('overlay:open');
+  assert.deepEqual(opened, [{ projectId: 'api' }]);
+  focused = true; overlay.refresh(); focused = false;
+  // × hides it while the same runs go on; a new run brings it back.
+  overlay.refresh(); click('overlay:dismiss');
+  assert.equal(overlay.pill, null);
+  const before = panel.sent.length;
+  overlay.progress(busy(['$ npm test', 'Grep\n{"pattern":"y"}'], ['Read\n{"file_path":"/w/a.js"}']), { enabled: true });
+  assert.equal(panel.sent.length, before, 'Dismissed runs stay hidden as their steps change.');
+  overlay.progress(statusSnapshot(registry([{ id: 'shop', name: 'acme-shop', c: conversation('s', { activeRun: { id: 'r3', provider: 'codex', phase: 'starting' } }), running: { provider: 'codex', approvals: new Map() } }])), { enabled: true });
+  assert.equal(panel.sent.at(-1), 'progress: Codex · Starting | acme-shop', 'The next run shows again.');
+  // When the work ends, the pill goes.
+  const hiddenBefore = panel.hidden;
+  overlay.progress(statusSnapshot(registry([{ id: 'idle', name: 'idle', c: conversation('i') }])), { enabled: true });
+  assert.deepEqual([overlay.pill, panel.hidden], [null, hiddenBefore + 1]);
+  overlay.dispose();
+});
+
+test('the panel announces alerts, but its progress pill is quiet: no announcement and no drop animation', () => {
+  const page = fs.readFileSync(new URL('../desktop/overlay.html', import.meta.url), 'utf8');
+  assert.match(page, /if \(progress\) alert\.removeAttribute\('role'\)/);
+  assert.match(page, /#alert:not\(\[hidden\]\):not\(\[data-kind="progress"\]\) \{ animation: drop/);
+  assert.match(page, /\[data-kind="progress"\]#alert \{[^}]*backdrop-filter: none/, 'Nothing to redraw while it stays on screen.');
 });

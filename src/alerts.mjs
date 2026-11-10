@@ -15,7 +15,9 @@ export const momentOf = kind => MOMENT_OF[kind] || null;
 
 const every = value => Object.fromEntries(MOMENTS.map(moment => [moment, value]));
 // Banners, the Dock and the menu bar status are on until turned off, and sounds are off until turned on. A banner is
-// a system notification unless `panel` shows it near the top of the screen instead.
+// a system notification unless `panel` shows it near the top of the screen instead. `progressPill` keeps a small
+// pill under the menu bar while agents work (#75), whichever way banners show and with or without the menu bar
+// status. A new installation turns it on; one from before it existed keeps it off until turned on.
 export const alertDefaults = Object.freeze({
   banner: Object.freeze({ on: true, ...every(true), panel: false }),
   sound: Object.freeze({ on: false, ...every(true), volume: 70, background: false }),
@@ -24,6 +26,7 @@ export const alertDefaults = Object.freeze({
   // A phone paired Away from home gets a lock-screen notification only after it turns them on itself.
   phone: Object.freeze({ on: true, ...every(true) }),
   statusItem: true,
+  progressPill: false,
 });
 const copy = value => ({ ...value, ...Object.fromEntries(CHANNELS.map(channel => [channel, { ...value[channel] }])) });
 const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
@@ -52,6 +55,7 @@ export function alertPreferences(saved = {}) {
     for (const [key, item] of Object.entries(saved)) if (valid(channel, key, item)) result[channel][key] = item;
   }
   if (typeof value.statusItem === 'boolean') result.statusItem = value.statusItem;
+  if (typeof value.progressPill === 'boolean') result.progressPill = value.progressPill;
   return result;
 }
 
@@ -60,12 +64,13 @@ export function mergeAlertPreferences(current, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) fail('Alert settings must be an object.');
   for (const [key, value] of Object.entries(patch)) {
     if (key === 'statusItem') { if (typeof value !== 'boolean') fail('Turn the status icon on or off.'); continue; }
+    if (key === 'progressPill') { if (typeof value !== 'boolean') fail('Turn the progress pill on or off.'); continue; }
     if (!CHANNELS.includes(key)) fail('Unknown alert setting.');
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Alert settings must be an object.');
     for (const [name, item] of Object.entries(value)) if (!valid(key, name, item)) fail(key === 'sound' && name === 'volume' ? 'Volume must be a whole number from 0 to 100.' : 'Turn each alert on or off.');
   }
   const next = copy(current);
-  for (const [key, value] of Object.entries(patch)) { if (key === 'statusItem') next.statusItem = value; else Object.assign(next[key], value); }
+  for (const [key, value] of Object.entries(patch)) { if (key === 'statusItem' || key === 'progressPill') next[key] = value; else Object.assign(next[key], value); }
   return next;
 }
 
@@ -77,6 +82,10 @@ export function alertPlan(notice, preferences, { focused = false, panelAvailable
   const banner = !focused && on('banner'), panel = banner && preferences.banner.panel === true && panelAvailable;
   return { moment, badge: !focused && on('badge'), bounce: !focused && on('bounce'), notification: banner && !panel, panel, sound: !QUIET.has(notice?.kind) && on('sound') && preferences.sound.volume > 0 };
 }
+
+// Whether the pill under the menu bar may show live progress (#75). It is a choice of its own, like the menu bar
+// status: either, both or neither. Whether Codeshi is in front, and whether anything is running, is decided where it shows.
+export const progressPillOn = preferences => preferences?.progressPill === true;
 
 // What a phone's lock screen shows for one alert, or null for none. Anyone holding the phone can read it, so it says
 // only what kind of thing happened and in which workspace: never a command, a file, a question or the agent's reply.

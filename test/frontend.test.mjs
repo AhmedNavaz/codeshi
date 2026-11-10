@@ -4620,7 +4620,7 @@ test('alerts play their sound once, only when allowed, and Settings chooses whic
 // A stand-in for the saved alert settings, which records each change and keeps it the way the server does.
 function alertSettings(ui) {
   const every = { attention: true, finished: true, stopped: true }, posts = [];
-  let saved = { banner: { on: true, ...every, panel: false }, sound: { on: false, ...every, volume: 70, background: false }, bounce: { on: true, ...every }, badge: { on: true, ...every }, phone: { on: true, ...every }, statusItem: true };
+  let saved = { banner: { on: true, ...every, panel: false }, sound: { on: false, ...every, volume: 70, background: false }, bounce: { on: true, ...every }, badge: { on: true, ...every }, phone: { on: true, ...every }, statusItem: true, progressPill: false };
   const reply = data => ({ ok: true, status: 200, text: async () => JSON.stringify(data), json: async () => clone(data) });
   ui.setIntercept((request, next) => {
     if (request.path !== '/api/notifications') return next();
@@ -4646,11 +4646,15 @@ test('Alerts in Settings turn each way on or off for each moment, with the banne
   assert.equal(box('Banner when an agent needs you').disabled, true); assert.equal(box('Banner when an agent needs you').checked, true);
   assert.equal(ui.document.querySelectorAll('tr').find(row => row.dataset.channel === 'banner').dataset.off, '');
   const again = ui.labelledInput('Banner'); again.checked = true; again.dispatchEvent(new UIEvent('change')); await flush();
+  // The progress pill (#75) is a choice of its own: it doesn't wait for the panel to be chosen as the banner style.
+  const progress = ui.labelledInput('Show what agents are doing in a pill under the menu bar');
+  assert.deepEqual([progress.disabled, progress.checked], [false, false]);
+  progress.checked = true; progress.dispatchEvent(new UIEvent('change')); await flush();
   ui.findButton('Panel at the top of the screen').click(); await flush();
   assert.equal(ui.findButton('Panel at the top of the screen').getAttribute('aria-pressed'), 'true');
   const status = ui.labelledInput('Show what agents are doing in the menu bar'); status.checked = false; status.dispatchEvent(new UIEvent('change')); await flush();
-  assert.deepEqual(posts, [{ bounce: { finished: false } }, { banner: { on: false } }, { banner: { on: true } }, { banner: { panel: true } }, { statusItem: false }]);
-  assert.deepEqual([saved().bounce.finished, saved().banner.panel, saved().statusItem], [false, true, false]);
+  assert.deepEqual(posts, [{ bounce: { finished: false } }, { banner: { on: false } }, { banner: { on: true } }, { progressPill: true }, { banner: { panel: true } }, { statusItem: false }]);
+  assert.deepEqual([saved().bounce.finished, saved().banner.panel, saved().progressPill, saved().statusItem], [false, true, true, false]);
   // The menus' Alert Settings… opens this section, even with Settings already open on another tab.
   await ui.window.relaySettings.open('accounts'); ui.menu('alert-settings'); await flush();
   assert.equal(ui.$('settings-title').textContent, 'Alerts');

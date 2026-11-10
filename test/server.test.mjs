@@ -582,7 +582,7 @@ test('a note for the working run is refused clearly when nothing is running',asy
 
 test('desktop alert preferences default to on and silent, reject other values and persist',async t=>{
   const f=await fixture(t),every={attention:true,finished:true,stopped:true};
-  assert.deepEqual(f.app.getNotificationPreferences(),{banner:{on:true,...every,panel:false},sound:{on:false,...every,volume:70,background:false},bounce:{on:true,...every},badge:{on:true,...every},phone:{on:true,...every},statusItem:true},'The menu bar status shows unless hidden; the panel near the top of the screen only when asked for.');
+  assert.deepEqual(f.app.getNotificationPreferences(),{banner:{on:true,...every,panel:false},sound:{on:false,...every,volume:70,background:false},bounce:{on:true,...every},badge:{on:true,...every},phone:{on:true,...every},statusItem:true,progressPill:true},'The menu bar status shows unless hidden; the panel near the top of the screen only when asked for; a new installation shows the progress pill.');
   f.app.setNotificationPreferences({sound:{on:true}});assert.equal(f.app.getNotificationPreferences().sound.on,true);
   f.app.setNotificationPreferences({banner:{on:false,panel:true},bounce:{finished:false}});assert.throws(()=>f.app.setNotificationPreferences({banner:{on:'no'}}),/on or off/);
   assert.throws(()=>f.app.setNotificationPreferences({enabled:false}),/Unknown alert setting/,'Only known preferences are saved.');
@@ -591,13 +591,17 @@ test('desktop alert preferences default to on and silent, reject other values an
 });
 
 test('alert settings saved by an earlier version keep working and are saved in the current shape when changed',async t=>{
-  const f=await fixture(t),settings=path.join(f.app.registry.dataRoot,'settings.json');await f.app.close();
+  const f=await fixture(t),settings=path.join(f.app.registry.dataRoot,'settings.json');
+  // A new installation shows the progress pill (#75), and saves that at once so it stays on.
+  assert.equal(f.app.getNotificationPreferences().progressPill,true);assert.equal(JSON.parse(fs.readFileSync(settings,'utf8')).notifications.progressPill,true);
+  await f.app.close();
   const saved=fs.existsSync(settings)?JSON.parse(fs.readFileSync(settings,'utf8')):{};
   fs.writeFileSync(settings,JSON.stringify({...saved,notifications:{enabled:false,sound:true,statusItem:true,overlay:true,sounds:{attention:true,finished:false,stopped:true,background:false,volume:40}}}));
   const next=await f.launch(),before=next.app.getNotificationPreferences();
   assert.deepEqual([before.banner.on,before.bounce.on,before.banner.panel,before.sound.on,before.sound.finished,before.sound.volume],[false,false,true,true,false,40]);
+  assert.equal(before.progressPill,false,'An installation from before the pill existed keeps it off until it is turned on.');
   next.app.setNotificationPreferences({badge:{on:false}});
-  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(settings,'utf8')).notifications).sort(),['badge','banner','bounce','phone','sound','statusItem']);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(settings,'utf8')).notifications).sort(),['badge','banner','bounce','phone','progressPill','sound','statusItem']);
 });
 
 test('alerts tell the page which sound to play, as chosen per moment, and sound settings are checked and kept', { timeout: 10000 }, async t => {

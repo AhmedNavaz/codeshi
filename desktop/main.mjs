@@ -17,7 +17,7 @@ import http from 'node:http';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
 import {runningEdit,statusSnapshot,statusTitle,statusMenu,statusTooltip,statusClickTarget,taskbarIsLight} from './status.mjs';
-import {alertPlan} from '../src/alerts.mjs';
+import {alertPlan,progressPillOn} from '../src/alerts.mjs';
 import {english} from '../src/i18n.mjs';
 import {createOverlay} from './overlay.mjs';
 import {closeWithin,writeShutdownLog} from './shutdown.mjs';
@@ -115,9 +115,13 @@ else {
     function syncStatus(){
       clearTimeout(statusTimer);statusTimer=null;
       if(!statusIcons||!relay||quitting)return;
-      const preferences=relay.getNotificationPreferences();
-      if(!preferences.statusItem){tray?.destroy();tray=null;return;}
+      const preferences=relay.getNotificationPreferences(),progress=Boolean(overlay)&&progressPillOn(preferences);
+      // The panel near the top of the screen follows the same status, including when the menu bar item is hidden:
+      // its progress pill (#75) and an approval's alert, which goes once the approval is answered.
+      if(!preferences.statusItem){tray?.destroy();tray=null;if(!progress&&!overlay?.current&&!overlay?.pill)return;}
       const snapshot=statusSeen=statusSnapshot(relay.registry,text);
+      overlay?.progress(snapshot,{enabled:progress,text});overlay?.reconcile(snapshot);
+      if(!preferences.statusItem)return;
       if(!tray){
         if(windows){
           // A left click brings Codeshi forward, to the one thing that needs you when there is exactly one; a right click opens the menu.
@@ -133,7 +137,6 @@ else {
         tray.setTitle(statusTitle(snapshot,text),{fontType:'monospacedDigit'});
       }
       tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,text,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
-      overlay?.reconcile(snapshot);
     }
     async function start(){
       relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify,onNotifications:()=>{updateMenu();scheduleStatus();},
@@ -154,7 +157,11 @@ else {
     relay.registry.on('update',()=>setTimeout(()=>updater.idle(),0));
     // Live status on the Mac (#13): the menu bar item follows every workspace's runs, approvals and waits.
     // In the Windows notification area (#74) an icon does the same, with the words in its tooltip.
-    if(process.platform==='darwin')overlay=createOverlay({BrowserWindow,screen,ipcMain,root,open:openTarget});
+    // The progress pill shows only while no Codeshi window is in front; focus moving between its windows passes through none.
+    if(process.platform==='darwin'){
+      overlay=createOverlay({BrowserWindow,screen,ipcMain,root,open:openTarget,isFocused:()=>Boolean(BrowserWindow.getFocusedWindow())});
+      app.on('browser-window-focus',()=>overlay?.refresh());app.on('browser-window-blur',()=>setTimeout(()=>overlay?.refresh(),150));
+    }
     if(statusIcons){relay.registry.on('update',scheduleStatus);relay.registry.on('projects',scheduleStatus);}
     if(windows){readTaskbar();nativeTheme.on('updated',readTaskbar);}
     updateMenu();syncStatus();

@@ -152,6 +152,8 @@
     if (mac) {
       const bar = kit.group(host, t('Menu bar'));
       kit.toggle(bar, { label: t('Show what agents are doing in the menu bar'), description: t('Codeshi’s mark in the menu bar says what needs you and what is running, with a menu for each workspace.'), keywords: 'status item tray', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
+      // Live progress in a pill (#75), a choice apart from the status above. A server from before it existed doesn't send it.
+      if (typeof settings.progressPill === 'boolean') kit.toggle(bar, { label: t('Show what agents are doing in a pill under the menu bar'), description: t('While you’re in another app, a small pill under the menu bar says what agents are doing, such as Codex · Editing. It changes only when that does, makes no sound and goes when the work ends. Use it with the menu bar status or instead of it.'), keywords: 'progress pill live status running working panel top of the screen', checked: settings.progressPill, onChange: value => save({ progressPill: value }) });
     }
     if (platform === 'win32') {
       const area = kit.group(host, t('Notification area'));

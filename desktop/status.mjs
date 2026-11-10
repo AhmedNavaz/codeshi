@@ -55,15 +55,16 @@ export function statusSnapshot(registry, text = english) {
     else if (c.retryOffer && !running) add('offer', t('Tests failed · retry with {agent}?', { agent: agents[c.retryOffer.provider] }));
     else if (c.handoffOffer && running) add('offer', t('{agent} is at {percent}% · hand off?', { agent: agents[c.handoffOffer.from.provider], percent: Math.round(c.handoffOffer.from.usedPercent) }));
     else if (!running && c.lastRun?.check?.status === 'failed' && !c.resume) add('failed', t('Tests failed'));
-    else if (running && c.activeRun) { const action = currentAction(c, text); add('running', `${agents[running.provider] || t('Agent')} · ${action}`, { agent: agents[running.provider], action }); }
-    else if (c.runs?.some(run => run.check?.status === 'running')) add('running', t('Running the tests'), { action: t('Running the tests') });
+    // A running row's key names its run, so the panel near the top of the screen can tell runs apart (#75).
+    else if (running && c.activeRun) { const action = currentAction(c, text); add('running', `${agents[running.provider] || t('Agent')} · ${action}`, { agent: agents[running.provider], action, key: `run:${c.activeRun.id}` }); }
+    else if (c.runs?.some(run => run.check?.status === 'running')) add('running', t('Running the tests'), { action: t('Running the tests'), key: `tests:${projectId}` });
     else if (c.resume) add('waiting', t('Waiting for a usage limit to reset'));
     else if (c.queue?.length && c.queuePaused) add('paused', text.tn(c.queue.length, 'Queue paused · 1 waiting', 'Queue paused · {count} waiting'));
     // Tasks beside the main conversation (#88). Their approvals are answered in the window, where the task says what it's asking.
     for (const { broker: lane, c: own, task } of broker.tasks?.lanes.values() || []) {
       const run = lane.running, asking = run && [...run.approvals.values()][0];
       if (asking) add('approval', asking.kind === 'question' ? t('{folder}: has a question', { folder: task.folderName }) : t('{folder}: approval needed', { folder: task.folderName }));
-      else if (run && own?.activeRun) { const action = currentAction(own, text); add('running', `${task.folderName} · ${agents[run.provider] || t('Agent')} · ${action}`, { agent: agents[run.provider], action }); }
+      else if (run && own?.activeRun) { const action = currentAction(own, text); add('running', `${task.folderName} · ${agents[run.provider] || t('Agent')} · ${action}`, { agent: agents[run.provider], action, key: `run:${own.activeRun.id}` }); }
       else if (task.worktree && task.status === 'complete') add('offer', t('{folder}: ready to merge', { folder: task.folderName }));
     }
   }
@@ -79,6 +80,25 @@ export function statusTitle({ rows, attention, running }, { t, tn } = english) {
   if (running === 1) { const row = rows.find(item => item.kind === 'running'); return clip(row.agent ? `${row.agent} · ${row.action}` : row.action, 32); }
   if (running > 1) return tn(running, '1 working', '{count} working');
   return '';
+}
+
+// Live progress in the panel near the top of the screen (#75). `track` remembers each run's words, so the pill can
+// name the run whose step changed last; it starts from `progressTrack()` and is replaced by each new result.
+export function progressTrack(previous = { texts: new Map(), latest: null }, snapshot) {
+  const texts = new Map(); let latest = previous.latest;
+  for (const row of snapshot?.rows || []) if (row.kind === 'running' && row.key) { texts.set(row.key, row.text); if (previous.texts.get(row.key) !== row.text) latest = row.key; }
+  return { texts, latest: texts.has(latest) ? latest : null };
+}
+
+// The pill's one line, or null when it has nothing to say: nothing running, or only runs dismissed with its ×. One
+// run reads like the menu bar ("Codex · Editing · 3 files changed") with its workspace; several give the count and
+// the run whose step changed last ("2 working", "Shop: Codex · Editing").
+export function progressLine(snapshot, latest, { t, tn } = english, dismissed = new Set()) {
+  const running = (snapshot?.rows || []).filter(row => row.kind === 'running' && row.key);
+  if (!running.some(row => !dismissed.has(row.key))) return null;
+  const row = running.find(item => item.key === latest) || running[0];
+  if (running.length === 1) return { title: clip(row.text, 60), detail: clip(row.name, 40), projectId: row.projectId };
+  return { title: tn(running.length, '1 working', '{count} working'), detail: clip(`${row.name}: ${row.text}`, 70), projectId: row.projectId };
 }
 
 // Windows shows no words beside a notification area icon (#74), so they go in its tooltip, after the app's name.
