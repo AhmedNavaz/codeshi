@@ -15,10 +15,32 @@
 .voice-status-where[hidden] { display: none; }
 .voice-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .voice-status[data-state="listening"] .voice-dot { background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
-.voice-status[data-state="countdown"] .voice-dot, .voice-status[data-state="speaking"] .voice-dot { background: var(--link); }
+.voice-status[data-state="countdown"] .voice-dot, .voice-status[data-state="speaking"] .voice-dot, .voice-status[data-state="paused"] .voice-dot { background: var(--link); }
 .voice-status[data-state="error"] { color: var(--danger); }
 .voice-status[data-state="error"] .voice-dot { background: var(--danger); }
 .voice-status-actions { display: inline-flex; flex: none; gap: 10px; margin-left: auto; }
 .voice-status-actions .text-link { font-size: 12px; }
 .voice-field { display: grid; grid-template-columns: 170px minmax(0, 260px); align-items: center; gap: 10px; margin: 8px 0; color: var(--muted); font-size: 12.5px; }
 .voice-field select { height: 28px; padding: 0 8px; border: 1px solid var(--input-border); border-radius: 5px; background: var(--surface-input); color: var(--text); font-size: 12px; }
+/* In Flow, an arrow beside the microphone chooses dictation or conversation. */
+.voice-mode { display: inline-grid; place-items: center; width: 16px; height: 30px; margin-left: -6px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--faint); anchor-name: --voice-mode; }
+.voice-mode[hidden] { display: none; }
+.voice-mode:hover, .voice-mode[aria-expanded="true"] { color: var(--text); background: var(--hover); }
+.voice-mode .icon { width: 12px; height: 12px; }
+/* Microphone and mode arrow share one wrapper with no gap, so they read as one split control. */
+.voice-split { display: inline-flex; align-items: center; gap: 0; border-radius: 15px; }
+.voice-split:not(:has(> :not([hidden]))) { display: none; }
+.voice-split:hover, .voice-split:has(.voice-mode[aria-expanded="true"]) { background: var(--hover); }
+.voice-split .voice-input:hover:enabled, .voice-split .voice-mode:hover { background: transparent; }
+.voice-split .voice-input[aria-pressed="true"], .voice-split .voice-input[aria-pressed="true"]:hover:enabled { background: var(--danger); }
+.voice-split .voice-mode { width: 16px; margin: 0 2px 0 -4px; border-radius: 0 15px 15px 0; }
+.voice-split:hover .voice-mode, .voice-split .voice-mode[aria-expanded="true"] { color: var(--text); }
+.voice-menu { position: fixed; position-anchor: --voice-mode; position-area: top span-left; position-try-fallbacks: flip-block; inset: auto; min-width: 230px; margin: 0 0 6px; padding: 4px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: 0 16px 40px rgb(0 0 0 / 0.32), 0 2px 6px rgb(0 0 0 / 0.16); }
+.voice-menu:popover-open { display: grid; gap: 1px; }
+.voice-menu-item { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 6px; width: 100%; padding: 6px 10px 6px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font-size: 12.5px; line-height: 16px; text-align: left; }
+.voice-menu-item > * { grid-column: 2; }
+.voice-menu-item::before { content: ""; grid-column: 1; grid-row: 1; align-self: center; width: 9px; height: 5px; margin-left: 3px; border: solid transparent; border-width: 0 0 1.5px 1.5px; transform: translateY(-1px) rotate(-45deg); }
+.voice-menu-item[aria-checked="true"]::before { border-color: var(--accent); }
+.voice-menu-item:hover, .voice-menu-item:focus-visible { background: var(--hover); outline: 0; }
+.voice-menu-hint { color: var(--muted); font-size: 11.5px; }
+.voice-menu-settings { margin-top: 3px; padding-top: 7px; border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; color: var(--muted); }

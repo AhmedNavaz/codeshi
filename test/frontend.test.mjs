@@ -4251,13 +4251,139 @@ test('voice input fills the message box as you speak, Esc cancels it, and a run 
     { id: 'reply', runId: 'run-voice', role: 'assistant', provider: 'claude', text: 'Done. The header now uses the **brand colour** from `theme.js`.\n\n```css\n.header { color: var(--brand); }\n```\n\nI also checked the dark theme.' });
   c.status = 'complete'; c.activeRun = null; c.lastRun = { id: 'run-voice', provider: 'claude', status: 'complete', startedAt, endedAt: '2026-11-02T10:01:40.000Z' };
   await ui.window.relayUI.refresh();
-  assert.deepEqual(ui.spoken, ['Claude finished in 1 minute 40 seconds. It changed header.css and theme.js, and ran the tests. Done. The header now uses the brand colour from theme.js. I also checked the dark theme.']);
+  assert.deepEqual(ui.spoken, ['Done. The header now uses the brand colour from theme.js.', 'I also checked the dark theme.'], 'Only the reply, as written, without the code.');
+  assert.equal(ui.$('voice-status-text').textContent, 'Reading the reply aloud');
+  assert.deepEqual([...ui.window.relayVoice.replyAloud({ provider: 'claude', status: 'complete', elapsedMs: 5000 }, [{ role: 'assistant', text: '| a | b |\n|---|---|\n| 1 | 2 |' }])], ['Claude finished in 5 seconds.'], 'A reply with nothing to say falls back to the short summary.');
 
   // A run started by typing is not read aloud unless that is chosen.
   c.status = 'running'; c.activeRun = { id: 'run-typed', provider: 'codex', startedAt }; await ui.window.relayUI.refresh();
   c.status = 'complete'; c.activeRun = null; c.lastRun = { id: 'run-typed', provider: 'codex', status: 'complete', startedAt, endedAt: startedAt }; await ui.window.relayUI.refresh();
-  assert.equal(ui.spoken.length, 1);
+  assert.equal(ui.spoken.length, 2);
   assert.equal(ui.window.relayVoice.summarize({ provider: 'codex', status: 'failed', errorCategory: 'quota' }, []), 'Codex stopped at a usage limit.');
+});
+
+test('a voice conversation keeps listening, sends on a final “send”, adds to a running task, and approves only after “yes, approve”', async () => {
+  let now = Date.parse('2026-11-10T10:00:00.000Z');
+  const ui = await browser({ voiceUI: true, clock: () => now, stored: { 'throughline:voice': JSON.stringify({ mode: 'conversation' }) } });
+  const posts = [], notes = [], answers = [], c = ui.canonical.get('project-one');
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/voice') return response({ supported: true, helper: 'ready', speech: 'authorized', microphone: 'authorized', onDevice: true, locale: 'en-US' });
+    if (request.path.startsWith('/api/voice/')) { posts.push([request.path.slice(11), clone(request.body)]); return response(request.path === '/api/voice/start' ? { id: `v${posts.length}`, status: 'starting' } : {}, request.path === '/api/voice/start' ? 201 : 200); }
+    if (request.path.endsWith('/steer')) { notes.push(request.body.text); return response({ added: true }); }
+    if (request.path.endsWith('/approval')) { answers.push(clone(request.body)); c.pendingApprovals = []; return response({ resolved: true }); }
+    return next();
+  });
+  ui.window.relayVoice.settings(ui.document.createElement('section')); await flush();
+  const mic = ui.$('voice-input'), input = ui.$('message-input');
+  const send = (type, data) => stream().dispatchEvent(new UIEvent(type, { data: JSON.stringify({ type, ...data }) }));
+  const stream = () => ui.eventSources.filter(source => source.url.startsWith('/api/voice/stream')).at(-1);
+  const starts = () => posts.filter(([action]) => action === 'start').length;
+  const pause = async () => { ui.runTimers(); await flush(); };
+  // Conversation belongs to Flow: outside it the microphone dictates, and there is no mode arrow.
+  const flow = on => { ui.$('app-shell').classList.toggle('flow', on); ui.window.dispatchEvent(new UIEvent('relay-flow')); };
+  assert.match(mic.title, /^Voice input/); assert.equal(ui.$('voice-mode').hidden, true);
+  flow(true);
+  assert.match(mic.title, /^Start a voice conversation/); assert.equal(ui.$('voice-mode').hidden, false);
+  const choice = mode => [...ui.$('voice-menu').children].find(item => item.dataset.mode === mode);
+  assert.equal(choice('conversation').getAttribute('aria-checked'), 'true');
+  choice('dictation').click(); assert.match(mic.title, /^Voice input/); assert.equal(JSON.parse(ui.storage.get('throughline:voice')).mode, 'dictation');
+  choice('conversation').click(); assert.match(mic.title, /^Start a voice conversation/); assert.equal(choice('conversation').getAttribute('aria-checked'), 'true');
+
+  // "send" inside a sentence is part of the message, and a session that runs out is followed by another.
+  mic.click(); await flush(); send('ready');
+  assert.equal(mic.getAttribute('aria-pressed'), 'true');
+  assert.match(ui.$('voice-status-text').textContent, /say “send” to send/);
+  send('partial', { text: 'Send the email after login' }); await pause();
+  assert.equal(input.value, 'Send the email after login');
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/messages')).length, 0, 'Not a command in the middle of a message.');
+  send('final', { text: 'Send the email after login' }); await flush();
+  assert.equal(starts(), 2, 'Listening starts again after the two-minute limit.');
+  send('ready'); send('partial', { text: 'and log it. Send.' }); await pause();
+  const sent = ui.requests.filter(request => request.path.endsWith('/messages'));
+  assert.equal(sent.length, 1); assert.equal(sent[0].body.text, 'Send the email after login and log it.');
+  assert.deepEqual(posts.find(([action, body]) => action === 'cancel' && body.id === 'v2'), ['cancel', { id: 'v2' }], 'The session that heard “send” ends…');
+  assert.equal(starts(), 3, '…and the next one starts.');
+
+  // While a run works, a message said and sent goes into it.
+  c.status = 'running'; c.canAddToRun = true; c.activeRun = { id: 'run-one', provider: 'claude', startedAt: new Date().toISOString() }; await ui.window.relayUI.refresh();
+  send('ready');
+  assert.match(ui.$('voice-status-text').textContent, /add it to this run/);
+  send('partial', { text: 'Also add a tooltip, send' }); await pause();
+  assert.deepEqual(notes, ['Also add a tooltip']);
+
+  // An approval is read out with the microphone off; "approve" alone asks again, and "yes, approve" approves.
+  const spokenBefore = ui.spoken.length, listened = starts();
+  c.pendingApprovals = [{ id: 'a1', runId: 'run-one', provider: 'claude', kind: 'commandExecution', command: 'npm test' }]; await ui.window.relayUI.refresh();
+  assert.deepEqual(ui.spoken.slice(spokenBefore), ['Claude wants to run npm test. Say approve or deny.']);
+  assert.equal(stream().closed, true, 'Listening pauses while Codeshi speaks.');
+  ui.window.speechSynthesis.utterances.at(-1).onend(); await flush();
+  assert.equal(starts(), listened + 1);
+  send('ready'); assert.match(ui.$('voice-status-text').textContent, /Say “approve” or “deny”/);
+  send('partial', { text: 'Approve.' }); await pause();
+  assert.deepEqual(answers, [], 'Approve alone never approves.');
+  assert.equal(ui.spoken.at(-1), 'To approve, say yes, approve.');
+  assert.equal(input.value, '', 'An answer is not written into the message box.');
+  ui.window.speechSynthesis.utterances.at(-1).onend(); await flush(); send('ready');
+  send('partial', { text: 'Yes, approve.' }); await pause(); await flush();
+  assert.deepEqual(answers, [{ runId: 'run-one', approvalId: 'a1', allow: true }]);
+  assert.equal(ui.spoken.at(-1), 'Approved.');
+
+  // A question from the agent waits for an answer on screen.
+  ui.window.speechSynthesis.utterances.at(-1).onend(); await flush();
+  const beforeQuestion = starts();
+  c.pendingApprovals = [{ id: 'q1', runId: 'run-one', provider: 'claude', kind: 'question', questions: [] }]; await ui.window.relayUI.refresh();
+  assert.equal(ui.spoken.at(-1), 'Claude has a question. Answer it on screen.');
+  ui.window.speechSynthesis.utterances.at(-1).onend(); await flush();
+  assert.equal(starts(), beforeQuestion, 'No listening while the question waits.');
+  assert.equal(ui.$('voice-status').dataset.state, 'paused');
+  c.pendingApprovals = []; await ui.window.relayUI.refresh(); await flush();
+  assert.equal(starts(), beforeQuestion + 1, 'Listening starts again once it is answered.');
+
+  // Esc ends the conversation and keeps what is in the message box.
+  send('ready'); send('partial', { text: 'one more thing' });
+  ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
+  assert.equal(mic.getAttribute('aria-pressed'), 'false');
+  assert.equal(input.value, 'one more thing');
+  assert.equal(stream().closed, true);
+
+  // After a pause the recognizer may begin again with only the new words; what came before stays.
+  c.status = 'complete'; c.activeRun = null; c.canAddToRun = false; await ui.window.relayUI.refresh();
+  mic.click(); await flush(); send('ready');
+  send('partial', { text: 'Rename the file.' });
+  now += 2500; send('partial', { text: 'Send.' }); await pause();
+  assert.equal(ui.requests.filter(request => request.path.endsWith('/messages')).at(-1).body.text, 'one more thing Rename the file.');
+
+  // Leaving Flow ends the conversation.
+  assert.equal(ui.window.relayVoice.conversation(), true);
+  flow(false);
+  assert.equal(ui.window.relayVoice.conversation(), false); assert.equal(mic.getAttribute('aria-pressed'), 'false'); assert.equal(ui.$('voice-mode').hidden, true);
+});
+
+test('dictation keeps what was said before a pause when the recognizer starts again', async () => {
+  let now = Date.parse('2026-11-10T10:00:00.000Z');
+  const ui = await browser({ voiceUI: true, clock: () => now });
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/voice') return response({ supported: true, helper: 'ready', speech: 'authorized', microphone: 'authorized', onDevice: true, locale: 'en-US' });
+    if (request.path.startsWith('/api/voice/')) return response(request.path === '/api/voice/start' ? { id: 'v1', status: 'starting' } : {}, request.path === '/api/voice/start' ? 201 : 200);
+    return next();
+  });
+  ui.window.relayVoice.settings(ui.document.createElement('section')); await flush();
+  const mic = ui.$('voice-input'), input = ui.$('message-input');
+  const stream = () => ui.eventSources.filter(source => source.url.startsWith('/api/voice/stream')).at(-1);
+  const send = (type, data) => stream().dispatchEvent(new UIEvent(type, { data: JSON.stringify({ type, ...data }) }));
+  mic.click(); await flush(); send('ready');
+  // A correction replaces the words; it is not a new start.
+  send('partial', { text: 'Fix the' }); now += 200; send('partial', { text: 'Fix the header' }); now += 200; send('partial', { text: 'Fix the header colour' });
+  assert.equal(input.value, 'Fix the header colour');
+  // After a pause only the new words arrive, even ones that begin as the last sentence did.
+  now += 3000; send('partial', { text: 'And' }); now += 200; send('partial', { text: 'And the footer' });
+  assert.equal(input.value, 'Fix the header colour And the footer');
+  now += 300; send('partial', { text: '' }); assert.equal(input.value, 'Fix the header colour And the footer');
+  now += 100; send('partial', { text: 'Fix' }); now += 200; send('partial', { text: 'Fix it today' });
+  assert.equal(input.value, 'Fix the header colour And the footer Fix it today');
+  send('final', { text: 'Fix it today.' }); await flush();
+  assert.equal(input.value, 'Fix the header colour And the footer Fix it today.');
+  assert.equal(ui.$('voice-status').dataset.state, '');
 });
 
 test('coming back after two minutes or more shows what ran, changed and is waiting, and can read it aloud', async () => {

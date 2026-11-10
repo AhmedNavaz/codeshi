@@ -254,7 +254,8 @@
               </div>
               <div class="composer-actions">
                 <span id="composer-hint" class="sr-only">Enter to send, Shift and Enter for a new line.</span>
-                <button id="voice-input" class="voice-input" type="button" aria-pressed="false" aria-label="Voice input" title="Voice input (⌥⌘V)" hidden><span class="voice-ring" aria-hidden="true"></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg></button>
+                <span class="voice-split"><button id="voice-input" class="voice-input" type="button" aria-pressed="false" aria-label="Voice input" title="Voice input (⌥⌘V)" hidden><span class="voice-ring" aria-hidden="true"></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/></svg></button><button id="voice-mode" class="voice-mode" type="button" popovertarget="voice-menu" aria-haspopup="menu" aria-label="Voice mode" title="Voice mode" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 14.5 5-5 5 5"/></svg></button></span>
+                <div id="voice-menu" class="voice-menu" popover="auto" role="menu" aria-label="Voice mode"></div>
                 <button id="stop-button" class="stop-button" type="button" hidden><span aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></span> Stop</button>
                 <button id="steer-button" class="steer-button" type="button" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v6a3 3 0 0 0 3 3h11"/><path d="m15 10 4 4-4 4"/></svg><span class="steer-label">Add to run</span></button>
                 <button id="queue-button" class="queue-button" type="button" hidden title="Run this after the current work (Enter)">Queue</button>
