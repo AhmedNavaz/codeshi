@@ -14,7 +14,7 @@
 //   desktop/overlay.html              the alert panel's シ, drawn inside the page
 //   public/logo.svg                   in-app logo (medium detail), Paper or Ink with the page
 //   public/index.html                 the welcome screen's animated logo
-//   public/icon-{16,32,180,512}.png   PNG favicons and touch icon (Paper)
+//   public/icon-{16,32,180,192,512}.png PNG favicons, touch and Home Screen icons (Paper)
 //   assets/social-preview.png         the GitHub repository card
 import { app, BrowserWindow } from 'electron';
 import { execFileSync } from 'node:child_process';
@@ -121,7 +121,7 @@ app.whenReady().then(async () => {
   }
   for (const look of ['paper', 'ink']) for (const size of [16, 32, 64, 128, 256, 512, 1024]) write(path.join(assets, 'brand', `codeshi-${look}-${size}.png`), await tilePng(look, size));
   for (const size of [16, 32]) write(path.join(pub, `icon-${size}.png`), await render(brand.mark({ pixels: size }), size));
-  for (const size of [180, 512]) write(path.join(pub, `icon-${size}.png`), await render(brand.mark({ pixels: size, square: true }), size));
+  for (const size of [180, 192, 512]) write(path.join(pub, `icon-${size}.png`), await render(brand.mark({ pixels: size, square: true }), size));
   const compiled = layersUnchanged ? 'kept Assets.car, since the layers have not changed' : compileLayers(layers);
 
   const card = `<!doctype html><meta charset="utf-8"><style>

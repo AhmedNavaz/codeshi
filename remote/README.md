@@ -57,6 +57,14 @@ browser requires computer approval, unless an already paired browser hands its c
 one-use, five-minute replacement channel and ends the old one. Scanning the link is not sufficient to start an
 agent or answer an approval.
 
+A Home Screen icon on iPhone has its own storage and no address bar, so a handover also gives an 8-character
+code (40 bits). The code never becomes a channel key. PBKDF2 (200,000 iterations) turns it into the ID and key of
+a separate meeting channel that lives as long as the replacement channel. The new browser sends a fresh P-256
+public key there; the computer answers once with the replacement channel's ID and key, sealed with an ECDH-derived
+key, and accepts nothing else on that channel. Guessing the code means online guesses within five minutes, and a
+code recovered later from stored packets can't open the sealed answer. The meeting channel is removed when the
+replacement is used, replaced, expires, or its phone is removed. The existing database rules cover it unchanged.
+
 AES-GCM encrypts request and response contents, with separate authenticated directions and channel IDs. Firebase
 sees coordination metadata, such as anonymous IDs, expiry and connection state, plus encrypted packets. It does
 not receive the pairing key, desktop session token, prompt text, device name or agent approval details in plaintext.

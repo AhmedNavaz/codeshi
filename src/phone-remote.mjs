@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { Readable, Writable } from 'node:stream';
 import { atomicJSON } from './patches.mjs';
-import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open, MAX_PACKET } from '../public/phone-firebase.mjs';
+import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open, MAX_PACKET, handoverCode, handoverMeeting, handoverKeys, handoverShared } from '../public/phone-firebase.mjs';
 import { TRANSFER_ENCODING, conversationRoute, encodeConversation } from '../public/phone-transfer.mjs';
 
 const FIVE_MINUTES = 300_000, SESSION = 7 * 24 * 60 * 60_000, ACTIVE_WINDOW = 45_000;
@@ -85,7 +85,7 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     return { configured: Boolean(settings), enabled, error: setupError || error, url: settings?.phoneURL || null,
       traffic: client?.traffic ? { ...client.traffic } : lastTraffic,
       invite: invite && now() < invite.expiresAt ? { url: invite.url, qr: invite.qr, expiresAt: invite.expiresAt } : null,
-      devices: [...rooms.values()].filter(room => room.state !== 'waiting').map(room => ({
+      devices: [...rooms.values()].filter(room => room.state !== 'waiting' && !room.meetingFor).map(room => ({
         id: room.id, name: room.name, code: room.code, state: room.state, expiresAt: room.expiresAt,
         lastSeenAt: room.lastSeenAt || null, activeNow: isActiveNow(room),
       })) };
@@ -100,10 +100,10 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
   async function remove(room, { persistStore = true } = {}) {
     rooms.delete(room.id); room.stop?.(); clearTimeout(room.timer);
     if (invite?.id === room.id) invite = null;
-    if (room.handoverId && rooms.has(room.handoverId)) {
-      const handover = rooms.get(room.handoverId);
-      room.handoverId = null;
-      await remove(handover, { persistStore: false });
+    for (const field of ['handoverId', 'meetingId']) if (room[field] && rooms.has(room[field])) {
+      const linked = rooms.get(room[field]);
+      room[field] = null;
+      await remove(linked, { persistStore: false });
     }
     if (persistStore && room.state === 'active') persist();
     // Expiry and rules still deny access if deletion cannot reach Firebase.
@@ -128,6 +128,8 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     try { request = await open(room.key, room.id, 'request', envelope.box); } catch { return; }
     if (typeof request.id !== 'string' || !/^[a-f0-9]{32}$/.test(request.id) || !Number.isFinite(request.at) || Math.abs(now() - request.at) > 30_000) return;
     if (room.peer && room.peer !== envelope.uid) return;
+    // A meeting point answers one key exchange and nothing else: it can never become a phone awaiting approval.
+    if (room.meetingFor && request.kind !== 'meet') return;
     for (const [id, entry] of room.seen) if (now() > entry.expiresAt) room.seen.delete(id);
     if (room.seen.has(request.id)) { const reply = room.seen.get(request.id).reply; if (reply) await publish(room, reply); return; }
     const minute = Math.floor(now() / 60000);
@@ -139,7 +141,18 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     // entire acceptance window, even if the phone floods the mailbox with session checks.
     const entry = { expiresAt: request.at + 30000, reply: null }; room.seen.set(request.id, entry);
     let reply;
-    if (request.kind === 'pair' && room.state === 'waiting') {
+    if (request.kind === 'meet' && room.meetingFor) {
+      const target = rooms.get(room.meetingFor), source = target && rooms.get(target.handoverFrom);
+      if (room.state !== 'waiting') return;
+      // Removing the meeting point is the answer the phone sees: its metadata disappears and it says the code didn't work.
+      if (!target || target.state !== 'waiting' || !source || source.state !== 'active' || now() >= target.expiresAt) { await remove(room, { persistStore: false }); return; }
+      room.peer = envelope.uid; room.state = 'pending';
+      await metadata(room);
+      let mine, shared;
+      try { mine = await handoverKeys(); shared = await handoverShared(mine.privateKey, request.pub, room.id); }
+      catch { await remove(room, { persistStore: false }); return; }
+      reply = { id: request.id, pub: mine.pub, box: await seal(shared, room.id, 'handover', { room: target.id, secret: target.secret }) };
+    } else if (request.kind === 'pair' && room.state === 'waiting') {
       if (room.handoverFrom) {
         const source = rooms.get(room.handoverFrom);
         if (!source || source.state !== 'active' || now() >= source.expiresAt) { await remove(room); return; }
@@ -154,6 +167,8 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
         room.activeNow = true;
         delete room.handoverFrom;
         source.handoverId = null;
+        if (room.meetingId && rooms.has(room.meetingId)) await remove(rooms.get(room.meetingId), { persistStore: false });
+        room.meetingId = null;
         await remove(source, { persistStore: false });
         await metadata(room);
         clearTimeout(room.timer); room.timer = setTimeout(() => remove(room), Math.max(1, room.expiresAt - now())); room.timer.unref?.();
@@ -189,7 +204,16 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
         await client.request(`owners/${next.owner}/${id}`, 'PUT', true);
         await metadata(next);
         watchRoom(next);
-        reply = { id: request.id, status: 200, body: { url: `${settings.phoneURL}/#remote=${id}.${secret}`, expiresAt } };
+        // The typed code leads to a separate meeting point, so the link's own secret is never derived from it.
+        const code = handoverCode(), meeting = await handoverMeeting(code);
+        if (!rooms.has(meeting.room)) {
+          const slot = { id: meeting.room, secret: meeting.secret, key: await roomKey(meeting.secret), owner: room.owner, state: 'waiting', peer: '', name: room.name, expiresAt, meetingFor: id, seen: new Map(), requests: 0 };
+          rooms.set(slot.id, slot); next.meetingId = slot.id;
+          await client.request(`owners/${slot.owner}/${slot.id}`, 'PUT', true);
+          await metadata(slot);
+          watchRoom(slot);
+        }
+        reply = { id: request.id, status: 200, body: { url: `${settings.phoneURL}/#remote=${id}.${secret}`, ...(next.meetingId ? { code } : {}), expiresAt } };
       } catch (failure) { await remove(next, { persistStore: false }); reply = { id: request.id, status: 503, body: { error: failure.message } }; }
     } else if (request.kind === 'api') {
       room.lastSeenAt = now(); room.activeNow = true;
@@ -214,7 +238,7 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     }
     await publish(room, reply); error = null;
   }
-  const countedRooms = () => [...rooms.values()].filter(room => !room.handoverFrom);
+  const countedRooms = () => [...rooms.values()].filter(room => !room.handoverFrom && !room.meetingFor);
   async function evictStaleIfNeeded(preferredName = null) {
     for (const room of [...rooms.values()]) if (now() >= room.expiresAt) await remove(room);
     if (countedRooms().length < 5) return;
@@ -287,11 +311,11 @@ export function createRemotePhoneAccess({ config, storeFile, handle, local, clie
     if (!enabled) fail('Enable remote access first.', 409);
     if (input.action === 'invite') return newInvite();
     const room = rooms.get(input.id);
-    if (!room || now() >= room.expiresAt) fail('This remote phone request expired or was removed.', 404);
+    if (!room || room.meetingFor || now() >= room.expiresAt) fail('This remote phone request expired or was removed.', 404);
     if (['deny', 'revoke'].includes(input.action)) { await remove(room); return status(); }
     if (input.action !== 'allow' || room.state !== 'pending') fail('Choose a pending phone or remove a connected one.');
     for (const other of [...rooms.values()]) {
-      if (other.id === room.id || other.handoverFrom) continue;
+      if (other.id === room.id || other.handoverFrom || other.meetingFor) continue;
       const sameDevice = Boolean(room.deviceId && other.deviceId === room.deviceId);
       const staleSameName = other.name === room.name && (other.state === 'pending' || (other.state === 'active' && !isActiveNow(other) && (other.activeNow === false || other.lastSeenAt)));
       if (sameDevice || staleSameName) await remove(other, { persistStore: false });

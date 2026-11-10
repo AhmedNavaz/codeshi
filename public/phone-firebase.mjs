@@ -14,6 +14,32 @@ export async function roomKey(secret) {
   if (!/^[a-f0-9]{64}$/.test(secret)) throw Error('Scan a new Codeshi QR code.');
   return crypto.subtle.importKey('raw', Uint8Array.from(secret.match(/../g), pair => parseInt(pair, 16)), 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
+// A typed handover code reaches a one-use meeting point; it never is the connection key. Each guess costs a stretched
+// derivation and an online Firebase read within five minutes. The real room secret then travels sealed with a fresh
+// ECDH key, so encrypted data stored in Firebase can't be opened by guessing the short code offline.
+const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+export function handoverCode() { return [...crypto.getRandomValues(new Uint8Array(8))].map(n => CODE_ALPHABET[n & 31]).join(''); }
+export function normalizeHandoverCode(text) {
+  const code = String(text || '').toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+  return new RegExp(`^[${CODE_ALPHABET}]{8}$`).test(code) ? code : null;
+}
+export async function handoverMeeting(code) {
+  const material = await crypto.subtle.importKey('raw', encoder.encode(code), 'PBKDF2', false, ['deriveBits']);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode('codeshi-handover-v1'), iterations: 200_000 }, material, 512));
+  const hex = bytes => [...bytes].map(n => n.toString(16).padStart(2, '0')).join('');
+  return { room: hex(bits.subarray(0, 32)), secret: hex(bits.subarray(32)) };
+}
+export async function handoverKeys() {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+  return { privateKey: pair.privateKey, pub: base64(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey))) };
+}
+export async function handoverShared(privateKey, peerPub, room) {
+  if (typeof peerPub !== 'string' || peerPub.length !== 88) throw Error('Invalid handover key.');
+  const peer = await crypto.subtle.importKey('raw', unbase64(peerPub), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: peer }, privateKey, 256);
+  const material = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: encoder.encode(`codeshi-handover-v1:${room}`), info: encoder.encode('room secret') }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
 export async function seal(key, room, direction, value) {
   const bytes = encoder.encode(JSON.stringify(value));
   if (bytes.length > MAX_PACKET) throw Error('This request is too large for remote access. Try a smaller photo or fewer messages.');

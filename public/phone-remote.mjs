@@ -1,4 +1,4 @@
-import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open } from './phone-firebase.mjs';
+import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open, REMOTE_BUSY, normalizeHandoverCode, handoverMeeting, handoverKeys, handoverShared } from './phone-firebase.mjs';
 import { TRANSFER_ENCODING, conversationRoute, decodeConversation } from './phone-transfer.mjs';
 
 const $ = id => document.getElementById(id), app = $('app');
@@ -7,7 +7,15 @@ const panel = document.createElement('main'); panel.className = 'phone-pair-card
 const title = document.createElement('h1'), note = document.createElement('p'), code = document.createElement('strong');
 code.id = 'phone-match-code';
 title.textContent = 'Connect to Codeshi'; note.setAttribute('role', 'status');
-panel.append(title, note, code); document.body.prepend(panel);
+// An unpaired browser, such as a new Home Screen icon, can take over a connection with the code from Move to another browser.
+const form = document.createElement('form'), field = document.createElement('input'), label = document.createElement('label'), submit = document.createElement('button');
+label.append('Code from Move to another browser', field); form.append(label, submit); form.hidden = true;
+Object.assign(field, { id: 'phone-handover-code', autocomplete: 'off', spellcheck: false, required: true, maxLength: 11, placeholder: 'XXXX XXXX' });
+field.setAttribute('autocapitalize', 'characters'); field.setAttribute('autocorrect', 'off');
+submit.type = 'submit'; submit.textContent = 'Connect';
+panel.append(title, note, code, form); document.body.prepend(panel);
+// Chromium offers installation only through this event, often before the app has loaded. Keep it for the Home Screen step.
+window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); window.codeshiInstallPrompt = event; window.dispatchEvent(new Event('codeshi-install-ready')); });
 let client, stopWatching, key, room, config, sessionKey, active = false, canWatch = false, chain = Promise.resolve(), awaiting = null, conversation = null;
 const listeners = new Set();
 const read = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
@@ -50,7 +58,7 @@ async function packet(value) {
     awaiting = { id: request.id, resolve: value => { clearTimeout(timer); awaiting = null; resolve(value); }, reject: error => { clearTimeout(timer); awaiting = null; reject(error); } };
     seal(key, room, 'request', request).then(async box => {
       await client.request(`rooms/${room}/request`, 'PUT', { uid: identity.uid, box });
-      if (value.kind === 'pair') await watchAfterClaim(identity.uid, request.id);
+      if (value.kind === 'pair' || value.kind === 'meet') await watchAfterClaim(identity.uid, request.id);
     })
       .catch(error => { if (awaiting?.id === request.id) awaiting.reject(error); });
   });
@@ -133,22 +141,21 @@ function activate() {
   const script = document.createElement('script'); script.src = '/phone.js'; document.head.append(script);
 }
 
-async function start() {
-  note.textContent = 'Connecting…';
-  config = firebaseConfig(await (await fetch('/remote-config.json', { cache: 'no-store' })).json());
-  sessionKey = `codeshi:remote-session:${config.projectId}`;
-  const fragment = new URLSearchParams(location.hash.slice(1)).get('remote');
-  history.replaceState(null, '', location.pathname);
-  const saved = read(sessionKey), match = fragment?.match(/^([a-f0-9]{64})\.([a-f0-9]{64})$/);
-  const session = match ? { room: match[1], secret: match[2] } : saved;
-  if (!session) {
-    note.textContent = 'This browser isn’t paired yet. Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) has its own connection. Move the connection from the browser where you approved it, or on your computer choose Remote access → Away from home and scan a new QR code.';
-    return;
-  }
+const NOT_PAIRED = 'This browser isn’t paired yet. Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) has its own connection. In the browser where you approved it, choose Move to another browser and type its code here. Or on your computer choose Remote access → Away from home and scan a new QR code.';
+const CODE_FAILED = 'That code didn’t work. A code works once, for 5 minutes. Choose Move to another browser again for a new one.';
+function askForCode(message = NOT_PAIRED) {
+  title.textContent = 'Connect to Codeshi'; code.textContent = ''; note.textContent = message;
+  form.hidden = false; submit.disabled = false;
+}
+function useClient() {
+  const authKey = `codeshi:remote-auth:${config.projectId}`;
+  client ||= new FirebasePhoneClient(config, { load: () => read(authKey), save: value => write(authKey, value) });
+  return client;
+}
+async function connect(session) {
   if (!/^[a-f0-9]{64}$/.test(session.room || '')) throw Error('Scan a new QR code on your computer.');
   room = session.room; key = await roomKey(session.secret);
-  const authKey = `codeshi:remote-auth:${config.projectId}`;
-  client = new FirebasePhoneClient(config, { load: () => read(authKey), save: value => write(authKey, value) });
+  useClient();
   const identity = await client.identity(), meta = await client.request(`rooms/${room}/meta`);
   if (!meta || meta.expiresAt <= Date.now() || meta.peer && meta.peer !== identity.uid) {
     unpair();
@@ -169,6 +176,43 @@ async function start() {
     else { title.textContent = 'Allow it on your computer'; code.textContent = result.code || ''; note.textContent = 'Check this number in Codeshi, then choose Allow.'; }
   }
 }
+// The code only opens a meeting point. The connection's own key arrives sealed with a fresh key exchange.
+async function redeem(typed) {
+  const handover = normalizeHandoverCode(typed);
+  if (!handover) { askForCode('Type the 8 letters and numbers shown under Move to another browser.'); return; }
+  form.hidden = true; note.textContent = 'Connecting…';
+  let target;
+  try {
+    const meeting = await handoverMeeting(handover);
+    room = meeting.room; key = await roomKey(meeting.secret);
+    const meta = await useClient().request(`rooms/${room}/meta`);
+    if (!meta || meta.state !== 'waiting' || meta.expiresAt <= Date.now()) throw Error(CODE_FAILED);
+    const mine = await handoverKeys(), result = await request({ kind: 'meet', pub: mine.pub });
+    target = await open(await handoverShared(mine.privateKey, result.pub, room), room, 'handover', result.box);
+  } catch (error) {
+    stopWatching?.(); stopWatching = null; canWatch = false; room = null;
+    const reach = error?.message === REMOTE_BUSY || /^Can’t reach/.test(error?.message || '');
+    askForCode(reach ? error.message : CODE_FAILED); return;
+  }
+  stopWatching?.(); stopWatching = null; canWatch = false;
+  await connect({ room: target.room, secret: target.secret });
+}
+form.addEventListener('submit', event => {
+  event.preventDefault(); submit.disabled = true;
+  redeem(field.value).catch(error => { if (!active) askForCode(error.message || CODE_FAILED); });
+});
+
+async function start() {
+  note.textContent = 'Connecting…';
+  config = firebaseConfig(await (await fetch('/remote-config.json', { cache: 'no-store' })).json());
+  sessionKey = `codeshi:remote-session:${config.projectId}`;
+  const fragment = new URLSearchParams(location.hash.slice(1)).get('remote');
+  history.replaceState(null, '', location.pathname);
+  const saved = read(sessionKey), match = fragment?.match(/^([a-f0-9]{64})\.([a-f0-9]{64})$/);
+  const session = match ? { room: match[1], secret: match[2] } : saved;
+  if (!session) { askForCode(); return; }
+  await connect(session);
+}
 document.addEventListener('visibilitychange', () => {
   if (!client) return;
   if (document.hidden) { stopWatching?.(); stopWatching = null; }
@@ -176,4 +220,4 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', () => { stopWatching?.(); });
 window.addEventListener('pageshow', event => { if (event.persisted && client && !document.hidden) watch(); });
-start().catch(error => { note.textContent = error.message || 'Could not connect. Scan a new QR code on your computer.'; });
+start().catch(error => { if (!active) askForCode(error.message || 'Could not connect. Scan a new QR code on your computer.'); });

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open, MAX_PACKET, REMOTE_BUSY } from '../public/phone-firebase.mjs';
+import { FirebasePhoneClient, firebaseConfig, token, roomKey, seal, open, MAX_PACKET, REMOTE_BUSY, handoverCode, normalizeHandoverCode, handoverMeeting, handoverKeys, handoverShared } from '../public/phone-firebase.mjs';
 import { createRemotePhoneAccess, phoneRemotePath, phoneRemoteRequest } from '../src/phone-remote.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { TRANSFER_ENCODING, conversationRoute, encodeConversation, decodeConversation } from '../public/phone-transfer.mjs';
@@ -65,6 +65,82 @@ test('remote packets are encrypted, authenticated and bound to their room and di
   await assert.rejects(open(key, room, 'out', box));
   await assert.rejects(open(key, room, 'request', { ...box, data: `${box.data.slice(0, -4)}AAAA` }));
   await assert.rejects(seal(key, room, 'request', { text: 'x'.repeat(MAX_PACKET) }), /too large/);
+});
+
+test('a typed handover code moves an allowed phone to a new browser once, without exposing the connection key (#115)', async t => {
+  const f = await fixture(t);
+  await f.send({ kind: 'pair', name: 'My iPhone', code: '123456' });
+  await f.access.manage({ action: 'allow', id: f.room });
+  const sendTo = async (room, key, value, uid) => {
+    const request = { id: token(16), at: Date.now(), ...value };
+    await f.firebase.request(`rooms/${room}/request`, 'PUT', { uid, box: await seal(key, room, 'request', request) });
+    let result;
+    await wait(() => { const out = f.firebase.values.get(`rooms/${room}/out`); if (out && out !== result?.out) { const entry = { out }; result = entry; open(key, room, 'out', out).then(value => { entry.value = value; }); } return result?.value?.id === request.id; });
+    return result.value;
+  };
+
+  assert.match(handoverCode(), /^[0-9A-HJKMNP-TV-Z]{8}$/);
+  assert.equal(normalizeHandoverCode('abcd-ef0o'), 'ABCDEF00');
+  assert.equal(normalizeHandoverCode('il23 4567'), '11234567');
+  assert.equal(normalizeHandoverCode('ABCD EFG'), null);
+  assert.equal(normalizeHandoverCode('ABCD EFGU'), null);
+
+  const handover = (await f.send({ kind: 'handover' })).value;
+  assert.equal(handover.status, 200);
+  const code = handover.body.code;
+  assert.ok(normalizeHandoverCode(code), 'Move to another browser also gives a short code.');
+  const [target, targetSecret] = new URLSearchParams(new URL(handover.body.url).hash.slice(1)).get('remote').split('.');
+
+  // A wrong code finds no meeting point. The real one finds a waiting one that isn't listed or counted as a device.
+  assert.equal(f.firebase.values.get(`rooms/${(await handoverMeeting('ZZZZZZZZ')).room}/meta`), undefined);
+  const meeting = await handoverMeeting(normalizeHandoverCode(code.toLowerCase()));
+  assert.equal(f.firebase.values.get(`rooms/${meeting.room}/meta`).state, 'waiting');
+  assert.notEqual(meeting.secret, targetSecret, 'The code never derives the connection key itself.');
+  assert.equal(f.access.status().devices.length, 1);
+  const meetingKey = await roomKey(meeting.secret);
+
+  // Only a key exchange is answered: a pair request on the meeting point never becomes a phone awaiting approval.
+  await f.firebase.request(`rooms/${meeting.room}/request`, 'PUT', { uid: 'intruder', box: await seal(meetingKey, meeting.room, 'request', { id: token(16), at: Date.now(), kind: 'pair', name: 'Intruder', code: '999999' }) });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(f.firebase.values.get(`rooms/${meeting.room}/meta`).state, 'waiting');
+  assert.equal(f.access.status().devices.every(device => device.name !== 'Intruder'), true);
+
+  const mine = await handoverKeys();
+  const answer = await sendTo(meeting.room, meetingKey, { kind: 'meet', pub: mine.pub }, 'phone-icon');
+  assert.equal(f.firebase.values.get(`rooms/${meeting.room}/meta`).peer, 'phone-icon');
+  assert.equal(JSON.stringify(f.firebase.writes).includes(targetSecret), false, 'The connection key is never written where the code alone opens it.');
+  await assert.rejects(open(meetingKey, meeting.room, 'handover', answer.box), 'Knowing the code is not enough to open the answer.');
+  const received = await open(await handoverShared(mine.privateKey, answer.pub, meeting.room), meeting.room, 'handover', answer.box);
+  assert.deepEqual(received, { room: target, secret: targetSecret });
+
+  // A second exchange on the used meeting point gets nothing.
+  const other = await handoverKeys(), before = f.firebase.values.get(`rooms/${meeting.room}/out`);
+  await f.firebase.request(`rooms/${meeting.room}/request`, 'PUT', { uid: 'phone-icon', box: await seal(meetingKey, meeting.room, 'request', { id: token(16), at: Date.now(), kind: 'meet', pub: other.pub }) });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(f.firebase.values.get(`rooms/${meeting.room}/out`), before);
+
+  // The new browser then joins the moved connection without approval, and the meeting point and old browser are gone.
+  const moved = await sendTo(target, await roomKey(received.secret), { kind: 'pair', name: 'iPhone', code: '222333', deviceId: 'device-icon-12345678' }, 'phone-icon');
+  assert.equal(moved.state, 'active');
+  assert.equal(f.firebase.values.has(`rooms/${meeting.room}/meta`), false);
+  assert.equal(f.firebase.values.has(`rooms/${f.room}/meta`), false);
+  assert.deepEqual(f.access.status().devices.map(device => device.id), [target]);
+  assert.equal(f.calls.length, 0);
+});
+
+test('a code meeting point disappears with its transfer, and a remote phone can not approve it as a device (#115)', async t => {
+  const f = await fixture(t);
+  await f.send({ kind: 'pair', name: 'My iPhone', code: '123456' });
+  await f.access.manage({ action: 'allow', id: f.room });
+  const handover = (await f.send({ kind: 'handover' })).value;
+  const meeting = await handoverMeeting(handover.body.code);
+  await assert.rejects(f.access.manage({ action: 'allow', id: meeting.room }), /expired or was removed/);
+  // Asking for another transfer replaces the first link and its code.
+  const again = (await f.send({ kind: 'handover' })).value;
+  assert.equal(f.firebase.values.has(`rooms/${meeting.room}/meta`), false);
+  assert.equal(f.firebase.values.get(`rooms/${(await handoverMeeting(again.body.code)).room}/meta`).state, 'waiting');
+  await f.access.manage({ action: 'revoke', id: f.room });
+  assert.equal(f.firebase.values.has(`rooms/${(await handoverMeeting(again.body.code)).room}/meta`), false, 'Removing the phone ends its code too.');
 });
 
 test('remote configuration accepts Firebase endpoints and rejects arbitrary database destinations', () => {
@@ -279,7 +355,7 @@ test('the hosted phone bootstrap pairs, unlocks only after approval, and carries
     calls.push({ path: req.url, body: JSON.parse(body || '{}') });
     res.writeHead(200); res.end(JSON.stringify(req.url.startsWith('/api/conversation?') ? { id: 'c', delta, messages: [{ id: 'm', text: chat }] } : { ok: true }));
   } }), storage = new Map(), pageEvents = new EventTarget(), window = new EventTarget();
-  const element = () => ({ hidden: false, textContent: '', children: [], classList: { values: new Set(), add(value) { this.values.add(value); }, remove(value) { this.values.delete(value); } }, append(...children) { this.children.push(...children); }, prepend(...children) { this.children.unshift(...children); }, setAttribute() {} });
+  const element = () => ({ hidden: false, textContent: '', children: [], classList: { values: new Set(), add(value) { this.values.add(value); }, remove(value) { this.values.delete(value); } }, append(...children) { this.children.push(...children); }, prepend(...children) { this.children.unshift(...children); }, setAttribute() {}, addEventListener() {} });
   const app = element(); app.hidden = true;
   const document = Object.assign(pageEvents, { hidden: false, getElementById: id => id === 'app' ? app : null, createElement: element, body: element(), head: element() });
   let replaced = null, pairSent = false, releasePair, streamFailure, watchCalls = 0, corruptAppend = false;

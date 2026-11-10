@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Codeshi Remote",
+  "short_name": "Codeshi",
+  "description": "Send prompts and answer approvals for Codeshi running on your computer.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#161513",
+  "theme_color": "#161513",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -15,7 +15,7 @@ test('remote phone progress refreshes chat without repeatedly loading projects, 
     Date: class extends Date { static now() { return now; } },
     setTimeout: (fn, ms) => { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; }, clearTimeout: id => timers.delete(id), setInterval: fn => intervals.push(fn),
     api: async path => { requests.push(path); return path === '/api/projects' ? [{ id: 'p' }] : { id: 'c', status, delta: true, messages: [], pendingApprovals: approvals }; },
-    phoneFetch: async () => ({ status: 200, ok: true }), $: () => ({}), render() {}, recall: () => null,
+    phoneFetch: async () => ({ status: 200, ok: true }), $: () => ({}), render() {}, offerHomeScreen() {}, recall: () => null,
     L: { mergeMessages: (current, update) => update.messages },
   };
   const controls = vm.runInNewContext(`${refresh}\n({connect, refreshProjects, scheduleConversation, scheduleProjects})`, context);

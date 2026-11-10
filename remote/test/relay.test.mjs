@@ -6,7 +6,7 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { createRelayServer } from '../../src/server.mjs';
 import { scriptCLIs } from '../../test/platform.mjs';
-import { FirebasePhoneClient, token, roomKey, seal, open } from '../../public/phone-firebase.mjs';
+import { FirebasePhoneClient, token, roomKey, seal, open, handoverMeeting, handoverKeys, handoverShared } from '../../public/phone-firebase.mjs';
 import { createRemotePhoneAccess } from '../../src/phone-remote.mjs';
 
 const config = { projectId: 'demo-codeshi-phone', apiKey: 'emulator-phone-api-key-only', databaseURL: 'https://demo-codeshi-phone.firebaseio.com', phoneURL: 'https://demo-codeshi-phone.web.app' };
@@ -87,6 +87,44 @@ test('encrypted remote pairing, desktop approval, prompts, cached retries and st
   assert.equal(streamError, null);
   await access.manage({ action: 'revoke', id: room });
   await denied(phone.request(`rooms/${room}/request`, 'PUT', { uid: identity.uid, box: await seal(key, room, 'request', stopped) }));
+});
+
+test('a typed code moves a connection to a Home Screen icon under the real rules (#115)', async t => {
+  const owner = client(), phone = client(), icon = client(), stranger = client();
+  const access = createRemotePhoneAccess({ config, clientFactory: () => owner, local: () => ({ port: 1234, accessToken: 'desktop-only' }), handle: async (req, res) => { res.writeHead(200); res.end('{"ok":true}'); } });
+  t.after(async () => { await access.close(); phone.close(); icon.close(); stranger.close(); });
+  const initial = await access.manage({ action: 'start' });
+  const [room, secret] = new URLSearchParams(new URL(initial.invite.url).hash.slice(1)).get('remote').split('.');
+  const exchange = async (who, target, key, input) => {
+    const uid = (await who.identity()).uid, request = { id: token(16), at: Date.now(), ...input };
+    await who.request(`rooms/${target}/request`, 'PUT', { uid, box: await seal(key, target, 'request', request) });
+    let reply = null; const until = Date.now() + 8000;
+    while (!reply && Date.now() < until) {
+      const meta = await who.request(`rooms/${target}/meta`);
+      if (meta?.peer === uid) { const out = await who.request(`rooms/${target}/out`).catch(() => null); const value = out && await open(key, target, 'out', out).catch(() => null); if (value?.id === request.id) reply = value; }
+      if (!reply) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (!reply) throw Error('The encrypted response did not arrive.');
+    return reply;
+  };
+  const key = await roomKey(secret);
+  await exchange(phone, room, key, { kind: 'pair', name: 'Scanner browser', code: '654321' }).catch(() => {});
+  await wait(() => access.status().devices[0]?.state === 'pending');
+  await access.manage({ action: 'allow', id: room });
+  const handover = await exchange(phone, room, key, { kind: 'handover' });
+  assert.match(handover.body.code, /^[0-9A-Z]{8}$/);
+
+  const meeting = await handoverMeeting(handover.body.code), meetingKey = await roomKey(meeting.secret);
+  assert.equal((await icon.request(`rooms/${meeting.room}/meta`)).state, 'waiting', 'A new icon can find the meeting point from the code alone.');
+  const mine = await handoverKeys();
+  const answer = await exchange(icon, meeting.room, meetingKey, { kind: 'meet', pub: mine.pub });
+  await denied(stranger.request(`rooms/${meeting.room}/out`));
+  const moved = await open(await handoverShared(mine.privateKey, answer.pub, meeting.room), meeting.room, 'handover', answer.box);
+  const joined = await exchange(icon, moved.room, await roomKey(moved.secret), { kind: 'pair', name: 'iPhone', code: '111222' });
+  assert.equal(joined.state, 'active', 'The icon joins without another approval on the computer.');
+  assert.deepEqual(access.status().devices.map(device => device.id), [moved.room]);
+  assert.equal(await icon.request(`rooms/${meeting.room}/meta`), null, 'The meeting point is gone once used.');
+  await denied(phone.request(`rooms/${room}/out`));
 });
 
 test('a remote prompt and agent approval reach the desktop conversation through the real server and worker', { skip: scriptCLIs }, async t => {

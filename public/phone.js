@@ -130,6 +130,7 @@
       S.c = update; S.loaded = true;
       adoptSettings();
       render();
+      offerHomeScreen();
     } catch (error) {
       // A task that's gone: back to the main conversation. Anything else keeps what's on screen, and the header says so.
       if (error.status >= 400 && error.status < 500 && S.thread) { S.thread = null; rememberView(); changedView(); refreshConversation(); }
@@ -988,30 +989,87 @@
     const foot = node('div', 'sheet-foot');
     foot.append(segmented('Appearance', [['system', 'System'], ['light', 'Light'], ['dark', 'Dark'], ['graphite', 'Graphite']], window.relayPhoneTheme?.choice() || 'system', value => { window.relayPhoneTheme?.choose(value); drawSheet(); }));
     foot.append(node('p', '', 'Work and sign-ins stay on your computer. Review, merging, files and the terminal are there too.'));
-    const move = button('Move to another browser', () => attempt(async () => {
-      const response = await phoneFetch('/phone/handover', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' });
-      const data = await response.json();
-      if (!response.ok || !data?.url) throw new Error(data?.error || 'Could not create a browser transfer link.');
-      try { await navigator.clipboard?.writeText?.(data.url); } catch { /* Selection works without clipboard access. */ }
-      openSheet('Move to another browser', body => {
-        body.append(node('p', 'sheet-text', 'Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) keeps its own connection. Open this one-use link in the browser you want to use within 5 minutes.'));
-        const field = node('input', 'own phone-handover-link');
-        field.type = 'text'; field.readOnly = true; field.value = data.url; field.setAttribute('aria-label', 'One-use browser transfer link');
-        field.addEventListener('click', () => field.select?.());
-        body.append(field);
-        if (data.code) body.append(node('p', 'sheet-note', `Or enter code ${String(data.code).replace(/(.{4})/, '$1 ')} in that browser.`));
-        body.append(node('p', 'sheet-note', 'Opening it moves this connection without asking on your computer again, and disconnects this browser.'));
-        const actions = node('div', 'card-actions');
-        actions.append(button('Copy link', () => { field.select?.(); navigator.clipboard?.writeText?.(data.url).catch(() => {}); toast('Link copied. Paste it in your other browser.'); }, 'big primary'));
-        body.append(actions);
-      });
-    }), 'link');
+    const move = button('Move to another browser', () => attempt(moveToAnotherBrowser), 'link');
+    const home = homeScreenAvailable() ? button('Add to Home Screen', () => homeScreenSheet(), 'link') : null;
     const leave = button('Disconnect this phone', () => attempt(async () => {
       if (!leave.classList.contains('armed')) { leave.classList.add('armed'); leave.textContent = 'Tap again to disconnect'; setTimeout(() => { leave.classList.remove('armed'); leave.textContent = 'Disconnect this phone'; }, 3000); return; }
       try { await phoneFetch('/phone/logout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' }); } finally { location.replace('/'); }
     }), 'link danger');
-    foot.append(move, leave); host.append(foot);
+    foot.append(...(home ? [home] : []), move, leave); host.append(foot);
   }
+  async function moveToAnotherBrowser() {
+    const response = await phoneFetch('/phone/handover', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: '{}' });
+    const data = await response.json();
+    if (!response.ok || !data?.url) throw new Error(data?.error || 'Could not create a browser transfer link.');
+    try { await navigator.clipboard?.writeText?.(data.url); } catch { /* Selection works without clipboard access. */ }
+    openSheet('Move to another browser', body => {
+      body.append(node('p', 'sheet-text', 'Each browser on your phone (a QR scanner, Safari, Chrome or a Home Screen icon) keeps its own connection. Open this one-use link in the browser you want to use within 5 minutes.'));
+      const field = node('input', 'own phone-handover-link');
+      field.type = 'text'; field.readOnly = true; field.value = data.url; field.setAttribute('aria-label', 'One-use browser transfer link');
+      field.addEventListener('click', () => field.select?.());
+      body.append(field);
+      if (data.code) body.append(node('p', 'sheet-note', transport?.remote
+        ? `Or type code ${String(data.code).replace(/(.{4})/, '$1 ')} where that browser asks for one, such as a new Home Screen icon.`
+        : `Or enter code ${String(data.code).replace(/(.{4})/, '$1 ')} in that browser.`));
+      body.append(node('p', 'sheet-note', 'Opening it moves this connection without asking on your computer again, and disconnects this browser.'));
+      const actions = node('div', 'card-actions');
+      actions.append(button('Copy link', () => { field.select?.(); navigator.clipboard?.writeText?.(data.url).catch(() => {}); toast('Link copied. Paste it in your other browser.'); }, 'big primary'));
+      body.append(actions);
+    });
+  }
+
+  // ---- Home Screen. Away from home only: Same Wi-Fi is plain HTTP at an address that can change, so an icon would break.
+  // A page can't add itself. iPhone needs the browser's own menu; Chromium on Android offers its prompt after a tap.
+  const HOME_STEP = 'codeshi:home-screen-step';
+  const standalone = () => window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  function homeScreenDevice() {
+    const agent = navigator.userAgent;
+    if (/iPhone|iPad|iPod/.test(agent) || (/Macintosh/.test(agent) && navigator.maxTouchPoints > 1)) {
+      if (/CriOS|FxiOS|EdgiOS/.test(agent)) return 'ios-browser';
+      // Apps showing pages in their own web view leave out Safari's token, and can't add to the Home Screen.
+      return /Safari\//.test(agent) && !/ GSA\/| FBAN| FBAV| Instagram/.test(agent) ? 'ios-safari' : 'ios-app';
+    }
+    return /Android/.test(agent) ? 'android' : null;
+  }
+  const homeScreenAvailable = () => Boolean(transport?.remote && homeScreenDevice() && !standalone() && recall(HOME_STEP) !== 'installed');
+  function homeScreenSheet() {
+    remember(HOME_STEP, recall(HOME_STEP) || 'shown');
+    const device = homeScreenDevice();
+    openSheet('Add to Home Screen', body => {
+      const steps = items => { const list = node('ol', 'home-steps'); for (const item of items) list.append(node('li', '', item)); body.append(list); };
+      const actions = node('div', 'card-actions');
+      if (device === 'ios-app') {
+        body.append(node('p', 'sheet-text', 'This page is open in another app’s browser, which can’t add it to your Home Screen. Move the connection to Safari first.'));
+        steps(['Choose Move to Safari and open the link in Safari.', 'In Safari, open the Share menu and choose Add to Home Screen.']);
+        actions.append(button('Move to Safari', () => attempt(moveToAnotherBrowser), 'big primary'));
+      } else if (device === 'android') {
+        body.append(node('p', 'sheet-text', 'Open Remote access from an icon, full screen, instead of finding this page again.'));
+        const prompt = window.codeshiInstallPrompt;
+        if (prompt) actions.append(button('Install', () => attempt(async () => {
+          window.codeshiInstallPrompt = null;
+          await prompt.prompt();
+          if ((await prompt.userChoice)?.outcome === 'accepted') { remember(HOME_STEP, 'installed'); closeSheet(); } else drawSheet();
+        }), 'big primary'));
+        else steps(['Open your browser’s menu (⋮).', 'Choose Install app or Add to Home screen.']);
+      } else {
+        body.append(node('p', 'sheet-text', 'Open Remote access from an icon, full screen, instead of finding this page again.'));
+        steps([device === 'ios-safari' ? 'Open the Share menu (under ⋯ on iOS 26) and choose Add to Home Screen.' : 'Open the Share menu and choose Add to Home Screen.',
+          'Open Codeshi from your Home Screen. If it asks for a code, come back here, choose Get a code and type it there.']);
+        actions.append(button('Get a code', () => attempt(moveToAnotherBrowser), 'big primary'));
+      }
+      body.append(node('p', 'sheet-note', 'You can come back to this from Add to Home Screen at the bottom of the workspace list.'));
+      if (actions.childElementCount) body.append(actions);
+    });
+  }
+  // Shown once, after a paired page first loads, and never again once installed or seen. Never over another sheet.
+  let homeScreenOffered = false;
+  function offerHomeScreen() {
+    if (homeScreenOffered || !homeScreenAvailable() || recall(HOME_STEP)) return;
+    homeScreenOffered = true;
+    setTimeout(() => { if (!sheet.open && !document.hidden && !recall(HOME_STEP)) homeScreenSheet(); }, 1200);
+  }
+  window.addEventListener('codeshi-install-ready', () => { if (sheetView?.title === 'Add to Home Screen') drawSheet(); });
+  window.addEventListener('appinstalled', () => { remember(HOME_STEP, 'installed'); if (sheetView?.title === 'Add to Home Screen') closeSheet(); });
   $('where').addEventListener('click', () => {
     openSheet('Workspaces', whereSheet, () => JSON.stringify([S.projects.map(item => [item.id, item.name, item.pendingApprovals, item.runningConversationId]), tasks().map(task => [task.id, task.title, task.status, task.approvals]), S.thread, S.draft]));
     scheduleProjects();
