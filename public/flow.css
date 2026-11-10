@@ -12,7 +12,15 @@
 
 /* The shell: a header across the whole window, then three columns with no sidebar and no docked panels. */
 #app-shell.flow, #app-shell.flow:has(.side-panel:not([hidden])), #app-shell.flow:has(#review-panel:not([hidden])) { grid-template-columns: minmax(330px, 430px) minmax(0, 1fr) minmax(330px, 430px); --content-width: 780px; }
-#app-shell.flow.flow-lounge { grid-template-columns: minmax(330px, 430px) minmax(0, 1fr) minmax(330px, 430px); --content-width: 780px; }
+/* The Lounge: its stage takes the wide left of the window and the chat moves to the right, where the right rail sits.
+   The middle column collapses to nothing so the rails can still slide out of their own columns as it opens.
+   The chat column is just wide enough for the message box to keep its controls on one row. */
+#app-shell.flow.flow-lounge, #app-shell.flow.flow-lounge:has(.side-panel:not([hidden])), #app-shell.flow.flow-lounge:has(#review-panel:not([hidden])) { grid-template-columns: minmax(0, 1fr) 0 clamp(548px, 38vw, 600px); }
+@media (max-width: 1180px) {
+  #app-shell.flow.flow-lounge, #app-shell.flow.flow-lounge:has(.side-panel:not([hidden])), #app-shell.flow.flow-lounge:has(#review-panel:not([hidden])) { grid-template-columns: minmax(0, 1fr) 0 clamp(420px, 46vw, 548px); }
+}
+#app-shell.flow.flow-lounge > .main-panel { grid-column: 3; }
+#app-shell.flow.flow-lounge .composer-region, #app-shell.flow.flow-lounge .messages { width: calc(100% - 24px); }
 #app-shell.flow > .sidebar { display: none; }
 #app-shell.flow > .main-panel { grid-column: 2; grid-row: 2; }
 #app-shell.flow { grid-template-rows: 56px minmax(0, 1fr); overflow-x: hidden; }
@@ -611,36 +619,210 @@
   100% { transform: translate3d(0, 0, 0); opacity: 1; }
 }
 
-/* Lounge side rails */
+/* The Lounge stage: one framed surface on the left. It opens on the grid of activities; choosing one fills it. */
 .flow-lounge-side {
   grid-row: 2;
   display: flex;
   flex-direction: column;
-  gap: 12px;
   min-width: 0;
   min-height: 0;
-  padding: 0 16px 24px;
-  overflow: auto;
+  overflow: hidden;
 }
-.flow-lounge-side[hidden] {
-  display: none;
-}
+.flow-lounge-side[hidden] { display: none; }
 .flow-lounge-left { grid-column: 1; }
-.flow-lounge-right { grid-column: 3; }
+#app-shell.flow.flow-lounge .flow-lounge-left { grid-column: 1 / 3; margin: 0 6px 18px 18px; }
+/* The stage leaves quickly: the chat is on its way back to the middle, which the stage still covers. */
+#app-shell.flow .flow-lounge-left.flow-slide-out-left { animation-duration: .2s !important; }
+/* The frame doesn't depend on the Lounge layout, so the stage keeps it while it slides away. */
+#app-shell.flow .flow-lounge-left {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-raised) 55%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.flow-lounge-home, .flow-lounge-view { flex: 1 1 auto; min-height: 0; }
+.flow-lounge-home[hidden], .flow-lounge-view[hidden], .flow-lounge-panel[hidden] { display: none !important; }
 
-/* Subdued Central Agent Working View in Lounge mode (#14) - clearly visible and readable */
-#app-shell.flow.flow-lounge .main-panel {
+/* Line icons, drawn as masks so they take the colour of their text. */
+.flow-lounge-glyph { display: inline-block; flex: none; width: 16px; height: 16px; background: currentColor; mask: var(--glyph) center / contain no-repeat; -webkit-mask: var(--glyph) center / contain no-repeat; }
+.flow-lounge-glyph[data-icon="breakout"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='5' height='3' rx='.8'/%3E%3Crect x='9.5' y='4' width='5' height='3' rx='.8'/%3E%3Crect x='16' y='4' width='5' height='3' rx='.8'/%3E%3Crect x='6' y='9' width='5' height='3' rx='.8'/%3E%3Crect x='13' y='9' width='5' height='3' rx='.8'/%3E%3Ccircle cx='14' cy='16' r='1.3'/%3E%3Cpath d='M8 20.5h8'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="snake"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 19.5h10a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7'/%3E%3Ccircle cx='20' cy='5.5' r='1.4'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="trivia"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1-4.4A8.5 8.5 0 1 1 20.5 12z'/%3E%3Cpath d='M9.8 9.6a2.3 2.3 0 1 1 3.2 2.1c-.7.3-1 .8-1 1.5'/%3E%3Cpath d='M12 16.2h.01'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="typing"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='6' width='19' height='12' rx='2.2'/%3E%3Cpath d='M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14h8'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="quote"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 7H6.5A1.5 1.5 0 0 0 5 8.5V12h5V7zM10 12c0 3.2-1.6 5.2-4.5 6M19 7h-3.5A1.5 1.5 0 0 0 14 8.5V12h5V7zM19 12c0 3.2-1.6 5.2-4.5 6'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph:is([data-icon="weather"], [data-icon="rain"]) { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 15.5a4 4 0 0 1-.5-8 5.5 5.5 0 0 1 10.6-1A3.8 3.8 0 0 1 17.5 15H7'/%3E%3Cpath d='M8.5 18.5l-1 2M12.5 18.5l-1 2M16.5 18.5l-1 2'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="snow"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9'/%3E%3Cpath d='M9.5 4.5 12 6l2.5-1.5M9.5 19.5 12 18l2.5 1.5'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="clear"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='4'/%3E%3Cpath d='M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4'/%3E%3C/svg%3E"); }
+.flow-lounge-glyph[data-icon="back"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 6l-6 6 6 6'/%3E%3C/svg%3E"); }
+
+/* Home: a heading, then every activity as a tile with its art, title, description and a short line of facts. */
+.flow-lounge-home { display: flex; flex-direction: column; gap: 22px; padding: 28px 30px 30px; overflow: auto; }
+.flow-lounge-home-head { display: grid; gap: 6px; }
+.flow-lounge-home-head h2 { margin: 0; color: var(--text-strong); font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+.flow-lounge-home-head p { margin: 0; max-width: 62ch; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.flow-lounge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.flow-lounge-grid-item { display: flex; min-width: 0; }
+.flow-lounge-tile {
+  --tile: var(--accent);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform .18s cubic-bezier(.2, .8, .2, 1), border-color .18s ease, box-shadow .18s ease;
+}
+.flow-lounge-tile:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--tile) 45%, var(--border-strong)); box-shadow: var(--shadow-lg); }
+.flow-lounge-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.flow-lounge-tile[data-activity="breakout"], .flow-lounge-tile-art[data-activity="breakout"] { --tile: var(--warning); }
+.flow-lounge-tile[data-activity="snake"], .flow-lounge-tile-art[data-activity="snake"] { --tile: var(--success); }
+.flow-lounge-tile[data-activity="trivia"], .flow-lounge-tile-art[data-activity="trivia"] { --tile: var(--link); }
+.flow-lounge-tile[data-activity="typing"], .flow-lounge-tile-art[data-activity="typing"] { --tile: var(--text-strong); }
+.flow-lounge-tile-art {
+  display: grid;
+  place-items: center;
+  flex: none;
+  height: 92px;
+  border-bottom: 1px solid var(--border);
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--tile) 20%, transparent), transparent 70%),
+    color-mix(in srgb, var(--surface-raised) 70%, var(--bg));
+  color: color-mix(in srgb, var(--tile) 80%, var(--text-strong));
+}
+.flow-lounge-tile-icon { width: 34px; height: 34px; transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
+.flow-lounge-tile:hover .flow-lounge-tile-icon { transform: scale(1.08); }
+.flow-lounge-tile-text { display: flex; flex-direction: column; gap: 5px; flex: 1; padding: 13px 15px 14px; }
+.flow-lounge-tile-title { color: var(--text-strong); font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+.flow-lounge-tile-desc { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 12.5px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.flow-lounge-tile-meta { margin-top: auto; padding-top: 4px; color: var(--faint); font-size: 11px; }
+.flow-lounge-tile-meta:empty { display: none; }
+
+/* An open activity: a bar with the way back and what it is, then the activity filling the rest of the stage. */
+.flow-lounge-view { display: flex; flex-direction: column; animation: flow-in .28s cubic-bezier(.2, .8, .2, 1) both; }
+.flow-lounge-view-bar { display: flex; align-items: center; gap: 14px; flex: none; min-width: 0; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.flow-lounge-back { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 30px; padding: 0 12px 0 8px; border: 1px solid var(--border-strong); border-radius: 15px; background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.flow-lounge-back:hover { background: var(--hover); color: var(--text-strong); }
+.flow-lounge-back:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.flow-lounge-back-icon { width: 14px; height: 14px; }
+.flow-lounge-view-titles { display: grid; gap: 1px; min-width: 0; }
+.flow-lounge-view-title { margin: 0; color: var(--text-strong); font-size: 14.5px; font-weight: 600; letter-spacing: -.01em; }
+.flow-lounge-view-note { margin: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.flow-lounge-view-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: 20px 24px 22px; overflow: auto; }
+.flow-lounge-panel { display: flex; flex-direction: column; gap: 14px; flex: 1 1 auto; min-height: 0; }
+/* Reading and answering things sit in a comfortable column in the middle rather than across the whole stage. */
+.flow-lounge-read-panel { width: min(100%, 720px); margin: 0 auto; justify-content: center; }
+
+/* Games: the board takes all the room left over and keeps its shape. */
+.flow-lounge-game { outline: none; }
+.flow-lounge-canvas-wrap {
   position: relative;
-  opacity: .62;
-  filter: brightness(0.82) contrast(0.92);
-  transition: opacity .65s cubic-bezier(.16, 1, .3, 1), filter .65s cubic-bezier(.16, 1, .3, 1);
-  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  flex: 1 1 0;
+  min-height: 180px;
+  min-width: 0;
+  overflow: hidden;
 }
-#app-shell.flow.flow-lounge .main-panel:hover,
-#app-shell.flow.flow-lounge .main-panel:focus-within {
-  opacity: 1;
-  filter: none;
+/* The frame is the board's own edge, so the walls the ball bounces off and the floor it falls through are visible. */
+.flow-lounge-canvas { display: block; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 12px; outline: none; background: var(--bg); cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease; }
+/* The board holding the keyboard gets an accent edge; keys never reach the other game. */
+.flow-lounge-game .flow-lounge-canvas:focus { border-color: color-mix(in srgb, var(--accent) 65%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.flow-lounge-score-pill { display: flex; align-items: center; gap: 22px; flex: none; color: var(--muted); font-size: 12.5px; }
+.flow-lounge-score-pill strong { margin-left: 5px; color: var(--text-strong); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.flow-lounge-foot { display: flex; align-items: center; gap: 8px; flex: none; }
+.flow-lounge-status-line { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; }
+.flow-lounge-btn { height: 30px; padding: 0 14px; font-size: 12px; }
+.flow-lounge-hint { margin: 0; color: var(--faint); font-size: 11.5px; line-height: 1.5; }
+@media (prefers-reduced-motion: reduce) {
+  .flow-lounge-tile, .flow-lounge-tile-icon, .flow-lounge-canvas-wrap { transition: none; }
+  .flow-lounge-tile:hover { transform: none; }
+  .flow-lounge-view { animation: none; }
 }
+
+/* One plain row above the grid, no card: the quote reads as a pull quote on the left, the weather as a small stacked control on the right. */
+.flow-lounge-ambient { display: flex; align-items: flex-start; justify-content: space-between; gap: 40px; flex: none; min-width: 0; padding: 0; border: 0; background: none; }
+.flow-lounge-quote { display: flex; align-items: flex-start; gap: 12px; flex: 1 1 0; min-width: 0; margin: 0; }
+.flow-lounge-quote-icon { flex: none; width: 18px; height: 18px; margin-top: 2px; color: var(--accent); }
+.flow-lounge-quote-words { display: grid; gap: 4px; min-width: 0; }
+.flow-lounge-quote-text { margin: 0; color: var(--text); font-family: Georgia, "Times New Roman", serif; font-size: 15px; font-style: italic; line-height: 1.5; }
+.flow-lounge-quote-meta { display: flex; align-items: center; gap: 12px; }
+.flow-lounge-quote-author { color: var(--faint); font-size: 11.5px; }
+.flow-lounge-quote-next { flex: none; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
+.flow-lounge-quote-next:hover { color: var(--text-strong); text-decoration: underline; }
+.flow-lounge-quote-next:focus-visible, .flow-lounge-weather-option:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.flow-lounge-glyph[data-icon="volume"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z'/%3E%3Cpath d='M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11'/%3E%3C/svg%3E"); }
+.flow-lounge-weather { display: flex; flex: none; }
+.flow-lounge-weather-words { display: grid; justify-items: end; gap: 6px; }
+.flow-lounge-weather-head { display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
+.flow-lounge-weather-volume { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+.flow-lounge-weather-speaker { width: 14px; height: 14px; }
+.flow-lounge-weather-volume.muted .flow-lounge-weather-speaker { opacity: .45; }
+.flow-lounge-weather-slider { -webkit-appearance: none; appearance: none; width: 84px; height: 14px; margin: 0; background: transparent; cursor: pointer; }
+.flow-lounge-weather-slider::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: var(--border-strong); }
+.flow-lounge-weather-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -4.5px; border: 0; border-radius: 50%; background: var(--text-strong); }
+.flow-lounge-weather-slider:hover::-webkit-slider-thumb { background: var(--accent); }
+.flow-lounge-weather-slider:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
+.flow-lounge-weather-title { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.flow-lounge-weather-options { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; }
+.flow-lounge-weather-option { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+.flow-lounge-weather-option:hover { color: var(--text-strong); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.flow-lounge-weather-option.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text-strong); }
+.flow-lounge-weather-icon { width: 14px; height: 14px; }
+.flow-lounge-weather-option.active .flow-lounge-weather-icon { color: var(--accent); }
+@media (max-width: 1180px) {
+  .flow-lounge-ambient { gap: 20px; }
+  .flow-lounge-weather-option span { display: none; }
+}
+
+/* Trivia */
+.flow-lounge-trivia-meta { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12.5px; }
+.flow-lounge-trivia-streak { color: var(--text-strong); font-weight: 600; }
+.flow-lounge-trivia-q { margin: 0; color: var(--text-strong); font-size: 19px; font-weight: 600; line-height: 1.45; letter-spacing: -.01em; }
+.flow-lounge-trivia-options { display: flex; flex-direction: column; gap: 8px; }
+.flow-lounge-trivia-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.flow-lounge-trivia-opt:hover:not(:disabled) { border-color: var(--border-strong); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); color: var(--text-strong); }
+.flow-lounge-trivia-opt:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.flow-lounge-trivia-opt.correct { border-color: var(--success) !important; background: var(--success-bg) !important; color: var(--success) !important; font-weight: 600; }
+.flow-lounge-trivia-opt.wrong { border-color: var(--danger) !important; background: var(--danger-bg) !important; color: var(--danger) !important; }
+.flow-lounge-trivia-opt:disabled { cursor: default; }
+.flow-lounge-trivia-feedback { display: grid; justify-items: start; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.5; }
+.flow-lounge-trivia-feedback p { margin: 0; }
+
+/* Typing test */
+.flow-lounge-typing-stats { display: flex; align-items: center; gap: 24px; color: var(--muted); font-size: 12.5px; }
+.flow-lounge-typing-stats strong { color: var(--text-strong); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.flow-lounge-typing-snippet { min-height: 80px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace); font-size: 15px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; user-select: none; }
+.flow-lounge-char-correct { color: var(--success); }
+.flow-lounge-char-wrong { border-radius: 2px; background: var(--danger-bg); color: var(--danger); }
+.flow-lounge-char-current { border-radius: 2px; background: color-mix(in srgb, var(--accent) 35%, transparent); text-decoration: underline; }
+.flow-lounge-char-pending { color: var(--muted); }
+.flow-lounge-typing-input { box-sizing: border-box; width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; outline: none; background: var(--surface-input, var(--surface-raised)); color: var(--text-strong); font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace); font-size: 15px; transition: border-color .15s ease, box-shadow .15s ease; }
+.flow-lounge-typing-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+.flow-lounge-typing-complete { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--success) 35%, transparent); border-radius: 10px; background: var(--success-bg); color: var(--text-strong); font-size: 13px; }
+.flow-lounge-typing-complete[hidden] { display: none; }
 
 /* Fullscreen Ambient Weather Canvas Overlay (#14) */
 #flow-lounge-weather-canvas {
@@ -650,318 +832,4 @@
   height: 100vh;
   pointer-events: none;
   z-index: 85;
-}
-
-/* Lounge Card Components */
-.flow-lounge-card {
-  display: grid;
-  gap: 10px;
-}
-/* The game holding the keyboard gets an accent edge; keys never reach the other one. */
-.flow-lounge-game { outline: none; transition: box-shadow 120ms ease; }
-.flow-lounge-game .flow-lounge-canvas { outline: none; cursor: pointer; }
-.flow-lounge-game:focus-within { box-shadow: var(--shadow-sm), 0 0 0 1.5px var(--accent); }
-.flow-lounge-game:focus-within .flow-lounge-canvas-wrap { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
-@media (prefers-reduced-motion: reduce) { .flow-lounge-game { transition: none; } }
-.flow-lounge-subtitle {
-  margin: -6px 0 2px;
-  font-size: 11px;
-  color: var(--muted);
-  font-weight: 500;
-}
-.flow-lounge-score-pill {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 5px 12px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
-  border: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 11px;
-}
-.flow-lounge-score-pill strong {
-  color: var(--text-strong);
-  font-weight: 700;
-  margin-left: 4px;
-}
-.flow-lounge-canvas-wrap {
-  position: relative;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background: var(--bg);
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  overflow: hidden;
-}
-.flow-lounge-canvas {
-  display: block;
-  width: 100%;
-  max-width: 100% !important;
-  height: auto;
-}
-.flow-lounge-status-line {
-  font-size: 11px;
-  color: var(--muted);
-  text-align: center;
-  min-height: 16px;
-}
-.flow-lounge-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-}
-.flow-lounge-btn {
-  font-size: 11.5px;
-  height: 28px;
-  padding: 0 12px;
-}
-.flow-lounge-hint {
-  margin: 0;
-  color: var(--faint);
-  font-size: 10.5px;
-  line-height: 1.4;
-}
-
-/* Quote card with shuffle button */
-.flow-lounge-quote-card {
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
-  border: 1px solid var(--border);
-  display: grid;
-  gap: 6px;
-}
-.flow-lounge-quote-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.flow-lounge-quote-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-  color: var(--muted);
-}
-.flow-lounge-quote-btn {
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  transition: all .15s ease;
-}
-.flow-lounge-quote-btn:hover {
-  color: var(--text-strong);
-  background: var(--hover);
-}
-.flow-lounge-quote-text {
-  margin: 0;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--text);
-  font-style: italic;
-}
-.flow-lounge-quote-author {
-  margin: 0;
-  font-size: 10.5px;
-  color: var(--muted);
-  text-align: right;
-  font-weight: 600;
-}
-
-/* Weather Selector Tabs, and the Lounge activity picker that shares their look */
-.flow-lounge-weather-tabs, .flow-lounge-picker {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  border-radius: 10px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-}
-.flow-lounge-picker { flex: none; }
-.flow-lounge-weather-tab, .flow-lounge-picker-tab {
-  flex: 1;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all .15s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-.flow-lounge-weather-keep { justify-self: start; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
-.flow-lounge-weather-keep.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--text-strong); }
-.flow-lounge-weather-tab:hover, .flow-lounge-picker-tab:hover {
-  color: var(--text);
-}
-.flow-lounge-weather-tab.active, .flow-lounge-picker-tab.active {
-  background: var(--bg);
-  color: var(--text-strong);
-  box-shadow: var(--shadow-sm);
-}
-.flow-lounge-picker-tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.flow-lounge-left > .flow-lounge-card[hidden] { display: none; }
-
-/* Trivia Card */
-.flow-lounge-trivia-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--muted);
-}
-.flow-lounge-trivia-streak {
-  font-weight: 600;
-  color: var(--text-strong);
-}
-.flow-lounge-trivia-q {
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.45;
-  color: var(--text-strong);
-  margin: 0;
-}
-.flow-lounge-trivia-options {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.flow-lounge-trivia-opt {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  text-align: left;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: var(--text);
-  font: inherit;
-  font-size: 11.5px;
-  line-height: 1.35;
-  cursor: pointer;
-  transition: all .15s ease;
-}
-.flow-lounge-trivia-opt:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
-  color: var(--text-strong);
-}
-.flow-lounge-trivia-opt.correct {
-  border-color: #10b981 !important;
-  background: color-mix(in srgb, #10b981 18%, var(--surface-raised)) !important;
-  color: #10b981 !important;
-  font-weight: 600;
-}
-.flow-lounge-trivia-opt.wrong {
-  border-color: #ef4444 !important;
-  background: color-mix(in srgb, #ef4444 18%, var(--surface-raised)) !important;
-  color: #ef4444 !important;
-}
-.flow-lounge-trivia-opt:disabled {
-  cursor: default;
-}
-.flow-lounge-trivia-feedback {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--text);
-  display: grid;
-  gap: 6px;
-}
-.flow-lounge-trivia-feedback p {
-  margin: 0;
-}
-
-/* Typing Speed Test Card */
-.flow-lounge-typing-stats {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 12px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
-  border: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--muted);
-}
-.flow-lounge-typing-stats strong {
-  color: var(--text-strong);
-  font-weight: 700;
-}
-.flow-lounge-typing-snippet {
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
-  font-size: 11.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-  user-select: none;
-  min-height: 52px;
-}
-.flow-lounge-char-correct {
-  color: #10b981;
-}
-.flow-lounge-char-wrong {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.22);
-  border-radius: 2px;
-}
-.flow-lounge-char-current {
-  background: color-mix(in srgb, var(--accent) 35%, transparent);
-  text-decoration: underline;
-  border-radius: 2px;
-}
-.flow-lounge-char-pending {
-  color: var(--muted);
-}
-.flow-lounge-typing-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: var(--text-strong);
-  font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
-  font-size: 11.5px;
-  outline: none;
-  transition: border-color .15s ease, box-shadow .15s ease;
-}
-.flow-lounge-typing-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
-}
-.flow-lounge-typing-complete {
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: color-mix(in srgb, #10b981 14%, var(--surface-raised));
-  border: 1px solid color-mix(in srgb, #10b981 35%, transparent);
-  color: var(--text-strong);
-  font-size: 11.5px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }

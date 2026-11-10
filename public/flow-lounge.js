@@ -1,19 +1,20 @@
 (() => {
   "use strict";
   // Flow Lounge (#14): Play and relax while agents work.
+  // - The stage on the left opens on a grid of everything there is to do, each with a title and a description.
+  //   Choosing one fills the whole stage with it; All activities goes back to the grid.
+  // - A quote and the weather switch share one row above the grid.
+  // - The running chat moves to the right, where the right rail sits, and stays live and usable.
   // - Fullscreen ambient weather canvas (Rain, Snow, Clear) physically interacting with UI cards and panels.
-  // - Left Rail: one activity at a time (Breakout, Snake, Trivia or Typing), chosen from a picker.
-  // - Right Rail: the calm, always-on things: Ambient Weather controls and Developer Wisdom quotes.
-  // - Games start only on click/interaction; keys reach only the game whose card holds focus.
-  // - Subdued, readable central view (.main-panel).
+  // - Games start only on click/interaction; keys reach only the game whose board holds focus.
   // - Auto-recedes when approvals or agent attention is needed.
 
   const $ = id => document.getElementById(id), api = window.relayUI, shell = $("app-shell");
   const toggle = $("toggle-flow-lounge");
   const left = $("flow-left"), right = $("flow-right");
-  const loungeLeft = $("flow-lounge-left"), loungeRight = $("flow-lounge-right");
+  const loungeLeft = $("flow-lounge-left");
 
-  if (!api || !shell || !toggle || !loungeLeft || !loungeRight) return;
+  if (!api || !shell || !toggle || !loungeLeft) return;
   toggle.setAttribute("aria-pressed", "false");
 
   const safeClearInterval = id => { if (typeof clearInterval === "function") try { clearInterval(id); } catch {} };
@@ -22,6 +23,8 @@
   const safeRequestAnim = fn => typeof requestAnimationFrame === "function" ? requestAnimationFrame(fn) : null;
   const node = (tag, cls, text) => { const el = document.createElement(tag); if (cls) el.className = cls; if (text !== undefined) el.textContent = text; return el; };
   const button = (cls, text, handler) => { const el = node("button", cls, text); el.type = "button"; if (handler) el.addEventListener("click", handler); return el; };
+  // Line icons are CSS masks keyed by data-icon, so they take the text colour like the rest of the app's icons.
+  const icon = (name, cls) => { const el = node("span", "flow-lounge-glyph" + (cls ? " " + cls : "")); el.setAttribute("data-icon", name); el.setAttribute("aria-hidden", "true"); return el; };
 
   let active = false;
   let wanted = false;
@@ -68,21 +71,20 @@
         "#flow-right .flow-button",
         "#flow-left .flow-step",
         "#flow-right .flow-plan",
-        // Lounge cards: interactive controls and content blocks
-        ".flow-lounge-game-canvas",
+        // Lounge stage: the grid of activities, the open activity's bar, controls and content blocks
+        ".flow-lounge-tile",
+        ".flow-lounge-view-bar",
+        ".flow-lounge-canvas-wrap",
         ".flow-lounge-score-pill",
         ".flow-lounge-trivia-q",
         ".flow-lounge-trivia-opt",
         ".flow-lounge-trivia-meta",
         ".flow-lounge-trivia-feedback",
-        ".flow-lounge-quote-card",
-        ".flow-lounge-quote-text",
+        ".flow-lounge-ambient",
         ".flow-lounge-typing-snippet",
         ".flow-lounge-typing-input",
         ".flow-lounge-typing-stats",
-        ".flow-lounge-weather-tab",
         "button.flow-lounge-btn",
-        "button.flow-lounge-quote-btn",
         // Top bar buttons & controls
         "#toggle-flow-lounge",
         "#leave-flow",
@@ -181,10 +183,10 @@
   }
 
   // Weather can stay on outside the Lounge, in Flow only, when the person keeps it on from the weather card.
-  const KEEP_WEATHER_KEY = "throughline:lounge-keep-weather";
-  let keepWeather = (() => { try { return localStorage.getItem(KEEP_WEATHER_KEY) !== "0"; } catch { return true; } })();
-  const weatherShown = () => (active && !receded) || (keepWeather && Boolean(window.relayFlow?.isOn?.()));
+  // The weather keeps falling over Flow's cards after you leave the Lounge; turning Flow off ends it.
+  const weatherShown = () => (active && !receded) || Boolean(window.relayFlow?.isOn?.());
   function syncWeather() {
+    syncSound();
     if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
     if (weatherShown()) {
       if (!weatherCanvas) initWeatherSystem(); else resizeWeatherCanvas();
@@ -195,6 +197,80 @@
       weatherCanvas = null;
       weatherCtx = null;
     }
+  }
+
+  // ==========================================
+  // WEATHER SOUND
+  // ==========================================
+  // Real recorded loops (public/sounds, credits in CREDITS.md), decoded once and looped without a gap. Rain and Snow each have
+  // their own; Clear is silent. A sound plays only while the weather itself is showing, fades in and out, and follows the
+  // volume slider, which is remembered on this computer. Nothing plays until you choose Rain or Snow, so there is no surprise sound.
+  const VOLUME_KEY = "codeshi:lounge-volume";
+  const SOUND_FILES = { rain: "/sounds/rain.m4a", snow: "/sounds/snow.m4a" };
+  let volume = (() => { try { const v = parseFloat(localStorage.getItem(VOLUME_KEY)); return v >= 0 && v <= 1 ? v : 0.5; } catch { return 0.5; } })();
+  let audioCtx = null, audioMaster = null;
+  const beds = {};
+  function soundContext() {
+    if (audioCtx) return audioCtx;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try {
+      audioCtx = new Ctx();
+      audioMaster = audioCtx.createGain();
+      audioMaster.gain.value = volume * volume;
+      audioMaster.connect(audioCtx.destination);
+    } catch { audioCtx = null; }
+    return audioCtx;
+  }
+  async function loadBed(id) {
+    const ctx = soundContext();
+    if (!ctx || !SOUND_FILES[id]) return null;
+    const bed = beds[id] || (beds[id] = { buffer: null, loading: null, gain: null, source: null });
+    if (bed.buffer) return bed;
+    bed.loading = bed.loading || fetch(SOUND_FILES[id]).then(r => { if (!r.ok) throw new Error(); return r.arrayBuffer(); })
+      .then(data => new Promise((resolve, reject) => ctx.decodeAudioData(data, resolve, reject)))
+      .then(buffer => { bed.buffer = buffer; return bed; })
+      .catch(() => { bed.loading = null; return null; });
+    return bed.loading;
+  }
+  function fadeBed(bed, to, seconds) {
+    if (!bed?.gain || !audioCtx) return;
+    const now = audioCtx.currentTime;
+    bed.gain.gain.cancelScheduledValues(now);
+    bed.gain.gain.setValueAtTime(bed.gain.gain.value, now);
+    bed.gain.gain.linearRampToValueAtTime(to, now + seconds);
+  }
+  // Brings the sound in line with the weather: the wanted bed fades in, any other fades out and is released.
+  async function syncSound() {
+    const want = weatherShown() && SOUND_FILES[weatherMode] ? weatherMode : null;
+    for (const id of Object.keys(beds)) {
+      const bed = beds[id];
+      if (id === want || !bed.source) continue;
+      fadeBed(bed, 0, 1.2);
+      const { source, gain } = bed;
+      bed.source = null; bed.gain = null;
+      setTimeout(() => { try { source.stop(); source.disconnect(); gain.disconnect(); } catch {} }, 1400);
+    }
+    if (!want) return;
+    const bed = await loadBed(want);
+    // The choice may have changed while the file loaded.
+    if (!bed?.buffer || bed.source || !(weatherShown() && weatherMode === want)) return;
+    const ctx = audioCtx;
+    if (ctx.state === "suspended") { try { await ctx.resume(); } catch {} }
+    const source = ctx.createBufferSource();
+    source.buffer = bed.buffer; source.loop = true;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    source.connect(gain); gain.connect(audioMaster);
+    source.start();
+    bed.source = source; bed.gain = gain;
+    fadeBed(bed, 1, 1.6);
+  }
+  // The slider is perceptual: the square of its position, so the lower half is gentle rather than all the same quiet.
+  function setVolume(v, save = true) {
+    volume = Math.min(1, Math.max(0, v));
+    if (audioMaster && audioCtx) audioMaster.gain.setTargetAtTime(volume * volume, audioCtx.currentTime, 0.05);
+    if (save) { try { localStorage.setItem(VOLUME_KEY, String(volume)); } catch {} }
   }
 
   function drawWeather(time) {
@@ -556,12 +632,44 @@
     rainRipples = [];
     settledSnow = [];
     snowClumps = [];
-    const tabs = document.querySelectorAll(".flow-lounge-weather-tab");
-    tabs.forEach(t => {
+    syncSound();
+    const options = document.querySelectorAll(".flow-lounge-weather-option");
+    options.forEach(t => {
       const match = t.getAttribute("data-mode") === mode;
       t.classList.toggle("active", match);
+      t.setAttribute("aria-pressed", String(match));
     });
+    refreshTiles();
   }
+
+  // ==========================================
+  // BOARDS THAT FILL THE STAGE
+  // ==========================================
+  // Each game keeps its own small coordinate space (Breakout 320×200, Snake 300×195). The board is drawn as large as
+  // the stage allows at that shape, at the screen's pixel density, so it stays sharp when it fills the area.
+  function fitBoard(canvas, ctx, logicalW, logicalH) {
+    const wrap = canvas?.parentNode;
+    if (!wrap?.getBoundingClientRect) return false;
+    const box = wrap.getBoundingClientRect();
+    if (!box.width || !box.height) return false;
+    const scale = Math.max(0.5, Math.min(box.width / logicalW, box.height / logicalH));
+    const cssW = Math.floor(logicalW * scale), cssH = Math.floor(logicalH * scale);
+    const dpr = Math.min(3, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
+    const backW = Math.round(cssW * dpr), backH = Math.round(cssH * dpr);
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+    if (canvas.width !== backW || canvas.height !== backH) { canvas.width = backW; canvas.height = backH; }
+    ctx?.setTransform?.(backW / logicalW, 0, 0, backH / logicalH, 0, 0);
+    return true;
+  }
+
+  function fitBoards() {
+    if (fitBoard(breakoutCanvas, breakoutCtx, 320, 200) && !breakoutAnimId) breakoutAnimId = safeRequestAnim(drawBreakout);
+    if (fitBoard(snakeCanvas, snakeCtx, 300, 195) && !snakeAnimId) snakeAnimId = safeRequestAnim(drawSnake);
+  }
+
+  const boardObserver = typeof ResizeObserver === "function" ? new ResizeObserver(() => fitBoards()) : null;
+  const watchBoard = wrap => { try { boardObserver?.observe(wrap); } catch {} };
 
   // ==========================================
   // 2. LEFT RAIL: BREAKOUT MINI-GAME
@@ -726,8 +834,7 @@
     breakoutAnimId = null;
     if (!active || receded || document.hidden || !breakoutCtx || !breakoutCanvas) return;
     const ctx = breakoutCtx;
-    const w = breakoutCanvas.width, h = breakoutCanvas.height;
-    ctx.clearRect(0, 0, w, h);
+    ctx.clearRect(0, 0, 320, 200);
 
     const s = breakoutState;
     if (s) {
@@ -766,13 +873,8 @@
   }
 
   function buildBreakoutCard() {
-    const card = node("section", "flow-card flow-lounge-card");
+    const card = node("section", "flow-lounge-card flow-lounge-panel flow-lounge-board-panel");
     card.id = "flow-card-lounge-arcade";
-
-    const head = node("div", "flow-card-head");
-    const title = node("h2", undefined, "Breakout");
-    head.append(title);
-
 
     const scorePill = node("div", "flow-lounge-score-pill");
     const scoreLabel = node("span", undefined, "Score ");
@@ -791,13 +893,14 @@
     breakoutCanvas.height = 200;
     if (typeof breakoutCanvas.getContext === "function") breakoutCtx = breakoutCanvas.getContext("2d");
     canvasWrap.append(breakoutCanvas);
+    watchBoard(canvasWrap);
 
     breakoutStatusEl = node("div", "flow-lounge-status-line", BREAKOUT_READY);
 
     breakoutCanvas.addEventListener("mousemove", e => {
       if (breakoutState) {
         const rect = breakoutCanvas.getBoundingClientRect ? breakoutCanvas.getBoundingClientRect() : { left: 0, width: 320 };
-        const scaleX = breakoutCanvas.width / (rect.width || 320);
+        const scaleX = breakoutState.w / (rect.width || breakoutState.w);
         const x = (e.clientX - rect.left) * scaleX;
         breakoutState.paddle.x = Math.max(0, Math.min(breakoutState.w - breakoutState.paddle.w, x - breakoutState.paddle.w / 2));
         // Before launch the loop is idle; redraw so the paddle and ball follow the mouse.
@@ -818,8 +921,8 @@
       loopBreakout();
     });
 
-    foot.append(bStartBreakout, bRestart);
-    card.append(head, scorePill, canvasWrap, breakoutStatusEl, foot);
+    foot.append(breakoutStatusEl, bStartBreakout, bRestart);
+    card.append(scorePill, canvasWrap, foot);
     wireGameCard(card, breakoutCanvas, "Breakout board. Space starts or pauses; arrow keys or A and D move the paddle.", () => setBreakoutPaused(true));
     return card;
   }
@@ -963,12 +1066,19 @@
     snakeAnimId = null;
     if (!active || receded || document.hidden || !snakeCtx || !snakeCanvas) return;
     const ctx = snakeCtx;
-    const w = snakeCanvas.width, h = snakeCanvas.height;
-    ctx.clearRect(0, 0, w, h);
+    ctx.clearRect(0, 0, 300, 195);
 
     const s = snakeState;
     if (s) {
       if (snakeStarted) stepSnake(time);
+
+      // A faint grid so the snake's lanes read at full size.
+      ctx.fillStyle = "rgba(148, 163, 184, 0.09)";
+      for (let gx = 0; gx < s.cols; gx++) {
+        for (let gy = 0; gy < s.rows; gy++) {
+          ctx.fillRect(gx * s.size + s.size / 2 - 0.6, gy * s.size + s.size / 2 - 0.6, 1.2, 1.2);
+        }
+      }
 
       // Draw food
       ctx.fillStyle = "#f43f5e";
@@ -990,13 +1100,8 @@
   }
 
   function buildSnakeCard() {
-    const card = node("section", "flow-card flow-lounge-card");
+    const card = node("section", "flow-lounge-card flow-lounge-panel flow-lounge-board-panel");
     card.id = "flow-card-lounge-zen";
-
-    const head = node("div", "flow-card-head");
-    const title = node("h2", undefined, "Retro Snake");
-    head.append(title);
-
 
     const scorePill = node("div", "flow-lounge-score-pill");
     const scoreLabel = node("span", undefined, "Score ");
@@ -1015,6 +1120,7 @@
     snakeCanvas.height = 195;
     if (typeof snakeCanvas.getContext === "function") snakeCtx = snakeCanvas.getContext("2d");
     canvasWrap.append(snakeCanvas);
+    watchBoard(canvasWrap);
 
     snakeStatusEl = node("div", "flow-lounge-status-line", SNAKE_READY);
 
@@ -1031,8 +1137,8 @@
       loopSnake();
     });
 
-    foot.append(bStartSnake, bRestart);
-    card.append(head, scorePill, canvasWrap, snakeStatusEl, foot);
+    foot.append(snakeStatusEl, bStartSnake, bRestart);
+    card.append(scorePill, canvasWrap, foot);
     wireGameCard(card, snakeCanvas, "Snake board. Arrow keys or W, A, S and D steer; Space starts or pauses.", () => setSnakePaused(true));
     return card;
   }
@@ -1121,12 +1227,8 @@
   let triviaStreak = 0;
 
   function buildTriviaCard() {
-    const card = node("section", "flow-card flow-lounge-card");
+    const card = node("section", "flow-lounge-card flow-lounge-panel flow-lounge-read-panel");
     card.id = "flow-card-lounge-trivia";
-
-    const head = node("div", "flow-card-head");
-    const title = node("h2", undefined, "Tech & Code Trivia");
-    head.append(title);
 
     const meta = node("div", "flow-lounge-trivia-meta");
     const scoreSpan = node("span", undefined, `Score: ${triviaScore}/${triviaTotal}`);
@@ -1145,7 +1247,7 @@
     feedWrap.id = "flow-lounge-trivia-feedback";
     feedWrap.hidden = true;
 
-    card.append(head, meta, qEl, optWrap, feedWrap);
+    card.append(meta, qEl, optWrap, feedWrap);
     renderTriviaQuestion(card);
     return card;
   }
@@ -1235,17 +1337,25 @@
   let qAuthorEl = null;
 
   function buildQuoteCard() {
-    const card = node("div", "flow-lounge-quote-card");
+    const card = node("figure", "flow-lounge-quote");
     card.id = "flow-card-lounge-quote";
+    card.setAttribute("aria-label", "Developer wisdom");
 
-    const head = node("div", "flow-lounge-quote-head");
-    const label = node("span", "flow-lounge-quote-label", "Developer Wisdom");
-    const nextBtn = button("flow-lounge-quote-btn", "🎲 Shuffle", nextQuote);
-    head.append(label, nextBtn);
-
-    qTextEl = node("p", "flow-lounge-quote-text");
-    qAuthorEl = node("p", "flow-lounge-quote-author");
-    card.append(head, qTextEl, qAuthorEl);
+    const words = node("div", "flow-lounge-quote-words");
+    qTextEl = node("blockquote", "flow-lounge-quote-text");
+    qAuthorEl = node("figcaption", "flow-lounge-quote-author");
+    const meta = node("div", "flow-lounge-quote-meta");
+    words.append(qTextEl, meta);
+    const nextBtn = button("flow-lounge-quote-next", "Another", () => {
+      nextQuote();
+      // Choosing one restarts the 20-second clock, so it isn't replaced straight away.
+      if (quoteTimer) safeClearInterval(quoteTimer);
+      quoteTimer = safeSetInterval(nextQuote, 20000);
+    });
+    nextBtn.title = "Another quote. A new one appears every 20 seconds.";
+    nextBtn.setAttribute("aria-label", "Another quote");
+    meta.append(qAuthorEl, nextBtn);
+    card.append(icon("quote", "flow-lounge-quote-icon"), words);
 
     showQuote(Math.floor(Math.random() * QUOTES.length));
     if (quoteTimer) safeClearInterval(quoteTimer);
@@ -1256,7 +1366,7 @@
   function showQuote(idx) {
     quoteIdx = idx % QUOTES.length;
     const q = QUOTES[quoteIdx];
-    if (qTextEl) qTextEl.textContent = `“${q.quote}”`;
+    if (qTextEl) { qTextEl.textContent = `“${q.quote}”`; qTextEl.title = q.quote; }
     if (qAuthorEl) qAuthorEl.textContent = `— ${q.author}`;
   }
 
@@ -1288,14 +1398,8 @@
   let typingCompleteBox = null;
 
   function buildTypingCard() {
-    const card = node("section", "flow-card flow-lounge-card");
+    const card = node("section", "flow-lounge-card flow-lounge-panel flow-lounge-read-panel");
     card.id = "flow-card-lounge-typing";
-
-    const head = node("div", "flow-card-head");
-    const title = node("h2", undefined, "Typing Speed Test");
-    head.append(title);
-
-    const sub = node("p", "flow-lounge-subtitle", "Practice Real Code Snippets");
 
     const stats = node("div", "flow-lounge-typing-stats");
     const sWpm = node("span", undefined, "WPM: ");
@@ -1329,7 +1433,7 @@
     });
     foot.append(bNextSnippet);
 
-    card.append(head, sub, stats, typingSnippetEl, typingInputEl, typingCompleteBox, foot);
+    card.append(stats, typingSnippetEl, typingInputEl, typingCompleteBox, foot);
     resetTypingTest();
     return card;
   }
@@ -1415,41 +1519,54 @@
   // 7. AMBIENT WEATHER SELECTOR (RIGHT RAIL)
   // ==========================================
   function buildWeatherCard() {
-    const card = node("section", "flow-card flow-lounge-card");
+    const card = node("div", "flow-lounge-weather");
     card.id = "flow-card-lounge-weather";
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", "Weather");
 
-    const head = node("div", "flow-card-head");
-    const title = node("h2", undefined, "Ambient Weather");
-    head.append(title);
+    const options = node("div", "flow-lounge-weather-options");
+    for (const mode of WEATHER_MODES) {
+      const option = button("flow-lounge-weather-option" + (weatherMode === mode.id ? " active" : ""), "", () => setWeatherMode(mode.id));
+      option.setAttribute("data-mode", mode.id);
+      option.setAttribute("aria-pressed", String(weatherMode === mode.id));
+      option.title = mode.note;
+      option.append(icon(mode.icon, "flow-lounge-weather-icon"), node("span", undefined, mode.label));
+      options.append(option);
+    }
 
-    const sub = node("p", "flow-lounge-subtitle", "Full-Screen Ambient Weather & Physics");
-
-    const tabs = node("div", "flow-lounge-weather-tabs");
-    const bRain = button("flow-lounge-weather-tab" + (weatherMode === "rain" ? " active" : ""), "🌧 Rain", () => setWeatherMode("rain"));
-    bRain.setAttribute("data-mode", "rain");
-    const bSnow = button("flow-lounge-weather-tab" + (weatherMode === "snow" ? " active" : ""), "❄️ Snow", () => setWeatherMode("snow"));
-    bSnow.setAttribute("data-mode", "snow");
-    const bClear = button("flow-lounge-weather-tab" + (weatherMode === "clear" ? " active" : ""), "✨ Clear", () => setWeatherMode("clear"));
-    bClear.setAttribute("data-mode", "clear");
-    tabs.append(bRain, bSnow, bClear);
-
-    const keep = button("flow-lounge-weather-keep", "", () => {
-      keepWeather = !keepWeather;
-      try { localStorage.setItem(KEEP_WEATHER_KEY, keepWeather ? "1" : "0"); } catch {}
-      paintKeep();
-      syncWeather();
-    });
-    keep.setAttribute("role", "switch");
-    const paintKeep = () => {
-      keep.setAttribute("aria-checked", String(keepWeather));
-      keep.classList.toggle("active", keepWeather);
-      keep.textContent = keepWeather ? "Keeps going outside Lounge · On" : "Keep going outside Lounge · Off";
-    };
-    paintKeep();
-    const hint = node("p", "flow-lounge-hint", "Rain drops splash and snowflakes settle upon cards and workspace headers.");
-    card.append(head, sub, tabs, keep, hint);
+    // A short caption over the three choices, which fall over the chat in Flow and the Lounge.
+    const words = node("div", "flow-lounge-weather-words");
+    // Volume for the sound that goes with Rain and Snow.
+    const level = node("label", "flow-lounge-weather-volume");
+    level.title = "Volume of the rain and snow sound";
+    const slider = node("input", "flow-lounge-weather-slider");
+    slider.type = "range"; slider.min = "0"; slider.max = "100"; slider.step = "1";
+    slider.value = String(Math.round(volume * 100));
+    slider.setAttribute("aria-label", "Weather sound volume");
+    slider.addEventListener("input", () => { setVolume(Number(slider.value) / 100); level.classList.toggle("muted", volume === 0); });
+    level.classList.toggle("muted", volume === 0);
+    level.append(icon("volume", "flow-lounge-weather-speaker"), slider);
+    const title = node("span", "flow-lounge-weather-title", "Weather");
+    const head = node("div", "flow-lounge-weather-head");
+    head.append(title, level);
+    words.append(head, options);
+    card.append(words);
     return card;
   }
+
+  // One row above the grid: the quote on the left, the weather on the right. It belongs to the grid, so an open activity gets the whole stage.
+  function buildAmbientBar() {
+    const bar = node("footer", "flow-lounge-ambient");
+    bar.id = "flow-lounge-ambient";
+    bar.append(buildQuoteCard(), buildWeatherCard());
+    return bar;
+  }
+
+  const WEATHER_MODES = [
+    { id: "rain", label: "Rain", note: "Drops splash on the chat and cards", icon: "rain" },
+    { id: "snow", label: "Snow", note: "Flakes settle and slide off edges", icon: "snow" },
+    { id: "clear", label: "Clear", note: "Nothing falling", icon: "clear" },
+  ];
 
   // ==========================================
   // 8. KEYBOARD SHORTCUTS FOR GAMES
@@ -1539,89 +1656,237 @@
   // ==========================================
   let slideTimer = null;
 
+  const PINNED = ["position", "left", "top", "width", "height", "margin", "boxSizing"];
+  // Something sliding away keeps the place and size it had, whatever the columns do underneath it. Without this a
+  // rail stretches across the Lounge's wide column, or the stage shrinks into the left rail's, as it leaves.
+  const placeOf = el => { try { return el.hidden ? null : el.getBoundingClientRect?.() || null; } catch { return null; } };
+  function pin(el, r) {
+    try {
+      if (!r || !r.width || !r.height) return;
+      Object.assign(el.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", margin: "0", boxSizing: "border-box" });
+    } catch {}
+  }
+  function unpin(...els) {
+    for (const el of els) try { for (const prop of PINNED) el.style[prop] = ""; } catch {}
+  }
+  const calmMotion = () => { try { return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches); } catch { return false; } };
+  // The chat changes column when the Lounge opens or closes. It travels there instead of jumping, in step with
+  // the rail beside it, so the rail never crosses over it.
+  function moveChat(change, duration, easing) {
+    const chat = shell.querySelector?.(".main-panel");
+    let before = null;
+    try { before = chat?.getBoundingClientRect?.() || null; } catch {}
+    change();
+    try {
+      if (!chat || !before || typeof chat.animate !== "function" || calmMotion()) return;
+      const dx = before.left - chat.getBoundingClientRect().left;
+      if (Math.abs(dx) < 1) return;
+      chat.animate([{ transform: `translate3d(${dx}px, 0, 0)` }, { transform: "translate3d(0, 0, 0)" }], { duration, easing });
+    } catch {}
+  }
+
   function clearSlideClasses() {
     if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
     left.classList.remove("flow-slide-out-left", "flow-slide-in-left");
     right.classList.remove("flow-slide-out-right", "flow-slide-in-right");
     loungeLeft.classList.remove("flow-slide-out-left", "flow-slide-in-left");
-    loungeRight.classList.remove("flow-slide-out-right", "flow-slide-in-right");
+    unpin(left, right, loungeLeft);
   }
 
-  // One activity at a time on the left, chosen from a picker; the calm, always-on things on the right.
-  const ACTIVITIES = [
-    { id: "breakout", label: "Breakout" },
-    { id: "snake", label: "Snake" },
-    { id: "trivia", label: "Trivia" },
-    { id: "typing", label: "Typing" },
-  ];
-  const ACTIVITY_KEY = "throughline:lounge-activity";
-  let activity = (() => {
-    try { const saved = localStorage.getItem(ACTIVITY_KEY); return ACTIVITIES.some(a => a.id === saved) ? saved : "breakout"; }
-    catch { return "breakout"; }
-  })();
-  let activityTabs = [];
-  let activityPanels = {};
-
-  function buildPicker() {
-    const bar = node("div", "flow-lounge-picker");
-    bar.setAttribute("role", "tablist");
-    bar.setAttribute("aria-label", "Lounge activity");
-    activityTabs = ACTIVITIES.map(a => {
-      const tab = button("flow-lounge-picker-tab", a.label, () => chooseActivity(a.id));
-      tab.id = "flow-lounge-tab-" + a.id;
-      tab.setAttribute("role", "tab");
-      tab.setAttribute("data-activity", a.id);
-      tab.setAttribute("aria-controls", activityPanels[a.id]?.id || "");
-      return tab;
-    });
-    bar.addEventListener("keydown", e => {
-      const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-      if (!step) return;
-      e.preventDefault();
-      const i = ACTIVITIES.findIndex(a => a.id === activity);
-      const next = ACTIVITIES[(i + step + ACTIVITIES.length) % ACTIVITIES.length].id;
-      chooseActivity(next);
-      activityTabs.find(tab => tab.getAttribute("data-activity") === next)?.focus?.();
-    });
-    bar.append(...activityTabs);
-    return bar;
+  // Opening: the rails leave from where they stand, the chat follows the right rail into its column, and the
+  // stage arrives from the left.
+  function showStage() {
+    // Measured first: clearing the slide classes restarts a rail's own entrance, which would move it.
+    const leftAt = placeOf(left), rightAt = placeOf(right);
+    clearSlideClasses();
+    pin(left, leftAt);
+    pin(right, rightAt);
+    moveChat(() => shell.classList.add("flow-lounge"), 400, "cubic-bezier(.35, 0, .25, 1)");
+    left.hidden = true;
+    right.hidden = true;
+    left.classList.add("flow-slide-out-left");
+    right.classList.add("flow-slide-out-right");
+    loungeLeft.hidden = false;
+    loungeLeft.classList.add("flow-slide-in-left");
+    fitBoards();
+    slideTimer = setTimeout(() => {
+      left.classList.remove("flow-slide-out-left");
+      right.classList.remove("flow-slide-out-right");
+      unpin(left, right);
+      slideTimer = null;
+      updateObstacleRects();
+    }, 500);
   }
 
-  function chooseActivity(id) {
-    // A game you switch away from waits, paused, where you left it.
-    if (id !== "breakout") setBreakoutPaused(true);
-    if (id !== "snake") setSnakePaused(true);
-    activity = id;
-    try { localStorage.setItem(ACTIVITY_KEY, id); } catch {}
-    for (const tab of activityTabs) {
-      const on = tab.getAttribute("data-activity") === id;
-      tab.setAttribute("aria-selected", String(on));
-      tab.tabIndex = on ? 0 : -1;
-      tab.classList.toggle("active", on);
+  // Closing: the stage leaves from where it stands, the chat goes back to the middle, and the rails come in
+  // behind it.
+  function hideStage() {
+    const stageAt = placeOf(loungeLeft);
+    clearSlideClasses();
+    pin(loungeLeft, stageAt);
+    moveChat(() => shell.classList.remove("flow-lounge"), 480, "cubic-bezier(.16, 1, .3, 1)");
+    loungeLeft.hidden = true;
+    loungeLeft.classList.add("flow-slide-out-left");
+    if (window.relayFlow?.isOn?.()) {
+      left.hidden = false;
+      right.hidden = false;
+      left.classList.add("flow-slide-in-left");
+      right.classList.add("flow-slide-in-right");
     }
+    slideTimer = setTimeout(() => {
+      loungeLeft.classList.remove("flow-slide-out-left");
+      unpin(loungeLeft);
+      slideTimer = null;
+    }, 500);
+  }
+
+  // The stage opens on a grid of the things to play. Choosing one fills the whole stage with it, and All activities
+  // (or Escape) goes back to the grid. The quote and the weather aren't activities: they keep a bar of their own
+  // along the foot of the stage, in view whatever is open. The chat sits on the right the whole time.
+  const ACTIVITIES = [
+    { id: "breakout", title: "Breakout", kind: "Game", keys: "Arrow keys or mouse", icon: "breakout",
+      description: "Knock out the wall of bricks with a paddle and ball. Aim with where the ball meets the paddle.",
+      build: () => buildBreakoutCard(), focus: () => breakoutCanvas, stat: () => bestLine("breakout") },
+    { id: "snake", title: "Snake", kind: "Game", keys: "Arrow keys or WASD", icon: "snake",
+      description: "Eat, grow and keep clear of the walls and your own tail. It speeds up as you score.",
+      build: () => buildSnakeCard(), focus: () => snakeCanvas, stat: () => bestLine("snake") },
+    { id: "trivia", title: "Code trivia", kind: "Quiz", keys: "Mouse", icon: "trivia",
+      description: `${TRIVIA.length} questions on Git, JavaScript, Linux, SQL, CSS and more, each with the answer explained.`,
+      build: () => buildTriviaCard(), focus: card => card.querySelector(".flow-lounge-trivia-opt"),
+      stat: () => triviaTotal ? `${triviaScore} of ${triviaTotal} right` : "" },
+    { id: "typing", title: "Typing test", kind: "Practice", keys: "Keyboard", icon: "typing",
+      description: "Type real code snippets and see your words per minute and accuracy as you go.",
+      build: () => buildTypingCard(), focus: () => typingInputEl, stat: () => "" },
+  ];
+  const bestLine = game => { const best = getBestScore(game); return best ? `Best ${best}` : ""; };
+
+  let activity = null;
+  let activityPanels = {};
+  let homeEl = null, viewEl = null, viewTitleEl = null, viewNoteEl = null;
+  let tiles = [];
+
+  function buildHome() {
+    homeEl = node("div", "flow-lounge-home");
+    homeEl.id = "flow-lounge-home";
+    const head = node("header", "flow-lounge-home-head");
+    const heading = node("h2", undefined, "Lounge");
+    const lead = node("p", undefined, "Take a break while the agents work. The chat stays live on the right, and the Lounge steps aside when an agent needs you.");
+    head.append(heading, lead);
+
+    const grid = node("div", "flow-lounge-grid");
+    grid.setAttribute("role", "list");
+    tiles = ACTIVITIES.map(a => {
+      const item = node("div", "flow-lounge-grid-item");
+      item.setAttribute("role", "listitem");
+      const tile = button("flow-lounge-tile", "", () => openActivity(a.id));
+      tile.id = "flow-lounge-tile-" + a.id;
+      tile.setAttribute("data-activity", a.id);
+      const art = node("span", "flow-lounge-tile-art");
+      art.setAttribute("data-activity", a.id);
+      art.append(icon(a.icon, "flow-lounge-tile-icon"));
+      const text = node("span", "flow-lounge-tile-text");
+      const title = node("span", "flow-lounge-tile-title", a.title);
+      const desc = node("span", "flow-lounge-tile-desc", a.description);
+      const meta = node("span", "flow-lounge-tile-meta");
+      text.append(title, desc, meta);
+      tile.append(art, text);
+      item.append(tile);
+      return tile;
+    });
+    grid.append(...tiles.map(tile => tile.parentNode));
+    homeEl.append(head, buildAmbientBar(), grid);
+    refreshTiles();
+    return homeEl;
+  }
+
+  // The small line under each description: what kind of thing it is, how it's played, and your best so far.
+  function refreshTiles() {
+    for (const tile of tiles) {
+      const a = ACTIVITIES.find(item => item.id === tile.getAttribute("data-activity"));
+      const meta = tile.querySelector(".flow-lounge-tile-meta");
+      if (!a || !meta) continue;
+      meta.textContent = [a.kind, a.keys, a.stat()].filter(Boolean).join(" · ");
+    }
+  }
+
+  function buildView() {
+    viewEl = node("section", "flow-lounge-view");
+    viewEl.id = "flow-lounge-view";
+    viewEl.hidden = true;
+    const bar = node("div", "flow-lounge-view-bar");
+    const back = button("flow-lounge-back", "", () => showHome());
+    back.id = "flow-lounge-back";
+    back.append(icon("back", "flow-lounge-back-icon"), node("span", undefined, "All activities"));
+    const titles = node("div", "flow-lounge-view-titles");
+    viewTitleEl = node("h2", "flow-lounge-view-title");
+    viewTitleEl.id = "flow-lounge-view-title";
+    viewNoteEl = node("p", "flow-lounge-view-note");
+    titles.append(viewTitleEl, viewNoteEl);
+    bar.append(back, titles);
+    const body = node("div", "flow-lounge-view-body");
+    body.append(...Object.values(activityPanels));
+    viewEl.setAttribute("aria-labelledby", viewTitleEl.id);
+    viewEl.append(bar, body);
+    return viewEl;
+  }
+
+  function pauseGames(except) {
+    // A game you leave waits, paused, where you left it.
+    if (except !== "breakout") setBreakoutPaused(true);
+    if (except !== "snake") setSnakePaused(true);
+  }
+
+  function openActivity(id) {
+    const a = ACTIVITIES.find(item => item.id === id);
+    if (!a || !viewEl) return;
+    pauseGames(id);
+    activity = id;
     for (const [key, panel] of Object.entries(activityPanels)) panel.hidden = key !== id;
+    viewTitleEl.textContent = a.title;
+    viewNoteEl.textContent = a.description;
+    homeEl.hidden = true;
+    viewEl.hidden = false;
+    viewEl.setAttribute("data-activity", id);
+    fitBoards();
+    // Keys go straight to what was opened: a game's board, the typing box, the first answer.
+    try { a.focus(activityPanels[id])?.focus?.({ preventScroll: true }); } catch {}
     updateObstacleRects();
   }
 
+  function showHome() {
+    if (!homeEl || !viewEl) return;
+    const from = activity;
+    pauseGames(null);
+    activity = null;
+    viewEl.hidden = true;
+    homeEl.hidden = false;
+    refreshTiles();
+    try { tiles.find(tile => tile.getAttribute("data-activity") === from)?.focus?.({ preventScroll: true }); } catch {}
+    updateObstacleRects();
+  }
+
+  loungeLeft.addEventListener("keydown", e => {
+    if (e.key !== "Escape" || !activity || e.defaultPrevented) return;
+    e.preventDefault();
+    showHome();
+  });
+
   function mountLoungeDecks() {
-    activityPanels = {
-      breakout: buildBreakoutCard(),
-      snake: buildSnakeCard(),
-      trivia: buildTriviaCard(),
-      typing: buildTypingCard(),
-    };
-    for (const [id, panel] of Object.entries(activityPanels)) {
-      panel.setAttribute("role", "tabpanel");
-      panel.setAttribute("aria-labelledby", "flow-lounge-tab-" + id);
+    try { boardObserver?.disconnect(); } catch {}
+    activityPanels = {};
+    for (const a of ACTIVITIES) {
+      const panel = a.build();
+      panel.hidden = true;
+      panel.setAttribute("data-activity", a.id);
+      activityPanels[a.id] = panel;
     }
-    loungeLeft.replaceChildren(buildPicker(), ...Object.values(activityPanels));
-    loungeRight.replaceChildren(buildWeatherCard(), buildQuoteCard());
+    activity = null;
+    loungeLeft.replaceChildren(buildHome(), buildView());
 
     initBreakout();
     initSnake();
     updateBreakoutScores();
     updateSnakeScores();
-    chooseActivity(activity);
   }
 
   function enter() {
@@ -1630,34 +1895,13 @@
     wanted = true;
     receded = false;
 
-    shell.classList.add("flow-lounge");
     toggle.setAttribute("aria-pressed", "true");
     toggle.classList.remove("flow-lounge-receded");
     toggle.title = "Leave Lounge: restore standard cards and full brightness";
 
     mountLoungeDecks();
     initWeatherSystem();
-
-    clearSlideClasses();
-
-    // Outgoing: flow-left and flow-right slide out of window
-    left.hidden = true;
-    right.hidden = true;
-    left.classList.add("flow-slide-out-left");
-    right.classList.add("flow-slide-out-right");
-
-    // Incoming: lounge decks slide in from window edges
-    loungeLeft.hidden = false;
-    loungeRight.hidden = false;
-    loungeLeft.classList.add("flow-slide-in-left");
-    loungeRight.classList.add("flow-slide-in-right");
-
-    slideTimer = setTimeout(() => {
-      left.classList.remove("flow-slide-out-left");
-      right.classList.remove("flow-slide-out-right");
-      slideTimer = null;
-      updateObstacleRects();
-    }, 500);
+    showStage();
 
     if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
     breakoutAnimId = safeRequestAnim(drawBreakout);
@@ -1674,7 +1918,6 @@
     wanted = false;
     receded = false;
 
-    shell.classList.remove("flow-lounge");
     toggle.setAttribute("aria-pressed", "false");
     toggle.classList.remove("flow-lounge-receded");
     toggle.title = "Lounge: ambient games and relaxation while agents work";
@@ -1685,35 +1928,13 @@
     if (quoteTimer) { safeClearInterval(quoteTimer); quoteTimer = null; }
 
     syncWeather();
-
-    clearSlideClasses();
-
-    // Outgoing: lounge cards slide out of window
-    loungeLeft.hidden = true;
-    loungeRight.hidden = true;
-    loungeLeft.classList.add("flow-slide-out-left");
-    loungeRight.classList.add("flow-slide-out-right");
-
-    // Incoming: flow cards slide back in
-    if (window.relayFlow?.isOn?.()) {
-      left.hidden = false;
-      right.hidden = false;
-      left.classList.add("flow-slide-in-left");
-      right.classList.add("flow-slide-in-right");
-    }
-
-    slideTimer = setTimeout(() => {
-      loungeLeft.classList.remove("flow-slide-out-left");
-      loungeRight.classList.remove("flow-slide-out-right");
-      slideTimer = null;
-    }, 500);
+    hideStage();
   }
 
   function recede(reason = "attention") {
     if (!active || receded) return;
     receded = true;
 
-    shell.classList.remove("flow-lounge");
     toggle.setAttribute("aria-pressed", "false");
     toggle.classList.add("flow-lounge-receded");
     toggle.title = reason === "done" ? "Run finished · Click to return to Lounge" : "Approval/question required · Click to return to Lounge";
@@ -1723,60 +1944,19 @@
     if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
 
     syncWeather();
-
-    clearSlideClasses();
-
-    // Outgoing: lounge cards slide out of window
-    loungeLeft.hidden = true;
-    loungeRight.hidden = true;
-    loungeLeft.classList.add("flow-slide-out-left");
-    loungeRight.classList.add("flow-slide-out-right");
-
-    // Incoming: standard flow cards slide back in
-    if (window.relayFlow?.isOn?.()) {
-      left.hidden = false;
-      right.hidden = false;
-      left.classList.add("flow-slide-in-left");
-      right.classList.add("flow-slide-in-right");
-    }
-
-    slideTimer = setTimeout(() => {
-      loungeLeft.classList.remove("flow-slide-out-left");
-      loungeRight.classList.remove("flow-slide-out-right");
-      slideTimer = null;
-    }, 500);
+    hideStage();
   }
 
   function resume() {
     if (!active || !receded) return;
     receded = false;
 
-    shell.classList.add("flow-lounge");
     toggle.setAttribute("aria-pressed", "true");
     toggle.classList.remove("flow-lounge-receded");
     toggle.title = "Leave Lounge: restore standard cards and full brightness";
 
     initWeatherSystem();
-    clearSlideClasses();
-
-    // Outgoing: flow cards slide out
-    left.hidden = true;
-    right.hidden = true;
-    left.classList.add("flow-slide-out-left");
-    right.classList.add("flow-slide-out-right");
-
-    // Incoming: lounge cards slide back in
-    loungeLeft.hidden = false;
-    loungeRight.hidden = false;
-    loungeLeft.classList.add("flow-slide-in-left");
-    loungeRight.classList.add("flow-slide-in-right");
-
-    slideTimer = setTimeout(() => {
-      left.classList.remove("flow-slide-out-left");
-      right.classList.remove("flow-slide-out-right");
-      slideTimer = null;
-      updateObstacleRects();
-    }, 500);
+    showStage();
 
     if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
     breakoutAnimId = safeRequestAnim(drawBreakout);
@@ -1840,6 +2020,10 @@
     resume,
     setWeatherMode,
     getWeatherMode: () => weatherMode,
+    open: openActivity,
+    home: showHome,
+    current: () => activity,
+    activities: () => ACTIVITIES.map(a => ({ id: a.id, title: a.title })),
     sync: (flowOn) => {
       toggle.hidden = !flowOn;
       if (!flowOn && active) exit();

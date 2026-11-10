@@ -5889,7 +5889,6 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   assert.equal(ui.$('toggle-flow-lounge').hidden, false);
   assert.equal(ui.$('toggle-flow-lounge').getAttribute('aria-pressed'), 'false');
   assert.equal(ui.$('flow-lounge-left').hidden, true);
-  assert.equal(ui.$('flow-lounge-right').hidden, true);
 
   // Click Lounge to activate
   ui.$('toggle-flow-lounge').click(); await flush();
@@ -5901,33 +5900,41 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   assert.equal(ui.$('flow-left').classList.contains('flow-slide-out-left'), true);
   assert.equal(ui.$('flow-right').classList.contains('flow-slide-out-right'), true);
   assert.equal(ui.$('flow-lounge-left').hidden, false);
-  assert.equal(ui.$('flow-lounge-right').hidden, false);
   assert.equal(ui.$('flow-lounge-left').classList.contains('flow-slide-in-left'), true);
-  assert.equal(ui.$('flow-lounge-right').classList.contains('flow-slide-in-right'), true);
 
-  // Check card content: Breakout on left, Retro Snake on right, Trivia & Typing & Quotes & Weather
-  assert.equal(ui.$('flow-card-lounge-arcade') !== null, true);
-  assert.equal(ui.$('flow-card-lounge-zen') !== null, true);
-  assert.equal(ui.$('flow-card-lounge-trivia') !== null, true);
-  assert.equal(ui.$('flow-card-lounge-typing') !== null, true);
-  assert.equal(ui.$('flow-card-lounge-quote') !== null, true);
-  assert.equal(ui.$('flow-card-lounge-weather') !== null, true);
-  assert.match(ui.$('flow-card-lounge-arcade').textContent, /Breakout/);
-  assert.match(ui.$('flow-card-lounge-zen').textContent, /Retro Snake/);
-  assert.match(ui.$('flow-card-lounge-trivia').textContent, /Trivia/);
-  assert.match(ui.$('flow-card-lounge-typing').textContent, /Typing Speed Test/);
+  // The stage opens on a grid of the things to play, each with a title, a description and a line of facts.
+  const tile = id => ui.$('flow-lounge-tile-' + id);
+  const ids = ['breakout', 'snake', 'trivia', 'typing'];
+  assert.deepEqual([...ui.window.relayFlowLounge.activities().map(a => a.id)], ids);
+  assert.equal(ui.$('flow-lounge-home').hidden, false); assert.equal(ui.$('flow-lounge-view').hidden, true);
+  assert.equal(ui.window.relayFlowLounge.current(), null);
+  for (const id of ids) {
+    assert.ok(tile(id), `${id} has a tile`);
+    assert.ok(tile(id).querySelectorAll('.flow-lounge-tile-desc')[0].textContent.length > 20, `${id} has a description`);
+  }
+  assert.match(tile('breakout').textContent, /Breakout/); assert.match(tile('snake').textContent, /Snake/);
+  assert.match(tile('trivia').textContent, /trivia/); assert.match(tile('typing').textContent, /Typing test/);
+  // The quote and the weather aren't in the grid: they have a one-row bar of their own above the grid.
+  assert.equal(tile('quotes'), null); assert.equal(tile('weather'), null);
+  const ambient = ui.$('flow-lounge-ambient');
+  assert.equal(ambient.parentNode, ui.$('flow-lounge-home'));
+  assert.equal(ui.$('flow-lounge-home').children[ui.$('flow-lounge-home').children.indexOf(ambient) + 1].className, 'flow-lounge-grid', 'The bar sits right above the grid, so an open activity does not carry it.');
+  assert.equal(ui.$('flow-card-lounge-quote').parentNode, ambient); assert.equal(ui.$('flow-card-lounge-weather').parentNode, ambient);
+  assert.match(ui.$('flow-card-lounge-quote').textContent, /“.+”/);
 
-  // One activity at a time on the left, picked from tabs; weather and quotes on the right.
+  // Choosing a tile fills the stage with that one activity; All activities goes back to the grid.
+  const panelIds = { breakout: 'arcade', snake: 'zen', trivia: 'trivia', typing: 'typing' };
+  const shown = () => ids.filter(id => !ui.$('flow-card-lounge-' + panelIds[id]).hidden);
+  assert.deepEqual(shown(), [], 'Nothing is open until a tile is chosen.');
+  tile('trivia').click();
+  assert.deepEqual(shown(), ['trivia']); assert.equal(ui.$('flow-lounge-home').hidden, true); assert.equal(ui.$('flow-lounge-view').hidden, false);
+  assert.equal(ui.$('flow-lounge-view-title').textContent, 'Code trivia');
+  ui.$('flow-lounge-back').click();
+  assert.equal(ui.$('flow-lounge-home').hidden, false); assert.equal(ui.$('flow-lounge-view').hidden, true);
+  assert.equal(ui.document.activeElement, tile('trivia'), 'Going back returns focus to the tile that was opened.');
+  tile('snake').click();
+  assert.deepEqual(shown(), ['snake']);
   const breakoutCard = ui.$('flow-card-lounge-arcade'), snakeCard = ui.$('flow-card-lounge-zen');
-  const tab = id => ui.$('flow-lounge-tab-' + id);
-  const shown = () => ['arcade', 'zen', 'trivia', 'typing'].filter(id => !ui.$('flow-card-lounge-' + id).hidden);
-  assert.deepEqual(shown(), ['arcade'], 'Breakout is the first activity shown.');
-  assert.equal(tab('breakout').getAttribute('aria-selected'), 'true');
-  assert.deepEqual(ui.$('flow-lounge-right').children.map(card => card.id), ['flow-card-lounge-weather', 'flow-card-lounge-quote']);
-  tab('trivia').click();
-  assert.deepEqual(shown(), ['trivia']); assert.equal(tab('trivia').getAttribute('aria-selected'), 'true'); assert.equal(tab('breakout').getAttribute('aria-selected'), 'false');
-  tab('snake').click();
-  assert.deepEqual(shown(), ['zen']);
 
   // Keys reach only the game whose card holds focus.
   const [breakoutBoard] = breakoutCard.querySelectorAll('canvas'), [snakeBoard] = snakeCard.querySelectorAll('canvas');
@@ -5948,9 +5955,12 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   press(snakeBoard, ' ');
   assert.match(status(snakeCard), /^Playing/, 'Space resumes the focused game.');
 
-  // Switching activity pauses the game left behind; Space starts only the focused game.
-  tab('breakout').click();
-  assert.deepEqual(shown(), ['arcade']); assert.match(status(snakeCard), /^Paused/);
+  // Going back to the grid pauses the game left behind; Space starts only the focused game.
+  ui.$('flow-lounge-back').click();
+  assert.match(status(snakeCard), /^Paused/);
+  tile('breakout').click();
+  assert.deepEqual(shown(), ['breakout']); assert.match(status(snakeCard), /^Paused/);
+  assert.equal(ui.document.activeElement, breakoutBoard, 'Opening a game hands the keys to its board.');
   press(breakoutBoard, ' ');
   assert.match(status(breakoutCard), /^Playing/); assert.match(status(snakeCard), /^Paused/);
   assert.equal(press(startButton(breakoutCard), ' ').defaultPrevented, false, 'A focused button keeps Space for its own click.');
@@ -5958,20 +5968,24 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   assert.match(status(breakoutCard), /^Paused/);
 
   // The Start button starts its own game and hands the keys to the board.
-  tab('snake').click();
+  ui.window.relayFlowLounge.open('snake');
   startButton(snakeCard).click();
   assert.match(status(snakeCard), /^Playing/); assert.equal(ui.document.activeElement, snakeBoard);
   assert.equal(snakeCard.classList.contains('flow-lounge-game'), true); assert.equal(snakeBoard.tabIndex, 0);
-  tab('typing').click();
-  assert.deepEqual(shown(), ['typing']); assert.match(status(snakeCard), /^Paused/);
+  // Escape inside the stage goes back to the grid too, and the game waits paused.
+  const escape = new UIEvent('keydown', { key: 'Escape', target: snakeBoard }); ui.$('flow-lounge-left').dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, true); assert.equal(ui.$('flow-lounge-home').hidden, false); assert.match(status(snakeCard), /^Paused/);
+  tile('typing').click();
+  assert.deepEqual(shown(), ['typing']); assert.equal(ui.window.relayFlowLounge.current(), 'typing');
 
-  // Switch weather mode to Snow and back to Rain
-  const weatherTabs = ui.$('flow-card-lounge-weather').querySelectorAll('.flow-lounge-weather-tab');
+  // Switch weather mode to Snow and back to Rain from the bar, with an activity still open.
+  const weatherTabs = ui.$('flow-card-lounge-weather').querySelectorAll('.flow-lounge-weather-option');
   const snowTab = weatherTabs.find(t => t.textContent.includes('Snow'));
   assert(snowTab, 'Snow weather tab is available');
   snowTab.click(); await flush();
   assert.equal(ui.window.relayFlowLounge.getWeatherMode(), 'snow');
-  assert.equal(snowTab.classList.contains('active'), true);
+  assert.equal(snowTab.classList.contains('active'), true); assert.equal(snowTab.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(shown(), ['typing'], 'Changing the weather leaves the open activity alone.');
 
   const rainTab = weatherTabs.find(t => t.textContent.includes('Rain'));
   assert(rainTab, 'Rain weather tab is available');
@@ -5995,7 +6009,6 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   assert.equal(ui.$('flow-left').classList.contains('flow-slide-in-left'), true);
   assert.equal(ui.$('flow-right').classList.contains('flow-slide-in-right'), true);
   assert.equal(ui.$('flow-lounge-left').hidden, true);
-  assert.equal(ui.$('flow-lounge-right').hidden, true);
 
   // Approvals resolved: click Lounge button resumes
   c.pendingApprovals = [];
@@ -6005,7 +6018,7 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   assert.equal(ui.$('flow-left').hidden, true);
   assert.equal(ui.$('flow-right').hidden, true);
   assert.equal(ui.$('flow-lounge-left').classList.contains('flow-slide-in-left'), true);
-  assert.equal(ui.$('flow-lounge-right').classList.contains('flow-slide-in-right'), true);
+  assert.equal(ui.window.relayFlowLounge.current(), 'typing', 'Coming back finds the activity that was open.');
 
   // Exiting Lounge via Lounge header toggle
   ui.$('toggle-flow-lounge').click(); await flush();
@@ -6018,7 +6031,6 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   assert.equal(ui.$('flow-left').classList.contains('flow-slide-in-left'), true);
   assert.equal(ui.$('flow-right').classList.contains('flow-slide-in-right'), true);
   assert.equal(ui.$('flow-lounge-left').classList.contains('flow-slide-out-left'), true);
-  assert.equal(ui.$('flow-lounge-right').classList.contains('flow-slide-out-right'), true);
 
   // Leaving Flow mode hides the Lounge toggle
   ui.window.relayFlow.leave(); await flush();
