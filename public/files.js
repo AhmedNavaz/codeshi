@@ -41,7 +41,7 @@
     }
     list.hidden = !shown().length;
     $('attach-files').disabled = !state.ready || Boolean(state.pending) || uploads.has(state.projectId);
-    $('attach-files').title = 'Attach up to 6 files · PNG, JPEG, GIF, WebP (5 MB) or text/code (64 KB) · paste or drop also works';
+    $('attach-files').title = 'Attach up to 6 files · PNG, JPEG, GIF, WebP (5 MB), text/code (64 KB) or Word .docx (5 MB, 64 KB of text) · paste or drop also works';
     api.renderControls();
   }
   // Files added while others upload wait their turn instead of being dropped, so the limits below always count what is already attached.

@@ -333,9 +333,10 @@ Click **Attach** in the composer, drag files onto it, or paste an image from you
 
 - PNG, JPEG, GIF and WebP images, up to 5 MiB each.
 - UTF-8 text and code (including Markdown, JSON, CSV and source files), up to 64 KiB each.
+- Word documents (.docx), up to 5 MiB each, attached as their text. Headings, list items and table rows become Markdown lines, tracked deletions and older copies of text boxes are left out, and pictures are not sent. The text counts toward the text limits, so it can be up to 64 KiB. A Word 97-2003 document (.doc) or one with a password can't be read: save it as .docx or as text.
 - Up to six files and 20 MiB per message, with a combined text limit of 128 KiB. The prompt context budget still applies.
 
-PDF, Office, audio, video and other binary attachments are not supported. SVG is treated as text, never rendered as active content. Images require the native Codex app-server, Claude SDK or an ACP-capable Gemini CLI reporting image prompt support; the optional plain CLI adapter rejects image input explicitly.
+PDF, other Office, audio, video and other binary attachments are not supported. SVG is treated as text, never rendered as active content. Images require the native Codex app-server, Claude SDK or an ACP-capable Gemini CLI reporting image prompt support; the optional plain CLI adapter rejects image input explicitly.
 
 ### Add from GitHub
 

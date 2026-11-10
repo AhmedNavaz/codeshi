@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { wordText } from './word-documents.mjs';
 
 export const attachmentLimits = { count: 6, imageBytes: 5 * 1024 * 1024, textBytes: 64 * 1024, totalBytes: 20 * 1024 * 1024, totalTextBytes: 128 * 1024 };
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
@@ -10,18 +11,26 @@ const imageType = bytes => bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71
   : /^GIF8[79]a/.test(bytes.subarray(0,6).toString('ascii')) ? 'image/gif'
   : bytes.subarray(0,4).toString() === 'RIFF' && bytes.subarray(8,12).toString() === 'WEBP' ? 'image/webp' : null;
 
-export function describeAttachment(name, bytes) {
+// What a file is, and for text the text an agent gets. A Word document (.docx) is text: its size is its text's size,
+// which is what the text limits count.
+export function inspectAttachment(name, bytes) {
   if (typeof name !== 'string' || !name.trim() || name.length > 240 || /[\x00-\x1f\x7f/\\]/.test(name)) fail('Choose a file with a valid filename.');
   if (!bytes.length) fail('This file is empty.');
+  if (/\.docx$/i.test(name)) { const text = wordText(bytes); return { name, mime: 'text/plain', kind: 'text', bytes: Buffer.byteLength(text), text }; }
+  if (/\.doc$/i.test(name)) fail("Word 97-2003 documents (.doc) can't be read. Save it as .docx or as text, and attach that.");
   if (bytes.length > attachmentLimits.imageBytes) fail('Images must be 5 MB or smaller.', 413);
   const mime = imageType(bytes);
   if (mime) return { name, mime, kind: 'image', bytes: bytes.length };
-  if (/\.(png|jpe?g|gif|webp|pdf|docx?|xlsx?|pptx?|zip|gz|mp[34]|mov|wav|heic|avif)$/i.test(name)) fail('Attach PNG, JPEG, GIF, WebP, or UTF-8 text/code files. This file format is not supported.');
+  if (/\.(png|jpe?g|gif|webp|pdf|xlsx?|pptx?|zip|gz|mp[34]|mov|wav|heic|avif)$/i.test(name)) fail('Attach PNG, JPEG, GIF, WebP, Word (.docx) or UTF-8 text/code files. This file format is not supported.');
   if (bytes.length > attachmentLimits.textBytes) fail('Text and code attachments must be 64 KB or smaller.', 413);
   let text;
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { fail('This is a binary file. Attach an image or a UTF-8 text/code file.'); }
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) fail('This is a binary file. Attach an image or a UTF-8 text/code file.');
-  return { name, mime: 'text/plain', kind: 'text', bytes: bytes.length };
+  return { name, mime: 'text/plain', kind: 'text', bytes: bytes.length, text };
+}
+export function describeAttachment(name, bytes) {
+  const { text, ...meta } = inspectAttachment(name, bytes);
+  return meta;
 }
 
 // Immutable snapshots live in the workspace's application storage, never its source tree.
@@ -59,9 +68,10 @@ export class AttachmentStore {
       const stat = fs.fstatSync(fd);
       if (!stat.isFile() || stat.size > 7 * 1024 * 1024) fail('Invalid attachment snapshot.');
       const saved = JSON.parse(fs.readFileSync(fd, 'utf8')), bytes = Buffer.from(saved.data, 'base64');
-      const meta = describeAttachment(saved.name, bytes);
-      if (digest(Buffer.concat([Buffer.from(meta.name + '\0'), bytes])) !== id) fail('The saved attachment has changed.', 409);
-      return { ...meta, id, data: bytes.toString('base64'), ...(meta.kind === 'text' ? { text: bytes.toString('utf8') } : {}) };
+      // Checked against its ID before it is read, since reading a Word document means unpacking it.
+      if (typeof saved.name !== 'string' || digest(Buffer.concat([Buffer.from(saved.name + '\0'), bytes])) !== id) fail('The saved attachment has changed.', 409);
+      const { text, ...meta } = inspectAttachment(saved.name, bytes);
+      return { ...meta, id, data: bytes.toString('base64'), ...(meta.kind === 'text' ? { text } : {}) };
     } catch (error) { if (error.code === 'ENOENT') fail('An attachment is no longer available. Remove it and attach the file again.', 404); throw error; }
     finally { if (fd !== undefined) fs.closeSync(fd); }
   }
