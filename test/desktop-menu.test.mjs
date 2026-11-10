@@ -134,10 +134,13 @@ test('the installed app offers Check for Updates… after About, which asks the 
   assert(!menu().all.some(entry=>entry.label==='Check for Updates…'),'A copy that cannot update itself, such as one run from source, leaves it out.');
 });
 
-test('other systems flash the taskbar button instead of bouncing an icon, with no Dock badge or menu bar status',()=>{
-  const windows=menu({platform:'win32'});
-  assert.deepEqual(windows.labels(windows.item('Alerts').submenu),['Banners','Sounds','Flash the Taskbar Button','-','Alert Settings…']);
+test('other systems flash the taskbar button instead of bouncing an icon, with no Dock badge, and Windows has its notification area',()=>{
+  const changes=[],windows=menu({platform:'win32',setNotifications:patch=>changes.push(patch)});
+  assert.deepEqual(windows.labels(windows.item('Alerts').submenu),['Banners','Sounds','Flash the Taskbar Button','Status in the Notification Area','-','Alert Settings…']);
+  windows.item('Status in the Notification Area').click();assert.deepEqual(changes,[{statusItem:false}]);
   assert(!windows.all.some(entry=>/Menu Bar|Dock/.test(entry.label||'')));
+  const linux=menu({platform:'linux'});
+  assert.deepEqual(linux.labels(linux.item('Alerts').submenu),['Banners','Sounds','Flash the Taskbar Button','-','Alert Settings…']);
 });
 
 test('Voice Input is in the Agent menu on macOS, where speech is recognized on the Mac, and nowhere else yet',()=>{

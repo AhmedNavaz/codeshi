@@ -59,7 +59,7 @@ export function alertPreferences(saved = {}) {
 export function mergeAlertPreferences(current, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) fail('Alert settings must be an object.');
   for (const [key, value] of Object.entries(patch)) {
-    if (key === 'statusItem') { if (typeof value !== 'boolean') fail('Turn the menu bar status on or off.'); continue; }
+    if (key === 'statusItem') { if (typeof value !== 'boolean') fail('Turn the status icon on or off.'); continue; }
     if (!CHANNELS.includes(key)) fail('Unknown alert setting.');
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Alert settings must be an object.');
     for (const [name, item] of Object.entries(value)) if (!valid(key, name, item)) fail(key === 'sound' && name === 'volume' ? 'Volume must be a whole number from 0 to 100.' : 'Turn each alert on or off.');

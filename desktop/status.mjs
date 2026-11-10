@@ -2,9 +2,9 @@ import { alertDefaults } from '../src/alerts.mjs';
 import { latestEdit } from '../src/activity-format.mjs';
 import { runSteps, TESTS } from '../src/recap.mjs';
 
-// Live status outside the window on macOS (#13): a status item in the menu bar and, when turned on, alerts near the
-// top of the screen. Both read the same run state as the page and the Dock badge, from the workspaces Codeshi
-// has open; nothing here starts, answers or changes work, except Keep Awake when it is clicked. Like notifications,
+// Live status outside the window: a status item in the macOS menu bar (#13) or an icon in the Windows notification
+// area (#74) and, on macOS when turned on, alerts near the top of the screen. They read the same run state as the
+// page and the Dock badge, from the workspaces Codeshi has open; nothing here starts, answers or changes work, except Keep Awake when it is clicked. Like notifications,
 // they never show commands, chat text or file paths, which anyone looking at the screen could read: an action is
 // said in general words with a count. The state and the menu are built without Electron so they can be tested;
 // desktop/main.mjs shows them.
@@ -80,8 +80,29 @@ export function statusTitle({ rows, attention, running }) {
   return '';
 }
 
-export function statusMenu(snapshot, { keepAwake = { enabled: false, active: false }, alerts = alertDefaults, setAlerts = () => {}, alertSettings = () => {}, open = () => {}, show = () => {}, setKeepAwake = () => {}, hide = () => {}, quit = () => {} } = {}) {
-  const separator = { type: 'separator' };
+// Windows shows no words beside a notification area icon (#74), so they go in its tooltip, after the app's name.
+export function statusTooltip(snapshot) {
+  const title = statusTitle(snapshot);
+  return title ? `Codeshi — ${title}` : 'Codeshi';
+}
+
+// A left click on the Windows icon brings Codeshi forward. When exactly one thing needs the person it opens that
+// workspace, or that approval's request card, which is never answered on the way; otherwise the window as it is.
+export function statusClickTarget(snapshot) {
+  const waiting = snapshot.rows.filter(row => row.attention);
+  if (waiting.length !== 1) return null;
+  const [row] = waiting;
+  return row.kind === 'approval' && row.approvalId ? { projectId: row.projectId, approvalId: row.approvalId } : { projectId: row.projectId };
+}
+
+// Windows colours its taskbar apart from its apps, so the icon follows the taskbar's own setting, read from the
+// output of `reg query …\Themes\Personalize /v SystemUsesLightTheme`. Unknown means dark, as Windows starts out.
+export function taskbarIsLight(output) {
+  return /SystemUsesLightTheme\s+REG_DWORD\s+0x0*1\b/i.test(String(output || ''));
+}
+
+export function statusMenu(snapshot, { platform = 'darwin', keepAwake = { enabled: false, active: false }, alerts = alertDefaults, setAlerts = () => {}, alertSettings = () => {}, open = () => {}, show = () => {}, setKeepAwake = () => {}, hide = () => {}, quit = () => {} } = {}) {
+  const separator = { type: 'separator' }, mac = platform === 'darwin';
   const summary = snapshot.rows.length ? [snapshot.attention ? `${snapshot.attention} need${snapshot.attention === 1 ? 's' : ''} you` : '', snapshot.running ? `${snapshot.running} working` : ''].filter(Boolean).join(' · ') || 'Waiting' : 'Nothing running';
   // An approval opens its own request card; it is never answered from here.
   const rows = snapshot.rows.map(row => ({ label: `${row.name} — ${row.text}`, click: () => open(row.kind === 'approval' ? { projectId: row.projectId, approvalId: row.approvalId } : { projectId: row.projectId }) }));
@@ -91,26 +112,26 @@ export function statusMenu(snapshot, { keepAwake = { enabled: false, active: fal
     separator,
     { label: 'Open Codeshi', click: show },
     { label: 'Keep Awake', type: 'checkbox', checked: keepAwake.enabled, click: () => setKeepAwake(!keepAwake.enabled) },
-    ...keepAwake.active ? [{ label: 'Keeping your Mac awake while agents work', enabled: false }] : [],
+    ...keepAwake.active ? [{ label: `Keeping your ${mac ? 'Mac' : 'PC'} awake while agents work`, enabled: false }] : [],
     // This menu belongs to the status item, so hiding it has its own item rather than a switch under Alerts.
-    { label: 'Alerts', submenu: alertMenu(alerts, { statusItem: false, set: setAlerts, settings: alertSettings }) },
-    { label: 'Hide from Menu Bar', click: hide },
+    { label: 'Alerts', submenu: alertMenu(alerts, { platform, statusItem: false, set: setAlerts, settings: alertSettings }) },
+    { label: mac ? 'Hide from Menu Bar' : 'Hide from Notification Area', click: hide },
     separator,
     { label: 'Quit Codeshi', click: quit },
   ];
 }
 
 // The ways Codeshi alerts you while you are in another app, each on or off, for the Agent menu and the status
-// item's menu. Alert Settings… chooses each way for each moment, and how banners show. Other systems have no Dock or
-// menu bar status: the taskbar button flashes instead of the icon bouncing.
+// item's menu. Alert Settings… chooses each way for each moment, and how banners show. Other systems have no Dock:
+// the taskbar button flashes instead of the icon bouncing. Windows has its status in the notification area (#74).
 export function alertMenu(preferences, { platform = 'darwin', statusItem = true, set = () => {}, settings = () => {} } = {}) {
-  const mac = platform === 'darwin', way = (label, channel) => ({ label, type: 'checkbox', checked: preferences[channel].on, click: () => set({ [channel]: { on: !preferences[channel].on } }) });
+  const mac = platform === 'darwin', windows = platform === 'win32', way = (label, channel) => ({ label, type: 'checkbox', checked: preferences[channel].on, click: () => set({ [channel]: { on: !preferences[channel].on } }) });
   return [
     way('Banners', 'banner'),
     way('Sounds', 'sound'),
     way(mac ? 'Bounce the Dock Icon' : 'Flash the Taskbar Button', 'bounce'),
     ...mac ? [way('Badge on the Dock Icon', 'badge')] : [],
-    ...mac && statusItem ? [{ label: 'Status in the Menu Bar', type: 'checkbox', checked: preferences.statusItem, click: () => set({ statusItem: !preferences.statusItem }) }] : [],
+    ...(mac || windows) && statusItem ? [{ label: mac ? 'Status in the Menu Bar' : 'Status in the Notification Area', type: 'checkbox', checked: preferences.statusItem, click: () => set({ statusItem: !preferences.statusItem }) }] : [],
     { type: 'separator' },
     { label: 'Alert Settings…', click: settings },
   ];

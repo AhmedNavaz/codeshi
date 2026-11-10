@@ -348,6 +348,14 @@ export function template({ attention = false } = {}) {
     + (attention ? `<circle cx="${x}" cy="${y}" r="${r}"/>` : '') + '</svg>' };
 }
 
+// Windows notification area icon (#74): the same シ and dot, but Windows has no template images, so it is drawn in
+// white for a dark taskbar or near black for a light one, and the dot is vermilion so it reads at 16 px.
+export function tray({ taskbar = 'dark', attention = false } = {}) {
+  const unit = 100 / 14, box = [-unit, -unit, 16 * unit, 16 * unit].map(fmt).join(' '), { x, y, r } = glyph.dot, dark = taskbar !== 'light';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box}">${glyphPath(dark ? '#fff' : '#1b1917')}`
+    + (attention ? `<circle cx="${x}" cy="${y}" r="${r}" fill="${dark ? glyph.dark : colors.seal}"/>` : '') + '</svg>';
+}
+
 // The welcome screen's animated logo, kept in public/index.html by `npm run icons`. Its colours come from
 // public/onboarding.css, so it shows Paper or Ink with the app's theme; the tile pops in, the brush paints the C
 // along its stroke and the seal is stamped last.

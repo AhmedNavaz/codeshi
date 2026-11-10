@@ -80,7 +80,7 @@
   // paired phone's lock screen (#23) applies everywhere, as the server sends it.
   function ways() {
     const desktop = window.relayDesktop, platform = desktop ? desktop.platform || 'darwin' : null, mac = platform === 'darwin';
-    return { mac, desktop: Boolean(desktop), rows: [
+    return { mac, platform, desktop: Boolean(desktop), rows: [
       ...desktop ? [['banner', 'Banner']] : [],
       ['sound', 'Sound'],
       ...desktop ? [['bounce', mac ? 'Bounce the Dock icon' : 'Flash the taskbar button']] : [],
@@ -103,7 +103,7 @@
     if (!kit) return;
     host.replaceChildren();
     if (!settings) { kit.note(host, 'Loading alert settings…'); return; }
-    const { mac, desktop, rows } = ways();
+    const { mac, platform, desktop, rows } = ways();
     const group = kit.group(host, 'Ways to alert you', 'How Codeshi tells you that an agent needs you, finished or stopped while you’re in another app. Turn each way on or off, and choose the moments it’s for.');
     const matrix = node('div', undefined, 'settings-row alert-matrix'); matrix.dataset.keywords = 'banner notification sound bounce dock badge phone lock screen push needs you finished stopped approval';
     const table = node('table', undefined, 'alert-table'), head = node('tr'), body = node('tbody');
@@ -151,6 +151,10 @@
     if (mac) {
       const bar = kit.group(host, 'Menu bar');
       kit.toggle(bar, { label: 'Show what agents are doing in the menu bar', description: 'Codeshi’s mark in the menu bar says what needs you and what is running, with a menu for each workspace.', keywords: 'status item tray', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
+    }
+    if (platform === 'win32') {
+      const area = kit.group(host, 'Notification area');
+      kit.toggle(area, { label: 'Show Codeshi in the notification area', description: 'Codeshi’s mark beside the clock gets a dot when something needs you. Point at it to read what is happening, click it to open Codeshi, or right-click for a menu of your workspaces.', keywords: 'status item tray taskbar system tray icon', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
     }
     if (!desktop) kit.note(host, 'Banners and the Dock icon are part of the desktop app.');
   }

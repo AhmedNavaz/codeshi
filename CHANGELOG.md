@@ -4,6 +4,9 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Added
+- **Status in the Windows notification area** ([#74](https://github.com/AhmedNavaz/codeshi/issues/74)). On Windows, Codeshi's mark now sits beside the clock, as it does in the macOS menu bar. A dot says something needs you and the tooltip says what, in general words and counts only. A click brings Codeshi forward, to the request when exactly one thing needs you, and a right-click opens a menu of busy workspaces with **Keep Awake** and **Alerts**. The icon follows a dark or a light taskbar. Turn it off in **Settings › Alerts**. It's covered by automated tests but hasn't been tried on a real Windows PC yet.
+
 ## [0.41.0] - 2026-11-10
 
 ### Added

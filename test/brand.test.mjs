@@ -149,6 +149,20 @@ test('the committed icon sources match the drawings (run `npm run icons` after c
   for (const file of ['assets/Assets.car', 'assets/icon.icns', 'assets/icon.ico', 'assets/status/StatusTemplate@2x.png', 'assets/status/StatusAttentionTemplate@2x.png']) assert.ok(fs.statSync(path.join(root, file)).size > 0, file);
 });
 
+test('the Windows notification area icons are シ for a dark and a light taskbar, with a vermilion dot only when something needs you', () => {
+  for (const taskbar of ['dark', 'light']) {
+    const idle = brand.tray({ taskbar }), attention = brand.tray({ taskbar, attention: true });
+    assert.match(idle, taskbar === 'dark' ? /stroke="#fff"/ : /stroke="#1b1917"/, 'Windows has no template images, so each taskbar gets its own colour');
+    assert.doesNotMatch(idle, /<circle|<rect/);
+    assert.match(attention, new RegExp(`<circle[^>]+fill="${taskbar === 'dark' ? brand.glyph.dark : brand.colors.seal}"`));
+    for (const name of [`Tray${taskbar === 'dark' ? 'Dark' : 'Light'}.ico`, `Tray${taskbar === 'dark' ? 'Dark' : 'Light'}Attention.ico`]) {
+      const icon = fs.readFileSync(path.join(root, 'assets/status', name)), count = icon.readUInt16LE(4);
+      assert.deepEqual([icon.readUInt16LE(0), icon.readUInt16LE(2)], [0, 1], `${name} is an icon file`);
+      assert.deepEqual(Array.from({ length: count }, (_, index) => icon.readUInt8(6 + 16 * index)), [16, 20, 24, 32, 40, 48], `${name} has a size for each taskbar scale`);
+    }
+  }
+});
+
 test('the welcome screen logo has every part its styles animate', () => {
   const css = read('public/onboarding.css'), mark = brand.onboardingMark();
   for (const part of ['mark-tile', 'mark-fill', 'mark-edge', 'mark-brush', 'mark-reveal', 'mark-seal']) {

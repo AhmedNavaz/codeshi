@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
-import { alertMenu, currentAction, overlayBounds, statusMenu, statusSnapshot, statusTitle } from '../desktop/status.mjs';
+import { alertMenu, currentAction, overlayBounds, statusClickTarget, statusMenu, statusSnapshot, statusTitle, statusTooltip, taskbarIsLight } from '../desktop/status.mjs';
 import { alertPreferences } from '../src/alerts.mjs';
 import { createOverlay } from '../desktop/overlay.mjs';
 
@@ -94,13 +94,40 @@ test('the status menu opens the right workspace or request and only changes Keep
   assert.equal(statusMenu({ rows: [], attention: 0, running: 0 })[0].label, 'Nothing running');
 });
 
-test('the Alerts menu lists the ways each system has: the taskbar flashes elsewhere, with no Dock badge or menu bar status', () => {
+test('the Alerts menu lists the ways each system has: the taskbar flashes elsewhere, and Windows has its notification area', () => {
   const changes = [], labels = items => items.map(item => item.type === 'separator' ? '-' : item.label);
   const mac = alertMenu(alertPreferences({ statusItem: false }), { set: patch => changes.push(patch) });
   assert.deepEqual(labels(mac), ['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon', 'Status in the Menu Bar', '-', 'Alert Settings…']);
   mac.find(entry => entry.label === 'Status in the Menu Bar').click(); mac.find(entry => entry.label === 'Banners').click();
   assert.deepEqual(changes, [{ statusItem: true }, { banner: { on: false } }]);
-  assert.deepEqual(labels(alertMenu(alertPreferences(), { platform: 'win32' })), ['Banners', 'Sounds', 'Flash the Taskbar Button', '-', 'Alert Settings…']);
+  const windows = alertMenu(alertPreferences(), { platform: 'win32', set: patch => changes.push(patch) });
+  assert.deepEqual(labels(windows), ['Banners', 'Sounds', 'Flash the Taskbar Button', 'Status in the Notification Area', '-', 'Alert Settings…']);
+  windows.find(entry => entry.label === 'Status in the Notification Area').click();
+  assert.deepEqual(changes.at(-1), { statusItem: false });
+  assert.deepEqual(labels(alertMenu(alertPreferences(), { platform: 'linux' })), ['Banners', 'Sounds', 'Flash the Taskbar Button', '-', 'Alert Settings…']);
+});
+
+test('in the Windows notification area the state is in the tooltip, a click opens what needs you, and the menu uses Windows words (#74)', () => {
+  const row = (kind, extra = {}) => ({ projectId: 'api', name: 'payments-api', kind, text: 'x', attention: ['approval', 'failed', 'offer'].includes(kind), ...extra });
+  const snapshot = (...rows) => ({ rows, attention: rows.filter(item => item.attention).length, running: rows.filter(item => item.kind === 'running').length });
+  assert.equal(statusTooltip(snapshot()), 'Codeshi');
+  assert.equal(statusTooltip(snapshot(row('approval', { approvalId: 'ap1' }))), 'Codeshi — Approval needed');
+  assert.equal(statusTooltip(snapshot(row('running', { agent: 'Codex', action: 'Reading files' }))), 'Codeshi — Codex · Reading files');
+  assert.equal(statusTooltip(snapshot(row('approval'), row('failed'), row('running'))), 'Codeshi — 2 need you');
+  assert(statusTooltip(snapshot(row('running', { agent: 'Codex', action: 'Working · '.repeat(40) }))).length < 128, 'Windows cuts a tooltip off at 127 characters.');
+  // One thing waiting: the click goes to it. An approval opens its request card and is never answered on the way.
+  assert.deepEqual(statusClickTarget(snapshot(row('approval', { approvalId: 'ap1' }), row('running'))), { projectId: 'api', approvalId: 'ap1' });
+  assert.deepEqual(statusClickTarget(snapshot(row('failed'))), { projectId: 'api' });
+  assert.deepEqual(statusClickTarget(snapshot(row('approval'))), { projectId: 'api' }, 'A task beside the main conversation asks in the window.');
+  assert.equal(statusClickTarget(snapshot(row('approval', { approvalId: 'ap1' }), row('failed'))), null, 'With several waiting the window just comes forward.');
+  assert.equal(statusClickTarget(snapshot(row('running'))), null);
+  assert.equal(statusClickTarget(snapshot()), null);
+  const labels = statusMenu(snapshot(), { platform: 'win32', keepAwake: { enabled: true, active: true } }).map(item => item.type === 'separator' ? '-' : item.label);
+  assert.deepEqual(labels, ['Nothing running', '-', 'Open Codeshi', 'Keep Awake', 'Keeping your PC awake while agents work', 'Alerts', 'Hide from Notification Area', '-', 'Quit Codeshi']);
+  assert.deepEqual(statusMenu(snapshot(), { platform: 'win32' }).find(item => item.label === 'Alerts').submenu.map(item => item.label).filter(Boolean), ['Banners', 'Sounds', 'Flash the Taskbar Button', 'Alert Settings…']);
+  // The taskbar's colour, from `reg query`. Anything unreadable means dark, as Windows starts out.
+  const reg = value => `\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\r\n    SystemUsesLightTheme    REG_DWORD    ${value}\r\n\r\n`;
+  assert.deepEqual([reg('0x1'), reg('0x0'), reg('0x00000001'), '', undefined, 'ERROR: The system was unable to find the specified registry key or value.'].map(taskbarIsLight), [true, false, true, false, false, false]);
 });
 
 test('the overlay sits centred under the menu bar of its display, and its page runs only its own script', () => {

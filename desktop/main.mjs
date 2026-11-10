@@ -16,7 +16,7 @@ import os from 'node:os';
 import http from 'node:http';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
-import {runningEdit,statusSnapshot,statusTitle,statusMenu} from './status.mjs';
+import {runningEdit,statusSnapshot,statusTitle,statusMenu,statusTooltip,statusClickTarget,taskbarIsLight} from './status.mjs';
 import {alertPlan} from '../src/alerts.mjs';
 import {createOverlay} from './overlay.mjs';
 import {closeWithin,writeShutdownLog} from './shutdown.mjs';
@@ -87,20 +87,36 @@ else {
       notice.on('failed',(_event,error)=>{notificationsRefused=true;console.warn('macOS did not show a Codeshi notification:',error);});
       notice.show();
     }
-    const statusIcons=process.platform==='darwin'?{idle:nativeImage.createFromPath(path.join(root,'assets','status','StatusTemplate.png')),attention:nativeImage.createFromPath(path.join(root,'assets','status','StatusAttentionTemplate.png'))}:null;
-    let statusTimer=null;
+    // macOS colours its template images itself. Windows has none (#74), so its icons come drawn for a dark and for a light taskbar.
+    const statusIcon=name=>nativeImage.createFromPath(path.join(root,'assets','status',name)),windows=process.platform==='win32';
+    const statusIcons=process.platform==='darwin'?{idle:statusIcon('StatusTemplate.png'),attention:statusIcon('StatusAttentionTemplate.png')}
+      :windows?{idle:statusIcon('TrayDark.ico'),attention:statusIcon('TrayDarkAttention.ico'),lightIdle:statusIcon('TrayLight.ico'),lightAttention:statusIcon('TrayLightAttention.ico')}:null;
+    // The taskbar's colour is a Windows setting apart from the apps' and from Codeshi's own theme, so it is read from the registry.
+    let statusTimer=null,lightTaskbar=false,statusSeen={rows:[],attention:0,running:0};
+    function readTaskbar(){if(!windows)return;execFile('reg',['query','HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize','/v','SystemUsesLightTheme'],{timeout:5000,windowsHide:true},(_error,stdout)=>{const light=taskbarIsLight(stdout);if(light!==lightTaskbar){lightTaskbar=light;scheduleStatus();}});}
     function scheduleStatus(){if(!statusTimer)statusTimer=setTimeout(syncStatus,400);}
     function setStatusPreferences(patch){relay.setNotificationPreferences(patch);updateMenu();syncStatus();}
     function syncStatus(){
       clearTimeout(statusTimer);statusTimer=null;
-      if(process.platform!=='darwin'||!relay||quitting)return;
+      if(!statusIcons||!relay||quitting)return;
       const preferences=relay.getNotificationPreferences();
       if(!preferences.statusItem){tray?.destroy();tray=null;return;}
-      const snapshot=statusSnapshot(relay.registry);
-      if(!tray){for(const icon of Object.values(statusIcons))icon.setTemplateImage(true);tray=new Tray(statusIcons.idle);tray.setToolTip('Codeshi');}
-      tray.setImage(snapshot.attention?statusIcons.attention:statusIcons.idle);
-      tray.setTitle(statusTitle(snapshot),{fontType:'monospacedDigit'});
-      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
+      const snapshot=statusSeen=statusSnapshot(relay.registry);
+      if(!tray){
+        if(windows){
+          // A left click brings Codeshi forward, to the one thing that needs you when there is exactly one; a right click opens the menu.
+          tray=new Tray(statusIcons.idle);tray.on('click',()=>openTarget(statusClickTarget(statusSeen)));
+        }else{for(const icon of Object.values(statusIcons))icon.setTemplateImage(true);tray=new Tray(statusIcons.idle);tray.setToolTip('Codeshi');}
+      }
+      if(windows){
+        // Windows shows no words beside the icon: the dot says something needs you, and the tooltip says what.
+        tray.setImage(lightTaskbar?snapshot.attention?statusIcons.lightAttention:statusIcons.lightIdle:snapshot.attention?statusIcons.attention:statusIcons.idle);
+        tray.setToolTip(statusTooltip(snapshot));
+      }else{
+        tray.setImage(snapshot.attention?statusIcons.attention:statusIcons.idle);
+        tray.setTitle(statusTitle(snapshot),{fontType:'monospacedDigit'});
+      }
+      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
       overlay?.reconcile(snapshot);
     }
     async function start(){
@@ -118,15 +134,15 @@ else {
     if(demo)updater.check();
     relay.registry.on('update',()=>setTimeout(()=>updater.idle(),0));
     // Live status on the Mac (#13): the menu bar item follows every workspace's runs, approvals and waits.
-    if(process.platform==='darwin'){
-      overlay=createOverlay({BrowserWindow,screen,ipcMain,root,open:openTarget});
-      relay.registry.on('update',scheduleStatus);relay.registry.on('projects',scheduleStatus);
-    }
+    // In the Windows notification area (#74) an icon does the same, with the words in its tooltip.
+    if(process.platform==='darwin')overlay=createOverlay({BrowserWindow,screen,ipcMain,root,open:openTarget});
+    if(statusIcons){relay.registry.on('update',scheduleStatus);relay.registry.on('projects',scheduleStatus);}
+    if(windows){readTaskbar();nativeTheme.on('updated',readTaskbar);}
     updateMenu();syncStatus();
     win=new BrowserWindow({width:1440,height:1000,minWidth:900,minHeight:680,show:false,title:'Codeshi',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences:{preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]}});
     // Back in the window, the page shows what happened, including the recap after a while away, so the badge clears
     // and the panel near the top of the screen goes; it would otherwise cover the recap.
-    win.on('focus',()=>{attention=0;app.dock?.setBadge('');overlay?.hide();if(process.platform!=='darwin')win.flashFrame(false);});
+    win.on('focus',()=>{attention=0;app.dock?.setBadge('');overlay?.hide();if(process.platform!=='darwin')win.flashFrame(false);readTaskbar();});
     // The window list and the app switcher tell the two copies apart.
     if(development)win.on('page-title-updated',(event,title)=>{event.preventDefault();win.setTitle(`${title} (Development)`);});
     if(!smoke) win.once('ready-to-show',()=>win.show());
@@ -200,6 +216,8 @@ else {
       // Voice input loaded, and in a packaged Mac build its speech helper is inside and answers without asking for anything.
       result.voiceUI=await win.webContents.executeJavaScript(`typeof window.relayVoice?.toggle==='function'&&!!document.getElementById('voice-input')`);
       // The status item shows in the menu bar, and an alert panel loads and shows without taking focus (#13).
+      // On Windows the icon is in the notification area, with all four of its drawings loaded (#74).
+      if(windows)result.statusItem=Boolean(tray&&!tray.isDestroyed()&&Object.values(statusIcons).every(icon=>!icon.isEmpty())&&statusMenu(statusSnapshot(relay.registry),{platform:'win32'}).length>0);
       if(process.platform==='darwin'){
         result.statusItem=Boolean(tray&&!tray.isDestroyed()&&!statusIcons.idle.isEmpty()&&!statusIcons.attention.isEmpty()&&statusMenu(statusSnapshot(relay.registry)).length>0);
         overlay.show({kind:'finished',title:'Task finished',body:'Smoke test',projectName:'Smoke'});

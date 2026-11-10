@@ -8,7 +8,8 @@
 //   assets/icon-dark.png              Ink, for the Dock in development when the appearance is dark
 //   assets/icon.ico                   Windows (Paper)
 //   assets/status/*.png               menu bar template images: シ on its own, with a dot when something needs you
-//   assets/brand/*.png                both looks at every size from 16 to 1024 (16 and 32 are the seal)
+//   assets/status/Tray*.ico           Windows notification area: the same, for a dark or a light taskbar
+//   assets/brand/*.png              both looks at every size from 16 to 1024 (16 and 32 are the seal)
 //   public/icon.svg                   favicon: the seal, the same in both themes
 //   public/mark.svg                   the mark beside the name in the app: シ in vermilion
 //   desktop/overlay.html              the alert panel's シ, drawn inside the page
@@ -119,6 +120,9 @@ app.whenReady().then(async () => {
     write(path.join(assets, 'status', `${name}.png`), await render(svg, width, height));
     write(path.join(assets, 'status', `${name}@2x.png`), await render(svg, width * 2, height * 2));
   }
+  // Windows picks the entry that fits the taskbar's scale: 16 px at 100%, 20 at 125%, 24 at 150%, 32 at 200%.
+  for (const taskbar of ['dark', 'light']) for (const attention of [false, true])
+    write(path.join(assets, 'status', `Tray${taskbar === 'dark' ? 'Dark' : 'Light'}${attention ? 'Attention' : ''}.ico`), ico(await Promise.all([16, 20, 24, 32, 40, 48].map(async size => ({ size, png: await render(brand.tray({ taskbar, attention }), size) })))));
   for (const look of ['paper', 'ink']) for (const size of [16, 32, 64, 128, 256, 512, 1024]) write(path.join(assets, 'brand', `codeshi-${look}-${size}.png`), await tilePng(look, size));
   for (const size of [16, 32]) write(path.join(pub, `icon-${size}.png`), await render(brand.mark({ pixels: size }), size));
   for (const size of [180, 192, 512]) write(path.join(pub, `icon-${size}.png`), await render(brand.mark({ pixels: size, square: true }), size));
