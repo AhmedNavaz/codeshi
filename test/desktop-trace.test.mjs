@@ -41,7 +41,8 @@ test('a trace records the Performance panel categories for ten seconds and saves
   assert.equal(chromium.calls[1][1], path.join(dir, 'codeshi-trace-20261111-090807.json'), 'Chromium writes the trace');
   assert.equal(zlib.gunzipSync(fs.readFileSync(file)).toString(), '{"traceEvents":[]}', 'and it is kept gzipped');
   assert(!fs.existsSync(path.join(dir, 'codeshi-trace-20261111-090807.json')), 'with no uncompressed copy left');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // Windows has no owner-only file modes.
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(summary.recordedAt, '2026-11-11T09:08:07.123Z');
   assert.deepEqual(summary.cpu, { pages: 36, graphics: 39, app: 2, other: 0 }, 'part of one core over the ten seconds');
   assert.equal(summary.seconds, 10);
@@ -49,7 +50,7 @@ test('a trace records the Performance panel categories for ten seconds and saves
   assert.deepEqual(summary.processes.map(entry => entry.group), ['app', 'pages', 'graphics']);
   assert.deepEqual(changes, [true, false], 'the menu hears when it starts and ends');
   assert.equal(recorder.isRecording(), false);
-  assert.equal(fs.statSync(dir).mode & 0o777, 0o700, 'the folder is private to this user');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(dir).mode & 0o777, 0o700, 'the folder is private to this user');
 });
 
 test('one trace at a time, and tracing stops even if waiting fails', async t => {

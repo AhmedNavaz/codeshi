@@ -274,15 +274,17 @@ test('tests run only the command marked in Run, after the patch is applied and t
 test('failing tests keep the patch and its recovery checkpoint, and stopping is recorded as stopped',async t=>{
   const env=setup(t),commands=new ProjectCommands({registry:env.registry,stopGrace:20});t.after(()=>commands.close());
   const solution=await appliedFix(env);await env.service.applySolution(env.first.id,solution.id,{approvedIntegrity:solution.integrity});
-  const folderId=env.registry.get(env.first.id).folders[0].id,saved=commands.save(env.first.id,{name:'Test',folderId,command:'echo nope; exit 3',test:true});
+  // Commands that mean the same in sh and in cmd.exe, so this also runs on Windows.
+  const fails=`node -e "console.log('nope');process.exit(3)"`,waits=`node -e "setTimeout(()=>{},30000)"`;
+  const folderId=env.registry.get(env.first.id).folders[0].id,saved=commands.save(env.first.id,{name:'Test',folderId,command:fails,test:true});
   const confirm={reviewed:true,command:{id:saved.id,command:saved.command,folderId,directory:''}};
   await env.service.runTests(env.first.id,solution.id,confirm);await env.service.testing.get(solution.id).finished;
   let result=env.service.getSolution(env.first.id,solution.id).verification.at(-1);
   assert.equal(result.status,'failed');assert.equal(result.exitCode,3);assert.match(result.output,/nope/);
   assert.equal(existsContent(env.owner,'app.js'),'fixed\n','nothing is undone on its own');assert.equal(env.service.getSolution(env.first.id,solution.id).status,'applied');
   assert.match(env.broker.get(env.conversation.id).messages.at(-1).text,/failed \(exit code 3\).*can be undone/);
-  commands.save(env.first.id,{id:saved.id,name:'Test',folderId,command:'sleep 30',test:true});
-  await env.service.runTests(env.first.id,solution.id,{...confirm,command:{...confirm.command,command:'sleep 30'}});
+  commands.save(env.first.id,{id:saved.id,name:'Test',folderId,command:waits,test:true});
+  await env.service.runTests(env.first.id,solution.id,{...confirm,command:{...confirm.command,command:waits}});
   await until(()=>commands.state(env.first.id).sessions[saved.id]?.status==='running');
   const after=await env.service.stopTests(env.first.id,solution.id);assert.equal(after.status,'ready');
   result=after.results.at(-1);assert.equal(result.status,'stopped');assert.equal(result.passed,false);
