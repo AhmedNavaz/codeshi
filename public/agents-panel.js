@@ -34,6 +34,7 @@
       const selected = currentMode === option.mode, row = node('button', 'routing-option');
       row.type = 'button'; row.disabled = locked;
       row.setAttribute('role', 'radio'); row.setAttribute('aria-checked', String(selected));
+      row.setAttribute('aria-label', option.name); row.setAttribute('aria-description', option.hint);
       row.dataset.mode = option.mode;
       const text = node('span', 'routing-option-text');
       text.append(node('strong', '', option.name), node('small', '', option.hint));

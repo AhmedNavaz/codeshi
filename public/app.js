@@ -2802,22 +2802,26 @@
     return [...workspaces, ...files, ...actions];
   }
   function renderCommandResults(open) {
-    const host = $("command-results"), bar = host.parentNode;
+    // The search box is the combobox (#26): it says whether the list is open and which result the arrow keys are on.
+    const host = $("command-results"), input = $("workspace-search");
     commandItems = open ? commandResults() : [];
-    host.hidden = !commandItems.length; bar.setAttribute("aria-expanded", String(!host.hidden));
-    if (host.hidden) return;
+    host.hidden = !commandItems.length; input.setAttribute("aria-expanded", String(!host.hidden));
+    if (host.hidden) { input.removeAttribute("aria-activedescendant"); return; }
     commandActive = Math.min(Math.max(commandActive, 0), commandItems.length - 1);
-    let group = null;
+    let group = null, activeRow = null;
     host.replaceChildren(...commandItems.flatMap((item, index) => {
       const nodes = [];
       if (item.group !== group) { group = item.group; nodes.push(element("div", "command-group", group)); }
       const row = element("button", `command-result${index === commandActive ? " active" : ""}`);
-      row.type = "button"; row.setAttribute("role", "option"); row.setAttribute("aria-selected", String(index === commandActive));
+      row.type = "button"; row.id = `command-result-${index}`; row.tabIndex = -1; row.setAttribute("role", "option"); row.setAttribute("aria-selected", String(index === commandActive));
+      row.setAttribute("aria-label", item.detail ? `${item.label}, ${item.detail}` : item.label); if (index === commandActive) activeRow = row;
       row.append(element("span", "command-label", item.label), element("span", "command-detail", item.detail));
       row.addEventListener("mousedown", event => event.preventDefault());
       row.addEventListener("click", () => runCommandResult(index));
       nodes.push(row); return nodes;
     }));
+    input.setAttribute("aria-activedescendant", `command-result-${commandActive}`);
+    activeRow?.scrollIntoView?.({ block: "nearest" });
   }
   function runCommandResult(index) {
     const item = commandItems[index]; if (!item) return false;
@@ -2832,6 +2836,8 @@
   $("workspace-search")?.addEventListener("keydown", (event) => {
     // While an input method is composing, these keys finish or cancel the composition instead.
     if (event.isComposing) return;
+    // Tab leaves the search for the next control; the list closes first, so focus doesn't land in it as it closes.
+    if (event.key === "Tab") { renderCommandResults(false); return; }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); if (!commandItems.length) renderCommandResults(true); commandActive = (commandActive + (event.key === "ArrowDown" ? 1 : -1) + commandItems.length) % Math.max(commandItems.length, 1); renderCommandResults(true); }
     if (event.key === "Enter") { const items = commandItems.length ? commandItems : commandResults(); if (items[commandActive] || items[0]) { event.preventDefault(); commandItems = items; runCommandResult(items[commandActive] ? commandActive : 0); } }
     if (event.key === "Escape") { if ($("workspace-search").value) { event.preventDefault(); $("workspace-search").value = ""; searchFiles(); renderCommandResults(true); } else { renderCommandResults(false); $("workspace-search").blur?.(); } }

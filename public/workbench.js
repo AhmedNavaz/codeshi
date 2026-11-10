@@ -266,18 +266,28 @@
     actions(build, button('Build and export solution', async () => { if (!choice.i.value) throw Error('Choose an imported request first.'); const solution = await post(`/handoffs/${choice.i.value}/build`, { files: lines(files.i.value), deletedPaths: lines(deletes.i.value), explanation: explanation.i.value, assumptions: lines(assumptions.i.value), verification: lines(verification.i.value) }); notice(build, `Solution exported with ${solution.patch.files.length} proposed file change${solution.patch.files.length === 1 ? '' : 's'}. Send the file back to the person who requested help.`); diagnostics(build, solution, 'Exported solution details'); download(`solution-${solution.id}.json`, solution); }, 'primary'));
   }
 
+  // Requests a screen reader has already been told about (#26), so a redraw doesn't repeat them.
+  const announced = new Set();
+  function announceRequests(lines) {
+    const announcer = $('announcer'); if (!announcer || !lines.length) return;
+    announcer.textContent = lines.length === 1 ? `${lines[0]}. It’s above the message box.` : `${lines.length} requests need you, above the message box. ${lines.join('. ')}.`;
+  }
   function approvals() {
-    let host = $('pending-approvals'); if (!host) { host = node('section', undefined, 'pending-approvals'); host.id = 'pending-approvals'; $('transcript-footer').prepend(host); }
+    let host = $('pending-approvals'); if (!host) { host = node('section', undefined, 'pending-approvals'); host.id = 'pending-approvals'; host.setAttribute('aria-label', 'Requests from the agent'); $('transcript-footer').prepend(host); }
     const state = api().getState(), pending = state.conversation?.pendingApprovals || [], signature = describe(pending); if (host.dataset.signature === signature) return; host.dataset.signature = signature; host.replaceChildren();
+    const fresh = [];
     for (const item of pending) {
+      const isNew = item.id && !announced.has(item.id); if (item.id) announced.add(item.id);
       // An agent's questions with options get their own card, with the choices and Submit or Skip.
-      if (item.kind === 'question' && window.relayQuestions) { host.append(window.relayQuestions.card(item, state.conversation.id)); continue; }
+      if (item.kind === 'question' && window.relayQuestions) { if (isNew) fresh.push(`${providerName(item.provider)} has a question for you`); host.append(window.relayQuestions.card(item, state.conversation.id)); continue; }
       // The heading says what the agent wants to do; the exact command or file follows, and the full request stays one click away.
       const command = item.command || item.input?.command, target = item.input?.file_path || item.input?.path, files = item.kind?.includes('fileChange') || target;
       const card = node('article', undefined, 'approval-card'), head = node('header'), mark = node('span', undefined, 'approval-icon'); mark.setAttribute('aria-hidden', 'true');
       card.dataset.approvalId = item.id; card.tabIndex = -1;
       const access = item.kind === 'item/permissions/requestApproval', specific = item.connector || access;
-      head.append(mark, node('h3', `${providerName(item.provider)} ${command ? 'wants to run a command' : item.connector ? `wants to use ${item.connector}` : access ? 'wants more access' : files ? 'wants to change files' : 'needs your permission'}`)); card.append(head);
+      const heading = `${providerName(item.provider)} ${command ? 'wants to run a command' : item.connector ? `wants to use ${item.connector}` : access ? 'wants more access' : files ? 'wants to change files' : 'needs your permission'}`;
+      if (isNew) fresh.push(heading);
+      head.append(mark, node('h3', heading)); card.append(head);
       if (item.title && item.title !== command) card.append(node('p', item.title, 'approval-title'));
       // A tool's own parameters say what it will do, so they're shown before you decide.
       if (specific) { if (item.details) output(card, item.details).classList.add('approval-details'); }
@@ -291,18 +301,22 @@
         const menu = node('div', undefined, 'approval-scope-menu'); menu.hidden = true; menu.setAttribute('role', 'menu');
         for (const [remember, title, detail] of [['run', 'Allow for this run', 'Until this run ends'], ['workspace', 'Always allow in this workspace', 'You can revoke it in Workspace settings']]) {
           const option = node('button', undefined, 'approval-scope-option'); option.type = 'button'; option.setAttribute('role', 'menuitem');
-          option.append(node('strong', title), node('span', `${item.scope.label} · ${detail}`));
+          option.append(node('strong', title), node('span', `${item.scope.label} · ${detail}`)); option.setAttribute('aria-label', title); option.setAttribute('aria-description', `${item.scope.label} · ${detail}`);
           option.addEventListener('click', () => { menu.hidden = true; answer([...choices, ...scoped], state.conversation.id, item, true, remember); });
           menu.append(option); scoped.push(option);
         }
         more.addEventListener('click', () => { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('button')?.focus?.(); });
-        menu.addEventListener('keydown', event => { if (event.key === 'Escape') { menu.hidden = true; more.setAttribute('aria-expanded', 'false'); more.focus(); } });
+        menu.addEventListener('keydown', event => {
+          if (event.key === 'Escape') { menu.hidden = true; more.setAttribute('aria-expanded', 'false'); more.focus(); return; }
+          if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { const list = [...menu.querySelectorAll('button')], at = list.indexOf(document.activeElement), next = window.codeshiKeyboard?.step(event.key, at, list.length); if (next >= 0) { event.preventDefault(); list[next].focus(); } }
+        });
         scoped.push(more);
         const split = node('span', undefined, 'approval-split'); split.append(choices[0], more, menu);
         diagnostics(footer, item, 'Full request'); actions(footer, choices[1], split);
       } else { diagnostics(footer, item, 'Full request'); actions(footer, choices[1], choices[0]); }
       host.append(card);
     }
+    announceRequests(fresh);
   }
   // Approval cards sit outside the dialog, so a failed answer is shown in the page notice. The refresh afterwards removes a request that is no longer pending.
   async function answer(choices, conversationId, item, allow, remember = null) {

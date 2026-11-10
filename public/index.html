@@ -18,6 +18,7 @@
     <link rel="stylesheet" href="/parallel-tasks.css" />
     <link rel="stylesheet" href="/workbench.css" />
     <link rel="stylesheet" href="/settings.css" />
+    <script src="/keyboard.js" defer></script>
     <script src="/routing.js" defer></script>
     <script src="/layout.js" defer></script>
     <script src="/app.js" defer></script>
@@ -109,10 +110,10 @@
           <div id="flow-brand" class="flow-brand" hidden><img class="flow-brand-mark" src="/mark.svg" alt="" width="22" height="22" /><span class="flow-brand-name">Flow</span><span id="flow-brand-workspace" class="flow-brand-workspace"></span></div>
           <button id="workspace-chip" class="workspace-chip" type="button" title="Show the sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg><span id="workspace-chip-name">Codeshi</span></button>
           <div class="header-title sr-only"><h1 id="conversation-title">No workspace selected</h1><p id="conversation-subtitle">Create a workspace to start.</p></div>
-          <div class="command-bar" role="combobox" aria-haspopup="listbox" aria-owns="command-results" aria-expanded="false">
+          <div class="command-bar">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-            <label class="sr-only" for="workspace-search">Search workspaces and actions</label><input id="workspace-search" type="search" placeholder="Search workspaces and actions" autocomplete="off" spellcheck="false" aria-controls="command-results" aria-autocomplete="list" />
-            <div id="command-results" class="command-results" role="listbox" aria-label="Workspaces and actions" hidden></div>
+            <label class="sr-only" for="workspace-search">Search workspaces and actions</label><input id="workspace-search" type="search" role="combobox" placeholder="Search workspaces and actions" autocomplete="off" spellcheck="false" aria-controls="command-results" aria-autocomplete="list" aria-expanded="false" />
+            <div id="command-results" class="command-results" role="listbox" aria-label="Workspaces and actions" tabindex="-1" hidden></div>
           </div>
           <div class="header-actions">
             <div id="conversation-state" class="conversation-state sr-only" hidden><i aria-hidden="true"></i><span>Ready</span></div>
@@ -427,7 +428,7 @@
       <section class="explorer" id="explorer" aria-label="Workspace files" hidden>
         <header class="explorer-heading"><div><h2 id="files-title">Files</h2><p id="files-location"></p></div><button id="refresh-files" class="icon-button" type="button" aria-label="Refresh files" title="Refresh files"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button><button id="close-files" class="icon-button" type="button" aria-label="Close files" title="Close files (Esc)"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6l-12 12"/></svg></button></header>
         <p id="files-error" class="files-error" role="alert" hidden></p>
-        <div id="file-tree" class="file-tree" role="region" aria-label="Folders and files"></div>
+        <div id="file-tree" class="file-tree" role="tree" aria-label="Folders and files"></div>
         <p class="explorer-footnote">Choose a file to preview or attach to your message.</p>
       </section>
     </dialog>

@@ -26,6 +26,14 @@
   // The parts every page is built from. A group is a titled list of rows. A row says what a setting is and does, with
   // its control on the right; a switch or a list is part of the row's label, so clicking the words changes it too.
   const words = (label, description) => { const text = node('span', undefined, 'settings-row-text'); text.append(node('span', label, 'settings-row-label')); if (description) text.append(node('span', description, 'settings-row-description')); return text; };
+  // A screen reader names a switch or list by its label alone and reads the description after it (#26), rather than
+  // reading the whole row as its name.
+  let described = 0;
+  const name = (control, text, label) => {
+    control.setAttribute('aria-label', label);
+    const description = text.querySelector?.('.settings-row-description') || text.childNodes?.[1];
+    if (description) { description.id ||= `settings-description-${++described}`; control.setAttribute('aria-describedby', description.id); }
+  };
   const kit = {
     group(parent, heading, description) {
       const group = node('section', undefined, 'settings-group');
@@ -47,14 +55,16 @@
       const row = node('label', undefined, 'settings-row'), box = node('input', undefined, 'settings-switch');
       box.type = 'checkbox'; box.setAttribute('role', 'switch'); box.checked = Boolean(checked); box.disabled = Boolean(disabled);
       box.addEventListener('change', () => onChange(box.checked));
-      row.append(words(label, description), box); if (keywords) row.dataset.keywords = keywords;
+      const text = words(label, description); name(box, text, label);
+      row.append(text, box); if (keywords) row.dataset.keywords = keywords;
       rows.append(row); return box;
     },
     select(rows, { label, description, keywords, options, value, disabled = false, onChange }) {
       const row = node('label', undefined, 'settings-row'), select = node('select', undefined, 'settings-select');
       for (const [optionValue, text] of options) { const option = node('option', text); option.value = optionValue; select.append(option); }
       select.value = value; select.disabled = Boolean(disabled); select.addEventListener('change', () => onChange(select.value));
-      row.append(words(label, description), select); if (keywords) row.dataset.keywords = keywords;
+      const text = words(label, description); name(select, text, label);
+      row.append(text, select); if (keywords) row.dataset.keywords = keywords;
       rows.append(row); return select;
     },
     segmented(options, value, onChange, label) {

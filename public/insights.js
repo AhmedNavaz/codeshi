@@ -105,7 +105,11 @@
     const asking = Boolean(c.pendingApprovals?.length) && c.pendingApprovals.every(item => item.kind === 'question');
     const quiet = running && !c.pendingApprovals?.length && silence > 30000;
     const phaseLabel = { routing: 'Assessing task', starting: 'Starting agent', working: 'Working', reasoning: 'Reasoning', responding: 'Writing response', tool: 'Running tools', compacting: 'Organizing context', approval: asking ? 'Waiting for your answer' : 'Waiting for approval' }[phase] || 'Working';
-    $('run-phase').textContent = running ? state.streamConnected === false ? 'Reconnecting to app' : quiet ? 'Waiting for provider' : phaseLabel : run.status === 'complete' ? 'Completed' : run.errorCategory === 'quota' ? 'Usage limit reached' : 'Run stopped';
+    // This runs every second; the spoken status changes only when its words do, so a screen reader doesn't repeat it (#26).
+    const report = run.purpose === 'review' ? c.reviews?.find(review => review.id === run.reviewId) : null;
+    const runText = running ? state.streamConnected === false ? 'Reconnecting to app' : quiet ? 'Waiting for provider' : phaseLabel : run.status === 'complete' ? 'Completed' : run.errorCategory === 'quota' ? 'Usage limit reached' : 'Run stopped';
+    const phaseText = run.purpose !== 'review' ? runText : running ? 'Review · ' + runText : report?.status === 'complete' ? 'Review complete' : 'Review needs attention';
+    if ($('run-phase').textContent !== phaseText) $('run-phase').textContent = phaseText;
     $('run-phase').className = `run-phase sr-only ${running ? quiet ? 'quiet' : phase === 'approval' ? 'approval' : 'active' : run.status === 'complete' ? 'complete' : 'quiet'}`;
     // A finished run states its duration in the action text.
     $('run-elapsed').textContent = running && Number.isFinite(elapsed) ? duration(elapsed) : '';
@@ -165,8 +169,6 @@
     }
     $('run-metrics').replaceChildren(...metrics.map(value => el('span', value, 'run-metric-item')));
     if (run.purpose === 'review') {
-      const report = c.reviews?.find(review => review.id === run.reviewId);
-      $('run-phase').textContent = running ? 'Review · ' + $('run-phase').textContent : report?.status === 'complete' ? 'Review complete' : 'Review needs attention';
       if (!running && report?.status !== 'complete') $('run-phase').className = 'run-phase sr-only quiet';
       $('run-detail').textContent = `${name(run.provider)} · Read-only review${report?.summary ? ' · ' + report.summary : ''}`;
     }

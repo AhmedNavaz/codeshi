@@ -9,6 +9,8 @@ button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .5; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: -1px; }
+/* A popover dialog takes focus as it opens so its title is read (#26); the box itself needs no ring. */
+[popover][role="dialog"]:focus-visible { outline: none; }
 ::selection { background: var(--selection); }
 [hidden] { display: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

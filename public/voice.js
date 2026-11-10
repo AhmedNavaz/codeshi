@@ -435,6 +435,7 @@
     const items = MODES.map(([mode, label, hint]) => {
       const item = node('button', undefined, 'voice-menu-item'); item.type = 'button'; item.setAttribute('role', 'menuitemradio'); item.setAttribute('aria-checked', String(mode === chosen)); item.dataset.mode = mode;
       item.append(node('span', label, 'voice-menu-label'), node('span', hint, 'voice-menu-hint'));
+      item.setAttribute('aria-label', label); item.setAttribute('aria-description', hint);
       item.addEventListener('click', () => { modeMenu.hidePopover?.(); setMode(mode); });
       return item;
     });

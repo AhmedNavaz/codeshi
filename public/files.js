@@ -127,9 +127,13 @@
       }
     }
   }
-  function directory(folder, relative, name, host, id, version, root = false) {
-    const branch = el('div', 'tree-branch'), row = button('', 'tree-row tree-directory' + (root ? ' tree-root' : ''), toggle), children = el('div', 'tree-children');
+  // The tree is an ARIA tree (#26): each row is a treeitem at its level, a folder's contents are its group, and
+  // keyboard.js moves between rows with the arrow keys.
+  const treeRow = (node, level) => { node.setAttribute('role','treeitem'); node.setAttribute('aria-level',String(level)); node.tabIndex = -1; return node; };
+  function directory(folder, relative, name, host, id, version, root = false, level = 1) {
+    const branch = el('div', 'tree-branch'), row = treeRow(button('', 'tree-row tree-directory' + (root ? ' tree-root' : ''), toggle), level), children = el('div', 'tree-children');
     row.append(el('span','tree-chevron'), el('span','file-glyph folder'), el('span','tree-label',name));
+    branch.setAttribute('role','none'); children.setAttribute('role','group');
     row.title = relative || folder.path; row.setAttribute('aria-expanded','false'); children.hidden = true;
     branch.append(row,children); host.append(branch); let loaded = false, loading = false;
     async function load(offset = 0) {
@@ -140,21 +144,22 @@
         if (version !== treeVersion) return;
         if (!offset) children.replaceChildren();
         for (const entry of result.entries) {
-          if (entry.kind === 'directory') directory(folder,entry.path,entry.name,children,id,version);
+          if (entry.kind === 'directory') directory(folder,entry.path,entry.name,children,id,version,false,level + 1);
           else {
-            const file = button('', 'tree-row tree-file', () => { for (const node of $('file-tree').querySelectorAll('.tree-file')) node.classList.remove('selected'); file.classList.add('selected'); openFile(folder,entry,id); });
+            const file = treeRow(button('', 'tree-row tree-file', () => { for (const node of $('file-tree').querySelectorAll('.tree-file')) { node.classList.remove('selected'); node.setAttribute('aria-selected','false'); } file.classList.add('selected'); file.setAttribute('aria-selected','true'); openFile(folder,entry,id); }), level + 1);
+            file.setAttribute('aria-selected','false');
             const ext = entry.name.split('.').at(-1).toLowerCase(), image = ['png','jpg','jpeg','gif','webp'].includes(ext);
-            file.append(el('span','file-glyph ' + (image ? 'image' : ['js','jsx','ts','tsx','json'].includes(ext) ? 'script' : 'code'), image ? '▧' : ['js','jsx','ts','tsx'].includes(ext) ? ext.slice(0,2).toUpperCase() : '≡'), el('span','tree-label',entry.name)); file.title = entry.path; children.append(file);
+            const glyph = el('span','file-glyph ' + (image ? 'image' : ['js','jsx','ts','tsx','json'].includes(ext) ? 'script' : 'code'), image ? '▧' : ['js','jsx','ts','tsx'].includes(ext) ? ext.slice(0,2).toUpperCase() : '≡'); glyph.setAttribute('aria-hidden','true');
+            file.append(glyph, el('span','tree-label',entry.name)); file.title = entry.path; children.append(file);
           }
         }
-        if (!result.entries.length && !offset) children.append(el('p','tree-note','No visible files'));
-        if (result.nextOffset !== null) { const more = button('Load more…','tree-more', () => { more.disabled = true; load(result.nextOffset).then(ok => { if (ok) more.remove(); else more.disabled = false; }); }); children.append(more); }
+        if (!result.entries.length && !offset) { const empty = treeRow(el('p','tree-note','No visible files'), level + 1); empty.setAttribute('aria-disabled','true'); children.append(empty); }
+        if (result.nextOffset !== null) { const more = treeRow(button('Load more…','tree-more', () => { more.disabled = true; load(result.nextOffset).then(ok => { if (ok) more.remove(); else more.disabled = false; }); }), level + 1); children.append(more); }
         loaded = true; return true;
-      } catch (error) { if (version === treeVersion) { if (!offset) children.replaceChildren(); const retry = button('Retry','tree-more',() => { retry.remove(); load(offset); }); children.append(el('p','tree-note',error.message),retry); } return false; }
+      } catch (error) { if (version === treeVersion) { if (!offset) children.replaceChildren(); const retry = treeRow(button('Retry','tree-more',() => { retry.remove(); load(offset); }), level + 1); retry.setAttribute('aria-label', 'Retry. ' + error.message); children.append(el('p','tree-note',error.message),retry); } return false; }
       finally { loading = false; row.removeAttribute('aria-busy'); }
     }
     function toggle() { if (loading) return; const expanded = row.getAttribute('aria-expanded') === 'true'; row.setAttribute('aria-expanded',String(!expanded)); children.hidden = expanded; if (!expanded && !loaded) load(); }
-    row.addEventListener('keydown',event => { if (event.key === 'ArrowRight' && children.hidden || event.key === 'ArrowLeft' && !children.hidden) { event.preventDefault(); toggle(); } });
     if (root) toggle();
   }
   function refreshTree() {
@@ -203,6 +208,7 @@
     if (browser.open) { browser.close(); return; }
     if (!api.getState().projectId) return;
     $('explorer').hidden = false; opener.setAttribute('aria-expanded', 'true'); browser.showModal(); refreshTree();
+    $('file-tree').querySelector('[role="treeitem"]')?.focus();
     window.dispatchEvent(new Event('relay-files'));
   });
   $('close-files').addEventListener('click', () => browser.close());

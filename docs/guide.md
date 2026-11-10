@@ -329,6 +329,16 @@ Shortcuts use ⌘ on macOS and Ctrl elsewhere:
 
 The desktop app's menu bar lists these shortcuts too, and adds ⌘, for **Settings…**, ⌘N for **New Workspace** and ⌘G for **Find Next**. Each menu item does what its shortcut or button does. Items are dimmed when they don't apply, such as **Stop Run** when nothing is running, and while a dialog is open, items for the controls behind it do nothing. **Agent** ticks the selected agent and **Keep Awake**, **Workspace** ticks the open workspace, and **View** ticks **Show Files**, **Show Git Activity** and the appearance. **Help** opens this guide, the roadmap, the release notes and the bug and design feedback forms on GitHub. The bug form starts with your Codeshi and macOS versions filled in.
 
+**Without a mouse, or with a screen reader** (#26):
+
+- **Menus** such as **More actions** and **Voice mode** open on their first item, or on the chosen one. The arrow keys, Home and End move between items, a letter jumps to the next item starting with it, Escape closes the menu and returns to its button, and Tab closes it and moves on.
+- **Popovers** such as **Plan usage** and **Software update** take focus when they open, so a screen reader reads their title. Tab stays inside until Escape or **Close** returns you to what opened them.
+- **The file tree** in **Files** is one stop in the Tab order. Up and Down move between rows, Right opens a folder or moves into it, Left closes it or moves to its parent, Home and End go to the ends, a letter jumps to the next row starting with it, and Enter opens a file.
+- **The search bar** reads the highlighted result as the arrow keys move, and Tab leaves it for the next control.
+- **Approvals and questions** are read out once when they arrive, such as "Claude wants to run a command. It's above the message box." Their **Approve** and **Deny** come before the message box in the Tab order.
+- **The run's status**, such as *Working* or *Waiting for approval*, is read when it changes, not repeated while it stays the same.
+- **Settings** switches and lists are read by their name, followed by their description.
+
 ## Cross-agent review
 
 After a completed task, **Review changes…** (shown under the run when there are changes, and always in the search bar and the **File** menu) suggests the eligible changed files and prepares their exact diff preview. The goal is filled from the current task. Adjust the selected files if needed, inspect the preview and choose **Start read-only review**. Unknown or API billing needs explicit confirmation before the review can consume usage. The toolbar's **Review** action also supports choosing files manually.

@@ -608,6 +608,33 @@ test('a connector request says who it reaches and what it will do, and a paramet
   assert.equal(access.querySelector('h3').textContent,'Codex wants more access');assert.equal(access.querySelector('.approval-title').textContent,'Network access');assert.match(access.querySelector('.approval-details').textContent,/Needs to fetch/);
 });
 
+test('a screen reader hears each new approval request once, and what it asks (#26)',async()=>{
+  const ui=await browser({workbench:true}),conversation=ui.canonical.get('project-one'),spoken=()=>ui.$('announcer').textContent;
+  conversation.status='running';conversation.activeRun={provider:'codex'};conversation.pendingApprovals=[{id:'approval-one',runId:'run-one',provider:'codex',kind:'command',command:'git status'}];await ui.window.relayUI.refresh();
+  assert.equal(spoken(),'Codex wants to run a command. It’s above the message box.');
+  ui.$('announcer').textContent='';conversation.pendingApprovals=[...conversation.pendingApprovals,{id:'approval-two',runId:'run-one',provider:'codex',kind:'fileChange',input:{file_path:'src/a.js'}}];await ui.window.relayUI.refresh();
+  assert.equal(spoken(),'Codex wants to change files. It’s above the message box.','Only the new request is read.');
+  ui.$('announcer').textContent='';conversation.pendingApprovals=[{id:'approval-two',runId:'run-one',provider:'codex',kind:'fileChange',input:{file_path:'src/a.js'}}];await ui.window.relayUI.refresh();
+  assert.equal(spoken(),'','A request already read is not read again when the cards redraw.');
+  conversation.pendingApprovals=[{id:'three',runId:'run-one',provider:'claude',kind:'command',command:'ls'},{id:'four',runId:'run-one',provider:'claude',kind:'command',command:'pwd'}];await ui.window.relayUI.refresh();
+  assert.equal(spoken(),'2 requests need you, above the message box. Claude wants to run a command. Claude wants to run a command.');
+  assert.equal(ui.$('pending-approvals').getAttribute('aria-label'),'Requests from the agent');
+});
+
+test('the search box is a combobox that says which result the arrow keys are on, and Tab leaves it (#26)',async()=>{
+  const ui=await browser({moreProjects:true}),search=ui.$('workspace-search'),results=ui.$('command-results');
+  const press=key=>search.dispatchEvent(new UIEvent('keydown',{key}));
+  search.dispatchEvent(new UIEvent('focus'));
+  assert.equal(search.getAttribute('aria-expanded'),'true');assert.equal(search.getAttribute('aria-activedescendant'),'command-result-0');
+  press('ArrowDown');
+  const active=results.querySelectorAll('.command-result').find(row=>row.id===search.getAttribute('aria-activedescendant'));
+  assert.equal(search.getAttribute('aria-activedescendant'),'command-result-1');assert.equal(active.getAttribute('aria-selected'),'true');
+  assert.equal(active.getAttribute('aria-label').startsWith(active.querySelector('.command-label').textContent),true,'Each result is named by its label, then its detail.');
+  assert.equal(active.tabIndex,-1,'Results are reached with the arrow keys, not Tab.');
+  press('Tab');
+  assert.equal(results.hidden,true);assert.equal(search.getAttribute('aria-expanded'),'false');assert.equal(search.getAttribute('aria-activedescendant'),null);
+});
+
 test('shipped markup has one conversation header and retains distinct primary controls',()=>{
   const html=fs.readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
   const tags=[...html.matchAll(/<([\w-]+)\b[^>]*\bid="([^"]+)"[^>]*>/g)];
@@ -5031,6 +5058,13 @@ test('Settings puts each subject on its own page, switches the view from General
   assert.deepEqual(labels('routing'), ['Offer a handoff near a usage limit', 'Hand off automatically', 'Context limit', 'Custom context limit']);
   assert.deepEqual(labels('testing'), ['Testing cadence']);
   assert.equal(labels('general').includes('Theme'), false, 'General no longer holds the theme.');
+  // A screen reader names each switch and list by its label and reads the description after it (#26).
+  const awake = page('general').querySelectorAll('input').find(box => box.getAttribute('aria-label') === 'Keep awake');
+  assert.equal(awake.getAttribute('role'), 'switch');
+  const description = page('general').querySelectorAll('.settings-row-description').find(node => node.id === awake.getAttribute('aria-describedby'));
+  assert.match(description.textContent, /Keep the computer awake/);
+  const handoff = page('routing').querySelectorAll('select').find(select => select.getAttribute('aria-label') === 'Context limit');
+  assert(handoff?.getAttribute('aria-describedby'), 'Lists are named the same way.');
   // Places other parts of the app link to open the page that holds them.
   await ui.window.relaySettings.open('remote'); await flush(); assert.equal(ui.$('settings-title').textContent, 'Phone & remote');
   await ui.window.relaySettings.open('handoff'); await flush(); assert.equal(ui.$('settings-title').textContent, 'Routing & handoffs');
