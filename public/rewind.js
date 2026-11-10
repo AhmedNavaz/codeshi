@@ -75,20 +75,27 @@
     const count = action => work.filter(file => file.action === action).length;
     const parts = redo ? (work.length ? [`puts back ${plural(work.length, 'file')} as the run left them`] : []) : [count('restore') && `restores ${plural(count('restore'), 'file')}`, count('merge') && `takes the run’s edits out of ${plural(count('merge'), 'file')}, keeping later changes`, count('remove') && `removes ${plural(count('remove'), 'file')} it added`, count('recreate') && `brings back ${plural(count('recreate'), 'file')} it deleted`].filter(Boolean);
     const summary = parts.length ? `This ${parts.join(', ').replace(/, ([^,]*)$/, ' and $1')}.` : redo ? 'There is nothing to put back: these files changed since the undo.' : 'There is nothing to undo: these files are already as they were before the run, or changed since.';
-    $('rewind-summary').textContent = (restoring ? work.length ? `This returns ${plural(work.length, 'file')} to the selected checkpoint, replacing later edits and removing files added since. The conversation stays. Review the changes below.` : 'The saved files already match this checkpoint.' : summary) + (left.length ? ` ${plural(left.length, 'file')} ${left.length === 1 ? 'stays' : 'stay'} as ${left.length === 1 ? 'it is' : 'they are'}.` : '');
+    const talk = restoring ? preview.conversation : null, rewinding = Boolean(talk?.available && current.conversation);
+    $('rewind-conversation').hidden = !talk;
+    if (talk) {
+      const box = $('rewind-conversation-check'); box.disabled = !talk.available; box.checked = rewinding;
+      $('rewind-conversation-detail').textContent = !talk.available ? talk.reason || 'Not available for this checkpoint.'
+        : `${plural(talk.count, 'later message')} ${talk.count === 1 ? 'is' : 'are'} folded away: still in the chat behind a fold, but no agent reads ${talk.count === 1 ? 'it' : 'them'} again. Every agent starts a fresh session.${talk.returnsPrompt ? ' The run’s prompt goes back in the message box.' : ''}`;
+    }
+    $('rewind-summary').textContent = (restoring ? work.length ? `This returns ${plural(work.length, 'file')} to the selected checkpoint, replacing later edits and removing files added since. ${rewinding ? 'The conversation goes back too.' : 'The conversation stays.'} Review the changes below.` : rewinding ? 'The saved files already match this checkpoint. Only the conversation goes back.' : 'The saved files already match this checkpoint.' : summary) + (left.length ? ` ${plural(left.length, 'file')} ${left.length === 1 ? 'stays' : 'stay'} as ${left.length === 1 ? 'it is' : 'they are'}.` : '');
     const files = $('rewind-files'); files.replaceChildren();
     if (work.length) { const list = node('div', undefined, 'rewind-list'); work.forEach(file => list.append(fileRow(file, multiple, restoring))); if (work.length === 1) list.firstChild.open = true; files.append(list); }
     if (left.length) { const heading = node('h3', 'Left as they are', 'rewind-heading'), list = node('ul', undefined, 'rewind-left-list'); left.forEach(file => list.append(fileRow(file, multiple))); files.append(heading, list); }
-    $('rewind-note').textContent = work.length ? restoring ? 'A recovery checkpoint is saved before restoring.' : redo ? 'You can undo this run again afterwards.' : 'You can redo this afterwards.' : '';
-    $('confirm-rewind').textContent = restoring ? 'Restore checkpoint' : redo ? 'Redo changes' : 'Undo changes';
-    $('confirm-rewind').disabled = !work.length || api.isRunning() || Boolean(api.getState().taskId);
+    $('rewind-note').textContent = work.length ? restoring ? 'A recovery checkpoint is saved before restoring.' : redo ? 'You can undo this run again afterwards.' : 'You can redo this afterwards.' : rewinding ? 'Folded messages stay in the saved history.' : '';
+    $('confirm-rewind').textContent = restoring ? rewinding ? work.length ? 'Restore files and conversation' : 'Rewind conversation' : 'Restore checkpoint' : redo ? 'Redo changes' : 'Undo changes';
+    $('confirm-rewind').disabled = !(work.length || rewinding) || api.isRunning() || Boolean(api.getState().taskId);
   }
   function failure(message) { $('rewind-error').textContent = message || ''; $('rewind-error').hidden = !message; }
 
   async function open(target) {
     if (api.getState().taskId) { api.showNotice('Open the main workspace conversation to use Timeline.'); return; }
     const projectId = api.getState().projectId, mine = ++generation;
-    current = { target, projectId, preview: null }; busy = false; failure('');
+    current = { target, projectId, preview: null, conversation: false }; busy = false; failure(''); $('rewind-conversation').hidden = true;
     $('rewind-title').textContent = target.kind === 'checkpoint' ? 'Restore checkpoint?' : target.kind === 'rewind' ? 'Redo changes?' : 'Undo changes?'; $('rewind-meta').textContent = '';
     $('rewind-summary').textContent = 'Comparing the files with this run’s checkpoint…'; $('rewind-files').replaceChildren(); $('rewind-note').textContent = '';
     $('confirm-rewind').textContent = target.kind === 'rewind' ? 'Redo changes' : 'Undo changes'; $('confirm-rewind').disabled = true;
@@ -106,19 +113,24 @@
     const { target, projectId, preview } = current, mine = generation;
     busy = true; $('confirm-rewind').disabled = true; dialog.setAttribute('aria-busy', 'true'); failure('');
     try {
-      await api.post('/api/checkpoints/apply', { target, digest: preview.digest }, projectId);
+      const rewinding = Boolean(current.conversation && preview.conversation?.available);
+      const result = await api.post('/api/checkpoints/apply', { target, digest: preview.digest, ...(rewinding ? { conversation: { count: preview.conversation.count } } : {}) }, projectId);
       if (mine !== generation) return;
       dialog.close();
       await api.refresh?.();
+      // Rewound to before a run: its prompt goes back in an empty message box, to edit and send again.
+      const input = $('message-input'), prompt = result?.conversation?.prompt;
+      if (prompt && input && !input.value.trim() && api.getState().projectId === projectId) { input.value = prompt; input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); }
     } catch (error) {
       if (mine !== generation) return;
       busy = false; dialog.removeAttribute('aria-busy');
       // Files changed since the preview: show the new preview, so what is confirmed is always what you saw.
-      if (error.status === 409 && /Review the changes again/.test(error.message)) { await open(target); failure('Files changed since you opened this. Here is the updated preview.'); }
+      if (error.status === 409 && /Review the changes again/.test(error.message)) { const keep = current.conversation; await open(target); if (current) { current.conversation = keep; if (current.preview) render(current.preview); } failure('The files or the conversation changed since you opened this. Here is the updated preview.'); }
       else { failure(error.message); $('confirm-rewind').disabled = false; }
     }
   });
   const close = () => { generation++; busy = false; if (dialog.open) dialog.close(); };
+  $('rewind-conversation-check').addEventListener('change', event => { if (!current?.preview || busy) return; current.conversation = event.target.checked; render(current.preview); });
   $('cancel-rewind').addEventListener('click', close);
   $('close-rewind').addEventListener('click', close);
   dialog.addEventListener('close', () => { generation++; busy = false; current = null; });
@@ -172,7 +184,7 @@
     if (!panel) return;
     panel.hidden = !open;
     if (keep) remember(open ? 'timeline' : 'none');
-    if (open) { window.relayAgents?.close(); window.relayGit?.close(); window.relayBrief?.close(); window.relayTasks?.close(); window.relayReviews?.closePanel?.(); window.relayOrchestration?.closePanel?.(); loadTimeline(); }
+    if (open) { window.relayAgents?.close(); window.relayGit?.close(); window.relayBrief?.close(); window.relayTasks?.close(); window.relayReviews?.closePanel?.(); loadTimeline(); }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
   $('refresh-timeline')?.addEventListener('click', () => loadTimeline(true));

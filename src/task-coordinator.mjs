@@ -248,7 +248,7 @@ export class TaskCoordinator {
       for (const entry of (c.memory || []).filter(item => item.status === 'active' && (task.purpose === 'project-review' || !item.folderId || item.folderId === task.folderId))) lane.broker.record(conversation, { type: 'memory_add', entry });
       if (c.skills?.length) lane.broker.record(conversation, { type: 'skills', skills: c.skills, dirs: c.skillDirs || [] });
       lane.broker.budget.setPolicy(conversation, this.main.budget.policy(c));
-      if (task.includeHistory) for (const message of c.messages.filter(item => ['user', 'assistant'].includes(item.role) && item.text?.trim() && !item.reviewId).slice(-20)) lane.broker.record(conversation, { type: 'message', message: { id: randomUUID(), role: message.role, text: message.text, provider: message.provider, status: 'complete', createdAt: message.createdAt } });
+      if (task.includeHistory) for (const message of c.messages.filter(item => ['user', 'assistant'].includes(item.role) && item.text?.trim() && !item.reviewId && !item.rewound).slice(-20)) lane.broker.record(conversation, { type: 'message', message: { id: randomUUID(), role: message.role, text: message.text, provider: message.provider, status: 'complete', createdAt: message.createdAt } });
     }
     if (first) lane.broker.record(lane.c, { type: 'execution_policy', policy: this.main.execution.current(c, task.execution.taskId) });
     const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` };

@@ -197,6 +197,29 @@ export class RunCheckpoints {
     return { runId: rewind.runId, before: rewind.folders.map(({ folderId, path: where, before }) => ({ folderId, path: where, ...before })), after: rewind.folders.map(({ folderId, path: where, after }) => ({ folderId, path: where, ...after })) };
   }
 
+  // Where the conversation stood at a checkpoint: the first message after it, and how many messages came since.
+  // Before a run, its prompt is the first message folded; after a run, the first message that isn't the run's own.
+  conversation(c, target) {
+    if (target?.kind !== 'checkpoint') return null;
+    const messages = c.messages || [], saved = c.snapshots?.[target.id], rewind = c.rewinds?.find(item => item.id === target.id);
+    let from = -1;
+    if (saved) {
+      const first = messages.findIndex(message => message.runId === target.id);
+      if (target.phase === 'before') from = first;
+      else if (first >= 0) { const last = messages.findLastIndex(message => message.runId === target.id); from = messages.findIndex((message, index) => index > last && message.runId !== target.id); }
+    } else if (rewind?.noteId) {
+      const note = messages.findIndex(message => message.id === rewind.noteId);
+      from = note < 0 ? -1 : target.phase === 'before' ? note : note + 1 < messages.length ? note + 1 : -1;
+    }
+    const why = saved || rewind?.noteId ? 'Nothing was said after this checkpoint.' : 'This checkpoint was saved before the conversation could be rewound.';
+    if (from < 0) return { available: false, count: 0, reason: why };
+    const later = messages.slice(from).filter(message => !message.rewound);
+    if (!later.length) return { available: false, count: 0, reason: 'The later messages are already rewound.' };
+    const reason = c.queue?.length ? 'Queued prompts were written after this point. Send or remove them first.' : c.resume ? 'A task is waiting for a usage limit to reset. Cancel that wait first.' : null;
+    const prompt = target.phase === 'before' && saved && messages[from].role === 'user' && !messages[from].continuation ? messages[from].text || '' : '';
+    return { available: !reason, count: later.length, fromId: later[0].id, ...(reason ? { reason } : {}), ...(prompt ? { prompt } : {}) };
+  }
+
   async blob(gitDir, entry) { return entry ? (await git(['cat-file', 'blob', entry.oid], { gitDir, buffer: true })).stdout : Buffer.alloc(0); }
   async merge(gitDir, ours, base, theirs) {
     const directory = fs.mkdtempSync(path.join(this.root, 'merge-'));
@@ -264,7 +287,9 @@ export class RunCheckpoints {
         if (ACTIONS.includes(file.action) && lines < this.limits.diffTotal) { Object.assign(shown, await this.diff(file.gitDir, file.now, file.result)); lines += shown.diff ? shown.diff.split('\n').length : 0; }
         files.push(shown);
       }
-      return { target, runId: plan.pair.runId, provider: run?.provider || null, local: Boolean(run?.local), prompt: run?.prompt || '', startedAt: run?.startedAt || null, ...(plan.pair.restore ? { checkpointAt: plan.pair.checkpointAt, checkpointKind: plan.pair.checkpointKind } : {}), digest: plan.digest, files, unchanged: plan.files.filter(file => file.action === 'unchanged').length };
+      const conversation = plan.pair.restore ? this.conversation(c, target) : null;
+      return { target, runId: plan.pair.runId, provider: run?.provider || null, local: Boolean(run?.local), prompt: run?.prompt || '', startedAt: run?.startedAt || null, ...(plan.pair.restore ? { checkpointAt: plan.pair.checkpointAt, checkpointKind: plan.pair.checkpointKind } : {}), digest: plan.digest, files, unchanged: plan.files.filter(file => file.action === 'unchanged').length,
+        ...(conversation ? { conversation: { available: conversation.available, count: conversation.count, ...(conversation.reason ? { reason: conversation.reason } : {}), ...(conversation.prompt ? { returnsPrompt: true } : {}) } } : {}) };
     });
   }
 
@@ -292,14 +317,24 @@ export class RunCheckpoints {
     }
   }
 
-  async apply(c, target, digest) {
+  // rewindConversation, for a restore: { count } as the preview showed it. The conversation is folded back to the
+  // checkpoint only after every file is written, so a failed restore never leaves the chat rewound over unchanged files.
+  async apply(c, target, digest, rewindConversation = null) {
     return this.serial(async () => {
       if (this.broker.running) fail('Wait for the current run to finish before undoing changes.', 409);
       const plan = await this.plan(c, target);
       if (typeof digest !== 'string' || plan.digest !== digest) fail('Files changed since you reviewed this. Review the changes again.', 409);
+      let talk = null;
+      if (rewindConversation) {
+        talk = plan.pair.restore ? this.conversation(c, target) : null;
+        if (!talk) fail('Only a checkpoint restore can rewind the conversation.');
+        if (!talk.available) fail(talk.reason, 409);
+        if (talk.count !== rewindConversation.count) fail('The conversation changed since you reviewed this. Review the changes again.', 409);
+      }
       const order = file => ACTIONS.indexOf(file.action);
       // Removals first: on a case-insensitive disk, a renamed file would otherwise be written and then removed.
       const work = plan.files.filter(file => ACTIONS.includes(file.action)).sort((a, b) => order(a) - order(b));
+      if (!work.length && talk) return this.rewindConversation(c, target, plan, talk, null, 0);
       if (!work.length) fail(plan.pair.restore ? 'The saved files already match this checkpoint.' : 'There is nothing to undo: these files are already as they were, or changed since.', 409);
       const id = randomUUID(), folderOf = new Map(this.folders().map(folder => [folder.id, folder])), done = [];
       const savedStores = plan.pair.restore ? this.folders().map(folder => ({ folder, gitDir: path.join(this.root, `${folder.id}.git`), now: plan.current.find(item => item.folderId === folder.id) })) : plan.stores;
@@ -326,14 +361,25 @@ export class RunCheckpoints {
       });
       const counts = Object.fromEntries(ACTIONS.map(action => [action, work.filter(file => file.action === action).length]));
       const left = plan.files.filter(file => ['conflict', 'skip'].includes(file.action)).map(({ folderId, path: where, reason }) => ({ folderId, path: where, reason }));
-      const run = c.runs?.find(item => item.id === plan.pair.runId);
-      this.broker.record(c, { type: 'rewind', id, target, runId: plan.pair.runId, folders, counts, left: left.slice(0, 200) });
+      const run = c.runs?.find(item => item.id === plan.pair.runId), noteId = randomUUID();
+      this.broker.record(c, { type: 'rewind', id, target, runId: plan.pair.runId, folders, counts, left: left.slice(0, 200), noteId });
+      if (talk) { const result = await this.rewindConversation(c, target, plan, talk, id, work.length, left.length, noteId); await this.prune(c); return { id, counts, left, ...result }; }
       this.broker.message(c, 'system', plan.pair.restore
         ? `Restored the workspace to the checkpoint ${target.phase} ${plan.pair.checkpointKind === 'run' ? agentName(run) + '’s step' : plan.pair.checkpointKind === 'restore' ? 'a workspace restore' : 'an undo or redo'}. Changed ${plural(work.length, 'file')}.${left.length ? ` Left ${plural(left.length, 'file')} as they are; review the Timeline for details.` : ''} The conversation is kept. Earlier messages describe historical files; inspect the current files before continuing. A recovery checkpoint is available in Timeline.`
-        : note({ redo: target.kind === 'rewind', run, counts, work, left, multi: this.folders().length > 1 }), run?.provider || c.provider);
+        : note({ redo: target.kind === 'rewind', run, counts, work, left, multi: this.folders().length > 1 }), run?.provider || c.provider, noteId);
       await this.prune(c);
       return { id, counts, left };
     });
+  }
+
+  // Folds the conversation back to a checkpoint and says so in a note every agent reads next. With no files to change,
+  // only the conversation goes back.
+  async rewindConversation(c, target, plan, talk, restoreId, files, left = 0, noteId = randomUUID()) {
+    const run = c.runs?.find(item => item.id === plan.pair.runId), point = `${target.phase} ${plan.pair.checkpointKind === 'run' ? agentName(run) + '’s step' : plan.pair.checkpointKind === 'restore' ? 'a workspace restore' : 'an undo or redo'}`;
+    const id = randomUUID();
+    this.broker.record(c, { type: 'conversation_rewind', id, restoreId, fromId: talk.fromId, count: talk.count });
+    this.broker.message(c, 'system', `${files ? `Restored the workspace and the conversation to the checkpoint ${point}. Changed ${plural(files, 'file')}.${left ? ` Left ${plural(left, 'file')} as they are; review the Timeline for details.` : ''}` : `Rewound the conversation to the checkpoint ${point}. The files already matched it.`} ${plural(talk.count, 'later message')} ${talk.count === 1 ? 'is' : 'are'} folded away and no longer part of this conversation; they stay in the saved history. Every agent starts a fresh session from here. Inspect the current files before continuing.${restoreId ? ' A recovery checkpoint for the files is available in Timeline.' : ''}`, run?.provider || c.provider, noteId);
+    return { conversation: { id, count: talk.count, ...(talk.prompt ? { prompt: talk.prompt } : {}) } };
   }
 
   // Public history contains descriptions and targets, never private object-store paths or blob identities.

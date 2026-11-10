@@ -425,9 +425,18 @@ export class Broker extends EventEmitter {
     if (record.type === 'review_result') { const review = c.reviews.find(item => item.id === record.id); if (review) Object.assign(review, record.result, { endedAt: record.at }); }
     if (record.type === 'title') c.title = record.title;
     // Checkpoints (#20): a run's folders saved before and after it, and the undos made from them.
-    if (['run_snapshot', 'rewind', 'snapshot_expired'].includes(record.type)) c.checkpointRevision = record.seq;
+    if (['run_snapshot', 'rewind', 'snapshot_expired', 'conversation_rewind'].includes(record.type)) c.checkpointRevision = record.seq;
     if (record.type === 'run_snapshot') { c.snapshots ||= {}; const saved = c.snapshots[record.runId] ||= {}; saved[record.phase] = { folders: record.folders, at: record.at }; if (record.phase === 'after') { saved.files = record.files || 0; const run = c.runs?.findLast(item => item.id === record.runId); if (run) run.files = saved.files; } }
-    if (record.type === 'rewind') c.rewinds = [...(c.rewinds || []).filter(item => item.id !== record.id), { id: record.id, target: record.target, runId: record.runId, folders: record.folders, counts: record.counts, left: record.left || [], pending: Boolean(record.pending), at: record.at }];
+    if (record.type === 'rewind') c.rewinds = [...(c.rewinds || []).filter(item => item.id !== record.id), { id: record.id, target: record.target, runId: record.runId, folders: record.folders, counts: record.counts, left: record.left || [], pending: Boolean(record.pending), at: record.at, ...(record.noteId ? { noteId: record.noteId } : {}) }];
+    // Conversation rewind (#20, stage 3): the messages from fromId on are folded away. They stay in the journal and in
+    // the chat behind a fold, but no agent reads them again, and every agent starts a fresh session.
+    if (record.type === 'conversation_rewind') {
+      const start = c.messages.findIndex(message => message.id === record.fromId);
+      if (start >= 0) for (const message of c.messages.slice(start)) if (!message.rewound) { message.rewound = record.id; message.seq = record.seq; }
+      c.conversationRewinds = [...(c.conversationRewinds || []), { id: record.id, restoreId: record.restoreId || null, fromId: record.fromId, count: record.count, at: record.at }];
+      for (const provider of Object.keys(c.sessions)) delete c.sessions[provider];
+      c.asyncQuestions = []; c.retryOffer = null;
+    }
     if (record.type === 'snapshot_expired') { for (const id of record.runIds || []) delete c.snapshots?.[id]; const gone = new Set(record.rewindIds || []); c.rewinds = (c.rewinds || []).filter(item => !gone.has(item.id)); }
     if (record.type === 'message') { const added = { ...record.message, ...(record.message?.routing?.mode ? { routing: { ...record.message.routing, mode: normalizeRoutingMode(record.message.routing.mode) } } : {}), seq: record.seq }; c.messages.push(added); c.messageById.set(added.id, added); }
     if (record.type === 'message_update') {

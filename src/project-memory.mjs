@@ -103,7 +103,7 @@ export function memorySuggestions(c, folders) {
     const seen = foldersInText(message?.text, folders);
     found.set(key, { key, kind, text: clean, folderId: seen.length === 1 ? seen[0] : null, messageId: message?.id || null, runId: message?.runId || null });
   };
-  const said = (c.messages || []).filter(message => message.role === 'user' && !message.imported && !message.retry && !message.reviewId && message.text && message.text !== continuationRequest).slice(-200).reverse();
+  const said = (c.messages || []).filter(message => message.role === 'user' && !message.rewound && !message.imported && !message.retry && !message.reviewId && message.text && message.text !== continuationRequest).slice(-200).reverse();
   for (const message of said) {
     for (const match of message.text.matchAll(SAID)) add(match[1].toLowerCase(), match[2], message);
     for (const match of message.text.matchAll(REMEMBER)) add('convention', match[1], message);

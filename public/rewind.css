@@ -43,6 +43,17 @@
 .rewind-left { display: grid; gap: 2px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
 .rewind-left code { color: var(--text); font: 12px/1.4 var(--mono); overflow-wrap: anywhere; }
 .rewind-left span { color: var(--muted); }
+.rewind-conversation { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.rewind-conversation-choice { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; cursor: pointer; }
+.rewind-conversation-choice input { flex: none; margin: 3px 0 0; accent-color: var(--accent); }
+.rewind-conversation-choice input:disabled + span { color: var(--muted); }
+.rewind-conversation-choice strong { color: var(--text-strong); font-weight: 600; }
+.rewind-conversation-detail { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+/* Messages a conversation rewind folded away: a line where they were, and dimmed when shown. */
+.messages-rewound { display: flex; align-items: center; gap: 10px; margin: 10px 0; color: var(--muted); font-size: 12px; }
+.messages-rewound::before, .messages-rewound::after { content: ''; flex: 1; border-top: 1px dashed var(--border-strong); }
+.messages-rewound .text-link { font-size: 12px; }
+.message-rewound { opacity: .5; }
 .rewind-error { margin: 0; padding: 0 20px 10px; color: var(--danger); font-size: 12.5px; }
 .rewind-footer { display: flex; align-items: center; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
 .rewind-note { margin-right: auto; color: var(--muted); font-size: 12px; }

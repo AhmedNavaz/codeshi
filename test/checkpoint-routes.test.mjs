@@ -34,6 +34,8 @@ test('checkpoint routes list history, enforce the workspace lease and restore on
   try { await assert.rejects(call('/api/checkpoints/apply', 'POST', { target, digest: preview.value.digest }), error => error.status === 409); }
   finally { lease.release(); }
   await assert.rejects(call('/api/checkpoints/apply', 'POST', { target, digest: 'stale' }), /Review the changes again/);
+  await assert.rejects(call('/api/checkpoints/apply', 'POST', { target, digest: preview.value.digest, conversation: { count: 'all' } }), /Review the conversation rewind again/);
+  assert.equal(preview.value.conversation.available, false, 'Nothing was said after this checkpoint, so there is nothing to rewind.');
   await assert.rejects(call('/api/checkpoints', 'GET', {}, '&task=parallel'), /main workspace conversation/);
   await assert.rejects(call('/api/checkpoints', 'POST'), error => error.status === 405);
   assert.equal((await call('/api/checkpoints/apply', 'POST', { target, digest: preview.value.digest })).status, 200);

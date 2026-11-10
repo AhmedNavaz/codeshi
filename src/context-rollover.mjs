@@ -156,7 +156,7 @@ export function observationsFor(c, record) {
 export function milestoneMemory(c, { folders, text, now = new Date().toISOString() }) {
   const scope = selectFolders([text], folders, { inherited: c.lastRun?.context?.scope });
   const runs = runFolders(c.messages, folders);
-  const visible = message => !outOfScope(message, scope.folders, runs, folders);
+  const visible = message => !message.rewound && !outOfScope(message, scope.folders, runs, folders);
   const requests = c.messages.filter(message => message.role === 'user' && !message.reviewId && !message.retry && !message.imported && visible(message) && !message.text?.startsWith('Continue the unfinished task from this shared conversation.'));
   const messages = c.messages.filter(visible), byId = new Map(messages.map(message => [message.id, message]));
   const taskId = c.lastRun?.taskId || c.lastRun?.id, taskRuns = new Set((c.runs || []).filter(run => (run.taskId || run.id) === taskId).map(run => run.id));

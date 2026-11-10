@@ -31,7 +31,7 @@ export function assessmentPrompt(c, input, broker, references = []) {
   const recent = [];
   for (let at = c.messages.length - 1; at >= 0 && recent.length < 4; at--) {
     const message = c.messages[at];
-    if (['user', 'assistant'].includes(message.role) && !message.reviewId) recent.unshift({ role: message.role, text: bounded(message.text, 500) });
+    if (['user', 'assistant'].includes(message.role) && !message.reviewId && !message.rewound) recent.unshift({ role: message.role, text: bounded(message.text, 500) });
   }
   const attachments = broker.attachments.select(input.attachments || []).map(file => ({ name: file.name, kind: file.kind, bytes: file.bytes, ...(file.kind === 'text' ? { excerpt: bounded(file.text, 300) } : {}) }));
   const request = input.text.length > 6000 ? input.text.slice(0, 4500) + '\n[Middle omitted from routing assessment]\n' + input.text.slice(-1500) : input.text;
@@ -298,7 +298,7 @@ export class RoutingDispatcher {
         options.verifyRouting?.(); options.verifyExecution?.();
       };
       const attachments = input.attachments?.length || 0;
-      const previousText = c.messages.findLast(message => message.role === 'user' && !message.reviewId && !message.steer)?.text || c.context?.goal || '';
+      const previousText = c.messages.findLast(message => message.role === 'user' && !message.reviewId && !message.steer && !message.rewound)?.text || c.context?.goal || '';
       // Planning (Orchestrate, #12) gets the deepest work the mode allows, so there is nothing to rate.
       let assessment = planning ? { tier: 'deep', effort: TIER_EFFORT.deep, reason: 'plans the steps', source: 'plan' } : globalThis.relayRouting.triage(input.text, { attachments, previous: c.lastRun?.routing?.assessment });
       if (!assessment) {

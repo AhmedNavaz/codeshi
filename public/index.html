@@ -623,7 +623,7 @@
 
     <dialog id="rewind-dialog" class="rewind-dialog" aria-labelledby="rewind-title" aria-describedby="rewind-summary">
       <header><div><h2 id="rewind-title">Undo changes?</h2><p id="rewind-meta"></p></div><button id="close-rewind" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
-      <div class="rewind-body"><p id="rewind-summary" class="rewind-summary"></p><div id="rewind-files" class="rewind-files"></div></div>
+      <div class="rewind-body"><p id="rewind-summary" class="rewind-summary"></p><div id="rewind-conversation" class="rewind-conversation" hidden><label class="rewind-conversation-choice"><input id="rewind-conversation-check" type="checkbox"><span><strong>Also rewind the conversation</strong><span id="rewind-conversation-detail" class="rewind-conversation-detail"></span></span></label></div><div id="rewind-files" class="rewind-files"></div></div>
       <p id="rewind-error" class="project-error rewind-error" role="alert" hidden></p>
       <footer class="rewind-footer"><span id="rewind-note" class="rewind-note"></span><button id="cancel-rewind" class="secondary-button" type="button">Cancel</button><button id="confirm-rewind" class="primary-button" type="button" disabled>Undo changes</button></footer>
     </dialog>

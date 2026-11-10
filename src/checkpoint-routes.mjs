@@ -14,7 +14,8 @@ export function createCheckpointRoutes({ registry, body, json }) {
     const input = await body(req, 16000);
     if (url.pathname === '/api/checkpoints/preview') { json(res, 200, await broker.checkpoints.preview(c, input.target)); return true; }
     if (broker.running) fail('Wait for the current run to finish before undoing changes.', 409);
-    json(res, 200, await registry.withMutation(projectId, 'undo', () => broker.checkpoints.apply(c, input.target, input.digest)));
+    const conversation = input.conversation == null ? null : Number.isSafeInteger(input.conversation?.count) && input.conversation.count > 0 ? { count: input.conversation.count } : fail('Review the conversation rewind again.');
+    json(res, 200, await registry.withMutation(projectId, 'undo', () => broker.checkpoints.apply(c, input.target, input.digest, conversation)));
     return true;
   };
 }

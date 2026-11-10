@@ -7258,3 +7258,47 @@ test('Run as tasks sends the agents the plan shows, then the card follows each s
   ui.$('orchestration-close').click(); await flush();
   assert.equal(actions.at(-1).action, 'close');
 });
+
+test('a restore can also rewind the conversation, and folded messages show as one line in the chat', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, rewindUI: true, moreProjects: true });
+  const id = '22222222-2222-4222-8222-222222222222', target = { kind: 'checkpoint', id, phase: 'before' };
+  const conversation = ui.canonical.get('project-one');
+  const entry = { id, kind: 'run', provider: 'codex', prompt: 'Try the zebra layout', at: '2026-11-10T08:00:00Z', status: 'complete', files: 1, checkpoints: [{ target, available: true }] };
+  let body = null;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/checkpoints') return response({ entries: [entry] });
+    if (request.path === '/api/checkpoints/preview') return response({ target, digest: 'd', provider: 'codex', prompt: entry.prompt, files: [], conversation: { available: true, count: 3, returnsPrompt: true } });
+    if (request.path === '/api/checkpoints/apply') { body = request.body; return response({ conversation: { id: 'fold', count: 3, prompt: 'Try the zebra layout' } }); }
+    return next();
+  });
+  ui.window.relayUI.showSidePanel('timeline'); await flush();
+  ui.$('timeline-content').querySelector('button').click(); await flush();
+  assert.equal(ui.$('rewind-conversation').hidden, false);
+  assert.match(ui.$('rewind-conversation-detail').textContent, /3 later messages are folded away.*fresh session.*prompt goes back in the message box/);
+  assert.equal(ui.$('confirm-rewind').disabled, true, 'Files already match, so nothing happens until the conversation is chosen.');
+  const box = ui.$('rewind-conversation-check'); box.checked = true; box.dispatchEvent(new UIEvent('change')); await flush();
+  assert.equal(ui.$('confirm-rewind').textContent, 'Rewind conversation');
+  assert.match(ui.$('rewind-summary').textContent, /Only the conversation goes back/);
+  ui.$('message-input').value = '';
+  ui.$('confirm-rewind').click(); await flush();
+  assert.deepEqual(body, { target, digest: 'd', conversation: { count: 3 } });
+  assert.equal(ui.$('message-input').value, 'Try the zebra layout', 'The rewound prompt is back, ready to edit.');
+
+  conversation.messages = [
+    { id: 'm1', role: 'user', text: 'Keep this', provider: 'codex', seq: 1 },
+    { id: 'm2', role: 'user', text: 'Try the zebra layout', provider: 'codex', seq: 9, rewound: 'fold' },
+    { id: 'm3', role: 'assistant', text: 'Zebra done', provider: 'codex', seq: 9, rewound: 'fold' },
+    { id: 'm4', role: 'system', text: 'Rewound the conversation.', provider: 'codex', seq: 10 },
+  ];
+  conversation.checkpointRevision = 9;
+  await ui.window.relayUI.refresh(); await flush();
+  const transcript = () => ui.$('messages').textContent;
+  assert.match(transcript(), /Keep this/); assert.doesNotMatch(transcript(), /Zebra done/);
+  const fold = ui.$('messages').querySelector('.messages-rewound');
+  assert.match(fold.textContent, /2 messages rewound/);
+  fold.querySelector('button').click(); await flush();
+  assert.match(transcript(), /Zebra done/);
+  assert(ui.$('messages').querySelectorAll('.message-rewound').length >= 2, 'Shown folded messages are dimmed.');
+  ui.$('messages').querySelector('.messages-rewound').querySelector('button').click(); await flush();
+  assert.doesNotMatch(transcript(), /Zebra done/);
+});

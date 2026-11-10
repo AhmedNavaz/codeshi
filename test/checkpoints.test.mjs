@@ -254,3 +254,57 @@ test('restoring a checkpoint supersedes old Changes undone labels without discar
   assert.equal(env.view().checkpoints[id].undone, undefined);
   assert(env.broker.checkpoints.timeline(env.c).some(entry => entry.id === undone.result.id));
 });
+
+test('a restore can rewind the conversation: later messages fold away, agents start fresh, and the prompt comes back', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { files: { 'a.txt': 'original\n' }, scenarios: {
+    'Alpha edit': { write: { 'a.txt': 'alpha\n' } }, 'Zebra edit': { write: { 'a.txt': 'zebra\n', 'z.txt': 'zebra file\n' } }, 'Yak edit': { write: { 'y.txt': 'yak\n' } }, 'Fresh start': {},
+  } });
+  await env.run('Alpha edit'); const zebra = await env.run('Zebra edit'); await env.run('Yak edit');
+  const target = { kind: 'checkpoint', id: zebra, phase: 'before' };
+  const preview = await env.broker.checkpoints.preview(env.c, target);
+  const firstFolded = env.c.messages.findIndex(message => message.runId === zebra), later = env.c.messages.length - firstFolded;
+  assert.deepEqual(preview.conversation, { available: true, count: later, returnsPrompt: true });
+  // Without the choice, a restore keeps the conversation as before.
+  assert.equal(env.c.messages.some(message => message.rewound), false);
+  await assert.rejects(env.broker.checkpoints.apply(env.c, target, preview.digest, { count: later + 1 }), /conversation changed/);
+
+  const result = await env.broker.checkpoints.apply(env.c, target, preview.digest, { count: later });
+  assert.equal(read(env.workspace, 'a.txt'), 'alpha\n');
+  assert.equal(exists(env.workspace, 'z.txt'), false); assert.equal(exists(env.workspace, 'y.txt'), false);
+  assert.equal(result.conversation.count, later); assert.equal(result.conversation.prompt, 'Zebra edit');
+  assert(env.c.messages.slice(firstFolded, -1).every(message => message.rewound === result.conversation.id), 'Every message from the run’s prompt on is folded.');
+  assert(env.c.messages.slice(0, firstFolded).every(message => !message.rewound), 'Earlier messages stay.');
+  const note = env.c.messages.at(-1);
+  assert.equal(note.rewound, undefined);
+  assert.match(note.text, /^Restored the workspace and the conversation to the checkpoint before Codex’s step\. Changed 3 files\. \d+ later messages are folded away/);
+  assert.deepEqual(env.c.sessions, {}, 'Native sessions remember the folded messages, so every agent starts fresh.');
+  assert.equal(env.c.rewinds.find(item => item.id === result.id).noteId, note.id);
+  const view = env.broker.view(env.c);
+  assert(view.messages.filter(message => message.rewound).length === later, 'The chat still has the folded messages, marked.');
+
+  await env.run('Fresh start');
+  const capture = read(env.workspace, '.mock-captures.jsonl').trim().split('\n').map(line => JSON.parse(line)).at(-1);
+  assert.equal(capture.context.continuation.sessionMode, 'fresh');
+  const sent = JSON.stringify(capture.context);
+  assert(!sent.includes('Zebra') && !sent.includes('Yak'), 'No agent reads folded messages again.');
+  assert(sent.includes('Alpha edit') && sent.includes('folded away'), 'Earlier messages and the rewind note are still sent.');
+
+  // Files that already match: only the conversation goes back. A queued prompt blocks it first.
+  const fresh = env.c.runs.at(-1).id, again = { kind: 'checkpoint', id: fresh, phase: 'before' };
+  env.c.queue.push({ id: 'queued', text: 'Later' });
+  assert.equal((await env.broker.checkpoints.preview(env.c, again)).conversation.available, false);
+  env.c.queue.length = 0;
+  const only = await env.broker.checkpoints.preview(env.c, again);
+  assert.equal(only.files.length, 0); assert.equal(only.conversation.available, true);
+  const rewound = await env.broker.checkpoints.apply(env.c, again, only.digest, { count: only.conversation.count });
+  assert.equal(rewound.conversation.prompt, 'Fresh start');
+  assert.match(env.c.messages.at(-1).text, /^Rewound the conversation to the checkpoint before Codex’s step\. The files already matched it\./);
+  assert.equal(env.c.rewinds.length, 1, 'A conversation-only rewind adds no file restore.');
+
+  const replay = new Broker({ workspace: env.workspace, dataDir: env.dataDir });
+  try {
+    const again = replay.get(env.c.id);
+    assert.deepEqual(again.messages.map(message => message.rewound || null), env.c.messages.map(message => message.rewound || null), 'Folds survive a restart.');
+    assert.deepEqual(again.sessions, {});
+  } finally { await replay.close(); }
+});

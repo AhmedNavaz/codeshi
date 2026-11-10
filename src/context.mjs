@@ -50,7 +50,8 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   const restoredAfterCompaction = policy === 'task' && restoreAfterCompaction(c, provider, fresh);
   const reconstruct = fresh || restoredAfterCompaction;
   const cursor = reconstruct ? 0 : c.sessions[provider]?.cursor || 0;
-  const source = c.messages.filter(message => message.seq > cursor);
+  // Messages folded away by a conversation rewind (#20) are history no agent reads again.
+  const source = c.messages.filter(message => message.seq > cursor && !message.rewound);
   const attachmentText = files => (files || []).filter(f => f.kind === 'text').map(file => {
     try { return '\n\nAttached file ' + JSON.stringify(file.name) + ':\n' + readAttachment(file.id).text; }
     catch { return '\n[Saved attachment unavailable: ' + file.name + ']'; }

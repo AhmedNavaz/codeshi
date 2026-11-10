@@ -22,7 +22,7 @@
   };
   const state = {
     localSelections: {}, accounts: {}, accountsChecking: {}, accountChecks: {}, accountCheck: 0, accountsCheckedAt: 0, accountRefresh: null, connectionAction: null, model: "", effort: null, workspaceFilter: "", streamConnected: null, retrySubmission: null, status: null, conversation: null, provider: "codex", mode: "edit", approvalPolicy: "ask",
-    pending: null, loading: false, selectionVersion: 0, refreshPromise: null, refreshAgain: false,
+    pending: null, loading: false, selectionVersion: 0, refreshPromise: null, refreshAgain: false, shownRewinds: new Set(),
     settingsRevision: 0, settingsPending: 0, settingsPromise: Promise.resolve(),
     noticeRetry: null, eventTimer: null, messagesSignature: "", listSignature: "", ready: false,
     projects: [], projectId: null, projectVersion: 0, projectsLoaded: false, projectSaving: false,
@@ -57,8 +57,25 @@
   function returnDraft(draft) { const typed = ui.input.value; ui.input.value = typed.trim() ? `${draft}\n${typed}` : draft; saveDraft(); resizeInput(); }
   function draftAccepted() { if (ui.input.value === "") { storedWrite(draftKey(), ""); storedWrite(draftKey(null), ""); } }
   // The message just sent shows in the chat at once, until the saved conversation has it.
+  // Messages a conversation rewind folded away (#20) give way to one line saying how many, which shows them dimmed.
+  const rewoundMarkers = new Map();
+  function foldRewound(messages) {
+    if (!messages.some(message => message.rewound)) return messages;
+    const result = [], seen = new Set();
+    for (const message of messages) {
+      if (!message.rewound) { result.push(message); continue; }
+      if (!seen.has(message.rewound)) {
+        seen.add(message.rewound);
+        const count = messages.filter(item => item.rewound === message.rewound).length, key = `${message.rewound}:${count}:${state.shownRewinds.has(message.rewound)}`;
+        if (!rewoundMarkers.has(key)) rewoundMarkers.set(key, { id: `rewound:${message.rewound}`, role: "system", rewoundMarker: { id: message.rewound, count, shown: state.shownRewinds.has(message.rewound) } });
+        result.push(rewoundMarkers.get(key));
+      }
+      if (state.shownRewinds.has(message.rewound)) result.push(message);
+    }
+    return result;
+  }
   function shownMessages(c) {
-    const saved = c?.messages || [], sending = state.sending;
+    const saved = foldRewound(c?.messages || []), sending = state.sending;
     if (!sending || sending.projectId !== state.projectId || (sending.conversationId && sending.conversationId !== c?.id)) return saved;
     const from = saved.findIndex(message => message.id === sending.after) + 1;
     return saved.slice(from).some(message => message.role === "user" && message.text === sending.message.text) ? saved : [...saved, sending.message];
@@ -1012,6 +1029,15 @@
 
   const isContinuationPrompt = message => message?.role === "user" && (message.continuation || /^\s*Continue the unfinished task from this shared conversation/i.test(message.text || ""));
   function renderMessage(message) {
+    if (message.rewoundMarker) {
+      const { id, count, shown } = message.rewoundMarker, line = element("div", "messages-rewound");
+      line.setAttribute("role", "note");
+      const toggle = element("button", "text-link", shown ? "Hide" : "Show");
+      toggle.type = "button"; toggle.setAttribute("aria-expanded", String(shown));
+      toggle.addEventListener("click", () => { if (state.shownRewinds.has(id)) state.shownRewinds.delete(id); else state.shownRewinds.add(id); renderMessages(); });
+      line.append(element("span", "", `${count} ${count === 1 ? "message" : "messages"} rewound${shown ? " · no agent reads these" : ""}`), toggle);
+      return line;
+    }
     const moment = limitMoment(message);
     if (moment) return moment;
     if (message.role === "error") {
@@ -1245,6 +1271,7 @@
         const key = "message:" + (message.id || index), extra = messageExtra(message), kept = oldNodes.get(key);
         if (kept?.message === message && kept.extra === extra) { nodes.set(key, kept); return kept.node; }
         const node = renderMessage(message);
+        if (message.rewound) node.classList.add("message-rewound");
         nodes.set(key, { message, extra, node });
         return node;
       };
@@ -1257,6 +1284,7 @@
         const key = "step:" + entryId, kept = oldNodes.get(key);
         if (kept?.message === step.message) { nodes.set(key, kept); return kept.node; }
         const node = renderStep(step, entryId, kept?.node.classList.contains("open") ? new Set([entryId]) : noOpenOutputs);
+        if (step.message?.rewound) node.classList.add("message-rewound");
         nodes.set(key, { message: step.message, node });
         return node;
       };
