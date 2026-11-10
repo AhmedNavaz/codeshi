@@ -165,6 +165,25 @@ Design boundaries:
 - Usage limits, routing and billing rules apply as they do to any run, and a schedule never wakes a sleeping Mac.
 - Cards are kept with the project in Codeshi's own data, not in the repository, and work offline.
 
+## Public help requests
+
+Ask a Friend sends a reviewed request to one person you choose, by file or private link. Public help requests would let you post the same kind of request where anyone can pick it up and send back a fix, without access to your repository.
+
+What carries over from Ask a Friend:
+
+1. **Only what you approve is shared.** You choose the messages and files, secrets and local paths are removed, and you see the exact package before it goes out. The rest of the project stays on your computer.
+2. **The agent's history goes with it.** The helper sees the problem, what was tried and the decisions made, so their own agent can continue where yours stopped instead of starting over.
+3. **Changes come back as a patch you review.** A returned patch can only touch the paths you approved. You review each change, including binary files ([#25](https://github.com/AhmedNavaz/codeshi/issues/25)), before applying it, and recovery can take it back. Nothing a helper sends runs on its own.
+
+Open questions before building:
+
+- **Where requests are listed:** a hosted board, or a GitHub issue with the request attached.
+- **Privacy:** a public request is public for good, so it would start with context only, block on any secret warning, and say plainly who can read it.
+- **Trust:** patches from strangers need closer review than patches from a friend: programs flagged, no unapproved paths, and your own tests run on a patch only with your approval ([#10](https://github.com/AhmedNavaz/codeshi/issues/10)), with the files that decide what they run named first.
+- **Abuse:** spam requests and spam answers, and how to report and remove them.
+- **Hosting:** links need a sharing service, and none is hosted yet.
+- **Helpers:** what a helper gets in return, such as credit on the request.
+
 ## Flow feedback follow-ups
 
 The November 2026 reports are tracked without reopening shipped milestones:

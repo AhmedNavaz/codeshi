@@ -140,3 +140,12 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | One total for an Orchestrate plan: planning and every step ([#84](https://github.com/AhmedNavaz/codeshi/issues/84)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
 | One usage line for choosing an agent and for handing a task off ([#12](https://github.com/AhmedNavaz/codeshi/issues/12)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
 | Word documents (.docx) attached as their text ([#157](https://github.com/AhmedNavaz/codeshi/pull/157)) | [0.41.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.41.0) |
+| Suggestions after a run for Remember, Make a skill and Try Flow, from local rules ([#106](https://github.com/AhmedNavaz/codeshi/issues/106)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| Status in the Windows notification area ([#74](https://github.com/AhmedNavaz/codeshi/issues/74)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| An interface ready for translation, with a language setting ([#27](https://github.com/AhmedNavaz/codeshi/issues/27)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| Keyboard and screen reader support in menus, popovers, the file tree and search ([#26](https://github.com/AhmedNavaz/codeshi/issues/26)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| Progress pill under the menu bar on macOS ([#75](https://github.com/AhmedNavaz/codeshi/issues/75)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| Binary files in Ask a Friend requests and patches ([#25](https://github.com/AhmedNavaz/codeshi/issues/25)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| Run your own tests on a returned Ask a Friend patch ([#10](https://github.com/AhmedNavaz/codeshi/issues/10)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| Six puzzles in the Lounge: Codle, 2048, Minesweeper, Sudoku, Pairs and Fifteen | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| Record Performance Trace in Help, and weather that falls only in the Lounge ([#152](https://github.com/AhmedNavaz/codeshi/issues/152)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |

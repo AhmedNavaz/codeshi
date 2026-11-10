@@ -10,7 +10,7 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 
 | # | Feature | What's left | Issue |
 | --- | --- | --- | --- |
-| 1 | **Lower battery and resource use** | Measure idle, streaming, Lounge and preview workloads, fix what the measurements show, and set energy budgets. The Lounge's first mitigation shipped in 0.38.0, and 0.40.0 draws weather at most 30 times a second, paces games at 60 Hz speed and runs the setup glow once. Idle, streaming and preview workloads are not measured yet | [#152](https://github.com/AhmedNavaz/codeshi/issues/152) |
+| 1 | **Lower battery and resource use** | Measure idle, streaming, Lounge and preview workloads, fix what the measurements show, and set energy budgets. The Lounge's first mitigation shipped in 0.38.0, and 0.40.0 draws weather at most 30 times a second, paces games at 60 Hz speed and runs the setup glow once. Since 0.42.0, weather falls only in the Lounge, and **Help › Record Performance Trace** measures the installed app. Idle, streaming and preview workloads are not measured yet | [#152](https://github.com/AhmedNavaz/codeshi/issues/152) |
 | 2 | **Onboarding redesign** | Workspace-first setup and the Normal or Flow choice shipped in 0.39.0. Left: a keyboard and screen-reader pass over the new steps. [Scope](docs/roadmap-details.md#onboarding-and-execution-mode-selection) | [#129](https://github.com/AhmedNavaz/codeshi/issues/129) |
 | 3 | **Interface polish** | The near-black Dark theme, the text scale and two-line workspace rows shipped in 0.39.0. Left: contrast checks for every badge state in each theme. [Scope](docs/roadmap-details.md#interface-polish-typography-scale-and-settings-structure) | [#127](https://github.com/AhmedNavaz/codeshi/issues/127) |
 | 4 | **Settings in clear categories** | A page for each subject and three button heights shipped in 0.39.0. Left: one header and footer layout for every dialog | [#130](https://github.com/AhmedNavaz/codeshi/issues/130) |
@@ -42,14 +42,10 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 | Project memory: a recheck when a branch or dependency changes, and reviewed suggestions. Copy to AGENTS.md shipped in 0.40.0 | First version shipped in 0.26.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
 | Rewind stage 3: commits on the Timeline. Rewinding the conversation with a checkpoint shipped in 0.41.0 | Stages 1 and 2 shipped in 0.20.0 and 0.28.0 | [#20](https://github.com/AhmedNavaz/codeshi/issues/20) |
 | iPhone Live Activities, which need a native app. Lock-screen notifications shipped in 0.41.0 | Remote access shipped in 0.27.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
-| Suggest the right feature at the right moment, from local rules | Planned | [#106](https://github.com/AhmedNavaz/codeshi/issues/106) |
 | Voice input on Windows | Help wanted | [#73](https://github.com/AhmedNavaz/codeshi/issues/73) |
-| Status in the Windows notification area | Help wanted | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
-| Accessibility pass for keyboard navigation and screen readers | Help wanted | [#26](https://github.com/AhmedNavaz/codeshi/issues/26) |
-| Interface translations | Help wanted | [#27](https://github.com/AhmedNavaz/codeshi/issues/27) |
-| Live progress in a compact pill near the top of the screen | Needs design | [#75](https://github.com/AhmedNavaz/codeshi/issues/75) |
-| Binary files in Ask a Friend patches | Planned | [#25](https://github.com/AhmedNavaz/codeshi/issues/25) |
-| Run the project's own tests on a returned patch, with approval | On hold until Ask a Friend sees more use | [#10](https://github.com/AhmedNavaz/codeshi/issues/10) |
+| Status in the Windows notification area: trying it on a real Windows PC. Built with automated tests only | First version shipped in 0.42.0, help wanted | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
+| Accessibility: a VoiceOver and NVDA check of the whole app. Menus, popovers, the file tree and search shipped in 0.42.0 | First pass shipped in 0.42.0, help wanted | [#26](https://github.com/AhmedNavaz/codeshi/issues/26) |
+| Interface translations: the first languages, and the remaining panels, phone page and server messages. The base and main surfaces shipped in 0.42.0 | Base shipped in 0.42.0, help wanted | [#27](https://github.com/AhmedNavaz/codeshi/issues/27) |
 
 ## Exploring
 
@@ -62,13 +58,14 @@ Larger ideas that need design work first, so join the issue before building. The
 | **Designer module.** Design websites and app screens in Codeshi and guide agents section by section | [#125](https://github.com/AhmedNavaz/codeshi/issues/125) |
 | **Race mode.** Two agents take the same task in separate worktrees; keep the better result | [#16](https://github.com/AhmedNavaz/codeshi/issues/16) |
 | **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription | [#24](https://github.com/AhmedNavaz/codeshi/issues/24) |
+| **Public help requests.** Post a reviewed request, with the agent's history, where anyone can pick it up and send back a fix you review, without access to your repository. Builds on Ask a Friend. [Plan](docs/roadmap-details.md#public-help-requests) | [#158](https://github.com/AhmedNavaz/codeshi/issues/158) |
 
 ## Recently shipped
 
+- **0.42.0:** a progress pill under the menu bar, binary files and your own tests in Ask a Friend, suggestions after a run, status in the Windows notification area, an interface ready for translation, a keyboard and screen reader pass, six puzzles in the Lounge, and Record Performance Trace.
 - **0.41.0:** Orchestrate plans as a full-window chart, lock-screen notifications on your phone, rewinding the conversation with a checkpoint, a total for a whole plan, Word documents as attachments, and one usage line for assigning and handing off a task.
 - **0.40.0:** hands-free voice conversations in Flow, selected terminal output added to your message, Remote access on the Home Screen, Copy to AGENTS.md for project memory, a Lounge that fills the window with rain and snow sounds, and installed packages in a task's own copy.
 - **0.39.0:** GitHub issues and pull requests in your message, Orchestrate plans run as tasks, a near-black Dark theme and text size, workspace-first setup, and Settings with a page for each subject.
-- **0.38.0:** Smart results, the Lounge, a preview window per interface, roles on Orchestrate steps, long conversations folded into the brief, and allowance that is about to reset.
 
 The full list is in [shipped features](docs/shipped.md).
 
