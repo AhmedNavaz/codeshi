@@ -2390,6 +2390,8 @@
     state.retrySubmission = { ...(state.retrySubmission?.key === payloadKey ? state.retrySubmission : {}), key:payloadKey,id:requestId };
     const projectId = state.projectId;
     state.pending = continuing ? "continue" : "send";
+    // An informational notice such as "Issue #84 is in the message box" is stale once the message is sent.
+    if (!state.noticeRetry && !ui.notice.querySelector(".notice-action-btn")) hideNotice();
     saveDraft();
     const taken = !continuing && !again;
     if (taken) {
