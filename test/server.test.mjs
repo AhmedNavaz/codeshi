@@ -711,3 +711,31 @@ test('Smart results come from the workspace’s saved tasks, without requests un
   assert.equal(chosen.range.days, 30);
   assert.equal((await fetch(`${f.url}/api/results?projectId=${project.id}&baseline=nope`)).status, 400);
 });
+
+test('the page gets its language as /locale.js, from Settings or else the browser, and Settings lists the catalogs (#27)', async t => {
+  const locales = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-locales-'));
+  t.after(() => fs.rmSync(locales, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(locales, 'es.json'), JSON.stringify({ $name: 'Español', Send: 'Enviar' }));
+  const changes = [];
+  const { url } = await fixture(t, { localesDir: locales, onLanguage: id => changes.push(id) });
+  const locale = async language => {
+    const response = await fetch(`${url}/locale.js`, { headers: { 'Accept-Language': language } });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /^text\/javascript/);
+    const script = await response.text(), json = script.match(/^window\.codeshiText\.load\((.*)\);\n$/s);
+    assert(json, 'It only hands the catalog to the page.');
+    return JSON.parse(json[1]);
+  };
+  assert.deepEqual(await locale('es-MX,en;q=0.5'), { language: 'es', direction: 'ltr', messages: { Send: 'Enviar' } });
+  assert.deepEqual(await locale('fr'), { language: 'en', direction: 'ltr', messages: {} });
+  let preferences = await (await fetch(`${url}/api/preferences`, { headers: { 'Accept-Language': 'es' } })).json();
+  assert.equal(preferences.language, 'system'); assert.equal(preferences.activeLanguage, 'es');
+  assert.deepEqual(preferences.languages, [{ id: 'en', name: 'English', direction: 'ltr' }, { id: 'es', name: 'Español', direction: 'ltr' }]);
+  assert.equal((await post(`${url}/api/preferences`, { language: 'de' })).status, 400, 'Only a language with a catalog can be chosen.');
+  assert.deepEqual(changes, []);
+  preferences = await (await post(`${url}/api/preferences`, { language: 'es' })).json();
+  assert.equal(preferences.language, 'es'); assert.deepEqual(changes, ['es'], 'The desktop menus hear the new language.');
+  assert.equal((await locale('en-US')).language, 'es', 'A chosen language comes before the browser’s.');
+  await post(`${url}/api/preferences`, { language: 'system' });
+  assert.equal((await locale('en-US')).language, 'en');
+});

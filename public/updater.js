@@ -1,5 +1,6 @@
 (() => {
   'use strict';
+  const { t } = window.codeshiText;
   // Updates (#2): when a newer release is out, the status bar shows Update to <version>. One click downloads the update
   // for this Mac and checks it, with a ring for the download, and the button becomes Restart to update. Restarting
   // never stops an agent: it waits for the run to finish. Quitting instead installs the update as Codeshi closes.
@@ -114,18 +115,18 @@
     settingsHost = host; settingsKit = kit;
     if (!kit) return;
     host.replaceChildren();
-    const rows = kit.group(host, 'Updates');
-    if (!state?.supported) { kit.row(rows, { label: 'Updates', description: window.relayDesktop?.platform === 'win32' ? 'Updates install in the Codeshi app for macOS. On Windows, run the installer again or download the latest release.' : 'Updates install in the Codeshi app for macOS. This copy is updated from its source instead.', keywords: 'version' }); return; }
+    const rows = kit.group(host, t('Updates'));
+    if (!state?.supported) { kit.row(rows, { label: t('Updates'), description: window.relayDesktop?.platform === 'win32' ? t('Updates install in the Codeshi app for macOS. On Windows, run the installer again or download the latest release.') : t('Updates install in the Codeshi app for macOS. This copy is updated from its source instead.'), keywords: 'version' }); return; }
     const checked = state.checkedAt ? new Date(state.checkedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : null;
-    const summary = state.status === 'checking' ? 'Checking for updates…'
-      : ['ready', 'waiting'].includes(state.status) ? `Codeshi ${state.latest.version} is downloaded and checked. Restart to use it.`
-      : offered() || ['downloading', 'installing'].includes(state.status) ? `Codeshi ${state.latest.version} is available.`
-      : state.status === 'error' ? state.error : `${state.status === 'current' ? 'The latest version.' : ''}${checked ? ` Last checked ${checked}.` : ''}`.trim();
-    const check = kit.button(state.status === 'checking' ? 'Checking…' : 'Check now', () => call(() => bridge.checkForUpdates()));
+    const summary = state.status === 'checking' ? t('Checking for updates…')
+      : ['ready', 'waiting'].includes(state.status) ? t('Codeshi {version} is downloaded and checked. Restart to use it.', { version: state.latest.version })
+      : offered() || ['downloading', 'installing'].includes(state.status) ? t('Codeshi {version} is available.', { version: state.latest.version })
+      : state.status === 'error' ? state.error : `${state.status === 'current' ? t('The latest version.') : ''}${checked ? ' ' + t('Last checked {time}.', { time: checked }) : ''}`.trim();
+    const check = kit.button(state.status === 'checking' ? t('Checking…') : t('Check now'), () => call(() => bridge.checkForUpdates()));
     check.disabled = ['checking', 'downloading', 'ready', 'waiting', 'installing'].includes(state.status);
-    const controls = state.latest && (offered() || state.skipped === state.latest.version) ? [kit.button('Show update', () => { window.relaySettings?.close(); open(); }), check] : [check];
+    const controls = state.latest && (offered() || state.skipped === state.latest.version) ? [kit.button(t('Show update'), () => { window.relaySettings?.close(); open(); }), check] : [check];
     kit.row(rows, { label: `Codeshi ${state.version}`, description: summary, keywords: 'update version check', control: controls });
-    kit.toggle(rows, { label: 'Check for updates automatically', description: 'Codeshi looks for a new version in the background and offers it in the status bar.', keywords: 'update', checked: state.automatic, onChange: value => call(() => bridge.setAutomaticUpdates(value)) });
+    kit.toggle(rows, { label: t('Check for updates automatically'), description: t('Codeshi looks for a new version in the background and offers it in the status bar.'), keywords: 'update', checked: state.automatic, onChange: value => call(() => bridge.setAutomaticUpdates(value)) });
   }
 
   button.addEventListener('click', () => {

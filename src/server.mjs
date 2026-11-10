@@ -29,12 +29,13 @@ import { createRemotePhoneAccess } from './phone-remote.mjs';
 import { createWebPush } from './web-push.mjs';
 import { phoneConversation } from './phone-conversation.mjs';
 import { chooseTip, dismissTip, markShown } from './suggestions.mjs';
+import { catalog, chooseLanguage, languages, localesDir as defaultLocales, textFor } from './i18n.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
   '/brief-panel.js': ['brief-panel.js', 'text/javascript; charset=utf-8'], '/tasks-panel.js': ['tasks-panel.js', 'text/javascript; charset=utf-8'], '/smart-results.js': ['smart-results.js', 'text/javascript; charset=utf-8'], '/skills.js': ['skills.js', 'text/javascript; charset=utf-8'], '/memory.js': ['memory.js', 'text/javascript; charset=utf-8'], '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
   '/bottom-panel.js': ['bottom-panel.js', 'text/javascript; charset=utf-8'], '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'],
-  '/suggestions.js': ['suggestions.js', 'text/javascript; charset=utf-8'], '/keyboard.js': ['keyboard.js', 'text/javascript; charset=utf-8'], '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
+  '/suggestions.js': ['suggestions.js', 'text/javascript; charset=utf-8'], '/keyboard.js': ['keyboard.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
   '/parallel-tasks.js': ['parallel-tasks.js', 'text/javascript; charset=utf-8'], '/parallel-tasks.css': ['parallel-tasks.css', 'text/css; charset=utf-8'], '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'],
   // The terminal renderer, served from the installed package so packaged builds work offline.
   '/vendor/xterm.js': ['../node_modules/@xterm/xterm/lib/xterm.js', 'text/javascript; charset=utf-8'], '/vendor/xterm.css': ['../node_modules/@xterm/xterm/css/xterm.css', 'text/css; charset=utf-8'], '/vendor/addon-fit.js': ['../node_modules/@xterm/addon-fit/lib/addon-fit.js', 'text/javascript; charset=utf-8'], '/vendor/addon-web-links.js': ['../node_modules/@xterm/addon-web-links/lib/addon-web-links.js', 'text/javascript; charset=utf-8'],
@@ -78,7 +79,7 @@ async function body(req, limit = 3 * 1024 * 1024) {
   } catch { throw Object.assign(new Error('Invalid JSON request.'), { status: 400 }); }
 }
 
-export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, voice, phoneOptions } = {}) {
+export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, onLanguage = () => {}, systemLanguages = null, localesDir = defaultLocales, voice, phoneOptions } = {}) {
   const registry = new ProjectRegistry({ dataRoot: dataRoot || dataDir || path.join(root, '.data'), bins, lock });
   for (const folder of [...(workspace ? [workspace] : []), ...workspaces]) registry.add({ path: folder });
   const collaboration = new CollaborationService({ registry, dataRoot: registry.dataRoot });
@@ -96,7 +97,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   registry.verificationCadence = () => verificationCadence(config);
   registry.contextLimit = () => contextLimit(config);
   // The desktop app hears each saved appearance, so its window follows whichever request saved it.
-  const saveSettings = patch => { config = { ...(readSettings() || config), ...patch }; atomicJSON(settingsFile, config); if (patch.appearance !== undefined) onAppearance(appearance(config)); };
+  const saveSettings = patch => { config = { ...(readSettings() || config), ...patch }; atomicJSON(settingsFile, config); if (patch.appearance !== undefined) onAppearance(appearance(config)); if (patch.language !== undefined) onLanguage(currentLanguage()); };
+  // The interface language (#27): the one chosen in Settings, or the system's. The desktop app passes the system's
+  // languages, so its page and its menus agree; in a browser the page goes by the languages the browser asks for.
+  const currentLanguage = (asked = null) => chooseLanguage(config.language || 'system', systemLanguages ? systemLanguages() : asked, languages(localesDir));
   let sharing=(sharingURL||config.sharingURL)?new SharingClient({baseUrl:sharingURL||config.sharingURL,storePath:path.join(registry.dataRoot,'sharing-client.json'),createKey:process.env.AI_RELAY_SHARING_CREATE_KEY}):null;
   const configureSharing=input=>{const baseUrl=validateSharingURL(input.baseUrl);sharing=new SharingClient({baseUrl,storePath:path.join(registry.dataRoot,'sharing-client.json'),createKey:process.env.AI_RELAY_SHARING_CREATE_KEY});saveSettings({sharingURL:baseUrl});return {baseUrl};};
   const workspaceRoutes = createWorkspaceRoutes({ registry, body, json });
@@ -175,6 +179,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(fs.readFileSync(path.join(root, 'public', 'phone.html')));
       }
+      if (req.method === 'GET' && url.pathname === '/locale.js') {
+        res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+        return res.end(`window.codeshiText.load(${JSON.stringify(catalog(currentLanguage(req.headers['accept-language']), localesDir))});\n`);
+      }
       if (req.method === 'GET' && assets[url.pathname]) {
         const [filename, type] = assets[url.pathname];
         let contents = fs.readFileSync(path.join(root, 'public', filename));
@@ -215,9 +223,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         return json(res, 405, { error: 'Use GET or POST for remote access.' });
       }
       if (url.pathname === '/api/preferences') {
-        if (req.method === 'POST') saveSettings(preferencePatch(await body(req), config));
+        const listed = languages(localesDir);
+        if (req.method === 'POST') saveSettings(preferencePatch(await body(req), config, { languages: listed.map(item => item.id) }));
         else if (req.method !== 'GET') return json(res, 405, { error: 'Use GET or POST for preferences.' });
-        return json(res, 200, publicPreferences(config, registry.list().length > 0));
+        return json(res, 200, publicPreferences(config, registry.list().length > 0, { languages: listed, language: currentLanguage(req.headers['accept-language']) }));
       }
       if (url.pathname === '/api/notifications') {
         if (req.method === 'POST') return json(res, 200, setNotificationPreferences(await body(req, 4096)));
@@ -420,6 +429,8 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   })();
   return { server, registry, collaboration, sharing, commands: commandRoutes.commands, projectReview: projectReviewRoutes.review, terminals: terminalRoutes.sessions, close,
     getAppearancePreference: () => appearance(config),
+    // The menus' words, in the language the page uses (#27).
+    getText: () => textFor(currentLanguage(), localesDir),
     getKeepAwakePreference: () => config.keepAwake === true,
     // Handoff near a usage limit (#17): offered at 90% by default, automatic only when allowed, 0 turns offers off.
     getHandoffPreferences: () => handoffPreferences(),

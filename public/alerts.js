@@ -6,6 +6,7 @@
   // with Web Audio, so there are no audio files, and it plays in the desktop app and the browser alike.
   const api = window.relayUI;
   if (!api) return;
+  const { t } = window.codeshiText;
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   // [frequency in Hz, start in seconds, length in seconds] for each tone.
   const TONES = {
@@ -16,11 +17,11 @@
     // Two notes falling: it stopped before finishing.
     stopped: { wave: 'sine', notes: [[493.88, 0, 0.35], [369.99, 0.17, 0.6]] },
   };
-  // The three moments, as the table's columns, with what each covers.
+  // The three moments, as the table's columns, with what each covers and the name of its sample sound.
   const MOMENTS = [
-    ['attention', 'Needs you', 'an agent needs you', 'An approval, a question or a handoff offer'],
-    ['finished', 'Finished', 'a task finishes', 'A task finishes, or continues by itself after a usage limit'],
-    ['stopped', 'Stopped', 'a task stops', 'An error, a usage limit or failing tests'],
+    ['attention', t('Needs you'), t('an agent needs you'), t('An approval, a question or a handoff offer'), t('Play the Needs you sound')],
+    ['finished', t('Finished'), t('a task finishes'), t('A task finishes, or continues by itself after a usage limit'), t('Play the Finished sound')],
+    ['stopped', t('Stopped'), t('a task stops'), t('An error, a usage limit or failing tests'), t('Play the Stopped sound')],
   ];
   let context = null, lastAt = 0, host = null, settings = null, settingsKit = null;
 
@@ -72,7 +73,7 @@
 
   async function save(patch) {
     try { settings = await api.post('/api/notifications', patch, null); }
-    catch (error) { api.showNotice?.(error.message || 'Alert settings could not be saved.'); }
+    catch (error) { api.showNotice?.(error.message || t('Alert settings could not be saved.')); }
     if (host) render();
   }
   // The ways that apply here. Banners and the Dock icon belong to the desktop app; other systems flash the taskbar
@@ -81,11 +82,11 @@
   function ways() {
     const desktop = window.relayDesktop, platform = desktop ? desktop.platform || 'darwin' : null, mac = platform === 'darwin';
     return { mac, platform, desktop: Boolean(desktop), rows: [
-      ...desktop ? [['banner', 'Banner']] : [],
-      ['sound', 'Sound'],
-      ...desktop ? [['bounce', mac ? 'Bounce the Dock icon' : 'Flash the taskbar button']] : [],
-      ...mac ? [['badge', 'Badge on the Dock icon']] : [],
-      ['phone', 'Phone notification'],
+      ...desktop ? [['banner', t('Banner')]] : [],
+      ['sound', t('Sound')],
+      ...desktop ? [['bounce', mac ? t('Bounce the Dock icon') : t('Flash the taskbar button')]] : [],
+      ...mac ? [['badge', t('Badge on the Dock icon')]] : [],
+      ['phone', t('Phone notification')],
     ] };
   }
   function checkbox(checked, change, { label, disabled = false } = {}) {
@@ -102,9 +103,9 @@
     const kit = settingsKit;
     if (!kit) return;
     host.replaceChildren();
-    if (!settings) { kit.note(host, 'Loading alert settings…'); return; }
+    if (!settings) { kit.note(host, t('Loading alert settings…')); return; }
     const { mac, platform, desktop, rows } = ways();
-    const group = kit.group(host, 'Ways to alert you', 'How Codeshi tells you that an agent needs you, finished or stopped while you’re in another app. Turn each way on or off, and choose the moments it’s for.');
+    const group = kit.group(host, t('Ways to alert you'), t('How Codeshi tells you that an agent needs you, finished or stopped while you’re in another app. Turn each way on or off, and choose the moments it’s for.'));
     const matrix = node('div', undefined, 'settings-row alert-matrix'); matrix.dataset.keywords = 'banner notification sound bounce dock badge phone lock screen push needs you finished stopped approval';
     const table = node('table', undefined, 'alert-table'), head = node('tr'), body = node('tbody');
     head.append(node('th'));
@@ -116,11 +117,11 @@
       row.dataset.channel = channel; if (!way.on) row.dataset.off = '';
       title.scope = 'row';
       label.append(checkbox(way.on, value => save({ [channel]: { on: value } })), node('span', name)); title.append(label); row.append(title);
-      for (const [moment, column, phrase] of MOMENTS) {
+      for (const [moment, , phrase, , sample] of MOMENTS) {
         const cell = node('td');
-        cell.append(checkbox(way[moment], value => save({ [channel]: { [moment]: value } }), { label: `${name} when ${phrase}`, disabled: !way.on }));
+        cell.append(checkbox(way[moment], value => save({ [channel]: { [moment]: value } }), { label: t('{way} when {moment}', { way: name, moment: phrase }), disabled: !way.on }));
         if (channel === 'sound') {
-          const test = node('button', undefined, 'alert-play'); test.type = 'button'; test.title = `Play the ${column} sound`; test.setAttribute('aria-label', `Play the ${column} sound`);
+          const test = node('button', undefined, 'alert-play'); test.type = 'button'; test.title = sample; test.setAttribute('aria-label', sample);
           test.addEventListener('click', () => { lastAt = 0; play(moment, settings.sound.volume ?? 70); });
           cell.append(test);
         }
@@ -129,40 +130,40 @@
       body.append(row);
     }
     table.append(thead, body);
-    matrix.append(table, node('p', 'Needs you: an approval, a question or a handoff offer. Stopped: an error, a usage limit or failing tests.', 'alert-legend'),
-      node('p', 'Phone notification: on the lock screen of a phone connected Away from home, once you turn them on from Notifications at the bottom of its workspace list. It comes while Codeshi isn’t open on the phone, and says only what happened and in which workspace.', 'alert-legend'));
+    matrix.append(table, node('p', t('Needs you: an approval, a question or a handoff offer. Stopped: an error, a usage limit or failing tests.'), 'alert-legend'),
+      node('p', t('Phone notification: on the lock screen of a phone connected Away from home, once you turn them on from Notifications at the bottom of its workspace list. It comes while Codeshi isn’t open on the phone, and says only what happened and in which workspace.'), 'alert-legend'));
     group.append(matrix);
 
-    const options = kit.group(host, desktop ? 'Banners and sounds' : 'Sounds');
+    const options = kit.group(host, desktop ? t('Banners and sounds') : t('Sounds'));
     // A banner is a macOS notification, or a panel near the top of the screen, which shows even where macOS holds
     // notifications back.
     if (mac) {
-      const style = kit.segmented([[false, 'macOS notification'], [true, 'Panel at the top of the screen']], settings.banner.panel, panel => { if (settings.banner.panel !== panel) save({ banner: { panel } }); }, 'Banner style');
+      const style = kit.segmented([[false, t('macOS notification')], [true, t('Panel at the top of the screen')]], settings.banner.panel, panel => { if (settings.banner.panel !== panel) save({ banner: { panel } }); }, t('Banner style'));
       for (const choice of style.querySelectorAll('button')) choice.disabled = !settings.banner.on;
-      kit.row(options, { label: 'Banner style', description: settings.banner.panel ? 'A small panel under the menu bar, which shows even where macOS holds notifications back.' : 'If banners don’t appear, allow Codeshi in System Settings › Notifications, or choose the panel.', keywords: 'notification panel overlay top of the screen', control: style });
+      kit.row(options, { label: t('Banner style'), description: settings.banner.panel ? t('A small panel under the menu bar, which shows even where macOS holds notifications back.') : t('If banners don’t appear, allow Codeshi in System Settings › Notifications, or choose the panel.'), keywords: 'notification panel overlay top of the screen', control: style });
     }
     const slider = node('input', undefined, 'alert-volume'), shown = node('output', `${settings.sound.volume}%`, 'alert-volume-value');
     slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '5'; slider.value = String(settings.sound.volume); slider.disabled = !settings.sound.on;
-    slider.setAttribute('aria-label', 'Sound volume'); slider.setAttribute('aria-valuetext', `${settings.sound.volume}%`);
+    slider.setAttribute('aria-label', t('Sound volume')); slider.setAttribute('aria-valuetext', `${settings.sound.volume}%`);
     slider.addEventListener('input', () => { shown.textContent = `${slider.value}%`; });
     slider.addEventListener('change', () => { const value = Number(slider.value); save({ sound: { volume: value } }); lastAt = 0; play('finished', value); });
-    kit.row(options, { label: 'Volume', description: 'How loud alert sounds play.', keywords: 'sound loud', control: [slider, shown] });
-    kit.toggle(options, { label: 'Play sounds only when Codeshi isn’t in front', description: 'Keep sounds quiet while you’re looking at Codeshi.', keywords: 'sound background focus', checked: settings.sound.background, disabled: !settings.sound.on, onChange: value => save({ sound: { background: value } }) });
+    kit.row(options, { label: t('Volume'), description: t('How loud alert sounds play.'), keywords: 'sound loud', control: [slider, shown] });
+    kit.toggle(options, { label: t('Play sounds only when Codeshi isn’t in front'), description: t('Keep sounds quiet while you’re looking at Codeshi.'), keywords: 'sound background focus', checked: settings.sound.background, disabled: !settings.sound.on, onChange: value => save({ sound: { background: value } }) });
     if (mac) {
-      const bar = kit.group(host, 'Menu bar');
-      kit.toggle(bar, { label: 'Show what agents are doing in the menu bar', description: 'Codeshi’s mark in the menu bar says what needs you and what is running, with a menu for each workspace.', keywords: 'status item tray', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
+      const bar = kit.group(host, t('Menu bar'));
+      kit.toggle(bar, { label: t('Show what agents are doing in the menu bar'), description: t('Codeshi’s mark in the menu bar says what needs you and what is running, with a menu for each workspace.'), keywords: 'status item tray', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
     }
     if (platform === 'win32') {
-      const area = kit.group(host, 'Notification area');
-      kit.toggle(area, { label: 'Show Codeshi in the notification area', description: 'Codeshi’s mark beside the clock gets a dot when something needs you. Point at it to read what is happening, click it to open Codeshi, or right-click for a menu of your workspaces.', keywords: 'status item tray taskbar system tray icon', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
+      const area = kit.group(host, t('Notification area'));
+      kit.toggle(area, { label: t('Show Codeshi in the notification area'), description: t('Codeshi’s mark beside the clock gets a dot when something needs you. Point at it to read what is happening, click it to open Codeshi, or right-click for a menu of your workspaces.'), keywords: 'status item tray taskbar system tray icon', checked: settings.statusItem, onChange: value => save({ statusItem: value }) });
     }
-    if (!desktop) kit.note(host, 'Banners and the Dock icon are part of the desktop app.');
+    if (!desktop) kit.note(host, t('Banners and the Dock icon are part of the desktop app.'));
   }
   window.relayAlerts = {
     play,
     async settings(section, kit) {
       host = section; settingsKit = kit || settingsKit; render();
-      try { settings = await api.api('/api/notifications', {}, null); } catch (error) { settings = null; if (settingsKit) { host.replaceChildren(); settingsKit.note(host, error.message || 'Alert settings are unavailable.'); } return; }
+      try { settings = await api.api('/api/notifications', {}, null); } catch (error) { settings = null; if (settingsKit) { host.replaceChildren(); settingsKit.note(host, error.message || t('Alert settings are unavailable.')); } return; }
       if (host === section) render();
     },
   };

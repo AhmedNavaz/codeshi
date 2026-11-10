@@ -8,8 +8,13 @@ export const appearances = ['system', 'light', 'dark', 'graphite'];
 export const appearance = config => appearances.includes(config.appearance) ? config.appearance : 'system';
 // view is the layout setup chose for new workspaces: Normal (every panel, manual choices) or Flow (routed, cards).
 export const defaultPreferences = { provider: 'codex', model: null, effort: null, mode: 'edit', billing: 'subscription', view: 'normal' };
-export function preferencePatch(input, previous = {}) {
+export function preferencePatch(input, previous = {}, { languages = ['en'] } = {}) {
   const patch = {};
+  // The interface language (#27): System follows the computer, or a language with a catalog.
+  if (input.language !== undefined) {
+    if (input.language !== 'system' && !languages.includes(input.language)) fail('Choose System or a listed language.');
+    patch.language = input.language;
+  }
   if (input.contextLimit !== undefined) patch.contextLimit = validateContextLimit(input.contextLimit);
   if (input.verificationCadence !== undefined) {
     if (!verificationCadences.includes(input.verificationCadence)) fail('Choose As needed or Review first for testing.');
@@ -43,6 +48,6 @@ export function preferencePatch(input, previous = {}) {
   }
   return patch;
 }
-export function publicPreferences(config, hasProjects) {
-  return { defaults: { ...defaultPreferences, ...config.defaults }, theme: appearance(config), verificationCadence: verificationCadence(config), contextLimit: contextLimit(config), suggestions: config.suggestions !== false, onboarding: config.onboarding || { step: 0 }, firstRun: !hasProjects && !config.onboarding?.completedAt && !config.onboarding?.dismissed };
+export function publicPreferences(config, hasProjects, { languages = [], language = 'en' } = {}) {
+  return { defaults: { ...defaultPreferences, ...config.defaults }, theme: appearance(config), language: config.language || 'system', activeLanguage: language, languages, verificationCadence: verificationCadence(config), contextLimit: contextLimit(config), suggestions: config.suggestions !== false, onboarding: config.onboarding || { step: 0 }, firstRun: !hasProjects && !config.onboarding?.completedAt && !config.onboarding?.dismissed };
 }

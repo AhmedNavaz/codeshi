@@ -15,3 +15,5 @@ remote/dist/
 remote/.firebase/
 firebase-debug.log
 database-debug.log
+# The pseudo-language `npm run i18n -- --pseudo` writes for checking translations (#27).
+public/locales/en-XA.json

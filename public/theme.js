@@ -8,6 +8,8 @@
   const system = window.matchMedia?.('(prefers-color-scheme: dark)');
   let revision = 0, saving = Promise.resolve(), preference = 'system';
   const headers = () => window.relayDesktop?.token ? { 'X-AI-Relay-Token': window.relayDesktop.token } : {};
+  // This runs before the page's language loads (#27), so a message is translated when it shows.
+  const t = text => window.codeshiText ? window.codeshiText.t(text) : text; // i18n-ignore
   function message(text = '') { const status = document.getElementById('appearance-status'); if (status) status.textContent = text; }
   // The preference is saved and cached; the palette is what it resolves to now.
   function apply(value, save = false) {
@@ -25,7 +27,7 @@
           const response = await fetch('/api/appearance', { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, body: JSON.stringify({ theme: chosen }) });
           if (!response.ok) throw new Error();
           message();
-        } catch { message('Appearance could not be saved. Choose it again to retry.'); }
+        } catch { message(t('Appearance could not be saved. Choose it again to retry.')); }
       });
     }
   }

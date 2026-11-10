@@ -18,6 +18,7 @@ import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
 import {runningEdit,statusSnapshot,statusTitle,statusMenu,statusTooltip,statusClickTarget,taskbarIsLight} from './status.mjs';
 import {alertPlan} from '../src/alerts.mjs';
+import {english} from '../src/i18n.mjs';
 import {createOverlay} from './overlay.mjs';
 import {closeWithin,writeShutdownLog} from './shutdown.mjs';
 import {createPreview} from './preview.mjs';
@@ -39,6 +40,8 @@ else app.setPath('userData',preferredUserData(app.getPath('appData'),app.getPath
 if(process.platform==='win32'&&!development)app.setAppUserModelId(APP_ID);
 const primary=app.requestSingleInstanceLock();
 let relay,win,origin,keepAwake,updater,tray=null,overlay=null,preview=null,quitting=false;
+// The words of the menus and the status item, in the interface language (#27).
+let text=english;
 if(!primary) app.quit();
 else {
   app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
@@ -56,7 +59,7 @@ else {
     const appearance=createAppearance({nativeTheme,onBackground:color=>{if(win&&!win.isDestroyed())win.setBackgroundColor(color);}});
     // The menu bar shows what the page last reported, the saved appearance and Keep Awake.
     let page=null,awake=false;
-    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),
+    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
       send:(...command)=>{if(win&&!win.isDestroyed())win.webContents.send('relay:menu-command',...command);updateMenu();}})));
     app.setAboutPanelOptions({applicationName:'Codeshi',applicationVersion:app.getVersion(),version:''});
@@ -101,7 +104,7 @@ else {
       if(!statusIcons||!relay||quitting)return;
       const preferences=relay.getNotificationPreferences();
       if(!preferences.statusItem){tray?.destroy();tray=null;return;}
-      const snapshot=statusSeen=statusSnapshot(relay.registry);
+      const snapshot=statusSeen=statusSnapshot(relay.registry,text);
       if(!tray){
         if(windows){
           // A left click brings Codeshi forward, to the one thing that needs you when there is exactly one; a right click opens the menu.
@@ -111,16 +114,19 @@ else {
       if(windows){
         // Windows shows no words beside the icon: the dot says something needs you, and the tooltip says what.
         tray.setImage(lightTaskbar?snapshot.attention?statusIcons.lightAttention:statusIcons.lightIdle:snapshot.attention?statusIcons.attention:statusIcons.idle);
-        tray.setToolTip(statusTooltip(snapshot));
+        tray.setToolTip(statusTooltip(snapshot,text));
       }else{
         tray.setImage(snapshot.attention?statusIcons.attention:statusIcons.idle);
-        tray.setTitle(statusTitle(snapshot),{fontType:'monospacedDigit'});
+        tray.setTitle(statusTitle(snapshot,text),{fontType:'monospacedDigit'});
       }
-      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
+      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,text,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
       overlay?.reconcile(snapshot);
     }
     async function start(){
-      relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify,onNotifications:()=>{updateMenu();scheduleStatus();}});
+      relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify,onNotifications:()=>{updateMenu();scheduleStatus();},
+        // The page reloads itself in a newly chosen language; the menus and the status item follow here.
+        systemLanguages:()=>app.getPreferredSystemLanguages?.()||[app.getLocale()],onLanguage:()=>{text=relay.getText();updateMenu();scheduleStatus();}});
+      text=relay.getText();
       appearance.set(relay.getAppearancePreference());
       keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;if(win&&!win.isDestroyed())win.webContents.send('relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
       await new Promise((resolve,reject)=>{relay.server.once('error',reject);relay.server.listen(0,'127.0.0.1',resolve);});

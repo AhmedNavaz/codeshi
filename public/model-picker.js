@@ -1,9 +1,10 @@
 (() => {
   'use strict';
+  const { t } = window.codeshiText;
   // One searchable menu for every agent: a section per agent, compact rows and "More models" for the long tail.
   // Reasoning effort has its own control beside it, because the levels depend on the model chosen here.
   const $ = id => document.getElementById(id), api = window.relayUI, popup = $('model-picker-popover'), trigger = $('model-picker-button');
-  const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini', local: 'Local · Ollama' }, cache = new Map(), loadingAgents = new Set(), failures = new Map();
+  const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini', local: t('Local · Ollama') }, cache = new Map(), loadingAgents = new Set(), failures = new Map();
   const shortList = 4;
   let scope = null, saving = false, failure = '', query = '', active = -1;
   // Another control can open the same menu for its own purpose, such as choosing who continues a stopped task.
@@ -17,6 +18,9 @@
   const modelId = row => row.id || row.model || row.value || '';
   const modelName = row => row.displayName || row.name || modelId(row) || 'Auto';
   const effortName = text => String(text || '').replace(/ \(saved\)$/, '');
+  // Effort levels by their value, in the interface language (#27); the select's own English labels stay as they are.
+  const LEVELS = { none: t('None'), minimal: t('Minimal'), low: t('Low'), medium: t('Medium'), high: t('High'), xhigh: t('X-High'), max: t('Max'), ultra: t('Ultra') };
+  const levelName = option => LEVELS[option?.value] || effortName(option?.textContent);
 
   function position() {
     if (!open()) return;
@@ -39,14 +43,14 @@
     const state = api.getState(), local = state.localSelections?.[state.projectId], actual = local ? 'local' : state.provider, auto = routing();
     // While routing is on, the button shows the mode instead of a model and opens Routing in the Agents panel.
     $('picked-agent').textContent = auto ? 'Routing' : names[actual];
-    $('picked-model').textContent = auto ? window.relayRouting?.modeNames[auto.mode] || 'Auto' : local?.model || (state.model ? modelName(selectedRow(state.provider) || { id: state.model }) : 'Default');
+    $('picked-model').textContent = auto ? window.relayRouting?.modeNames[auto.mode] || t('Auto') : local?.model || (state.model ? modelName(selectedRow(state.provider) || { id: state.model }) : t('Default'));
     $('picked-agent-icon').className = 'agent-icon ' + (auto ? 'auto' : actual === 'local' ? 'codex' : actual);
     trigger.classList.toggle('routing', Boolean(auto));
     trigger.disabled = !state.ready || !state.projectId || Boolean(state.pending || state.settingsPending);
-    trigger.setAttribute('aria-label', auto ? `Routing: ${$('picked-model').textContent}. Change it in the Agents panel.` : `Choose agent and model. Current: ${names[actual]}, ${$('picked-model').textContent}`);
-    trigger.title = auto ? 'Routing picks the agent, model and effort for each message. Click to change it.' : '';
+    trigger.setAttribute('aria-label', auto ? t('Routing: {model}. Change it in the Agents panel.', { model: $('picked-model').textContent }) : t('Choose agent and model. Current: {agent}, {model}', { agent: names[actual], model: $('picked-model').textContent }));
+    trigger.title = auto ? t('Routing picks the agent, model and effort for each message. Click to change it.') : '';
     if (local) {
-      $('model-description').textContent = `Local · ${local.model} · Downloaded model · No cloud model charges`;
+      $('model-description').textContent = t('Local · {model} · Downloaded model · No cloud model charges', { model: local.model });
       $('effort-select').disabled = true;
     }
     if (open() && scope !== state.projectId) close();
@@ -72,7 +76,7 @@
     if (provider === 'local') return (data?.models || []).map(row => ({ ...row, tag: row.parameterSize || '' }));
     const reported = (data?.models || []).filter(row => row.value !== 'default').map(row => ({ ...row, tag: row.isDefault ? 'Default' : '' }));
     // The agent's own default, named so it isn't confused with Codeshi's Auto above.
-    return [{ id: '', displayName: `Let ${names[provider]} choose`, description: `${names[provider]} uses its default model`, tag: '' }, ...reported];
+    return [{ id: '', displayName: t('Let {agent} choose', { agent: names[provider] }), description: t('{agent} uses its default model', { agent: names[provider] }), tag: '' }, ...reported];
   }
   function isSelected(provider, row) {
     const state = api.getState(), local = state.localSelections?.[scope];
@@ -88,7 +92,7 @@
     choice.setAttribute('aria-pressed', String(selected));
     choice.dataset.nav = 'true';
     choice.title = row.description && row.description !== modelId(row) ? row.description : modelId(row) || row.description || '';
-    const busyAgent = api.isRunning() && provider !== (state.localSelections?.[scope] ? 'local' : state.provider); choice.disabled = Boolean(saving || busyAgent); if (busyAgent) choice.title = 'Stop the current run before switching assistants.';
+    const busyAgent = api.isRunning() && provider !== (state.localSelections?.[scope] ? 'local' : state.provider); choice.disabled = Boolean(saving || busyAgent); if (busyAgent) choice.title = t('Stop the current run before switching assistants.');
     const check = node('span', undefined, 'picker-row-check'); check.setAttribute('aria-hidden', 'true');
     choice.append(node('span', modelName(row), 'picker-row-name'), node('span', row.tag || '', 'picker-row-tag'), check);
     choice.addEventListener('click', () => choose(provider, row));
@@ -108,18 +112,18 @@
       header.append(icon, node('span', names[provider], 'picker-section-name'));
       const note = node('span', '', 'picker-section-note'); header.append(note);
       const section = [];
-      if (loadingAgents.has(provider) && !cache.has(scope + ':' + provider)) note.textContent = 'Loading…';
+      if (loadingAgents.has(provider) && !cache.has(scope + ':' + provider)) note.textContent = t('Loading…');
       else if (!installed(provider)) {
-        note.textContent = provider === 'local' ? 'Not set up' : 'Not connected';
+        note.textContent = provider === 'local' ? t('Not set up') : t('Not connected');
         if (!query) {
           const setup = node('button', undefined, 'picker-row picker-setup');
           setup.type = 'button'; setup.dataset.nav = 'true';
-          setup.append(node('span', provider === 'local' ? 'Set up local models…' : `Connect ${names[provider]}…`, 'picker-row-name'));
+          setup.append(node('span', provider === 'local' ? t('Set up local models…') : t('Connect {agent}…', { agent: names[provider] }), 'picker-row-name'));
           setup.addEventListener('click', () => { close(); if (provider === 'local') window.relayLocal?.open(); else if (window.relaySettings) window.relaySettings.open('accounts'); else $('relay-settings')?.click(); });
           section.push(setup);
         }
       } else {
-        if (failures.has(provider)) note.textContent = 'Could not load models';
+        if (failures.has(provider)) note.textContent = t('Could not load models');
         const rows = rowsFor(provider).filter(row => matches(provider, row));
         // Without a search the list shows a few models per agent, always including the chosen one.
         const visible = query || expanded.has(provider) ? rows : rows.filter((row, index) => index < shortList || isSelected(provider, row));
@@ -127,17 +131,17 @@
         if (visible.length < rows.length) {
           const more = node('button', undefined, 'picker-row picker-more');
           more.type = 'button'; more.dataset.nav = 'true';
-          more.append(node('span', `More ${names[provider].replace(' · Ollama', '')} models`, 'picker-row-name'), node('span', String(rows.length - visible.length), 'picker-row-tag'));
+          more.append(node('span', provider === 'local' ? t('More Local models') : t('More {agent} models', { agent: names[provider] }), 'picker-row-name'), node('span', String(rows.length - visible.length), 'picker-row-tag'));
           more.addEventListener('click', () => { expanded.add(provider); render(); highlight(more.dataset.index ? +more.dataset.index : active); });
           section.push(more);
         }
-        if (!rows.length && !query) note.textContent = provider === 'local' ? 'No downloaded models' : 'No models reported';
+        if (!rows.length && !query) note.textContent = provider === 'local' ? t('No downloaded models') : t('No models reported');
       }
       if (query && !section.length) continue;
       host.append(header, ...section);
       shown += section.length;
     }
-    if (!shown) host.append(node('p', query ? 'No models match your search.' : 'No agents are connected yet.', 'picker-empty'));
+    if (!shown) host.append(node('p', query ? t('No models match your search.') : t('No agents are connected yet.'), 'picker-empty'));
     navRows().forEach((row, index) => { row.dataset.index = String(index); row.id = 'picker-row-' + index; row.addEventListener('mouseenter', () => highlight(index, false)); });
     highlight(Math.min(Math.max(active, 0), navRows().length - 1), false);
   }
@@ -157,11 +161,11 @@
   // The hidden effort select remains the source of truth and saves the choice.
   const effortButton = $('effort-button'), effortPopup = $('effort-popover'), range = $('effort-range');
   const effortOpen = () => effortPopup?.matches?.(':popover-open');
-  const hints = { none: 'No extra reasoning', minimal: 'Quickest replies, almost no reasoning', low: 'Fast replies with light reasoning', medium: 'Balanced speed and depth', high: 'Deeper reasoning for harder tasks', xhigh: 'Extended reasoning for complex work', max: 'Most thorough; slowest and uses the most allowance' };
+  const hints = { none: t('No extra reasoning'), minimal: t('Quickest replies, almost no reasoning'), low: t('Fast replies with light reasoning'), medium: t('Balanced speed and depth'), high: t('Deeper reasoning for harder tasks'), xhigh: t('Extended reasoning for complex work'), max: t('Most thorough; slowest and uses the most allowance') };
   const autoNotes = {
-    claude: 'Claude uses the model’s default level and decides on each step how much to think.',
-    gemini: 'Gemini adjusts its thinking to each prompt.',
-    codex: 'Codex uses its default level for every prompt.',
+    claude: t('Claude uses the model’s default level and decides on each step how much to think.'),
+    gemini: t('Gemini adjusts its thinking to each prompt.'),
+    codex: t('Codex uses its default level for every prompt.'),
   };
   const effortLevels = () => choices($('effort-select')).filter(option => option.value);
   const agentDefault = () => choices($('effort-select')).find(option => !option.value)?.textContent.match(/\((\w+)\)/)?.[1] || '';
@@ -177,8 +181,8 @@
     effortButton.disabled = select.disabled;
     bars($('effort-bars'), index >= 0 ? index + 1 : 0, levels.length);
     effortButton.dataset.level = index >= 0 ? levels[index].value : 'auto';
-    $('effort-button-label').textContent = index >= 0 ? effortName(levels[index].textContent) : 'Default';
-    effortButton.title = `Reasoning effort: ${index >= 0 ? effortName(levels[index].textContent) : 'the agent’s default'}`;
+    $('effort-button-label').textContent = index >= 0 ? levelName(levels[index]) : t('Default');
+    effortButton.title = index >= 0 ? t('Reasoning effort: {level}', { level: levelName(levels[index]) }) : t('Reasoning effort: the agent’s default');
     effortButton.setAttribute('aria-label', effortButton.title);
     if (effortButton.hidden && effortOpen()) effortPopup.hidePopover();
     if (effortOpen()) renderEffortPanel();
@@ -189,12 +193,12 @@
     effortPopup.dataset.level = auto ? 'auto' : level?.value || 'auto';
     range.value = String(index);
     range.style.setProperty?.('--fill', levels.length > 1 ? (index / (levels.length - 1)) * 100 + '%' : '0%');
-    range.setAttribute('aria-valuetext', level ? effortName(level.textContent) : 'Agent default');
+    range.setAttribute('aria-valuetext', level ? levelName(level) : t('Agent default'));
     $('effort-stops').querySelectorAll('button').forEach((stop, position) => stop.setAttribute('aria-pressed', String(!auto && position === index)));
     const unknown = effortPopup.classList.contains('unknown');
     $('effort-ticks').querySelectorAll('i').forEach((tick, position) => { tick.hidden = !unknown && position === index; tick.classList.toggle('passed', !unknown && position < index); });
     const provider = api.getState().provider, fallback = agentDefault();
-    $('effort-hint').textContent = auto ? (provider === 'codex' && fallback ? `Codex uses its default, ${effortName(fallback[0].toUpperCase() + fallback.slice(1))}, for every prompt.` : autoNotes[provider] || 'The agent uses its default level.') : hints[level?.value] || 'Reasoning level reported by the model';
+    $('effort-hint').textContent = auto ? (provider === 'codex' && fallback ? t('Codex uses its default, {level}, for every prompt.', { level: LEVELS[fallback] || effortName(fallback[0].toUpperCase() + fallback.slice(1)) }) : autoNotes[provider] || t('The agent uses its default level.')) : hints[level?.value] || t('Reasoning level reported by the model');
     $('effort-stops').querySelectorAll('button').forEach((stop, position) => stop.classList.toggle('agent-default', auto && levels[position]?.value === fallback));
   }
   function renderEffortPanel() {
@@ -209,7 +213,7 @@
     effortPopup.classList.toggle('auto', auto);
     $('effort-ticks').replaceChildren(...levels.map((_, index) => { const tick = node('i'); tick.style.left = levels.length > 1 ? `calc(8px + (100% - 16px) * ${index / (levels.length - 1)})` : '8px'; return tick; }));
     $('effort-stops').replaceChildren(...levels.map((option, index) => {
-      const stop = node('button', effortName(option.textContent));
+      const stop = node('button', levelName(option));
       stop.type = 'button';
       stop.tabIndex = -1;
       stop.style.left = levels.length > 1 ? `calc(8px + (100% - 16px) * ${index / (levels.length - 1)})` : '8px';

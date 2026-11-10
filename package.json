@@ -46,6 +46,7 @@
     "stats": "node scripts/stats.mjs",
     "package": "node desktop/package.mjs",
     "icons": "electron desktop/icons.mjs",
+    "i18n": "node scripts/i18n.mjs",
     "build:phone": "node scripts/build-phone.mjs",
     "measure:phone": "node scripts/measure-phone.mjs",
     "test:phone:remote": "firebase emulators:exec --only auth,database --project demo-codeshi-phone --config remote/firebase.json \"node --test remote/test/relay.test.mjs\""

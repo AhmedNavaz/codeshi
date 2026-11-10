@@ -142,7 +142,8 @@ test('the file tree keeps one row in the Tab order and moves by level with the a
 test('the page loads the keyboard script first and marks the file tree and command bar for screen readers', () => {
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const scripts = [...html.matchAll(/<script src="\/([\w-]+)\.js" defer>/g)].map(match => match[1]);
-  assert.equal(scripts[0], 'keyboard', 'Loaded before the scripts whose menus and popovers it wires.');
+  // The interface language comes first (#27), so every script after it can translate what it draws.
+  assert.deepEqual(scripts.slice(0, 3), ['i18n', 'locale', 'keyboard'], 'The keyboard script loads before the scripts whose menus and popovers it wires.');
   assert.match(html, /id="file-tree" class="file-tree" role="tree"/);
   assert.match(html, /<input id="workspace-search" type="search" role="combobox"[^>]*aria-expanded="false"/, 'The search box itself is the combobox.');
   assert.doesNotMatch(html, /class="command-bar" role=/);

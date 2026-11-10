@@ -81,7 +81,7 @@ function realXterm(){
 }
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,githubUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,githubUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -262,6 +262,8 @@ async function browser({existing=true,available=true,providers={},authenticated=
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
   const highlights=new Map();document.createRange=()=>new Range();
   const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,clearInterval:id=>timers.delete(id),cancelAnimationFrame:()=>{},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async()=>{}}}});
+  // The page's words (#27): English unless a test loads a catalog, as /locale.js does.
+  vm.runInContext(fs.readFileSync(new URL('../public/i18n.js',import.meta.url),'utf8'),context,{filename:'public/i18n.js'});if(locale)window.codeshiText.load(locale);
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
   const previewOpens=[],previewListeners=[],previewCloses=[];
@@ -7336,4 +7338,40 @@ test('a restore can also rewind the conversation, and folded messages show as on
   assert(ui.$('messages').querySelectorAll('.message-rewound').length >= 2, 'Shown folded messages are dimmed.');
   ui.$('messages').querySelector('.messages-rewound').querySelector('button').click(); await flush();
   assert.doesNotMatch(transcript(), /Zebra done/);
+});
+
+test('Settings, the composer and the model picker use the interface language, and General offers each language with a catalog (#27)', async () => {
+  const messages = { 'Keep awake': 'Mantener activo', View: 'Vista', Send: 'Enviar', 'Describe the task or ask a question…': 'Describe la tarea o haz una pregunta…', Language: 'Idioma',
+    'Same as the computer ({language})': 'Igual que el ordenador ({language})', 'Use {agent} for your next message': 'Usar {agent} para el próximo mensaje', 'Ways to alert you': 'Formas de avisarte' };
+  const ui = await browser({ workbench: true, desktop: true, alertsUI: true, locale: { language: 'es', messages } });
+  const languages = [{ id: 'en', name: 'English', direction: 'ltr' }, { id: 'es', name: 'Español', direction: 'ltr' }];
+  const every = { attention: true, finished: true, stopped: true }, alerts = { banner: { on: true, ...every, panel: false }, sound: { on: false, ...every, volume: 70, background: false }, bounce: { on: true, ...every }, badge: { on: true, ...every }, phone: { on: true, ...every }, statusItem: true };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/notifications') return response(alerts);
+    const result = next();
+    return request.path === '/api/preferences' && request.method === 'GET' ? Promise.resolve(result).then(async answer => response({ ...await answer.json(), languages, activeLanguage: 'es' })) : result;
+  });
+  assert.equal(ui.$('message-input').placeholder, 'Describe la tarea o haz una pregunta…');
+  assert.equal(ui.$('send-button').firstElementChild.textContent, 'Enviar');
+  assert.equal(ui.$('select-claude').title, 'Usar Claude para el próximo mensaje');
+  await ui.window.relaySettings.open('general'); await flush();
+  const page = name => ui.$('settings-content').querySelectorAll('.settings-page').find(section => section.dataset.page === name);
+  const labels = name => page(name).querySelectorAll('.settings-row-label').map(label => label.textContent);
+  assert.deepEqual(labels('general'), ['Vista', 'Mantener activo', 'Idioma'], 'A text without a translation stays English.');
+  assert(page('alerts').querySelectorAll('h3').some(heading => heading.textContent === 'Formas de avisarte'), 'Pages other modules draw are translated too.');
+  // Following the computer names the language that gives; each language is listed by its own name.
+  const select = ui.$('settings-language');
+  assert.deepEqual(select.querySelectorAll('option').map(option => [option.value, option.textContent]), [['system', 'Igual que el ordenador (Español)'], ['en', 'English'], ['es', 'Español']]);
+  assert.equal(select.value, 'system');
+  let reloads = 0; ui.window.location = { reload: () => { reloads++; } };
+  select.value = 'en'; ui.fire('settings-language', 'change'); await flush();
+  assert(ui.requests.some(request => request.path === '/api/preferences' && request.method === 'POST' && request.body?.language === 'en'));
+  assert.equal(reloads, 1, 'The window reloads in the chosen language.');
+});
+
+test('General has no language choice while English is the only language (#27)', async () => {
+  const ui = await browser({ workbench: true, desktop: true });
+  await ui.window.relaySettings.open('general'); await flush();
+  assert.equal(ui.$('settings-language'), null);
+  assert.equal(ui.$('settings-content').querySelectorAll('.settings-row-label').some(label => label.textContent === 'Language'), false);
 });

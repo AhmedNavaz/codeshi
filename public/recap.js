@@ -1,5 +1,6 @@
 (() => {
   'use strict';
+  const { t } = window.codeshiText;
   // "While you were away" (#22). Coming back to Codeshi after two minutes or more, a short recap shows what ran,
   // what changed and what is waiting in every workspace, if anything happened. It is put together from what
   // Codeshi recorded, with no agent call. Read aloud speaks it with voice mode's speech (#11); it can also be read
@@ -121,9 +122,9 @@
     settingsHost = host; settingsKit = kit;
     if (!kit) return;
     host.replaceChildren();
-    const rows = kit.group(host, 'When you come back');
-    kit.toggle(rows, { label: 'Show a recap when I come back', description: 'After two minutes or more away: what ran, what changed and what is waiting in each workspace, from what Codeshi recorded.', keywords: 'while you were away summary return', checked: prefs.show, onChange: value => save({ show: value }) });
-    if (window.relayVoice?.speak) kit.toggle(rows, { label: 'Read it aloud', description: 'Speak the recap in the voice chosen under Voice.', keywords: 'recap speech speak', checked: prefs.speak, onChange: value => save({ speak: value }) });
+    const rows = kit.group(host, t('When you come back'));
+    kit.toggle(rows, { label: t('Show a recap when I come back'), description: t('After two minutes or more away: what ran, what changed and what is waiting in each workspace, from what Codeshi recorded.'), keywords: 'while you were away summary return', checked: prefs.show, onChange: value => save({ show: value }) });
+    if (window.relayVoice?.speak) kit.toggle(rows, { label: t('Read it aloud'), description: t('Speak the recap in the voice chosen under Voice.'), keywords: 'recap speech speak', checked: prefs.speak, onChange: value => save({ speak: value }) });
   }
   window.relayRecap = {
     open: () => show(lastAway ?? openedAt, false),

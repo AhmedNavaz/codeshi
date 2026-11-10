@@ -2,6 +2,8 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
+  // The interface language (#27). The composer and its controls are translated; other parts still use English.
+  const { t, tn } = window.codeshiText;
   const ui = {
     workspaceList: $("workspace-list"), workspaceCount: $("workspace-count"), createWorkspace: $("create-workspace"), workspaceToggle: $("workspace-toggle"),
     title: $("conversation-title"), subtitle: $("conversation-subtitle"), state: $("conversation-state"),
@@ -1932,7 +1934,7 @@
     }
     const execution = state.conversation?.execution, policy = execution?.active;
     executionStrip.hidden = !execution;
-    executionLabel.textContent = execution ? `Task: ${policy?.mode === 'flow' ? 'Flow' : 'Normal'} · New work: ${execution.defaults.mode === 'flow' ? 'Flow' : 'Normal'}` : '';
+    executionLabel.textContent = execution ? t('Task: {task} · New work: {work}', { task: policy?.mode === 'flow' ? 'Flow' : t('Normal'), work: execution.defaults.mode === 'flow' ? 'Flow' : t('Normal') }) : '';
     executionTakeover.hidden = !policy || policy.mode !== 'flow';
     executionTakeover.title = 'Revoke pending automatic work. The current native turn may finish; Stop ends it immediately.';
   }
@@ -1950,7 +1952,7 @@
       ui[provider].classList.toggle("selected", state.provider === provider);
       ui[provider].setAttribute("aria-pressed", String(state.provider === provider));
       ui[provider].disabled = !state.ready || busy || running || !available(provider);
-      ui[provider].title = available(provider) ? `Use ${label(provider)} for your next message` : `${label(provider)} CLI is not installed`;
+      ui[provider].title = available(provider) ? t("Use {agent} for your next message", { agent: label(provider) }) : t("{agent} CLI is not installed", { agent: label(provider) });
     }
     ui.agent.value = state.provider;
     ui.agent.disabled = !state.ready || busy || running;
@@ -1965,20 +1967,20 @@
     // While work runs or waits for a reset, a message joins the queue instead of starting now (#32).
     const queueing = Boolean(state.conversation) && (running || Boolean(state.conversation?.resume));
     const canAdd = running && state.conversation?.canAddToRun === true, modKey = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘" : "Ctrl+";
-    ui.input.placeholder = queueing ? (canAdd ? `Queue a follow-up, or ${modKey}↵ to add it to this run…` : "Add a message to the queue…") : state.taskDraft ? "What should this task do?" : "Describe the task or ask a question…";
+    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : t("Describe the task or ask a question…");
     $("steer-button").hidden = !canAdd;
     $("steer-button").disabled = !state.ready || busy || !ui.input.value.trim() || Boolean(window.relayFiles?.ids().length);
-    $("steer-button").title = window.relayFiles?.ids().length ? "Attachments go with a queued message" : `Add this to the current run (${modKey}↵)`;
+    $("steer-button").title = window.relayFiles?.ids().length ? t("Attachments go with a queued message") : t("Add this to the current run ({shortcut})", { shortcut: `${modKey}↵` });
     $("queue-button").hidden = !queueing;
     $("queue-button").disabled = !state.ready || busy || Boolean(state.localSelections[state.projectId]) || window.relayFiles?.uploading() || !ui.input.value.trim();
     ui.send.hidden = running;
     ui.send.disabled = !state.ready || busy || otherRunning || (ui.input.value.trim() !== '/compact' && !state.localSelections[state.projectId] && selectedConnection.blocked) || window.relayFiles?.uploading() || (!ui.input.value.trim() && !window.relayFiles?.ids().length);
     renderContextMeter();
     renderUsageNotice();
-    ui.send.firstElementChild.textContent = state.pending === "send" ? "Sending…" : "Send";
+    ui.send.firstElementChild.textContent = state.pending === "send" ? t("Sending…") : t("Send");
     ui.stop.hidden = !running;
     ui.stop.disabled = Boolean(state.routingStopPending) || busy && state.conversation?.activeRun?.purpose !== 'routing';
-    ui.stop.lastChild.textContent = state.pending === "stop" ? " Stopping…" : " Stop";
+    ui.stop.lastChild.textContent = " " + (state.pending === "stop" ? t("Stopping…") : t("Stop"));
     ui.otherRunning.hidden = !otherRunning;
     // A narrow composer shows these pickers as icons, so each names its current choice on hover.
     for (const select of [$("effort-select"), ui.mode, ui.approval]) {
@@ -1994,7 +1996,7 @@
     const switching = state.conversation?.limitSwitching;
     ui.continuation.hidden = !canContinue || Boolean(resume) || Boolean(switching);
     const previous=state.conversation?.lastRun;
-    const reason={quota:'Usage limit reached.',budget:'Task limit reached.',authentication:'Sign-in required.',permission:'A permission request was declined.',protocol:'The assistant connection stopped.',interrupted:'Run stopped.'}[previous?.errorCategory] || 'The previous run did not finish.';
+    const reason={quota:t('Usage limit reached.'),budget:t('Task limit reached.'),authentication:t('Sign-in required.'),permission:t('A permission request was declined.'),protocol:t('The assistant connection stopped.'),interrupted:t('Run stopped.')}[previous?.errorCategory] || t('The previous run did not finish.');
     ui.continueText.textContent = reason;
     const alternative=['codex','claude','gemini'].find(provider=>provider!==state.provider&&!connection(provider).blocked) || state.provider;
     const continuationProvider=previous?.errorCategory==='quota' && previous.provider===state.provider && !connection(alternative).blocked ? alternative : state.provider;
@@ -2004,8 +2006,8 @@
     const modelLabel = continuationModel ? window.relayModelPicker?.modelName?.(continuationProvider, continuationModel) || continuationModel : "";
     // Continuing on another agent after a limit is a handoff, so queued prompts for the limited agent go along if they can (#93).
     const followers = previous?.errorCategory === "quota" && continuationProvider !== previous.provider ? (state.conversation?.queue || []).filter(item => item.provider === previous.provider).length : 0;
-    if (followers) ui.continueText.textContent = `${reason} ${followers} queued prompt${followers === 1 ? "" : "s"} ${connection(continuationProvider).account?.billingSource === "subscription" ? `${followers === 1 ? "moves" : "move"} too` : `${followers === 1 ? "stays" : "stay"} with ${label(previous.provider)}`}.`;
-    ui.continueButton.replaceChildren(document.createTextNode(state.pending === "continue" ? "Continuing…" : `Continue with ${label(continuationProvider)}${modelLabel ? ` · ${modelLabel}` : ""} `), element("span", "", "→"));
+    if (followers) ui.continueText.textContent = `${reason} ${connection(continuationProvider).account?.billingSource === "subscription" ? tn(followers, "1 queued prompt moves too.", "{count} queued prompts move too.") : tn(followers, "1 queued prompt stays with {agent}.", "{count} queued prompts stay with {agent}.", { agent: label(previous.provider) })}`;
+    ui.continueButton.replaceChildren(document.createTextNode(state.pending === "continue" ? t("Continuing…") : `${t("Continue with {agent}", { agent: label(continuationProvider) })}${modelLabel ? ` · ${modelLabel}` : ""} `), element("span", "", "→"));
     $("continue-choose").disabled = busy || otherRunning;
     ui.continueButton.disabled = busy || otherRunning || connection(continuationProvider).blocked;
     // After a usage limit, the task can wait for a reset and continue on whichever agent has room first.
@@ -2017,7 +2019,7 @@
     $("resume-waiting").hidden = !resume && !switching;
     $("resume-cancel").hidden = Boolean(switching) && !resume;
     if (resume) $("resume-waiting-text").textContent = resumeText(resume);
-    else if (switching) $("resume-waiting-text").textContent = `${label(switching.provider)} reached its usage limit. Finding an agent with room…`;
+    else if (switching) $("resume-waiting-text").textContent = t("{agent} reached its usage limit. Finding an agent with room…", { agent: label(switching.provider) });
     renderQueue(); renderHandoff(); renderRetry(); renderPlan();
     const hasMessages = Boolean(state.conversation?.messages?.length);
     ui.title.textContent=state.loading&&state.projectId?'Opening workspace…':currentProject()?.name||'Codeshi';
@@ -2843,7 +2845,7 @@
     if (event.key === "Escape") { if ($("workspace-search").value) { event.preventDefault(); $("workspace-search").value = ""; searchFiles(); renderCommandResults(true); } else { renderCommandResults(false); $("workspace-search").blur?.(); } }
   });
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || ""), shortcut = (key, shift = false) => mac ? `${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${shift ? "Shift+" : ""}${key}`;
-  $("workspace-search").placeholder = `Search workspaces and actions   ${shortcut("K")}`;
+  $("workspace-search").placeholder = `${t("Search workspaces and actions")}   ${shortcut("K")}`;
   $("open-git").title = `Git activity (${shortcut("G", true)})`;
   $("toggle-sidebar").title = `Toggle sidebar (${shortcut("B")})`;
   $("toggle-flow").title = `Flow mode: just the chat, with plain-language cards (${shortcut("F", true)})`;

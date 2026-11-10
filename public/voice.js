@@ -1,5 +1,6 @@
 (() => {
   'use strict';
+  const { t } = window.codeshiText;
   // Voice mode (#11). Push to talk: the microphone button or ⌥⌘V starts listening, and again stops it. What you say
   // appears in the message box as it is heard, for you to review and send; "Send when I stop talking" sends it after
   // a three-second countdown that Esc cancels. When a run you started by voice finishes, its reply is read aloud as
@@ -458,13 +459,14 @@
   // The Voice part of Settings.
   // What macOS currently allows, in one sentence.
   function permissions(info) {
-    if (info.helper !== 'ready') return 'The speech helper is prepared the first time you use voice input.';
+    if (info.helper !== 'ready') return t('The speech helper is prepared the first time you use voice input.');
     if (info.error) return info.error;
     const both = [info.speech, info.microphone];
-    let text = both.every(value => value === 'authorized') ? 'Speech recognition and the microphone are allowed.'
-      : both.every(value => value === 'not-determined') ? 'macOS asks for the microphone and speech recognition the first time you speak.'
-      : `Speech recognition is ${info.speech === 'authorized' ? 'allowed' : info.speech === 'not-determined' ? 'not asked yet' : 'not allowed'}, and the microphone is ${info.microphone === 'authorized' ? 'allowed' : info.microphone === 'not-determined' ? 'not asked yet' : 'not allowed'}.`;
-    if (info.onDevice === false) text += ' On-device recognition isn’t installed for this language; turn on Dictation for it in System Settings › Keyboard.';
+    const state = value => value === 'authorized' ? t('allowed') : value === 'not-determined' ? t('not asked yet') : t('not allowed');
+    let text = both.every(value => value === 'authorized') ? t('Speech recognition and the microphone are allowed.')
+      : both.every(value => value === 'not-determined') ? t('macOS asks for the microphone and speech recognition the first time you speak.')
+      : t('Speech recognition is {speech}, and the microphone is {microphone}.', { speech: state(info.speech), microphone: state(info.microphone) });
+    if (info.onDevice === false) text += ' ' + t('On-device recognition isn’t installed for this language; turn on Dictation for it in System Settings › Keyboard.');
     return text;
   }
   // The Voice page of Settings: speaking a message, and reading summaries aloud. Settings lends the kit its rows are
@@ -474,22 +476,22 @@
     if (!kit) return;
     host.replaceChildren();
     if (support?.supported) {
-      const input = kit.group(host, 'Voice input', `Speak a message with ${shortcut} or the microphone in the message box. Speech is recognized on this Mac by Codeshi Speech and the audio never leaves it; what you say appears in the message box for you to review.`);
+      const input = kit.group(host, t('Voice input'), t('Speak a message with {shortcut} or the microphone in the message box. Speech is recognized on this Mac by Codeshi Speech and the audio never leaves it; what you say appears in the message box for you to review.', { shortcut }));
       const denied = [support.speech, support.microphone].includes('denied');
-      kit.row(input, { label: 'Permissions', description: permissions(support) + (denied ? ' To allow it, open System Settings › Privacy & Security, then Speech Recognition and Microphone, and turn on Codeshi Speech.' : ''), keywords: 'microphone speech recognition privacy' });
-      kit.select(input, { label: 'Mode', description: prefs.mode === 'conversation' ? `Hands-free, in Flow: ${shortcut} starts a conversation that keeps listening until you say “stop listening”, press Esc or click the microphone. Say “send” at the end to send. Listening pauses while Codeshi speaks. Outside Flow the microphone dictates.` : 'What you say goes into the message box, and you send it. In Flow, the arrow beside the microphone also changes this.', keywords: 'voice dictation conversation hands-free', options: [['dictation', 'Dictation'], ['conversation', 'Conversation']], value: prefs.mode === 'conversation' ? 'conversation' : 'dictation', onChange: value => { save({ mode: value }); render(); } });
+      kit.row(input, { label: t('Permissions'), description: permissions(support) + (denied ? ' ' + t('To allow it, open System Settings › Privacy & Security, then Speech Recognition and Microphone, and turn on Codeshi Speech.') : ''), keywords: 'microphone speech recognition privacy' });
+      kit.select(input, { label: t('Mode'), description: prefs.mode === 'conversation' ? t('Hands-free, in Flow: {shortcut} starts a conversation that keeps listening until you say “stop listening”, press Esc or click the microphone. Say “send” at the end to send. Listening pauses while Codeshi speaks. Outside Flow the microphone dictates.', { shortcut }) : t('What you say goes into the message box, and you send it. In Flow, the arrow beside the microphone also changes this.'), keywords: 'voice dictation conversation hands-free', options: [['dictation', t('Dictation')], ['conversation', t('Conversation')]], value: prefs.mode === 'conversation' ? 'conversation' : 'dictation', onChange: value => { save({ mode: value }); render(); } });
       if (prefs.mode === 'conversation') {
-        kit.toggle(input, { label: 'Send after a pause', description: 'Sends after 2 seconds of silence, without saying “send”.', keywords: 'voice conversation automatic send silence', checked: prefs.pauseSend, onChange: value => save({ pauseSend: value }) });
-        kit.select(input, { label: 'While the agent works', description: 'Where a message you send by voice goes during a run. Approvals are read out; say “approve”, then “yes, approve”, or “deny”.', keywords: 'voice conversation queue add to run approvals', options: [['add', 'Add it to the run when the agent allows, otherwise queue'], ['queue', 'Queue it for after the run']], value: prefs.whileWorking === 'queue' ? 'queue' : 'add', onChange: value => save({ whileWorking: value }) });
-      } else kit.toggle(input, { label: 'Send when I stop talking', description: 'After a 3-second countdown, which Esc cancels.', keywords: 'voice dictation automatic send', checked: prefs.sendAfter, onChange: value => save({ sendAfter: value }) });
-    } else kit.note(host, 'Voice input is available on macOS for now. Replies can still be read aloud when a run finishes.');
-    const aloud = kit.group(host, 'Reading aloud');
-    kit.select(aloud, { label: 'Read the reply aloud', description: 'When a run finishes, its reply is read as written, without code or tables.', keywords: 'speech speak voice summary reply response', options: [['voice', 'After runs I started by voice'], ['always', 'After every run'], ['never', 'Never']], value: prefs.readAloud, onChange: value => save({ readAloud: value }) });
+        kit.toggle(input, { label: t('Send after a pause'), description: t('Sends after 2 seconds of silence, without saying “send”.'), keywords: 'voice conversation automatic send silence', checked: prefs.pauseSend, onChange: value => save({ pauseSend: value }) });
+        kit.select(input, { label: t('While the agent works'), description: t('Where a message you send by voice goes during a run. Approvals are read out; say “approve”, then “yes, approve”, or “deny”.'), keywords: 'voice conversation queue add to run approvals', options: [['add', t('Add it to the run when the agent allows, otherwise queue')], ['queue', t('Queue it for after the run')]], value: prefs.whileWorking === 'queue' ? 'queue' : 'add', onChange: value => save({ whileWorking: value }) });
+      } else kit.toggle(input, { label: t('Send when I stop talking'), description: t('After a 3-second countdown, which Esc cancels.'), keywords: 'voice dictation automatic send', checked: prefs.sendAfter, onChange: value => save({ sendAfter: value }) });
+    } else kit.note(host, t('Voice input is available on macOS for now. Replies can still be read aloud when a run finishes.'));
+    const aloud = kit.group(host, t('Reading aloud'));
+    kit.select(aloud, { label: t('Read the reply aloud'), description: t('When a run finishes, its reply is read as written, without code or tables.'), keywords: 'speech speak voice summary reply response', options: [['voice', t('After runs I started by voice')], ['always', t('After every run')], ['never', t('Never')]], value: prefs.readAloud, onChange: value => save({ readAloud: value }) });
     if (!synth()) return;
     const voices = synth().getVoices?.() || [], language = (globalThis.navigator?.language || 'en').split('-')[0];
-    const options = [['', 'System voice'], ...[...voices].sort((a, b) => Number(b.lang.startsWith(language)) - Number(a.lang.startsWith(language)) || a.name.localeCompare(b.name)).map(voice => [voice.voiceURI, `${voice.name} (${voice.lang})`])];
-    kit.select(aloud, { label: 'Voice', description: 'The voice that reads replies and recaps.', keywords: 'speech speak', options, value: voices.some(voice => voice.voiceURI === prefs.voice) ? prefs.voice : '', onChange: value => save({ voice: value }) });
-    kit.row(aloud, { label: 'Hear it', description: 'A sample reply in the chosen voice.', keywords: 'voice test sample', control: kit.button('Play a sample', () => speak('The checkout now applies promo codes. I changed checkout.js and promo.js, and the tests pass.')) });
+    const options = [['', t('System voice')], ...[...voices].sort((a, b) => Number(b.lang.startsWith(language)) - Number(a.lang.startsWith(language)) || a.name.localeCompare(b.name)).map(voice => [voice.voiceURI, `${voice.name} (${voice.lang})`])];
+    kit.select(aloud, { label: t('Voice'), description: t('The voice that reads replies and recaps.'), keywords: 'speech speak', options, value: voices.some(voice => voice.voiceURI === prefs.voice) ? prefs.voice : '', onChange: value => save({ voice: value }) });
+    kit.row(aloud, { label: t('Hear it'), description: t('A sample reply in the chosen voice.'), keywords: 'voice test sample', control: kit.button(t('Play a sample'), () => speak(t('The checkout now applies promo codes. I changed checkout.js and promo.js, and the tests pass.'))) });
   }
   synth()?.addEventListener?.('voiceschanged', () => { if (settingsHost?.isConnected) renderSettings(settingsHost); });
 

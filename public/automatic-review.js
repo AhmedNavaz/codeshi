@@ -1,5 +1,6 @@
 (() => {
   'use strict';
+  const { t } = window.codeshiText;
   const $ = id => document.getElementById(id), api = window.relayUI, dialog = $('automatic-review-dialog');
   const name = provider => ({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini' })[provider] || provider;
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
@@ -32,7 +33,7 @@
     const unsupported = !state.ready || !state.projectId || Boolean(state.taskDraft || state.taskId) || api.isRunning() || state.pending || state.projectSaving || state.settingsPending || state.mode !== 'edit' || state.conversation?.resume || Boolean(state.localSelections[state.projectId]);
     $('automatic-review-toggle').disabled = Boolean(unsupported);
     $('automatic-review-toggle').setAttribute('aria-pressed', String(Boolean(armed)));
-    $('automatic-review-toggle').textContent = armed ? 'Review after · On' : 'Review after';
+    $('automatic-review-toggle').textContent = armed ? t('Review after · On') : t('Review after');
     $('automatic-review-armed').hidden = !armed;
     if (armed) {
       const current = valid();
