@@ -448,6 +448,27 @@ test('setup preferences survive restart, apply only to new chats, and do not cha
   assert.deepEqual(restored.defaults,preferences.defaults);assert.equal(restored.theme,'light');assert.equal(restored.onboarding.completedAt,preferences.onboarding.completedAt);assert.equal(restored.firstRun,false);
 });
 
+test('a suggestion is offered at a pause, counted when shown, dismissed for good, and turned off in Settings', async t => {
+  const f = await fixture(t), broker = f.app.broker;
+  const c = broker.get((await (await fetch(`${f.url}/api/conversation`)).json()).id);
+  assert.equal((await (await fetch(`${f.url}/suggestions.js`)).text()).includes('relaySuggestions'), true);
+  assert.deepEqual(await (await fetch(`${f.url}/api/suggestion`)).json(), { on: true, tip: null });
+  c.messages.push({ id: 'u1', role: 'user', text: 'Always use pnpm, never npm, in this repo.', runId: 'r1' }, { id: 'u2', role: 'user', text: 'Add a header. Always use pnpm, never npm, in this repo.', runId: 'r2' });
+  c.lastRun = { id: 'r2', status: 'complete' }; c.status = 'complete';
+  const { tip } = await (await fetch(`${f.url}/api/suggestion`)).json();
+  assert.equal(tip.kind, 'memory'); assert.equal(tip.runId, 'r2');
+  assert.equal((await post(`${f.url}/api/suggestion`, { action: 'shown', key: tip.key, runId: 'old' })).status, 409);
+  assert.equal((await post(`${f.url}/api/suggestion`, { action: 'shown', key: '../x', runId: 'r2' })).status, 400);
+  assert.equal((await (await post(`${f.url}/api/suggestion`, { action: 'shown', key: tip.key, runId: 'r2' })).json()).tip.key, tip.key);
+  assert.equal((await (await post(`${f.url}/api/suggestion`, { action: 'dismiss', key: tip.key })).json()).tip, null);
+  await f.app.close(); const reopened = await f.launch(), again = reopened.app.broker.get(c.id);
+  again.messages.push(...c.messages.filter(message => message.role === 'user')); again.lastRun = { id: 'r2', status: 'complete' }; again.status = 'complete';
+  assert.equal((await (await fetch(`${reopened.url}/api/suggestion`)).json()).tip, null, 'a dismissal survives a restart');
+  assert.equal((await post(`${reopened.url}/api/preferences`, { suggestions: 'no' })).status, 400);
+  assert.equal((await (await post(`${reopened.url}/api/preferences`, { suggestions: false })).json()).suggestions, false);
+  assert.deepEqual(await (await fetch(`${reopened.url}/api/suggestion`)).json(), { on: false, tip: null });
+});
+
 test('testing cadence persists and reaches existing workspace and task brokers without starting work', async t => {
   const f = await fixture(t), broker = f.app.broker;
   const initial = await (await fetch(`${f.url}/api/preferences`)).json();

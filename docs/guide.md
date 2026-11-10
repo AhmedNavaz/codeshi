@@ -59,6 +59,14 @@ After every prompt, Normal and Flow check locally whether that run used a lot, w
 
 The notice offers at most one action. **Compact** appears when the agent's context is 40,000 tokens or more and not yet due for a refresh, including when automatic refresh is off. If a refresh is already due or scheduled, the notice says so and asks for nothing. In Flow, when Compact doesn't apply, **Use Saver** switches the routing mode, unless it is already on. Dismissing a notice applies to that run. The run details keep each run's total, what is usual for that agent and how each limit moved, whether or not a notice appeared. A long run can still grow its own context well past the target, because a refresh only happens between turns.
 
+When there's no usage notice, the same line can suggest a feature that fits what just happened. Suggestions come from local rules on this conversation, with no model call, and each says what it saw:
+
+- **Remember a rule.** You've written the same rule, such as "always use pnpm, never npm", in two messages, the latest one included. **Remember…** opens the Memory dialog with that sentence, so you can edit it before saving. Saved memories can be retired from **Memory**.
+- **Make a skill.** You've given the same list of three or more steps in three messages. **Make a skill…** opens the skill dialog with the steps numbered, to name and check before saving. The skill then shows under **Skills**, marked *From your messages*, and can be removed there.
+- **Try Flow.** In Normal, at least three of your last eight messages looked like small changes or quick questions to Codeshi's keyword rules, and each ran on a strong model (Opus, Pro, Max) or at high effort. **Try Flow…** first says what changes, and only **Turn on Flow** switches. **Leave Flow** brings your own choices back. The line promises no saving, because Codeshi hasn't measured one.
+
+A suggestion appears only after a run that finished, never during a run, a reset wait, a handoff offer, an approval or a question. There's one at a time. Codeshi points to at most two features a day across workspaces. One you ignored waits a week before it can come back, and **×** keeps it away for good. **Settings › General › Suggestions after a run** turns suggestions and usage notices off. What was shown or dismissed stays in Codeshi's settings on this computer.
+
 ### Permission controls and tool approvals
 
 Codeshi provides two distinct permission choices in the composer toolbar:

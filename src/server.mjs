@@ -28,12 +28,13 @@ import { createPhoneAccess } from './phone-access.mjs';
 import { createRemotePhoneAccess } from './phone-remote.mjs';
 import { createWebPush } from './web-push.mjs';
 import { phoneConversation } from './phone-conversation.mjs';
+import { chooseTip, dismissTip, markShown } from './suggestions.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
   '/brief-panel.js': ['brief-panel.js', 'text/javascript; charset=utf-8'], '/tasks-panel.js': ['tasks-panel.js', 'text/javascript; charset=utf-8'], '/smart-results.js': ['smart-results.js', 'text/javascript; charset=utf-8'], '/skills.js': ['skills.js', 'text/javascript; charset=utf-8'], '/memory.js': ['memory.js', 'text/javascript; charset=utf-8'], '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
   '/bottom-panel.js': ['bottom-panel.js', 'text/javascript; charset=utf-8'], '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'],
-  '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
+  '/suggestions.js': ['suggestions.js', 'text/javascript; charset=utf-8'], '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
   '/parallel-tasks.js': ['parallel-tasks.js', 'text/javascript; charset=utf-8'], '/parallel-tasks.css': ['parallel-tasks.css', 'text/css; charset=utf-8'], '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'],
   // The terminal renderer, served from the installed package so packaged builds work offline.
   '/vendor/xterm.js': ['../node_modules/@xterm/xterm/lib/xterm.js', 'text/javascript; charset=utf-8'], '/vendor/xterm.css': ['../node_modules/@xterm/xterm/css/xterm.css', 'text/css; charset=utf-8'], '/vendor/addon-fit.js': ['../node_modules/@xterm/addon-fit/lib/addon-fit.js', 'text/javascript; charset=utf-8'], '/vendor/addon-web-links.js': ['../node_modules/@xterm/addon-web-links/lib/addon-web-links.js', 'text/javascript; charset=utf-8'],
@@ -254,6 +255,18 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if(req.method==='GET'&&(url.pathname==='/api/ledger'||url.pathname==='/api/memory'||url.pathname==='/api/budget'||url.pathname==='/api/skills'||url.pathname==='/api/conversation/brief')){
         const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversationId(projectId));
         return json(res,200,url.pathname==='/api/ledger'?await broker.ledger(c,{prompts:url.searchParams.get('prompts')==='1'}):url.pathname==='/api/memory'?broker.memory(c):url.pathname==='/api/budget'?broker.budget.view(c):url.pathname==='/api/skills'?broker.skills.view(c):broker.briefPreview(c));
+      }
+      // Suggestions (#106): worked out locally at a pause, with no model call. What was shown or dismissed stays in settings.
+      if(url.pathname==='/api/suggestion'){
+        const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversationId(projectId)),on=config.suggestions!==false;
+        if(req.method==='GET')return json(res,200,{on,tip:chooseTip(c,{on,tips:config.tips,waiting:broker.pendingApprovals(c).length>0})});
+        if(req.method!=='POST')return json(res,405,{error:'Use GET or POST for suggestions.'});
+        const input=await body(req,4096);
+        if(typeof input.key!=='string'||!/^(memory|skill|flow):[\w-]{1,40}$/.test(input.key))return json(res,400,{error:'Choose a suggestion.'});
+        if(input.action==='shown'){if(typeof input.runId!=='string'||input.runId!==c.lastRun?.id)return json(res,409,{error:'That suggestion is no longer current.'});saveSettings({tips:markShown(config.tips,{key:input.key,runId:input.runId,conversationId:c.id})});}
+        else if(input.action==='dismiss')saveSettings({tips:dismissTip(config.tips,input.key)});
+        else return json(res,400,{error:'Unknown suggestion action.'});
+        return json(res,200,{on,tip:chooseTip(c,{on,tips:config.tips,waiting:broker.pendingApprovals(c).length>0})});
       }
       if(req.method==='GET'&&url.pathname==='/api/conversation'){
         // ?tail=N is the short form for a phone: the latest messages and only what its page reads.

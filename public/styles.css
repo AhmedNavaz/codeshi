@@ -534,6 +534,9 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .usage-notice > span:first-child { align-items: flex-start; overflow-wrap: anywhere; }
 .usage-notice > span:first-child::before { margin-top: 3px; }
 .usage-notice .usage-notice-dismiss { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 12px; background: none; color: var(--muted); }
+/* A suggestion (#106) shares the usage notice's line, with its own mark so it doesn't read as a warning. */
+.tip-line > span:first-child::before { background: var(--accent); -webkit-mask-image: var(--icon-auto); mask-image: var(--icon-auto); }
+.tip-line #tip-action[data-confirm] { background: var(--accent); color: var(--on-accent); }
 /* An agent that works in one folder, in a workspace with several: the message waits while a folder is chosen. */
 .folder-ask { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-height: 30px; padding: 0 2px; color: var(--text); font-size: 12.5px; line-height: 1.5; }
 .folder-ask[hidden] { display: none; }

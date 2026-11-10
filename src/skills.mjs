@@ -178,20 +178,32 @@ export class SkillCatalog {
       return this.save(c, skills.filter(item => item !== skill));
     }
     if (input.action === 'from-memory') return this.fromMemory(c, input);
+    if (input.action === 'from-messages') return this.fromMessages(c, input);
     throw fail('Unknown skill action.');
   }
   // A reviewed step: the person has read and edited this before saving, and the skill records what it came from.
   fromMemory(c, input) {
-    const entry = (c.memory || []).find(item => item.id === input.entryId), name = input.name, description = String(input.description || '').trim(), body = String(input.body || '').trim();
+    const entry = (c.memory || []).find(item => item.id === input.entryId);
     if (!entry) throw fail('That memory is no longer here.', 404);
+    return this.written(c, input, { metadata: { 'source-memory': entry.id, 'source-commit': entry.source?.commit || 'unknown' }, sourceLabel: 'your memory', sourceKind: 'memory', provenance: { entryId: entry.id, commit: entry.source?.commit || null, messageId: entry.source?.messageId || null } });
+  }
+  // From steps the person gave in several messages, offered by a suggestion (#106). The same reviewed step as from memory.
+  fromMessages(c, input) {
+    const ids = Array.isArray(input.messageIds) ? input.messageIds.filter(id => typeof id === 'string').slice(0, 10) : [];
+    const found = ids.filter(id => (c.messages || []).some(message => message.id === id && message.role === 'user'));
+    if (!found.length) throw fail('Those messages are no longer here.', 404);
+    return this.written(c, input, { metadata: { 'source-messages': String(found.length) }, sourceLabel: 'your messages', sourceKind: 'messages', provenance: { messageIds: found } });
+  }
+  written(c, input, { metadata, sourceLabel, sourceKind, provenance }) {
+    const name = input.name, description = String(input.description || '').trim(), body = String(input.body || '').trim();
     const problems = validateSkill({ frontmatter: { name, description } }, name);
     if (problems.length) throw fail(`This skill can't be saved: ${problems.join('; ')}.`);
     if (!body) throw fail('Say what the skill should have an agent do.');
     if ((c.skills || []).some(item => item.name === name)) throw fail(`A skill named ${name} is already enabled.`, 409);
-    const text = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\nmetadata:\n  source-memory: "${entry.id}"\n  source-commit: "${entry.source?.commit || 'unknown'}"\n---\n\n${body}\n`;
+    const text = `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\nmetadata:\n${Object.entries(metadata).map(([key, value]) => `  ${key}: "${value}"\n`).join('')}---\n\n${body}\n`;
     const version = createHash('sha256').update(text).digest('hex'), snapshot = path.join(this.root, version.slice(0, 24), name);
     fs.mkdirSync(snapshot, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(snapshot, 'SKILL.md'), text, { mode: 0o600 });
-    const skill = { name, description, license: null, compatibilityNote: null, compatibility: compatibilityOf({ frontmatter: { name, description }, body }, ['SKILL.md']), version, snapshot, files: ['SKILL.md'], sourcePath: snapshot, sourceLabel: 'your memory', sourceKind: 'memory', provenance: { entryId: entry.id, commit: entry.source?.commit || null, messageId: entry.source?.messageId || null }, revision: null, enabled: true, pinned: false, enabledAt: new Date().toISOString() };
+    const skill = { name, description, license: null, compatibilityNote: null, compatibility: compatibilityOf({ frontmatter: { name, description }, body }, ['SKILL.md']), version, snapshot, files: ['SKILL.md'], sourcePath: snapshot, sourceLabel, sourceKind, provenance, revision: null, enabled: true, pinned: false, enabledAt: new Date().toISOString() };
     return this.save(c, [...(c.skills || []), skill]);
   }
 

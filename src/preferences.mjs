@@ -15,6 +15,11 @@ export function preferencePatch(input, previous = {}) {
     if (!verificationCadences.includes(input.verificationCadence)) fail('Choose As needed or Review first for testing.');
     patch.verificationCadence = input.verificationCadence;
   }
+  // Suggestions after a run (#106), usage notices included. On unless turned off.
+  if (input.suggestions !== undefined) {
+    if (typeof input.suggestions !== 'boolean') fail('Turn suggestions on or off.');
+    patch.suggestions = input.suggestions;
+  }
   if (input.theme !== undefined) {
     if (!appearances.includes(input.theme)) fail('Choose System, Light, Dark or Graphite.');
     patch.appearance = input.theme;
@@ -39,5 +44,5 @@ export function preferencePatch(input, previous = {}) {
   return patch;
 }
 export function publicPreferences(config, hasProjects) {
-  return { defaults: { ...defaultPreferences, ...config.defaults }, theme: appearance(config), verificationCadence: verificationCadence(config), contextLimit: contextLimit(config), onboarding: config.onboarding || { step: 0 }, firstRun: !hasProjects && !config.onboarding?.completedAt && !config.onboarding?.dismissed };
+  return { defaults: { ...defaultPreferences, ...config.defaults }, theme: appearance(config), verificationCadence: verificationCadence(config), contextLimit: contextLimit(config), suggestions: config.suggestions !== false, onboarding: config.onboarding || { step: 0 }, firstRun: !hasProjects && !config.onboarding?.completedAt && !config.onboarding?.dismissed };
 }

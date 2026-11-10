@@ -242,6 +242,17 @@ test('a memory can become a skill only as a reviewed step, and keeps where it ca
   assert.throws(() => env.broker.skills.change(env.c, input), /already enabled/);
 });
 
+test('steps from several messages can become a skill, as the same reviewed step', t => {
+  const env = setup(t);
+  env.c.messages.push({ id: 'u1', role: 'user', text: '1. Run tests\n2. Update the changelog\n3. Bump the version' }, { id: 'a1', role: 'assistant', text: 'Done.' });
+  const input = { action: 'from-messages', messageIds: ['u1', 'a1', 'gone'], name: 'release-steps', description: 'Steps to release.', body: '1. Run tests\n2. Update the changelog\n3. Bump the version' };
+  assert.throws(() => env.broker.skills.change(env.c, { ...input, messageIds: ['gone'] }), /no longer here/);
+  const [saved] = env.broker.skills.change(env.c, input).enabled;
+  assert.deepEqual([saved.sourceKind, saved.sourceLabel, saved.provenance.messageIds], ['messages', 'your messages', ['u1']]);
+  assert.equal(saved.sourceMissing, false);
+  assert.match(fs.readFileSync(path.join(saved.snapshot, 'SKILL.md'), 'utf8'), /source-messages: "1"/);
+});
+
 test('skills stay in their workspace, survive a restart, and a skill folder inside a repository is found but stays off', { skip: scriptCLIs }, async t => {
   const env = setup(t), repository = path.join(env.workspace, '.agents', 'skills', 'repo-rules');
   fs.mkdirSync(repository, { recursive: true }); fs.writeFileSync(path.join(repository, 'SKILL.md'), skill('repo-rules', 'This repository\'s rules.'));

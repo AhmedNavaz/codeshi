@@ -7,8 +7,8 @@
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'text-link') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
   const conversation = () => api.getState().conversation;
-  const SOURCE = { starter: 'Starter', repository: 'This repository', folder: 'Your folder', memory: 'From memory' };
-  let view = null, shown = null, fromEntry = null;
+  const SOURCE = { starter: 'Starter', repository: 'This repository', folder: 'Your folder', memory: 'From memory', messages: 'From your messages' };
+  let view = null, shown = null, fromEntry = null, fromMessages = null;
 
   async function change(input) {
     const c = conversation();
@@ -96,7 +96,7 @@
   });
   // From a memory entry. The person reads and edits it here, and only saving makes it a skill.
   function fromMemory(entry) {
-    fromEntry = entry;
+    fromEntry = entry; fromMessages = null;
     $('skill-name').value = entry.text.toLowerCase().match(/[a-z0-9]+/g)?.slice(0, 4).join('-').slice(0, 64) || '';
     $('skill-description').value = entry.text.split('\n')[0].slice(0, 300);
     $('skill-body').value = entry.text;
@@ -104,13 +104,28 @@
     $('skill-error').hidden = true;
     $('skill-dialog').showModal();
   }
+  // From steps given in several messages, offered by a suggestion (#106). Nothing is saved until the person saves it here.
+  function fromSteps({ steps, messageIds }, onSaved = null) {
+    fromEntry = null; fromMessages = { messageIds, onSaved };
+    const first = steps[0] || '';
+    $('skill-name').value = first.toLowerCase().match(/[a-z0-9]+/g)?.slice(0, 4).join('-').slice(0, 64) || '';
+    $('skill-description').value = `Steps to follow: ${steps.slice(0, 3).join('; ')}`.slice(0, 300);
+    $('skill-body').value = steps.map((step, index) => `${index + 1}. ${step}`).join('\n');
+    $('skill-source').textContent = `From steps you gave in ${messageIds.length} messages. Name it, check the steps hold in general, then save. You can remove it later under Skills.`;
+    $('skill-error').hidden = true;
+    $('skill-dialog').showModal();
+  }
   $('skill-form').addEventListener('submit', async event => {
     event.preventDefault();
-    try { await change({ action: 'from-memory', entryId: fromEntry?.id, name: $('skill-name').value.trim(), description: $('skill-description').value, body: $('skill-body').value }); $('skill-dialog').close(); }
+    const fields = { name: $('skill-name').value.trim(), description: $('skill-description').value, body: $('skill-body').value };
+    try {
+      await change(fromMessages ? { action: 'from-messages', messageIds: fromMessages.messageIds, ...fields } : { action: 'from-memory', entryId: fromEntry?.id, ...fields });
+      $('skill-dialog').close(); fromMessages?.onSaved?.(fields.name);
+    }
     catch (error) { $('skill-error').textContent = error.message; $('skill-error').hidden = false; }
   });
   $('skill-cancel').addEventListener('click', () => $('skill-dialog').close());
   window.addEventListener('relay-state', () => load());
   window.addEventListener('relay-side-panel', () => load(true));
-  window.relaySkills = { fromMemory, load };
+  window.relaySkills = { fromMemory, fromSteps, load };
 })();

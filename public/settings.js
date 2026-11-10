@@ -77,6 +77,15 @@
       render('general');
     }, 'View');
     kit.row(view, { label: 'View', description: 'Normal gives you every panel and lets you choose the agent, model and effort for each message. Flow is just the chat with plain-language cards either side, and Codeshi chooses for you. You can also switch with the Flow button in the header.', keywords: 'flow normal mode view layout routing default start', control: choices });
+    // Suggestions (#106) and usage notices: one switch for both, saved for every workspace.
+    const tips = window.relaySuggestions;
+    if (tips) {
+      const box = kit.toggle(view, { label: 'Suggestions after a run', description: 'When a run ends, one line above the message box can say a run used more than usual, or point to a feature that fits what just happened, such as remembering a rule you keep repeating. Each says why it appeared, and nothing changes until you choose it. Codeshi works them out on this computer with no model call, and points to at most two features a day.', keywords: 'suggestions tips hints usage notices remember skill flow nudge', checked: tips.enabled(), onChange: value => perform(async () => {
+        box.disabled = true;
+        try { box.checked = await tips.setEnabled(value); } finally { box.disabled = false; }
+      }) });
+      box.id = 'settings-suggestions';
+    }
     const bridge = window.relayDesktop;
     if (bridge?.getKeepAwake && bridge?.setKeepAwake) {
       const work = kit.group(host, 'While agents work');

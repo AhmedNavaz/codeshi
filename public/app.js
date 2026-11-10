@@ -131,7 +131,7 @@
   }
   async function api(path, options = {}, projectId = state.projectId) {
     const providerEndpoint = /^\/api\/providers(?:\/|$)/.test(path);
-    if (/^\/api\/(?:tasks|ledger|memory|budget|skills|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
+    if (/^\/api\/(?:tasks|ledger|memory|budget|skills|suggestion|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
       if (!projectId) throw new Error("Choose a project first.");
       path += `${path.includes("?") ? "&" : "?"}projectId=${encodeURIComponent(projectId)}`;
     }
@@ -1892,7 +1892,9 @@
   }
   function renderUsageNotice() {
     const c = state.conversation, watch = c?.usageWatch, notice = watch?.notice, box = $('usage-notice');
-    box.hidden = !notice || Boolean(state.taskDraft) || isRunning() || storedRead(usageNoticeKey(c.id)) === watch.runId;
+    // Turned off with suggestions in Settings › General (#106). While it shows, a suggestion waits its turn.
+    box.hidden = !notice || Boolean(state.taskDraft) || isRunning() || storedRead(usageNoticeKey(c.id)) === watch.runId || window.relaySuggestions?.enabled?.() === false;
+    window.relaySuggestions?.usage?.(!box.hidden);
     if (box.hidden) return;
     $('usage-notice-text').textContent = usageNoticeText(watch);
     box.title = notice.moves.length ? 'Limits count all use of this account, including other apps.' : '';
