@@ -10,6 +10,16 @@
   const button = (text, handler, cls = 'text-link') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
   const tasks = () => (api.getState().conversation?.parallelTasks || []).filter(task => task.purpose !== 'project-review' || task.id === api.getState().taskId || task.approvals);
   const LABEL = { waiting: 'Waiting', running: 'Working', complete: 'Finished', stopped: 'Stopped', failed: 'Did not finish', integrated: 'Merged', kept: 'Kept as a branch', discarded: 'Discarded', cancelled: 'Cancelled', blocked: 'Blocked', lost: 'Copy gone', detached: 'Folder removed' };
+  // What the copy has that a fresh checkout wouldn't, and the secrets it doesn't have.
+  const copyNote = setup => {
+    if (!setup) return '';
+    const parts = [], deps = setup.dependencies || [], linked = deps.filter(item => item.how === 'link');
+    if (deps.length && !linked.length) parts.push(`It has its own copy of the installed ${deps.length === 1 ? 'node_modules' : `node_modules folders (${deps.length})`}.`);
+    else if (linked.length) parts.push(`${linked.length === 1 ? 'Its node_modules is' : 'Its node_modules folders are'} shared with ${linked.length === deps.length ? 'the folder' : 'the folder where they couldn’t be copied'}, so installing packages in the task changes the folder’s too.`);
+    const missing = setup.missing || [];
+    if (missing.length) parts.push(`It has no ${missing.length > 3 ? `${missing.slice(0, 3).join(', ')} and ${missing.length - 3} more` : missing.join(', ')}, as secrets aren’t copied.`);
+    return parts.length ? ` ${parts.join(' ')}` : '';
+  };
   const canMerge = task => task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status);
   const act = async (task, action, input = {}) => { const result = await api.post(`/api/tasks/${task.id}/${action}`, input); await api.refresh(); return result; };
   const attempt = work => work().catch(error => api.showNotice(error.message));
@@ -79,7 +89,7 @@
     if (!task) return;
     const text = node('div', 'task-banner-text');
     text.append(node('strong', 'task-banner-title', `${task.folderName} · ${LABEL[task.status] || task.status}`));
-    const how = task.reason || (task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
+    const how = task.reason || (task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
     if (task.status === 'integrated') text.append(node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`));
     else if (task.status === 'kept') text.append(node('span', 'task-banner-detail', `Saved as the branch ${task.integration?.branch}. Nothing was merged.`));
     else if (how) text.append(node('span', 'task-banner-detail', how));

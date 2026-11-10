@@ -14,8 +14,9 @@ const MAX_OUTPUT = 256 * 1024 * 1024, DIFF_LIMIT = 64 * 1024, CHECK_LIMIT_MS = 1
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 const sha = value => createHash('sha256').update(value).digest('hex');
 
-export function git(cwd, args, { encoding = 'utf8', timeout = 30000, input } = {}) {
-  return spawnSync(gitExecutable(), [...PREFIX, ...args], { cwd, encoding, timeout, input, maxBuffer: MAX_OUTPUT, shell: false, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+// `magic` lets a call use pathspec magic such as :(exclude); every other call takes paths literally.
+export function git(cwd, args, { encoding = 'utf8', timeout = 30000, input, magic = false } = {}) {
+  return spawnSync(gitExecutable(), [...(magic ? PREFIX.filter(arg => arg !== '--literal-pathspecs') : PREFIX), ...args], { cwd, encoding, timeout, input, maxBuffer: MAX_OUTPUT, shell: false, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
 }
 function must(cwd, args, options) {
   const result = git(cwd, args, options);
@@ -77,15 +78,67 @@ export function createWorktree(identity, target, id) {
   fs.mkdirSync(scopePath, { recursive: true });
   return { worktree: target, scopePath: fs.realpathSync.native(scopePath), base };
 }
-// Saves what the task did as a commit in its worktree. Ignored files stay out, as they would from any commit.
-export function snapshotWorktree(worktree, id) {
-  patient(worktree, ['add', '-A']);
+// A fresh worktree has none of the folder's ignored files, so an agent's build or tests would fail in it. Installed
+// dependencies are brought over: each ignored node_modules gets its own copy-on-write clone, which takes about a second
+// and no extra disk space, so installing in the task can't touch the folder's. Where the disk can't clone (another volume,
+// or a file system without it) it is linked instead, and then it is shared. Secrets are never brought over: ignored .env
+// files are only listed, so the person knows the copy lacks them. Python environments stay out too, since a virtual
+// environment points at its own path and a copy would still install into the original.
+const DEPENDENCY = 'node_modules', MAX_DEPENDENCIES = 40, CLONE_LIMIT_MS = 2 * 60 * 1000;
+const ENV_FILE = /^\.env(?:\..+)?$/;
+function cloneFolder(from, to) {
+  const flags = process.platform === 'darwin' ? ['-c', '-R'] : process.platform === 'linux' ? ['-R', '--reflink=always'] : null;
+  if (!flags) return Promise.resolve(false);
+  // A clone can't cross volumes, and macOS's cp would quietly make a full copy instead.
+  try { if (fs.statSync(from).dev !== fs.statSync(path.dirname(to)).dev) return Promise.resolve(false); } catch { return Promise.resolve(false); }
+  return new Promise(resolve => {
+    const child = spawn('/bin/cp', [...flags, from, to], { stdio: 'ignore', shell: false });
+    const timer = setTimeout(() => child.kill('SIGKILL'), CLONE_LIMIT_MS); timer.unref?.();
+    const done = ok => { clearTimeout(timer); if (!ok) fs.rmSync(to, { recursive: true, force: true }); resolve(ok); };
+    child.on('error', () => done(false));
+    child.on('close', code => done(code === 0));
+  });
+}
+export async function prepareWorktree(identity, target) {
+  const listed = git(identity.root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory'], { timeout: 60000 });
+  const entries = listed.status === 0 ? listed.stdout.split('\0').filter(Boolean) : [];
+  const dependencies = [], missing = [];
+  for (const entry of entries) {
+    const clean = entry.replace(/\/$/, ''), name = path.posix.basename(clean);
+    if (name === DEPENDENCY && entry.endsWith('/') && dependencies.length < MAX_DEPENDENCIES) dependencies.push(clean);
+    else if (!entry.endsWith('/') && ENV_FILE.test(name) && !clean.split('/').includes(DEPENDENCY) && missing.length < 20) missing.push(clean);
+  }
+  const prepared = [];
+  for (const place of dependencies.sort()) {
+    const from = path.join(identity.root, place), to = path.join(target, place);
+    // Only where the copy has the folder around it, and never over something already there.
+    if (!reachable(target, place) || !fs.existsSync(path.dirname(to)) || fs.existsSync(to)) continue;
+    try { if (!fs.lstatSync(from).isDirectory()) continue; } catch { continue; }
+    if (await cloneFolder(from, to)) { prepared.push({ path: place, how: 'copy' }); continue; }
+    try { fs.symlinkSync(from, to, process.platform === 'win32' ? 'junction' : 'dir'); prepared.push({ path: place, how: 'link' }); } catch { /* The task runs without it, as before. */ }
+  }
+  return { dependencies: prepared, missing: missing.sort() };
+}
+
+// Saves what the task did as a commit in its worktree. Ignored files stay out, as they would from any commit, and so do
+// the dependencies brought in above, which a link or a .gitignore change could otherwise let in.
+// Git refuses to be told about a path it already ignores, so only the others are named.
+export function snapshotWorktree(worktree, id, exclude = []) {
+  // A folder is asked about as one (a trailing slash), since a pattern like `node_modules/` matches only folders, not links.
+  const kind = place => { try { return fs.lstatSync(path.join(worktree, place)).isDirectory() ? `${place}/` : place; } catch { return null; } };
+  const named = exclude.map(kind).filter(Boolean).filter(place => git(worktree, ['check-ignore', '-q', '--no-index', '--', place], { magic: true }).status === 1).map(place => place.replace(/\/$/, ''));
+  patient(worktree, ['add', '-A', '--', '.', ...named.map(place => `:(top,literal,exclude)${place}`)], { magic: true });
   if (git(worktree, ['diff', '--cached', '--quiet']).status !== 0) patient(worktree, ['-c', 'user.name=Codeshi', '-c', 'user.email=codeshi@localhost', 'commit', '--no-verify', '--quiet', '-m', `Codeshi task ${id}`]);
   const result = must(worktree, ['rev-parse', 'HEAD']).trim();
   patient(worktree, ['update-ref', refs(id).result, result]);
   return result;
 }
-export function removeWorktree(root, worktree, id) {
+export function removeWorktree(root, worktree, id, dependencies = []) {
+  // A linked dependency is unlinked first, so nothing that deletes the copy can reach into the folder's own.
+  for (const item of dependencies) {
+    const place = worktree && path.join(worktree, item.path);
+    try { if (place && fs.lstatSync(place).isSymbolicLink()) fs.unlinkSync(place); } catch { /* Already gone. */ }
+  }
   if (worktree && fs.existsSync(worktree)) { git(root, ['worktree', 'remove', '--force', worktree]); fs.rmSync(worktree, { recursive: true, force: true }); }
   git(root, ['worktree', 'prune']);
   for (const ref of Object.values(refs(id))) git(root, ['update-ref', '-d', ref]);

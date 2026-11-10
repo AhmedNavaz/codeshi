@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readLedger } from './task-ledger.mjs';
-import { applyPlan, checkCombined, createWorktree, folderIdentity, integrationPlan, keepBranch, planIsolation, removeWorktree, snapshotWorktree, uncommittedCount, unrestricted } from './task-isolation.mjs';
+import { applyPlan, checkCombined, createWorktree, folderIdentity, integrationPlan, keepBranch, planIsolation, prepareWorktree, removeWorktree, snapshotWorktree, uncommittedCount, unrestricted } from './task-isolation.mjs';
 
 // Independent tasks in one workspace (#88). Each task is a lane: a broker of its own, scoped to one folder, with its own
 // journal, native sessions, approvals, queue and Stop. A late event can't reach the wrong task, because a lane has no other
@@ -13,12 +13,16 @@ const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
 const STOPPED = { complete: 'complete', interrupted: 'stopped', incomplete: 'failed' };
 // The tasks one waits for: none, one (as a task started by hand saves it) or several (a plan step after more than one step).
 const waitsFor = task => task.dependsOn ? [].concat(task.dependsOn) : [];
+// The dependency folders brought into a task's copy, which never become part of its changes.
+const brought = task => (task.setup?.dependencies || []).map(item => item.path);
 const line = text => { const first = String(text || '').trim().split('\n')[0]; return first.length > 80 ? `${first.slice(0, 79).trimEnd()}…` : first; };
 
 export class TaskCoordinator {
   constructor(main, { BrokerClass, acquireFolders = () => ({ release() {}, setProcess() {} }), withFolders = async (paths, operation, work) => work(), tests = null }) {
     Object.assign(this, { main, BrokerClass, acquireFolders, withFolders, tests });
     this.lanes = new Map(); this.closed = false; this.ticking = false; this.mainBusy = false; this.checking = new Map(); this.aborts = new Set();
+    // Tasks whose copy is still being prepared. They hold a slot, and the queue leaves them alone until they start.
+    this.preparing = new Map();
     // Waiting tasks look again when the main conversation's run begins or ends.
     main.on('update', () => { const busy = this.activeWorkers; if (busy !== this.mainBusy) { this.mainBusy = busy; this.tickAll(); } });
     main.admit = c => this.admit(c, null);
@@ -27,7 +31,7 @@ export class TaskCoordinator {
   find(c, id) { const task = (c.parallelTasks || []).find(item => item.id === id); if (!task) throw fail('That task is no longer here.', 404); return task; }
   update(c, task, changes) { this.main.record(c, { type: 'parallel_task_update', id: task.id, changes }); this.main.emit('update', { conversationId: c.id }); }
   get running() { return [...this.lanes.values()].filter(lane => lane.broker.running).length; }
-  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
+  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.preparing.size + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
   get busy() { return this.running > 0 || this.checking.size > 0; }
   get waitingResumes() { return [...this.lanes.values()].reduce((count, lane) => count + (lane.broker.waitingResumes || 0), 0); }
   openLanes() { return [...this.lanes.values()].map(lane => lane.broker); }
@@ -183,7 +187,7 @@ export class TaskCoordinator {
     if (this.closed || this.ticking) return;
     this.ticking = true;
     try {
-      for (const task of (c.parallelTasks || []).filter(item => item.status === 'waiting' && !item.held)) {
+      for (const task of (c.parallelTasks || []).filter(item => item.status === 'waiting' && !item.held && !this.preparing.has(item.id))) {
         const wait = reason => { if (task.reason !== reason) this.update(c, task, { reason }); };
         if (!this.available(task)) { this.update(c, task, { status: 'detached', reason: `${task.folderName} is no longer in this workspace.` }); continue; }
         const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !(before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete')));
@@ -210,9 +214,32 @@ export class TaskCoordinator {
   launch(c, task, plan) {
     if (!task.execution) { this.main.execution.ensure(c, task.id, { source: 'legacy-task', config: { mode: task.routing ? 'flow' : 'normal', routingMode: task.routing?.mode } }); this.update(c, task, { execution: this.main.execution.token(c, task.id) }); }
     this.main.execution.assert(c, task.execution, { action: task.routing ? 'routing' : 'manual', ...(task.purpose === 'project-review' && task.routing ? {} : { provider: task.provider, model: task.model, effort: task.effort }) });
-    const { identity } = plan;
-    const place = plan.mode === 'worktree' ? createWorktree(identity, path.join(this.directory(task), 'worktree'), task.id) : { scopePath: identity.real };
-    this.update(c, task, { mode: plan.mode, modeReason: plan.reason, reason: null, commonDir: identity.commonDir || null, ...place, ...(identity.git ? { repoRoot: identity.root, prefix: identity.prefix } : {}), ...(plan.uncommitted ? { uncommitted: plan.uncommitted } : {}) });
+    const { identity } = plan, where = { mode: plan.mode, modeReason: plan.reason, commonDir: identity.commonDir || null, ...(identity.git ? { repoRoot: identity.root, prefix: identity.prefix } : {}), ...(plan.uncommitted ? { uncommitted: plan.uncommitted } : {}) };
+    if (plan.mode !== 'worktree') { this.update(c, task, { ...where, reason: null, scopePath: identity.real }); this.begin(c, task); return; }
+    // A copy left by an interrupted start is kept once the task has a conversation, as its agent may have worked in it, and
+    // otherwise made again.
+    const target = path.join(this.directory(task), 'worktree'), reuse = task.worktree === target && fs.existsSync(target) && Boolean(task.conversationId || task.setup);
+    if (!reuse && fs.existsSync(target)) removeWorktree(identity.root, target, task.id, task.setup?.dependencies);
+    const place = reuse ? { worktree: target, scopePath: task.scopePath, base: task.base } : createWorktree(identity, target, task.id);
+    if (reuse && task.setup) { this.update(c, task, { ...where, ...place, reason: null }); this.begin(c, task); return; }
+    // Installed dependencies are brought into the copy in the background, so the app stays responsive meanwhile.
+    this.update(c, task, { ...where, ...place, reason: 'Preparing its copy' });
+    const preparing = prepareWorktree(identity, target).catch(() => ({ dependencies: [], missing: [] }));
+    this.preparing.set(task.id, preparing);
+    preparing.then(setup => {
+      this.preparing.delete(task.id);
+      // Cancelled meanwhile, or Codeshi is stopping: whatever was brought in goes with the copy.
+      if (this.closed || task.status !== 'waiting') { if (ENDED.has(task.status) && fs.existsSync(target)) { try { removeWorktree(identity.root, target, task.id, setup.dependencies); } catch { /* Cleared on the next start. */ } } return; }
+      this.update(c, task, { setup, reason: null });
+      try { this.begin(c, task); }
+      catch (error) {
+        if (error.status === 409 && /busy|already/i.test(error.message)) this.update(c, task, { reason: error.message });
+        else this.update(c, task, { status: 'failed', reason: String(error.message).slice(0, 500) });
+      }
+      setImmediate(() => this.tick(c));
+    });
+  }
+  begin(c, task) {
     const lane = this.lane(c, task), first = !task.conversationId;
     if (first) {
       const conversation = lane.broker.get(lane.broker.create().id); lane.c = conversation;
@@ -314,7 +341,7 @@ export class TaskCoordinator {
     if (!fs.existsSync(task.repoRoot)) throw fail(`${task.folderName} is unavailable, so nothing can be merged into it.`);
     return task;
   }
-  planFor(c, task) { const result = snapshotWorktree(task.worktree, task.id); return { result, plan: integrationPlan({ root: task.repoRoot, prefix: task.prefix, base: task.base, result }) }; }
+  planFor(c, task) { const result = snapshotWorktree(task.worktree, task.id, brought(task)); return { result, plan: integrationPlan({ root: task.repoRoot, prefix: task.prefix, base: task.base, result }) }; }
   review(c, id) {
     const task = this.reviewable(c, id), { result, plan } = this.planFor(c, task);
     if (result !== task.result) this.update(c, task, { result });
@@ -354,7 +381,7 @@ export class TaskCoordinator {
   }
   // Leaves both sides as they are and gives the person the task's work as an ordinary branch.
   keep(c, id) {
-    const task = this.reviewable(c, id), result = snapshotWorktree(task.worktree, task.id), branch = keepBranch(task.repoRoot, result, task.title, task.id);
+    const task = this.reviewable(c, id), result = snapshotWorktree(task.worktree, task.id, brought(task)), branch = keepBranch(task.repoRoot, result, task.title, task.id);
     this.main.message(c, 'system', `“${task.title}” is kept as the branch ${branch}. Nothing was merged into ${task.folderName}.`);
     this.finish(c, task, { status: 'kept', integration: { branch, at: new Date().toISOString() } });
     return { branch, task: this.public(task) };
@@ -371,7 +398,8 @@ export class TaskCoordinator {
   finish(c, task, changes) {
     const lane = this.lanes.get(task.id);
     this.update(c, task, { ...changes, reason: null, endedAt: task.endedAt || new Date().toISOString() });
-    if (task.worktree && task.repoRoot && fs.existsSync(task.repoRoot)) { try { removeWorktree(task.repoRoot, task.worktree, task.id); } catch (error) { console.error('Codeshi could not remove a task’s working copy:', error.message); } }
+    // A copy still being prepared is removed once that ends, so nothing is deleted from under it.
+    if (task.worktree && task.repoRoot && fs.existsSync(task.repoRoot) && !this.preparing.has(task.id)) { try { removeWorktree(task.repoRoot, task.worktree, task.id, task.setup?.dependencies); } catch (error) { console.error('Codeshi could not remove a task’s working copy:', error.message); } }
     // Prompts queued in it go no further: what they would have worked on has gone.
     if (lane?.c?.queue.length && !lane.c.queuePaused) lane.broker.queue.pause(lane.c, 'This task has ended.');
     setImmediate(() => this.tick(c));

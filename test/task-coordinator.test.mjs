@@ -214,6 +214,41 @@ test('a task beside a running main conversation takes its own copy, and is merge
   const ended = env.lane(task.id); assert.throws(() => ended.broker.start(ended.c, { text: 'More', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }), /has ended/);
 });
 
+test('a task’s copy brings the installed dependencies but no secrets, and neither becomes part of its changes', { skip: scriptCLIs }, async t => {
+  const env = setup(t, root => {
+    const folder = repository(path.join(root, 'a'), { 'app.js': 'one\n', 'web/page.js': 'page\n' });
+    fs.writeFileSync(path.join(folder, '.gitignore'), '.release\n.mock-captures.jsonl\nnode_modules/\n.env*\n');
+    git(folder, 'commit', '-qam', 'ignore');
+    for (const place of ['node_modules/dep', 'web/node_modules/tool']) { fs.mkdirSync(path.join(folder, place), { recursive: true }); fs.writeFileSync(path.join(folder, place, 'index.js'), 'installed\n'); }
+    fs.writeFileSync(path.join(folder, '.env'), 'SECRET=1\n'); fs.writeFileSync(path.join(folder, 'web/.env.local'), 'SECRET=2\n');
+    return { a: folder };
+  });
+  env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
+  const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(env.folders.a)).length, 'the main run');
+  const task = hold(env, 'a', 'Hold A'); await working(env, task);
+  const saved = env.task(task.id), copy = saved.worktree;
+  assert.equal(saved.mode, 'worktree');
+  assert.deepEqual(saved.setup.dependencies.map(item => item.path), ['node_modules', 'web/node_modules']);
+  assert.deepEqual(saved.setup.missing, ['.env', 'web/.env.local'], 'The person is told which secrets the copy lacks.');
+  assert.equal(fs.readFileSync(path.join(copy, 'web/node_modules/tool/index.js'), 'utf8'), 'installed\n', 'Its build finds what is installed.');
+  assert.equal(fs.existsSync(path.join(copy, '.env')), false, 'Secrets are never copied.');
+  const cloned = saved.setup.dependencies.every(item => item.how === 'copy');
+  if (cloned) {
+    edit(env, task, 'node_modules/dep/index.js', 'reinstalled\n');
+    assert.equal(fs.readFileSync(path.join(env.folders.a, 'node_modules/dep/index.js'), 'utf8'), 'installed\n', 'Installing in the task leaves the folder’s own alone.');
+  }
+  edit(env, task, 'app.js', 'two\n');
+  env.release(env.task(task.id).scopePath); await finished(env, task);
+  const review = env.broker.tasks.review(env.c, task.id);
+  assert.deepEqual(review.files.map(file => file.path), ['app.js'], 'Brought-in dependencies are never part of its changes.');
+  env.release(fs.realpathSync(env.folders.a)); await main.done;
+  env.broker.tasks.discard(env.c, task.id);
+  assert.equal(fs.existsSync(copy), false, 'Its copy is gone.');
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'node_modules/dep/index.js'), 'utf8'), 'installed\n', 'Removing the copy never reaches the folder’s dependencies.');
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'web/node_modules/tool/index.js'), 'utf8'), 'installed\n');
+});
+
 test('a queued prompt can start as a task beside the main run, keeping its settings, and stays queued when the task can’t start', { skip: scriptCLIs }, async t => {
   const env = setup(t, root => ({ a: repository(path.join(root, 'a')) }));
   env.broker.tasks.BrokerClass = class extends Broker {

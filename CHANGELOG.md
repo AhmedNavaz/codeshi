@@ -2,6 +2,11 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **A task in its own copy has your installed packages** ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)). Each `node_modules` the folder's `.gitignore` leaves out is cloned into the task's copy before the agent starts, so its builds and tests can run there. On disks that can clone it takes about a second and no extra space, and installing in the task doesn't touch the folder's own; elsewhere it's linked, and the task card says it's shared. `.env` files are never copied, and the task card names the ones the copy lacks. None of this becomes part of the task's changes.
+
 ## [0.39.0] - 2026-11-10
 
 ### Added
