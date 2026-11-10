@@ -302,17 +302,28 @@
           d.y = -15 - Math.random() * 25;
           d.x = Math.random() * (w + 200) - 100;
           d.passThrough = Math.random() < 0.35;
+          d.trail = 0;
         } else {
           d.x = nextX;
           d.y = nextY;
           if (ctx) {
+            // A frame is drawn every second step or so. The streak also covers the way the drop fell since the last
+            // drawn frame, as the 60 Hz frames between them did together, so the rain reads as streaks, not dashes.
+            // It is fainter by as much as it is longer, so the rain gives off the same light as at 60 frames a second.
+            const len = d.len + (d.trail || 0);
+            ctx.globalAlpha = d.len / len;
             ctx.beginPath();
             ctx.moveTo(d.x, d.y);
-            ctx.lineTo(d.x + d.vx * (d.len / d.vy), d.y - d.len);
+            ctx.lineTo(d.x + d.vx * (len / d.vy), d.y - len);
             ctx.stroke();
+            d.trail = 0;
+          } else {
+            d.trail = (d.trail || 0) + d.vy;
           }
         }
       }
+
+      if (ctx) ctx.globalAlpha = 1;
 
       // Draw and update splashes
       for (let i = rainSplashes.length - 1; i >= 0; i--) {
@@ -598,11 +609,27 @@
     });
   }
 
+  // Breakout and Snake move in steps of a 60 Hz frame, as the weather does, so they play at the same speed on a 60 Hz
+  // and a 120 Hz display. A game's clock tells how many steps the time since its last frame covers.
+  const GAME_STEP_MS = 1000 / 60;
+  const gameClock = () => ({ last: null, lag: 0 });
+  function gameSteps(clock, time) {
+    // The first frame after a game starts, resumes or comes back into view takes one step, as every frame used to.
+    if (clock.last === null || !(time >= clock.last)) { clock.last = time; clock.lag = 0; return 1; }
+    // A frame up to a millisecond early still counts as a step, and after a stall a game catches up by a few at most.
+    clock.lag = Math.min(clock.lag + time - clock.last, 4 * GAME_STEP_MS);
+    clock.last = time;
+    const steps = Math.floor((clock.lag + 1) / GAME_STEP_MS);
+    clock.lag -= steps * GAME_STEP_MS;
+    return steps;
+  }
+
   // ==========================================
   // 2. LEFT RAIL: BREAKOUT MINI-GAME
   // ==========================================
   let breakoutState = null;
   let breakoutAnimId = null;
+  let breakoutClock = gameClock();
   let breakoutScoreEl = null;
   let breakoutBestEl = null;
   let breakoutStatusEl = null;
@@ -674,6 +701,7 @@
 
   function loopBreakout() {
     if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
+    breakoutClock = gameClock();
     breakoutAnimId = safeRequestAnim(drawBreakout);
   }
 
@@ -757,20 +785,27 @@
     }
   }
 
-  function drawBreakout() {
+  function drawBreakout(time) {
     breakoutAnimId = null;
     if (!active || receded || document.hidden || !breakoutCtx || !breakoutCanvas) return;
+    const s = breakoutState;
+    const moving = Boolean(s && breakoutStarted && !breakoutPaused && !s.gameOver && !s.won);
+    const steps = moving ? gameSteps(breakoutClock, time) : 0;
+    // On a display faster than 60 Hz, a frame between two steps has nothing new to draw.
+    if (moving && !steps) {
+      breakoutAnimId = safeRequestAnim(drawBreakout);
+      return;
+    }
     const ctx = breakoutCtx;
     const w = breakoutCanvas.width, h = breakoutCanvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    const s = breakoutState;
     if (s) {
       if (!breakoutStarted && !s.gameOver && !s.won) {
         s.ball.x = s.paddle.x + s.paddle.w / 2;
         s.ball.y = s.paddle.y - s.ball.r - 1;
       } else {
-        stepBreakout();
+        for (let step = 0; step < steps; step++) stepBreakout();
       }
 
       // Draw bricks
@@ -881,6 +916,7 @@
   // ==========================================
   let snakeState = null;
   let snakeAnimId = null;
+  let snakeClock = gameClock();
   let snakeScoreEl = null;
   let snakeBestEl = null;
   let snakeStatusEl = null;
@@ -904,7 +940,9 @@
       nextDir: { x: 1, y: 0 },
       score: 0,
       gameOver: false,
-      lastTick: 0,
+      // Time played, counted in 60 Hz steps, and when the snake last moved. Its first move comes at once.
+      played: 0,
+      lastTick: -Infinity,
       tickRate: 110,
     };
 
@@ -950,6 +988,7 @@
 
   function loopSnake() {
     if (snakeAnimId) safeCancelAnim(snakeAnimId);
+    snakeClock = gameClock();
     snakeAnimId = safeRequestAnim(drawSnake);
   }
 
@@ -961,11 +1000,13 @@
     if (!paused) loopSnake();
   }
 
-  function stepSnake(time) {
+  // One 60 Hz step of Snake. The snake moves once its tick has passed.
+  function stepSnake() {
     const s = snakeState;
     if (!s || !snakeStarted || snakePaused || s.gameOver) return;
-    if (time - s.lastTick < s.tickRate) return;
-    s.lastTick = time;
+    s.played += GAME_STEP_MS;
+    if (s.played - s.lastTick < s.tickRate) return;
+    s.lastTick = s.played;
 
     s.dir = s.nextDir;
     const head = { x: s.snake[0].x + s.dir.x, y: s.snake[0].y + s.dir.y };
@@ -997,13 +1038,20 @@
   function drawSnake(time) {
     snakeAnimId = null;
     if (!active || receded || document.hidden || !snakeCtx || !snakeCanvas) return;
+    const s = snakeState;
+    const moving = Boolean(s && snakeStarted && !snakePaused && !s.gameOver);
+    const steps = moving ? gameSteps(snakeClock, time) : 0;
+    // On a display faster than 60 Hz, a frame between two steps has nothing new to draw.
+    if (moving && !steps) {
+      snakeAnimId = safeRequestAnim(drawSnake);
+      return;
+    }
     const ctx = snakeCtx;
     const w = snakeCanvas.width, h = snakeCanvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    const s = snakeState;
     if (s) {
-      if (snakeStarted) stepSnake(time);
+      for (let step = 0; step < steps; step++) stepSnake();
 
       // Draw food
       ctx.fillStyle = "#f43f5e";
@@ -1562,6 +1610,9 @@
     if (snakeAnimId) safeCancelAnim(snakeAnimId);
     if (weatherAnimId) safeCancelAnim(weatherAnimId);
     breakoutAnimId = snakeAnimId = weatherAnimId = null;
+    // A game coming back into view goes on from where it was, not from where the hidden time would have taken it.
+    breakoutClock = gameClock();
+    snakeClock = gameClock();
     if (active && !receded && !document.hidden) {
       breakoutAnimId = safeRequestAnim(drawBreakout);
       snakeAnimId = safeRequestAnim(drawSnake);

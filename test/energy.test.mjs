@@ -17,7 +17,8 @@ function recorder() {
   const calls = [];
   return new Proxy({ calls }, {
     get(target, key) { return key in target ? target[key] : (...args) => { calls.push([key, ...args]); }; },
-    set(target, key, value) { target[key] = value; return true; },
+    // globalAlpha is recorded too: how faint the next lines are drawn.
+    set(target, key, value) { if (key === 'globalAlpha') calls.push([key, value]); target[key] = value; return true; },
   });
 }
 class Element extends Events {
@@ -130,6 +131,102 @@ for (const hz of [120, 50]) test(`Lounge rain falls at its 60 Hz speed on a ${hz
   assert.equal(drops.length, 110, 'each drop is drawn once in a frame');
   // One second is 60 steps after the first frame's step, give or take the step still to come.
   for (const [, x, y] of drops) { assert.ok(Math.abs(x - (600 - 1.2 * 61)) <= 1.2 * 1.5, `x ${x}`); assert.ok(Math.abs(y - (1500 + 17 * 61)) <= 17 * 1.5, `y ${y}`); }
+});
+
+test('Lounge rain streaks cover the way each drop fell between drawn frames, fainter by as much as they are longer', () => {
+  // With Math.random fixed at 0.5, every drop falls 17 px a 60 Hz step and its streak is 16 px long. At 60 Hz the
+  // streaks of two frames in a row leave a 1 px gap; drawn every second step, a streak is 17 px longer to leave the same.
+  const ui = lounge({ height: 3000, random: 0.5 });
+  ui.api.enter(); ui.api.setWeatherMode('rain');
+  second(ui, 60);
+  const calls = ui.weather(), start = calls.findLastIndex(([name]) => name === 'clearRect') + 1;
+  const strokes = []; let alpha = 1, from = null;
+  for (const [name, ...args] of calls.slice(start)) {
+    if (name === 'globalAlpha') alpha = args[0];
+    else if (name === 'moveTo') from = args;
+    else if (name === 'lineTo' && from) strokes.push({ length: from[1] - args[1], alpha });
+  }
+  assert.equal(strokes.length, 110);
+  for (const { length, alpha } of strokes) {
+    assert.ok(Math.abs(length - 33) < 1e-6, `a streak is ${length} px long`);
+    assert.ok(Math.abs(alpha * length - 16) < 1e-6, `drawn at ${alpha}, a ${length} px streak gives off the light of a 16 px one`);
+  }
+  assert.equal(calls.filter(([name]) => name === 'globalAlpha').at(-1)[1], 1, 'splashes and ripples are drawn as before');
+  // A drop that reaches the bottom starts again above the view, at y -27.5 here. Its next streak covers only the way
+  // it fell since, so it never reaches above that.
+  const low = lounge({ height: 100, random: 0.5 });
+  low.api.enter(); low.api.setWeatherMode('rain');
+  second(low, 60);
+  const tops = low.weather().filter(([name]) => name === 'lineTo').map(([, , y]) => y);
+  assert.ok(tops.length > 300 && tops.some(y => y < 0), 'drops fell through the view several times');
+  assert.ok(Math.min(...tops) >= -27.5, `a streak reached up to y ${Math.min(...tops)}`);
+});
+
+// Starts a lounge game with its card's Start button and plays it on a display of the given refresh rate. Returns the
+// frames drawn and the shapes on its board at the end.
+function play(card, hz, seconds) {
+  const ui = lounge();
+  ui.api.enter(); ui.api.setWeatherMode('clear');
+  const board = ui.document.getElementById(card), [canvas] = board.querySelectorAll('canvas');
+  board.querySelectorAll('button').find(button => /Start/.test(button.textContent)).click();
+  const before = canvas.getContext().calls.length;
+  second(ui, hz, 1000, seconds);
+  const calls = canvas.getContext().calls.slice(before);
+  return { frames: drawnFrames(calls), scene: calls.slice(calls.findLastIndex(([name]) => name === 'clearRect') + 1).filter(([name]) => ['arc', 'roundRect'].includes(name)) };
+}
+
+test('Lounge Breakout moves at its 60 Hz speed on a 120 Hz display and draws only the frames that moved', () => {
+  const [slow, fast] = [play('flow-card-lounge-arcade', 60, 0.5), play('flow-card-lounge-arcade', 120, 0.5)];
+  const ball = scene => scene.filter(([name]) => name === 'arc').at(-1);
+  assert.ok(slow.scene.length > 10, 'bricks, paddle and ball are on the board');
+  assert.deepEqual(ball(fast.scene), ball(slow.scene), 'the ball is in the same place');
+  assert.notDeepEqual(ball(slow.scene), play('flow-card-lounge-arcade', 60, 0.25).scene.filter(([name]) => name === 'arc').at(-1), 'and it moves');
+  assert.ok(fast.frames <= slow.frames, `drew ${fast.frames} frames at 120 Hz and ${slow.frames} at 60 Hz`);
+});
+
+// Plays a lounge game at 60 Hz for the given frames, then does what `then` says, and returns the frames drawn and where
+// its moving piece is: Breakout's ball, or the snake's head.
+function game(card, frames, then = null, jitter = 0) {
+  const ui = lounge();
+  ui.api.enter(); ui.api.setWeatherMode('clear');
+  const board = ui.document.getElementById(card), [canvas] = board.querySelectorAll('canvas');
+  const control = () => board.querySelectorAll('button').find(button => /Start|Pause|Resume/.test(button.textContent));
+  control().click();
+  // Frames that come up to `jitter` ms early or late, as a display's do.
+  for (let i = 0; i < frames; i++) ui.frame(1000 + i * 1000 / 60 + (i % 2 ? jitter : -jitter));
+  const last = 1000 + (frames - 1) * 1000 / 60;
+  if (then === 'hidden') { ui.setHidden(true); ui.frame(last + 2000); ui.setHidden(false); ui.frame(last + 5000); }
+  else if (then === 'paused') { control().click(); ui.frame(last + 2000); control().click(); ui.frame(last + 5000); }
+  else if (then === 'stalled') ui.frame(last + 1000);
+  else for (let i = 1; i <= (then || 0); i++) ui.frame(last + i * 1000 / 60);
+  const calls = canvas.getContext().calls, scene = calls.slice(calls.findLastIndex(([name]) => name === 'clearRect') + 1);
+  return { frames: drawnFrames(calls), piece: card === 'flow-card-lounge-arcade' ? scene.filter(([name]) => name === 'arc').at(-1) : scene.find(([name]) => name === 'roundRect') };
+}
+
+test('Lounge Breakout goes on from where it was after a pause or time out of view, and keeps pace with uneven frames', () => {
+  const arcade = 'flow-card-lounge-arcade', next = game(arcade, 31, 1);
+  for (const then of ['hidden', 'paused']) assert.deepEqual(game(arcade, 31, then).piece, next.piece, `the ball takes one step after five seconds ${then}, as after one frame`);
+  assert.deepEqual(game(arcade, 31, 'stalled').piece, game(arcade, 31, 4).piece, 'after a stall of a second the ball catches up by four steps, not sixty');
+  const uneven = game(arcade, 31, 1, 0.4), even = game(arcade, 31, 1);
+  assert.equal(uneven.frames, even.frames, 'a frame that comes a little early still moves the game, so none is skipped');
+  assert.deepEqual(uneven.piece, even.piece);
+});
+
+test('Lounge Snake goes on from where it was after a pause or time out of view', () => {
+  // After 33 steps the snake has moved 5 times, at steps 1, 8, 15, 22 and 29. One more step leaves it there; four would
+  // reach its sixth move at step 36.
+  const zen = 'flow-card-lounge-zen', next = game(zen, 33, 1);
+  assert.notDeepEqual(game(zen, 33, 4).piece, next.piece);
+  for (const then of ['hidden', 'paused']) assert.deepEqual(game(zen, 33, then).piece, next.piece, `the snake takes one step after five seconds ${then}`);
+});
+
+test('Lounge Snake moves at its 60 Hz speed on a 144 Hz display', () => {
+  // The snake moves every 110 ms. Counted in display frames, that is every 116.7 ms at 60 Hz but every 111.1 ms at 144 Hz.
+  const [slow, fast] = [play('flow-card-lounge-zen', 60, 1.45), play('flow-card-lounge-zen', 144, 1.45)];
+  const head = scene => scene.find(([name]) => name === 'roundRect');
+  assert.deepEqual(head(fast.scene), head(slow.scene), 'the snake has moved as far');
+  assert.equal(head(slow.scene)[1], (5 + 13) * 15 + 1, 'thirteen moves to the right in 1.45 seconds');
+  assert.ok(fast.frames <= slow.frames + 1, `drew ${fast.frames} frames at 144 Hz and ${slow.frames} at 60 Hz`);
 });
 
 test('Lounge snow and its settling run on elapsed time too', () => {
