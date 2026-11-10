@@ -351,7 +351,7 @@
             <p id="memory-empty" class="panel-empty">Nothing remembered yet. Press <strong>Remember</strong> on any message or step, and every agent in this workspace will know it.</p>
             <div id="memory-suggested" class="panel-group" hidden><h4 class="panel-group-title">Suggested</h4><ul id="memory-suggestions" class="panel-list"></ul></div>
             <ul id="memory-list" class="panel-list"></ul>
-            <div class="panel-section-foot"><button id="memory-export" class="text-link" type="button" hidden>Export</button></div>
+            <div class="panel-section-foot"><button id="memory-copy" class="text-link" type="button" hidden>Copy to AGENTS.md</button><button id="memory-export" class="text-link" type="button" hidden>Export</button></div>
           </section>
           <section id="brief-skills" class="panel-section" aria-labelledby="skills-title">
             <div class="panel-section-head"><h3 id="skills-title" class="panel-section-title">Skills <span id="skills-count" class="panel-count" hidden></span></h3><button id="skills-add" class="icon-button" type="button" aria-label="Add skills" title="Add skills"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
@@ -613,6 +613,14 @@
         <p id="skill-error" class="project-error" role="alert" hidden></p><div class="memory-footer"><button id="skill-cancel" class="secondary-button" type="button">Cancel</button><button class="primary-button" type="submit">Save skill</button></div></form>
     </dialog>
 
+    <dialog id="memory-copy-dialog" class="memory-dialog memory-copy-dialog" aria-labelledby="memory-copy-title">
+      <form id="memory-copy-form"><h2 id="memory-copy-title">Copy to AGENTS.md</h2><p class="agents-hint">Puts the chosen memories in the folder's AGENTS.md as one marked section, so anyone working in the repository sees them. The rest of the file stays as it is, and nothing is committed.</p>
+        <div id="memory-copy-folder-row" class="memory-fields"><div><label class="brief-label" for="memory-copy-folder">Folder</label><select id="memory-copy-folder"></select></div></div>
+        <fieldset class="memory-copy-choices"><legend class="brief-label">Memories</legend><ul id="memory-copy-list" class="memory-copy-list"></ul></fieldset>
+        <p id="memory-copy-effect" class="memory-copy-effect"></p><pre id="memory-copy-preview" class="memory-copy-preview" tabindex="0" aria-label="Section to be written"></pre>
+        <label class="memory-copy-retire"><input id="memory-copy-retire" type="checkbox"> Retire these memories afterwards. Agents will read them from AGENTS.md instead.</label>
+        <p id="memory-copy-error" class="project-error" role="alert" hidden></p><div class="memory-footer"><button id="memory-copy-cancel" class="secondary-button" type="button">Cancel</button><button id="memory-copy-submit" class="primary-button" type="submit">Copy</button></div></form>
+    </dialog>
     <dialog id="memory-dialog" class="memory-dialog" aria-labelledby="memory-dialog-title">
       <form id="memory-form"><h2 id="memory-dialog-title">Remember this</h2><p class="agents-hint">Every agent in this workspace will be told this when it's relevant. Keep it to what matters.</p>
         <label class="brief-label" for="memory-text">What to remember</label><textarea id="memory-text" class="brief-note" rows="5" maxlength="2000" required></textarea>

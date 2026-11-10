@@ -55,6 +55,7 @@
     $('memory-suggestions').replaceChildren(...suggestions.map(renderSuggestion));
     list.replaceChildren(...[...active, ...entries.filter(entry => entry.status !== 'active')].map(renderEntry));
     $('memory-export').hidden = !entries.length;
+    if ($('memory-copy')) $('memory-copy').hidden = !active.length;
     window.relayBrief?.rerender?.();
   }
   const scope = () => { const state = api.getState(), c = state.conversation; return c ? `${state.projectId}:${c.id}:${c.lastRun?.id || ''}:${c.status}` : null; };
@@ -100,6 +101,62 @@
     const url = URL.createObjectURL(new Blob([JSON.stringify(view?.entries || [], null, 2)], { type: 'application/json' })), link = document.createElement('a');
     link.href = url; link.download = 'codeshi-project-memory.json'; document.body?.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
+  // Copy to AGENTS.md: choose a folder and memories, see the exact section, then write it. The server checks that the file
+  // is still what the preview was made from, so nothing written meanwhile by a person or an agent is lost.
+  const copyDialog = $('memory-copy-dialog');
+  let copyPreview = null, copyRequest = 0;
+  const copyFolder = () => $('memory-copy-folder').value;
+  const copyable = folderId => (view?.entries || []).filter(entry => entry.status === 'active' && (!entry.folderId || entry.folderId === folderId));
+  const chosenIds = () => [...$('memory-copy-list').querySelectorAll('input:checked')].map(input => input.value);
+  function copyError(message) { $('memory-copy-error').textContent = message || ''; $('memory-copy-error').hidden = !message; }
+  function renderCopyList() {
+    const entries = copyable(copyFolder());
+    $('memory-copy-list').replaceChildren(...entries.map(entry => {
+      const row = node('li'), label = node('label'), box = node('input'), text = node('span', '', entry.text);
+      box.type = 'checkbox'; box.value = entry.id; box.checked = !entry.needsRecheck;
+      if (entry.needsRecheck) text.append(node('span', 'memory-copy-note', ' · needs recheck'));
+      label.append(box, text); row.append(label); return row;
+    }));
+    if (!entries.length) $('memory-copy-list').append(node('li', 'memory-copy-note', 'No active memories apply to this folder.'));
+  }
+  async function previewCopy() {
+    const c = conversation(), request = ++copyRequest, ids = chosenIds();
+    copyPreview = null; $('memory-copy-submit').disabled = true; copyError('');
+    if (!c || !ids.length) { $('memory-copy-effect').textContent = 'Choose at least one memory.'; $('memory-copy-preview').textContent = ''; return; }
+    try {
+      const result = await api.post(`/api/conversations/${c.id}/memory`, { action: 'instructions-preview', folderId: copyFolder(), ids });
+      if (request !== copyRequest) return;
+      copyPreview = result.copy;
+      $('memory-copy-effect').textContent = copyPreview.unchanged ? 'AGENTS.md already has exactly this section.' : !copyPreview.exists ? 'Creates AGENTS.md with this section:' : copyPreview.replaces ? 'Replaces the section copied before. Anything edited inside it is replaced:' : 'Adds this section at the end of AGENTS.md:';
+      $('memory-copy-preview').textContent = copyPreview.section;
+      $('memory-copy-submit').disabled = copyPreview.unchanged && !$('memory-copy-retire').checked;
+    } catch (error) { if (request === copyRequest) { $('memory-copy-effect').textContent = ''; $('memory-copy-preview').textContent = ''; copyError(error.message); } }
+  }
+  function openCopy() {
+    const folders = foldersOf(), select = $('memory-copy-folder'), previous = select.value;
+    select.replaceChildren(...folders.map(folder => { const option = node('option', '', folder.displayName || folder.name); option.value = folder.id; return option; }));
+    select.value = folders.some(folder => folder.id === previous) ? previous : folders[0]?.id || '';
+    $('memory-copy-folder-row').hidden = folders.length < 2;
+    $('memory-copy-retire').checked = false;
+    renderCopyList(); copyDialog.showModal(); previewCopy();
+  }
+  if (copyDialog) {
+    $('memory-copy').addEventListener('click', openCopy);
+    $('memory-copy-folder').addEventListener('change', () => { renderCopyList(); previewCopy(); });
+    $('memory-copy-list').addEventListener('change', previewCopy);
+    $('memory-copy-retire').addEventListener('change', () => { if (copyPreview) $('memory-copy-submit').disabled = copyPreview.unchanged && !$('memory-copy-retire').checked; });
+    $('memory-copy-cancel').addEventListener('click', () => copyDialog.close());
+    $('memory-copy-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!copyPreview) return;
+      $('memory-copy-submit').disabled = true;
+      try {
+        const result = await change({ action: 'instructions-write', folderId: copyPreview.folderId, ids: copyPreview.ids, sha256: copyPreview.sha256, retire: $('memory-copy-retire').checked });
+        copyDialog.close();
+        api.showNotice(`${result.copied.unchanged ? 'AGENTS.md already had this section' : 'Copied to AGENTS.md'} in ${result.copied.folder}. It isn't committed.`);
+      } catch (error) { copyError(error.message); $('memory-copy-submit').disabled = false; }
+    });
+  }
   window.addEventListener('relay-state', load);
   window.addEventListener('relay-side-panel', load);
   window.relayMemory = { remember, open, activeCount: () => view ? view.entries.filter(entry => entry.status === 'active').length : null };

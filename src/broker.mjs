@@ -20,6 +20,7 @@ import { contextControlView, estimateContext, findMessage, managedContextVersion
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
+import { planCopy, writeCopy } from './memory-instructions.mjs';
 import { applyBudgetRecord, isExplicitRetry, TaskBudgets } from './task-budget.mjs';
 import { SkillCatalog } from './skills.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
@@ -503,8 +504,20 @@ export class Broker extends EventEmitter {
 
   // Project memory (#21): every change comes from the person, through here.
   memory(c) { return memoryView(c, this.workspaceFolders); }
+  async copyMemoryToInstructions(c, input) {
+    const folder = this.workspaceFolders.find(item => item.id === input.folderId);
+    if (!folder) throw Object.assign(new Error('That folder is no longer in this workspace.'), { status: 404 });
+    const withFolders = this.tasks?.withFolders || ((paths, operation, work) => work());
+    // Worked out again under the lease: the preview's hash must still match the file before anything is written.
+    const plan = await withFolders([folder.path], 'copying memory to AGENTS.md', async () => { const current = planCopy(c, this.workspaceFolders, input); writeCopy(current, input.sha256); return current; });
+    if (input.retire === true) for (const entry of plan.entries) this.record(c, { type: 'memory_update', id: entry.id, changes: { status: 'retired' } });
+    return { ...this.memory(c), copied: plan.preview };
+  }
   changeMemory(c, input = {}) {
     const found = () => { const entry = (c.memory || []).find(item => item.id === input.id); if (!entry) throw Object.assign(new Error('That memory is no longer here.'), { status: 404 }); return entry; };
+    // Copy to AGENTS.md: a preview first, then the write under the folder's lease, so no run edits the file meanwhile.
+    if (input.action === 'instructions-preview') return { ...this.memory(c), copy: planCopy(c, this.workspaceFolders, input).preview };
+    if (input.action === 'instructions-write') return this.copyMemoryToInstructions(c, input);
     if (input.action === 'add') {
       if ((c.memory || []).filter(entry => entry.status === 'active').length >= memoryLimit) throw Object.assign(new Error(`Memory holds up to ${memoryLimit} entries. Retire some first.`), { status: 409 });
       this.record(c, { type: 'memory_add', entry: newEntry(input, this.workspaceFolders) });
