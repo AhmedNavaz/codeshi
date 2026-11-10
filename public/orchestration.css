@@ -1,5 +1,5 @@
 /* Orchestrate (#12, #89, #97): the toggle beside Review after, the line saying a plan comes first, and the plan card in the
-   Plan side panel. The card keeps to a height of its own: its steps scroll, and the worst case and the actions stay below them. */
+   Plan view (plan-view.css). Its step editor is the Plan view's drawer, and its footer holds the worst case and the actions. */
 .orchestrate-toggle { flex: none; padding: 5px 7px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); font: 11px var(--font); cursor: pointer; white-space: nowrap; }
 .orchestrate-toggle:hover { color: var(--text); background: var(--hover); }
 .orchestrate-toggle[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
@@ -88,17 +88,6 @@
 .orchestration-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .orchestration-discard { margin-right: auto; }
 .message-orchestrate-label { color: var(--muted); font-size: 11px; }
-
-/* The Plan side panel: hosts the orchestration card cleanly alongside the other side panels */
-.plan-panel { overflow-x: hidden; overflow-y: hidden; display: flex; flex-direction: column; min-width: 0; }
-.plan-panel .panel-body { flex: 1 1 auto; min-width: 0; overflow: hidden auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-.plan-panel .orchestration-card { margin: 0; max-height: none; flex: 1 1 auto; border: none; background: transparent; min-width: 0; width: 100%; max-width: 100%; }
-.plan-panel .orchestration-head { padding: 0 0 8px; min-width: 0; }
-.plan-panel .orchestration-body { padding: 0; min-width: 0; overflow-x: hidden; }
-.plan-panel .orchestration-foot { padding: 10px 0 0; min-width: 0; }
-.plan-panel-actions { display: flex; gap: 8px; margin-top: 4px; }
-@media (max-width: 1100px) { .plan-panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: var(--statusbar-height); width: min(var(--inspector-width, var(--inspector-width-default)), 80vw); box-shadow: var(--shadow-lg); } }
-@media (max-width: 760px) { .plan-panel { top: 44px; width: min(360px, 100vw); } }
 
 /* A plan running as tasks: one row per step with its task's state; a row opens that task. */
 .orchestration-progress { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; min-width: 0; }

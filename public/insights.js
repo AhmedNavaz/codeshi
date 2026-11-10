@@ -309,7 +309,7 @@
   function setGitPanel(open, remember = true) {
     $('git-panel').hidden = !open; $('open-git').setAttribute('aria-expanded', String(open));
     if (remember) try { localStorage.setItem('throughline:side-panel', open ? 'git' : 'none'); } catch { /* Panel state is a convenience. */ }
-    if (open) { window.relayReviews?.closePanel(); window.relayTimeline?.close(); window.relayAgents?.close(); window.relayBrief?.close(); window.relayTasks?.close(); window.relayOrchestration?.closePanel?.(); loadGit(); }
+    if (open) { window.relayReviews?.closePanel(); window.relayTimeline?.close(); window.relayAgents?.close(); window.relayBrief?.close(); window.relayTasks?.close(); loadGit(); }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
   $('open-git').addEventListener('click', () => setGitPanel($('git-panel').hidden));

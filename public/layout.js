@@ -37,7 +37,7 @@
   window.addEventListener('pagehide', () => endDrag());
   document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(); });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && dragging) { event.preventDefault(); endDrag(); } }, true);
-  const sidePanels = () => ['git-panel', 'agents-panel', 'brief-panel', 'tasks-panel', 'timeline-panel', 'review-panel', 'plan-panel'].map($).filter(Boolean);
+  const sidePanels = () => ['git-panel', 'agents-panel', 'brief-panel', 'tasks-panel', 'timeline-panel', 'review-panel'].map($).filter(Boolean);
 
   // name: [how to measure the current size, how to apply a size, min, max, axis, sign, label]
   const sections = {
@@ -101,7 +101,7 @@
     $('toggle-sidebar')?.setAttribute('aria-pressed', String(!shell?.classList.contains('sidebar-collapsed')));
     $('toggle-side-panel')?.setAttribute('aria-pressed', String(sidePanels().some(panel => !panel.hidden)));
     for (const id of ['toggle-sidebar', 'toggle-side-panel']) if ($(id)) $(id).disabled = flowing();
-    for (const [id, name] of [['agents-panel', 'agents'], ['git-panel', 'git'], ['brief-panel', 'brief'], ['tasks-panel', 'tasks'], ['timeline-panel', 'timeline'], ['plan-panel', 'plan']]) if ($(id) && !$(id).hidden) write(LAST_PANEL_KEY, name);
+    for (const [id, name] of [['agents-panel', 'agents'], ['git-panel', 'git'], ['brief-panel', 'brief'], ['tasks-panel', 'tasks'], ['timeline-panel', 'timeline']]) if ($(id) && !$(id).hidden) write(LAST_PANEL_KEY, name);
   }
   function setSidebar(collapsed) {
     endDrag();
@@ -119,8 +119,7 @@
     else if (!$('tasks-panel')?.hidden) { write(LAST_PANEL_KEY, 'tasks'); window.relayTasks?.close(); }
     else if (!$('timeline-panel')?.hidden) { write(LAST_PANEL_KEY, 'timeline'); window.relayTimeline?.close(); }
     else if (!$('review-panel')?.hidden) window.relayReviews?.closePanel?.();
-    else if (!$('plan-panel')?.hidden) { write(LAST_PANEL_KEY, 'plan'); window.relayOrchestration?.closePanel?.(); }
-    else { const last = read(LAST_PANEL_KEY); if (last === 'timeline') window.relayTimeline?.open(); else if (last === 'brief') window.relayBrief?.open(); else if (last === 'tasks') window.relayTasks?.open(); else if (last === 'plan') window.relayOrchestration?.openPanel?.(); else $(last === 'git' ? 'open-git' : 'open-agents')?.click(); }
+    else { const last = read(LAST_PANEL_KEY); if (last === 'timeline') window.relayTimeline?.open(); else if (last === 'brief') window.relayBrief?.open(); else if (last === 'tasks') window.relayTasks?.open(); else $(last === 'git' ? 'open-git' : 'open-agents')?.click(); }
     sync();
   });
   if (typeof MutationObserver === 'function') {

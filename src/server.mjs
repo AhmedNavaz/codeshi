@@ -40,7 +40,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
   '/github-context.js': ['github-context.js', 'text/javascript; charset=utf-8'], '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
-  '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'],
+  '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'], '/plan-view.js': ['plan-view.js', 'text/javascript; charset=utf-8'], '/plan-view.css': ['plan-view.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow-lounge.js': ['flow-lounge.js', 'text/javascript; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],

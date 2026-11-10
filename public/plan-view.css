@@ -1,0 +1,117 @@
+/* The Plan view (#97): an Orchestrate plan full window, as a chart or an outline, with the selected step in a drawer
+   and the plan's actions below. */
+.plan-view { width: calc(100vw - 32px); height: calc(100dvh - 32px); max-width: none; max-height: none; padding: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); color: var(--text); box-shadow: var(--shadow-lg); font-size: 12px; }
+.plan-view[open] { display: flex; flex-direction: column; }
+.plan-view::backdrop { background: var(--backdrop); }
+.plan-view [hidden] { display: none !important; }
+
+.plan-view-head { flex: none; display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
+.plan-view-heading { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.plan-view-title { margin: 0; color: var(--text-strong); font-size: 14px; font-weight: 600; }
+.plan-view-summary { margin: 0; color: var(--text); line-height: 1.45; max-width: 90ch; overflow-wrap: anywhere; }
+.plan-view-documents { margin: 0; color: var(--muted); font-size: 11.5px; }
+.plan-view-modes { flex: none; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; }
+.plan-view-modes button { height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 12px var(--font); cursor: pointer; }
+.plan-view-modes button:hover { color: var(--text); background: var(--hover); }
+.plan-view-modes button[aria-pressed=true] { color: var(--text-strong); background: var(--surface-strong); }
+.plan-view-head .orchestration-add { flex: none; height: 28px; border: 1px solid var(--border); }
+.plan-view-close { flex: none; width: 28px; height: 28px; }
+
+.plan-view-main { flex: 1 1 auto; min-height: 0; display: flex; }
+.plan-view-canvas { flex: 1 1 auto; min-width: 0; overflow: auto; padding: 18px 20px 24px;
+  background-image: radial-gradient(circle, var(--border) 1px, transparent 1.2px); background-size: 18px 18px; }
+.plan-view-empty { margin: 40px auto; max-width: 52ch; color: var(--muted); text-align: center; line-height: 1.5; }
+
+/* The chart: a column per phase, cards in each, and arrows drawn behind them. */
+.plan-chart { position: relative; display: flex; align-items: flex-start; gap: 56px; width: max-content; min-width: 100%; }
+.plan-arrows { position: absolute; inset: 0 auto auto 0; pointer-events: none; overflow: visible; z-index: 0; }
+.plan-arrow { fill: none; stroke: var(--border-strong); stroke-width: 1.5; }
+.plan-arrow.done { stroke: var(--success); opacity: .7; }
+.plan-arrow.related { stroke: var(--accent); stroke-width: 2; }
+.plan-arrows marker path { fill: var(--border-strong); }
+.plan-column { position: relative; z-index: 1; display: grid; gap: 10px; width: 236px; flex: none; }
+.plan-column-head { display: flex; align-items: center; gap: 6px; padding: 0 2px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.plan-column-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-column-count { color: var(--faint); font-weight: 500; }
+.plan-column-cards { display: grid; gap: 14px; }
+
+.plan-node { display: grid; gap: 6px; width: 100%; min-width: 0; padding: 9px 10px 9px 12px; border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--surface-raised); color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+.plan-node:hover { border-color: var(--border-strong); }
+.plan-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.plan-node[aria-pressed=true] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.plan-node[data-status=running] { border-left-color: var(--accent); }
+.plan-node:is([data-status=complete], [data-status=integrated], [data-status=kept]) { border-left-color: var(--success); }
+.plan-node:is([data-status=failed], [data-status=blocked], [data-status=lost], [data-status=detached]) { border-left-color: var(--danger); }
+.plan-node[data-status=stopped] { border-left-color: var(--warning); }
+.plan-node-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.plan-node-number { flex: none; min-width: 16px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.plan-node-state, .plan-node-tier { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.plan-node[data-status=running] .plan-node-state { color: var(--accent); }
+.plan-node:is([data-status=complete], [data-status=integrated], [data-status=kept]) .plan-node-state { color: var(--success); }
+.plan-node:is([data-status=failed], [data-status=blocked], [data-status=lost]) .plan-node-state { color: var(--danger); }
+.plan-node-title { color: var(--text-strong); font-weight: 500; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.plan-node-title.untitled { color: var(--faint); font-style: italic; }
+.plan-node-meta { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--muted); font-size: 11px; }
+.plan-node-route { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-view .agent-icon.codex { color: var(--codex); }
+.plan-view .agent-icon.claude { color: var(--claude); }
+.plan-view .agent-icon.gemini { color: var(--gemini); }
+
+/* The outline: the same steps as a list, grouped the same way. */
+.plan-outline { display: grid; gap: 16px; max-width: 760px; margin: 0; padding: 0; list-style: none; }
+.plan-outline-name { margin: 0 0 6px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.plan-outline-steps { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.plan-outline-step { display: flex; align-items: baseline; gap: 8px; width: 100%; min-height: 30px; padding: 6px 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; }
+.plan-outline-step:hover { background: var(--hover); }
+.plan-outline-step[aria-pressed=true] { background: var(--surface-strong); }
+.plan-outline-title { flex: 1 1 auto; min-width: 0; color: var(--text-strong); overflow-wrap: anywhere; }
+.plan-outline-meta { flex: 0 1 auto; color: var(--muted); font-size: 11px; text-align: right; }
+
+/* The drawer: the selected step. */
+.plan-drawer { flex: none; display: flex; flex-direction: column; width: min(380px, 42vw); min-height: 0; border-left: 1px solid var(--border); background: var(--panel-bg); }
+.plan-drawer-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px 16px; border-bottom: 1px solid var(--border); }
+.plan-drawer-title { flex: 1; min-width: 0; margin: 0; color: var(--text-strong); font-size: 12px; font-weight: 600; }
+.plan-drawer-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; align-content: start; gap: 12px; padding: 12px 16px 16px; }
+.plan-drawer-body .orchestration-step-detail { padding: 0; }
+.plan-drawer-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.plan-drawer-tools .secondary-button:last-child { margin-left: auto; color: var(--danger); }
+.plan-drawer-step-title { margin: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; line-height: 1.4; }
+.plan-drawer-instructions { margin: 0; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.plan-drawer-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 0; }
+.plan-drawer-facts dt { color: var(--faint); }
+.plan-drawer-facts dd { margin: 0; overflow-wrap: anywhere; }
+.plan-drawer-body > .primary-button { justify-self: start; }
+
+/* The plan card's footer, borrowed while the view is open. */
+.plan-view-foot-slot { flex: none; border-top: 1px solid var(--border); background: var(--panel-bg); }
+.plan-view-foot-slot .orchestration-foot { border-top: 0; padding: 10px 16px 12px; }
+
+/* With no plan yet: how to start one. */
+.plan-view-start { margin: 56px auto 0; max-width: 56ch; padding: 18px 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); line-height: 1.5; }
+.plan-view-start p { margin: 0 0 12px; }
+.plan-view-start-form { display: flex; gap: 8px; }
+.plan-view-start-form .orchestration-field { flex: 1; min-width: 0; }
+.plan-view-status { margin: 0 0 14px; padding: 8px 10px; max-width: 90ch; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 12px; }
+
+/* The Plan button in the title bar, beside Flow. Its dot and short word say where the plan stands. */
+.plan-entry { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; margin-left: 6px; padding: 0 11px 0 9px; border: 1px solid var(--border-strong); border-radius: 14px; background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; -webkit-app-region: no-drag; }
+.plan-entry .icon { width: 14px; height: 14px; }
+.plan-entry:hover:enabled { background: var(--hover); color: var(--text-strong); }
+.plan-entry:disabled { opacity: .4; cursor: default; }
+.plan-entry-state { display: inline-flex; align-items: center; gap: 5px; padding-left: 7px; border-left: 1px solid var(--border-strong); color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+.plan-entry-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.plan-entry[data-state="ready"] { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.plan-entry[data-state="ready"] .plan-entry-state { color: var(--link); }
+.plan-entry[data-state="ready"] .plan-entry-state::before { background: var(--accent); }
+.plan-entry[data-state="running"] .plan-entry-state::before, .plan-entry[data-state="planning"] .plan-entry-state::before { background: var(--accent); animation: plan-entry-pulse 1.4s ease-in-out infinite; }
+.plan-entry[data-state="finished"] .plan-entry-state::before { background: var(--success); }
+.plan-entry[data-state="trouble"] .plan-entry-state::before, .plan-entry[data-state="stopped"] .plan-entry-state::before { background: var(--warning, var(--danger)); }
+@keyframes plan-entry-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .plan-entry-state::before { animation: none !important; } }
+@media (max-width: 900px) { .plan-entry-state { padding-left: 0; border-left: 0; font-size: 0; gap: 0; } }
+
+@media (max-width: 760px) {
+  .plan-view { width: 100vw; height: 100dvh; border-radius: 0; }
+  .plan-view-main { position: relative; }
+  .plan-drawer { position: absolute; inset: 0; width: auto; z-index: 2; }
+}

@@ -1113,6 +1113,7 @@
     if (!user && message.orchestrationId) {
       const plan = state.conversation?.orchestrations?.find(item => item.id === message.orchestrationId);
       body.append(element('p', '', window.relayOrchestration?.describe(plan) || (streaming ? 'Planning the steps…' : 'The planner’s response.')));
+      if (window.relayOrchestration?.isCurrent(plan)) { const view = element('button', 'secondary-button', 'View plan'); view.type = 'button'; view.addEventListener('click', () => window.relayPlanView?.open()); body.append(view); }
       const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the planner…')); body.append(raw);
       row.append(heading, body, actions); return row;
     }
@@ -2920,7 +2921,7 @@
   $("header-menu").addEventListener("click", event => { if (event.target?.closest?.("button")) $("header-menu").hidePopover?.(); });
   // The tabs at the top of a side panel switch to the other panel.
   // The side panel's tabs: Agents, Brief, Tasks, Git and Timeline, each opened by its own module.
-  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), timeline: () => window.relayTimeline?.open(), plan: () => window.relayOrchestration?.openPanel?.() };
+  const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), timeline: () => window.relayTimeline?.open() };
   const showSidePanel = name => { const panel = $(`${name}-panel`); if (panel?.hidden !== false) sidePanelOpeners[name]?.(); };
   document.querySelectorAll(".panel-tab").forEach(tab => tab.addEventListener("click", () => showSidePanel(tab.dataset.panel)));
   $("run-plan-toggle").addEventListener("click", () => {

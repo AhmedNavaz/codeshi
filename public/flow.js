@@ -478,9 +478,9 @@
     const plan = window.relayOrchestration?.waiting?.();
     if (!plan) return null;
     const count = plan.steps?.length || 0;
-    if (plan.status === 'planning') return { chip: 'Planning', text: `${agentName(plan.planner?.provider)} is planning the steps. The plan opens above the message box.` };
-    if (plan.status === 'draft') return { chip: 'Plan waiting', text: count ? `A plan of ${plural(count, 'step')} is waiting above the message box. Nothing from it runs until you approve it.` : 'An empty plan is waiting above the message box. Add its steps there.' };
-    return { chip: 'Plan not ready', text: 'The plan isn’t ready. Plan again or write the steps yourself, above the message box.' };
+    if (plan.status === 'planning') return { chip: 'Planning', text: `${agentName(plan.planner?.provider)} is planning the steps. The Plan button shows the plan when it’s ready.` };
+    if (plan.status === 'draft') return { chip: 'Plan waiting', text: count ? `A plan of ${plural(count, 'step')} is waiting. Nothing from it runs until you approve it.` : 'An empty plan is waiting. Open the plan to add its steps.' };
+    return { chip: 'Plan not ready', text: 'The plan isn’t ready. Open the plan to plan again or write the steps yourself.' };
   }
   function renderNext(card) {
     const state = api.getState(), c = state.conversation, { steps, held, running, run } = planFor(), queue = c?.queue || [], tasks = c?.parallelTasks || [];
@@ -493,6 +493,12 @@
     const selectTask = id => window.relayTaskThreads.select(id).catch(error => api.showNotice?.(error.message));
     const others = tasks.filter(task => task.purpose !== 'project-review' && task.id !== state.taskId && !['integrated', 'kept', 'discarded', 'cancelled', 'lost', 'detached'].includes(task.status) && (task.conversationId || task.status === 'waiting'));
     if (plan) body.append(node('p', 'flow-lead flow-plan-waiting', plan.text));
+    // The plan opens full window from here, while it's being made, waits or runs as tasks.
+    if (window.relayOrchestration?.snapshot?.()) {
+      const openChart = node('button', 'secondary-button flow-plan-open', 'Open plan'); openChart.type = 'button';
+      openChart.addEventListener('click', () => window.relayPlanView?.open());
+      body.append(openChart);
+    }
     else if (running && !steps.length) {
       const activeItem = node('div', 'flow-current-work flow-task-running flow-plan-active');
       const head = node('div', 'flow-task-head');

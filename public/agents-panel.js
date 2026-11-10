@@ -115,7 +115,7 @@
     if (open) {
       window.relayGit?.close();
       window.relayReviews?.closePanel?.(); window.relayTimeline?.close();
-      window.relayBrief?.close(); window.relayTasks?.close(); window.relayOrchestration?.closePanel?.();
+      window.relayBrief?.close(); window.relayTasks?.close();
       loadPreferences();
       loadLocalRow();
       loadTestCommand();

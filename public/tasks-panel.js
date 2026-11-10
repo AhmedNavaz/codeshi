@@ -208,7 +208,7 @@
     panel.hidden = !open;
     if (keep) remember(open ? 'tasks' : 'none');
     if (open) {
-      window.relayAgents?.close(); window.relayGit?.close(); window.relayReviews?.closePanel?.(); window.relayTimeline?.close(); window.relayBrief?.close(); window.relayOrchestration?.closePanel?.();
+      window.relayAgents?.close(); window.relayGit?.close(); window.relayReviews?.closePanel?.(); window.relayTimeline?.close(); window.relayBrief?.close();
       load();
       window.relaySmartResults?.renderSection(); window.relaySmartResults?.load();
       if (section === 'limits') openLimits();

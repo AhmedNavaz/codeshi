@@ -1,8 +1,7 @@
 // Orchestrate (#12, #89, #97): a message can be planned as a few steps. Turned on for one message, one read-only
-// run plans it with the deepest work allowed; the plan then opens in the Plan side panel. Each
-// step is one row (number, role, title, tier, and the agent and model chosen) that opens to edit it, and the worst case
-// and the actions stay pinned below the steps. Nothing from a plan runs until it is approved, and queued messages wait
-// for it. The server checks every saved plan again.
+// run plans it with the deepest work allowed; the plan then opens from the Plan button beside Flow, as a chart
+// (plan-view.js). This module keeps the draft being edited, each step's editor, the worst case and the plan's actions.
+// Nothing from a plan runs until it is approved, and queued messages wait for it. The server checks every saved plan again.
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), api = window.relayUI;
@@ -14,12 +13,9 @@
   const ARTIFACTS = [['', 'None'], ['contract', 'Contract'], ['schema', 'Schema'], ['diff', 'Diff'], ['test_evidence', 'QA evidence'], ['findings', 'Findings']];
   const roleNames = { builder: 'Builder', reviewer: 'Reviewer', frontend: 'Frontend', backend: 'Backend', database: 'Database', design: 'Design', qa: 'QA' };
   const OPEN = ['planning', 'draft', 'unstructured', 'failed', 'interrupted'];
-  const PANEL_KEY = 'throughline:side-panel';
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
   const clip = (text, size = 280) => text.length > size ? `${text.slice(0, size - 1).trimEnd()}…` : text;
-  const read = () => { try { return localStorage.getItem(PANEL_KEY) || 'agents'; } catch { return 'agents'; } };
-  const remember = value => { try { localStorage.setItem(PANEL_KEY, value); } catch { /* A convenience only. */ } };
 
   // failure: what the server last refused, shown until the plan is changed again. asking: the answer to "replace this
   // plan?", while the card asks it. opened: the rows open for editing, kept for the plan across refreshes and saves.
@@ -37,23 +33,6 @@
   const copy = plan => ({ planId: plan.id, revision: plan.revision, review: plan.review !== false, steps: JSON.parse(JSON.stringify(plan.steps || [])), dirty: false, structure: 0 });
   const effortText = effort => effort ? `${effort[0].toUpperCase()}${effort.slice(1)} effort` : '';
   const choiceText = routed => [names[routed.provider] || routed.provider, routed.modelName || 'default model', effortText(routed.effort)].filter(Boolean).join(' · ');
-
-  function setOpen(open, keep = true) {
-    const p = $('plan-panel');
-    if (!p) return;
-    p.hidden = !open;
-    if (keep) remember(open ? 'plan' : 'none');
-    if (open) {
-      window.relayAgents?.close?.();
-      window.relayGit?.close?.();
-      window.relayReviews?.closePanel?.();
-      window.relayTimeline?.close?.();
-      window.relayTasks?.close?.();
-      window.relayBrief?.close?.();
-      render();
-    }
-    window.dispatchEvent(new CustomEvent('relay-side-panel'));
-  }
 
   // The same checks the server makes, so a problem shows before saving.
   function problem(steps) {
@@ -100,7 +79,7 @@
     asking?.(false);
     return new Promise(resolve => {
       asking = answer => { asking = null; resolve(answer); render(); };
-      render(); $('orchestration-confirm-no').focus();
+      window.relayPlanView?.open(); render(); $('orchestration-confirm-no').focus();
     });
   }
   // A plan written by hand starts from the drafted message, without a model call.
@@ -111,7 +90,7 @@
     const fromDraft = goal === $('message-input').value.trim();
     if (await action({ action: 'create', goal })) {
       armedFor = null;
-      setOpen(true);
+      window.relayPlanView?.open();
       if (fromDraft) { $('message-input').value = ''; $('message-input').dispatchEvent(new CustomEvent('input')); }
       api.announce('An empty plan is ready. Add its steps.');
     }
@@ -184,6 +163,7 @@
     const to = index + by; if (to < 0 || to >= edit.steps.length) return;
     const [step] = edit.steps.splice(index, 1); edit.steps.splice(to, 0, step);
     changed(true);
+    if (!control) return;
     const target = $('orchestration-steps').children[to]?.querySelector(`.orchestration-step-${control}`);
     (target?.disabled ? $('orchestration-steps').children[to]?.querySelector('.orchestration-step-toggle') : target)?.focus();
   }
@@ -207,28 +187,10 @@
     const input = node(tag, `orchestration-field ${cls}`); input.value = value; input.placeholder = placeholder; input.setAttribute('aria-label', label);
     input.addEventListener('input', () => handler(input.value)); return input;
   }
-  function stepRow(step, index) {
-    const number = index + 1, row = node('li', 'orchestration-step'), line = node('div', 'orchestration-step-line'), open = opened.ids.has(step.id);
-    row.dataset.step = step.id;
-    const toggle = node('button', 'orchestration-step-toggle'); toggle.type = 'button'; toggle.setAttribute('aria-expanded', String(open));
-    const detail = node('div', 'orchestration-step-detail'); detail.id = `orchestration-step-detail-${step.id}`; detail.hidden = !open; toggle.setAttribute('aria-controls', detail.id);
-    toggle.append(
-      node('span', 'orchestration-step-number', String(number)),
-      node('span', 'orchestration-step-role', roleNames[step.role] || 'Builder'),
-      node('span', 'orchestration-step-name'),
-      node('span', 'effort-bars orchestration-step-tier'),
-      node('span', 'orchestration-step-route')
-    );
-    toggle.addEventListener('click', () => {
-      const show = !opened.ids.has(step.id); if (show) opened.ids.add(step.id); else opened.ids.delete(step.id);
-      toggle.setAttribute('aria-expanded', String(show)); detail.hidden = !show;
-    });
-    const tools = node('div', 'orchestration-step-tools');
-    tools.append(iconButton('orchestration-step-up', `Move step ${number} up`, () => move(index, -1, 'up'), index === 0),
-      iconButton('orchestration-step-down', `Move step ${number} down`, () => move(index, 1, 'down'), index === edit.steps.length - 1),
-      iconButton('orchestration-step-remove', `Remove step ${number}`, () => remove(index)));
-    line.append(toggle, node('div', 'orchestration-step-afters'), tools);
-
+  // A step's editor: its text, files and choices. The Plan view's side drawer uses it, on
+  // the same draft, and syncDetail keeps its pressed choices and waits current.
+  function stepDetail(step, index) {
+    const number = index + 1, detail = node('div', 'orchestration-step-detail');
     const title = field('input', 'orchestration-step-title', step.title, `Step ${number} title`, 'What this step does', value => { step.title = value; changed(); }); title.maxLength = LIMITS.title;
     const instructions = field('textarea', 'orchestration-step-instructions', step.instructions, `Step ${number} instructions`, 'What to do, and how to know it is done', value => { step.instructions = value; changed(); });
     instructions.rows = 3; instructions.maxLength = LIMITS.instructions;
@@ -246,6 +208,44 @@
     const options = node('div', 'orchestration-step-options');
     options.append(labelled('Role', roles), labelled('Tier', tiers), labelled('Agent', agents), labelled('Artifact', artifacts), labelled('Check', check), labelled('Runs after', after));
     detail.append(title, instructions, files, options);
+    return detail;
+  }
+  function syncDetail(detail, step, index) {
+    for (const button of detail.querySelectorAll('.orchestration-role-option')) button.setAttribute('aria-pressed', String((button.dataset.role || 'builder') === (step.role || 'builder')));
+    for (const button of detail.querySelectorAll('.orchestration-tier-option')) button.setAttribute('aria-pressed', String(button.dataset.tier === step.tier));
+    for (const button of detail.querySelectorAll('.orchestration-agent-option')) button.setAttribute('aria-pressed', String(button.dataset.provider === (step.agent?.provider || '')));
+    for (const button of detail.querySelectorAll('.orchestration-artifact-option')) button.setAttribute('aria-pressed', String((button.dataset.artifact || '') === (step.artifact || '')));
+    const afters = detail.querySelector('.orchestration-afters-choice');
+    afters.replaceChildren(...edit.steps.slice(0, index).map((earlier, position) => {
+      const button = choice('orchestration-after-option', `Step ${position + 1}`, 'step', earlier.id, () => {
+        step.dependsOn = step.dependsOn.includes(earlier.id) ? step.dependsOn.filter(id => id !== earlier.id) : [...step.dependsOn, earlier.id]; changed();
+      });
+      button.title = earlier.title.trim() || 'Untitled step'; button.setAttribute('aria-pressed', String(step.dependsOn.includes(earlier.id)));
+      return button;
+    }));
+    if (!index) afters.append(node('span', 'orchestration-option-none', 'Starts first'));
+  }
+  function stepRow(step, index) {
+    const number = index + 1, row = node('li', 'orchestration-step'), line = node('div', 'orchestration-step-line'), open = opened.ids.has(step.id);
+    row.dataset.step = step.id;
+    const toggle = node('button', 'orchestration-step-toggle'); toggle.type = 'button'; toggle.setAttribute('aria-expanded', String(open));
+    const detail = stepDetail(step, index); detail.id = `orchestration-step-detail-${step.id}`; detail.hidden = !open; toggle.setAttribute('aria-controls', detail.id);
+    toggle.append(
+      node('span', 'orchestration-step-number', String(number)),
+      node('span', 'orchestration-step-role', roleNames[step.role] || 'Builder'),
+      node('span', 'orchestration-step-name'),
+      node('span', 'effort-bars orchestration-step-tier'),
+      node('span', 'orchestration-step-route')
+    );
+    toggle.addEventListener('click', () => {
+      const show = !opened.ids.has(step.id); if (show) opened.ids.add(step.id); else opened.ids.delete(step.id);
+      toggle.setAttribute('aria-expanded', String(show)); detail.hidden = !show;
+    });
+    const tools = node('div', 'orchestration-step-tools');
+    tools.append(iconButton('orchestration-step-up', `Move step ${number} up`, () => move(index, -1, 'up'), index === 0),
+      iconButton('orchestration-step-down', `Move step ${number} down`, () => move(index, 1, 'down'), index === edit.steps.length - 1),
+      iconButton('orchestration-step-remove', `Remove step ${number}`, () => remove(index)));
+    line.append(toggle, node('div', 'orchestration-step-afters'), tools);
     row.append(line, detail);
     return row;
   }
@@ -271,18 +271,7 @@
         chip.addEventListener('click', () => { step.dependsOn = step.dependsOn.filter(other => other !== id); changed(); });
         return chip;
       }));
-      for (const button of row.querySelectorAll('.orchestration-role-option')) button.setAttribute('aria-pressed', String((button.dataset.role || 'builder') === (step.role || 'builder')));
-      for (const button of row.querySelectorAll('.orchestration-tier-option')) button.setAttribute('aria-pressed', String(button.dataset.tier === step.tier));
-      for (const button of row.querySelectorAll('.orchestration-agent-option')) button.setAttribute('aria-pressed', String(button.dataset.provider === (step.agent?.provider || '')));
-      for (const button of row.querySelectorAll('.orchestration-artifact-option')) button.setAttribute('aria-pressed', String((button.dataset.artifact || '') === (step.artifact || '')));
-      row.querySelector('.orchestration-afters-choice').replaceChildren(...edit.steps.slice(0, index).map((earlier, position) => {
-        const button = choice('orchestration-after-option', `Step ${position + 1}`, 'step', earlier.id, () => {
-          step.dependsOn = step.dependsOn.includes(earlier.id) ? step.dependsOn.filter(id => id !== earlier.id) : [...step.dependsOn, earlier.id]; changed();
-        });
-        button.title = earlier.title.trim() || 'Untitled step'; button.setAttribute('aria-pressed', String(step.dependsOn.includes(earlier.id)));
-        return button;
-      }));
-      if (!index) row.querySelector('.orchestration-afters-choice').append(node('span', 'orchestration-option-none', 'Starts first'));
+      syncDetail(row.querySelector('.orchestration-step-detail'), step, index);
     });
     $('orchestration-title').textContent = `Plan · ${edit.steps.length ? plural(edit.steps.length, 'step') : 'No steps yet'}`;
     $('orchestration-cost').textContent = cost(plan, edit.steps, edit.review);
@@ -313,24 +302,21 @@
   }
 
   function renderCard() {
-    const plan = openPlan() || runningPlan(), card = $('orchestration-card'), empty = $('plan-empty'), actions = $('plan-empty-actions');
+    const plan = openPlan() || runningPlan(), card = $('orchestration-card'), empty = $('plan-empty');
     // In a task the card waits, with any unsaved changes, for the person to come back to the main conversation.
     if (!onMain()) {
       if (card) card.hidden = true;
-      if (empty) empty.hidden = false;
-      if (actions) actions.hidden = false;
+      if (empty) empty.hidden = true;
       asking?.(false);
       return;
     }
     if (!plan) {
       if (card) card.hidden = true;
       if (empty) empty.hidden = false;
-      if (actions) actions.hidden = false;
       edit = null; drawn = null; failure = null; asking?.(false);
       return;
     }
     if (empty) empty.hidden = true;
-    if (actions) actions.hidden = true;
     if (card) card.hidden = false;
     const draft = plan.status === 'draft', planning = plan.status === 'planning', queued = conversation()?.queue?.length || 0;
     card.dataset.status = plan.status;
@@ -381,17 +367,41 @@
     $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run plans the steps first, ${agentOrMode}. Nothing from this plan runs until you approve it.`;
     $('orchestrate-write').disabled = busy;
     renderCard();
+    renderEntry();
+    window.relayPlanView?.render();
   }
+  // The Plan button beside Flow: it opens the plan, and says where the plan stands.
+  function renderEntry() {
+    const entry = $('open-plan'); if (!entry) return;
+    const plan = onMain() ? openPlan() || runningPlan() : null, count = plan?.steps?.length || 0;
+    let name = 'none', short = '', long = 'Plan: no plan yet. Orchestrate plans a message as steps.';
+    if (plan?.status === 'planning') { name = 'planning'; short = 'Planning…'; long = 'Plan: the steps are being planned.'; }
+    else if (plan?.status === 'draft') { name = 'ready'; short = count ? 'Ready' : 'Empty'; long = count ? `Plan: ${plural(count, 'step')} waiting for you. Nothing runs until you approve it.` : 'Plan: an empty plan is waiting for its steps.'; }
+    else if (plan?.status === 'running') {
+      const rows = planTasks(plan), done = rows.filter(row => row.task && ['complete', 'integrated', 'kept'].includes(row.task.status)).length, live = rows.some(row => row.task && LIVE.includes(row.task.status));
+      name = live ? 'running' : 'finished'; short = `${done}/${rows.length}`; long = `Plan: ${live ? 'running' : 'finished'}, ${done} of ${plural(rows.length, 'step')} done.`;
+    }
+    else if (plan?.status === 'stopped') { name = 'stopped'; short = 'Stopped'; long = 'Plan: stopped.'; }
+    else if (plan) { name = 'trouble'; short = 'Not ready'; long = 'Plan: the plan isn’t ready. Plan again or write the steps yourself.'; }
+    entry.dataset.state = name; entry.title = long; entry.setAttribute('aria-label', long);
+    entry.disabled = !state().projectId;
+    const badge = $('open-plan-state'); if (badge) { badge.textContent = short; badge.hidden = !short; }
+  }
+  $('open-plan')?.addEventListener('click', () => window.relayPlanView?.open());
 
   $('orchestrate-toggle').addEventListener('click', () => {
     armedFor = armed() ? null : state().projectId;
-    if (armed()) setOpen(true);
     render(); api.renderControls();
     api.announce(armed() ? 'Orchestrate is on for this message. One read-only run plans the steps first.' : 'Orchestrate is off.');
   });
   $('orchestrate-off').addEventListener('click', () => { armedFor = null; render(); api.renderControls(); });
   $('orchestrate-write').addEventListener('click', () => writeYourself($('message-input').value));
-  $('plan-panel-write')?.addEventListener('click', () => writeYourself($('message-input')?.value || ''));
+  // With no plan, the Plan view asks what the plan is for, starting from the message being written.
+  $('plan-panel-write')?.addEventListener('click', () => {
+    const goal = $('plan-empty-goal');
+    if (goal && !goal.value.trim()) { goal.focus(); return; }
+    writeYourself(goal ? goal.value : $('message-input')?.value || '');
+  });
   $('orchestration-write').addEventListener('click', () => writeYourself(openPlan()?.goal));
   $('orchestration-again').addEventListener('click', planAgain);
   $('orchestration-confirm-yes').addEventListener('click', () => asking?.(true));
@@ -414,16 +424,7 @@
   $('orchestration-stop').addEventListener('click', () => { const plan = runningPlan(); if (plan) action({ action: 'stop', id: plan.id }, () => api.announce('Plan stopped.')); });
   $('orchestration-close').addEventListener('click', () => { const plan = runningPlan(); if (plan) action({ action: 'close', id: plan.id }, () => api.announce('Plan closed.')); });
   $('orchestration-discard').addEventListener('click', () => { const plan = openPlan(); if (plan) action({ action: 'discard', id: plan.id }, () => { edit = null; api.announce('Plan discarded.'); }); });
-  let lastProject = null;
-  window.addEventListener('relay-state', () => {
-    const projectId = api.getState().projectId;
-    if (projectId !== lastProject) {
-      lastProject = projectId;
-      if (!projectId) setOpen(false, false);
-      else if ($('plan-panel')?.hidden && read() === 'plan' && window.matchMedia?.('(min-width: 1101px)').matches) setOpen(true, false);
-    }
-    render();
-  });
+  window.addEventListener('relay-state', render);
   window.addEventListener('relay-account', render);
   window.addEventListener('relay-flow', render);
 
@@ -444,10 +445,24 @@
       if (plan.status === 'planning') return 'Orchestrate · planning the steps';
       return plan.steps?.length ? 'Orchestrate · planned' : 'Orchestrate · not planned';
     },
-    openPanel: () => setOpen(true),
-    closePanel: () => { if (!$('plan-panel')?.hidden) setOpen(false, false); },
-    togglePanel: () => setOpen($('plan-panel')?.hidden),
-    isOpen: () => !$('plan-panel')?.hidden,
+    // For the Plan view (plan-view.js): the plan the card shows, drawn from the same draft, and the same edits.
+    snapshot() {
+      const plan = onMain() ? openPlan() || runningPlan() : null;
+      if (!plan) return null;
+      const draft = plan.status === 'draft', running = RUN.includes(plan.status), editing = draft && edit?.planId === plan.id;
+      return { plan, draft, running, steps: editing ? edit.steps : plan.steps || [], structure: editing ? edit.structure : 0, dirty: Boolean(editing && edit.dirty), busy, tasks: running ? planTasks(plan) : null, title: $('orchestration-title').textContent, status: $('orchestration-status').hidden ? '' : $('orchestration-status').textContent };
+    },
+    routeText: step => route(step),
+    taskLabel: task => task ? TASK_LABEL[task.status] || task.status : 'Closed',
+    roleName: role => roleNames[role] || 'Builder',
+    tierName: tier => (TIERS.find(([value]) => value === tier) || TIERS[1])[1],
+    stepDetail, syncDetail,
+    move: (index, by) => { if (edit) move(index, by, null); },
+    remove: index => { if (edit) remove(index); },
+    openTask: id => api.setTask(id),
+    onMain,
+    // Whether this is the plan the Plan button opens, for the thread's View plan.
+    isCurrent: plan => Boolean(plan && onMain() && (openPlan() || runningPlan())?.id === plan.id),
   };
   render();
 })();
