@@ -24,7 +24,7 @@ test('steps are drawn as tools with what they did: Claude tools, Codex commands 
   const roots = ['/work/app'];
   const read = parseActivity('Read\n{"file_path":"/work/app/src/a.js"}\n1\tconst a = 1;\n2\t');
   assert.equal(read.tool, 'Read'); assert.equal(read.input.file_path, '/work/app/src/a.js');
-  assert.equal(text(formatActivity({ text: 'Read\n{"file_path":"/work/app/src/a.js"}\n1\tx\n2\ty', toolOutcome: { status: 'completed' } }, { roots })), '● Read(src/a.js)\n  ⎿ Read 2 lines');
+  assert.equal(text(formatActivity({ text: 'Read\n{"file_path":"/work/app/src/a.js"}\n1\tx\n2\ty', toolOutcome: { status: 'completed' } }, { roots })), `● Read(${path.join('src', 'a.js')})\n  ⎿ Read 2 lines`, 'a path in the system\'s own form');
   const edit = formatActivity({ text: 'Edit\n{"file_path":"/work/app/a.js","old_string":"a\\nb\\n","new_string":"a\\nc\\nd\\n"}', toolOutcome: { status: 'completed' } }, { roots });
   assert.equal(text(edit), '● Update(a.js)\n  ⎿ Added 2 lines, removed 1 line\n    - b\n    + c\n    + d');
   assert.equal(edit[2][1].color, 'red'); assert.equal(edit[3][1].color, 'green');

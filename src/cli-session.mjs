@@ -663,11 +663,12 @@ export async function session({ options, env, cwd, version, fetchImpl, stdin, st
   const history = (view.messages || []).filter(message => message.role === 'user').map(message => message.text);
   stdout.write(`\x1b]0;codeshi · ${project.name}\x07`);
   let last = view;
+  // Ink draws only a final frame when CI is set, even in a terminal. This session only starts in one, so it always draws live.
   const instance = render(h(Session, {
     engine, start: { project, view, banner, printed, history, branch },
     onClear: () => { instance.clear(); stdout.write('\x1b[2J\x1b[3J\x1b[H'); },
     onLeave: current => { last = current; },
-  }), { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false, incrementalRendering: true, kittyKeyboard: { mode: 'auto', flags: ['disambiguateEscapeCodes'] } });
+  }), { stdin, stdout, stderr, interactive: Boolean(stdout.isTTY), exitOnCtrlC: false, patchConsole: false, incrementalRendering: true, kittyKeyboard: { mode: 'auto', flags: ['disambiguateEscapeCodes'] } });
   await instance.waitUntilExit();
   stdout.write('\x1b]0;\x07');
   if (last?.status === 'running') say(`${agentName(last.activeRun?.provider || last.provider)} is still working in Codeshi. codeshi brings you back; codeshi stop stops it.`);
