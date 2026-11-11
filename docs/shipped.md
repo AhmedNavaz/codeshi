@@ -149,3 +149,8 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | Run your own tests on a returned Ask a Friend patch ([#10](https://github.com/AhmedNavaz/codeshi/issues/10)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
 | Six puzzles in the Lounge: Codle, 2048, Minesweeper, Sudoku, Pairs and Fifteen | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
 | Record Performance Trace in Help, and weather that falls only in the Lounge ([#152](https://github.com/AhmedNavaz/codeshi/issues/152)) | [0.42.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.42.0) |
+| A task board with Backlog, Ready, Doing, Review and Done, where each card runs as its own task ([#132](https://github.com/AhmedNavaz/codeshi/issues/132), first stage) | [0.43.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.43.0) |
+| The `codeshi` command on macOS: an interactive session in your terminal and script commands, in the same conversation as the window, and a CLI tab in the window ([#90](https://github.com/AhmedNavaz/codeshi/issues/90), first slice) | [0.43.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.43.0) |
+| Design notes in the preview: mark several parts of a page with a note on each ([#125](https://github.com/AhmedNavaz/codeshi/issues/125), first slice) | [0.43.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.43.0) |
+| Watch a teammate's conversation live, read-only, with suggestions ([#24](https://github.com/AhmedNavaz/codeshi/issues/24), first slice) | [0.43.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.43.0) |
+| Weather in Flow's Your space, and smaller Appearance and Stay connected rows | [0.43.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.43.0) |

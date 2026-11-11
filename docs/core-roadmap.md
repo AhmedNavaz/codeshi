@@ -128,7 +128,7 @@ Claude Code and Codex already have skills, subagents and automation interfaces. 
 
 For one prompt to one provider, the native CLI remains sufficient. Do not build a second model runtime or replace native agent loops. Start with a headless service/client contract and commands for run/status/continue/stop; team workflows and a terminal UI come later.
 
-All command names in the CLI proposal are examples, not installed functionality.
+The commands listed in [docs/cli.md](cli.md) are built; the other command names in the CLI proposal are examples, not installed functionality.
 
 ## Issue proposals
 
@@ -441,7 +441,7 @@ For a checkout promo-code feature: agree on API/data contracts; frontend and bac
 
 **Issue title:** Add a Codeshi CLI for shared workflows, provider handoff and desktop continuity
 
-**Tracking:** [#90](https://github.com/AhmedNavaz/codeshi/issues/90) — proposed, not implemented.
+**Tracking:** [#90](https://github.com/AhmedNavaz/codeshi/issues/90). A first slice shipped in 0.43.0 on macOS: an interactive `codeshi` session, and `codeshi status`, `run`, `continue`, `wait`, `stop` and `tasks`, work through the desktop app's engine, starting it without a window when it isn't open, with `--json`/`--jsonl` output, documented exit codes, terminal approvals and `needs_input` without a terminal ([reference](cli.md)). Flow routing, workflows, `skills`, `doctor` and Windows/Linux installs remain proposals.
 
 #### Problem
 

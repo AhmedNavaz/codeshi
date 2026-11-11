@@ -49,8 +49,8 @@ Flow-exclusive behavior means discretionary routing, handoff, recovery and futur
 | Race mode (#16) | Explicit two-attempt comparison and result selection | Optional managed comparison; never implied by Ultra |
 | GitHub/CI context (#18) | Select context and actions explicitly | Gather relevant context within authorized repository scope; external text remains untrusted |
 | Contextual suggestions (#106) | Explain and offer a change for acceptance | Explain decisions and propose meaningful policy changes; suggestions grant no authority |
-| Multiplayer (#24) | Shared manual collaboration | Shared observation/steering with explicit authority and no conflicting controllers |
-| Future CLI (#90) | Explicit agents and exact workflows | Same backend Flow policy; no second orchestration engine |
+| Multiplayer (#24) | Shared manual collaboration. Read-only watching with suggestions shipped in 0.43.0 | Shared observation/steering with explicit authority and no conflicting controllers |
+| CLI (#90) | Explicit agents and exact workflows. The interactive session and script commands shipped in 0.43.0 ([docs/cli.md](cli.md)) | Same backend Flow policy; no second orchestration engine |
 
 Both modes retain context selection and native-compaction visibility, the canonical shared history and briefs, reviewed memory, portable skills, usage readings and task accounting, budgets and concurrency protection, recovery, read/edit access and tool approvals (including optional full auto-approval), import/export, conversation search, Ask a Friend, recaps, notifications and menu-bar status, keep-awake, themes, setup, updates, accessibility, translations and platform/adapter support. Phone notifications/Home Screen support, binary patches and collaboration improvements are also shared. Flow may change their presentation, not remove their protections or grant extra access. Durable memory changes remain reviewed.
 
@@ -154,9 +154,9 @@ Enhance legibility, visual hierarchy, and navigation across the desktop interfac
 
 A board for each project to capture work as it comes up and run it under an explicit Normal or Flow policy, tracked in [board/schedule execution #132](https://github.com/AhmedNavaz/codeshi/issues/132). #97 owns the shared card/canvas/board views; this issue owns execution and schedules, reusing #88 tasks.
 
-1. **The board and running tasks.** Columns for Backlog, Ready, Doing, Review and Done. A card has a title, a description, a priority, labels, a checklist of what done means, and the execution policy: explicit assignments in Normal, or authorized automatic assignment in Flow. No new Normal card defaults to Auto. Running a card sends it to the agent and moves it to Doing; when the run ends, the card keeps the files it changed, the result of **Check with tests** and a short summary. **Run the Ready column** executes the exact selected graph in Normal, or an explicitly authorized bounded selection with Flow assignments. Dependencies, workspace concurrency and shared budgets apply in both. Cards can be dictated with voice input, and the saved context's unfinished tasks become the board's open cards, so agents know the backlog.
+1. **The board and running tasks.** *Shipped in 0.43.0:* the columns, cards with a description, priority, checklist, dependencies and an explicit agent, **Run** and **Run Ready…** for exactly the chosen cards, Review with the agent's summary, files and test result, and accepting by hand. Still to do in this stage: labels, dictating cards, and the saved context's unfinished tasks as cards. Columns for Backlog, Ready, Doing, Review and Done. A card has a title, a description, a priority, labels, a checklist of what done means, and the execution policy: explicit assignments in Normal, or authorized automatic assignment in Flow. No new Normal card defaults to Auto. Running a card sends it to the agent and moves it to Doing; when the run ends, the card keeps the files it changed, the result of **Check with tests** and a short summary. **Run the Ready column** executes the exact selected graph in Normal, or an explicitly authorized bounded selection with Flow assignments. Dependencies, workspace concurrency and shared budgets apply in both. Cards can be dictated with voice input, and the saved context's unfinished tasks become the board's open cards, so agents know the backlog.
 2. **Schedules.** Run a card or a prompt once at a set time, or repeat it daily, on weekdays or weekly. Normal binds fixed agents/settings and an exact workflow; Flow binds an outcome/backlog scope and permitted automation. Store the policy and material card revisions with the schedule; deduplicate starts and stop future automatic dispatch after takeover. Codeshi can keep running in the menu bar after its window closes, and open at login. Schedules run while the Mac is awake; a missed run shows in the "While you were away" recap and waits for you, unless you let it run late.
-3. **Later.** Turn pasted meeting notes into cards with an agent, checked by you before any is added; sync cards with GitHub Issues through the access from [#18](https://github.com/AhmedNavaz/codeshi/issues/18); and run cards in parallel in separate worktrees with [#16](https://github.com/AhmedNavaz/codeshi/issues/16).
+3. **Later.** Show an Orchestrate plan's steps as board cards, so the two share one set of cards (#97); turn pasted meeting notes into cards with an agent, checked by you before any is added; sync cards with GitHub Issues through the access from [#18](https://github.com/AhmedNavaz/codeshi/issues/18); and run cards in parallel in separate worktrees with [#16](https://github.com/AhmedNavaz/codeshi/issues/16).
 
 Design boundaries:
 
@@ -164,6 +164,20 @@ Design boundaries:
 - A scheduled run uses the access chosen when it was scheduled. Anything that needs approval waits and shows in the menu bar; nothing is approved for it unless the project already allows it, and nothing is pushed.
 - Usage limits, routing and billing rules apply as they do to any run, and a schedule never wakes a sleeping Mac.
 - Cards are kept with the project in Codeshi's own data, not in the repository, and work offline.
+
+## Designer module
+
+Point and tell ([#19](https://github.com/AhmedNavaz/codeshi/issues/19)) changes one element at a time. The Designer module is for working on a whole page or screen and telling agents what each part should do, tracked in [#125](https://github.com/AhmedNavaz/codeshi/issues/125).
+
+1. **Design notes in the preview.** *Shipped in 0.43.0:* **Design** in the preview's toolbar marks several parts of the running page, by clicking an element or dragging a box around an area. Each part gets a numbered box and a note. They go into the message box as one numbered list with each part's code location, a screenshot with the same numbers, and screenshots of parts out of view. The boxes are found again by their selectors after a scroll or a reload. Still to do in this stage: marking parts with the keyboard, and keeping unsent notes when the preview window closes.
+2. **A layout canvas.** For pages that don't exist yet: sketch a screen from boxes (header, hero, cards, form), each with a note, and send it as a plan for the agent to build. It shares its numbering and message format with design notes.
+3. **Handing design work over.** A designer's step in team workflows ([#89](https://github.com/AhmedNavaz/codeshi/issues/89)) that produces these notes for frontend agents, and design notes kept as cards in Plans ([#97](https://github.com/AhmedNavaz/codeshi/issues/97)) or on the board ([#132](https://github.com/AhmedNavaz/codeshi/issues/132)).
+
+Design boundaries:
+
+- Notes go into the message box for you to read; nothing is sent to an agent on its own.
+- The page never sees the notes or the boxes, and gets no access to Codeshi.
+- Models suited to design work, such as Astra and Fable, stay a manual choice in Normal. Flow's routing doesn't pick them.
 
 ## Public help requests
 

@@ -10,7 +10,7 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 
 | # | Feature | What's left | Issue |
 | --- | --- | --- | --- |
-| 1 | **Lower battery and resource use** | Measure idle, streaming, Lounge and preview workloads, fix what the measurements show, and set energy budgets. The Lounge's first mitigation shipped in 0.38.0, and 0.40.0 draws weather at most 30 times a second, paces games at 60 Hz speed and runs the setup glow once. Since 0.42.0, weather falls only in the Lounge, and **Help › Record Performance Trace** measures the installed app. Idle, streaming and preview workloads are not measured yet | [#152](https://github.com/AhmedNavaz/codeshi/issues/152) |
+| 1 | **Lower battery and resource use** | Measure idle, streaming, Lounge and preview workloads, fix what the measurements show, and set energy budgets. The Lounge's first mitigation shipped in 0.38.0, and 0.40.0 draws weather at most 30 times a second, paces games at 60 Hz speed and runs the setup glow once. Since 0.42.0, **Help › Record Performance Trace** measures the installed app. In 0.43.0, weather moved from the Lounge to Flow's **Your space**, and Clear draws nothing. Idle, streaming and preview workloads are not measured yet | [#152](https://github.com/AhmedNavaz/codeshi/issues/152) |
 | 2 | **Onboarding redesign** | Workspace-first setup and the Normal or Flow choice shipped in 0.39.0. Left: a keyboard and screen-reader pass over the new steps. [Scope](docs/roadmap-details.md#onboarding-and-execution-mode-selection) | [#129](https://github.com/AhmedNavaz/codeshi/issues/129) |
 | 3 | **Interface polish** | The near-black Dark theme, the text scale and two-line workspace rows shipped in 0.39.0. Left: contrast checks for every badge state in each theme. [Scope](docs/roadmap-details.md#interface-polish-typography-scale-and-settings-structure) | [#127](https://github.com/AhmedNavaz/codeshi/issues/127) |
 | 4 | **Settings in clear categories** | A page for each subject and three button heights shipped in 0.39.0. Left: one header and footer layout for every dialog | [#130](https://github.com/AhmedNavaz/codeshi/issues/130) |
@@ -53,19 +53,19 @@ Larger ideas that need design work first, so join the issue before building. The
 
 | Idea | Issue |
 | --- | --- |
-| **Task board and schedules.** A board per project, and cards or prompts that run at a set time. [Plan](docs/roadmap-details.md#task-board-and-schedules) | [#132](https://github.com/AhmedNavaz/codeshi/issues/132) |
-| **Codeshi CLI.** Run, inspect, stop and continue the same workflows from a terminal, on the same engine as the desktop app | [#90](https://github.com/AhmedNavaz/codeshi/issues/90) |
-| **Designer module.** Design websites and app screens in Codeshi and guide agents section by section | [#125](https://github.com/AhmedNavaz/codeshi/issues/125) |
+| **Task board and schedules.** A board per project, and cards or prompts that run at a set time. The board you run by hand shipped in 0.43.0; schedules and Flow choosing cards are next. [Plan](docs/roadmap-details.md#task-board-and-schedules) | [#132](https://github.com/AhmedNavaz/codeshi/issues/132) |
+| **Codeshi CLI.** Run, inspect, stop and continue the same workflows from a terminal, on the same engine as the desktop app. An interactive `codeshi` session and script commands shipped in 0.43.0 on macOS, sharing the window's conversation; Flow routing, workflows and Windows and Linux installs are next. [Reference](docs/cli.md) | [#90](https://github.com/AhmedNavaz/codeshi/issues/90) |
+| **Designer module.** Design websites and app screens in Codeshi and guide agents section by section. Design notes in the preview shipped in 0.43.0: mark several parts of a page, with a note on each, sent as one message. A layout canvas and handing design work to team workflows are next. [Plan](docs/roadmap-details.md#designer-module) | [#125](https://github.com/AhmedNavaz/codeshi/issues/125) |
 | **Race mode.** Two agents take the same task in separate worktrees; keep the better result | [#16](https://github.com/AhmedNavaz/codeshi/issues/16) |
-| **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription | [#24](https://github.com/AhmedNavaz/codeshi/issues/24) |
+| **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription. Watching a teammate's conversation read-only, with suggestions, shipped in 0.43.0; steering and running together are next | [#24](https://github.com/AhmedNavaz/codeshi/issues/24) |
 | **Public help requests.** Post a reviewed request, with the agent's history, where anyone can pick it up and send back a fix you review, without access to your repository. Builds on Ask a Friend. [Plan](docs/roadmap-details.md#public-help-requests) | [#158](https://github.com/AhmedNavaz/codeshi/issues/158) |
 
 ## Recently shipped
 
+- **0.43.0:** a task board, the `codeshi` command and a CLI tab, design notes in the preview, watching a teammate's conversation live, and weather in Flow's Your space.
 - **0.42.0:** a progress pill under the menu bar, binary files and your own tests in Ask a Friend, suggestions after a run, status in the Windows notification area, an interface ready for translation, a keyboard and screen reader pass, six puzzles in the Lounge, and Record Performance Trace.
 - **0.41.0:** Orchestrate plans as a full-window chart, lock-screen notifications on your phone, rewinding the conversation with a checkpoint, a total for a whole plan, Word documents as attachments, and one usage line for assigning and handing off a task.
 - **0.40.0:** hands-free voice conversations in Flow, selected terminal output added to your message, Remote access on the Home Screen, Copy to AGENTS.md for project memory, a Lounge that fills the window with rain and snow sounds, and installed packages in a task's own copy.
-- **0.39.0:** GitHub issues and pull requests in your message, Orchestrate plans run as tasks, a near-black Dark theme and text size, workspace-first setup, and Settings with a page for each subject.
 
 The full list is in [shipped features](docs/shipped.md).
 
