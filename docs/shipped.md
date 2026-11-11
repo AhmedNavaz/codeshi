@@ -159,10 +159,10 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | One header and footer layout for every dialog ([#130](https://github.com/AhmedNavaz/codeshi/issues/130)) | [0.44.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.44.0) |
 | Setup with the keyboard and a screen reader ([#129](https://github.com/AhmedNavaz/codeshi/issues/129)) | [0.44.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.44.0) |
 | Badge text that passes WCAG AA contrast in Light, Dark and Graphite ([#127](https://github.com/AhmedNavaz/codeshi/issues/127)) | [0.44.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.44.0) |
-| The board as a canvas: cards placed anywhere with arrows, undo and a Mermaid Markdown export ([#97](https://github.com/AhmedNavaz/codeshi/issues/97), first stage) | [0.45.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.0) |
-| Opt-in sharing for Smart results through GitHub Discussions ([#139](https://github.com/AhmedNavaz/codeshi/issues/139)) | [0.45.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.0) |
-| Preserving waiting approvals and questions across handoffs and context resets ([#85](https://github.com/AhmedNavaz/codeshi/issues/85)) | [0.45.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.0) |
-| What happened card in Flow: decisions behind recent runs from recorded data ([#107](https://github.com/AhmedNavaz/codeshi/issues/107)) | [0.45.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.0) |
-| A plan's steps fold into one row with total usage and status once it ends ([#108](https://github.com/AhmedNavaz/codeshi/issues/108)) | [0.45.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.0) |
-| What's New thanks contributors with GitHub and Patreon links | [0.45.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.0) |
-| Menu bar status quiet while Codeshi is focused on macOS | [0.45.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.0) |
+| The board as a canvas: cards placed anywhere with arrows, undo and a Mermaid Markdown export ([#97](https://github.com/AhmedNavaz/codeshi/issues/97), first stage) | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
+| Opt-in sharing for Smart results through GitHub Discussions ([#139](https://github.com/AhmedNavaz/codeshi/issues/139)) | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
+| Preserving waiting approvals and questions across handoffs and context resets ([#85](https://github.com/AhmedNavaz/codeshi/issues/85)) | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
+| What happened card in Flow: decisions behind recent runs from recorded data ([#107](https://github.com/AhmedNavaz/codeshi/issues/107)) | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
+| A plan's steps fold into one row with total usage and status once it ends ([#108](https://github.com/AhmedNavaz/codeshi/issues/108)) | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
+| What's New thanks contributors with GitHub and Patreon links | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
+| Menu bar status quiet while Codeshi is focused on macOS | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |

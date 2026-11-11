@@ -4,7 +4,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
-## [0.45.0] - 2026-11-11
+## [0.45.1] - 2026-11-11
 
 ### Added
 - **The board as a canvas** ([#97](https://github.com/AhmedNavaz/codeshi/issues/97)). **Board** has a **Canvas** view beside **Columns**: the same cards, placed wherever you drag them, with arrows from a card to the cards that wait for it. Drag from the dot on a card's right edge onto another card to make it wait, or select an arrow and press **Delete** to remove it. Moves, arrows and **Arrange**, which lays every card out by what it waits for, can be undone with **Undo** or ⌘Z. Scroll to pan, pinch or ⌘-scroll to zoom, and double-click empty space for a new card there. A card's place is only where it's drawn, so moving a card changes nothing an agent reads, and a card that's working can still be moved. Cards you haven't placed sit below the placed ones, in columns by what they wait for or in a grid. **Columns** stays the view for the keyboard and screen readers, and Alt with an arrow key moves a focused card on the canvas. **Export** saves the board as Markdown with a Mermaid chart of the cards and their arrows, followed by each card's details and checklist, without task ids or the agents' summaries.
