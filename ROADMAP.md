@@ -23,9 +23,9 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 | 2 | **More agents and models** | Grok, DeepSeek, Qwen and free cloud tiers on your own accounts. Gemini and local Ollama models have shipped | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 | 3 | **Plans** | Plans drafted from an uploaded project document, a board, and cards you place yourself. Orchestrate's step plans shipped in 0.37.0, 0.41.0 shows them as a full-window chart with an outline, and 0.45.1 adds a canvas to the board | [#97](https://github.com/AhmedNavaz/codeshi/issues/97) |
 | 4 | **Parallel tasks from one request** | A split proposed by the agent, a total for the group, and a measured comparison with one agent working in order. Running an Orchestrate plan as tasks shipped in 0.39.0, and folding a plan's row with its total in 0.45.1 | [#108](https://github.com/AhmedNavaz/codeshi/issues/108) |
-| 5 | **Specialist roles** | Role-specific briefs and a gated integration step applied to runs. Roles, artifacts and checks on Orchestrate steps shipped in 0.38.0 | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
-| 6 | **GitHub in the conversation** | Open a pull request from the conversation. Issues, pull requests and failing checks as context shipped in 0.39.0. [Scope](docs/roadmap-details.md#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
-| 7 | **Concurrent tasks, finished** | Tasks in the recap, with local models, reviews and undo; shared files, imports, patches and restores that cannot race. A task's copy getting your installed packages shipped in 0.40.0 | [#88](https://github.com/AhmedNavaz/codeshi/issues/88) |
+| 5 | **Specialist roles** | One round of repair after a review, an independent review of the final result, and a measured comparison with one agent. Roles, artifacts and checks on Orchestrate steps shipped in 0.38.0. Since 0.46.0, a plan's step is tested before later steps build on it, and each step is briefed from what the earlier steps did | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
+| 6 | **GitHub in the conversation** | Trying **Open pull request** against GitHub itself: it shipped in 0.46.0 with automated tests only. Issues, pull requests and failing checks as context shipped in 0.39.0. [Scope](docs/roadmap-details.md#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
+| 7 | **Concurrent tasks, finished** | Local models, Review changes and undo inside a task. A task's copy getting your installed packages shipped in 0.40.0, and tasks and plans in the recap in 0.46.0 | [#88](https://github.com/AhmedNavaz/codeshi/issues/88) |
 | 8 | **Skills through each agent's own skill system** | The same skill on at least two agents, including after a handoff, with usage measured with and without it | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
 | 9 | **Task limits checked on a paid API account** | Everything else has shipped; it has only been tested with simulated providers | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
 | 10 | **Install with Homebrew** | `brew install --cask codeshi`. Depends on notarized builds (#1) | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
@@ -61,6 +61,7 @@ Larger ideas that need design work first, so join the issue before building. The
 
 ## Recently shipped
 
+- **0.46.0:** a plan's steps tested before later steps build on them, Open pull request in the Git panel, tasks and plans in the recap, and a 12-hour clock.
 - **0.45.1:** the board as a canvas, a What happened card in Flow, sharing for Smart results, folded plan rows with totals, and waiting approvals kept across handoffs.
 - **0.44.0:** one handoff line for a whole routed task, Claude's usage split by model, one layout for every dialog, setup with the keyboard and a screen reader, and badges that pass contrast checks in every theme.
 - **0.43.0:** a task board, the `codeshi` command and a CLI tab, design notes in the preview, watching a teammate's conversation live, and weather in Flow's Your space.

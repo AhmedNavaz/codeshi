@@ -130,7 +130,7 @@ Bring the work around the code into the project conversation, so an agent sees w
 
 1. **GitHub as context.** Paste or pick an issue, a pull request or the current branch, and Codeshi reads it through your own `gh` login: the issue or pull request with its comments and review threads, and the failing checks with the end of each failing job's log. It never asks for a token of its own and only reads. What comes in is shown for review before it is sent, as part of your message, with secrets and local paths removed by the same step that cleans exports. Nothing is fetched in the background.
 2. **Logs from the app.** A failed command in **Run** puts its command and the end of its output in the message box in one click, since [0.19.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.19.0); selected terminal output follows in [#71](https://github.com/AhmedNavaz/codeshi/issues/71).
-3. **A pull request from the conversation.** After you review the diff and commit in the Git panel, **Open pull request** pushes the branch and opens the pull request with `gh`, with a title and description drafted from the conversation for you to edit. It is the one place Codeshi pushes, only when you click it and after showing the remote and branch; agents never push.
+3. **A pull request from the conversation.** *Shipped in 0.46.0, with automated tests only; not yet tried against GitHub itself.* After you review the diff and commit in the Git panel, **Open pull request** pushes the branch and opens the pull request with `gh`, with a title and description drafted from the conversation for you to edit. It is the one place Codeshi pushes, only when you click it and after showing the remote and branch; agents never push.
 
 ## Onboarding and execution mode selection
 

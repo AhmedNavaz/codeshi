@@ -166,3 +166,8 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | A plan's steps fold into one row with total usage and status once it ends ([#108](https://github.com/AhmedNavaz/codeshi/issues/108)) | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
 | What's New thanks contributors with GitHub and Patreon links | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
 | Menu bar status quiet while Codeshi is focused on macOS | [0.45.1](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.45.1) |
+| A plan's steps tested on a temporary copy before later steps build on them, with Check again and Continue anyway ([#89](https://github.com/AhmedNavaz/codeshi/issues/89)) | [0.46.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.46.0) |
+| A plan step's instructions written when it starts, from what the earlier steps did ([#89](https://github.com/AhmedNavaz/codeshi/issues/89)) | [0.46.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.46.0) |
+| Open pull request in the Git panel: remote and branch shown first, title and description drafted with no model ([#18](https://github.com/AhmedNavaz/codeshi/issues/18)) | [0.46.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.46.0) |
+| Tasks and plans in the While you were away recap ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)) | [0.46.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.46.0) |
+| A 12-hour clock for every time shown | [0.46.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.46.0) |
