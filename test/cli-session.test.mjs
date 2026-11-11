@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import pty from 'node-pty';
 import { scriptCLIs } from './platform.mjs';
 import { createRelayServer } from '../src/server.mjs';
+import { prepareHelper } from '../src/terminal.mjs';
 import { EXIT, appLocation, connect, startApp } from '../src/cli.mjs';
 import { writeConnection } from '../desktop/cli.mjs';
 import {
@@ -130,13 +131,16 @@ test('the session sends, follows a run, answers an approval, stops a run with es
   bins.gemini = path.join(root, 'missing-gemini');
   const app = createRelayServer({ workspace, dataRoot: path.join(root, 'data'), bins, accessToken: 'tok' });
   app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  let term = null, screen = '', exited = null;
+  // Cleanup comes first, so a terminal that can't start still closes the engine and the test file ends.
+  t.after(async () => { if (term && exited === null) term.kill(); await app.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const file = path.join(root, 'cli.json');
   writeConnection(file, { url: `http://127.0.0.1:${app.server.address().port}`, token: 'tok', version: 'test' });
   const project = app.registry.list()[0], broker = app.registry.broker(project.id);
-  const term = pty.spawn(process.execPath, [entry], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, CODESHI_CONNECTION: file } });
-  let screen = '', exited = null;
+  // A fresh npm install leaves node-pty's macOS helper unable to run, as the app's own terminal knows.
+  prepareHelper();
+  term = pty.spawn(process.execPath, [entry], { name: 'xterm-256color', cols: 100, rows: 30, cwd: workspace, env: { ...process.env, CODESHI_CONNECTION: file } });
   term.onData(chunk => { screen += chunk; }); term.onExit(({ exitCode }) => { exited = exitCode; });
-  t.after(async () => { if (exited === null) term.kill(); await app.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const until = async (check, what) => { for (let i = 0; i < 1500; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail(`Timed out waiting for ${what}:\n${strip(screen).slice(-1500)}`); };
   const seen = pattern => () => pattern.test(strip(screen));
   const type = async keys => { for (const key of keys) { term.write(key); await new Promise(resolve => setTimeout(resolve, 5)); } };
