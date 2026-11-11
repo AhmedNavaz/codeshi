@@ -81,7 +81,7 @@ function realXterm(){
 }
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,githubUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -289,6 +289,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   if(githubUI)vm.runInContext(fs.readFileSync(new URL('../public/github-context.js',import.meta.url),'utf8'),context,{filename:'public/github-context.js'});
   if(orchestrationUI)vm.runInContext(fs.readFileSync(new URL('../public/orchestration.js',import.meta.url),'utf8'),context,{filename:'public/orchestration.js'});
   if(orchestrationUI)vm.runInContext(fs.readFileSync(new URL('../public/plan-view.js',import.meta.url),'utf8'),context,{filename:'public/plan-view.js'});
+  if(boardUI)vm.runInContext(fs.readFileSync(new URL('../public/board.js',import.meta.url),'utf8'),context,{filename:'public/board.js'});
   if(rewindUI)vm.runInContext(fs.readFileSync(new URL('../public/rewind.js',import.meta.url),'utf8'),context,{filename:'public/rewind.js'});
   if(flowUI) {
     vm.runInContext(fs.readFileSync(new URL('../public/project-review.js',import.meta.url),'utf8'),context,{filename:'public/project-review.js'});
@@ -1252,14 +1253,14 @@ test('a failed merge can be cancelled with Escape without changing the workspace
   assert.equal(ui.$('import-dialog').open,false);assert.equal(ui.state().projectId,'project-one');assert.equal(ui.state().conversation.id,conversationId);assert.equal(ui.state().conversation.messages.length,0);
 });
 
-const updateLaunch={version:'0.10.0',previousVersion:'0.9.0',updated:true,releases:[{version:'0.10.0',sections:[{title:'Added',items:['A new feature.','<img src=x onerror=alert(1)>']}]},{version:'0.9.1',sections:[{title:'Fixed',items:['An earlier fix.']}]}]};
+const updateLaunch={version:'0.10.0',previousVersion:'0.9.0',updated:true,releases:[{version:'0.10.0',sections:[{title:'Added',items:[{title:'A new feature',text:'What it does for you.'},'<img src=x onerror=alert(1)>']}]},{version:'0.9.1',sections:[{title:'Fixed',items:['An earlier fix.']}]}]};
 
 test('an update opens the saved workspace with release notes instead of restart choices',async()=>{
   const ui=await browser({setup:true,desktop:true,launch:clone(updateLaunch)});
   assert.equal(ui.$('setup-dialog').open,false);assert.equal(ui.document.querySelector('.onboarding-choice'),null);
   assert.equal(ui.$('updates-dialog').open,true);assert.equal(ui.$('updates-title').textContent,'Codeshi 0.10.0');
   assert.match(ui.$('updates-description').textContent,/Updated from 0.9.0/);assert.match(ui.$('updates-content').textContent,/An earlier fix/);
-  assert.match(ui.$('updates-content').textContent,/<img src=x onerror=alert\(1\)>/);assert.equal(ui.$('updates-content').querySelector('img'),null,'Changelog text never creates executable HTML.');
+  assert.match(ui.$('updates-content').textContent,/<img src=x onerror=alert\(1\)>/);assert.match(ui.$('updates-content').textContent,/A new featureWhat it does for you\./);assert.equal(ui.$('updates-content').querySelector('img'),null,'Changelog text never creates executable HTML.');
   assert.equal(ui.state().projectId,'project-one');assert.equal(ui.conversations.length,1);assert.equal(ui.updateAcknowledgements.length,0);
   const requests=ui.requests.length,conversationId=ui.state().conversation.id;ui.$('message-input').value='Keep this draft';ui.fire('message-input','input');
   ui.$('updates-dismiss').click();await flush();assert.deepEqual(ui.updateAcknowledgements,['0.10.0']);assert.equal(ui.$('updates-dialog').open,false);
@@ -1957,6 +1958,12 @@ test('a running app opens in the preview from Run, and a pick goes into the mess
   assert.deepEqual(attachments,[{name:'preview-button.png',data:'iVBORw0KGgo='}],'The screenshot is attached to the message.');
   assert.deepEqual([...ui.window.relayFiles.ids()],['att-1']);
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
+  // Design notes (#125) come as one numbered message with their screenshots: the page, then a section out of view.
+  ui.$('message-input').value='';ui.fire('message-input','input');attachments.length=0;
+  await ui.pickInPreview({projectId:'project-one',design:true,text:'Design notes for the preview of localhost:3000, 2 sections.\n1. The “Pricing” section (section.pricing): Side by side.\n2. The “Footer” footer (footer): Smaller.',image:null,images:[{name:'design-page.png',data:'iVBORw0KGgo='},{name:'design-section-2.png',data:'iVBORw0KGgp='},{name:'bad.png'}]});await flush();
+  assert.match(ui.$('message-input').value,/^Design notes for the preview of localhost:3000, 2 sections\.\n1\. /);
+  assert.deepEqual(attachments.map(file=>file.name),['design-page.png','design-section-2.png'],'Both screenshots are attached, and one without data is left out.');
+  assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Design notes aren’t sent either.');
   const web=await browser({commandsUI:true});assert.equal(web.window.relayPreview,undefined,'Without the desktop app there is no preview.');
 });
 
@@ -2005,6 +2012,7 @@ test('Add from GitHub reads an issue or pull request into the message box withou
   assert.match(ui.$('github-context-error').textContent,/issue or pull request number/);
   assert.equal(ui.requests.filter(request=>request.path==='/api/git/github-context').length,0,'An empty reference asks instead of reading.');
 
+  ui.$('message-input').setSelectionRange=()=>{};
   ui.$('message-input').value='Fix what the review asks for.';
   ui.$('github-context-reference').value=' #7 ';
   ui.$('github-context-form').dispatchEvent(new UIEvent('submit'));await flush();await flush();
@@ -2014,6 +2022,15 @@ test('Add from GitHub reads an issue or pull request into the message box withou
   assert.equal(ui.$('github-context-dialog').open,false);
   assert.equal(ui.$('message-input').value,'Fix what the review asks for.\n\nThe pull request below was read from GitHub for context.\n\n# GitHub pull request acme/app#7: Fix login');
   assert.equal(ui.requests.filter(request=>/\/(messages|continue)$/.test(request.path)).length,0,'Nothing is sent.');
+  assert.equal(ui.$('notice').hidden,false);
+  assert.equal(ui.$('notice-text').textContent,'Removed 1 possible secret from Pull request #7.','A notice says only what was taken out.');
+
+  ui.window.relayUI.hideNotice?.();ui.$('notice').hidden=true;
+  reply=()=>response({kind:'issue',number:132,repo:'acme/app',text:'# GitHub issue acme/app#132: Board',removed:{secrets:0,paths:0},truncated:false});
+  ui.$('github-context-open').click();ui.$('github-context-reference').value='132';
+  ui.$('github-context-form').dispatchEvent(new UIEvent('submit'));await flush();await flush();
+  assert.match(ui.$('message-input').value,/# GitHub issue acme\/app#132: Board$/);
+  assert.equal(ui.$('notice').hidden,true,'An unaltered issue shows no notice: the text in the message box is enough.');
 
   reply=()=>response({error:'This branch has no pull request on GitHub yet.'},404);
   ui.$('github-context-open').click();ui.$('github-context-branch').click();await flush();await flush();
@@ -6130,7 +6147,7 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   const ambient = ui.$('flow-lounge-ambient');
   assert.equal(ambient.parentNode, ui.$('flow-lounge-home'));
   assert.equal(ui.$('flow-lounge-home').children[ui.$('flow-lounge-home').children.indexOf(ambient) + 1].className, 'flow-lounge-grid', 'The bar sits right above the grid, so an open activity does not carry it.');
-  assert.equal(ui.$('flow-card-lounge-quote').parentNode, ambient); assert.equal(ui.$('flow-card-lounge-weather').parentNode, ambient);
+  assert.equal(ui.$('flow-card-lounge-quote').parentNode, ambient); assert.equal(ambient.querySelectorAll('.flow-weather-options').length, 0, 'The weather is chosen in Your space, not in the Lounge.');
   assert.match(ui.$('flow-card-lounge-quote').textContent, /“.+”/);
 
   // Choosing a tile fills the stage with that one activity; All activities goes back to the grid.
@@ -6189,16 +6206,17 @@ test('Flow Lounge (#14): toggles ambient break mode, animates side cards, and au
   tile('typing').click();
   assert.deepEqual(shown(), ['typing']); assert.equal(ui.window.relayFlowLounge.current(), 'typing');
 
-  // Switch weather mode to Snow and back to Rain from the bar, with an activity still open.
-  const weatherTabs = ui.$('flow-card-lounge-weather').querySelectorAll('.flow-lounge-weather-option');
-  const snowTab = weatherTabs.find(t => t.textContent.includes('Snow'));
+  // Switch weather mode to Snow and back to Rain from Your space, with an activity still open.
+  assert.equal(ui.$('flow-weather').closest('.flow-utility')?.id, 'flow-space');
+  const weatherTabs = ui.$('flow-weather').querySelectorAll('.flow-weather-option');
+  const snowTab = weatherTabs.find(t => t.getAttribute('data-mode') === 'snow');
   assert(snowTab, 'Snow weather tab is available');
   snowTab.click(); await flush();
   assert.equal(ui.window.relayFlowLounge.getWeatherMode(), 'snow');
   assert.equal(snowTab.classList.contains('active'), true); assert.equal(snowTab.getAttribute('aria-pressed'), 'true');
   assert.deepEqual(shown(), ['typing'], 'Changing the weather leaves the open activity alone.');
 
-  const rainTab = weatherTabs.find(t => t.textContent.includes('Rain'));
+  const rainTab = weatherTabs.find(t => t.getAttribute('data-mode') === 'rain');
   assert(rainTab, 'Rain weather tab is available');
   rainTab.click(); await flush();
   assert.equal(ui.window.relayFlowLounge.getWeatherMode(), 'rain');
@@ -6845,7 +6863,7 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
   assert.strictEqual(geminiPlan.querySelector(".flow-plan-details"), null, "Gemini plan does not have detailed windows breakdown");
 });
 
-// Orchestrate (#12): one read-only run plans a message as steps, and the plan opens from the Plan button beside Flow.
+// Orchestrate (#12): one read-only run plans a message as steps, and the plan opens from the Plan button in the top bar.
 const orchestrateBrowser = options => flowBrowser({ orchestrationUI: true, ...options });
 const planAt = '2026-11-08T10:00:00.000Z';
 const planSteps = () => [
@@ -6886,10 +6904,10 @@ test('Orchestrate is available in Normal mode: toggle arms planning, the Plan bu
   ui.$('message-input').value = 'Add a list of saved items'; ui.fire('message-input', 'input');
   assert.equal(ui.$('orchestrate-toggle').hidden, false, 'In normal mode Orchestrate is available.');
   assert.equal(ui.$('orchestration-card').hidden, false);
-  // The plan has a button of its own beside Flow, not a tab in the side panel.
+  // The plan has a button of its own in the top bar, not a tab in the side panel.
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   assert.doesNotMatch(html, /data-panel="plan"|id="plan-panel"/);
-  assert(html.indexOf('id="open-plan"') > html.indexOf('id="layout-toggles"') && html.indexOf('id="open-plan"') < html.indexOf('id="toggle-flow"'), 'The Plan button sits beside Flow, where Flow keeps it in view.');
+  assert(html.indexOf('id="open-plan"') > html.indexOf('class="header-lead"') && html.indexOf('id="open-board"') < html.indexOf('id="open-plan"') && html.indexOf('id="open-plan"') < html.indexOf('class="command-bar"'), 'Board and Plan sit at the left of the search, so the search stays centred, and Flow keeps them in view.');
   assert.deepEqual([ui.$('open-plan').disabled, ui.$('open-plan').dataset.state, ui.$('open-plan-state').textContent], [false, 'ready', 'Ready']);
   assert.match(ui.$('open-plan').title, /^Plan: 2 steps waiting for you\./);
   ui.$('orchestrate-toggle').click(); await flush();
@@ -7272,7 +7290,7 @@ test('The Plan view shows a plan as a chart and an outline, edits the same draft
   Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, orchestrations: [draftPlan({ steps })] });
   await ui.window.relayUI.refresh(); await flush();
   const dialog = ui.$('plan-view'), chart = ui.$('plan-view-chart');
-  assert.equal(ui.$('open-plan').disabled, false, 'The Plan button beside Flow opens the plan.');
+  assert.equal(ui.$('open-plan').disabled, false, 'The Plan button in the top bar opens the plan.');
   ui.$('open-plan').click(); await flush();
   assert.equal(dialog.open, true);
   assert.equal(ui.$('plan-view-title').textContent, 'Plan · 3 steps');
@@ -7512,4 +7530,70 @@ test('Run tests on an applied patch confirms the saved command and offers undo a
   assert.ok(ui.findButton('Run tests again'));
   const text = section().textContent; assert.ok(text.indexOf('Undo this patch') < text.indexOf('End of the output'), 'Undo sits above the output');
   assert.ok(text.indexOf('Failed') < text.indexOf('I read those files'), 'the latest result comes before the next run');
+});
+
+test('the board shows a workspace’s cards in five columns, runs exactly the cards chosen and leaves accepting to you (#132)', async () => {
+  const ui = await browser({ boardUI: true, wide: true }), posted = [];
+  const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
+  const ids = { idea: 'a0000000-0000-4000-8000-000000000001', first: 'a0000000-0000-4000-8000-000000000002', second: 'a0000000-0000-4000-8000-000000000003', blank: 'a0000000-0000-4000-8000-000000000004', copy: 'a0000000-0000-4000-8000-000000000005', working: 'a0000000-0000-4000-8000-000000000006' };
+  let board = { revision: 3, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }, { id: 'backend', name: 'Backend' }], limits: { title: 200, notes: 20000, check: 300, checks: 20 }, cards: [
+    card(ids.idea, 'An idea for later', 'backlog', { agent: null }),
+    card(ids.first, 'Move the templates', 'ready'),
+    card(ids.second, 'Add a reset link', 'ready', { priority: 'high', agent: { provider: 'claude', model: null, effort: null }, dependsOn: [ids.first], checks: [{ text: 'Tests pass', done: false }] }),
+    card(ids.blank, 'No agent yet', 'ready', { agent: null, reason: 'Stopped before it finished.' }),
+    card(ids.working, 'Speed up search', 'doing', { taskState: { id: 't1', status: 'running', approvals: 1, provider: 'codex' } }),
+    card(ids.copy, 'Fix the footer', 'review', { result: { status: 'complete', summary: 'Moved it.', files: 2, tests: 'passed', inCopy: true }, taskState: { id: 't2', status: 'complete', hasWorktree: true, provider: 'codex' } }),
+  ] };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') { assert.equal(request.params.projectId, 'project-one', 'The board is the selected workspace’s.'); return response(board); }
+    if (request.path.startsWith('/api/board/')) { posted.push({ path: request.path, body: request.body }); return response(request.path === '/api/board/cards' ? { card: card('a0000000-0000-4000-8000-000000000009', request.body.title, request.body.column, { agent: request.body.agent }), board } : { board, card: board.cards[0] }, request.path === '/api/board/cards' ? 201 : 200); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+assert.equal(ui.$('open-board').disabled, false); assert.equal(ui.$('open-board-state').textContent, '1', 'The Board button says how many cards wait for you in Review.');
+  ui.$('open-board').click(); await flush();
+  assert.equal(ui.$('board-view').open, true);
+  const columns = ui.$('board-columns').children;
+  assert.deepEqual(columns.map(column => column.dataset.column), ['backlog', 'ready', 'doing', 'review', 'done']);
+  assert.deepEqual(columns.map(column => column.querySelectorAll('.board-card').length), [1, 3, 1, 1, 0]);
+  assert.match(columns[4].textContent, /Work you accepted/, 'An empty column says what it’s for.');
+  const find = id => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  assert.match(find(ids.idea).textContent, /No agent yet/, 'A card without an agent says so; nothing defaults to Auto.');
+  assert.match(find(ids.second).textContent, /High/); assert.match(find(ids.second).textContent, /0\/1/); assert.match(find(ids.second).textContent, /After Move the templates/);
+  assert.match(find(ids.blank).textContent, /Stopped before it finished/, 'A card back in Ready says why.');
+  assert.match(find(ids.working).textContent, /Needs you/, 'A card whose task waits for an approval says so.');
+  assert.match(find(ids.copy).textContent, /Merge first/);
+  const drawer = () => ui.$('board-drawer-body'), action = text => drawer().querySelectorAll('button').find(item => item.textContent === text);
+  // A card in Review whose work is still in its own copy can't be accepted until it's merged.
+  find(ids.copy).click(); await flush();
+  assert.equal(ui.$('board-drawer').hidden, false); assert.match(drawer().textContent, /2 files changed · tests passed · in its own copy, not merged yet/); assert.match(drawer().textContent, /Moved it\./);
+  assert.equal(action('Accept').disabled, true); assert.ok(action('Review and merge'));
+  // Running one Ready card runs exactly that card.
+  find(ids.first).click(); await flush();
+  action('Run').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: '/api/board/run', body: { ids: [ids.first] } });
+  // Run Ready: cards with an agent are ticked, one waiting for an unticked card can't run alone, one without an agent can't be ticked.
+  ui.$('board-run-ready').click(); await flush();
+  assert.equal(ui.$('board-drawer-title').textContent, 'Run Ready cards');
+  const rows = () => drawer().querySelectorAll('.board-run-row'), tick = index => rows()[index].querySelector('input');
+  assert.deepEqual(rows().map(row => tick(rows().indexOf(row)).checked), [true, true, false]);
+  assert.equal(tick(2).disabled, true); assert.match(rows()[2].textContent, /Choose an agent first/);
+  assert.match(drawer().textContent, /can edit files, and asks before anything that needs approval/); assert.match(drawer().textContent, /Nothing is pushed or published/);
+  tick(0).checked = false; tick(0).dispatchEvent(new UIEvent('change')); await flush();
+  assert.match(rows()[1].textContent, /Waits for “Move the templates”/);
+  assert.equal(action('Run 1 card').disabled, true, 'A card can’t run before the card it waits for, unless they run together.');
+  tick(0).checked = true; tick(0).dispatchEvent(new UIEvent('change')); await flush();
+  action('Run 2 cards').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: '/api/board/run', body: { ids: [ids.first, ids.second] } });
+  // A new card: written in the drawer, with no agent unless one is chosen.
+  ui.$('board-new').click(); await flush();
+  assert.match(ui.$('board-drawer-title').textContent, /New card · Backlog/);
+  assert.equal(action('Add card').disabled, true, 'A card needs a title.');
+  const title = drawer().querySelector('.board-field-title'); title.value = 'Write the changelog'; title.dispatchEvent(new UIEvent('input'));
+  assert.equal(action('Add card').disabled, false);
+  action('Add card').click(); await flush();
+  const made = posted.at(-1);
+  assert.equal(made.path, '/api/board/cards'); assert.deepEqual([made.body.title, made.body.column, made.body.agent, made.body.priority], ['Write the changelog', 'backlog', null, 'normal']);
+  ui.$('board-close').click(); await flush();
+  assert.equal(ui.$('board-view').open, false);
 });

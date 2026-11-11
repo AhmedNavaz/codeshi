@@ -1,3 +1,4 @@
+import os from 'node:os';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { collaborationRoute } from './collaboration-routes.mjs';
 import { closeAccountConnections } from './providers.mjs';
 import { createCommandRoutes } from './project-commands.mjs';
 import { createProjectReviewRoutes } from './project-review.mjs';
-import { createTerminalRoutes } from './terminal.mjs';
+import { cliCommand, createTerminalRoutes } from './terminal.mjs';
 import { createVoiceRoutes } from './voice.mjs';
 import { buildRecap } from './recap.mjs';
 import { createWorkspaceRoutes } from './workspace-routes.mjs';
@@ -20,6 +21,8 @@ import { createCheckpointRoutes } from './checkpoint-routes.mjs';
 import { alertPreferences, alertPush, alertSound, mergeAlertPreferences } from './alerts.mjs';
 import { createLocalRoutes } from './local-models.mjs';
 import { createTaskRoutes } from './task-routes.mjs';
+import { createBoardRoutes } from './board-routes.mjs';
+import { createWatchAlong, watchView } from './watch-along.mjs';
 import { atomicJSON } from './patches.mjs';
 import { appearance, appearances, preferencePatch, publicPreferences } from './preferences.mjs';
 import { verificationCadence } from './verification.mjs';
@@ -34,7 +37,7 @@ import { catalog, chooseLanguage, languages, localesDir as defaultLocales, textF
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
   '/brief-panel.js': ['brief-panel.js', 'text/javascript; charset=utf-8'], '/tasks-panel.js': ['tasks-panel.js', 'text/javascript; charset=utf-8'], '/smart-results.js': ['smart-results.js', 'text/javascript; charset=utf-8'], '/skills.js': ['skills.js', 'text/javascript; charset=utf-8'], '/memory.js': ['memory.js', 'text/javascript; charset=utf-8'], '/model-picker.js': ['model-picker.js', 'text/javascript; charset=utf-8'], '/routing.js': ['routing.js', 'text/javascript; charset=utf-8'], '/layout.js': ['layout.js', 'text/javascript; charset=utf-8'], '/agents-panel.js': ['agents-panel.js', 'text/javascript; charset=utf-8'], '/model-picker.css': ['model-picker.css', 'text/css; charset=utf-8'],
-  '/bottom-panel.js': ['bottom-panel.js', 'text/javascript; charset=utf-8'], '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'],
+  '/bottom-panel.js': ['bottom-panel.js', 'text/javascript; charset=utf-8'], '/preview.js': ['preview.js', 'text/javascript; charset=utf-8'], '/terminal.js': ['terminal.js', 'text/javascript; charset=utf-8'], '/terminal.css': ['terminal.css', 'text/css; charset=utf-8'], '/cli-tab.js': ['cli-tab.js', 'text/javascript; charset=utf-8'], '/cli-tab.css': ['cli-tab.css', 'text/css; charset=utf-8'],
   '/suggestions.js': ['suggestions.js', 'text/javascript; charset=utf-8'], '/keyboard.js': ['keyboard.js', 'text/javascript; charset=utf-8'], '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'], '/voice.js': ['voice.js', 'text/javascript; charset=utf-8'], '/voice.css': ['voice.css', 'text/css; charset=utf-8'],
   '/parallel-tasks.js': ['parallel-tasks.js', 'text/javascript; charset=utf-8'], '/parallel-tasks.css': ['parallel-tasks.css', 'text/css; charset=utf-8'], '/recap.js': ['recap.js', 'text/javascript; charset=utf-8'], '/recap.css': ['recap.css', 'text/css; charset=utf-8'],
   // The terminal renderer, served from the installed package so packaged builds work offline.
@@ -43,7 +46,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
   '/github-context.js': ['github-context.js', 'text/javascript; charset=utf-8'], '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
-  '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'], '/plan-view.js': ['plan-view.js', 'text/javascript; charset=utf-8'], '/plan-view.css': ['plan-view.css', 'text/css; charset=utf-8'],
+  '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'], '/plan-view.js': ['plan-view.js', 'text/javascript; charset=utf-8'], '/plan-view.css': ['plan-view.css', 'text/css; charset=utf-8'], '/board.js': ['board.js', 'text/javascript; charset=utf-8'], '/board.css': ['board.css', 'text/css; charset=utf-8'], '/watch-along.js': ['watch-along.js', 'text/javascript; charset=utf-8'], '/watch-along.css': ['watch-along.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow-lounge.js': ['flow-lounge.js', 'text/javascript; charset=utf-8'], '/flow-lounge-puzzles.js': ['flow-lounge-puzzles.js', 'text/javascript; charset=utf-8'], '/flow-lounge-puzzles.css': ['flow-lounge-puzzles.css', 'text/css; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
@@ -79,7 +82,7 @@ async function body(req, limit = 3 * 1024 * 1024) {
   } catch { throw Object.assign(new Error('Invalid JSON request.'), { status: 400 }); }
 }
 
-export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, onLanguage = () => {}, systemLanguages = null, localesDir = defaultLocales, voice, phoneOptions } = {}) {
+export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDir, bins, lock = true, sharingURL = process.env.AI_RELAY_SHARING_URL, accessToken, importer, onAppearance = () => {}, onNotify = () => {}, onHandoff = () => {}, onNotifications = () => {}, onLanguage = () => {}, onOpenWindow = null, cliConnection = null, systemLanguages = null, localesDir = defaultLocales, voice, phoneOptions } = {}) {
   // A data folder with no workspaces and no settings yet is a new installation.
   const dataFolder = path.resolve(dataRoot || dataDir || path.join(root, '.data')), fresh = !fs.existsSync(path.join(dataFolder, 'projects.json')) && !fs.existsSync(path.join(dataFolder, 'settings.json'));
   const registry = new ProjectRegistry({ dataRoot: dataRoot || dataDir || path.join(root, '.data'), bins, lock });
@@ -114,9 +117,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const checkpointRoutes = createCheckpointRoutes({ registry, body, json });
   const localRoutes = createLocalRoutes({ registry, body, json });
   const taskRoutes = createTaskRoutes({ registry, body, json });
+  const boardRoutes = createBoardRoutes({ registry, body, json });
   const commandRoutes = createCommandRoutes({ registry, body, json });
   const projectReviewRoutes = createProjectReviewRoutes({ registry, commands: commandRoutes.commands, body, json });
-  const terminalRoutes = createTerminalRoutes({ registry, body, json });
+  const terminalRoutes = createTerminalRoutes({ registry, body, json, cli: cliCommand(cliConnection) });
   const voiceRoutes = createVoiceRoutes({ body, json, ...(voice ? { sessions: voice } : {}) });
   const listeners = new Set();
   let closing = false;
@@ -206,6 +210,14 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (req.method === 'GET' && url.pathname === '/api/projects') return json(res, 200, registry.list());
       // What ran, changed and is waiting since a given time, across workspaces (#22).
       if (req.method === 'GET' && url.pathname === '/api/recap') return json(res, 200, buildRecap({ registry, since: url.searchParams.get('since') }));
+      // The codeshi command's /open (#90): the desktop app brings its window forward on a workspace. The browser build has none.
+      if (req.method === 'POST' && url.pathname === '/api/window') {
+        if (req.headers['x-ai-relay'] !== '1' || req.phoneClient) return json(res, 403, { error: 'Open the window on the computer.' });
+        if (!onOpenWindow) return json(res, 409, { error: 'This Codeshi has no window to open.' });
+        const input = await body(req, 4096), projectId = typeof input.projectId === 'string' && registry.list().some(project => project.id === input.projectId) ? input.projectId : null;
+        onOpenWindow({ projectId });
+        return json(res, 200, { opened: true });
+      }
       if (req.method === 'GET' && url.pathname === '/api/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         res.write('event: ready\ndata: {}\n\n');
@@ -220,6 +232,14 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (closing) return json(res, 503, { error: 'Codeshi is stopping.' });
           return json(res, 201, registry.add(input));
         }
+      }
+      if (url.pathname === '/api/watch') {
+        // Watch-along (#24): sharing a conversation live, and watching a teammate's. Managed only on this computer.
+        if (req.phoneClient) return json(res, 403, { error: 'Manage watch-along on the computer.' });
+        const projectId = url.searchParams.get('projectId') || null;
+        if (req.method === 'GET') return json(res, 200, watchAlong.status(projectId));
+        if (req.method === 'POST') return json(res, 200, await watchAlong.manage({ ...await body(req, 16 * 1024), projectId }));
+        return json(res, 405, { error: 'Use GET or POST for watch-along.' });
       }
       if (url.pathname === '/api/phone') {
         if (req.phoneClient) return json(res, 403, { error: 'Manage remote access on the computer.' });
@@ -321,6 +341,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (await checkpointRoutes({ req, res, url })) return;
       if (await localRoutes({ req, res, url })) return;
       if (await taskRoutes({ req, res, url })) return;
+      if (await boardRoutes({ req, res, url })) return;
       if (await collaborationRoute({req,res,url,registry,collaboration,sharing,configureSharing,body,json})) return;
       if (req.method === 'GET' && url.pathname === '/api/status') {
         const broker = selectedBroker(url);
@@ -408,6 +429,13 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     if (plan) remotePhone.alert(plan).catch(error => console.error('Codeshi could not notify a phone:', error.message));
   });
   const phoneAccess = createPhoneAccess({ ...phoneOptions, ...phoneBridge, remote: remotePhone });
+  const watchAlong = createWatchAlong({ config: remotePhoneConfig, storeFile: path.join(registry.dataRoot, 'watch-along.json'),
+    readConversation: projectId => watchView(registry.mainConversation(projectId, { limit: 600 })),
+    workspaceName: projectId => registry.get(projectId).name,
+    defaultName: (() => { const name = os.userInfo().username || 'Teammate'; return name.charAt(0).toUpperCase() + name.slice(1); })(),
+    ...(phoneOptions?.watchClientFactory ? { clientFactory: phoneOptions.watchClientFactory } : {}),
+    onChange: () => { for (const res of listeners) res.write('event: watch\ndata: {}\n\n'); } });
+  registry.on('update', ({ projectId, conversationId } = {}) => watchAlong.notify(projectId, conversationId));
   let closePromise;
   // force drops requests still in flight, such as account checks, for a desktop quit or restart, where the page goes away anyway.
   // Each step gets its turn even if an earlier one fails, and reports its time through onStep, so a slow shutdown can be traced.
@@ -421,6 +449,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     };
     closeAccountConnections();
     await step('remote access', () => phoneAccess.close());
+    await step('watch-along', () => watchAlong.close());
     await step('reviews', () => reviewRoutes.close());
     await step('project review', () => projectReviewRoutes.close());
     await step('commands', () => commandRoutes.close());
@@ -432,7 +461,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     await step('connections', () => new Promise(resolve => { server.close(resolve); if (force) server.closeAllConnections(); }));
     if (failure) throw failure;
   })();
-  return { server, registry, collaboration, sharing, commands: commandRoutes.commands, projectReview: projectReviewRoutes.review, terminals: terminalRoutes.sessions, close,
+  return { server, registry, collaboration, eventClients: () => listeners.size, sharing, commands: commandRoutes.commands, projectReview: projectReviewRoutes.review, terminals: terminalRoutes.sessions, close,
     getAppearancePreference: () => appearance(config),
     // The menus' words, in the language the page uses (#27).
     getText: () => textFor(currentLanguage(), localesDir),

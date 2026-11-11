@@ -5,13 +5,15 @@
 .updates-heading > img { flex: none; border-radius: 10px; }
 .updates-heading > div { flex: 1; min-width: 0; }
 .updates-heading h2 { margin: 5px 0 9px; font-size: 23px; font-weight: 600; letter-spacing: -.6px; color: var(--text-strong); }
-.updates-heading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.updates-heading p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .updates-heading .updates-eyebrow { color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: 1px; }
 .updates-content { min-height: 0; padding: 20px 28px; overflow: auto; overscroll-behavior: contain; }
-.updates-release h3 { margin: 0 0 18px; color: var(--text-strong); font-size: 14px; font-weight: 600; }
-.updates-release h4 { margin: 18px 0 8px; color: var(--text-strong); font-size: 12px; font-weight: 600; }
-.updates-release ul { margin: 0; padding-left: 18px; }
-.updates-release li { margin: 9px 0; padding-left: 3px; font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
+.updates-release h3 { margin: 0 0 16px; color: var(--text-strong); font-size: 15px; font-weight: 600; }
+.updates-release h4 { margin: 22px 0 10px; color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; }
+.updates-release ul { margin: 0; padding: 0; list-style: none; }
+.updates-release li { margin: 0 0 14px; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.updates-release li strong { display: block; margin-bottom: 2px; color: var(--text-strong); font-size: 13.5px; font-weight: 600; }
+.updates-release li strong + span { color: var(--muted); }
 .updates-release + .updates-release { margin-top: 20px; border-top: 1px solid var(--border); }
 .updates-release summary { display: flex; align-items: center; gap: 6px; padding: 15px 0 0; color: var(--muted); cursor: pointer; font-size: 12px; }
 .updates-release summary::before { content: ""; flex: none; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; }

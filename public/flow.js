@@ -180,21 +180,26 @@
   const space = node('section', 'flow-utility flow-space'), connect = node('section', 'flow-utility flow-connect');
   space.id = 'flow-space'; connect.id = 'flow-connect';
   space.setAttribute('aria-label', 'Your space'); connect.setAttribute('aria-label', 'Stay connected');
-  space.append(node('h2', undefined, 'Your space'), node('p', 'flow-utility-hint', 'Appearance and preferences.'));
-  const appearance = node('div', 'flow-appearance'); appearance.append(node('span', 'flow-utility-label', 'Appearance'));
-  space.append(appearance);
-  connect.append(node('h2', undefined, 'Stay connected'), node('p', 'flow-utility-hint', 'Pick up the conversation on your phone.'));
+  space.append(node('h2', undefined, 'Your space'), node('p', 'flow-utility-hint', 'Appearance, weather and preferences.'));
+  // Each preference is one row: its name on the left, a small control on the right. The Lounge fills in the weather.
+  const appearance = node('div', 'flow-pref flow-appearance'); appearance.append(node('span', 'flow-utility-label', 'Appearance'));
+  const weather = node('div', 'flow-pref flow-weather'); weather.id = 'flow-weather';
+  space.append(appearance, weather);
+  connect.append(node('h2', undefined, 'Stay connected'), node('p', 'flow-utility-hint', 'Pick up the conversation on your phone, or share it live with a teammate.'));
+  // Remote access, Share live and Keep awake sit side by side in one row.
+  const connectRow = node('div', 'flow-connect-row'); connect.append(connectRow);
   const preferences = node('div', 'flow-preferences');
   // Move the actual controls so connection counts, update progress and theme state keep updating in Flow.
   const movedControls = [];
   function moveControls() {
-    for (const id of ['flow-status', 'connect-phone', 'relay-settings', 'appearance-options', 'keep-awake', 'update-status', 'update-more']) {
+    for (const id of ['flow-status', 'connect-phone', 'status-watch', 'status-watch-menu', 'relay-settings', 'appearance-options', 'keep-awake', 'update-status', 'update-more']) {
       const control = $(id); if (!control) continue;
       const marker = node('span'); marker.hidden = true;
       control.parentNode.insertBefore(marker, control); movedControls.push({ control, marker });
       if (id === 'flow-status') cards.get('working').element.insertBefore(control, cards.get('working').body);
       else if (id === 'appearance-options') appearance.append(control);
       else if (id === 'relay-settings') space.append(control);
+      else if (['connect-phone', 'status-watch', 'keep-awake'].includes(id)) connectRow.append(control);
       else connect.append(control);
     }
   }
@@ -691,7 +696,7 @@
       return chip;
     }));
     const options = button('flow-chip flow-space-chip', 'Your space', () => peekCard('space'));
-    options.setAttribute('aria-pressed', String(peeking === 'space')); options.setAttribute('aria-label', 'Your space: appearance, settings and phone access');
+    options.setAttribute('aria-pressed', String(peeking === 'space')); options.setAttribute('aria-label', 'Your space: appearance, weather, settings and phone access');
     strip.append(options);
   }
   function peekCard(id) {

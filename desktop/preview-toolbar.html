@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-iBbvdEml6MUETVXavbRClQz3PFoKMBviDFV9KasKzso='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-KtToxN1iGgkldFaLUvyiBGAEETYiP6uxfxziDFlsi4c='">
 <title>Preview toolbar</title>
 <style>
   /* Codeshi's Paper and Ink colours, as in public/editor-theme.css. */
@@ -86,6 +86,29 @@
   .detail-url { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; -webkit-user-select: text; user-select: text; }
   .detail-meta { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--muted); }
   .count-tag { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: var(--badge-bg); color: var(--muted); }
+
+  /* Design notes (#125): the sections marked on the page, numbered as their boxes are, each with its note. */
+  .design-tools { display: flex; align-items: center; gap: 10px; }
+  #design-mark { flex: none; }
+  #design-hint { min-width: 0; color: var(--muted); font-size: 11.5px; line-height: 1.3; }
+  #design-list { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+  #design-empty { margin: 0; padding: 18px 14px; color: var(--muted); line-height: 1.45; }
+  .design-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 24px; column-gap: 9px; row-gap: 6px; align-items: start; }
+  .design-badge { width: 22px; height: 22px; border-radius: 11px; background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 12px; line-height: 22px; text-align: center; }
+  .design-name { font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; padding-top: 2px; }
+  .design-name::first-letter { text-transform: uppercase; }
+  .design-meta { grid-column: 2 / 4; color: var(--faint); font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  .design-flag { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--muted); }
+  .design-flag[data-kind="missing"] { color: var(--danger); }
+  .design-remove { width: 24px; height: 24px; }
+  .design-row textarea, #design-overall { grid-column: 2 / 4; box-sizing: border-box; width: 100%; min-height: 54px; padding: 6px 8px; border: 1px solid var(--field-border); border-radius: 6px; background: var(--field); color: var(--text); font: 12.5px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; resize: vertical; outline: none; -webkit-user-select: text; user-select: text; }
+  .design-row textarea:focus, #design-overall:focus { border-color: var(--accent); }
+  .design-foot { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--border); background: var(--panel-bg); }
+  #design-overall { min-height: 44px; }
+  .design-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  #design-send { height: 28px; padding: 0 12px; border-radius: 6px; background: var(--accent); color: var(--on-accent); font-weight: 500; }
+  #design-send:hover:enabled { background: var(--accent-strong); color: var(--on-accent); }
+  #design-panel .drawer-body { padding: 0; }
 </style>
 </head>
 <body>
@@ -96,6 +119,7 @@
     <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Local address" />
     <button id="stack-btn" class="pill-btn" type="button" aria-pressed="false" title="View backend and database configuration"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><rect x="3" y="4" width="18" height="16" rx="2"/></svg><span id="stack-label">Stack</span></button>
     <button id="apis-btn" class="pill-btn" type="button" aria-pressed="false" title="Inspect API requests and responses"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg><span id="apis-label">APIs (0)</span></button>
+    <button id="design-btn" class="pill-btn" type="button" aria-pressed="false" title="Mark sections of the page and write a note for each"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M10 10v10"/></svg><span>Design</span></button>
     <span id="workspace" title="Picks go to this workspace's message"></span>
     <span id="edit" role="status" aria-live="off"></span>
     <span id="status" role="status" aria-live="polite"></span>
@@ -103,6 +127,27 @@
     <button id="open-external" class="icon" type="button" aria-label="Open in browser" title="Open in your browser"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M18 14v4a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18V7.5A1.5 1.5 0 0 1 5.5 6H10"/></svg></button>
   </div>
   <div id="drawer" hidden>
+    <div id="design-panel" class="drawer-panel" hidden>
+      <div class="drawer-head">
+        <div class="drawer-title-group"><strong>Design notes</strong><span id="design-count" class="count-tag">0 of 12</span></div>
+        <button id="design-close" class="icon" type="button" aria-label="Close design notes"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div class="drawer-tools design-tools">
+        <button id="design-mark" class="pill-btn" type="button" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg><span id="design-mark-label">Mark sections</span></button>
+        <span id="design-hint">Click a part of the page, or drag a box around an area.</span>
+      </div>
+      <div class="drawer-body">
+        <p id="design-empty">Mark each section you want changed, then write what it should do or look like. Everything goes into your message as one, with a screenshot numbered to match.</p>
+        <div id="design-list" role="list" aria-label="Sections"></div>
+      </div>
+      <div class="design-foot">
+        <textarea id="design-overall" aria-label="About the whole page" placeholder="About the whole page (optional)" spellcheck="true"></textarea>
+        <div class="design-actions">
+          <button id="design-clear" class="drawer-btn" type="button" disabled>Clear</button>
+          <button id="design-send" type="button" disabled title="Put the notes in your message (⌘Enter)">Add to message</button>
+        </div>
+      </div>
+    </div>
     <div id="stack-panel" class="drawer-panel" hidden>
       <div class="drawer-head">
         <div class="drawer-title-group"><strong>Backend &amp; Database Configuration</strong></div>
@@ -147,13 +192,19 @@
   // panel's button, its ×, Esc or the shortcut close it.
   function setDrawer(which) {
     if (activeDrawer === which) which = null;
+    const wasDesign = activeDrawer === 'design';
     activeDrawer = which;
     if (which) lastDrawer = which;
     $('drawer').hidden = !activeDrawer;
     $('stack-panel').hidden = activeDrawer !== 'stack';
     $('apis-panel').hidden = activeDrawer !== 'apis';
+    $('design-panel').hidden = activeDrawer !== 'design';
     $('stack-btn')?.setAttribute?.('aria-pressed', String(activeDrawer === 'stack'));
     $('apis-btn')?.setAttribute?.('aria-pressed', String(activeDrawer === 'apis'));
+    $('design-btn')?.setAttribute?.('aria-pressed', String(activeDrawer === 'design'));
+    // The numbered boxes show on the page while Design notes is open, and marking starts with it.
+    if (activeDrawer === 'design' && !wasDesign) bridge.act('design', { open: true, marking: design.sections.length < design.limit });
+    else if (wasDesign && activeDrawer !== 'design') bridge.act('design', { open: false });
     if (activeDrawer) {
       bridge.act('show-inspector');
       if (activeDrawer === 'stack') renderStack();
@@ -228,6 +279,56 @@
       }
       preSec.append(preTitle, preGrid); host.append(preSec);
     }
+  }
+
+  // Design notes (#125). The app keeps the sections; the notes stay here, as typed, until they go into the message.
+  // Rows are kept and updated in place, so a note being typed keeps its focus when another section is marked.
+  let design = { open: false, marking: false, busy: false, sections: [], limit: 12 };
+  const notes = new Map(), rows = new Map();
+  function designRow(section) {
+    const row = document.createElement('div'); row.className = 'design-row'; row.setAttribute('role', 'listitem');
+    const badge = document.createElement('span'); badge.className = 'design-badge'; badge.setAttribute('aria-hidden', 'true');
+    const name = document.createElement('div'); name.className = 'design-name';
+    const remove = document.createElement('button'); remove.className = 'icon design-remove'; remove.type = 'button';
+    remove.append(document.createElementNS('http://www.w3.org/2000/svg', 'svg')); remove.firstChild.setAttribute('viewBox', '0 0 24 24');
+    const cross = document.createElementNS('http://www.w3.org/2000/svg', 'path'); cross.setAttribute('d', 'M18 6L6 18M6 6l12 12'); remove.firstChild.append(cross);
+    remove.addEventListener('click', () => { notes.delete(section.id); bridge.act('design-remove', section.id); });
+    const meta = document.createElement('div'); meta.className = 'design-meta';
+    const note = document.createElement('textarea'); note.placeholder = 'What should change here?'; note.spellcheck = true; note.value = notes.get(section.id) || '';
+    note.addEventListener('input', () => notes.set(section.id, note.value));
+    row.append(badge, name, remove, meta, note);
+    row.parts = { badge, name, remove, meta, note };
+    return row;
+  }
+  function renderDesign() {
+    const list = $('design-list'), ids = new Set(design.sections.map(section => section.id));
+    for (const [id, row] of rows) if (!ids.has(id)) { row.remove(); rows.delete(id); notes.delete(id); }
+    design.sections.forEach((section, index) => {
+      let row = rows.get(section.id);
+      if (!row) { row = designRow(section); rows.set(section.id, row); }
+      const { badge, name, remove, meta, note } = row.parts;
+      badge.textContent = String(section.n); name.textContent = section.name;
+      remove.setAttribute('aria-label', 'Remove section ' + section.n); remove.title = 'Remove section ' + section.n;
+      note.setAttribute('aria-label', 'Note for section ' + section.n + ', ' + section.name);
+      const flag = section.page ? ['page', 'On ' + section.page] : section.missing ? ['missing', 'Not on the page now'] : section.offscreen ? ['offscreen', 'Out of view'] : null;
+      meta.replaceChildren(document.createTextNode(section.code || ''));
+      if (flag) { const tag = document.createElement('span'); tag.className = 'design-flag'; tag.dataset.kind = flag[0]; tag.textContent = (section.code ? ' · ' : '') + flag[1]; meta.append(tag); }
+      if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+    });
+    const count = design.sections.length, full = count >= design.limit;
+    $('design-empty').hidden = count > 0;
+    $('design-count').textContent = count + ' of ' + design.limit;
+    $('design-mark').setAttribute('aria-pressed', String(design.marking));
+    $('design-mark').disabled = full && !design.marking;
+    $('design-mark-label').textContent = design.marking ? 'Marking · Esc stops' : 'Mark sections';
+    $('design-hint').textContent = full ? 'That’s ' + design.limit + ' sections, the most one message holds. Add them to your message first.' : design.marking ? 'Click a part of the page, or drag a box around an area.' : 'Marking is off, so the page works as usual.';
+    $('design-clear').disabled = !count || design.busy;
+    $('design-send').disabled = !count || design.busy;
+    $('design-send').textContent = design.busy ? 'Adding…' : 'Add to message';
+  }
+  function sendDesign() {
+    if (!design.sections.length || design.busy) return;
+    bridge.act('design-send', { notes: Object.fromEntries(notes), overall: $('design-overall').value });
   }
 
   function formatBody(raw) {
@@ -324,6 +425,12 @@
     if (state.picking) status('');
   });
   bridge.onPicked(() => status('picked', 'Added to your message', true));
+  bridge.onDesign?.(value => {
+    design = value; renderDesign();
+    // A section marked by the page opens Design notes if it was closed some other way.
+    if (value.open && activeDrawer !== 'design') { activeDrawer = 'design'; lastDrawer = 'design'; $('drawer').hidden = false; for (const id of ['stack', 'apis']) $(id + '-panel').hidden = true; $('design-panel').hidden = false; $('design-btn').setAttribute('aria-pressed', 'true'); bridge.act('show-inspector'); }
+  });
+  bridge.onDesignAdded?.(value => { $('design-overall').value = ''; status('picked', (value?.count === 1 ? '1 section' : (value?.count || 0) + ' sections') + ' added to your message', true); });
   bridge.onError(message => status('error', message));
 
   bridge.onStack?.(stack => {
@@ -358,6 +465,12 @@
   $('open-external').addEventListener('click', () => bridge.act('open-external'));
   $('stack-btn')?.addEventListener?.('click', () => setDrawer('stack'));
   $('apis-btn')?.addEventListener?.('click', () => setDrawer('apis'));
+  $('design-btn')?.addEventListener?.('click', () => setDrawer('design'));
+  $('design-close')?.addEventListener?.('click', () => setDrawer(null));
+  $('design-mark')?.addEventListener?.('click', () => bridge.act('design', { open: true, marking: !design.marking }));
+  $('design-clear')?.addEventListener?.('click', () => { notes.clear(); bridge.act('design-clear'); });
+  $('design-send')?.addEventListener?.('click', sendDesign);
+  $('design-panel')?.addEventListener?.('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); sendDesign(); } });
   bridge.onToggleInspector?.(() => setDrawer(activeDrawer ? null : lastDrawer));
   const shortcut = /Mac/.test(window.navigator?.platform || '') ? '⇧⌘I' : 'Ctrl+Shift+I';
   $('stack-btn').title = 'View backend and database configuration (' + shortcut + ')';
@@ -370,7 +483,12 @@
   $('address').addEventListener('focus', () => { editing = true; $('address').select(); });
   $('address').addEventListener('blur', () => { editing = false; });
   $('address').addEventListener('keydown', event => { if (event.key === 'Enter') { bridge.act('navigate', $('address').value); $('address').blur(); } if (event.key === 'Escape') { $('address').blur(); setDrawer(null); } });
-  window.addEventListener?.('keydown', event => { if (event.key === 'Escape' && activeDrawer) setDrawer(null); });
+  // Escape in a note leaves the note; elsewhere it closes the inspector.
+  window.addEventListener?.('keydown', event => {
+    if (event.key !== 'Escape') return;
+    if (event.target?.tagName === 'TEXTAREA') { event.target.blur(); return; }
+    if (activeDrawer) setDrawer(null);
+  });
 </script>
 </body>
 </html>

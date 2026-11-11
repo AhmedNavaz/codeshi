@@ -1,0 +1,15 @@
+#!/bin/sh
+# The codeshi command (#90). Installed as a link to this file by Codeshi › Install 'codeshi' Command.
+# It runs bin/codeshi.mjs with the Node built into the Codeshi app, so it needs no Node of its own.
+self="$0"
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+here=$(cd "$(dirname "$self")" && pwd)
+app="$here/../../../MacOS/Codeshi"
+if [ -x "$app" ]; then
+  ELECTRON_RUN_AS_NODE=1 exec "$app" "$here/codeshi.mjs" "$@"
+fi
+# A copy run from source uses the Node on the PATH.
+exec node "$here/codeshi.mjs" "$@"

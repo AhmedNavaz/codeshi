@@ -383,5 +383,5 @@
     lastProject = projectId(); closeMenu(); closeContext(); notice = '';
     if (shown()) load(); else render();
   });
-  window.relayTerminal = { toggle, open: () => window.relayPanel?.show('terminal'), close: () => { if (window.relayPanel?.isOpen('terminal')) window.relayPanel.hide(); }, isOpen: () => shown() };
+  window.relayTerminal = { theme, toggle, open: () => window.relayPanel?.show('terminal'), close: () => { if (window.relayPanel?.isOpen('terminal')) window.relayPanel.hide(); }, isOpen: () => shown() };
 })();

@@ -377,7 +377,7 @@
 
   // Plan usage: a five-hour headline where reported, plus other applicable limits for the selected model.
   const usage = {}, usageLoading = {}, usageAttempted = {}, usageErrors = {}, usageRequests = {};
-  let usageProvider = null, usageAnchor = null;
+  let usageProvider = null, usageAnchor = null, usageAnchorRect = null;
   const usagePopover = $('usage-dialog');
   const usageIsOpen = () => usagePopover.matches(':popover-open');
   const remaining = row => Math.max(0, Math.min(100, Math.round(100 - row.usedPercent)));
@@ -478,7 +478,14 @@
     const viewportWidth = window.innerWidth, viewportHeight = window.innerHeight, gap = 10, edge = 12;
     const width = Math.min(340, viewportWidth - edge * 2);
     usagePopover.style.width = width + 'px'; usagePopover.style.maxHeight = (viewportHeight - edge * 2) + 'px';
-    const anchor = usageAnchor.getBoundingClientRect(), height = usagePopover.getBoundingClientRect().height;
+    // A card that redraws (Flow's plans card does when a fresh reading arrives) replaces the row that opened this. A
+    // detached row measures as zero, which put the window at the top; follow its replacement, or keep the last place.
+    if (!usageAnchor.isConnected) {
+      const again = usageAnchor.id ? $(usageAnchor.id) : usageAnchor.dataset?.provider && usageAnchor.classList[0] ? document.querySelector(`.${usageAnchor.classList[0]}[data-provider="${usageAnchor.dataset.provider}"]`) : null;
+      if (again) { usageAnchor = again; usageAnchor.setAttribute('aria-expanded','true'); }
+    }
+    const anchor = usageAnchor.isConnected ? (usageAnchorRect = usageAnchor.getBoundingClientRect()) : usageAnchorRect, height = usagePopover.getBoundingClientRect().height;
+    if (!anchor) return;
     const above = anchor.top - gap - height, below = anchor.bottom + gap;
     const top = above >= edge ? above : below + height <= viewportHeight - edge ? below : Math.max(edge, viewportHeight - edge - height);
     usagePopover.style.left = Math.max(edge, Math.min(anchor.left, viewportWidth - width - edge)) + 'px';
@@ -492,7 +499,7 @@
   function openUsage(provider, anchor) {
     const row = $(`${provider}-status`), nextAnchor = anchor || (row && !row.closest?.('[hidden]') ? row : $('relay-settings'));
     if (usageIsOpen() && provider === usageProvider && nextAnchor === usageAnchor) { closeUsage(); return; }
-    usageAnchor?.setAttribute('aria-expanded','false'); usageProvider = provider; usageAnchor = nextAnchor;
+    usageAnchor?.setAttribute('aria-expanded','false'); usageProvider = provider; usageAnchor = nextAnchor; usageAnchorRect = null;
     usageAnchor.setAttribute('aria-expanded','true');
     if (!usageIsOpen()) usagePopover.showPopover();
     renderUsageDetails(); positionUsage(); loadUsage(provider,true);

@@ -1,3 +1,6 @@
 # These pages' security policies allow their inline scripts by hash, so they keep the same bytes on every system.
 desktop/overlay.html text eol=lf
 desktop/preview-toolbar.html text eol=lf
+
+# The codeshi launcher is a shell script, run as it is on macOS.
+bin/codeshi text eol=lf

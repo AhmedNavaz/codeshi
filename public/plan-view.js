@@ -1,4 +1,4 @@
-// The Plan view (#97): an Orchestrate plan as a flowchart, full window, opened by the Plan button beside Flow, from
+// The Plan view (#97): an Orchestrate plan as a flowchart, full window, opened by the Plan button in the top bar, from
 // What's next in Flow and from the planner's message. Steps are cards laid out in columns, one per
 // phase where the plan has phases, otherwise by what each step waits for; arrows show the waits. Selecting a card opens
 // it in a drawer: its editor while the plan is a draft, its task's state while it runs. The Outline shows the same

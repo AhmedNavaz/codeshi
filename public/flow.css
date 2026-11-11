@@ -30,7 +30,7 @@
 
 /* The header spans the window: the seal and the word Flow beside the window controls, search in the middle of the
    window, and the way out at its far right. The two outer columns match, so the search stays centred. */
-#app-shell.flow > .conversation-header { grid-column: 1 / -1; grid-row: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px) minmax(0, 1fr); align-items: center; gap: 16px; height: 56px; padding: 0 18px; border-bottom: 0; }
+#app-shell.flow > .conversation-header { grid-column: 1 / -1; grid-row: 1; display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, 420px) minmax(max-content, 1fr); align-items: center; gap: 16px; height: 56px; padding: 0 18px; border-bottom: 0; }
 /* The padding stays equal on both sides so the search is centred; on macOS the brand alone moves past the window controls. */
 .mac-titlebar #app-shell.flow .flow-brand { margin-left: 64px; }
 #app-shell.flow .workspace-chip, #app-shell.flow #layout-toggles, #app-shell.flow .panel-toggles { display: none; }
@@ -39,6 +39,8 @@
 #app-shell.flow .command-bar input:hover { border-color: var(--border); }
 #app-shell.flow .command-bar input:focus { border-color: var(--focus); background: var(--surface-input); }
 #app-shell.flow .header-actions { grid-column: 3; grid-row: 1; justify-self: end; }
+#app-shell.flow .header-lead { grid-column: 1; grid-row: 1; }
+#app-shell.flow .flow-brand:not([hidden]) { margin-right: 14px; }
 .flow-brand { display: none; grid-column: 1; grid-row: 1; align-items: center; gap: 8px; min-width: 0; }
 #app-shell.flow .flow-brand:not([hidden]) { display: inline-flex; animation: flow-in .5s cubic-bezier(.2, .8, .2, 1) both; }
 .flow-brand-mark { flex: none; width: 20px; height: 20px; }
@@ -69,16 +71,32 @@
 .flow-utility { flex: none; display: grid; gap: 12px; margin-top: auto; padding: 24px 8px 0; border-top: 1px solid var(--border); color: var(--text); }
 .flow-utility h2 { margin: 0; color: var(--text-strong); font-size: 12px; font-weight: 600; }
 .flow-utility-hint { margin: -6px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
-.flow-appearance { display: grid; gap: 8px; }
+/* A preference row: the name on the left, a compact icon switch on the right. */
+.flow-pref { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; }
+.flow-pref[hidden] { display: none; }
 .flow-utility-label { color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.flow-utility .appearance-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); }
-.flow-utility .appearance-options button { display: flex; flex-direction: column; justify-content: center; gap: 6px; width: auto; height: 48px; border-radius: 9px; color: var(--muted); font-size: 10px; }
-.flow-utility .appearance-options button .sr-only { position: static; width: auto; height: auto; margin: 0; padding: 0; overflow: visible; clip: auto; clip-path: none; white-space: normal; }
-.flow-utility .appearance-options button[aria-pressed="true"] { background: var(--bg); color: var(--text-strong); box-shadow: var(--shadow-sm); }
+.flow-utility .appearance-options, .flow-weather-options { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); }
+.flow-utility .appearance-options button, .flow-weather-option { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+.flow-utility .appearance-options button .icon, .flow-weather-option .flow-lounge-glyph { width: 14px; height: 14px; }
+.flow-utility .appearance-options button:hover, .flow-weather-option:hover { color: var(--text-strong); }
+.flow-utility .appearance-options button[aria-pressed="true"], .flow-weather-option[aria-pressed="true"] { background: var(--bg); color: var(--text-strong); box-shadow: var(--shadow-sm); }
+.flow-weather-option[aria-pressed="true"] .flow-lounge-glyph { color: var(--accent); }
+.flow-weather-option:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+/* The sound level shows only while rain or snow is falling. */
+.flow-weather-volume { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.flow-weather-volume[hidden] { display: none; }
+.flow-weather-volume .flow-lounge-weather-slider { flex: 1; width: auto; }
+.flow-weather-volume.muted .flow-lounge-weather-speaker { opacity: .45; }
+/* Remote access, Share live and Keep awake: one row of equal tiles, the icon over a short name. */
+.flow-connect-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
+.flow-utility .flow-connect-row .status-button { flex-direction: column; justify-content: center; gap: 5px; min-height: 52px; padding: 7px 4px; border: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text); text-align: center; font-size: 11px; line-height: 1.2; }
+.flow-utility .flow-connect-row .status-button > span:not(.phone-pending-count) { max-width: 100%; overflow-wrap: anywhere; text-wrap: balance; }
+.flow-utility .flow-connect-row .status-button { position: relative; }
+.flow-utility .flow-connect-row .phone-pending-count { position: absolute; top: 4px; right: 4px; }
+.flow-utility .flow-connect-row .keep-awake[aria-pressed="true"] { color: var(--success); }
 .flow-utility .status-button { justify-content: flex-start; gap: 9px; width: 100%; min-height: 36px; height: auto; padding: 8px 10px; border-radius: 10px; color: var(--muted); text-align: left; font-size: 12px; }
 .flow-utility .status-button .icon { width: 15px; height: 15px; flex: none; }
 .flow-utility .status-button:hover { background: var(--surface-raised); color: var(--text-strong); }
-.flow-utility #connect-phone { border: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text); }
 .flow-utility #relay-settings::after { content: "↗"; margin-left: auto; color: var(--faint); }
 /* The update button and its chevron share one row: the action fills it and the chevron for release notes and Skip
    sits at its end. They keep the accent fill and its text colour here, also on hover. */
@@ -464,7 +482,7 @@
 .flow-peek-close::before { content: ""; width: 12px; height: 12px; background: currentColor; mask: var(--icon-close) center / contain no-repeat; -webkit-mask: var(--icon-close) center / contain no-repeat; }
 @media (max-width: 1180px) {
   #app-shell.flow, #app-shell.flow:has(.side-panel:not([hidden])), #app-shell.flow:has(#review-panel:not([hidden])) { grid-template-columns: 0 minmax(0, 1fr) 0; }
-  #app-shell.flow > .conversation-header { grid-template-columns: minmax(0, 1fr) minmax(0, 260px) minmax(0, 1fr); }
+  #app-shell.flow > .conversation-header { grid-template-columns: minmax(max-content, 1fr) minmax(0, 260px) minmax(max-content, 1fr); }
   .flow-brand-workspace { display: none; }
 }
 
@@ -757,29 +775,16 @@
 .flow-lounge-quote-author { color: var(--faint); font-size: 11.5px; }
 .flow-lounge-quote-next { flex: none; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
 .flow-lounge-quote-next:hover { color: var(--text-strong); text-decoration: underline; }
-.flow-lounge-quote-next:focus-visible, .flow-lounge-weather-option:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.flow-lounge-quote-next:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .flow-lounge-glyph[data-icon="volume"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z'/%3E%3Cpath d='M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11'/%3E%3C/svg%3E"); }
-.flow-lounge-weather { display: flex; flex: none; }
-.flow-lounge-weather-words { display: grid; justify-items: end; gap: 6px; }
-.flow-lounge-weather-head { display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
-.flow-lounge-weather-volume { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
 .flow-lounge-weather-speaker { width: 14px; height: 14px; }
-.flow-lounge-weather-volume.muted .flow-lounge-weather-speaker { opacity: .45; }
 .flow-lounge-weather-slider { -webkit-appearance: none; appearance: none; width: 84px; height: 14px; margin: 0; background: transparent; cursor: pointer; }
 .flow-lounge-weather-slider::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: var(--border-strong); }
 .flow-lounge-weather-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -4.5px; border: 0; border-radius: 50%; background: var(--text-strong); }
 .flow-lounge-weather-slider:hover::-webkit-slider-thumb { background: var(--accent); }
 .flow-lounge-weather-slider:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
-.flow-lounge-weather-title { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.flow-lounge-weather-options { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; }
-.flow-lounge-weather-option { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; transition: background-color .15s ease, color .15s ease; }
-.flow-lounge-weather-option:hover { color: var(--text-strong); background: color-mix(in srgb, var(--text) 6%, transparent); }
-.flow-lounge-weather-option.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text-strong); }
-.flow-lounge-weather-icon { width: 14px; height: 14px; }
-.flow-lounge-weather-option.active .flow-lounge-weather-icon { color: var(--accent); }
 @media (max-width: 1180px) {
   .flow-lounge-ambient { gap: 20px; }
-  .flow-lounge-weather-option span { display: none; }
 }
 
 /* Trivia */

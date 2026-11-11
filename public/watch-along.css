@@ -1,0 +1,74 @@
+/* Watch-along (#24): the strip above the message box, Share live, and the read-only view of a teammate's conversation. */
+.watch-strip[hidden] { display: none; }
+.watch-strip { display: grid; gap: 6px; padding: 2px 2px 6px; font-size: 12.5px; line-height: 1.5; }
+.watch-strip-line { display: flex; align-items: center; gap: 8px; min-height: 26px; color: var(--muted); }
+.watch-strip-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-strip .text-link, .share-live-dialog .text-link, .watch-dialog .text-link { flex: none; font-size: 12.5px; }
+.watch-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.watch-dot.live { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent); }
+@media (prefers-reduced-motion: no-preference) { .watch-dot.live { animation: watch-pulse 2.4s ease-in-out infinite; } }
+@keyframes watch-pulse { 50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 10%, transparent); } }
+
+.watch-suggestion { display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 11px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius-md, 6px); background: var(--panel-bg); }
+.watch-suggestion-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.watch-suggestion-text strong { margin-right: 6px; color: var(--text-strong); font-weight: 600; }
+.watch-suggestion-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.watch-suggestion-actions .secondary-button { height: 26px; padding: 0 10px; }
+
+/* Share live and the join form */
+.watch-body { display: grid; gap: 14px; align-content: start; }
+.watch-body h3 { margin: 0 0 4px; color: var(--text-strong); font-size: var(--font-ui, 13px); font-weight: 600; }
+.watch-body p { margin: 0; }
+.watch-note { color: var(--text); line-height: 1.55; }
+.watch-fineprint { font-size: 11.5px; }
+.watch-error { color: var(--danger); }
+.watch-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.watch-ask { padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--accent) 6%, var(--panel-bg)); }
+.watch-code { margin: 0 2px; color: var(--text-strong); font-family: var(--font-mono, ui-monospace, monospace); font-size: 15px; letter-spacing: .06em; }
+.watch-invite { display: grid; gap: 8px; justify-items: start; }
+.watch-link { display: flex; gap: 8px; width: 100%; }
+.watch-link input { flex: 1; min-width: 0; height: var(--control-lg, 32px); padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md, 6px); background: var(--input-bg, var(--surface)); color: var(--text); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+.watch-people { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.watch-person { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.watch-person-text { display: grid; flex: 1; min-width: 0; }
+.watch-person-text strong { color: var(--text-strong); font-weight: 600; }
+.watch-join { display: grid; gap: 12px; }
+.watch-field { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.watch-field :is(input, textarea) { width: 100%; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md, 6px); background: var(--input-bg, var(--surface)); color: var(--text); font: inherit; font-size: 13px; resize: vertical; }
+.watch-field textarea { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
+
+/* Watching a teammate */
+.watch-dialog { width: min(760px, calc(100vw - 48px)); height: min(820px, calc(100vh - 64px)); }
+.watch-dialog .watch-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.watch-switch { display: flex; flex-wrap: wrap; gap: 4px 14px; flex: none; }
+.watch-live { display: flex; align-items: center; gap: 8px; flex: none; color: var(--muted); }
+.watch-waiting { flex: none; padding: 6px 10px; border-radius: var(--radius-md, 6px); background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--text); overflow-wrap: anywhere; }
+.watch-feed { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 14px; padding: 4px 2px 8px; }
+.watch-earlier { color: var(--faint); font-size: 11.5px; text-align: center; }
+.watch-message { min-width: 0; }
+.watch-message.user { justify-self: end; max-width: 85%; padding: 8px 12px; border-radius: var(--radius-lg); background: var(--surface-strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+.watch-message-head { margin-bottom: 3px; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.watch-message.error .watch-message-text { color: var(--danger); white-space: pre-wrap; }
+.watch-message.system .watch-message-text { color: var(--muted); white-space: pre-wrap; }
+.watch-message-text { line-height: 1.6; overflow-wrap: anywhere; }
+.watch-message-text .markdown > :first-child { margin-top: 0; }
+.watch-message-text .markdown > :last-child { margin-bottom: 0; }
+.watch-message-text .markdown p { margin: 0 0 8px; }
+.watch-message-text .markdown :is(ul, ol) { margin: 0 0 8px; padding-left: 20px; }
+.watch-message-text .markdown pre { margin: 0 0 8px; padding: 8px 10px; overflow-x: auto; border-radius: var(--radius-md, 6px); background: var(--code-bg, var(--surface-strong)); font-size: 12px; }
+.watch-message-text .markdown code { font-family: var(--font-mono, ui-monospace, monospace); font-size: .92em; }
+.watch-message-text .markdown :not(pre) > code { padding: 1px 4px; border-radius: 4px; background: var(--surface-strong); }
+.watch-message-text .markdown blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--muted); }
+.watch-table { overflow-x: auto; margin-bottom: 8px; }
+.watch-table table { border-collapse: collapse; font-size: 12px; }
+.watch-table :is(th, td) { padding: 4px 8px; border: 1px solid var(--border); text-align: left; }
+.watch-attachments { margin-top: 4px; color: var(--faint); font-size: 11.5px; }
+.watch-foot { gap: 8px; }
+.watch-foot[hidden] { display: none; }
+.watch-suggest { display: flex; align-items: flex-end; gap: 8px; flex: 1; min-width: 0; }
+.watch-suggest textarea { flex: 1; min-width: 0; min-height: 32px; max-height: 120px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md, 6px); background: var(--input-bg, var(--surface)); color: var(--text); font: inherit; font-size: 13px; resize: none; field-sizing: content; }
+
+/* The footer entry beside Remote access; its menu opens upward. */
+.status-watch { anchor-name: --status-watch; }
+.status-watch[data-live="true"] { color: var(--success); }
+.status-watch-menu { position-anchor: --status-watch; position-area: top span-right; margin: 0 0 6px; }

@@ -21,11 +21,17 @@ import {alertPlan,progressPillOn} from '../src/alerts.mjs';
 import {english} from '../src/i18n.mjs';
 import {createOverlay} from './overlay.mjs';
 import {closeWithin,writeShutdownLog} from './shutdown.mjs';
+import {commandState,connectionFile,installCommand,removeConnection,uninstallCommand,writeConnection} from './cli.mjs';
 import {createPreview} from './preview.mjs';
 import {createTraceRecorder} from './trace.mjs';
 import {APP_ID,ensureStartMenuShortcut} from './windows.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const smoke=process.argv.includes('--smoke-test');
+// Started by the codeshi command (#90) with no window: the engine and the menu bar status only. A window opens when asked
+// for (the command's /open, the status menu, or opening Codeshi again), and an untouched background start quits by itself
+// once no terminal is attached and nothing is working.
+const background=!smoke&&process.argv.includes('--background');
+let windowWanted=!background,pageLoaded=false,openMain=null;
 // A copy run from source is a separate app from the installed one: its own name, data folder and single-instance
 // lock. Both run side by side in their own windows, and testing from source never opens or changes the installed
 // app's workspaces and conversations.
@@ -45,9 +51,9 @@ let relay,win,origin,keepAwake,updater,tray=null,overlay=null,preview=null,quitt
 let text=english;
 if(!primary) app.quit();
 else {
-  app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
+  app.on('second-instance',(_event,argv=[])=>{if(argv.includes('--background'))return;if(openMain)return openMain();windowWanted=true;app.dock?.show();if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
   app.on('before-quit',event=>{if(relay&&!quitting){event.preventDefault();quitting=true;if(win&&!win.isDestroyed())win.webContents.send('relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{app.quit();setTimeout(()=>app.exit(0),2000);});}});
-  app.on('will-quit',()=>{keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
+  app.on('will-quit',()=>{removeConnection(connectionFile(app.getPath('userData')));keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
     // The packaged app's layered icon switches between Paper and Ink with the appearance; in development the Dock shows a picture, so swap it.
@@ -72,7 +78,19 @@ else {
         if(answer.response===0)shell.showItemInFolder(file);
       }catch(error){dialog.showErrorBox(t('The performance trace was not saved'),error?.message||String(error));}
     };
-    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),tracing:tracer.isRecording(),recordTrace,
+    // Codeshi › Install 'codeshi' Command (#90): a link to bin/codeshi in this app, which runs the CLI with the app's own Node.
+    const commandTarget=path.join(root,'bin','codeshi');
+    const command=async install=>{
+      const {t}=text,owner=win&&!win.isDestroyed()?win:undefined;
+      try{
+        const result=install?await installCommand({target:commandTarget}):await uninstallCommand({target:commandTarget});
+        if(result.cancelled)return;
+        await dialog.showMessageBox(owner,{type:'info',message:install?t('The codeshi command is installed'):t('The codeshi command is removed'),
+          detail:install?t('In a terminal, run codeshi in a project folder to work with your agents there. codeshi --help lists the commands for scripts. If Codeshi isn’t open, it starts in the background.'):t('Install it again from the Codeshi menu at any time.'),buttons:[t('OK')]});
+      }catch(error){dialog.showErrorBox(install?t('The codeshi command was not installed'):t('The codeshi command was not removed'),error?.message||String(error));}
+      updateMenu();
+    };
+    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),tracing:tracer.isRecording(),recordTrace,command:process.platform==="darwin"?{state:commandState({target:commandTarget}),install:()=>command(true),uninstall:()=>command(false)}:null,
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
       send:(...command)=>{if(win&&!win.isDestroyed())win.webContents.send('relay:menu-command',...command);updateMenu();}})));
     app.setAboutPanelOptions({applicationName:'Codeshi',applicationVersion:app.getVersion(),version:''});
@@ -85,6 +103,9 @@ else {
     // Brings the window forward, opening a workspace or an approval's request card. Nothing is answered on the way.
     function openTarget(target){
       if(!win||win.isDestroyed())return;
+      windowWanted=true;app.dock?.show();
+      // A background start loads the page only now, so nothing renders while no one looks.
+      if(!pageLoaded){loadPage().then(()=>openTarget(target),()=>{});return;}
       if(win.isMinimized())win.restore();win.show();win.focus();app.focus?.({steal:true});
       if(target?.projectId)win.webContents.send('relay:menu-command',target.approvalId?'open-approval':'open-workspace',target.approvalId?{projectId:target.projectId,approvalId:target.approvalId}:target.projectId);
     }
@@ -141,12 +162,17 @@ else {
     async function start(){
       relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify,onNotifications:()=>{updateMenu();scheduleStatus();},
         // The page reloads itself in a newly chosen language; the menus and the status item follow here.
-        systemLanguages:()=>app.getPreferredSystemLanguages?.()||[app.getLocale()],onLanguage:()=>{text=relay.getText();updateMenu();scheduleStatus();}});
+        systemLanguages:()=>app.getPreferredSystemLanguages?.()||[app.getLocale()],onLanguage:()=>{text=relay.getText();updateMenu();scheduleStatus();},
+        onOpenWindow:target=>openTarget(target?.projectId?target:null),
+        // The codeshi tab in the window (#90) runs the command inside this app against this engine.
+        cliConnection:smoke?null:connectionFile(app.getPath('userData'))});
       text=relay.getText();
       appearance.set(relay.getAppearancePreference());
       keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;if(win&&!win.isDestroyed())win.webContents.send('relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
       await new Promise((resolve,reject)=>{relay.server.once('error',reject);relay.server.listen(0,'127.0.0.1',resolve);});
       origin=`http://127.0.0.1:${relay.server.address().port}`;
+      // The codeshi command (#90) finds this engine through cli.json; the smoke test leaves it alone.
+      if(!smoke){try{writeConnection(connectionFile(app.getPath('userData')),{url:origin,token,version:app.getVersion()});}catch(error){console.warn('The codeshi command cannot reach Codeshi:',error.message);}}
     }
     await start();
     // Codeshi restarts to update only when no agent is working and no queued prompt is about to start.
@@ -165,13 +191,27 @@ else {
     if(statusIcons){relay.registry.on('update',scheduleStatus);relay.registry.on('projects',scheduleStatus);}
     if(windows){readTaskbar();nativeTheme.on('updated',readTaskbar);}
     updateMenu();syncStatus();
+    function loadPage(){pageLoaded=true;return win.loadURL(origin);}
     win=new BrowserWindow({width:1440,height:1000,minWidth:900,minHeight:680,show:false,title:'Codeshi',icon:path.join(root,'assets','icon.png'),backgroundColor:appearance.background(),...(process.platform==='darwin'?{titleBarStyle:'hiddenInset',trafficLightPosition:{x:14,y:13}}:{}),webPreferences:{preload:path.join(root,'desktop','preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,additionalArguments:[...(development?['--relay-channel=development']:[]),`--relay-token=${token}`]}});
     // Back in the window, the page shows what happened, including the recap after a while away, so the badge clears
     // and the panel near the top of the screen goes; it would otherwise cover the recap.
     win.on('focus',()=>{attention=0;app.dock?.setBadge('');overlay?.hide();if(process.platform!=='darwin')win.flashFrame(false);readTaskbar();});
     // The window list and the app switcher tell the two copies apart.
     if(development)win.on('page-title-updated',(event,title)=>{event.preventDefault();win.setTitle(`${title} (Development)`);});
-    if(!smoke) win.once('ready-to-show',()=>win.show());
+    if(!smoke) win.once('ready-to-show',()=>{if(windowWanted)win.show();});
+    if(background&&!windowWanted){
+      app.dock?.hide();
+      // Two quiet minutes in a row: no window wanted, no terminal following, nothing working or queued.
+      let quiet=0;
+      const idleQuit=setInterval(()=>{
+        if(windowWanted){clearInterval(idleQuit);return;}
+        quiet=busy()||relay.eventClients()>0?0:quiet+1;
+        if(quiet>=2){clearInterval(idleQuit);app.quit();}
+      },60000);
+      idleQuit.unref?.();
+      // Opening Codeshi from the Finder or Spotlight while it runs in the background shows the window.
+      app.on('activate',()=>{if(!windowWanted)openTarget(null);});
+    }
     const trusted=event=>event.sender===win.webContents && event.senderFrame===win.webContents.mainFrame && event.senderFrame.url.startsWith(origin+'/');
     ipcMain.handle('relay:keep-awake:get',event=>{if(!trusted(event))throw Error('Untrusted renderer');return keepAwake.getState();});
     ipcMain.handle('relay:keep-awake:set',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');return keepAwake.setEnabled(enabled);});
@@ -190,7 +230,7 @@ else {
     const previewPicks=[];
     preview=createPreview({BaseWindow,WebContentsView,session,ipcMain,shell,screen,root,background:()=>appearance.background(),
       folders:id=>{try{return id?relay.registry.get(id).folders.map(folder=>({name:folder.displayName||folder.name,path:folder.path})):[];}catch{return [];}},
-      onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image});}});
+      onPick:pick=>{for(const resolve of previewPicks.splice(0))resolve(pick);if(!win||win.isDestroyed())return;if(pick.focus){if(win.isMinimized())win.restore();win.show();win.focus();win.webContents.send('relay:menu-command','focus-message');return;}win.webContents.send('relay:preview-pick',{projectId:pick.projectId,text:pick.text,image:pick.image,...(pick.design?{design:true,images:pick.images}:{})});}});
     const previewStack=id=>{
       try{
         const review=relay.projectReview?.state(id);
@@ -223,7 +263,8 @@ else {
     win.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(origin+'/'))event.preventDefault();});
     // Only clipboard writes (Copy buttons) are granted; every other permission stays denied.
     win.webContents.session.setPermissionRequestHandler((_contents,permission,callback)=>callback(permission==='clipboard-sanitized-write'));
-    await win.loadURL(origin);
+    openMain=()=>openTarget(null);
+    if(windowWanted)await loadPage();
     if(smoke){
       const smokeStep=step=>console.log('AI_RELAY_SMOKE_STEP '+step);
       smokeStep('renderer');

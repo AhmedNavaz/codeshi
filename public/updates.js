@@ -22,7 +22,16 @@
       for (const section of release.sections) {
         if (!section.items?.length) continue;
         body.append(node('h4', section.title));
-        const items = node('ul'); for (const text of section.items) items.append(node('li', text)); body.append(items);
+        const items = node('ul');
+        for (const item of section.items) {
+          const title = typeof item === 'string' ? '' : item?.title || '', text = typeof item === 'string' ? item : item?.text || '';
+          if (!title && !text) continue;
+          const row = node('li');
+          if (title) row.append(node('strong', title));
+          if (text) row.append(node('span', text));
+          items.append(row);
+        }
+        body.append(items);
       }
       entry.append(body); content.append(entry);
     }

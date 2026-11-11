@@ -20,21 +20,31 @@ export function compareVersions(left, right) {
 }
 
 // The installed changelog is the source of truth. Unreleased and newer entries never appear.
-// Summarize each item to a brief user-facing sentence without GitHub issue/PR references or HTML.
-function summarizeItem(line, stripRefs = false) {
-  let text = line
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1');
-  if (stripRefs) {
-    text = text
-      .replace(/\s*\((?:[^()]*#\d+[^()]*|thanks\s+@[^()]+)\)/gi, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const boundary = text.search(/[.!?]\s+(?=[A-Z0-9"“‘(<])/);
-    if (boundary !== -1) text = text.slice(0, boundary + 1);
+// Each item becomes plain text, without GitHub issue/PR references or HTML: the entry's bold
+// title when it has one, and the start of its explanation, whole sentences where they fit.
+const BRIEF = 230, LONGEST = 300;
+const unlink = text => text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+const plain = text => unlink(text).replace(/`([^`]+)`/g, '$1').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*\s][^*]*)\*/g, '$1');
+const tidy = text => plain(text).replace(/\s*\((?:[^()]*#\d+[^()]*|thanks\s+@[^()]+)\)/gi, '').replace(/\s+/g, ' ').trim();
+
+function brief(text) {
+  const ends = [...text.matchAll(/[.!?]["”’)]?\s+(?=[A-Z0-9"“‘(<])/g)].map(match => match.index + match[0].trimEnd().length);
+  ends.push(text.length);
+  let end = ends[0];
+  for (const next of ends) { if (next > BRIEF) break; end = next; }
+  if (end <= LONGEST) return text.slice(0, end);
+  const cut = text.slice(0, LONGEST), space = cut.lastIndexOf(' ');
+  return cut.slice(0, space > LONGEST / 2 ? space : LONGEST).replace(/[\s,;:·–-]+$/, '') + '…';
+}
+
+function summarizeItem(line) {
+  // "**Title** (#12). Text", "**Title.** Text" and "**Title (#12)**: Text" have a title; a line
+  // that only starts with bold words, such as "**Text size** in Settings: …", is all text.
+  const titled = unlink(line).match(/^\*\*([^*]+)\*\*(?:\s*\([^()]*#\d+[^()]*\))?([.:]?)(?:\s+(.*))?$/);
+  if (titled && (titled[2] || /[.:!?]$/.test(titled[1].trim()) || !titled[3])) {
+    return { title: tidy(titled[1]).replace(/[.:]$/, '').slice(0, 120), text: brief(tidy(titled[3] || '')) };
   }
-  return text.slice(0, 320);
+  return { title: '', text: brief(tidy(line)) };
 }
 
 const internalSectionPattern = /^(?:internal|developer|tooling|tests?|documentation|docs|chores?|maintenance|infrastructure|ci|build)\b/i;
@@ -62,11 +72,11 @@ export function releaseNotes(changelog, current, since = null) {
       release = heading && versionPattern.test(heading[1]) ? { version: heading[1], date: heading[2] || null, sections: [] } : null;
       section = null; if (release) releases.push(release);
     } else if (release && line.startsWith('### ')) {
-      const title = summarizeItem(line.slice(4)).slice(0, 80);
+      const title = plain(line.slice(4)).trim().slice(0, 80);
       section = internalSectionPattern.test(title) ? null : { title, items: [] };
       if (section && release.sections.length < 8) release.sections.push(section);
     } else if (section && /^- /.test(line) && isUserFacingItem(line) && section.items.length < 20) {
-      section.items.push(summarizeItem(line.slice(2), true));
+      section.items.push(summarizeItem(line.slice(2)));
     }
   }
   if (!releases.some(item => compareVersions(item.version, current) === 0)) return [];

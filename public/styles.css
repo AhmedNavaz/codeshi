@@ -398,6 +398,7 @@ details[open] > summary > .disclosure-chevron, .activity-entry.open .activity-ou
 .activity-output-toggle { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; min-height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; }
 .activity-output-toggle:hover:enabled { color: var(--text); background: var(--hover); }
 div.activity-output-toggle { cursor: default; }
+.activity-view-image { flex: none; color: var(--accent); font-size: 11.5px; }
 .activity-entry-title { flex: none; max-width: 100%; overflow: hidden; color: var(--text); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .activity-entry-detail { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); }
@@ -1020,7 +1021,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .mac-titlebar .sidebar-titlebar { padding-left: 82px; }
 .mac-titlebar .sidebar-titlebar, .mac-titlebar .sidebar-heading, .mac-titlebar .conversation-header, .mac-titlebar .inspector-heading { -webkit-app-region: drag; user-select: none; }
 .mac-titlebar :is(.sidebar-titlebar, .sidebar-heading, .conversation-header, .inspector-heading) :is(a, button, input, select, .conversation-state) { -webkit-app-region: no-drag; }
-.mac-titlebar body:has(dialog[open]) :is(.sidebar-titlebar, .sidebar-heading, .conversation-header, .inspector-heading) { -webkit-app-region: no-drag; }
+.mac-titlebar body:has(dialog[open], #usage-dialog:popover-open) :is(.sidebar-titlebar, .sidebar-heading, .conversation-header, .inspector-heading) { -webkit-app-region: no-drag; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
@@ -1460,7 +1461,13 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 .command-detail { flex: none; color: var(--faint); font-size: 11.5px; }
 .conversation-header { justify-content: center; }
 /* Keep the layout buttons together at the right end of the search bar. */
-.conversation-header > .header-actions { margin-left: 0; }
+/* Three columns: the two ends are equal when there's room, so the search stays in the middle whatever each end holds,
+   and neither end is ever narrower than its buttons; the search gives way first. Board and Plan sit at the left. */
+.conversation-header { display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, 520px) minmax(max-content, 1fr); }
+.conversation-header > .header-lead { grid-column: 1; grid-row: 1; display: flex; align-items: center; justify-self: start; }
+.conversation-header > .command-bar { grid-column: 2; grid-row: 1; width: 100%; margin: 0; }
+.conversation-header > .header-actions { grid-column: 3; grid-row: 1; justify-self: end; margin-left: 0; }
+.header-lead .plan-entry { margin: 0 6px 0 0; }
 
 /* With the sidebar hidden, the top bar's left names the open workspace, so it is always clear where you are. */
 .workspace-chip { display: none; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; max-width: 240px; height: 28px; margin-right: 12px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text-strong); font-size: 12.5px; font-weight: 500; }
@@ -1468,7 +1475,6 @@ button.capability strong::after { content: " →"; color: var(--faint); }
 .workspace-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-chip:hover { background: var(--hover); }
 .app-shell.sidebar-collapsed .workspace-chip { display: inline-flex; }
-.app-shell.sidebar-collapsed .conversation-header { justify-content: flex-start; }
 @media (max-width: 760px) {
   .app-shell.sidebar-collapsed .workspace-chip { display: none; }
   .command-bar { position: relative; top: auto; left: auto; transform: none; flex: 1 1 auto; width: auto; margin: 0 auto; }

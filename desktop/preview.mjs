@@ -100,15 +100,47 @@ export function sourceLocation(hint, { folders = [] } = {}) {
 // The sentence put into the message box: where the element is, what it is and where its code is. Where the launch
 // map names the interface, the place starts with that name, so picks from a website and its admin panel differ.
 const KINDS = { a: 'link', button: 'button', input: 'field', textarea: 'text box', select: 'menu', img: 'image', svg: 'icon', h1: 'heading', h2: 'heading', h3: 'heading', h4: 'heading', h5: 'heading', h6: 'heading', nav: 'navigation', form: 'form', label: 'label', li: 'list item', ul: 'list', ol: 'list', table: 'table', p: 'paragraph', header: 'header', footer: 'footer', section: 'section', dialog: 'dialog' };
-export function pickText({ element, url, source, label = '' }) {
+function placeOf(url, label) {
   let where = 'the preview';
   try { const parsed = new URL(url); where = parsed.host + (parsed.pathname === '/' ? '' : parsed.pathname); } catch { /* The page's address is unknown. */ }
   const place = clip(label, 60);
-  if (place) where = where === 'the preview' ? place : `${place} (${where})`;
-  const kind = KINDS[element.tag] || `<${element.tag}> element`, name = element.text || element.label;
-  const code = source?.file ? `${source.file}${source.line ? `:${source.line}` : ''}${source.component ? ` in ${source.component}` : ''}` : source?.component ? `in ${source.component}` : '';
-  const details = [element.selector, code].filter(Boolean).join('; ');
-  return `In the preview of ${where}, the ${name ? `“${clip(name, 60)}” ` : ''}${kind}${details ? ` (${details})` : ''}: `;
+  return place ? (where === 'the preview' ? place : `${place} (${where})`) : where;
+}
+const elementName = element => { const kind = KINDS[element.tag] || `<${element.tag}> element`, name = element.text || element.label; return `${name ? `“${clip(name, 60)}” ` : ''}${kind}`; };
+const codeOf = source => source?.file ? `${source.file}${source.line ? `:${source.line}` : ''}${source.component ? ` in ${source.component}` : ''}` : source?.component ? `in ${source.component}` : '';
+const detailsOf = (element, source) => { const details = [element.selector, codeOf(source)].filter(Boolean).join('; '); return details ? ` (${details})` : ''; };
+export function pickText({ element, url, source, label = '' }) {
+  return `In the preview of ${placeOf(url, label)}, the ${elementName(element)}${detailsOf(element, source)}: `;
+}
+
+// Design notes (#125): several sections of a page, each marked on it by a click (an element) or a dragged box (an
+// area inside the element that holds it), each with the person's note. They go into the message box as one message,
+// numbered as in the screenshots, for the person to read before sending. At most DESIGN_LIMIT sections, and at most
+// DESIGN_SHOTS screenshots: the page as shown, then the sections it doesn't show, each captured when it was marked.
+export const DESIGN_LIMIT = 12, DESIGN_SHOTS = 4;
+const pathOf = url => { try { const parsed = new URL(url); return parsed.pathname + parsed.search; } catch { return ''; } };
+// An area as the page reported it: where it sits inside its element, in CSS pixels.
+export function cleanOffset(input) {
+  if (!input || typeof input !== 'object') return null;
+  const values = ['x', 'y', 'width', 'height'].map(key => Number(input[key]));
+  if (!values.every(Number.isFinite) || values[2] < 1 || values[3] < 1) return null;
+  const [x, y, width, height] = values.map(value => Math.round(Math.max(-100000, Math.min(100000, value))));
+  return { x, y, width, height };
+}
+// How a section is named, in the panel and in the message.
+export function sectionName(section) {
+  const name = elementName(section.element);
+  return section.offset ? `an area of ${section.offset.width}×${section.offset.height} in the ${name}` : `the ${name}`;
+}
+export function designText({ sections = [], notes = {}, overall = '', url = '', label = '', shots = 1 }) {
+  const here = pathOf(url), list = sections.map((section, index) => {
+    const note = clip(notes[section.id], 2000), page = section.url && pathOf(section.url) !== here ? `on ${pathOf(section.url) || section.url}, ` : '';
+    const name = page + sectionName(section);
+    return `${index + 1}. ${name[0].toUpperCase()}${name.slice(1)}${detailsOf(section.element, section.source)}: ${note}`.trimEnd();
+  });
+  const whole = clip(overall, 4000), count = sections.length;
+  const lead = `Design notes for the preview of ${placeOf(url, label)}${count ? `, ${count} ${count === 1 ? 'section' : 'sections'}` : ''}.${count && shots ? ` The numbers match the boxes in the ${shots === 1 ? 'screenshot' : 'screenshots'}.` : ''}`;
+  return [lead, ...list, ...(whole ? [`Whole page: ${whole}`] : [])].join('\n');
 }
 
 // The area to capture: the element and a little around it, kept inside the visible page.
@@ -256,7 +288,7 @@ export function apiInterceptorScript() {
 // they were; only a page that failed to load is loaded again. Each window has its own picker, inspector and API calls.
 // Opening one never closes or replaces another: the person closes a window, Stop review closes the windows of the
 // review's own services, and quitting closes the rest.
-export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, screen = null, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#1c1a18', captureWait = 1500, platform = process.platform }) {
+export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, screen = null, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#1c1a18', captureWait = 1500, paintWait = 120, platform = process.platform }) {
   const previews = new Set(), projects = new Map();
   let capture = 'none', clock = 0;
   const previewSession = session.fromPartition(PREVIEW_PARTITION);
@@ -295,6 +327,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     const value = state(preview), review = stack(preview);
     toToolbar(preview, 'preview:state', value);
     if (review) toToolbar(preview, 'preview:stack', review);
+    if (preview.design.open) designToolbar(preview);
     let host = ''; try { host = new URL(address(preview)).host; } catch { /* Not loaded yet. */ }
     preview.win.setTitle(value.label ? `${value.label} · ${host || 'Preview'}` : host ? `Preview · ${host}` : 'Preview');
   }
@@ -323,7 +356,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     return { x, y, width: bounds.width, height: bounds.height };
   }
   function create({ projectId, workspace, href }) {
-    const preview = { projectId, workspace, requested: href, picking: false, pickCount: 0, inspector: false, failed: false, used: ++clock };
+    const preview = { projectId, workspace, requested: href, picking: false, pickCount: 0, inspector: false, failed: false, used: ++clock, design: { open: false, marking: false, sections: [], clock: 0, missing: [], offscreen: [], busy: false } };
     // On macOS the windows can also be merged into tabs, from the Window menu.
     const win = new BaseWindow({ ...placement(), minWidth: 480, minHeight: 320, title: 'Preview', backgroundColor: background(), ...(mac ? { tabbingIdentifier: 'codeshi-preview' } : {}) });
     const toolbar = new WebContentsView({ webPreferences: { preload: path.join(root, 'desktop', 'preview-toolbar-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
@@ -343,6 +376,8 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     const injectInterceptor = () => { if (alive(page)) contents.executeJavaScript(apiInterceptorScript()).catch(() => {}); };
     contents.on('did-start-navigation', injectInterceptor);
     contents.on('did-finish-load', injectInterceptor);
+    // A page that loads again draws the design boxes again, found by their elements.
+    contents.on('did-finish-load', () => { if (preview.design.open) designPage(preview); });
     // Local addresses stay in this window's page; https links open in the browser; nothing opens a window.
     contents.setWindowOpenHandler(({ url }) => { if (isPreviewURL(url)) contents.loadURL(url); else if (/^https:\/\//i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
     const guard = (event, url) => { if (isPreviewURL(url)) return; event.preventDefault(); if (/^https:\/\//i.test(url)) shell.openExternal(url); };
@@ -380,9 +415,99 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   function setPicking(preview, on) {
     if (!live(preview) || !alive(preview.page)) return;
     preview.picking = Boolean(on);
+    if (preview.picking && preview.design.marking) { preview.design.marking = false; syncDesign(preview); }
     preview.page.webContents.send('preview:picking', preview.picking);
     sync(preview);
     if (preview.picking) preview.page.webContents.focus();
+  }
+
+  // Design notes (#125). The page gets only what it needs to draw the numbered boxes: each section's number, the
+  // selector that finds its element and, for an area, where the area sits inside it. The notes stay in the toolbar
+  // until they are added to the message, and the names, code locations and screenshots stay here.
+  const wait = (ms, value) => new Promise(resolve => setTimeout(resolve, ms, value));
+  function designPage(preview) {
+    if (!alive(preview.page)) return;
+    const { open, marking, sections } = preview.design;
+    preview.page.webContents.send('preview:design', { marking: open && marking, sections: open ? sections.map((section, index) => ({ id: section.id, n: index + 1, selector: section.element.selector, offset: section.offset })) : [] });
+  }
+  function designToolbar(preview) {
+    const { open, marking, sections, missing, offscreen, busy } = preview.design, here = pathOf(address(preview));
+    toToolbar(preview, 'preview:design', { open, marking, busy, limit: DESIGN_LIMIT, sections: sections.map((section, index) => {
+      const page = section.url && pathOf(section.url) !== here ? pathOf(section.url) || section.url : '';
+      return { id: section.id, n: index + 1, name: sectionName(section), code: codeOf(section.source) || section.element.selector, page, missing: !page && missing.includes(section.id), offscreen: !page && offscreen.includes(section.id) };
+    }) });
+  }
+  const syncDesign = preview => { designPage(preview); designToolbar(preview); };
+  function setDesign(preview, value) {
+    if (!live(preview) || !alive(preview.page)) return;
+    const design = preview.design;
+    design.open = Boolean(value?.open); design.marking = design.open && Boolean(value?.marking);
+    if (design.marking && preview.picking) { preview.picking = false; preview.page.webContents.send('preview:picking', false); sync(preview); }
+    syncDesign(preview);
+    if (design.marking) preview.page.webContents.focus();
+  }
+  // A screenshot of the page, or of part of it, as base64 PNG. Like a pick's, it never holds the notes up: a blank one
+  // is taken once more, and one that hangs is left out.
+  async function shoot(contents, rect = null) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt) await wait(250);
+      let shot = await Promise.race([(rect ? contents.capturePage(rect) : contents.capturePage()).catch(() => null), wait(captureWait, 'hung')]);
+      if (shot === 'hung') return null;
+      if (shot && !shot.isEmpty()) { if (shot.getSize().width > 1600) shot = shot.resize({ width: 1600 }); return shot.toPNG().toString('base64'); }
+    }
+    return null;
+  }
+  // A marked section: what it is and where its code is, asked of the page's framework once as for a pick, and a
+  // screenshot of it with its numbered box, for when the page no longer shows it.
+  async function addSection(preview, mark) {
+    const design = preview.design, contents = preview.page.webContents;
+    if (design.sections.length >= DESIGN_LIMIT) { toToolbar(preview, 'preview:error', `Design notes hold up to ${DESIGN_LIMIT} sections. Add these to your message first, or remove one.`); return null; }
+    const element = cleanElement(mark?.element);
+    if (!element.selector) { toToolbar(preview, 'preview:error', 'That part of the page can’t be found again, so it can’t be marked. Try the element around it.'); return null; }
+    // The section counts at once, so quick clicks can't pass the limit; its code location follows.
+    const section = { id: `s${++design.clock}`, element, source: sourceLocation(element.attributeSource, { folders: folders(preview.projectId) }), offset: cleanOffset(mark?.offset), url: contents.getURL(), image: null };
+    design.sections.push(section);
+    syncDesign(preview);
+    const rect = captureRect(mark?.rect, mark?.viewport, 16);
+    const [hint, image] = await Promise.all([
+      typeof mark?.nonce === 'string' && /^[a-z0-9]{8,40}$/.test(mark.nonce) ? contents.executeJavaScript(sourceScript(mark.nonce)).catch(() => null) : null,
+      rect ? wait(paintWait).then(() => alive(preview.page) ? shoot(contents, rect) : null) : null,
+    ]);
+    section.image = image;
+    section.source = sourceLocation(hint, { folders: folders(preview.projectId) }) || section.source;
+    if (design.sections.includes(section)) designToolbar(preview);
+    return section;
+  }
+  function removeSection(preview, id) {
+    const design = preview.design, before = design.sections.length;
+    design.sections = design.sections.filter(section => section.id !== id);
+    if (design.sections.length !== before) syncDesign(preview);
+  }
+  // Adds the notes to the message box as one message: the page as shown with its numbered boxes, then the sections it
+  // doesn't show. Marking stops first, so the outline under the pointer isn't in the screenshot.
+  async function sendDesign(preview, value) {
+    const design = preview.design, contents = preview.page.webContents, { projectId } = preview;
+    if (!design.sections.length || design.busy) return null;
+    design.busy = true; design.marking = false; syncDesign(preview);
+    try {
+      await wait(paintWait);
+      if (!alive(preview.page)) return null;
+      const images = [], page = await shoot(contents), away = new Set([...design.missing, ...design.offscreen]), here = pathOf(contents.getURL());
+      if (page) images.push({ name: 'design-page.png', data: page });
+      design.sections.forEach((section, index) => {
+        const elsewhere = pathOf(section.url) !== here || away.has(section.id);
+        if (images.length < DESIGN_SHOTS && section.image && (!page || elsewhere)) images.push({ name: `design-section-${index + 1}.png`, data: section.image });
+      });
+      if (!alive(preview.page)) return null;
+      const notes = value?.notes && typeof value.notes === 'object' ? value.notes : {}, url = contents.getURL(), name = label(preview);
+      const text = designText({ sections: design.sections, notes: Object.fromEntries(design.sections.map(section => [section.id, typeof notes[section.id] === 'string' ? notes[section.id] : ''])), overall: typeof value?.overall === 'string' ? value.overall : '', url, label: name, shots: images.length });
+      const count = design.sections.length;
+      Object.assign(design, { sections: [], missing: [], offscreen: [] });
+      const result = { projectId, url, label: name, design: true, image: null, images, text };
+      onPick(result);
+      toToolbar(preview, 'preview:design-added', { count });
+      return result;
+    } finally { design.busy = false; syncDesign(preview); }
   }
 
   // A pick says which window's interface it came from, and goes to that window's workspace.
@@ -418,6 +543,10 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     else if (action === 'forward' && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
     else if (action === 'reload') contents.reload();
     else if (action === 'pick') setPicking(preview, !preview.picking);
+    else if (action === 'design') setDesign(preview, value);
+    else if (action === 'design-remove' && typeof value === 'string') removeSection(preview, value);
+    else if (action === 'design-clear') { Object.assign(preview.design, { sections: [], missing: [], offscreen: [] }); syncDesign(preview); }
+    else if (action === 'design-send') sendDesign(preview, value).catch(error => toToolbar(preview, 'preview:error', `The design notes could not be added: ${error.message}`));
     else if (action === 'open-external' && isPreviewURL(contents.getURL())) shell.openExternal(contents.getURL());
     else if (action === 'navigate') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch (error) { toToolbar(preview, 'preview:error', error.message); } }
     else if (action === 'focus-app') onPick({ projectId: preview.projectId, focus: true });
@@ -428,6 +557,20 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   const onPicked = (event, pick) => { const preview = fromPage(event); if (!preview?.picking) return; preview.picking = false; sync(preview); finish(preview, pick).catch(error => toToolbar(preview, 'preview:error', `The element could not be picked: ${error.message}`)); };
   const onCancelled = event => { const preview = fromPage(event); if (preview) { preview.picking = false; sync(preview); } };
   ipcMain.on('preview:toolbar', onToolbar); ipcMain.on('preview:picked', onPicked); ipcMain.on('preview:pick-cancelled', onCancelled);
+  // The page marks a section only while marking is on, says which boxes it can't find or doesn't show, and stops
+  // marking on Escape.
+  const onDesignMark = (event, mark) => { const preview = fromPage(event); if (!preview?.design.open || !preview.design.marking) return; addSection(preview, mark).catch(error => toToolbar(preview, 'preview:error', `The section could not be marked: ${error.message}`)); };
+  const onDesignLayout = (event, value) => {
+    const preview = fromPage(event);
+    if (!preview?.design.open) return;
+    const ids = new Set(preview.design.sections.map(section => section.id)), list = key => Array.isArray(value?.[key]) ? value[key].filter(id => ids.has(id)).sort() : [];
+    const missing = list('missing'), offscreen = list('offscreen');
+    if (JSON.stringify([missing, offscreen]) === JSON.stringify([preview.design.missing, preview.design.offscreen])) return;
+    Object.assign(preview.design, { missing, offscreen });
+    designToolbar(preview);
+  };
+  const onDesignStop = event => { const preview = fromPage(event); if (preview?.design.marking) { preview.design.marking = false; syncDesign(preview); } };
+  ipcMain.on('preview:design-mark', onDesignMark); ipcMain.on('preview:design-layout', onDesignLayout); ipcMain.on('preview:design-stop', onDesignStop);
   // A page's API calls go to its own window's inspector.
   const onApiCall = (event, call) => {
     const preview = fromPage(event);
@@ -486,7 +629,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     shows: projectId => windowsOf(projectId).length > 0,
     // The smoke test picks in the window used last.
     setPicking: on => setPicking(latest(), on),
-    dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); ipcMain.off('preview:api-call', onApiCall); for (const preview of [...previews]) if (live(preview)) preview.win.destroy(); previews.clear(); projects.clear(); },
+    dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); ipcMain.off('preview:api-call', onApiCall); ipcMain.off('preview:design-mark', onDesignMark); ipcMain.off('preview:design-layout', onDesignLayout); ipcMain.off('preview:design-stop', onDesignStop); for (const preview of [...previews]) if (live(preview)) preview.win.destroy(); previews.clear(); projects.clear(); },
     get page() { return latest()?.page ?? null; }, get picking() { return Boolean(latest()?.picking); },
     get count() { return [...previews].filter(live).length; },
     // How the last pick's screenshot went: captured, blank, hung, or none when the pick had no area.

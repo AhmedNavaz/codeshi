@@ -29,7 +29,8 @@ export class TaskCoordinator {
   }
   all() { return [...this.main.conversations.values()].flatMap(c => (c.parallelTasks || []).map(task => ({ c, task }))); }
   find(c, id) { const task = (c.parallelTasks || []).find(item => item.id === id); if (!task) throw fail('That task is no longer here.', 404); return task; }
-  update(c, task, changes) { this.main.record(c, { type: 'parallel_task_update', id: task.id, changes }); this.main.emit('update', { conversationId: c.id }); }
+  // A card on the board (#132) follows the task it started, so the board hears about every change.
+  update(c, task, changes) { this.main.record(c, { type: 'parallel_task_update', id: task.id, changes }); this.onTask?.(c, task); this.main.emit('update', { conversationId: c.id }); }
   get running() { return [...this.lanes.values()].filter(lane => lane.broker.running).length; }
   get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.preparing.size + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
   get busy() { return this.running > 0 || this.checking.size > 0; }
@@ -85,7 +86,7 @@ export class TaskCoordinator {
     return { ...plan, running, limit, full: running >= limit };
   }
 
-  start(c, input = {}, { queueExecution = null, prepareReview = false, held = false, plan = null } = {}) {
+  start(c, input = {}, { queueExecution = null, prepareReview = false, held = false, plan = null, board = null } = {}) {
     input = { ...input, purpose: prepareReview ? 'project-review' : null, ...(prepareReview ? { mode: 'read', approvalPolicy: 'ask' } : {}) };
     if (this.closed) throw fail('Codeshi is stopping.', 503);
     const text = typeof input.text === 'string' ? input.text.trim() : '';
@@ -110,7 +111,7 @@ export class TaskCoordinator {
     for (const id of waitsFor({ dependsOn })) { const before = this.find(c, id); if (['discarded', 'cancelled'].includes(before.status)) throw fail(`“${before.title}” was ${before.status}, so nothing can wait for it.`); }
     const folder = this.plan(c, { ...input, provider, accessMode: mode, approvalPolicy }).folder;
     // Ownership is saved before anything can start, so a crash at any point finds a task it can recover.
-    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(plan ? { plan } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
+    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(plan ? { plan } : {}), ...(board ? { board } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
     this.main.record(c, { type: 'parallel_task', task });
     const saved = this.find(c, task.id);
     this.tick(c);

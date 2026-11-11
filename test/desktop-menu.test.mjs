@@ -18,7 +18,7 @@ test('the macOS menu bar has Codeshi, File, Edit, View, Agent, Workspace, Window
   const {template,all,item,roles,labels}=menu();
   assert.deepEqual(labels(template),['Codeshi','File','Edit','View','Agent','Workspace','windowMenu','help']);
   assert.deepEqual(labels(item('Codeshi').submenu),['about','-','Settings…','Setup Guide','-','services','-','hide','hideOthers','unhide','-','quit']);
-  assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','close']);
+  assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Share Live…','Watch a Teammate…','-','close']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','pasteAndMatchStyle','delete','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces','-','Speech']);
   assert.deepEqual(labels(item('View').submenu),['Show Git Activity','Show Files','Terminal','Flow Mode','Focus Message Box','-','Appearance','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen']);
   assert.deepEqual(labels(item('Appearance').submenu),['System','Light','Dark','Graphite']);
@@ -62,7 +62,7 @@ test('menu items enable and tick from the page, the saved appearance and Keep Aw
 
 test('page items and in-app release notes send commands, and external Help links open fixed GitHub pages',()=>{
   const {all,sent,opened,item}=menu();
-  const commands={'Review Changes with Other Agent…':['review'],'Ask a Friend…':['ask-friend'],'Settings…':['settings'],'Setup Guide':['setup-guide'],'New Workspace':['new-workspace'],'Add Folder to Workspace…':['add-folder'],'Previous Chats…':['previous-chats'],'Export Conversation…':['export'],'Find in Conversation':['find'],'Find Next':['find-next'],'Find Previous':['find-previous'],'Filter Workspaces':['filter-workspaces'],'Show Git Activity':['git'],'Show Files':['files'],'Focus Message Box':['focus-message'],System:['appearance','system'],Light:['appearance','light'],Dark:['appearance','dark'],Graphite:['appearance','graphite'],'Use Codex':['agent','codex'],'Use Claude Code':['agent','claude'],'Stop Run':['stop'],continue:['continue'],'Keep Awake':['keep-awake'],Frontend:['workspace',1],'R&D':['workspace',2],'Workspace Settings…':['workspace-settings'],'Remove Workspace…':['remove-workspace']};
+  const commands={'Review Changes with Other Agent…':['review'],'Ask a Friend…':['ask-friend'],'Share Live…':['share-live'],'Watch a Teammate…':['watch-teammate'],'Settings…':['settings'],'Setup Guide':['setup-guide'],'New Workspace':['new-workspace'],'Add Folder to Workspace…':['add-folder'],'Previous Chats…':['previous-chats'],'Export Conversation…':['export'],'Find in Conversation':['find'],'Find Next':['find-next'],'Find Previous':['find-previous'],'Filter Workspaces':['filter-workspaces'],'Show Git Activity':['git'],'Show Files':['files'],'Focus Message Box':['focus-message'],System:['appearance','system'],Light:['appearance','light'],Dark:['appearance','dark'],Graphite:['appearance','graphite'],'Use Codex':['agent','codex'],'Use Claude Code':['agent','claude'],'Stop Run':['stop'],continue:['continue'],'Keep Awake':['keep-awake'],Frontend:['workspace',1],'R&D':['workspace',2],'Workspace Settings…':['workspace-settings'],'Remove Workspace…':['remove-workspace']};
   commands['What’s New']=['whats-new'];
   commands.Terminal=['terminal'];
   commands['Flow Mode']=['flow'];
@@ -84,7 +84,7 @@ test('page items and in-app release notes send commands, and external Help links
 for(const platform of ['win32','linux'])test(`on ${platform} the menus have no app menu: Settings and Exit join File, Setup Guide and About join Help, and & stays literal`,()=>{
   const {template,item,roles,labels}=menu({platform});
   assert.deepEqual(labels(template),['File','Edit','View','Agent','Workspace','windowMenu','help']);
-  assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Settings…','-','close','quit']);
+  assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Share Live…','Watch a Teammate…','-','Settings…','-','close','quit']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','delete','-','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces']);
   assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','Setup Guide','-','Report a Bug','Share Design Feedback','Record Performance Trace','-','Roadmap','What’s New','-','about']);
   for(const role of ['services','hide','hideOthers','unhide','pasteAndMatchStyle'])assert(!roles.includes(role),role);

@@ -293,7 +293,7 @@ test('Lounge weather stays still when the system asks for reduced motion', () =>
   assert.deepEqual(ui.weather().filter(([name]) => ['stroke', 'fill'].includes(name)), []);
 });
 
-test('weather keeps one loop at most through hide, recede, Flow on and off, weather changes and re-entry', () => {
+test('weather keeps one loop at most through hide, approvals, Flow on and off, weather changes and Lounge visits', () => {
   const ui = lounge();
   ui.api.enter(); ui.api.setWeatherMode('rain'); ui.frame(0);
   assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'games draw once and wait for Start; only the weather runs');
@@ -304,35 +304,38 @@ test('weather keeps one loop at most through hide, recede, Flow on and off, weat
   second(ui, 60);
   assert.deepEqual(ui.loops(), { drawWeather: 1 });
   ui.api.recede('attention'); second(ui, 60, 2000);
-  assert.deepEqual(ui.loops(), {}, 'the weather stops while the Lounge has receded for an approval');
+  assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'the weather keeps falling while the Lounge steps aside for an approval');
   ui.setHidden(true); ui.setHidden(false); second(ui, 60, 3000);
-  assert.deepEqual(ui.loops(), {}, 'showing the window again does not start it while receded');
+  assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'showing the window again starts one loop, not two');
   ui.api.resume(); second(ui, 60, 4000);
-  assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'returning to the Lounge starts it again');
+  assert.deepEqual(ui.loops(), { drawWeather: 1 });
+  ui.api.exit(); second(ui, 60, 5000);
+  assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'the weather falls anywhere in Flow, not only in the Lounge');
   assert.equal(ui.api.getWeatherMode(), 'rain', 'with the same weather as before');
   ui.setFlow(false); second(ui, 60, 6000);
   assert.deepEqual(ui.loops(), {}, 'leaving Flow stops the weather');
   ui.setFlow(true); second(ui, 60, 8000);
-  assert.deepEqual(ui.loops(), {}, 'Flow alone does not bring the weather back');
-  ui.api.enter(); second(ui, 60, 9000);
-  assert.deepEqual(ui.loops(), { drawWeather: 1 });
+  assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'coming back to Flow brings the chosen weather back');
   ui.api.setWeatherMode('clear'); second(ui, 60, 10000);
-  assert.deepEqual(ui.loops(), {}, 'Clear stops after clearing');
+  assert.deepEqual(ui.loops(), {}, 'Clear draws nothing');
   ui.api.setWeatherMode('rain');
-  for (let i = 0; i < 3; i++) { ui.api.exit(); ui.api.enter(); }
+  for (let i = 0; i < 3; i++) { ui.api.enter(); ui.api.exit(); }
   second(ui, 60, 12000);
   assert.deepEqual(ui.loops(), { drawWeather: 1 });
 });
 
-test('weather stops when you leave the Lounge, and its canvas goes with it', () => {
+test('Clear keeps no full-window canvas, and leaving the Lounge keeps the weather', () => {
   const ui = lounge();
   ui.api.enter(); ui.api.setWeatherMode('snow'); second(ui, 60, 0, 2);
   assert.ok(ui.document.getElementById('flow-lounge-weather-canvas'), 'snow falls in the Lounge');
   ui.api.exit(); second(ui, 60, 3000, 2);
-  assert.deepEqual(ui.loops(), {}, 'nothing waits for a frame after leaving');
-  assert.equal(ui.document.getElementById('flow-lounge-weather-canvas'), null, 'Flow keeps no full-window canvas');
-  ui.api.enter(); second(ui, 60, 6000);
-  assert.equal(ui.api.getWeatherMode(), 'snow', 'coming back keeps the choice');
+  assert.ok(ui.document.getElementById('flow-lounge-weather-canvas'), 'and keeps falling in Flow');
+  assert.deepEqual(ui.loops(), { drawWeather: 1 });
+  ui.api.setWeatherMode('clear'); second(ui, 60, 6000);
+  assert.deepEqual(ui.loops(), {}, 'nothing waits for a frame with Clear');
+  assert.equal(ui.document.getElementById('flow-lounge-weather-canvas'), null, 'Clear keeps no canvas');
+  ui.setFlow(false); ui.setFlow(true); ui.api.setWeatherMode('snow'); second(ui, 60, 9000);
+  assert.equal(ui.api.getWeatherMode(), 'snow');
   assert.deepEqual(ui.loops(), { drawWeather: 1 });
 });
 

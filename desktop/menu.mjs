@@ -26,7 +26,7 @@ function system(platform, osVersion, arch) {
   return `${name} ${osVersion}, ${platform === 'darwin' ? arch === 'arm64' ? 'Apple Silicon' : 'Intel' : arch}`;
 }
 
-export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = alertDefaults, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open, tracing = false, recordTrace = () => {}, text: words = english }) {
+export function menuTemplate({ platform, packaged, updates = false, version, osVersion, arch, state, appearance, keepAwake, notifications = alertDefaults, setNotifications = () => {}, handoff = { threshold: 90, automatic: false }, setHandoff = () => {}, send, open, tracing = false, recordTrace = () => {}, command: shellCommand = null, text: words = english }) {
   // The menus' words are in the interface language (#27); names of workspaces and agents stay as they are.
   const { t } = words, page = state || initial, mac = platform === 'darwin', separator = () => ({ type: 'separator' });
   const command = (label, name, options = {}) => ({ label, ...options, click: () => send(...name) });
@@ -42,6 +42,9 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command(t('Export Conversation…'), ['export'], { enabled: page.export }),
     command(t('Review Changes with Other Agent…'), ['review'], { enabled: page.workspace && !page.running }),
     command(t('Ask a Friend…'), ['ask-friend'], { enabled: page.workspace }),
+    separator(),
+    command(t('Share Live…'), ['share-live'], { enabled: page.workspace }),
+    command(t('Watch a Teammate…'), ['watch-teammate']),
     separator(),
     ...mac ? [] : [settings, separator()],
     { role: 'close' },
@@ -118,6 +121,10 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command(t('What’s New'), ['whats-new'], { id: 'whats-new' }),
     ...mac ? [] : [separator(), { role: 'about' }],
   ] };
-  const application = { label: 'Codeshi', submenu: [{ role: 'about' }, ...updates ? [command(t('Check for Updates…'), ['check-updates'], { id: 'check-updates' })] : [], separator(), settings, setup, separator(), { role: 'services' }, separator(), { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator(), { role: 'quit' }] };
+  // The codeshi command (#90): installed as a link in /usr/local/bin, so Remove is offered only for Codeshi's own link.
+  const cli = !mac || !shellCommand ? [] : [shellCommand.state === 'installed'
+    ? { label: t('Remove ‘codeshi’ Command'), id: 'codeshi-command', click: () => shellCommand.uninstall() }
+    : { label: t('Install ‘codeshi’ Command…'), id: 'codeshi-command', click: () => shellCommand.install() }];
+  const application = { label: 'Codeshi', submenu: [{ role: 'about' }, ...updates ? [command(t('Check for Updates…'), ['check-updates'], { id: 'check-updates' })] : [], separator(), settings, setup, ...cli, separator(), { role: 'services' }, separator(), { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator(), { role: 'quit' }] };
   return [...mac ? [application] : [], file, edit, view, agent, workspace, { role: 'windowMenu' }, help];
 }

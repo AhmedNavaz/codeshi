@@ -1,5 +1,5 @@
 // Orchestrate (#12, #89, #97): a message can be planned as a few steps. Turned on for one message, one read-only
-// run plans it with the deepest work allowed; the plan then opens from the Plan button beside Flow, as a chart
+// run plans it with the deepest work allowed; the plan then opens from the Plan button in the top bar, as a chart
 // (plan-view.js). This module keeps the draft being edited, each step's editor, the worst case and the plan's actions.
 // Nothing from a plan runs until it is approved, and queued messages wait for it. The server checks every saved plan again.
 (() => {
@@ -370,7 +370,7 @@
     renderEntry();
     window.relayPlanView?.render();
   }
-  // The Plan button beside Flow: it opens the plan, and says where the plan stands.
+  // The Plan button in the top bar: it opens the plan, and says where the plan stands.
   function renderEntry() {
     const entry = $('open-plan'); if (!entry) return;
     const plan = onMain() ? openPlan() || runningPlan() : null, count = plan?.steps?.length || 0;

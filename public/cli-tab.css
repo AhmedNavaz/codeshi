@@ -1,0 +1,34 @@
+/* The codeshi command in a tab (#90): Chat and CLI as two tabs under the conversation's header, shown once a CLI tab is
+   open. With CLI in front, the command fills the conversation's place; the header, the bottom panel and the status bar
+   stay as they are. */
+.main-tabs { display: flex; align-items: stretch; gap: 2px; flex: none; height: 32px; padding: 0 12px 0 8px; border-bottom: 1px solid var(--border); background: var(--bg); }
+.main-tabs[hidden] { display: none; }
+.main-tab { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; border: 0; background: none; color: var(--muted); font-size: 12px; font-weight: 500; }
+.main-tab .icon { width: 14px; height: 14px; }
+.main-tab:hover { color: var(--text); }
+.main-tab[aria-selected="true"] { color: var(--text-strong); }
+.main-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; border-radius: 1px; background: var(--accent); }
+.main-tab:focus-visible { outline: 2px solid var(--focus, var(--accent)); outline-offset: -2px; border-radius: 4px; }
+.main-tab-cli { display: inline-flex; align-items: center; }
+.main-tab-cli .main-tab { padding-right: 4px; }
+.main-tab-cli .main-tab[aria-selected="true"]::after { right: -18px; }
+/* A dot says the command is still starting or has ended. */
+#main-tab-cli[data-state="ended"]::before, #main-tab-cli[data-state="starting"]::before { content: ""; order: 3; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.main-tab-close { width: 20px; height: 20px; margin-right: 4px; border-radius: 4px; color: var(--faint); }
+.main-tab-close .icon { width: 12px; height: 12px; }
+.main-tab-close:hover { color: var(--text); background: var(--hover); }
+.main-tabs-note { align-self: center; margin-left: auto; overflow: hidden; color: var(--faint); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+@container main-panel (max-width: 520px) { .main-tabs-note { display: none; } }
+
+/* With CLI in front, it takes the conversation's place: everything between the tabs and the bottom panel waits behind. */
+.main-panel.cli-front > :not(.conversation-header, #main-tabs, #cli-view, #bottom-panel, #announcer) { display: none !important; }
+.cli-view { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 10px 4px 4px 14px; background: var(--panel-bg, var(--bg)); }
+.cli-view[hidden] { display: none; }
+.cli-views { position: relative; flex: 1; min-height: 0; }
+.cli-host { position: absolute; inset: 0; }
+.cli-host[hidden] { display: none; }
+.cli-host .xterm { height: 100%; }
+/* xterm's scroll area is black by default and reaches below the last row; the view's own colour shows instead. */
+.cli-host .xterm-viewport { background-color: transparent !important; scrollbar-width: thin; }
+.cli-message { flex: none; margin: 6px 10px 2px 0; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-raised); color: var(--text); font-size: 12px; }
+.cli-message[hidden] { display: none; }

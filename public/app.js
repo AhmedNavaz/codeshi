@@ -133,7 +133,7 @@
   }
   async function api(path, options = {}, projectId = state.projectId) {
     const providerEndpoint = /^\/api\/providers(?:\/|$)/.test(path);
-    if (/^\/api\/(?:tasks|ledger|memory|budget|skills|suggestion|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
+    if (/^\/api\/(?:tasks|board|ledger|memory|budget|skills|suggestion|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
       if (!projectId) throw new Error("Choose a project first.");
       path += `${path.includes("?") ? "&" : "?"}projectId=${encodeURIComponent(projectId)}`;
     }
@@ -557,6 +557,12 @@
     if (resolved.kind === "exact") await openWorkspaceFile(resolved.folder, relative, null, null, resolved.fallbackRelative);
     else await probeWorkspaceFiles(folders, relative, null, null);
   }
+  async function openImageFile(path) {
+    const resolved = resolveWorkspaceCandidates(path);
+    if (resolved.kind === "exact") await openWorkspaceFile(resolved.folder, resolved.relative, null, null, resolved.fallbackRelative);
+    else if (resolved.kind === "probe") await probeWorkspaceFiles(resolved.folders, resolved.relative, null, null);
+    else reportResolutionProblem(resolved);
+  }
   function splitPlainUrl(raw) {
     let url = raw, trailing = "";
     while (url.length) {
@@ -868,7 +874,8 @@
     // version cut short still says which tool it was and what it acted on.
     const tool = text.match(/^([A-Za-z_][\w-]*)\n(\{.*\})(?:\n([\s\S]*))?$/), partial = !tool && text.match(/^([A-Za-z_][\w-]*)\n(\{"[^\n]*)/);
     if (tool || partial) {
-      const name = (tool || partial)[1], result = tool ? (tool[3] || "").trim() : "";
+      // A result that is a picture is never shown as its bytes: a Read of an image opens the image instead.
+      const name = (tool || partial)[1], given = tool ? (tool[3] || "").trim() : "", pictured = /^\[\{"type":"image"/.test(given), result = pictured ? "" : given;
       let input = {};
       if (tool) { try { input = JSON.parse(tool[2]); } catch {} }
       else for (const key of ["file_path", "notebook_path", "path", "command", "description", "pattern", "url", "query"]) {
@@ -877,7 +884,8 @@
       }
       const path = input.file_path || input.notebook_path || input.path || "", file = displayPath(path);
       const step = (icon, verb, detail, output = result, mono = false) => ({ kind: "tool", icon, verb, detail, mono, output, toolName: name, input, raw: text });
-      if (["Read", "read_file"].includes(name)) return { ...step("read", "Read", file), title: path };
+      if (["Read", "read_file"].includes(name)) return { ...step("read", "Read", file), title: path, ...(pictured && path ? { image: path, copy: path } : {}) };
+      if (pictured) return { ...step("tool", name, "Returned an image"), copy: name };
       if (["Edit", "MultiEdit", "edit_file", "NotebookEdit"].includes(name)) {
         const edits = (Array.isArray(input.edits) ? input.edits : [input]).filter(edit => typeof edit.old_string === "string" || typeof edit.new_string === "string");
         const diff = edits.map(edit => lineDiff(edit.old_string, edit.new_string).join("\n")).join("\n\n");
@@ -993,7 +1001,8 @@
     node.append(element("span", `activity-icon icon-${step.icon || step.kind}`));
     const head = element("div", "activity-entry-header");
     // A step with more to show is a button; one that is only its line stays text, which keeps it searchable.
-    const toggle = element(more ? "button" : "div", "activity-output-toggle");
+    const viewable = !more && Boolean(step.image) && !isFolderReference(step.image);
+    const toggle = element(more || viewable ? "button" : "div", "activity-output-toggle");
     toggle.append(element("span", "activity-entry-title", step.verb));
     if (step.files?.length) toggle.append(fileList(step.files));
     else if (step.detail) { const detail = element(step.mono ? "code" : "span", "activity-entry-detail", step.detail); detail.title = step.cmd || step.title || step.detail; toggle.append(detail); }
@@ -1005,6 +1014,12 @@
       head.append(remember);
     }
     entry.append(node, head);
+    // An image the agent read opens in the file preview when its row is clicked.
+    if (viewable) {
+      toggle.type = "button"; toggle.title = "View image";
+      toggle.append(element("span", "activity-view-image", "View image"));
+      toggle.addEventListener("click", () => openImageFile(step.image));
+    }
     if (!more) return entry;
     const output = element("pre", "activity-output", step.diff ? undefined : step.output), outputId = "activity-output-" + entryId;
     // An edit shows the lines it removed and added in their colours.
@@ -2734,6 +2749,7 @@
       else scheduleProjectsRefresh();
     });
     state.events.addEventListener("projects", scheduleProjectsRefresh);
+    state.events.addEventListener("watch", () => window.dispatchEvent(new CustomEvent("relay-watch")));
     // An alert with a sound to play (sounds.js), for any workspace.
     state.events.addEventListener("alert", (event) => { try { window.dispatchEvent(new CustomEvent("relay-alert", { detail: JSON.parse(event.data) })); } catch { /* A malformed alert plays nothing. */ } });
     state.events.addEventListener("error", () => { state.streamConnected = false; window.dispatchEvent(new CustomEvent("relay-state")); });
@@ -2756,6 +2772,7 @@
   // only. It never filters the sidebar. Enter runs the highlighted result, the first match at first, and Escape clears it.
   const commandActions = [
     { label: "Review changes…", id: "open-review" }, { label: "Ask a friend…", id: "ask-friend" },
+    { label: "Share live with a teammate…", id: "share-live" }, { label: "Watch a teammate’s conversation…", id: "watch-teammate" },
     { label: "Previous chats…", id: "open-import" }, { label: "Export conversation…", id: "open-export" }, { label: 'Compact context', id: 'compact-context' },
     { label: "Flow mode: just the chat, with plain-language cards", run: () => window.relayFlow?.toggle() },
     { label: "Agents: plan usage and handoff", run: () => window.relayAgents?.open() },
@@ -2869,7 +2886,7 @@
     terminal: () => { if (!state.projectId || !window.relayTerminal || window.relayFlow?.isOn?.()) return false; window.relayTerminal.toggle(); return true; },
     voice: () => Boolean(state.projectId && window.relayVoice?.toggle()),
     "local-models": () => window.relayLocal?.open(),
-    "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), files: () => { if ($('files-dialog')?.open) { $('close-files').click(); return true; } return press('toggle-explorer')(); }, "keep-awake": press("keep-awake"),
+    "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), "share-live": press("share-live"), "watch-teammate": press("watch-teammate"), files: () => { if ($('files-dialog')?.open) { $('close-files').click(); return true; } return press('toggle-explorer')(); }, "keep-awake": press("keep-awake"),
     "add-folder": () => { if (covered()) return false; toggleFolderForm(true); return true; },
     agent: provider => ["codex", "claude", "gemini"].includes(provider) && press("select-" + provider)(),
     continue: () => !ui.continuation.hidden && press("continue-button")(),

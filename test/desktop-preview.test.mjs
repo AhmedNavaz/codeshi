@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { INSPECTOR_WIDTH, apiInterceptorScript, captureRect, cleanElement, createPreview, interfaceName, isPreviewURL, pickText, previewEndpoint, previewURL, sourceLocation, sourceScript } from '../desktop/preview.mjs';
+import { DESIGN_LIMIT, INSPECTOR_WIDTH, apiInterceptorScript, captureRect, cleanElement, cleanOffset, createPreview, designText, interfaceName, isPreviewURL, pickText, previewEndpoint, previewURL, sectionName, sourceLocation, sourceScript } from '../desktop/preview.mjs';
 
 test('the preview opens only local addresses, without credentials', () => {
   assert.equal(previewURL(' http://localhost:5173/checkout '), 'http://localhost:5173/checkout');
@@ -414,4 +414,110 @@ test('each interface opens in a window of its own beside the others, and opening
   assert.equal(preview.close({ projectId: 'p1', urls: [] }), 0);
   preview.dispose();
   assert.deepEqual([preview.count, windows.every(win => win.closed)], [0, true]);
+});
+
+test('design notes read as one numbered message: each section, where its code is, its note, and the page as a whole (#125)', () => {
+  const sections = [
+    { id: 's1', element: { tag: 'section', text: 'Pricing', label: '', selector: 'section.pricing' }, source: { file: 'src/Pricing.tsx', line: 12, component: 'Pricing' }, offset: null, url: 'http://localhost:5173/' },
+    { id: 's2', element: { tag: 'ul', text: '', label: 'Plans', selector: 'ul.plans' }, source: null, offset: { x: 0, y: 40, width: 640, height: 220 }, url: 'http://localhost:5173/' },
+    { id: 's3', element: { tag: 'h2', text: 'Our team', label: '', selector: 'h2#team' }, source: null, offset: null, url: 'http://localhost:5173/about' },
+  ];
+  assert.equal(sectionName(sections[1]), 'an area of 640×220 in the “Plans” list');
+  assert.equal(designText({ sections, notes: { s1: 'Three plans side by side on desktop.', s2: ' Tighter   spacing. ' }, overall: 'Calmer, more white space.', url: 'http://localhost:5173/', label: 'Web', shots: 2 }), [
+    'Design notes for the preview of Web (localhost:5173), 3 sections. The numbers match the boxes in the screenshots.',
+    '1. The “Pricing” section (section.pricing; src/Pricing.tsx:12 in Pricing): Three plans side by side on desktop.',
+    '2. An area of 640×220 in the “Plans” list (ul.plans): Tighter spacing.',
+    '3. On /about, the “Our team” heading (h2#team):',
+    'Whole page: Calmer, more white space.',
+  ].join('\n'));
+  assert.match(designText({ sections: sections.slice(0, 1), url: 'http://localhost:5173/', shots: 0 }), /^Design notes for the preview of localhost:5173, 1 section\.\n1\. /, 'Without a screenshot it doesn’t point to one.');
+  assert.deepEqual([cleanOffset({ x: 1.4, y: -3.6, width: 20, height: 10 }), cleanOffset({ x: 0, y: 0, width: 0, height: 5 }), cleanOffset({ x: 'a' }), cleanOffset(null)], [{ x: 1, y: -4, width: 20, height: 10 }, null, null, null]);
+});
+
+test('design notes: the page draws numbered boxes from selectors only, the notes stay in the toolbar, and one message carries them with its screenshots (#125)', async () => {
+  const handlers = {}, picks = [], toolbar = [], page = [], captures = [], made = [];
+  const shot = name => ({ isEmpty: () => false, getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from(name) });
+  const contents = log => ({ url: '', isDestroyed: () => false, setWindowOpenHandler() {}, on() {}, once() {}, loadFile() {}, send: (channel, value) => log.push([channel, structuredClone(value)]), focus() {}, isLoading: () => false, navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    async loadURL(url) { this.url = url; }, getURL() { return this.url; }, getTitle: () => 'Shop',
+    executeJavaScript: async script => script.includes('"aaaaaaaa11"') ? { component: 'Pricing', source: { file: '/work/shop/src/Pricing.tsx', line: 12 } } : null,
+    capturePage: async rect => { captures.push(rect || 'page'); return shot(rect ? `crop-${captures.length}` : 'page'); } });
+  class View { constructor() { this.webContents = contents(made.length % 2 === 0 ? toolbar : page); made.push(this); } setBounds() {} }
+  class Window { constructor() { this.contentView = { addChildView() {} }; } getContentBounds() { return { width: 1000, height: 700 }; } on() {} show() {} focus() {} setTitle() {} close() {} destroy() {} isDestroyed() { return false; } }
+  const session = { fromPartition: () => ({ setPermissionRequestHandler() {}, setPermissionCheckHandler() {}, on() {} }) };
+  const preview = createPreview({ BaseWindow: Window, WebContentsView: View, session, ipcMain: { on: (channel, handler) => { handlers[channel] = handler; }, off() {} }, shell: { openExternal() {} }, root: '/app', folders: () => [{ name: 'shop', path: '/work/shop' }], onPick: value => picks.push(value), paintWait: 0, captureWait: 50 });
+  await preview.open({ projectId: 'p1', url: 'http://localhost:5173/' });
+  const fromToolbar = { sender: made[0].webContents }, fromPage = { sender: made[1].webContents };
+  const act = (action, value) => handlers['preview:toolbar'](fromToolbar, action, value);
+  const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setTimeout(resolve, 1)); };
+  const last = (log, name) => log.filter(([channel]) => channel === name).at(-1)?.[1];
+  const mark = (nonce, element, rect, offset = null) => handlers['preview:design-mark'](fromPage, { nonce, element, rect, offset, viewport: { width: 1000, height: 656 } });
+
+  // A mark before Design notes opens is ignored.
+  mark('zzzzzzzz00', { tag: 'div', selector: '#x' }, { x: 0, y: 0, width: 10, height: 10 }); await settle();
+  assert.equal(last(page, 'preview:design'), undefined);
+
+  // Opening it starts marking, and stops a pick in progress.
+  preview.setPicking(true);
+  act('design', { open: true, marking: true });
+  assert.deepEqual(last(page, 'preview:design'), { marking: true, sections: [] });
+  assert.deepEqual(last(page, 'preview:picking'), false);
+  mark('aaaaaaaa11', { tag: 'section', text: 'Pricing', selector: 'section.pricing' }, { x: 20, y: 30, width: 400, height: 200 });
+  mark('bbbbbbbb22', { tag: 'ul', label: 'Plans', selector: 'ul.plans' }, { x: 40, y: 500, width: 300, height: 90 }, { x: 0, y: 12.2, width: 300, height: 90 });
+  await settle();
+  // The page gets numbers, selectors and areas, never names, code or notes.
+  assert.deepEqual(last(page, 'preview:design'), { marking: true, sections: [{ id: 's1', n: 1, selector: 'section.pricing', offset: null }, { id: 's2', n: 2, selector: 'ul.plans', offset: { x: 0, y: 12, width: 300, height: 90 } }] });
+  assert.deepEqual(captures, [{ x: 4, y: 14, width: 432, height: 232 }, { x: 24, y: 484, width: 332, height: 122 }], 'Each section is captured when it is marked, with its box and a margin.');
+  // The toolbar gets what the panel shows.
+  assert.deepEqual(last(toolbar, 'preview:design').sections, [
+    { id: 's1', n: 1, name: 'the “Pricing” section', code: 'src/Pricing.tsx:12 in Pricing', page: '', missing: false, offscreen: false },
+    { id: 's2', n: 2, name: 'an area of 300×90 in the “Plans” list', code: 'ul.plans', page: '', missing: false, offscreen: false },
+  ]);
+  // The page says which boxes it can't find or doesn't show, as after a scroll; unknown ids are dropped.
+  handlers['preview:design-layout'](fromPage, { missing: [], offscreen: ['s2', 'nope'] });
+  assert.equal(last(toolbar, 'preview:design').sections[1].offscreen, true);
+  // Escape on the page stops marking; the boxes stay.
+  handlers['preview:design-stop'](fromPage);
+  assert.deepEqual(last(page, 'preview:design').marking, false);
+  assert.equal(last(page, 'preview:design').sections.length, 2);
+  mark('cccccccc33', { tag: 'p', selector: 'p' }, { x: 0, y: 0, width: 5, height: 5 }); await settle();
+  assert.equal(last(toolbar, 'preview:design').sections.length, 2, 'Nothing is marked while marking is off.');
+
+  // Adding to the message: one pick with the numbered text, the page as shown, then the section out of view.
+  captures.length = 0;
+  act('design-send', { notes: { s1: 'Three plans side by side.', s2: 'Less space between rows.', other: 'ignored' }, overall: 'Calmer.' });
+  await settle();
+  assert.equal(picks.length, 1);
+  const pick = picks[0];
+  assert.equal(pick.design, true);
+  assert.equal(pick.text, 'Design notes for the preview of localhost:5173, 2 sections. The numbers match the boxes in the screenshots.\n1. The “Pricing” section (section.pricing; src/Pricing.tsx:12 in Pricing): Three plans side by side.\n2. An area of 300×90 in the “Plans” list (ul.plans): Less space between rows.\nWhole page: Calmer.');
+  assert.deepEqual(pick.images.map(image => image.name), ['design-page.png', 'design-section-2.png']);
+  assert.deepEqual(captures, ['page']);
+  assert.deepEqual([last(toolbar, 'preview:design-added'), last(toolbar, 'preview:design').sections, last(page, 'preview:design').sections], [{ count: 2 }, [], []], 'The notes leave Design notes once they are in the message.');
+
+  // At most DESIGN_LIMIT sections.
+  act('design', { open: true, marking: true });
+  for (let i = 0; i <= DESIGN_LIMIT; i++) mark(`dddddddd${String(i).padStart(2, '0')}`, { tag: 'li', selector: `li:nth-of-type(${i + 1})` }, { x: 0, y: 0, width: 10, height: 10 });
+  await settle();
+  assert.equal(last(toolbar, 'preview:design').sections.length, DESIGN_LIMIT);
+  assert.match(last(toolbar, 'preview:error'), /up to 12 sections/);
+  act('design-remove', 's5');
+  assert.deepEqual(last(page, 'preview:design').sections.slice(1, 4).map(section => [section.id, section.n]), [['s4', 2], ['s6', 3], ['s7', 4]], 'Removing one renumbers the rest; ids never repeat.');
+  act('design-clear');
+  assert.deepEqual(last(page, 'preview:design').sections, []);
+  // Closing Design notes takes the boxes off the page.
+  mark('eeeeeeee01', { tag: 'li', selector: 'li' }, { x: 0, y: 0, width: 10, height: 10 }); await settle();
+  act('design', { open: false });
+  assert.deepEqual(last(page, 'preview:design'), { marking: false, sections: [] });
+  assert.equal(last(toolbar, 'preview:design').sections.length, 1, 'Closing keeps the sections for when it opens again.');
+  preview.dispose();
+});
+
+test('the toolbar keeps each note as it is typed, sends them with the sections, and the page preload gives the page nothing (#125)', () => {
+  const html = fs.readFileSync(new URL('../desktop/preview-toolbar.html', import.meta.url), 'utf8'), script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  assert.match(html, /id="design-btn"/); assert.match(html, /id="design-panel"/);
+  assert.doesNotMatch(script, /innerHTML/);
+  const preload = fs.readFileSync(new URL('../desktop/preview-page-preload.cjs', import.meta.url), 'utf8');
+  assert.match(preload, /attachShadow\(\{ mode: 'closed' \}\)[\s\S]*codeshi-design/);
+  assert.doesNotMatch(preload, /contextBridge|exposeInMainWorld|postMessage/, 'The boxes and marks never reach the page’s scripts.');
+  assert.doesNotMatch(preload, /attributes: true/, 'The boxes follow the page’s structure, not every style change, to keep idle work low.');
 });

@@ -38,6 +38,7 @@ import { RunChecks } from './run-checks.mjs';
 import { RoutingDispatcher } from './routing-assessment.mjs';
 import { ExecutionPolicies, executionConfig } from './execution-policy.mjs';
 import { verificationForRun } from './verification.mjs';
+import { Board } from './board.mjs';
 import { applyOrchestration, checkPlanning, orchestrationAction, planningRequest, planningResult, restartedPlanning } from './orchestration.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
@@ -210,7 +211,7 @@ export class Broker extends EventEmitter {
     this.checks = new RunChecks(this, { tests });
     this.checkpoints = new RunCheckpoints(this);
     // A lane runs one task, so only the workspace's own broker coordinates others.
-    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); }
+    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); this.board = new Board(this); }
     this.checks.restore();
     // The first check of a wait saved before a restart runs once startup has finished.
     if (this.resume.waiting) setTimeout(() => this.resume.tick(), 0);
@@ -332,6 +333,10 @@ export class Broker extends EventEmitter {
     // Independent tasks (#88): saved before anything starts, so a crash can always find who owned what.
     if (record.type === 'parallel_task') c.parallelTasks = [...(c.parallelTasks || []), record.task];
     if (record.type === 'parallel_task_update') { const task = c.parallelTasks?.find(item => item.id === record.id); if (task) Object.assign(task, record.changes); }
+    // The task board (#132): cards live in the workspace chat's journal, beside the tasks they start.
+    if (record.type === 'board_card') { c.board = [...(c.board || []), record.card]; c.boardRevision = record.seq; }
+    if (record.type === 'board_card_update') { const card = c.board?.find(item => item.id === record.id); if (card) Object.assign(card, record.changes); c.boardRevision = record.seq; }
+    if (record.type === 'board_card_remove') { c.board = (c.board || []).filter(item => item.id !== record.id); c.boardRevision = record.seq; }
     if (record.type === 'queue_add') c.queue = [...c.queue, record.item?.routing?.mode ? { ...record.item, routing: { ...record.item.routing, mode: normalizeRoutingMode(record.item.routing.mode) } } : record.item];
     if (record.type === 'queue_update') c.queue = c.queue.map(item => { if (item.id !== record.id) return item; const updated = { ...item }; if (record.text !== undefined) updated.text = record.text; if ('provider' in record) updated.provider = record.provider; if ('model' in record) updated.model = record.model; if ('effort' in record) updated.effort = record.effort; if (record.clearRouting) delete updated.routing; return updated; });
     if (record.type === 'queue_move') { const item = c.queue.find(entry => entry.id === record.id); if (item) { const rest = c.queue.filter(entry => entry !== item); rest.splice(record.index, 0, item); c.queue = rest; } }
@@ -631,7 +636,7 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null, limit = null, before = null, toRun = null, toMessage = null } = {}) {
-    const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
+    const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, board, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     if (c.routingPending) { visible.status = 'running'; visible.activeRun = c.routingPending; visible.canAddToRun = false; }
     const contextFor = provider => contextControlView(c, provider, rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() }));
@@ -1374,7 +1379,8 @@ export class Broker extends EventEmitter {
       for (const tool of event.message.content.filter(block => block.type === 'tool_result')) {
         const id = `${run.id}:tool:${tool.tool_use_id}`;
         const existing = findMessage(c, id);
-        const content = typeof tool.content === 'string' ? tool.content : JSON.stringify(tool.content || []);
+        // A picture a tool returned is named by its type only: its bytes are unreadable as text and would fill the journal.
+        const content = typeof tool.content === 'string' ? tool.content : JSON.stringify((Array.isArray(tool.content) ? tool.content : []).map(block => block?.type === 'image' ? { type: 'image', media_type: block.source?.media_type || 'image' } : block));
         this.message(c, 'activity', clip(`${existing?.text || run.tools.get(tool.tool_use_id) || 'Tool result'}\n${content}`), provider, id, undefined, { status: 'completed', isError: tool.is_error === true });
       }
     }

@@ -91,12 +91,12 @@ test('a failed dismissal remains pending and can be retried', t => {
 test('bundled notes exclude unreleased and future work, use plain text and bound long histories', () => {
   const notes = releaseNotes(changelog, '0.10.0', '0.9.1');
   assert.deepEqual(notes.map(item => item.version), ['0.10.0', '0.9.2']);
-  assert.equal(notes[0].sections[0].items[0], 'A new feature with code and details.');
+  assert.deepEqual(notes[0].sections[0].items[0], { title: '', text: 'A new feature with code and details.' });
   assert.equal(JSON.stringify(notes).includes('not shipped'), false);
   assert.deepEqual(releaseNotes(changelog, '0.8.0'), []);
   const many = Array.from({ length: 20 }, (_, index) => `## [0.${19-index}.0]\n### Added\n${'- '.concat('x'.repeat(index ? 10 : 3000), '\n').repeat(index ? 1 : 30)}`).join('\n');
   const bounded = releaseNotes(many, '0.19.0', '0.0.0'); assert.equal(bounded.length, 5);
-  assert(bounded.every(release => release.sections.every(section => section.items.length <= 20 && section.items.every(text => text.length <= 2000))));
+  assert(bounded.every(release => release.sections.every(section => section.items.length <= 20 && section.items.every(item => item.title.length <= 120 && item.text.length <= 301))));
 });
 
 test('bundled notes filter out internal repository and developer items while preserving user-facing points', () => {
@@ -123,7 +123,7 @@ test('bundled notes filter out internal repository and developer items while pre
   assert(rel13);
   assert.deepEqual(rel13.sections.map(s => s.title), ['Added']);
   assert.equal(rel13.sections[0].items.length, 1);
-  assert.match(rel13.sections[0].items[0], /Project command controls/);
+  assert.deepEqual(rel13.sections[0].items[0], { title: 'Project command controls', text: 'Configure, inspect, and run persistent local commands.' });
   assert.equal(JSON.stringify(rel13).includes('src/'), false);
   assert.equal(JSON.stringify(rel13).includes('backend modules'), false);
 
@@ -132,7 +132,7 @@ test('bundled notes filter out internal repository and developer items while pre
   assert(rel12);
   const changedSection = rel12.sections.find(s => s.title === 'Changed');
   assert(changedSection);
-  assert.deepEqual(changedSection.items, ['The composer uses a two-line agent/model control.']);
+  assert.deepEqual(changedSection.items, [{ title: '', text: 'The composer uses a two-line agent/model control.' }]);
   assert.equal(JSON.stringify(rel12).includes('Tests cover'), false);
 });
 
@@ -142,7 +142,7 @@ test('real changelog produces clean user-facing notes for 0.13.0 without interna
   assert.equal(notes.length, 1);
   assert.equal(notes[0].version, '0.13.0');
   assert.deepEqual(notes[0].sections.map(s => s.title), ['Added']);
-  assert.match(notes[0].sections[0].items[0], /Project command controls/);
+  assert.equal(notes[0].sections[0].items[0].title, 'Project command controls');
   assert.equal(JSON.stringify(notes).includes('src/'), false);
   assert.equal(JSON.stringify(notes).includes('backend modules'), false);
 });
@@ -159,5 +159,23 @@ test('bundled notes fall back to latest user-facing release when current patch h
   const notes = releaseNotes(internalPatchChangelog, '0.10.1');
   assert.equal(notes.length, 1);
   assert.equal(notes[0].version, '0.10.0');
-  assert.equal(notes[0].sections[0].items[0], 'A user facing feature.');
+  assert.equal(notes[0].sections[0].items[0].text, 'A user facing feature.');
+});
+
+test('a bundled note keeps its title and adds a short explanation in whole sentences', () => {
+  const long = 'word '.repeat(80).trim();
+  const notes = releaseNotes(`# Changelog
+## [0.42.0] - 2026-11-11
+### Added
+- **Six puzzles** ([#14](https://github.com/example/app/issues/14)). The Lounge has six new puzzles. Each one plays with the mouse or the keyboard. ${'Later detail that would make the note too long to read at a glance. '.repeat(4)}
+- **Shorter title.** Shown under *Skills* in \`Settings\` (thanks @someone). Second sentence.
+- **Text size** in **Settings**: **Larger** makes everything bigger.
+- **Only a title**
+- **One long sentence.** ${long}.
+`, '0.42.0')[0].sections[0].items;
+  assert.deepEqual(notes[0], { title: 'Six puzzles', text: 'The Lounge has six new puzzles. Each one plays with the mouse or the keyboard. Later detail that would make the note too long to read at a glance. Later detail that would make the note too long to read at a glance.' });
+  assert.deepEqual(notes[1], { title: 'Shorter title', text: 'Shown under Skills in Settings. Second sentence.' });
+  assert.deepEqual(notes[2], { title: '', text: 'Text size in Settings: Larger makes everything bigger.' });
+  assert.deepEqual(notes[3], { title: 'Only a title', text: '' });
+  assert.equal(notes[4].title, 'One long sentence'); assert.match(notes[4].text, /^word( word)+…$/); assert(notes[4].text.length <= 301);
 });

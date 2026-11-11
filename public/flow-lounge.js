@@ -3,9 +3,10 @@
   // Flow Lounge (#14): Play and relax while agents work.
   // - The stage on the left opens on a grid of everything there is to do, each with a title and a description.
   //   Choosing one fills the whole stage with it; All activities goes back to the grid.
-  // - A quote and the weather switch share one row above the grid.
+  // - A quote sits in one row above the grid.
   // - The running chat moves to the right, where the right rail sits, and stays live and usable.
-  // - Fullscreen ambient weather canvas (Rain, Snow, Clear) physically interacting with UI cards and panels.
+  // - Fullscreen ambient weather canvas (Rain, Snow, Clear) physically interacting with UI cards and panels. It's chosen
+  //   in Flow's Your space and falls anywhere in Flow, not only in the Lounge.
   // - Games start only on click/interaction; keys reach only the game whose board holds focus.
   // - Auto-recedes when approvals or agent attention is needed.
 
@@ -40,7 +41,9 @@
   let weatherCanvas = null;
   let weatherCtx = null;
   let weatherAnimId = null;
-  let weatherMode = "clear"; // "rain" | "snow" | "clear"
+  // The choice is kept on this computer, so Rain or Snow comes back with Flow.
+  const WEATHER_KEY = "codeshi:flow-weather";
+  let weatherMode = (() => { try { const v = localStorage.getItem(WEATHER_KEY); return v === "rain" || v === "snow" ? v : "clear"; } catch { return "clear"; } })();
   let rainDrops = [];
   let rainSplashes = [];
   let rainRipples = [];
@@ -281,10 +284,9 @@
     }
   }
 
-  // Weather falls only while the Lounge is open. A full-window canvas redrawn 30 times a second costs about a tenth of
-  // a core with the GPU work on top, so it stops when you leave the Lounge or it recedes for an approval or a finished
-  // run, and starts again where it was when you come back. The choice of Rain, Snow or Clear is kept meanwhile.
-  const weatherShown = () => active && !receded;
+  // Weather falls in Flow while Rain or Snow is chosen. A full-window canvas redrawn 30 times a second costs about a
+  // tenth of a core with the GPU work on top, so Clear keeps no canvas at all, and a hidden window or leaving Flow stops it.
+  const weatherShown = () => Boolean(window.relayFlow?.isOn?.()) && weatherMode !== "clear";
   function syncWeather() {
     syncSound();
     if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
@@ -768,22 +770,21 @@
   }
 
   function setWeatherMode(mode) {
+    if (!WEATHER_MODES.some(item => item.id === mode)) return;
     weatherMode = mode;
-    if (weatherAnimId) safeCancelAnim(weatherAnimId);
-    weatherAnimId = null;
-    if (weatherShown() && !document.hidden) weatherAnimId = safeRequestAnim(drawWeather);
+    try { localStorage.setItem(WEATHER_KEY, mode); } catch {}
     rainSplashes = [];
     rainRipples = [];
     settledSnow = [];
     snowClumps = [];
-    syncSound();
-    const options = document.querySelectorAll(".flow-lounge-weather-option");
-    options.forEach(t => {
+    syncWeather();
+    document.querySelectorAll(".flow-weather-option").forEach(t => {
       const match = t.getAttribute("data-mode") === mode;
       t.classList.toggle("active", match);
       t.setAttribute("aria-pressed", String(match));
     });
-    refreshTiles();
+    const level = $("flow-weather-volume");
+    if (level) level.hidden = mode === "clear";
   }
 
   // Breakout and Snake move in steps of a 60 Hz frame, as the weather does, so they play at the same speed on a 60 Hz
@@ -1697,28 +1698,30 @@
   }
 
   // ==========================================
-  // 7. AMBIENT WEATHER SELECTOR (RIGHT RAIL)
+  // 7. WEATHER IN FLOW'S YOUR SPACE
   // ==========================================
-  function buildWeatherCard() {
-    const card = node("div", "flow-lounge-weather");
-    card.id = "flow-card-lounge-weather";
-    card.setAttribute("role", "group");
-    card.setAttribute("aria-label", "Weather");
-
-    const options = node("div", "flow-lounge-weather-options");
+  // One row beside Appearance: the name, then three small icon choices. The volume row under it shows only while
+  // Rain or Snow is on. Flow builds the empty row (#flow-weather) and adds it to the page with Flow; this fills it once it's there.
+  function mountWeatherControl() {
+    const row = $("flow-weather");
+    if (!row || row.querySelector(".flow-weather-options")) return;
+    const options = node("div", "flow-weather-options");
+    options.setAttribute("role", "group");
+    options.setAttribute("aria-label", "Weather");
     for (const mode of WEATHER_MODES) {
-      const option = button("flow-lounge-weather-option" + (weatherMode === mode.id ? " active" : ""), "", () => setWeatherMode(mode.id));
+      const option = button("flow-weather-option" + (weatherMode === mode.id ? " active" : ""), "", () => setWeatherMode(mode.id));
       option.setAttribute("data-mode", mode.id);
       option.setAttribute("aria-pressed", String(weatherMode === mode.id));
-      option.title = mode.note;
-      option.append(icon(mode.icon, "flow-lounge-weather-icon"), node("span", undefined, mode.label));
+      option.title = `${mode.label}: ${mode.note}`;
+      option.append(icon(mode.icon), node("span", "sr-only", mode.label));
       options.append(option);
     }
+    row.append(node("span", "flow-utility-label", "Weather"), options);
 
-    // A short caption over the three choices, which fall over the chat in Flow and the Lounge.
-    const words = node("div", "flow-lounge-weather-words");
     // Volume for the sound that goes with Rain and Snow.
-    const level = node("label", "flow-lounge-weather-volume");
+    const level = node("label", "flow-weather-volume");
+    level.id = "flow-weather-volume";
+    level.hidden = weatherMode === "clear";
     level.title = "Volume of the rain and snow sound";
     const slider = node("input", "flow-lounge-weather-slider");
     slider.type = "range"; slider.min = "0"; slider.max = "100"; slider.step = "1";
@@ -1727,19 +1730,14 @@
     slider.addEventListener("input", () => { setVolume(Number(slider.value) / 100); level.classList.toggle("muted", volume === 0); });
     level.classList.toggle("muted", volume === 0);
     level.append(icon("volume", "flow-lounge-weather-speaker"), slider);
-    const title = node("span", "flow-lounge-weather-title", "Weather");
-    const head = node("div", "flow-lounge-weather-head");
-    head.append(title, level);
-    words.append(head, options);
-    card.append(words);
-    return card;
+    row.after(level);
   }
 
-  // One row above the grid: the quote on the left, the weather on the right. It belongs to the grid, so an open activity gets the whole stage.
+  // One row above the grid with the quote. It belongs to the grid, so an open activity gets the whole stage.
   function buildAmbientBar() {
     const bar = node("footer", "flow-lounge-ambient");
     bar.id = "flow-lounge-ambient";
-    bar.append(buildQuoteCard(), buildWeatherCard());
+    bar.append(buildQuoteCard());
     return bar;
   }
 
@@ -1925,7 +1923,7 @@
   }
 
   // The stage opens on a grid of the things to play. Choosing one fills the whole stage with it, and All activities
-  // (or Escape) goes back to the grid. The quote and the weather aren't activities: they keep a bar of their own
+  // (or Escape) goes back to the grid. The quote isn't an activity: it keeps a bar of its own
   // along the foot of the stage, in view whatever is open. The chat sits on the right the whole time.
   const ACTIVITIES = [
     { id: "breakout", title: "Breakout", kind: "Game", keys: "Arrow keys or mouse", icon: "breakout",
@@ -2092,7 +2090,6 @@
     toggle.title = "Leave Lounge: restore standard cards and full brightness";
 
     mountLoungeDecks();
-    initWeatherSystem();
     showStage();
 
     if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
@@ -2100,9 +2097,6 @@
 
     if (snakeAnimId) safeCancelAnim(snakeAnimId);
     snakeAnimId = safeRequestAnim(drawSnake);
-
-    if (weatherAnimId) safeCancelAnim(weatherAnimId);
-    weatherAnimId = safeRequestAnim(drawWeather);
   }
 
   function exit() {
@@ -2116,11 +2110,9 @@
 
     if (breakoutAnimId) { safeCancelAnim(breakoutAnimId); breakoutAnimId = null; }
     if (snakeAnimId) { safeCancelAnim(snakeAnimId); snakeAnimId = null; }
-    if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
     if (quoteTimer) { safeClearInterval(quoteTimer); quoteTimer = null; }
     pausePuzzles();
 
-    syncWeather();
     hideStage();
   }
 
@@ -2134,10 +2126,8 @@
 
     if (breakoutAnimId) { safeCancelAnim(breakoutAnimId); breakoutAnimId = null; }
     if (snakeAnimId) { safeCancelAnim(snakeAnimId); snakeAnimId = null; }
-    if (weatherAnimId) { safeCancelAnim(weatherAnimId); weatherAnimId = null; }
     pausePuzzles();
 
-    syncWeather();
     hideStage();
   }
 
@@ -2149,7 +2139,6 @@
     toggle.classList.remove("flow-lounge-receded");
     toggle.title = "Leave Lounge: restore standard cards and full brightness";
 
-    initWeatherSystem();
     showStage();
 
     if (breakoutAnimId) safeCancelAnim(breakoutAnimId);
@@ -2157,9 +2146,6 @@
 
     if (snakeAnimId) safeCancelAnim(snakeAnimId);
     snakeAnimId = safeRequestAnim(drawSnake);
-
-    if (weatherAnimId) safeCancelAnim(weatherAnimId);
-    weatherAnimId = safeRequestAnim(drawWeather);
   }
 
   function toggleLounge() {
@@ -2171,6 +2157,7 @@
   toggle.addEventListener("click", toggleLounge);
 
   window.addEventListener("relay-state", () => {
+    mountWeatherControl();
     if (!window.relayFlow?.isOn?.()) {
       if (active) exit();
       toggle.hidden = true;
@@ -2198,10 +2185,16 @@
 
   window.addEventListener("relay-flow", e => {
     const on = Boolean(e?.detail?.on);
+    mountWeatherControl();
     toggle.hidden = !on;
     if (!on && active) exit();
     syncWeather();
   });
+
+  // Weather chosen in an earlier session plays its sound once the page has been clicked, as browsers require.
+  document.addEventListener("pointerdown", () => { if (audioCtx?.state === "suspended" && weatherShown()) audioCtx.resume().catch(() => {}); }, { passive: true, capture: true });
+  mountWeatherControl();
+  syncWeather();
 
   window.relayFlowLounge = {
     isActive: () => active && !receded,

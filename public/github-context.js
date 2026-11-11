@@ -44,9 +44,10 @@
       input.setSelectionRange(input.value.length, input.value.length);
       const what = `${result.kind === 'pull' ? 'Pull request' : 'Issue'} #${result.number}`;
       const removed = [result.removed?.secrets ? `${result.removed.secrets} possible secret${result.removed.secrets === 1 ? '' : 's'}` : '', result.removed?.paths ? `${result.removed.paths} local path${result.removed.paths === 1 ? '' : 's'}` : ''].filter(Boolean);
-      const message = `${what} is in the message box. Read it, add what you want done, then send.${removed.length ? ` Removed ${removed.join(' and ')}.` : ''}${result.truncated ? ' It was shortened to fit.' : ''}`;
-      api.showNotice?.(message);
-      api.announce?.(message);
+      // The text appearing in the message box says it was added. A notice is shown only when the text was altered on the way in.
+      const altered = `${removed.length ? `Removed ${removed.join(' and ')} from ${what}.` : ''}${result.truncated ? `${removed.length ? ' It' : what} was shortened to fit.` : ''}`;
+      if (altered) api.showNotice?.(altered);
+      api.announce?.(`${what} is in the message box.${altered ? ` ${altered}` : ''}`);
     } catch (failure) {
       if (token !== generation) return;
       busy = false; error(failure.message || 'GitHub could not be read.');

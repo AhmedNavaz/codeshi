@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { MAX_SESSIONS, SCROLLBACK, TerminalSessions, loginShell, prepareHelper, processTree, shellArguments } from '../src/terminal.mjs';
+import { CLI_ENTRY, MAX_SESSIONS, SCROLLBACK, TerminalSessions, cliCommand, loginShell, prepareHelper, processTree, shellArguments } from '../src/terminal.mjs';
 import { createRelayServer } from '../src/server.mjs';
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -50,6 +50,33 @@ test('a terminal opens the person’s login shell in the chosen folder, as a tab
   assert.equal(sessions.start('project-1', { folderId: 'web', cols: 5000 }).cols, 1000, 'Sizes are kept within bounds.');
   assert.deepEqual(sessions.state('project-1').sessions.map(item => item.folderId), ['web']);
   assert.equal(sessions.state('project-1').shell, 'zsh');
+});
+
+test('the CLI tab runs the codeshi command on this engine, one per workspace, apart from the shells', async t => {
+  const { registry, projects } = workspaces(t), pty = fakePty();
+  const cli = cliCommand('/data/cli.json', { execPath: '/Applications/Codeshi.app/Contents/MacOS/Codeshi' });
+  const sessions = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1, cli });
+  t.after(() => sessions.close());
+  assert.equal(cliCommand(null), null, 'Without a connection file there is no CLI tab.');
+  assert.equal(path.basename(CLI_ENTRY), 'codeshi.mjs');
+  const shell = sessions.start('project-0', { folderId: 'web' });
+  const first = sessions.start('project-0', { kind: 'cli', cols: 90, rows: 30 });
+  const spawned = pty.spawned[1];
+  assert.deepEqual([first.kind, first.shell, first.folderId, first.cwd, spawned.file, spawned.args, spawned.options.cols], ['cli', 'codeshi', 'web', projects.get('project-0').folders[0].path, '/Applications/Codeshi.app/Contents/MacOS/Codeshi', [CLI_ENTRY, '--workspace', 'project-0'], 90]);
+  assert.deepEqual([spawned.options.env.ELECTRON_RUN_AS_NODE, spawned.options.env.CODESHI_CONNECTION, spawned.options.env.CODESHI_EMBEDDED, spawned.options.env.FORCE_COLOR, spawned.options.env.COLORTERM], ['1', '/data/cli.json', '1', '2', '']);
+  assert.equal(sessions.start('project-0', { kind: 'cli' }).id, first.id, 'Opening it again returns the one that runs.');
+  const state = sessions.state('project-0');
+  assert.deepEqual([state.sessions.map(item => item.id), state.cli.id, state.cliAvailable], [[shell.id], first.id, true], 'The shells list leaves the CLI tab out.');
+  spawned.exit(0);
+  const again = sessions.start('project-0', { kind: 'cli' });
+  assert.notEqual(again.id, first.id, 'One that ended gives way to a new one.');
+  assert.equal(sessions.state('project-0').cli.id, again.id);
+  await sessions.stop('project-0', again.id);
+  assert.equal(sessions.state('project-0').cli, null);
+  const plain = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1 });
+  t.after(() => plain.close());
+  assert.throws(() => plain.start('project-0', { kind: 'cli' }), /works in the Codeshi app/);
+  assert.equal(plain.state('project-0').cliAvailable, false);
 });
 
 test('a workspace keeps several shells: tabs of their own, or two panes of a tab split side by side or stacked', async t => {

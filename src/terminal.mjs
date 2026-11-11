@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { commandEnvironment } from './resolve-binary.mjs';
 
 // The workspace terminal (#7, #70): interactive shells in pseudo-terminals from node-pty, each started in an attached
@@ -61,9 +62,20 @@ export function processTree(root) {
 }
 const signal = (pid, kind) => { try { process.kill(pid, kind); return true; } catch { return false; } };
 
+// The codeshi command (#90) in a tab of the window: the command inside this app, run by the app's own binary acting as
+// Node, and pointed at this engine through its connection file. Without a connection file (a test, the smoke run or a
+// plain server) there is no CLI tab.
+export const CLI_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'codeshi.mjs');
+export function cliCommand(connection, { execPath = process.execPath, entry = CLI_ENTRY } = {}) {
+  if (!connection) return null;
+  // The window's terminal draws the 256 standard colours with its own styles, but full 24-bit colours only as inline
+  // styles, which the page's security policy blocks, so the command is asked for 256 colours.
+  return { file: execPath, args: [entry], env: { ELECTRON_RUN_AS_NODE: '1', CODESHI_CONNECTION: connection, CODESHI_EMBEDDED: '1', COLORTERM: '', FORCE_COLOR: '2' } };
+}
+
 export class TerminalSessions {
-  constructor({ registry, pty = null, shell = loginShell(), stopGrace = 1500, tree = processTree, flushMs = 8, platform = process.platform, endTree = endProcessTree } = {}) {
-    this.registry = registry; this.ptyImpl = pty; this.shell = shell; this.stopGrace = stopGrace; this.tree = tree; this.flushMs = flushMs; this.platform = platform; this.endTree = endTree;
+  constructor({ registry, pty = null, shell = loginShell(), stopGrace = 1500, tree = processTree, flushMs = 8, platform = process.platform, endTree = endProcessTree, cli = null } = {}) {
+    this.registry = registry; this.ptyImpl = pty; this.shell = shell; this.stopGrace = stopGrace; this.tree = tree; this.flushMs = flushMs; this.platform = platform; this.endTree = endTree; this.cli = cli;
     // Every session, by its own id; each knows its workspace, its tab and its place in that tab.
     // Tabs keep the order they opened in, counted rather than timed so two opened at once keep theirs.
     this.sessions = new Map(); this.closing = false; this.opened = 0;
@@ -74,11 +86,13 @@ export class TerminalSessions {
   pty() { if (!this.ptyImpl) { prepareHelper(); this.ptyImpl = require('node-pty'); } return this.ptyImpl; }
   view(session) {
     if (!session) return null;
-    return Object.fromEntries(['id', 'projectId', 'folderId', 'folderName', 'cwd', 'shell', 'status', 'exitCode', 'signal', 'error', 'startedAt', 'endedAt', 'cols', 'rows', 'tabId', 'pane', 'split', 'order'].map(key => [key, session[key]]));
+    return Object.fromEntries(['id', 'kind', 'projectId', 'folderId', 'folderName', 'cwd', 'shell', 'status', 'exitCode', 'signal', 'error', 'startedAt', 'endedAt', 'cols', 'rows', 'tabId', 'pane', 'split', 'order'].map(key => [key, session[key]]));
   }
-  // A workspace's sessions in the order its tabs opened, each tab's panes in their order.
-  list(projectId) { return [...this.sessions.values()].filter(session => session.projectId === projectId).sort((a, b) => a.order - b.order || a.pane - b.pane); }
-  state(projectId) { this.registry.get(projectId); return { sessions: this.list(projectId).map(session => this.view(session)), shell: path.win32.basename(this.shell).replace(/\.exe$/i, '') }; }
+  // A workspace's shells in the order its tabs opened, each tab's panes in their order. Its CLI tab is kept apart: it
+  // shows over the conversation, not in the bottom panel, and doesn't count toward the shells a workspace keeps.
+  list(projectId) { return [...this.sessions.values()].filter(session => session.projectId === projectId && session.kind !== 'cli').sort((a, b) => a.order - b.order || a.pane - b.pane); }
+  cliSession(projectId) { return [...this.sessions.values()].find(session => session.projectId === projectId && session.kind === 'cli') || null; }
+  state(projectId) { this.registry.get(projectId); return { sessions: this.list(projectId).map(session => this.view(session)), shell: path.win32.basename(this.shell).replace(/\.exe$/i, ''), cli: this.view(this.cliSession(projectId)), cliAvailable: Boolean(this.cli) }; }
   // A session of this workspace; an id from another workspace is refused like one that ended.
   session(projectId, id) {
     this.registry.get(projectId);
@@ -93,8 +107,9 @@ export class TerminalSessions {
 
   // Opens a shell in an attached folder: in a tab of its own, as the second pane of a tab (split: the session to split
   // and 'right' or 'down'), or in place of a session that has ended (replace), keeping that one's tab and place.
-  start(projectId, { folderId, cols, rows, split = null, replace = null } = {}) {
+  start(projectId, { folderId, cols, rows, split = null, replace = null, kind = 'shell' } = {}) {
     if (this.closing) fail('Codeshi is stopping.', 503);
+    if (kind === 'cli') return this.startCli(projectId, { folderId, cols, rows });
     const project = this.registry.get(projectId), open = this.list(projectId);
     let place = { tabId: null, pane: 0, split: null, order: ++this.opened }, replaced = null;
     if (replace) {
@@ -110,23 +125,47 @@ export class TerminalSessions {
         place = { tabId: beside.tabId, pane: 1, split: split.direction, order: beside.order };
       }
     }
+    const { folder, cwd } = this.folder(project, folderId);
+    const session = this.create({ projectId, folder, cwd, size: this.size(cols, rows), place, kind: 'shell', shell: this.shell });
+    // A session that ended gives its place to the new one; its views are told it closed.
+    if (replaced) this.discard(replaced);
+    return this.launch(session, this.shell, shellArguments(this.shell), {}, 'The shell');
+  }
+
+  // The workspace's CLI tab: one per workspace. Opening it again returns the one that runs; one that ended gives way to
+  // a new one. It starts in the chosen folder (else the first), on the workspace's conversation.
+  startCli(projectId, { folderId, cols, rows } = {}) {
+    if (!this.cli) fail('The codeshi tab works in the Codeshi app.', 409);
+    const project = this.registry.get(projectId), existing = this.cliSession(projectId);
+    if (existing && terminalActive(existing)) return this.view(existing);
+    const { folder, cwd } = this.folder(project, folderId || project.folders[0]?.id);
+    const session = this.create({ projectId, folder, cwd, size: this.size(cols, rows), place: { tabId: null, pane: 0, split: null, order: ++this.opened }, kind: 'cli', shell: 'codeshi' });
+    if (existing) this.discard(existing);
+    return this.launch(session, this.cli.file, [...this.cli.args, '--workspace', projectId], this.cli.env, 'codeshi');
+  }
+
+  folder(project, folderId) {
     const folder = project.folders.find(entry => entry.id === folderId);
     if (!folder) fail('Choose an attached workspace folder.');
     let cwd;
     try { cwd = fs.realpathSync(folder.path); if (!fs.statSync(cwd).isDirectory()) throw new Error(); }
     catch { fail('That folder is unavailable. Restore it or choose another folder.', 404); }
-    const size = this.size(cols, rows);
-    const session = { id: randomUUID(), projectId, folderId: folder.id, folderName: folder.displayName || folder.name, cwd, shell: this.shell, status: 'running', exitCode: null, signal: null, error: null, startedAt: new Date().toISOString(), endedAt: null, ...size, ...place, scrollback: '', offset: 0, pending: '', timer: null, listeners: new Set() };
+    return { folder, cwd };
+  }
+  create({ projectId, folder, cwd, size, place, kind, shell }) {
+    const session = { id: randomUUID(), kind, projectId, folderId: folder.id, folderName: folder.displayName || folder.name, cwd, shell, status: 'running', exitCode: null, signal: null, error: null, startedAt: new Date().toISOString(), endedAt: null, ...size, ...place, scrollback: '', offset: 0, pending: '', timer: null, listeners: new Set() };
     session.tabId ||= session.id;
     session.done = new Promise(resolve => { session.resolve = resolve; });
-    // A session that ended gives its place to the new one; its views are told it closed.
-    if (replaced) { this.sessions.delete(replaced.id); for (const listener of replaced.listeners) listener({ type: 'closed' }); replaced.listeners.clear(); }
+    return session;
+  }
+  discard(session) { this.sessions.delete(session.id); for (const listener of session.listeners) listener({ type: 'closed' }); session.listeners.clear(); }
+  launch(session, file, args, env, name) {
     this.sessions.set(session.id, session);
     try {
-      session.process = this.pty().spawn(this.shell, shellArguments(this.shell), { name: 'xterm-256color', ...size, cwd, env: { ...commandEnvironment(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'Codeshi' } });
+      session.process = this.pty().spawn(file, args, { name: 'xterm-256color', cols: session.cols, rows: session.rows, cwd: session.cwd, env: { ...commandEnvironment(), TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'Codeshi', ...env } });
       session.pid = session.process.pid;
     } catch (error) {
-      Object.assign(session, { status: 'failed', error: `The shell could not start: ${error.message}`, endedAt: new Date().toISOString() });
+      Object.assign(session, { status: 'failed', error: `${name} could not start: ${error.message}`, endedAt: new Date().toISOString() });
       session.resolve();
       return this.view(session);
     }
@@ -220,7 +259,7 @@ export class TerminalSessions {
   }
 }
 
-export function createTerminalRoutes({ registry, body, json, sessions = new TerminalSessions({ registry }) }) {
+export function createTerminalRoutes({ registry, body, json, cli = null, sessions = new TerminalSessions({ registry, cli }) }) {
   return {
     sessions,
     async route({ req, res, url }) {
