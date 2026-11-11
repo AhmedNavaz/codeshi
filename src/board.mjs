@@ -22,6 +22,15 @@ const text = (value, limit, name, required = false) => {
   if (trimmed.length > limit) throw fail(`A card’s ${name} can be up to ${limit.toLocaleString('en-US')} characters.`, 400);
   return trimmed;
 };
+// Where a card sits on the canvas (#97): whole pixels, within a generous square. Only the canvas reads it.
+const REACH = 100000;
+const position = at => {
+  if (!at || typeof at !== 'object' || !Number.isFinite(at.x) || !Number.isFinite(at.y)) throw fail('A card’s place on the canvas needs an x and a y.', 400);
+  const keep = value => Math.max(-REACH, Math.min(REACH, Math.round(value)));
+  return { x: keep(at.x), y: keep(at.y) };
+};
+// Mermaid reads quotes and angle brackets in a label as its own syntax; these are its entity codes.
+const label = value => String(value).replace(/\s+/g, ' ').replace(/[#"<>]/g, char => ({ '#': '#35;', '"': '#quot;', '<': '#lt;', '>': '#gt;' })[char]);
 const clip = (value, limit) => { const line = String(value || '').trim(); return line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line; };
 
 export class Board {
@@ -70,6 +79,7 @@ export class Board {
       if (folderId !== null && !this.folders().some(folder => folder.id === folderId)) throw fail('Choose a folder in this workspace.', 400);
       changes.folderId = folderId;
     }
+    if (!card && input.at != null) changes.at = position(input.at);
     if (!card || 'dependsOn' in input) {
       const ids = input.dependsOn ?? [];
       if (!Array.isArray(ids) || ids.length > LIMITS.dependsOn) throw fail(`A card can wait for up to ${LIMITS.dependsOn} others.`, 400);
@@ -135,6 +145,53 @@ export class Board {
     for (const other of this.cards(c).filter(item => item.dependsOn?.includes(id))) this.update(c, other, { dependsOn: other.dependsOn.filter(item => item !== id) });
     this.main.record(c, { type: 'board_card_remove', id });
     return { removed: true };
+  }
+  // Where cards sit on the canvas (#97), several at once so Arrange and its undo are one step. null hands a card back to
+  // the canvas's own layout. A place is only where the card is drawn: it changes nothing an agent reads, so it never bumps
+  // the revision and can change while the card runs. Every id is checked before anything is recorded.
+  place(c, { positions } = {}) {
+    if (!positions || typeof positions !== 'object' || Array.isArray(positions)) throw fail('Say where each card goes.', 400);
+    const entries = Object.entries(positions);
+    if (!entries.length || entries.length > LIMITS.cards) throw fail(`Place between 1 and ${LIMITS.cards} cards at a time.`, 400);
+    const changes = entries.map(([id, at]) => [this.find(c, id), at === null ? null : position(at)]);
+    for (const [card, at] of changes) if (JSON.stringify(card.at ?? null) !== JSON.stringify(at)) this.update(c, card, { at });
+    return { placed: changes.length };
+  }
+
+  // ---- Export (#97)
+  // The board as Markdown that reads well without Codeshi: a Mermaid chart of the cards and what waits for what, then each
+  // column's cards with everything you wrote on them. Task ids, run history and the agents' own summaries are left out.
+  markdown(c, { now = new Date() } = {}) {
+    const all = this.list(c), short = new Map(all.map((card, index) => [card.id, `c${index + 1}`]));
+    const folder = id => this.folders().find(item => item.id === id), folderName = id => { const found = folder(id); return found ? found.displayName || found.name : ''; };
+    const lines = ['# Task board', '', `Exported from Codeshi on ${now.toISOString().slice(0, 10)}. ${all.length} ${all.length === 1 ? 'card' : 'cards'}.`, ''];
+    if (all.length) {
+      lines.push('```mermaid', 'flowchart LR');
+      for (const card of all) lines.push(`  ${short.get(card.id)}["${label(card.title)}"]:::${card.column}`);
+      for (const card of all) for (const id of card.dependsOn || []) if (short.has(id)) lines.push(`  ${short.get(id)} --> ${short.get(card.id)}`);
+      lines.push('  classDef backlog fill:#f4f1ec,stroke:#9a958d', '  classDef ready fill:#eef3fb,stroke:#5b7fb8', '  classDef doing fill:#fdecea,stroke:#d9381e', '  classDef review fill:#fdf4e3,stroke:#c48a1a', '  classDef done fill:#eaf5ec,stroke:#3d8b4f', '```', '');
+    }
+    for (const column of COLUMNS) {
+      const own = all.filter(card => card.column === column);
+      if (!own.length) continue;
+      lines.push(`## ${COLUMN_NAME[column]}`, '');
+      for (const card of own) {
+        lines.push(`### ${card.title.replace(/\s+/g, ' ')}`, '');
+        const facts = [];
+        if (card.priority !== 'normal') facts.push(`Priority: ${card.priority}`);
+        facts.push(`Agent: ${card.agent ? `${card.agent.provider[0].toUpperCase()}${card.agent.provider.slice(1)}${card.agent.model ? ` (${card.agent.model}${card.agent.effort ? `, ${card.agent.effort}` : ''})` : ''}` : 'not chosen'}`);
+        if (card.folderId && this.folders().length > 1 && folderName(card.folderId)) facts.push(`Works in: ${folderName(card.folderId)}`);
+        const after = (card.dependsOn || []).map(id => all.find(item => item.id === id)?.title).filter(Boolean);
+        if (after.length) facts.push(`Waits for: ${after.map(title => `“${title.replace(/\s+/g, ' ')}”`).join(', ')}`);
+        if (card.result?.tests && ['review', 'done'].includes(card.column)) facts.push(`Tests: ${card.result.tests}`);
+        if (card.acceptedAt && card.column === 'done') facts.push(`Accepted: ${card.acceptedAt.slice(0, 10)}`);
+        if (card.reason && card.column === 'ready') facts.push(`Note: ${card.reason}`);
+        lines.push(...facts.map(fact => `- ${fact}`), '');
+        if (card.notes) lines.push(card.notes, '');
+        if (card.checks?.length) lines.push('Done means:', '', ...card.checks.map(item => `- [${item.done ? 'x' : ' '}] ${item.text}`), '');
+      }
+    }
+    return `${lines.join('\n').trimEnd()}\n`;
   }
 
   // ---- Running cards

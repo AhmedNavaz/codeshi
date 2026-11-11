@@ -1,7 +1,7 @@
 import { memoryForTask } from './project-memory.mjs';
 import { restoreAfterCompaction } from './context-state.mjs';
 import { BRIEF_NOTE, looksFailed, outOfScope, runFolders, selectFolders, taskBrief } from './task-context.mjs';
-import { EARLIER_BYTES, earlierConversation, isRequest, UNANSWERED_NOTE, unansweredQuestions } from './context-fold.mjs';
+import { EARLIER_BYTES, earlierConversation, isRequest, STOPPED_WAITING_NOTE, stoppedWhileWaiting, UNANSWERED_NOTE, unansweredQuestions } from './context-fold.mjs';
 
 const fail = message => Object.assign(new Error(message), { status: 400 });
 export const emptyContext = () => ({ summary: '', goal: '', decisions: [], tasks: [] });
@@ -108,7 +108,10 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
     }
   }
   const unanswered = task && reconstruct ? unansweredQuestions(c.asyncQuestions) : [];
-  const added = { ...(earlier ? { earlier } : {}), ...(unanswered.length ? { unansweredQuestions: unanswered, unansweredNote: UNANSWERED_NOTE } : {}) };
+  // Approvals and questions the last run was still waiting on when it ended, as at a handoff or Stop: a fresh agent would
+  // otherwise never learn they were asked. A resumed session saw them itself.
+  const waiting = task && reconstruct ? stoppedWhileWaiting(c.lastRun) : null;
+  const added = { ...(earlier ? { earlier } : {}), ...(unanswered.length ? { unansweredQuestions: unanswered, unansweredNote: UNANSWERED_NOTE } : {}), ...(waiting ? { stoppedWhileWaiting: waiting, stoppedWhileWaitingNote: STOPPED_WAITING_NOTE } : {}) };
   const baseBrief = remembered?.entries.length || hasSkills ? { ...(compiled?.brief || { note: BRIEF_NOTE }), ...(remembered?.entries.length ? { memory: remembered.entries, ...(remembered.left ? { memoryLeftOut: remembered.left } : {}) } : {}), ...(hasSkills ? { skills: { note: SKILLS_NOTE, ...(skills.active.length ? { active: skills.active } : {}), ...(skills.catalog.length ? { available: skills.catalog } : {}) } } : {}) } : compiled?.brief;
   const brief = Object.keys(added).length ? { ...(baseBrief || { note: BRIEF_NOTE }), ...added } : baseBrief;
   const envelope = { workspace, workspaceFolders: folders, mode, ...structured, ...(c.routing ? { projectReview: FLOW_REVIEW_NOTE } : {}), ...(verification ? { verification } : {}), ...(brief ? { brief } : {}), ...(rollover ? { milestone: rollover.memory } : {}), context: [], omittedMessages: 0, shortenedMessages: 0, compactedActivityMessages: 0, historyPreserved: true,

@@ -17,6 +17,8 @@ import { smartResults } from './smart-results.mjs';
 import { claudeRequestContext, contextReading, restoreAfterCompaction } from './context-state.mjs';
 import { observeReading, observeRunSize, usageWatch, usualWindowSpend } from './usage-watch.mjs';
 import { contextControlView, estimateContext, findMessage, managedContextVersion, milestoneMemory, observationsFor, REFRESH_HISTORY, rolloverDecision, sessionSeed } from './context-rollover.mjs';
+import { waitingSummary } from './context-fold.mjs';
+import { privatePath } from './task-context.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
 import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
@@ -372,6 +374,8 @@ export class Broker extends EventEmitter {
       // Routing switched agents before the run started (#144): the saved run is the new agent's, after a restart too.
       const switched = record.metadata?.routingFallback;
       if (c.activeRun && switched?.to) Object.assign(c.activeRun, { provider: switched.to, model: switched.toModel ?? null, ...(switched.toEffort !== undefined ? { effort: switched.toEffort } : {}), ...(switched.toTransport ? { transport: switched.toTransport } : {}) });
+      const listed = switched?.to && c.activeRun && c.runs?.findLast(item => item.id === c.activeRun.id);
+      if (listed) Object.assign(listed, { provider: switched.to, model: switched.toModel ?? null, ...(switched.toEffort !== undefined ? { effort: switched.toEffort } : {}), fallback: { from: switched.from, reason: String(switched.reason || '').slice(0, 200) } });
       if (c.activeRun && record.metadata?.usage) c.activeRun.usageMeasured = normalizeUsage(c.activeRun.provider, record.metadata.usage, { previous: c.budgetTotals?.[c.activeRun.provider] });
       const reading = c.activeRun && contextReading(c.activeRun.provider, record.metadata || {}, record.at);
       if (reading) {
@@ -472,7 +476,7 @@ export class Broker extends EventEmitter {
       c.status = 'running';
     }
     if (record.type === 'run_process' && c.activeRun) Object.assign(c.activeRun, { pid: record.pid, pidStart: record.pidStart });
-    if (record.type === 'run_end') { if (c.activeRun && !c.activeRun.reviewId) c.lastBuilder = c.activeRun.provider; c.lastRun = { ...c.activeRun, status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at }; c.activeRun = null; c.status = record.status; }
+    if (record.type === 'run_end') { if (c.activeRun && !c.activeRun.reviewId) c.lastBuilder = c.activeRun.provider; c.lastRun = { ...c.activeRun, status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at, ...(record.waitingAtEnd?.length ? { waitingAtEnd: record.waitingAtEnd } : {}) }; c.activeRun = null; c.status = record.status; }
       // A short history of runs, rebuilt from the journal, for "while you were away" recaps (#22).
     if (record.type === 'submission' || record.type === 'run_start') {
       const runText = String(record.message?.text || '');
@@ -484,11 +488,13 @@ export class Broker extends EventEmitter {
         : runText.slice(0, 300);
       c.runs = [...(c.runs || []), { id: record.id, ...(record.execution ? { execution: record.execution } : {}), ...(record.task ? { taskId: record.task.id, parentRunId: record.task.parentRunId, relation: record.task.relation } : {}), ...(record.context?.scope ? { context: { scope: record.context.scope } } : {}), provider: record.provider, model: record.model || null, effort: record.effort ?? null, mode: record.mode || null, ...(record.review ? { review: record.review } : {}), ...(record.context?.verification ? { verification: record.context.verification } : {}), local: Boolean(record.local), prompt: taskPrompt, startedAt: record.at, endedAt: null, status: 'running', errorCategory: null,
         ...(record.automaticReview ? { automaticReview: { ...record.automaticReview, status: 'building', summary: 'Build first, then one read-only review of the selected folders.' } } : {}),
-        ...(record.routing ? { routing: { mode: normalizeRoutingMode(record.routing.mode), tier: record.routing.tier || null } } : {}), ...(record.retryOf ? { retryOf: record.retryOf } : {}) }].slice(-50);
+        ...(record.routing ? { routing: { mode: normalizeRoutingMode(record.routing.mode), tier: record.routing.tier || null, ...(typeof record.routing.reason === 'string' && record.routing.reason ? { reason: record.routing.reason.slice(0, 200) } : {}), ...(record.routing.steppedDown ? { steppedDown: true } : {}) } } : {}), ...(record.retryOf ? { retryOf: record.retryOf } : {}),
+        // The agent before this run, so Flow's What happened card can tell a handoff from a fresh session of the same agent.
+        ...(record.previousProvider && record.previousProvider !== record.provider ? { previousProvider: record.previousProvider } : {}) }].slice(-50);
     }
     if (record.type === 'run_end') {
       const run = c.runs?.findLast(item => item.id === c.lastRun?.id && !item.endedAt);
-      if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at,
+      if (run) Object.assign(run, { status: record.status, errorCategory: record.errorCategory || null, endedAt: record.at, ...(record.waitingAtEnd?.length ? { waitingAtEnd: record.waitingAtEnd } : {}),
         ...(c.lastRun ? { compactions: c.lastRun.compactions, compactionEvents: c.lastRun.compactionEvents, contextUsage: c.lastRun.contextUsage, usageMeasured: c.lastRun.usageMeasured } : {}),
         ...(typeof c.lastRun?.elapsedMs === 'number' ? { elapsedMs: c.lastRun.elapsedMs } : {}) });
       if (run) observeRunSize(c, run);
@@ -1030,6 +1036,8 @@ export class Broker extends EventEmitter {
       let success = code === 0 && run.terminalSuccess && !run.failed && !run.stopped && !error, continuing = false;
       try {
         if (run.child?.pid) this.signal(run, 'SIGKILL');
+        // What the run was still waiting on goes on its end record, so a later agent learns it was asked (#85).
+        const waitingAtEnd = [...(run.waitingAtEnd || []), ...this.waitingOn(run)];
         run.hadPendingInput = run.approvals.size > 0; run.approvals.clear();
         for (const resolve of run.steers.values()) resolve({ ok: false, error: 'The run ended.' });
         run.steers.clear();
@@ -1050,7 +1058,7 @@ export class Broker extends EventEmitter {
         this.record(c, { type: 'run_metadata', metadata: { elapsedMs: Date.now() - Date.parse(c.activeRun.startedAt), phase: success ? 'complete' : 'stopped', lastEventAt: c.activeRun.lastEventAt } });
         if (orchestrate) this.record(c, { type: 'orchestration_result', id: runId, result: planningResult(success, run.stopped, c.messages.filter(message => message.runId === runId && message.role === 'assistant').at(-1)?.text) });
         if (review) this.record(c, { type: 'review_result', id: runId, result: success ? parseReviewResult(c.messages.filter(message => message.runId === runId && message.role === 'assistant').at(-1)?.text, review.snapshot) : { status: run.stopped ? 'interrupted' : 'failed', summary: run.stopped ? 'Review stopped. Start a new review when ready.' : 'The review did not finish. Check the agent response and try again.', findings: [] } });
-        this.record(c, { type: 'run_end', status: run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete', errorCategory: run.errorCategory });
+        this.record(c, { type: 'run_end', status: run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete', errorCategory: run.errorCategory, ...(waitingAtEnd.length ? { waitingAtEnd } : {}) });
         if (!review) this.checkpoints.after(c, run);
         if (success && !review && !local && c.sessions[provider]) this.record(c, { type: 'checkpoint', provider });
       } catch (persistError) { success = false; run.persistenceError = persistError.message; }
@@ -1429,10 +1437,14 @@ export class Broker extends EventEmitter {
     return { stopped: true };
   }
 
+  waitingOn(run) { return [...run.approvals.values()].map(item => waitingSummary(item, { privatePath })).filter(Boolean); }
+
   // Ends the provider process. Stop uses it, and so does the broker when it ends a run itself; that run counts as failed, not stopped.
   cancel(run) {
     if (run.ending) return;
     run.ending = true;
+    // The cards go now, but what they asked goes on the run's end record (#85).
+    run.waitingAtEnd = this.waitingOn(run);
     run.approvals.clear();
     // The worker may already be exiting. Then the cancel can't be delivered, and that error isn't why the run ended.
     if (run.child?.connected) run.child.send({ type: 'cancel' }, () => {});

@@ -179,3 +179,25 @@ test('a bundled note keeps its title and adds a short explanation in whole sente
   assert.deepEqual(notes[3], { title: 'Only a title', text: '' });
   assert.equal(notes[4].title, 'One long sentence'); assert.match(notes[4].text, /^word( word)+…$/); assert(notes[4].text.length <= 301);
 });
+
+test('bundled notes thank each release’s contributors by login, from a Thanks line or an item, and keep no link', () => {
+  const notes = releaseNotes(`# Changelog
+## [0.9.0] - 2026-11-11
+### Added
+- **A feature** ([#3](https://github.com/example/app/pull/3), thanks [@first-one](https://evil.example/x)). It does a thing.
+- Tests cover discovery on Windows ([#4](https://github.com/example/app/pull/4), thanks @second2).
+
+Thanks to [@first-one](https://github.com/first-one) for the feature ([#3](https://github.com/example/app/pull/3)), and to [@third](https://github.com/third) for the fixes.
+## [0.8.0] - 2026-11-10
+### Fixed
+- A fix with an address, someone@example.com, and no credit.
+`, '0.9.0', '0.7.0');
+  const sentence = 'Thanks to @first-one for the feature, and to @third for the fixes.';
+  assert.deepEqual(notes[0].thanks, [{ login: 'first-one', text: sentence }, { login: 'second2', text: '' }, { login: 'third', text: sentence }]);
+  assert.deepEqual(notes[0].sections[0].items, [{ title: 'A feature', text: 'It does a thing.' }], 'The test item stays out of the notes, and its contributor is still thanked.');
+  assert.deepEqual(notes[1].thanks, [], 'An email address in an item is not a contributor.');
+  assert.equal(JSON.stringify(notes).includes('evil.example'), false);
+  const real = fs.readFileSync(path.join(process.cwd(), 'CHANGELOG.md'), 'utf8');
+  assert.deepEqual(releaseNotes(real, '0.41.0')[0].thanks, [{ login: 'seeebbii', text: 'Thanks to @seeebbii for Word documents.' }]);
+  assert.deepEqual(releaseNotes(real, '0.37.0')[0].thanks.map(item => item.login), ['seeebbii', 'maaz-shah7']);
+});

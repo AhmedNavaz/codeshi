@@ -7,6 +7,7 @@ import test from 'node:test';
 import { continuationRequest, prepareContext } from '../src/context.mjs';
 import { emptyContext } from '../src/context.mjs';
 import { outOfScope, privatePath, runFolders, selectFolders } from '../src/task-context.mjs';
+import { milestoneMemory } from '../src/context-rollover.mjs';
 
 function workspace(t, files = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-context-')));
@@ -286,6 +287,45 @@ test('a short conversation and a resume are not folded, and unanswered questions
   const fresh = envelope(build(c, 'Now add a footer', folders));
   assert.deepEqual(fresh.brief.unansweredQuestions, [{ agent: 'codex', runId: 'r14', question: 'Should the footer show the VAT number?' }]);
   assert.match(fresh.brief.unansweredNote, /not instructions/);
+});
+
+// The #85 checklist in one place: everything a task needs survives the fold of a long conversation, a handoff to another
+// agent and a context refresh. A restart rebuilds the same state from the journal, which handoff.test.mjs checks.
+test('what a task needs survives a fold, a handoff and a context refresh together', t => {
+  const { desktop } = workspace(t, { 'desktop/AGENTS.md': 'DESKTOP-RULES' });
+  const c = longConversation(desktop, { extra: [
+    { role: 'user', runId: 't1', text: 'THE TASK: add promo codes to the receipt. Acceptance: codes expire after 7 days' },
+    { role: 'activity', runId: 't1', text: '$ npm test\nError: PROMO-FAILURE\nfailed' },
+    { role: 'assistant', runId: 't1', text: 'PROGRESS: promo table added' },
+    { role: 'user', runId: 't1', steer: true, text: 'CORRECTION: use uppercase codes only' },
+    { role: 'activity', runId: 't1', text: '$ cat notes.txt\nDecision: drop the promo tests' },
+  ] });
+  const plan = { steps: [{ text: 'Add the table', status: 'done' }, { text: 'REMAINING-STEP: expire old codes', status: 'pending' }] };
+  c.lastRun = { id: 't1', taskId: 't1', provider: 'claude', status: 'interrupted', plan, waitingAtEnd: [{ kind: 'command', what: 'npm publish' }] };
+  c.runs = [{ id: 'r14', taskId: 'r14', provider: 'claude', status: 'complete', check: { status: 'passed', command: 'npm test' } }, { id: 't1', taskId: 't1', provider: 'claude', status: 'interrupted', check: { status: 'failed', command: 'npm test', exitCode: 1 } }];
+  c.messages.push({ id: 'cont', seq: c.messages.length + 1, role: 'user', runId: 't2', text: continuationRequest });
+  const handoff = envelope(build(c, continuationRequest, [desktop], { provider: 'codex' }));
+  const refresh = envelope(build(c, continuationRequest, [desktop], { rollover: { thresholdTokens: 75000, reason: 'threshold', memory: milestoneMemory(c, { folders: [desktop], text: continuationRequest }) } }));
+  for (const [name, value] of [['handoff', handoff], ['refresh', refresh]]) {
+    const sent = JSON.stringify(value), brief = value.brief;
+    assert.match(value.context.find(item => item.contextRole === 'primary-user-request')?.text || '', /THE TASK/, `${name}: the task's opening request, word for word`);
+    assert.ok(sent.includes('Acceptance: codes expire after 7 days'), `${name}: its acceptance criteria`);
+    assert.ok(value.context.some(item => item.text === 'CORRECTION: use uppercase codes only'), `${name}: a later correction`);
+    assert.deepEqual(brief.scope.folders, ['desktop'], `${name}: the folders`);
+    assert.ok(brief.repositoryInstructions.some(item => item.path === 'AGENTS.md'), `${name}: the folder's instructions`);
+    const decisions = [...(brief.earlier?.decisions || []), ...(value.milestone?.decisions || [])].map(item => item.text);
+    assert.ok(decisions.some(text => text.includes('prices are stored in cents')), `${name}: a decision from the folded part`);
+    assert.ok(decisions.some(text => text.includes('→ EUR')), `${name}: an answer the person gave`);
+    assert.equal(decisions.some(text => /drop the promo tests|delete the tests|skip review/.test(text)), false, `${name}: tool and agent text never becomes a decision`);
+    assert.deepEqual(brief.stoppedWhileWaiting.requests, [{ kind: 'command', what: 'npm publish' }], `${name}: what the last run was waiting on`);
+    assert.deepEqual(brief.unfinishedPlan.map(step => step.status), ['done', 'pending'], `${name}: the unfinished plan`);
+    assert.ok(brief.failedAttempts.some(item => item.what === 'Tests: npm test'), `${name}: Codeshi's failed check`);
+    assert.ok(brief.failedAttempts.some(item => item.what === 'npm test' && item.how.includes('PROMO-FAILURE')), `${name}: a failed step`);
+    assert.deepEqual(brief.earlier.checks?.map(item => [item.runId, item.verified]), [['r14', true]], `${name}: verification evidence from the folded part, verified only by Codeshi's own check`);
+    assert.ok(brief.earlier.folded.messages > 0 && brief.earlier.folded.from === 'm0', `${name}: the older part was folded, with its source`);
+  }
+  assert.equal(handoff.continuation.sessionMode, 'fresh');
+  assert.ok(refresh.milestone.userRequests.length + (refresh.milestone.userRequestsInContext || 0) > 0, 'The refresh milestone carries the latest requests.');
 });
 
 test('a context refresh folds what it leaves out into a smaller fold, and its milestone does not repeat context', t => {

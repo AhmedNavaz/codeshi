@@ -59,6 +59,96 @@
     row.append(item);
     return row;
   }
+
+  // A plan's group (#108): where the plan stands, what it used once it has ended, and one action to close it. An ended
+  // group that needs nothing from you folds into its one row, and opens again on a click.
+  const DONE = new Set(['complete', 'integrated', 'kept']), LIVE = new Set(['waiting', 'running']), UNFINISHED = new Set(['failed', 'blocked', 'lost', 'detached']);
+  const plural = (count, word) => `${count.toLocaleString()} ${word}${count === 1 ? '' : 's'}`;
+  const duration = ms => { const seconds = Math.max(1, Math.round(ms / 1000)); if (seconds < 3600) return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`; const minutes = Math.round(seconds / 60); return `${Math.floor(minutes / 60)}h ${minutes % 60}m`; };
+  const compact = value => value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e4 || (value >= 1e3 && value % 1000 === 0) ? `${Math.round(value / 1e3)}k` : value >= 1e3 ? `${(value / 1e3).toFixed(1)}k` : String(value);
+  const FOLDS = 'codeshi:plan-groups';
+  // What you chose for each plan's group, open or folded. Without a choice, an ended group that needs nothing folds.
+  let folds = {}; try { folds = JSON.parse(localStorage.getItem(FOLDS) || '{}') || {}; } catch { /* A convenience only. */ }
+  // A task's own view carries the steps but not their plan, so the plan's name and the workspace chat's id are kept from
+  // the last time the workspace chat was shown.
+  const plans = new Map(); let mainId = null, mainProject = null, totals = new Map(), totalsKey = null, totalsRequest = 0;
+  function remember(state) {
+    if (mainProject !== state.projectId) { plans.clear(); totals = new Map(); totalsKey = null; mainId = null; mainProject = state.projectId; }
+    if (state.taskId || state.taskDraft || !state.conversation?.id) return;
+    mainId = state.conversation.id;
+    for (const plan of state.conversation.orchestrations || []) plans.set(plan.id, plan);
+  }
+  const needsYou = steps => steps.reduce((count, task) => count + (task.approvals ? 1 : canMerge(task) ? 1 : 0), 0);
+  function groupResult(steps) {
+    const done = steps.filter(task => DONE.has(task.status)).length, live = steps.some(task => LIVE.has(task.status)), unfinished = steps.filter(task => UNFINISHED.has(task.status)).length;
+    if (live) return { state: 'running', ended: false, text: `${done} of ${steps.length} done` };
+    if (unfinished) return { state: 'failed', ended: true, text: `${unfinished} didn’t finish` };
+    if (done === steps.length) return { state: 'done', ended: true, text: 'Finished' };
+    return { state: 'stopped', ended: true, text: `Stopped, ${done} of ${steps.length} done` };
+  }
+  function folded(id, steps, result, state) {
+    if (steps.some(task => task.id === (focused || state.taskId))) return false;
+    return folds[id] ?? (result.ended && !needsYou(steps));
+  }
+  function toggle(id, closed) {
+    folds[id] = closed;
+    const keys = Object.keys(folds); for (const key of keys.slice(0, Math.max(0, keys.length - 50))) delete folds[key];
+    try { localStorage.setItem(FOLDS, JSON.stringify(folds)); } catch { /* A convenience only. */ }
+    render(true);
+  }
+  // The whole plan's usage, from the same ledger as the Tasks panel: its planning run and every step, with their retries,
+  // handoffs and reviews. Asked for only when a group has ended, and again only when a step's state changes.
+  function totalText(total) {
+    if (!total) return '';
+    const usage = total.usage, tokens = usage?.runsWithTokens ? (usage.input || 0) + (usage.output || 0) + (usage.cacheWrite || 0) : null;
+    const partial = usage && (usage.runsWithTokens < usage.runs || usage.partialRuns);
+    return [plural(total.steps, 'step'), duration(total.workingMs || 0), tokens === null ? 'tokens not reported' : `${partial ? 'at least ' : ''}${compact(tokens)} new tokens`].join(' · ');
+  }
+  async function loadTotals() {
+    const state = api.getState(), ended = [];
+    const groups = new Map(); for (const task of tasks()) if (task.plan) groups.set(task.plan.id, [...(groups.get(task.plan.id) || []), task]);
+    for (const [id, steps] of groups) if (groupResult(steps).ended) ended.push([id, steps.map(task => task.status)]);
+    const key = ended.length ? JSON.stringify([state.projectId, ended]) : null;
+    if (key === totalsKey) return;
+    totalsKey = key;
+    if (!key) return;
+    const request = ++totalsRequest;
+    try {
+      const ledger = await api.api('/api/ledger');
+      if (request !== totalsRequest) return;
+      totals = new Map((ledger?.plans || []).map(plan => [plan.id, plan]));
+      render(true);
+    } catch { if (request === totalsRequest) totalsKey = null; }
+  }
+  async function closePlan(id, steps) {
+    const state = api.getState(), inside = steps.some(task => task.id === (focused || state.taskId));
+    await api.post(`/api/conversations/${encodeURIComponent(mainId)}/orchestration`, { action: 'close', id });
+    if (inside) await selectThread(null);
+    await api.refresh(); api.announce('Plan closed.');
+  }
+  function groupRow(id, steps, result, state) {
+    const plan = plans.get(id), name = plan?.summary || plan?.goal || 'Steps', closed = folded(id, steps, result, state), waiting = needsYou(steps);
+    const row = node('li', 'task-group-holder'), head = node('button', 'task-group'); head.type = 'button';
+    row.dataset.status = result.state;
+    head.setAttribute('aria-expanded', String(!closed));
+    const chevron = node('span', 'task-group-chevron'); chevron.setAttribute('aria-hidden', 'true');
+    const mark = node('span', 'task-group-icon'); mark.setAttribute('aria-hidden', 'true');
+    head.append(chevron, mark, node('span', 'task-group-title', `Plan · ${name}`));
+    if (closed && waiting) head.append(node('span', 'task-row-badge', String(waiting)));
+    else head.append(node('span', 'task-group-side', result.text));
+    const total = result.ended ? totalText(totals.get(id)) : '';
+    head.title = [`Plan · ${name}`, result.text, total, closed && waiting ? `${plural(waiting, 'step')} need${waiting === 1 ? 's' : ''} you` : ''].filter(Boolean).join(' · ');
+    head.addEventListener('click', () => toggle(id, !closed));
+    row.append(head);
+    // Close takes the whole plan off the list, which the plan allows once nothing works, waits or is left to merge.
+    if (result.ended && mainId && !steps.some(task => task.hasWorktree) && plan?.status !== 'closed') {
+      const close = node('button', 'icon-button task-group-close'); close.type = 'button'; close.title = 'Close plan'; close.setAttribute('aria-label', `Close plan ${name}`);
+      close.addEventListener('click', () => attempt(() => closePlan(id, steps)));
+      row.append(close);
+    }
+    if (total) row.append(node('span', 'task-group-total', total));
+    return row;
+  }
   function renderList() {
     const state = api.getState(), level = api.sidebarLevel?.() || 'single', chosen = api.selectedFolderId?.();
     section.hidden = !state.projectId;
@@ -71,9 +161,9 @@
       if (!task.plan) { grouped.push(taskRow(task, state, level)); continue; }
       if (seen.has(task.plan.id)) continue;
       seen.add(task.plan.id);
-      const plan = state.conversation?.orchestrations?.find(item => item.id === task.plan.id), header = node('li', 'task-group', `Plan · ${plan?.summary || plan?.goal || 'Steps'}`);
-      header.title = header.textContent;
-      grouped.push(header, ...shown.filter(item => item.plan?.id === task.plan.id).sort((a, b) => a.plan.number - b.plan.number).map(item => { const row = taskRow(item, state, level); row.classList.add('task-row-step'); return row; }));
+      const steps = shown.filter(item => item.plan?.id === task.plan.id).sort((a, b) => a.plan.number - b.plan.number), result = groupResult(steps);
+      grouped.push(groupRow(task.plan.id, steps, result, state));
+      if (!folded(task.plan.id, steps, result, state)) grouped.push(...steps.map(item => { const row = taskRow(item, state, level); row.classList.add('task-row-step'); return row; }));
     }
     const rows = [...(level === 'folder' ? [] : [mainRow(state)]), ...blank, ...grouped];
     // The + is for a folder: at the workspace level, nothing says where a task would go.
@@ -107,10 +197,11 @@
     const state = api.getState();
     // A blank task belongs to its folder, so going to the workspace or another folder puts it away. What was typed is kept.
     if (state.taskDraft && (api.sidebarLevel?.() === 'workspace' || (api.sidebarLevel?.() === 'folder' && api.selectedFolderId?.() !== state.taskDraft.folderId))) { attempt(() => selectThread(null)); return; }
-    const key = JSON.stringify([state.projectId, state.taskId, state.taskDraft, state.provider, state.mode, state.approvalPolicy, focused, api.sidebarLevel?.(), api.selectedFolderId?.(), state.conversation?.status, state.conversation?.pendingApprovals?.length, state.status?.runningConversationId, tasks().map(task => [task.id, task.status, task.approvals, task.reason, task.hasWorktree, task.held, task.title, task.folderId])]);
+    remember(state);
+    const key = JSON.stringify([state.projectId, state.taskId, state.taskDraft, state.provider, state.mode, state.approvalPolicy, focused, api.sidebarLevel?.(), api.selectedFolderId?.(), state.conversation?.status, state.conversation?.pendingApprovals?.length, state.status?.runningConversationId, tasks().map(task => [task.id, task.status, task.approvals, task.reason, task.hasWorktree, task.held, task.title, task.folderId]), [...plans.values()].map(plan => [plan.id, plan.status, plan.summary || plan.goal])]);
     if (focused && !tasks().some(task => task.id === focused)) focused = null;
     if (!force && key === signature) return;
-    signature = key; renderList(); renderBanner(); renderDraft();
+    signature = key; renderList(); renderBanner(); renderDraft(); loadTotals();
   }
 
   // Starting a task. The folder is the one selected, so there's nothing to ask: + opens a blank task in the middle, with the

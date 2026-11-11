@@ -65,6 +65,7 @@
       return block;
     };
     const KINDS = { convention: 'Convention', decision: 'Decision', solution: 'Working fix', 'failed-approach': 'Failed approach' };
+    const WAITING = { question: 'question', command: 'command approval', files: 'file change approval', access: 'access approval', connector: 'connector approval', tool: 'approval' };
     body.replaceChildren(
       section('Folders in scope', folders.map(name => ({ main: name })).concat((brief.scope?.otherFolders || []).map(name => ({ main: name, aside: 'left out, still available' }))), 'The whole workspace'),
       section('Repository instructions', (brief.repositoryInstructions || []).map(item => ({ main: `${item.folder}/${item.path}`, aside: item.truncated ? 'excerpt; full file remains available' : item.text ? 'sent in full' : item.loadedByAgent ? 'the agent loads it itself' : item.delivered ? 'already has it' : item.sameAsAbove ? 'same as above' : 'named' })), 'No AGENTS.md, CLAUDE.md or GEMINI.md in these folders'),
@@ -78,6 +79,7 @@
       earlierSection(brief.earlier),
       ...(brief.earlier?.decisions?.length ? [section('Decisions made earlier', brief.earlier.decisions.map(item => ({ main: item.text, aside: item.source === 'user-answer' ? 'your answer to a question' : 'your words' })), 'None', true)] : []),
       ...(brief.unansweredQuestions?.length ? [section('Questions nobody answered', brief.unansweredQuestions.map(item => ({ main: item.question, aside: item.agent ? `asked by ${item.agent}` : '' })), 'None', true)] : []),
+      ...(brief.stoppedWhileWaiting?.requests?.length ? [section('Waiting when the last run ended', brief.stoppedWhileWaiting.requests.map(item => ({ main: item.kind === 'question' ? item.questions.join(' · ') : item.what, aside: `${WAITING[item.kind] || 'approval'}${brief.stoppedWhileWaiting.agent ? ` · ${brief.stoppedWhileWaiting.agent}` : ''} · never answered` })), 'None', true)] : []),
       ...(preview?.milestone ? [section('Memory for the fresh session', preview.milestone.observations.map(item => ({ main: item.text, aside: `${item.type} · ${item.source}${item.messageId ? ' · message ' + item.messageId : ''}` })), 'Current goals, user requests and project memory will be carried into the fresh session', true)] : []),
     );
     const note = node('p', 'panel-muted brief-dialog-note', `${$('brief-size').textContent ? $('brief-size').textContent + '. ' : ''}${brief.note ? 'Everything here is marked as evidence for the agent to check; your requests take priority over all of it.' : ''}`.trim());

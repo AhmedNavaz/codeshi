@@ -14,6 +14,7 @@ import { smartResults } from '../src/smart-results.mjs';
 class Events {
   constructor(){this.listeners=new Map();}
   addEventListener(type,fn){const list=this.listeners.get(type)||[];list.push(fn);this.listeners.set(type,list);}
+  removeEventListener(type,fn){this.listeners.set(type,(this.listeners.get(type)||[]).filter(item=>item!==fn));}
   dispatchEvent(event){event.target ||= this;for(const fn of this.listeners.get(event.type)||[])fn(event);return !event.defaultPrevented;}
 }
 // Reads a pasted or dropped file as the browser does, for the composer's paste and drop handlers.
@@ -1301,6 +1302,8 @@ test('Help reopens in-app notes and Close or Escape dismisses them without reset
   const ui=await browser({setup:true,desktop:true,desktopControls:true,launch:{...clone(updateLaunch),updated:false}});
   ui.menu('whats-new');await flush();assert.equal(ui.$('updates-dialog').open,true);assert.equal(ui.$('updates-eyebrow').textContent,'WHAT’S NEW');
   ui.$('updates-release-notes').click();await flush();assert.deepEqual(ui.externalLinks,['https://github.com/AhmedNavaz/codeshi/releases']);
+  ui.$('updates-star').click();ui.$('updates-patreon').click();await flush();assert.deepEqual(ui.externalLinks.slice(1),['https://github.com/AhmedNavaz/codeshi','https://www.patreon.com/17048317/join'],'A star and Patreon are one click away, and open in the browser.');
+  assert.equal(ui.$('updates-content').querySelector('.updates-thanks'),null,'A release that credits no one has no thanks.');
   ui.$('updates-close').click();await flush();assert.equal(ui.$('updates-dialog').open,false);
   ui.menu('whats-new');await flush();const event=new UIEvent('cancel');ui.$('updates-dialog').dispatchEvent(event);await flush();
   assert.equal(event.defaultPrevented,true);assert.equal(ui.$('updates-dialog').open,false);assert.equal(ui.state().projectId,'project-one');
@@ -2159,6 +2162,7 @@ test('the Brief panel says what the next agent gets, opens the full brief, and k
   // A long conversation's older part is folded (#85): the panel says so, lists it newest first and says where it came from.
   brief.earlier = { trigger: { reason: 'history-over-allowance', historyBytes: 1976205, allowanceBytes: 48000 }, folded: { messages: 23565, from: 'a', to: 'b' }, requests: [{ messageId: 'a', text: 'Set up the shop', outcome: { agent: 'codex', text: 'Shop set up.' } }, { messageId: 'b', inContext: true, text: 'Fix the receipt', repeated: 2, outcome: { agent: 'claude', status: 'error', text: 'Stopped.' } }], requestsLeftOut: 40, decisions: [{ text: 'Currency? → EUR', source: 'user-answer', messageId: 'c' }] };
   brief.unansweredQuestions = [{ agent: 'codex', question: 'Show the VAT number?' }];
+  brief.stoppedWhileWaiting = { agent: 'codex', runId: 'r', ended: 'interrupted', requests: [{ kind: 'command', what: 'npm publish' }, { kind: 'question', questions: ['Ship it?'] }] };
   ui.window.relayBrief.reload(); await flush();
   assert.equal(ui.$('brief-composition').querySelectorAll('.brief-item-value').at(-1).textContent, '2 requests, 1 decision folded');
   ui.$('brief-view').click(); await flush();
@@ -2168,6 +2172,7 @@ test('the Brief panel says what the next agent gets, opens the full brief, and k
   assert.match(text, /23,565 messages folded without a model, because the earlier conversation is 1,976 KB, over the 48 KB it can take\. 40 older requests left out\./);
   assert.match(text, /Decisions made earlier.*Currency\? → EUR.*your answer to a question/);
   assert.match(text, /Questions nobody answered.*Show the VAT number\?.*asked by codex/);
+  assert.match(text, /Waiting when the last run ended.*npm publish.*command approval · codex · never answered.*Ship it\?.*question · codex · never answered/);
   ui.$('brief-dialog-close').click();
   assert.equal(ui.$('memory-empty').hidden, true);
   assert.equal(ui.$('skills-empty').hidden, false, 'With nothing enabled, the section explains what a skill is.');
@@ -5444,7 +5449,7 @@ test('Flow mode shows only the chat and its cards, and leaving brings the layout
   assert.deepEqual(ui.$('flow-left').children.map(card => card.id), ['flow-left-cards', 'flow-space'], 'The cards scroll in their own area and the utility section stays at the foot.');
   assert.deepEqual(ui.$('flow-left').children[0].children.map(card => card.id), ['flow-card-next', 'flow-card-plans', 'flow-card-results']);
   assert.deepEqual(ui.$('flow-right').children.map(card => card.id), ['flow-right-cards', 'flow-connect']);
-  assert.deepEqual(ui.$('flow-right').children[0].children.map(card => card.id), ['flow-card-working', 'flow-card-files', 'flow-card-preview']);
+  assert.deepEqual(ui.$('flow-right').children[0].children.map(card => card.id), ['flow-card-working', 'flow-card-happened', 'flow-card-files', 'flow-card-preview']);
   assert.equal(ui.$('toggle-flow').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('flow-status').hidden, false); assert.equal(ui.$('flow-status-text').textContent, 'Ready');
   assert.equal(ui.$('toggle-flow-label').textContent, 'Leave Flow'); assert.equal(ui.$('flow-brand').hidden, false); assert.equal(ui.$('flow-brand-workspace').textContent, 'Example workspace');
   assert.equal(ui.$('message-input').placeholder, 'What should we build next?', 'Flow has its own voice in the message box.');
@@ -5531,6 +5536,31 @@ test('Flow cards say in plain words how routing and handoff work, what is left, 
   const undo = ui.$('flow-card-files').querySelectorAll('.flow-run-action').find(action => action.textContent === 'Undo');
   assert.equal(undo.disabled, false); undo.click(); await flush();
   assert.deepEqual(ui.requests.filter(request => request.path === '/api/checkpoints/preview').map(request => request.body.target), [{ kind: 'run', id: 'run-1' }]);
+});
+
+test('Flow’s What happened card explains each recent decision with its recorded reason and outcome (#107)', async () => {
+  const ui = await flowBrowser({ wide: true });
+  const chat = ui.canonical.get('project-one');
+  assert.equal(ui.window.relayFlow.enter(), true); await flush();
+  assert.match(flowText(ui, 'happened'), /Nothing yet\./, 'An empty conversation says what will appear.');
+  const at = minutes => new Date(Date.UTC(2026, 10, 11, 9, minutes)).toISOString();
+  Object.assign(chat, { runs: [
+    { id: 'r0', provider: 'claude', model: 'claude-haiku', relation: 'assessment', startedAt: at(0), endedAt: at(0), status: 'complete' },
+    { id: 'r1', provider: 'codex', model: 'gpt-5', effort: 'high', routing: { mode: 'smart', tier: 'deep', reason: 'A cross-folder refactor.' }, startedAt: at(1), endedAt: at(5), status: 'complete', check: { status: 'failed' } },
+    { id: 'r2', provider: 'codex', model: 'gpt-5', effort: 'xhigh', relation: 'retry', retryOf: 'r1', startedAt: at(6), endedAt: at(9), status: 'complete', check: { status: 'passed' } },
+    { id: 'r3', provider: 'claude', relation: 'continuation', previousProvider: 'codex', routing: { mode: 'smart', tier: 'standard', reason: 'Codex weekly limit at 91%.' }, startedAt: at(10), endedAt: at(12), status: 'interrupted' },
+    { id: 'r4', provider: 'gemini', fallback: { from: 'claude', reason: 'claude quota is near (92% of the 5-hour limit)' }, routing: { mode: 'smart', tier: 'light' }, startedAt: at(13), endedAt: at(14), status: 'complete', errorCategory: 'quota' },
+    { id: 'r5', provider: 'gemini', startedAt: at(15), endedAt: null, status: 'running' },
+  ] });
+  await ui.window.relayUI.refresh(); await flush();
+  const items = ui.$('flow-card-happened').querySelectorAll('.flow-happened-item');
+  assert.deepEqual(items.map(item => item.dataset.kind), ['handoff', 'handoff', 'retry', 'route'], 'Newest finished runs first; assessments and the running run are left out.');
+  assert.match(items[0].textContent, /^Switched from Claude to Gemini.*Stopped at a usage limit.*claude quota is near/);
+  assert.match(items[1].textContent, /^Handed the task from Codex to Claude.*Stopped.*Codex weekly limit at 91%\./);
+  assert.match(items[2].textContent, /^Tests failed, so it tried again with Codex.*Tests passed/);
+  assert.match(items[3].textContent, /^Chose Codex.*for a complex task.*Tests failed.*A cross-folder refactor\./, 'The reason is the one recorded with the run.');
+  assert.equal(items[3].querySelector('.flow-happened-outcome').dataset.tone, 'bad');
+  assert.equal(ui.$('flow-card-happened').querySelectorAll('button').map(item => item.textContent).join(), 'Timeline');
 });
 
 test('Flow mode card polish: extra task indicators, multi-window quota glance, and active agent highlighting (#136)', async () => {
@@ -5659,16 +5689,16 @@ test('a narrow window keeps the Flow cards out of the chat as chips, and one ope
   // Every media query matches here, so the window counts as narrow: chips under the header, no side columns.
   assert.equal(ui.$('flow-left').hidden, true); assert.equal(ui.$('flow-strip').hidden, false);
   const chips = () => ui.$('flow-strip').querySelectorAll('.flow-chip').map(chip => chip.textContent);
-  assert.deepEqual(chips(), ['1 queued message', 'Plans', 'Ultra results', 'Ultra', 'Files', 'Run and review your project', 'Your space'], 'Every card has a chip, with preferences available separately.');
+  assert.deepEqual(chips(), ['1 queued message', 'Plans', 'Ultra results', 'Ultra', 'What happened', 'Files', 'Run and review your project', 'Your space'], 'Every card has a chip, with preferences available separately.');
   ui.$('flow-strip').querySelectorAll('.flow-chip')[0].click(); await flush();
   assert.equal(ui.$('flow-peek').hidden, false); assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-next'); assert.equal(ui.document.activeElement, ui.$('flow-peek-close'));
   assert.equal(ui.$('flow-strip').querySelectorAll('.flow-chip')[0].getAttribute('aria-pressed'), 'true');
   ui.$('flow-strip').querySelectorAll('.flow-chip')[1].click(); await flush();
   assert.equal(ui.$('flow-peek-body').children[0].id, 'flow-card-plans', 'Another chip swaps the open card.');
   ui.document.dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
-  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children[0].children.map(card => card.id).join(','), 'flow-card-working,flow-card-files,flow-card-preview', 'The cards go back to their sides.'); assert.equal(ui.$('flow-right').children[1].id, 'flow-connect');
+  assert.equal(ui.$('flow-peek').hidden, true); assert.equal(ui.$('flow-right').children[0].children.map(card => card.id).join(','), 'flow-card-working,flow-card-happened,flow-card-files,flow-card-preview', 'The cards go back to their sides.'); assert.equal(ui.$('flow-right').children[1].id, 'flow-connect');
   assert.equal(ui.$('flow-card-working').querySelectorAll('button').some(item => /hide/i.test(item.getAttribute('aria-label') || '')), false, 'Cards have no close button.');
-  assert.equal(ui.window.relayFlow.cards().length, 6);
+  assert.equal(ui.window.relayFlow.cards().length, 7);
 });
 
 test('Smart results show observed use, compare with manual tasks only when the evidence allows, and list the tasks behind it (#139)', async () => {
@@ -7434,6 +7464,56 @@ test('Run as tasks sends the agents the plan shows, then the card follows each s
   assert.equal(actions.at(-1).action, 'close');
 });
 
+// A plan's group in the task list (#108): where it stands, folded into one row once it has ended, with its total and Close.
+test('a plan’s group shows its progress, folds with its total once it ends and closes as one', async () => {
+  const ui = await orchestrateBrowser(), conversation = ui.canonical.get('project-one'), actions = [];
+  const plan = { ...draftPlan(), status: 'running', summary: 'Checkout rewrite' }, ids = plan.steps.map(step => step.id);
+  const task = (n, status, extra = {}) => ({ id: `task-${n}`, title: `${n}. Step`, status, provider: 'codex', folderId: 'one', folderName: 'one', plan: { id: plan.id, stepId: ids[n - 1], number: n }, ...extra });
+  let ledgerAsks = 0;
+  ui.setIntercept((request, next) => {
+    if (request.path.endsWith('/orchestration')) { actions.push(clone(request.body)); return response(conversation); }
+    if (request.path === '/api/ledger') { ledgerAsks++; return response({ runs: [], tasks: [], plans: [{ id: plan.id, steps: 2, runs: 3, workingMs: 750000, usage: { runs: 3, runsWithTokens: 3, partialRuns: 0, input: 200000, output: 40000, cacheWrite: 100000, cacheRead: null } }] }); }
+    return next();
+  });
+  Object.assign(conversation, { orchestrations: [plan], parallelTasks: [task(1, 'running'), task(2, 'waiting')] });
+  await ui.window.relayUI.refresh(); await flush();
+  const group = () => ui.$('task-list').querySelector('.task-group-holder'), steps = () => ui.$('task-list').querySelectorAll('.task-row-step').length;
+  assert.equal(group().querySelector('.task-group-title').textContent, 'Plan · Checkout rewrite');
+  assert.equal(group().querySelector('.task-group-side').textContent, '0 of 2 done');
+  assert.equal(group().dataset.status, 'running');
+  assert.equal(steps(), 2, 'A running plan shows its steps.');
+  assert.equal(group().querySelector('.task-group-close'), null, 'Nothing closes while a step works.');
+  assert.equal(ledgerAsks, 0, 'No usage is asked for until the plan ends.');
+
+  // One step finished in its own copy and waits for review: the group stays open, and can't close yet.
+  conversation.parallelTasks = [task(1, 'complete', { hasWorktree: true }), task(2, 'failed')];
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(group().querySelector('.task-group-side').textContent, '1 didn’t finish');
+  assert.equal(steps(), 2, 'A step that needs you keeps the group open.');
+  assert.equal(group().querySelector('.task-group-close'), null, 'A step left to merge keeps the plan open.');
+  assert.equal(ledgerAsks, 1, 'An ended plan asks for its total once.');
+
+  // Everything ended and merged: it folds into one row, with the whole plan's total, and Close closes the plan.
+  conversation.parallelTasks = [task(1, 'integrated'), task(2, 'complete')];
+  await ui.window.relayUI.refresh(); await flush(); await flush();
+  assert.equal(group().querySelector('.task-group-side').textContent, 'Finished');
+  assert.equal(group().dataset.status, 'done');
+  assert.equal(group().querySelector('.task-group').getAttribute('aria-expanded'), 'false');
+  assert.equal(steps(), 0, 'An ended plan that needs nothing folds into one row.');
+  assert.equal(ledgerAsks, 2, 'And again when a step’s state changes.');
+  assert.equal(group().querySelector('.task-group-total').textContent, '2 steps · 12m 30s · 340k new tokens');
+  group().querySelector('.task-group').click(); await flush();
+  assert.equal(steps(), 2, 'A click opens it again.');
+  group().querySelector('.task-group-close').click(); await flush();
+  assert.deepEqual([actions.at(-1).action, actions.at(-1).id], ['close', plan.id]);
+
+  // Folded by hand while a step needs review, the row still says so.
+  conversation.parallelTasks = [task(1, 'complete', { hasWorktree: true }), task(2, 'complete')];
+  await ui.window.relayUI.refresh(); await flush();
+  group().querySelector('.task-group').click(); await flush();
+  assert.equal(steps(), 0); assert.equal(group().querySelector('.task-row-badge').textContent, '1');
+});
+
 test('a restore can also rewind the conversation, and folded messages show as one line in the chat', async () => {
   const ui = await browser({ insights: true, agentsUI: true, rewindUI: true, moreProjects: true });
   const id = '22222222-2222-4222-8222-222222222222', target = { kind: 'checkpoint', id, phase: 'before' };
@@ -7618,4 +7698,98 @@ assert.equal(ui.$('open-board').disabled, false); assert.equal(ui.$('open-board-
   assert.equal(made.path, '/api/board/cards'); assert.deepEqual([made.body.title, made.body.column, made.body.agent, made.body.priority], ['Write the changelog', 'backlog', null, 'normal']);
   ui.$('board-close').click(); await flush();
   assert.equal(ui.$('board-view').open, false);
+});
+
+test('the board’s canvas places cards by dragging, draws arrows for waits, and undoes both (#97)', async () => {
+  const ui = await browser({ boardUI: true, wide: true }), posted = [];
+  const ids = { api: 'b0000000-0000-4000-8000-000000000001', form: 'b0000000-0000-4000-8000-000000000002', busy: 'b0000000-0000-4000-8000-000000000003', loose: 'b0000000-0000-4000-8000-000000000004' };
+  const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, cards: [
+    card(ids.api, 'Agree the API', 'ready', { at: { x: 0, y: 0 } }),
+    card(ids.form, 'Build the form', 'backlog', { at: { x: 400, y: 0 }, dependsOn: [ids.api] }),
+    card(ids.busy, 'Speed up search', 'doing', { at: { x: 400, y: 300 }, taskState: { id: 't1', status: 'running', provider: 'codex' } }),
+    card(ids.loose, 'Not placed yet', 'backlog'),
+  ] };
+  const find = id => board.cards.find(item => item.id === id);
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response(board);
+    if (request.path === '/api/board/export') { posted.push({ path: request.path }); return response({ markdown: '# Task board\n', filename: 'codeshi-board.md' }); }
+    if (request.path === '/api/board/place') { posted.push({ path: request.path, body: request.body }); for (const [id, at] of Object.entries(request.body.positions)) find(id).at = at; return response({ placed: 1, board }); }
+    const edit = request.path.match(/^\/api\/board\/cards\/([\w-]+)\/edit$/);
+    if (edit) { posted.push({ path: request.path, body: request.body }); const target = find(edit[1]); assert.equal(request.body.revision, target.revision, 'A change to waits says which version of the card it changes.'); target.dependsOn = request.body.dependsOn; target.revision++; return response({ card: target, board }); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  const space = ui.$('board-space'); space.bounds = { left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 };
+  ui.$('open-board').click(); await flush();
+  ui.$('board-canvas-mode').click(); await flush();
+  assert.equal(space.hidden, false); assert.equal(ui.$('board-columns').hidden, true); assert.equal(ui.$('board-canvas-mode').getAttribute('aria-pressed'), 'true');
+  const nodes = () => space.querySelectorAll('.board-node'), nodeOf = id => nodes().find(item => item.dataset.card === id), face = id => nodeOf(id).querySelector('.board-card');
+  assert.equal(nodes().length, 4, 'Every card is on the canvas, placed or not.');
+  assert.match(face(ids.form).textContent, /Backlog/, 'On the canvas a card says which column it’s in.');
+  assert.equal(nodeOf(ids.api).style.transform, 'translate(0px, 0px)');
+  assert.match(nodeOf(ids.loose).style.transform, /translate\(0px, 468px\)/, 'A card nobody placed sits below the placed ones.');
+  const arrows = () => space.querySelectorAll('.board-link-hit');
+  assert.deepEqual(arrows().map(hit => [hit.dataset.from, hit.dataset.to]), [[ids.api, ids.form]], 'An arrow runs from a card to the card that waits for it.');
+  // Where a world point is on screen, from the camera the canvas is drawn with.
+  const camera = () => { const [, x, y, z] = space.querySelector('.board-world').style.transform.match(/translate\(([-\d.]+)px, ([-\d.]+)px\) scale\(([\d.]+)\)/).map(Number); return { x, y, z }; };
+  const screen = point => { const c = camera(); return { clientX: point.x * c.z + c.x, clientY: point.y * c.z + c.y }; };
+  const pointer = (target, type, point, extra = {}) => target.dispatchEvent(new UIEvent(type, { button: 0, ...screen(point), ...extra }));
+  // Dragging a card places it, and the click that ends the drag doesn't open it.
+  pointer(face(ids.api), 'pointerdown', { x: 10, y: 10 }); pointer(ui.window, 'pointermove', { x: 60, y: 40 }); pointer(ui.window, 'pointerup', { x: 60, y: 40 }); face(ids.api).click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: '/api/board/place', body: { positions: { [ids.api]: { x: 50, y: 30 } } } });
+  assert.equal(ui.$('board-drawer').hidden, true, 'Ending a drag doesn’t open the card.');
+  const tool = label => space.querySelectorAll('.board-tool').find(item => item.textContent === label);
+  assert.equal(tool('Undo').disabled, false); assert.equal(tool('Redo').disabled, true);
+  tool('Undo').click(); await flush();
+  assert.deepEqual(posted.at(-1).body, { positions: { [ids.api]: { x: 0, y: 0 } } }, 'Undo puts the card back where it was.');
+  tool('Redo').click(); await flush();
+  assert.deepEqual(posted.at(-1).body, { positions: { [ids.api]: { x: 50, y: 30 } } });
+  // A small move is a click, which opens the card.
+  pointer(face(ids.form), 'pointerdown', { x: 410, y: 10 }); pointer(ui.window, 'pointerup', { x: 411, y: 11 }); face(ids.form).click(); await flush();
+  assert.equal(ui.$('board-drawer').hidden, false); ui.$('board-drawer-close').click(); await flush();
+  // Dragging from a card's dot onto another card makes that card wait for it.
+  const sent = posted.length;
+  pointer(nodeOf(ids.api).querySelector('.board-port'), 'pointerdown', { x: 270, y: 74 }); pointer(ui.window, 'pointermove', { x: 100, y: 500 });
+  assert.equal(space.querySelectorAll('.board-link').some(path => path.getAttribute('class').includes('drafting')), true, 'The arrow follows the pointer while it’s drawn.');
+  pointer(ui.window, 'pointerup', { x: 100, y: 500 }); await flush();
+  assert.deepEqual(posted.slice(sent), [{ path: `/api/board/cards/${ids.loose}/edit`, body: { dependsOn: [ids.api], revision: 1 } }]);
+  assert.equal(arrows().length, 2);
+  // A card an agent is working on keeps what it waits for.
+  pointer(nodeOf(ids.form).querySelector('.board-port'), 'pointerdown', { x: 620, y: 44 }); pointer(ui.window, 'pointermove', { x: 450, y: 330 }); pointer(ui.window, 'pointerup', { x: 450, y: 330 }); await flush();
+  assert.match(ui.$('board-error').textContent, /An agent is working on “Speed up search”/); assert.equal(posted.length, sent + 1, 'Nothing is sent for it.');
+  // Choosing an arrow and pressing Delete takes it away; ⌘Z brings it back.
+  arrows().find(hit => hit.dataset.to === ids.form).dispatchEvent(new UIEvent('click', { stopPropagation() {} })); await flush();
+  assert.match(space.querySelector('.board-link-remove').getAttribute('aria-label'), /Stop “Build the form” waiting for “Agree the API”/);
+  ui.$('board-view').dispatchEvent(new UIEvent('keydown', { key: 'Delete', target: space })); await flush();
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.form}/edit`, body: { dependsOn: [], revision: 1 } });
+  ui.$('board-view').dispatchEvent(new UIEvent('keydown', { key: 'z', metaKey: true, target: space })); await flush();
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.form}/edit`, body: { dependsOn: [ids.api], revision: 2 } }, 'Undo puts the arrow back.');
+  // Typing in a field keeps ⌘Z for the field.
+  const before = posted.length;
+  ui.$('board-view').dispatchEvent(new UIEvent('keydown', { key: 'z', metaKey: true, target: ui.document.createElement('input') })); await flush();
+  assert.equal(posted.length, before);
+  // Arrange lays every card out by its waits, and is one step to undo.
+  tool('Arrange').click(); await flush();
+  const arranged = posted.at(-1).body.positions;
+  assert.deepEqual(Object.keys(arranged).sort(), Object.values(ids).sort());
+  assert.ok(arranged[ids.form].x > arranged[ids.api].x, 'A card that waits sits right of what it waits for.');
+  tool('Undo').click(); await flush();
+  assert.deepEqual(posted.at(-1).body.positions[ids.loose], null, 'Undoing Arrange hands back a card nobody had placed.');
+  // Export saves the board as Markdown; the view chosen is remembered.
+  ui.$('board-export').click(); await flush();
+  assert.equal(posted.at(-1).path, '/api/board/export');
+  ui.$('board-columns-mode').click(); await flush();
+  assert.equal(space.hidden, true); assert.equal(ui.$('board-columns').hidden, false);
+});
+
+test('What’s New thanks a release’s contributors, and a name opens their GitHub profile',async()=>{
+  const sentence='Thanks to @first-one for the feature, and to @third for the fixes.',launch={...clone(updateLaunch),updated:false};
+  launch.releases[0].thanks=[{login:'first-one',text:sentence},{login:'second2',text:''},{login:'third',text:sentence},{login:'bad/../login',text:''},{login:'fourth',text:''}];
+  const ui=await browser({setup:true,desktop:true,desktopControls:true,launch});ui.menu('whats-new');await flush();
+  const blocks=ui.$('updates-content').querySelectorAll('.updates-thanks');assert.equal(blocks.length,1,'Only the release that credits someone thanks them.');
+  const lines=blocks[0].querySelectorAll('p').map(line=>line.textContent);
+  assert.deepEqual(lines,[sentence,'Thanks to @second2 and @fourth for contributing to this release.'],'A sentence naming two people shows once, and people only named share a line.');
+  const names=blocks[0].querySelectorAll('.updates-contributor');assert.deepEqual(names.map(name=>name.textContent),['@first-one','@third','@second2','@fourth'],'A login that isn’t a GitHub name is left out.');
+  names[1].click();await flush();assert.deepEqual(ui.externalLinks,['https://github.com/third']);
 });

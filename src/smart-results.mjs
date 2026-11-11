@@ -215,3 +215,65 @@ export function smartResults(tasks, { now = Date.now(), days = 30, baseline = nu
     observed, comparisons, excluded, tasks: inRange.reverse(),
   };
 }
+
+// ---- Sharing (#139). Codeshi sends nothing itself: the person saves this file and chooses whether to post it.
+// A shared report keeps the counts and the arithmetic, and drops what could tie it to a person or a project: requests
+// and routing reasons (even if the report was made with them), task IDs, which become 1, 2, 3 in the order the tasks
+// started, and times of day, which keep only the date.
+export const SHARE = Object.freeze({ format: 'codeshi-smart-results-shared', version: 1 });
+const SHARE_REMOVED = Object.freeze(['requests', 'routing-reasons', 'task-ids', 'times-of-day']);
+const day = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : null;
+
+export function shareableReport(report) {
+  const order = [...report.tasks].sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
+  const numbers = new Map(order.map((task, index) => [task, index + 1]));
+  const tasks = report.tasks.map(task => {
+    const { id, prompt, routingReason, startedAt, endedAt, ...rest } = task;
+    return { task: numbers.get(task), startedOn: day(startedAt), ...rest };
+  });
+  return {
+    format: SHARE.format, version: SHARE.version, removed: [...SHARE_REMOVED], source: { format: report.format, version: report.version },
+    method: report.method, generatedOn: day(report.generatedAt), range: { days: report.range.days, from: day(report.range.from), to: day(report.range.to) },
+    baseline: report.baseline, contextPolicy: report.contextPolicy, observed: report.observed, comparisons: report.comparisons, excluded: report.excluded, tasks,
+  };
+}
+
+const NAMES = { smart: 'Smart', saver: 'Saver', ultra: 'Ultra', manual: 'Manual' };
+const minutes = ms => { const total = Math.round((ms || 0) / 60000); return total < 60 ? `${total}m` : `${Math.floor(total / 60)}h ${total % 60}m`; };
+const thousands = value => value === null ? 'not reported' : value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${Math.round(value / 1e3)}k` : String(value);
+const pct = value => `${Math.round(Math.abs(value) * 100)}%`;
+function comparisonLine(result) {
+  if (result.status === 'not-enough-data') return 'not enough comparable data yet';
+  const q = result.quality;
+  if (result.status === 'quality-regression') return `verified ${pct(q.verifiedShare.routed)} of tasks against ${pct(q.verifiedShare.baseline)} by hand, so no saving`;
+  if (result.status === 'quality-not-established') return `too few tasks ran tests (${pct(q.checkedShare.routed)} and ${pct(q.checkedShare.baseline)} by hand)`;
+  const say = (metric, title) => {
+    if (!metric?.direction) return `${title}: not enough tasks reported it`;
+    const range = metric.interval?.relative ? ` (${Math.round(metric.interval.level * 100)}% range ${Math.round(metric.interval.relative[0] * 100)}% to ${Math.round(metric.interval.relative[1] * 100)}%, positive is less)` : '';
+    if (metric.direction === 'inconclusive') return `${title}: no clear difference${range}`;
+    return `${title}: ${metric.relative === null ? metric.direction : `${pct(metric.relative)} ${metric.direction}`} per verified task${range}${metric.caveat === 'different-agents' ? ', different agents on each side' : ''}`;
+  };
+  return `verified ${pct(q.verifiedShare.routed)} against ${pct(q.verifiedShare.baseline)} by hand; ${say(result.workingTime, 'working time')}; ${say(result.newTokens, 'new tokens')}`;
+}
+
+// The title and text of the Discussions post. Only figures already in the shared file, so the post and the file agree.
+export function sharePost(shared, { fileName = 'the saved file' } = {}) {
+  const groups = GROUPS.filter(name => shared.observed[name]?.tasks);
+  const total = groups.reduce((sum, name) => sum + shared.observed[name].tasks, 0);
+  const span = shared.range.days ? `the last ${shared.range.days} days` : 'all time';
+  const lines = [
+    `<!-- Drag ${fileName} into this box to attach it, and read it first if you like. Codeshi has sent nothing; this post is public once you submit it. -->`,
+    '',
+    `**Range:** ${span} (${shared.range.from || 'first task'} to ${shared.range.to})`,
+    `**Report:** ${shared.format} ${shared.version}, method ${shared.method?.version ?? 'unknown'}${shared.contextPolicy ? `, context setting ${shared.contextPolicy}` : ''}`,
+    '',
+  ];
+  if (groups.length) {
+    lines.push('| | Tasks | Verified by tests | Working | New tokens |', '| --- | --- | --- | --- | --- |');
+    for (const name of groups) { const seen = shared.observed[name]; lines.push(`| ${NAMES[name]} | ${seen.tasks} | ${seen.verified} | ${minutes(seen.workingMs)} | ${thousands(seen.newTokens?.total ?? null)} |`); }
+    lines.push('');
+  } else lines.push('No finished tasks in this range.', '');
+  for (const mode of ROUTED) if (shared.observed[mode]?.tasks) lines.push(`**${NAMES[mode]} compared with manual:** ${comparisonLine(shared.comparisons[mode])}.`);
+  lines.push('', '**Anything to add** (optional): the kind of project, and which agents you usually choose by hand.');
+  return { title: `${groups.some(name => name !== 'manual') ? 'Routing' : 'Manual'} results: ${total} task${total === 1 ? '' : 's'} over ${span}`, body: lines.join('\n') };
+}

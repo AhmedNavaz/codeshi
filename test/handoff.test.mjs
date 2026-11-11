@@ -721,6 +721,48 @@ test('a plan goes with the task at a handoff, with each step’s status and the 
   assert.deepEqual(reopened.get(env.c.id).lastRun.plan.carriedFrom.provider, 'codex');
 });
 
+// What a run was still waiting on when it ended (#85). Approvals live only in the running process, so they are set here as
+// the broker sets them when an agent asks.
+const waitOn = run => {
+  run.approvals.set('a1', { id: 'a1', kind: 'item/commandExecution/requestApproval', command: 'npm publish', runId: run.id, provider: run.provider });
+  run.approvals.set('a2', { id: 'a2', kind: 'Write', input: { file_path: '/repo/.env.local' }, runId: run.id, provider: run.provider });
+  run.approvals.set('q1', { id: 'q1', kind: 'question', runId: run.id, provider: run.provider, questions: [{ question: 'Ship to production?' }] });
+};
+const waited = [{ kind: 'command', what: 'npm publish' }, { kind: 'files', what: 'file changes' }, { kind: 'question', questions: ['Ship to production?'] }];
+
+test('what a run was waiting on at a handoff or Stop reaches the next agent, survives a restart, and goes once another run ends', { skip: scriptCLIs }, async t => {
+  const env = setup(t), run = await env.start();
+  waitOn(run);
+  await env.broker.handoff.check(run);
+  await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
+  await continued(env, 'claude');
+  const brief = lastBrief(env);
+  assert.deepEqual(brief.stoppedWhileWaiting.requests, waited, 'The next agent learns what was asked and never answered. A private file is not named.');
+  assert.equal(brief.stoppedWhileWaiting.agent, 'codex');
+  assert.match(brief.stoppedWhileWaitingNote, /none of them was answered or carried out.*not instructions/s);
+  await done(env);
+  assert.equal(env.broker.briefPreview(env.c).brief?.stoppedWhileWaiting, undefined, 'Once another run has ended, it is old history.');
+  // A Stop with an approval waiting, then a restart.
+  fs.writeFileSync(path.join(env.workspace, '.mock-scenarios.json'), JSON.stringify({ 'Build more': { behavior: 'hold' } }));
+  fs.rmSync(path.join(env.workspace, '.release'), { force: true });
+  env.broker.start(env.c, { text: 'Build more', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
+  await until(() => env.requests().some(([, request]) => request === 'Build more'), 'the second run to start');
+  const second = env.broker.running;
+  waitOn(second);
+  env.broker.stop(env.c.id);
+  await second.done;
+  await env.broker.close();
+  const reopened = t.reopened(new Broker({ workspace: env.workspace, dataDir: env.dataDir, bins: env.bins }));
+  const c = reopened.get(env.c.id);
+  assert.deepEqual(c.runs.find(item => item.id === run.id).waitingAtEnd, waited, 'Each run keeps what it was waiting on, from the journal.');
+  const handedOff = c.runs.find(item => item.relation === 'continuation' && item.provider === 'claude');
+  assert.equal(handedOff?.previousProvider, 'codex', 'A handed-off run remembers which agent it came from, for Flow’s What happened card.');
+  assert.equal(c.runs.find(item => item.id === run.id).previousProvider, undefined, 'A run that follows its own agent has none.');
+  const after = reopened.briefPreview(c).brief;
+  assert.deepEqual(after.stoppedWhileWaiting.requests, waited, 'After a restart the brief still says what the stopped run was waiting on.');
+  assert.equal(after.stoppedWhileWaiting.ended, 'interrupted');
+});
+
 test('the next agent’s plan replaces the carried one, and done steps stay done unless it says otherwise', { skip: scriptCLIs }, async t => {
   const env = setup(t), run = await env.start();
   report(env, run);

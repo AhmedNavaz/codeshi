@@ -33,6 +33,7 @@ import { createWebPush } from './web-push.mjs';
 import { phoneConversation } from './phone-conversation.mjs';
 import { chooseTip, dismissTip, markShown } from './suggestions.mjs';
 import { catalog, chooseLanguage, languages, localesDir as defaultLocales, textFor } from './i18n.mjs';
+import { shareableReport, sharePost } from './smart-results.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
@@ -284,7 +285,12 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         const broker=registry.broker(selectedProjectId(url)),days=url.searchParams.get('days'),raw=url.searchParams.get('baseline');
         let baseline=null;
         if(raw){try{baseline=JSON.parse(raw);}catch{baseline=null;}if(!baseline||typeof baseline.provider!=='string')throw Object.assign(new Error('Choose a manual baseline agent.'),{status:400});baseline={provider:baseline.provider,model:typeof baseline.model==='string'?baseline.model:null,effort:typeof baseline.effort==='string'?baseline.effort:null};}
-        return json(res,200,await broker.results({days:days==='all'?null:Math.min(3650,Math.max(1,Number(days)||30)),baseline,exclude:(url.searchParams.get('exclude')||'').split(',').filter(Boolean).slice(0,1000),prompts:url.searchParams.get('prompts')==='1'}));
+        // share=1 is the copy to post: never with requests, whatever else was asked.
+        const share=url.searchParams.get('share')==='1';
+        const results=await broker.results({days:days==='all'?null:Math.min(3650,Math.max(1,Number(days)||30)),baseline,exclude:(url.searchParams.get('exclude')||'').split(',').filter(Boolean).slice(0,1000),prompts:!share&&url.searchParams.get('prompts')==='1'});
+        if(!share)return json(res,200,results);
+        const report=shareableReport(results),fileName=`codeshi-smart-results-shared-${report.generatedOn}.json`;
+        return json(res,200,{report,fileName,post:sharePost(report,{fileName})});
       }
       if(req.method==='GET'&&(url.pathname==='/api/ledger'||url.pathname==='/api/memory'||url.pathname==='/api/budget'||url.pathname==='/api/skills'||url.pathname==='/api/conversation/brief')){
         const projectId=selectedProjectId(url),broker=registry.broker(projectId),c=broker.get(registry.mainConversationId(projectId));

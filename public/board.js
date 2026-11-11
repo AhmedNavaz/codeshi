@@ -2,6 +2,9 @@
 // Backlog and Ready are yours to fill and order (drag a card, or use the buttons in its drawer); Doing and Review follow the
 // task a card started; Done is what you accepted. Selecting a card opens it in a drawer to edit and act on. Run Ready opens
 // the same drawer with the Ready cards to choose from, and runs exactly the ones ticked.
+// The Canvas view (#97) shows the same cards placed freely, with arrows for what waits for what: drag a card to place it,
+// drag from the dot on its right edge to another card to make that one wait, and undo either. Columns stays the list for
+// the keyboard and screen readers. Export saves the board as Markdown with a Mermaid chart.
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -30,11 +33,15 @@
   const cards = () => board?.cards || [];
   const cardBy = id => cards().find(card => card.id === id);
   const folderName = id => board?.folders.find(folder => folder.id === id)?.name || '';
+  const VIEW_KEY = 'throughline:board-view';
+  let view = (() => { try { return localStorage.getItem(VIEW_KEY) === 'canvas' ? 'canvas' : 'columns'; } catch { return 'columns'; } })();
+  // Canvas changes in flight: a load that answers meanwhile would draw cards back where they were, so it waits.
+  let writes = 0, written = 0;
 
   async function load() {
     if (!api.getState().projectId) return;
     const request = ++loading;
-    try { const result = await api.api('/api/board'); if (request === loading) { board = result; render(); } }
+    try { const result = await api.api('/api/board'); if (request === loading) { if (writes) { seen = null; return; } board = result; render(); } }
     catch (error) { if (request === loading) { seen = null; failure = error.message; render(); } }
   }
   async function act(path, input = {}, done) {
@@ -61,11 +68,13 @@
     if (card.column === 'ready' && card.reason) return { text: 'Back', tone: 'trouble', detail: card.reason };
     return null;
   }
-  function cardButton(card) {
+  function cardButton(card, onCanvas = false) {
     const item = node('button', 'board-card'); item.type = 'button';
     item.dataset.card = card.id; item.dataset.column = card.column; item.dataset.priority = card.priority;
     item.setAttribute('aria-pressed', String(selected === card.id));
     const state = stateOf(card), top = node('span', 'board-card-top');
+    // On the canvas there are no columns to say where a card stands, so the card says it.
+    if (onCanvas) top.append(node('span', 'board-card-column', COLUMNS.find(([id]) => id === card.column)[1]));
     if (card.priority !== 'normal') top.append(node('span', `board-priority ${card.priority}`, card.priority === 'high' ? 'High' : 'Low'));
     if (state) { const badge = node('span', 'board-card-state', state.text); badge.dataset.tone = state.tone; top.append(badge); }
     const title = node('span', 'board-card-title', card.title);
@@ -79,9 +88,9 @@
     if (state?.detail && card.column === 'ready') item.append(node('span', 'board-card-reason', state.detail));
     item.title = state?.detail || card.title;
     item.setAttribute('aria-label', [card.title, card.priority !== 'normal' ? `${card.priority} priority` : '', provider ? AGENT[provider] : 'no agent yet', state?.text || '', state?.detail || ''].filter(Boolean).join('. '));
-    item.addEventListener('click', () => select(card.id));
+    item.addEventListener('click', () => { if (moved === card.id) { moved = null; return; } select(card.id); });
     // Backlog, Ready and Done cards can be dragged: between Backlog and Ready, back from Done, and into a new order.
-    if (['backlog', 'ready', 'done'].includes(card.column)) {
+    if (!onCanvas && ['backlog', 'ready', 'done'].includes(card.column)) {
       item.draggable = true;
       item.addEventListener('dragstart', event => { dragging = card.id; event.dataTransfer?.setData('text/plain', card.id); item.classList.add('dragging'); });
       item.addEventListener('dragend', () => { dragging = null; item.classList.remove('dragging'); for (const zone of dialog.querySelectorAll('.board-column.drop')) zone.classList.remove('drop'); });
@@ -114,7 +123,7 @@
   }
 
   // ---- The drawer
-  const blank = column => ({ title: '', notes: '', priority: 'normal', agent: null, folderId: null, dependsOn: [], checks: [], column, revision: null });
+  const blank = (column, at = null) => ({ title: '', notes: '', priority: 'normal', agent: null, folderId: null, dependsOn: [], checks: [], column, revision: null, at });
   const editable = card => ({ title: card.title, notes: card.notes || '', priority: card.priority, agent: card.agent ? { ...card.agent } : null, folderId: card.folderId || null, dependsOn: [...(card.dependsOn || [])], checks: (card.checks || []).map(item => ({ ...item })), column: card.column, revision: card.revision });
   const fields = value => JSON.stringify([value.title.trim(), value.notes.trim(), value.priority, value.agent?.provider || null, value.folderId, [...value.dependsOn].sort(), value.checks.map(item => [item.text.trim(), item.done])]);
   const dirty = () => { if (!draft) return false; if (selected === 'new') return Boolean(draft.title.trim() || draft.notes.trim()); const card = cardBy(selected); return card ? fields(draft) !== fields(editable(card)) : false; };
@@ -125,9 +134,9 @@
     render();
     if (selected) $('board-drawer-body').querySelector('input, textarea, button')?.focus();
   }
-  function openNew(column = 'backlog') {
+  function openNew(column = 'backlog', at = null) {
     if (selected && dirty() && !window.confirm('Leave this card without saving your changes?')) return;
-    selected = 'new'; draft = blank(column); failure = ''; drawn = null; render();
+    selected = 'new'; draft = blank(column, at); failure = ''; drawn = null; render();
     $('board-drawer-body').querySelector('.board-field-title')?.focus();
   }
   function openRun() {
@@ -214,7 +223,7 @@
   function save$() {
     if (!draft?.title.trim()) return;
     const input = { title: draft.title, notes: draft.notes, priority: draft.priority, agent: draft.agent, folderId: draft.folderId, dependsOn: draft.dependsOn, checks: draft.checks.filter(item => item.text.trim()) };
-    if (selected === 'new') act('/api/board/cards', { ...input, column: draft.column }, result => { selected = result.card.id; draft = editable(result.card); drawn = null; api.announce(`Added “${result.card.title}” to ${COLUMNS.find(([id]) => id === result.card.column)[1]}.`); });
+    if (selected === 'new') act('/api/board/cards', { ...input, column: draft.column, ...(draft.at ? { at: draft.at } : {}) }, result => { selected = result.card.id; draft = editable(result.card); drawn = null; api.announce(`Added “${result.card.title}” to ${COLUMNS.find(([id]) => id === result.card.column)[1]}.`); });
     else act(`/api/board/cards/${selected}/edit`, { ...input, revision: draft.revision }, result => { draft = editable(result.card); drawn = null; api.announce('Card saved.'); });
   }
   const openTask = card => { dialog.close(); window.relayTaskThreads?.select(card.taskState.id); };
@@ -312,16 +321,305 @@
   }
   function showError() { $('board-error').textContent = failure; $('board-error').hidden = !failure; }
 
+  // ---- The canvas (#97)
+  // A world of cards at their saved places, moved and scaled as one by the camera: screen = world × zoom + offset. A card
+  // nobody has placed yet is laid out by what it waits for, below the placed ones, and stays there until it's dragged.
+  const SVG = 'http://www.w3.org/2000/svg', WIDTH = 220, FALLBACK = 88, STEP_X = 290, GAP_Y = 22, ZOOM = [0.25, 2];
+  const frame = fn => (window.requestAnimationFrame ? window.requestAnimationFrame(fn) : fn());
+  // camera: { x, y, z }, null until the canvas is first shown, when it fits the cards. heights: each card's last measured
+  // height. gesture: a drag, a pan or a new arrow in progress. picked: the arrow chosen, as [from, to]. moved: the card
+  // just dragged, whose click that ends the drag isn't a selection. undos and redos: what Undo and Redo do, newest last.
+  let camera = null, heights = new Map(), gesture = null, picked$ = null, moved = null, stale = false, undos = [], redos = [];
+  const space = $('board-space');
+  const svg = tag => document.createElementNS ? document.createElementNS(SVG, tag) : document.createElement(tag);
+  const height = id => heights.get(id) || FALLBACK;
+  const title = id => `“${cardBy(id)?.title || 'a card'}”`;
+
+  // How deep each card sits in its chain of waits, among the given cards only.
+  function layout(list, top, left) {
+    const own = new Map(list.map(card => [card.id, card])), depth = new Map(), rows = new Map(), out = new Map();
+    const deep = (id, trail) => {
+      if (depth.has(id)) return depth.get(id);
+      if (trail.has(id)) return 0; trail.add(id);
+      const value = Math.max(-1, ...(own.get(id).dependsOn || []).filter(other => own.has(other)).map(other => deep(other, trail))) + 1;
+      depth.set(id, value); return value;
+    };
+    // Cards in a chain stand in a column per step of it; cards with no arrows at all fill a grid below, so a board of
+    // unconnected cards doesn't become one long column.
+    const linked = new Set(list.flatMap(card => { const waits = (card.dependsOn || []).filter(id => own.has(id)); return waits.length ? [card.id, ...waits] : []; }));
+    const chained = list.filter(card => linked.has(card.id)), single = list.filter(card => !linked.has(card.id));
+    for (const card of chained) {
+      const level = deep(card.id, new Set()), y = rows.get(level) ?? top;
+      out.set(card.id, { x: left + level * STEP_X, y }); rows.set(level, y + height(card.id) + GAP_Y);
+    }
+    const across = Math.max(4, rows.size), start = chained.length ? Math.max(...rows.values()) + 60 : top;
+    let y = start;
+    for (let first = 0; first < single.length; first += across) {
+      const line = single.slice(first, first + across);
+      line.forEach((card, index) => out.set(card.id, { x: left + index * (WIDTH + 30), y }));
+      y += Math.max(...line.map(card => height(card.id))) + GAP_Y;
+    }
+    return out;
+  }
+  function places() {
+    const all = cards(), placed = all.filter(card => card.at), out = new Map(placed.map(card => [card.id, { x: card.at.x, y: card.at.y }]));
+    const loose = all.filter(card => !card.at);
+    if (loose.length) {
+      const top = placed.length ? Math.max(...placed.map(card => card.at.y + height(card.id))) + 80 : 0, left = placed.length ? Math.min(...placed.map(card => card.at.x)) : 0;
+      for (const [id, at] of layout(loose, top, left)) out.set(id, at);
+    }
+    if (gesture?.kind === 'move') out.set(gesture.id, gesture.at);
+    return out;
+  }
+  const toWorld = (event, rect = space.getBoundingClientRect()) => ({ x: (event.clientX - rect.left - camera.x) / camera.z, y: (event.clientY - rect.top - camera.y) / camera.z });
+  const cardAt = (point, at, skip) => [...cards()].reverse().find(card => { const p = at.get(card.id); return card.id !== skip && p && point.x >= p.x && point.x <= p.x + WIDTH && point.y >= p.y && point.y <= p.y + height(card.id); });
+
+  function aim() {
+    const world = space.querySelector('.board-world'); if (!world || !camera) return;
+    world.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.z})`;
+    const zoom = space.querySelector('.board-zoom-level'); if (zoom) zoom.textContent = `${Math.round(camera.z * 100)}%`;
+    space.style.backgroundSize = `${18 * camera.z}px ${18 * camera.z}px`; space.style.backgroundPosition = `${camera.x}px ${camera.y}px`;
+  }
+  function fit() {
+    const rect = space.getBoundingClientRect(), at = places(), all = cards();
+    if (!all.length || !rect.width) { camera = { x: 40, y: 40, z: 1 }; aim(); return; }
+    const xs = all.map(card => at.get(card.id).x), ys = all.map(card => at.get(card.id).y);
+    const left = Math.min(...xs), top = Math.min(...ys), right = Math.max(...xs) + WIDTH, bottom = Math.max(...all.map(card => at.get(card.id).y + height(card.id)));
+    const z = Math.max(ZOOM[0], Math.min(1, (rect.width - 80) / (right - left), (rect.height - 120) / (bottom - top)));
+    camera = { x: (rect.width - (right - left) * z) / 2 - left * z, y: Math.max(40, (rect.height - 60 - (bottom - top) * z) / 2) - top * z, z };
+    aim();
+  }
+  function zoom(factor, around = null) {
+    const rect = space.getBoundingClientRect(), point = around || { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+    const z = Math.max(ZOOM[0], Math.min(ZOOM[1], camera.z * factor)), sx = point.clientX - rect.left, sy = point.clientY - rect.top;
+    camera = { x: sx - (sx - camera.x) * z / camera.z, y: sy - (sy - camera.y) * z / camera.z, z };
+    aim();
+    if (picked$) drawLinks();
+  }
+
+  // An arrow from the card waited for to the card that waits, leaving one's right edge and entering the other's left.
+  function curve(from, to, fromHeight, toHeight) {
+    const x0 = from.x + WIDTH, y0 = from.y + fromHeight / 2, x3 = to.x, y3 = to.y + toHeight / 2, bend = Math.max(40, Math.abs(x3 - x0) / 2);
+    return { d: `M${x0} ${y0} C${x0 + bend} ${y0} ${x3 - bend} ${y3} ${x3} ${y3}`, mid: { x: (x0 + x3) / 2, y: (y0 + y3) / 2 } };
+  }
+  function links() {
+    const out = [];
+    for (const card of cards()) for (const from of card.dependsOn || []) if (cardBy(from)) out.push([from, card.id]);
+    return out;
+  }
+  function drawLinks(at = places()) {
+    const layer = space.querySelector('.board-links'); if (!layer) return;
+    const head = svg('marker'); head.setAttribute('id', 'board-link-head'); head.setAttribute('viewBox', '0 0 8 8'); head.setAttribute('refX', '7'); head.setAttribute('refY', '4');
+    head.setAttribute('markerWidth', '8'); head.setAttribute('markerHeight', '8'); head.setAttribute('orient', 'auto-start-reverse');
+    const tip = svg('path'); tip.setAttribute('d', 'M0 0L8 4L0 8z'); head.append(tip);
+    const defs = svg('defs'); defs.append(head);
+    const drawn$ = [defs];
+    for (const [from, to] of links()) {
+      const line = curve(at.get(from), at.get(to), height(from), height(to)), done = cardBy(from).column === 'done';
+      const chosen = picked$ && picked$[0] === from && picked$[1] === to, related = selected === from || selected === to;
+      const path = svg('path'); path.setAttribute('d', line.d); path.setAttribute('marker-end', 'url(#board-link-head)');
+      path.setAttribute('class', `board-link${done ? ' done' : ''}${related ? ' related' : ''}${chosen ? ' picked' : ''}`);
+      // A wider, invisible line over it is what the pointer catches.
+      const hit = svg('path'); hit.setAttribute('d', line.d); hit.setAttribute('class', 'board-link-hit'); hit.dataset.from = from; hit.dataset.to = to;
+      const tooltip = svg('title'); tooltip.textContent = `${title(to)} waits for ${title(from)}`; hit.append(tooltip);
+      hit.addEventListener('pointerdown', event => { event.stopPropagation?.(); });
+      hit.addEventListener('click', event => { event.stopPropagation?.(); picked$ = chosen ? null : [from, to]; drawLinks(); });
+      drawn$.push(path, hit);
+    }
+    if (gesture?.kind === 'link' && gesture.to) {
+      const from = at.get(gesture.from), end = gesture.to, x0 = from.x + WIDTH, y0 = from.y + height(gesture.from) / 2, bend = Math.max(40, Math.abs(end.x - x0) / 2);
+      const draft$ = svg('path'); draft$.setAttribute('d', `M${x0} ${y0} C${x0 + bend} ${y0} ${end.x - bend} ${end.y} ${end.x} ${end.y}`); draft$.setAttribute('class', 'board-link drafting'); draft$.setAttribute('marker-end', 'url(#board-link-head)');
+      drawn$.push(draft$);
+    }
+    layer.replaceChildren(...drawn$);
+    // The chosen arrow gets a button at its middle to take it away.
+    space.querySelector('.board-link-remove')?.remove();
+    if (picked$ && cardBy(picked$[0]) && cardBy(picked$[1])?.dependsOn?.includes(picked$[0])) {
+      const [from, to] = picked$, mid = curve(at.get(from), at.get(to), height(from), height(to)).mid;
+      const remove = button('×', () => disconnect(from, to), 'icon-button board-link-remove');
+      remove.setAttribute('aria-label', `Stop ${title(to)} waiting for ${title(from)}`); remove.title = `Stop ${title(to)} waiting for ${title(from)} (Delete)`;
+      // Kept the same size at any zoom, so it's always easy to hit.
+      remove.style.transform = `translate(${mid.x}px, ${mid.y}px) scale(${1 / (camera?.z || 1)}) translate(-50%, -50%)`;
+      space.querySelector('.board-world').append(remove);
+    } else picked$ = null;
+  }
+
+  function tools() {
+    const bar = node('div', 'board-canvas-tools'); bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'Canvas');
+    const tool = (text, label, handler, cls = '') => { const value = button(text, handler, `board-tool ${cls}`.trim()); value.setAttribute('aria-label', label); value.title = label; return value; };
+    const undo = tool('Undo', `Undo${undos.length ? `: ${undos.at(-1).label}` : ''} (⌘Z)`, () => step(undos, redos)), redo = tool('Redo', `Redo${redos.length ? `: ${redos.at(-1).label}` : ''} (⇧⌘Z)`, () => step(redos, undos));
+    undo.disabled = !undos.length; redo.disabled = !redos.length;
+    const level = tool('100%', 'Zoom to 100%', () => { zoom(1 / camera.z); }, 'board-zoom-level');
+    bar.append(undo, redo, node('span', 'board-tool-gap'), tool('−', 'Zoom out', () => zoom(1 / 1.2)), level, tool('+', 'Zoom in', () => zoom(1.2)), tool('Fit', 'Fit the cards in view', fit), node('span', 'board-tool-gap'), tool('Arrange', 'Lay every card out by what it waits for', arrange));
+    return bar;
+  }
+  function drawSpace() {
+    // A drag keeps its cards under the pointer: anything that arrives meanwhile is drawn when it ends.
+    if (gesture) { stale = true; return; }
+    stale = false;
+    const at = places(), world = node('div', 'board-world'), layer = svg('svg');
+    layer.setAttribute('class', 'board-links'); layer.setAttribute('aria-hidden', 'true'); layer.setAttribute('width', '1'); layer.setAttribute('height', '1');
+    world.append(layer);
+    for (const card of cards()) {
+      const place = at.get(card.id), item = node('div', 'board-node'); item.dataset.card = card.id;
+      item.style.transform = `translate(${place.x}px, ${place.y}px)`;
+      const face = cardButton(card, true);
+      face.addEventListener('pointerdown', event => startMove(event, card.id));
+      face.addEventListener('keydown', event => nudge(event, card.id));
+      // The dot on the right edge starts an arrow to a card that will wait for this one.
+      const port = node('span', 'board-port'); port.setAttribute('aria-hidden', 'true'); port.title = 'Drag to a card that should wait for this one';
+      port.addEventListener('pointerdown', event => startLink(event, card.id));
+      item.append(face, port); world.append(item);
+    }
+    const empty = cards().length ? [] : [node('p', 'board-canvas-empty', 'No cards yet. Double-click anywhere to add one, or use New card.')];
+    space.replaceChildren(world, ...empty, tools(), node('p', 'board-canvas-hint', 'Drag a card to place it. Drag its dot onto another card to make that card wait. Double-click to add a card.'));
+    frame(() => {
+      let changed = false;
+      for (const item of world.querySelectorAll('.board-node')) { const measured = item.offsetHeight; if (measured && measured !== heights.get(item.dataset.card)) { heights.set(item.dataset.card, measured); changed = true; } }
+      if (!camera) fit(); else aim();
+      // Cards not placed yet sit by their heights: once those are known, they're drawn again where they belong.
+      if (changed && cards().some(card => !card.at)) { const again = places(); for (const item of world.querySelectorAll('.board-node')) { const p = again.get(item.dataset.card); if (p) item.style.transform = `translate(${p.x}px, ${p.y}px)`; } drawLinks(again); }
+      else drawLinks(at);
+    });
+  }
+
+  // ---- Gestures
+  function follow(onMove, onEnd) {
+    const move = event => onMove(event), end = event => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); onEnd(event); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
+  }
+  function startMove(event, id) {
+    if (event.button !== 0 || gesture) return;
+    const start = places().get(id), origin = toWorld(event);
+    gesture = { kind: 'move', id, at: { ...start }, start, moved: false };
+    follow(next => {
+      const point = toWorld(next), x = Math.round(start.x + point.x - origin.x), y = Math.round(start.y + point.y - origin.y);
+      if (!gesture.moved && Math.hypot(x - start.x, y - start.y) < 4) return;
+      gesture.moved = true; gesture.at = { x, y };
+      const item = space.querySelector(`.board-node[data-card="${id}"]`); if (item) { item.style.transform = `translate(${x}px, ${y}px)`; item.classList.add('moving'); }
+      drawLinks();
+    }, () => {
+      const done = gesture; gesture = null;
+      space.querySelector('.board-node.moving')?.classList.remove('moving');
+      if (!done.moved) { if (stale) drawSpace(); return; }
+      moved = id; setTimeout(() => { if (moved === id) moved = null; }, 0);
+      const before = cardBy(id)?.at || null;
+      record(`Move ${title(id)}`, { [id]: before }, { [id]: done.at });
+      place({ [id]: done.at });
+    });
+  }
+  function startLink(event, from) {
+    if (event.button !== 0 || gesture) return;
+    event.preventDefault(); event.stopPropagation?.();
+    gesture = { kind: 'link', from, to: null, over: null };
+    follow(next => {
+      gesture.to = toWorld(next);
+      const over = cardAt(gesture.to, places(), from)?.id || null;
+      if (over !== gesture.over) { space.querySelector('.board-node.link-target')?.classList.remove('link-target'); if (over) space.querySelector(`.board-node[data-card="${over}"]`)?.classList.add('link-target'); gesture.over = over; }
+      drawLinks();
+    }, () => {
+      const target = gesture.over; gesture = null;
+      space.querySelector('.board-node.link-target')?.classList.remove('link-target');
+      if (target) connect(from, target); else if (stale) drawSpace(); else drawLinks();
+    });
+  }
+  function startPan(event) {
+    if (event.button !== 0 || gesture || event.target.closest?.('.board-node, .board-canvas-tools, .board-link-remove')) return;
+    const origin = { x: event.clientX, y: event.clientY, cx: camera.x, cy: camera.y };
+    gesture = { kind: 'pan' }; space.classList.add('panning');
+    if (picked$) { picked$ = null; drawLinks(); }
+    follow(next => { camera = { ...camera, x: origin.cx + next.clientX - origin.x, y: origin.cy + next.clientY - origin.y }; aim(); }, () => { gesture = null; space.classList.remove('panning'); if (stale) drawSpace(); });
+  }
+  // Alt and an arrow key move the focused card, for those who'd rather not drag.
+  function nudge(event, id) {
+    const by = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[event.key];
+    if (!by || !event.altKey) return;
+    event.preventDefault();
+    const from = places().get(id), to = { x: from.x + by[0], y: from.y + by[1] };
+    record(`Move ${title(id)}`, { [id]: cardBy(id)?.at || null }, { [id]: to });
+    place({ [id]: to });
+  }
+
+  // ---- Changes, and undoing them
+  // Canvas changes show at once and are saved behind; one that fails reloads the board as it is.
+  async function quietly(path, input) {
+    const request = ++written; writes++; failure = '';
+    try { const result = await api.post(path, input); writes--; if (request === written && result.board) { board = result.board; render(); } return true; }
+    catch (error) { writes--; failure = error.message; showError(); await load(); return false; }
+  }
+  function place(positions) {
+    for (const [id, at] of Object.entries(positions)) { const card = cardBy(id); if (card) card.at = at; }
+    render();
+    return quietly('/api/board/place', { positions });
+  }
+  // Waits are part of what an agent is told, so they change through the card's own edit, which checks for circles.
+  function setWaits(id, change) {
+    const card = cardBy(id); if (!card) return Promise.resolve(false);
+    const dependsOn = change(card.dependsOn || []);
+    card.dependsOn = dependsOn; render();
+    return quietly(`/api/board/cards/${id}/edit`, { dependsOn, revision: card.revision });
+  }
+  async function connect(from, to) {
+    const card = cardBy(to);
+    if (!card || card.dependsOn?.includes(from)) { drawSpace(); return; }
+    if (card.column === 'doing') { failure = `An agent is working on ${title(to)}. Stop it before changing what it waits for.`; showError(); drawSpace(); return; }
+    if (await setWaits(to, waits => [...waits, from])) { record(`${title(to)} waits for ${title(from)}`, null, null, { undo: () => setWaits(to, waits => waits.filter(id => id !== from)), redo: () => setWaits(to, waits => [...new Set([...waits, from])]) }); api.announce(`${title(to)} now waits for ${title(from)}.`); }
+  }
+  async function disconnect(from, to) {
+    picked$ = null;
+    if (cardBy(to)?.column === 'doing') { failure = `An agent is working on ${title(to)}. Stop it before changing what it waits for.`; showError(); drawSpace(); return; }
+    if (await setWaits(to, waits => waits.filter(id => id !== from))) { record(`${title(to)} stops waiting for ${title(from)}`, null, null, { undo: () => setWaits(to, waits => [...new Set([...waits, from])]), redo: () => setWaits(to, waits => waits.filter(id => id !== from)) }); api.announce(`${title(to)} no longer waits for ${title(from)}.`); }
+  }
+  function arrange() {
+    const all = cards(); if (!all.length) return;
+    const before = Object.fromEntries(all.map(card => [card.id, card.at || null])), after = Object.fromEntries([...layout(all, 0, 0)].map(([id, at]) => [id, at]));
+    record('Arrange', before, after);
+    place(after).then(() => fit());
+  }
+  // A move undoes to the places before it; an arrow undoes with its own pair of changes.
+  function record(label, before, after, own = null) {
+    undos.push(own ? { label, ...own } : { label, undo: () => place(before), redo: () => place(after) });
+    if (undos.length > 100) undos.shift();
+    redos = []; refreshTools();
+  }
+  async function step(from, to) {
+    const entry = from.pop(); if (!entry) return;
+    const ok = await (from === undos ? entry.undo() : entry.redo());
+    if (ok !== false) { to.push(entry); api.announce(`${from === undos ? 'Undone' : 'Redone'}: ${entry.label}.`); }
+    refreshTools();
+  }
+  function refreshTools() {
+    const bar = space.querySelector('.board-canvas-tools');
+    if (!bar || view !== 'canvas') return;
+    bar.replaceWith(tools()); aim();
+  }
+
+  function showView(next) {
+    view = next; try { localStorage.setItem(VIEW_KEY, next); } catch {}
+    for (const [id, mode] of [['board-columns-mode', 'columns'], ['board-canvas-mode', 'canvas']]) $(id)?.setAttribute('aria-pressed', String(view === mode));
+    picked$ = null; render();
+  }
+  async function exportBoard() {
+    try {
+      const result = await api.api('/api/board/export'), url = URL.createObjectURL(new Blob([result.markdown], { type: 'text/markdown' })), link = document.createElement('a');
+      link.href = url; link.download = result.filename || 'codeshi-board.md'; document.body?.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      api.announce('Board saved as Markdown.');
+    } catch (error) { failure = error.message; showError(); }
+  }
+
   function render() {
     if (!dialog.open) { entry(); return; }
-    if (!board) { $('board-columns').replaceChildren(node('p', 'plan-view-empty', failure ? `The board couldn’t be loaded. ${failure}` : 'Loading the board…')); return; }
+    const onCanvas = view === 'canvas';
+    $('board-canvas').classList.toggle('canvas-mode', onCanvas); $('board-columns').hidden = onCanvas; space.hidden = !onCanvas;
+    for (const [id, mode] of [['board-columns-mode', 'columns'], ['board-canvas-mode', 'canvas']]) $(id)?.setAttribute('aria-pressed', String(view === mode));
+    if (!board) { const message = node('p', 'plan-view-empty', failure ? `The board couldn’t be loaded. ${failure}` : 'Loading the board…'); (onCanvas ? space : $('board-columns')).replaceChildren(message); return; }
     const ready = cards().filter(card => card.column === 'ready');
     $('board-run-ready').disabled = busy || !ready.some(card => card.agent);
     $('board-run-ready').title = ready.length ? 'Choose Ready cards to run' : 'Nothing is in Ready';
     // Typing keeps its place: the columns are drawn again only when the cards change.
-    const focused = document.activeElement?.closest?.('#board-columns') ? document.activeElement.dataset?.card : null;
-    drawColumns();
-    if (focused) $('board-columns').querySelector(`[data-card="${focused}"]`)?.focus();
+    const where = onCanvas ? space : $('board-columns'), focused = document.activeElement?.closest?.(onCanvas ? '#board-space' : '#board-columns') ? document.activeElement.dataset?.card : null;
+    if (onCanvas) drawSpace(); else drawColumns();
+    if (focused) where.querySelector(`.board-card[data-card="${focused}"]`)?.focus();
     renderDrawer(); showError(); entry();
   }
   // The Board button says how many cards wait for you in Review.
@@ -336,9 +634,39 @@
   function open() {
     if (dialog.open || !api.getState().projectId) return;
     selected = null; draft = null; failure = ''; drawn = null;
-    dialog.showModal(); render(); load().then(() => $('board-columns').querySelector('.board-card')?.focus());
+    dialog.showModal(); render(); load().then(() => (view === 'canvas' ? space : $('board-columns')).querySelector('.board-card')?.focus());
   }
-  dialog.addEventListener('cancel', event => { if (selected) { event.preventDefault(); closeDrawer(); } else if (dirty()) event.preventDefault(); });
+  dialog.addEventListener('cancel', event => {
+    if (picked$) { event.preventDefault(); picked$ = null; drawLinks(); }
+    else if (selected) { event.preventDefault(); closeDrawer(); } else if (dirty()) event.preventDefault();
+  });
+  $('board-columns-mode')?.addEventListener('click', () => showView('columns'));
+  $('board-canvas-mode')?.addEventListener('click', () => showView('canvas'));
+  $('board-export')?.addEventListener('click', exportBoard);
+  // The canvas: drag empty space to pan, scroll to pan, pinch or ⌘-scroll to zoom, double-click for a new card there.
+  const onCard = event => event.target?.closest?.('.board-node') || event.target?.closest?.('.board-canvas-tools') || event.target?.closest?.('.board-link-remove');
+  space.addEventListener('pointerdown', startPan);
+  space.addEventListener('wheel', event => {
+    if (!camera) return;
+    event.preventDefault();
+    if (event.ctrlKey || event.metaKey) zoom(Math.exp(-event.deltaY * 0.01), event);
+    else { camera = { ...camera, x: camera.x - event.deltaX, y: camera.y - event.deltaY }; aim(); }
+  }, { passive: false });
+  space.addEventListener('dblclick', event => {
+    if (!camera || onCard(event)) return;
+    const point = toWorld(event);
+    openNew('backlog', { x: Math.round(point.x - WIDTH / 2), y: Math.round(point.y - 20) });
+  });
+  // ⌘Z and ⇧⌘Z undo and redo canvas changes; Delete takes away the chosen arrow. Typing in a field keeps its own undo.
+  dialog.addEventListener('keydown', event => {
+    if (view !== 'canvas' || !board) return;
+    const target = event.target, typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || target?.isContentEditable || target?.closest?.('#board-drawer');
+    if (typing) return;
+    const key = String(event.key || '').toLowerCase(), command = event.metaKey || event.ctrlKey;
+    if (command && key === 'z') { event.preventDefault(); if (event.shiftKey) step(redos, undos); else step(undos, redos); }
+    else if (command && key === 'y') { event.preventDefault(); step(redos, undos); }
+    else if ((key === 'delete' || key === 'backspace') && picked$) { event.preventDefault(); disconnect(...picked$); }
+  });
   dialog.addEventListener('close', () => { selected = null; draft = null; drawn = null; entry(); });
   $('board-close').addEventListener('click', () => { if (!dirty() || window.confirm('Leave this card without saving your changes?')) { selected = null; draft = null; dialog.close(); } });
   $('board-drawer-close').addEventListener('click', closeDrawer);
@@ -349,7 +677,7 @@
   let project = null;
   window.addEventListener('relay-state', () => {
     const state = api.getState();
-    if (state.projectId !== project) { project = state.projectId; board = null; seen = null; if (dialog.open) dialog.close(); }
+    if (state.projectId !== project) { project = state.projectId; board = null; seen = null; camera = null; heights = new Map(); undos = []; redos = []; picked$ = null; if (dialog.open) dialog.close(); }
     const key = JSON.stringify([state.projectId, state.conversation?.boardRevision, (state.conversation?.parallelTasks || []).map(task => [task.id, task.status, task.approvals, task.hasWorktree])]);
     if (key === seen) { entry(); return; }
     seen = key;

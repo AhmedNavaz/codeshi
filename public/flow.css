@@ -20,7 +20,7 @@
   #app-shell.flow.flow-lounge, #app-shell.flow.flow-lounge:has(.side-panel:not([hidden])), #app-shell.flow.flow-lounge:has(#review-panel:not([hidden])) { grid-template-columns: minmax(0, 1fr) 0 clamp(420px, 46vw, 548px); }
 }
 #app-shell.flow.flow-lounge > .main-panel { grid-column: 3; }
-#app-shell.flow.flow-lounge .composer-region, #app-shell.flow.flow-lounge .messages { width: calc(100% - 24px); }
+#app-shell.flow.flow-lounge .composer-region, #app-shell.flow.flow-lounge .messages { width: calc(100% - 16px); }
 #app-shell.flow > .sidebar { display: none; }
 #app-shell.flow > .main-panel { grid-column: 2; grid-row: 2; }
 #app-shell.flow { grid-template-rows: 56px minmax(0, 1fr); overflow-x: hidden; }
@@ -469,6 +469,15 @@
 .flow-run-title { color: var(--text); }
 .flow-run-meta { grid-column: 1; color: var(--faint); font-size: 11px; }
 .flow-run-action { grid-column: 2; grid-row: 1 / span 2; }
+/* What happened: one decision per finished run, newest first, with the recorded reason under it. */
+.flow-happened { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.flow-happened-item { display: grid; gap: 1px; min-width: 0; padding-left: 9px; border-left: 2px solid var(--border); }
+.flow-happened-item[data-kind="handoff"], .flow-happened-item[data-kind="retry"] { border-left-color: var(--accent); }
+.flow-happened-title { color: var(--text); overflow-wrap: anywhere; }
+.flow-happened-meta { color: var(--faint); font-size: 11px; }
+.flow-happened-outcome[data-tone="good"] { color: var(--success); }
+.flow-happened-outcome[data-tone="bad"] { color: var(--danger); }
+.flow-happened-why { color: var(--muted); font-size: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* A narrow window: one chip per card under the header; a chip opens its card over the right edge of the chat. */
 .flow-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: none; padding: 2px 18px 8px; }

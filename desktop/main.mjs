@@ -154,8 +154,10 @@ else {
         tray.setImage(lightTaskbar?snapshot.attention?statusIcons.lightAttention:statusIcons.lightIdle:snapshot.attention?statusIcons.attention:statusIcons.idle);
         tray.setToolTip(statusTooltip(snapshot,text));
       }else{
-        tray.setImage(snapshot.attention?statusIcons.attention:statusIcons.idle);
-        tray.setTitle(statusTitle(snapshot,text),{fontType:'monospacedDigit'});
+        // With a Codeshi window in front the window says it all, so the item is the plain mark with no words.
+        const focused=Boolean(BrowserWindow.getFocusedWindow());
+        tray.setImage(snapshot.attention&&!focused?statusIcons.attention:statusIcons.idle);
+        tray.setTitle(statusTitle(snapshot,text,{focused}),{fontType:'monospacedDigit'});
       }
       tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,text,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
     }
@@ -186,7 +188,8 @@ else {
     // The progress pill shows only while no Codeshi window is in front; focus moving between its windows passes through none.
     if(process.platform==='darwin'){
       overlay=createOverlay({BrowserWindow,screen,ipcMain,root,open:openTarget,isFocused:()=>Boolean(BrowserWindow.getFocusedWindow())});
-      app.on('browser-window-focus',()=>overlay?.refresh());app.on('browser-window-blur',()=>setTimeout(()=>overlay?.refresh(),150));
+      // The menu bar status drops its words at once when a window comes forward, and gets them back after focus has settled.
+      app.on('browser-window-focus',()=>{overlay?.refresh();syncStatus();});app.on('browser-window-blur',()=>setTimeout(()=>{overlay?.refresh();syncStatus();},150));
     }
     if(statusIcons){relay.registry.on('update',scheduleStatus);relay.registry.on('projects',scheduleStatus);}
     if(windows){readTaskbar();nativeTheme.on('updated',readTaskbar);}

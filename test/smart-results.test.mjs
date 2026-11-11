@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { continuationRequest } from '../src/context.mjs';
 import { ledgerFromRecords } from '../src/task-ledger.mjs';
-import { compare, difference, METHOD, smartResults } from '../src/smart-results.mjs';
+import { compare, difference, METHOD, SHARE, shareableReport, sharePost, smartResults } from '../src/smart-results.mjs';
 import { measuredComparisons, measuredMarkdown } from '../evals/compare.mjs';
 
 // Journal records for whole tasks, so every case goes through the real ledger the app reads.
@@ -222,6 +222,36 @@ test('the report holds no requests unless asked, and you can leave tasks out', (
   assert.equal(left.excluded['left-out-by-you'], 1);
   assert.equal(left.observed.smart.tasks, 11);
   assert.equal(left.tasks.find(task => task.id === id).included, false, 'A task left out is still listed, so it can be put back.');
+});
+
+test('a shared report drops requests, task IDs and times of day, and its post matches the file', () => {
+  const log = standardPair(), full = log.results({ prompts: true }), shared = shareableReport(full);
+  assert.equal(shared.format, SHARE.format);
+  assert.deepEqual(shared.removed, ['requests', 'routing-reasons', 'task-ids', 'times-of-day']);
+  const text = JSON.stringify(shared);
+  assert.equal(text.includes(SIZES.standard), false, 'No request, even from a report made with prompts.');
+  assert.equal(text.includes('a focused change'), false, 'No routing reason.');
+  for (const task of full.tasks) assert.equal(text.includes(task.id), false, `Task ID ${task.id} is gone.`);
+  assert.equal(/T\d{2}:\d{2}/.test(text), false, 'No time of day anywhere.');
+  assert.deepEqual(shared.tasks.map(task => task.task).sort((a, b) => a - b), full.tasks.map((_, index) => index + 1), 'Tasks are numbered 1 to n.');
+  const first = shared.tasks.find(task => task.task === 1), earliest = full.tasks.reduce((a, b) => (a.startedAt <= b.startedAt ? a : b));
+  assert.equal(first.startedOn, earliest.startedAt.slice(0, 10), 'Task 1 is the one that started first, with only its date.');
+  assert.deepEqual(shared.observed, full.observed);
+  assert.deepEqual(shared.comparisons, full.comparisons, 'The arithmetic is unchanged.');
+  const post = sharePost(shared, { fileName: 'x.json' });
+  assert.match(post.title, /^Routing results: \d+ tasks over all time$/);
+  assert.match(post.body, /Drag x\.json into this box/);
+  assert.match(post.body, new RegExp(`\\| Smart \\| ${shared.observed.smart.tasks} \\| ${shared.observed.smart.verified} \\|`));
+  assert.match(post.body, /\*\*Smart compared with manual:\*\* /);
+  assert.equal(post.body.includes(SIZES.standard), false);
+});
+
+test('a shared post with no tasks says so and makes no comparison', () => {
+  const empty = shareableReport(smartResults([], { now: START, days: 30 })), post = sharePost(empty);
+  assert.equal(empty.tasks.length, 0);
+  assert.match(post.title, /^Manual results: 0 tasks over the last 30 days$/);
+  assert.match(post.body, /No finished tasks in this range\./);
+  assert.equal(post.body.includes('compared with manual'), false);
 });
 
 test('the time range only counts tasks that started inside it', () => {

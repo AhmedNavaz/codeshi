@@ -96,5 +96,23 @@ summary.task-merge-head { cursor: pointer; }
 .task-row-draft-icon { flex: none; width: 14px; height: 14px; background: var(--link); -webkit-mask: var(--icon-pencil) center / contain no-repeat; mask: var(--icon-pencil) center / contain no-repeat; }
 .task-section-heading .icon-button[hidden] { display: none; }
 /* A plan's steps, grouped under the plan (#108). */
-.task-group { padding: 8px 8px 2px; overflow: hidden; color: var(--faint); font-size: var(--font-ui-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.task-row-step .task-row { padding-left: 18px; }
+/* Its row says where the plan stands, folds and opens the steps, and once the plan has ended shows what it used. */
+.task-group-holder { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; margin-top: 2px; }
+.task-group { display: flex; align-items: center; gap: 6px; min-width: 0; height: 28px; padding: 0 8px 0 4px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font-size: var(--font-ui-base); font-weight: 500; text-align: left; }
+.task-group:hover { background: var(--hover); }
+.task-group-chevron { flex: none; width: 12px; height: 12px; background: var(--faint); -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; transition: transform .12s; }
+.task-group[aria-expanded="true"] .task-group-chevron { transform: rotate(90deg); }
+.task-group-icon { flex: none; width: 14px; height: 14px; background: var(--faint); -webkit-mask: var(--icon-tasks) center / contain no-repeat; mask: var(--icon-tasks) center / contain no-repeat; }
+.task-group-holder[data-status="running"] .task-group-icon { background: var(--link); animation: task-working 1.6s ease-in-out infinite; }
+.task-group-holder[data-status="done"] .task-group-icon { background: var(--success); -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); }
+.task-group-holder[data-status="failed"] .task-group-icon { background: var(--danger); }
+.task-group-holder[data-status="stopped"] .task-group-icon { background: var(--warning); }
+.task-group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-group-side { flex: none; max-width: 48%; overflow: hidden; color: var(--faint); font-size: var(--font-ui-sm); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.task-group-holder[data-status="failed"] .task-group-side { color: var(--danger); }
+.task-group-close { width: 22px; height: 22px; margin-left: 2px; opacity: 0; }
+.task-group-close::before { content: ""; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-close) center / contain no-repeat; mask: var(--icon-close) center / contain no-repeat; }
+.task-group-holder:is(:hover, :focus-within) .task-group-close { opacity: 1; }
+.task-group-total { grid-column: 1 / -1; padding: 0 8px 4px 40px; overflow: hidden; color: var(--faint); font-size: var(--font-ui-xs); text-overflow: ellipsis; white-space: nowrap; }
+.task-row-step .task-row { padding-left: 26px; }
+@media (prefers-reduced-motion: reduce) { .task-group-chevron { transition: none; } .task-group-holder[data-status="running"] .task-group-icon { animation: none; } }

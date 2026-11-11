@@ -10,9 +10,14 @@ export function createBoardRoutes({ registry, body, json }) {
       if (req.method !== 'GET') fail('Use GET.', 405);
       json(res, 200, board.view(c)); return true;
     }
+    if (url.pathname === '/api/board/export') {
+      if (req.method !== 'GET') fail('Use GET.', 405);
+      json(res, 200, { markdown: board.markdown(c), filename: 'codeshi-board.md' }); return true;
+    }
     if (req.method !== 'POST') fail('Use POST.', 405);
     const input = await body(req, 256 * 1024);
     if (url.pathname === '/api/board/cards') { json(res, 201, { card: board.create(c, input), board: board.view(c) }); return true; }
+    if (url.pathname === '/api/board/place') { const result = board.place(c, input); json(res, 200, { ...result, board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/run') { const result = board.run(c, input); json(res, 202, { tasks: result.tasks, board: board.view(c) }); return true; }
     const match = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/(edit|move|remove|stop|accept|send-back)$/);
     if (!match) fail('Not found.', 404);

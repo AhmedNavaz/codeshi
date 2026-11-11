@@ -31,6 +31,7 @@
     { id: 'plans', title: 'What’s left on your plans', side: left },
     { id: 'results', title: 'Smart results', side: left },
     { id: 'working', title: 'How it’s working now', side: right },
+    { id: 'happened', title: 'What happened', side: right },
     { id: 'files', title: 'Files changed', side: right },
     { id: 'preview', title: 'Run and review your project', side: right },
   ];
@@ -625,7 +626,60 @@
     }
     body.append(list);
   }
-  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, files: renderFiles, preview: card => window.relayProjectReview?.render(card), results: card => window.relaySmartResults?.renderCard(card) };
+  // What happened (#107): the decisions Codeshi made on the latest finished runs, each with the reason it recorded at the
+  // time and how the run ended. Read from the saved runs, with no model call; a reason is shown as recorded, never invented.
+  const tierWords = { light: 'a small task', standard: 'a medium task', deep: 'a complex task' };
+  function runAgent(run) {
+    const model = run.model ? (window.relayModelPicker?.modelName?.(run.provider, run.model) || run.model) : '';
+    return `${agentName(run.provider, run.local)}${model ? ` · ${model}` : ''}${run.effort ? ` (${run.effort})` : ''}`;
+  }
+  function decision(run) {
+    const agent = runAgent(run), name = agentName(run.provider, run.local), why = run.routing?.reason || '';
+    if (run.relation === 'review' || run.review) return { kind: 'review', title: `${name} reviewed the changes`, why: '' };
+    if (run.retryOf) return { kind: 'retry', title: `Tests failed, so it tried again with ${agent}`, why: 'One step up from the run that failed, once only.' };
+    if (run.fallback?.from) return { kind: 'handoff', title: `Switched from ${agentName(run.fallback.from)} to ${agent}`, why: run.fallback.reason || 'The first choice was near its usage limit.' };
+    if (run.relation === 'continuation' && run.previousProvider) return { kind: 'handoff', title: `Handed the task from ${agentName(run.previousProvider)} to ${agent}`, why };
+    if (run.relation === 'continuation') return { kind: 'refresh', title: `Continued with a fresh ${name} session`, why: why || 'Started over with the task’s brief so the agent’s context stays small.' };
+    if (run.routing) return { kind: 'route', title: `Chose ${agent}${tierWords[run.routing.tier] ? ` for ${tierWords[run.routing.tier]}` : ''}`, why };
+    return { kind: 'manual', title: `You chose ${agent}`, why: '' };
+  }
+  function outcome(run) {
+    if (run.errorCategory === 'quota') return { text: 'Stopped at a usage limit', tone: 'bad' };
+    if (run.status === 'interrupted') return { text: 'Stopped', tone: 'muted' };
+    if (run.status === 'failed' || run.status === 'incomplete') return { text: 'Didn’t finish', tone: 'bad' };
+    const check = run.check?.status;
+    if (check === 'passed') return { text: 'Tests passed', tone: 'good' };
+    if (check === 'failed') return { text: 'Tests failed', tone: 'bad' };
+    if (check === 'deferred') return { text: 'Tests wait for your review', tone: 'muted' };
+    if (check === 'running') return { text: 'Testing…', tone: 'muted' };
+    return { text: 'Done', tone: 'muted' };
+  }
+  function happenings() {
+    const runs = api.getState().conversation?.runs || [];
+    return runs.filter(run => run.endedAt && run.relation !== 'assessment').slice(-4).reverse().map(run => ({ run, ...decision(run), outcome: outcome(run) }));
+  }
+  function renderHappened(card) {
+    const rows = happenings();
+    const signature = JSON.stringify(rows.map(row => [row.run.id, row.title, row.why, row.outcome.text]));
+    if (signature === card.signature) return;
+    card.signature = signature;
+    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
+    card.foot.append(button('flow-button', 'Timeline', () => window.relayTimeline?.open?.()));
+    if (!rows.length) { body.append(node('p', 'flow-empty', 'Nothing yet. After each run, the agent Codeshi chose, any handoff or retry, and how it ended appear here.')); return; }
+    const list = node('ul', 'flow-happened');
+    for (const row of rows) {
+      const item = node('li', 'flow-happened-item'); item.dataset.kind = row.kind;
+      item.append(node('span', 'flow-happened-title', row.title));
+      const meta = node('span', 'flow-happened-meta'), result = node('span', 'flow-happened-outcome', row.outcome.text);
+      result.dataset.tone = row.outcome.tone; meta.append(result);
+      const at = when(row.run.endedAt); if (at) meta.append(document.createTextNode(` · ${at}`));
+      item.append(meta);
+      if (row.why) { const why = node('span', 'flow-happened-why', clip(row.why, 140)); why.title = row.why; item.append(why); }
+      list.append(item);
+    }
+    body.append(list);
+  }
+  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, files: renderFiles, happened: renderHappened, preview: card => window.relayProjectReview?.render(card), results: card => window.relaySmartResults?.renderCard(card) };
 
   // ---- Live status in the working card. Remote access and Settings sit below it; no footer is needed.
   const phaseWords = { starting: 'starting', probing: 'checking usage', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
@@ -682,6 +736,7 @@
     const state = api.getState();
     if (id === 'preview') return window.relayProjectReview?.label() || 'Run and review your project';
     if (id === 'results') { const data = window.relaySmartResults?.data?.(), mode = canonicalMode(routing()?.mode) || 'smart', name = modes.find(item => item.mode === mode)?.name || 'Smart', seen = data?.observed?.[mode]; return seen?.tasks ? `${name} · ${plural(seen.tasks, 'task')} · ${seen.verified} verified` : `${name} results`; }
+    if (id === 'happened') { const latest = happenings()[0]; return latest ? clip(latest.title, 48) : 'What happened'; }
     if (id === 'working') return modes.find(item => item.mode === canonicalMode(routing()?.mode))?.name || 'Routing';
     if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
     if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || [], plan = waitingPlan(); if (plan) return plan.chip; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }

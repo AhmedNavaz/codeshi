@@ -60,6 +60,18 @@ const internalPatterns = [
   /\bseparate\s+interface\s+and\s+HTTP\s+route\s+modules\b/i,
 ];
 
+// Contributors a release thanks. A line of its own, "Thanks to [@name](…) for the import fixes.", is kept as a
+// sentence; "thanks @name" inside an item names them only. Only the login is kept, never the link: the page builds
+// the GitHub address from it.
+const LOGIN = /@([A-Za-z\d](?:[A-Za-z\d-]{0,37}[A-Za-z\d])?)(?![\w-])/g;
+const logins = text => [...new Set([...unlink(text).matchAll(LOGIN)].map(match => match[1]))];
+function addThanks(release, names, text = '') {
+  for (const login of names) {
+    const known = release.thanks.find(item => item.login.toLowerCase() === login.toLowerCase());
+    if (known) { if (text && !known.text) known.text = text; } else if (release.thanks.length < 12) release.thanks.push({ login, text });
+  }
+}
+
 function isUserFacingItem(text) {
   return !internalPatterns.some(pattern => pattern.test(text));
 }
@@ -69,14 +81,19 @@ export function releaseNotes(changelog, current, since = null) {
   for (const line of changelog.slice(0, 256 * 1024).split(/\r?\n/)) {
     if (line.startsWith('## ')) {
       const heading = line.match(/^## \[([^\]]+)\](?: - (\d{4}-\d{2}-\d{2}))?/);
-      release = heading && versionPattern.test(heading[1]) ? { version: heading[1], date: heading[2] || null, sections: [] } : null;
+      release = heading && versionPattern.test(heading[1]) ? { version: heading[1], date: heading[2] || null, sections: [], thanks: [] } : null;
       section = null; if (release) releases.push(release);
     } else if (release && line.startsWith('### ')) {
       const title = plain(line.slice(4)).trim().slice(0, 80);
       section = internalSectionPattern.test(title) ? null : { title, items: [] };
       if (section && release.sections.length < 8) release.sections.push(section);
-    } else if (section && /^- /.test(line) && isUserFacingItem(line) && section.items.length < 20) {
-      section.items.push(summarizeItem(line.slice(2)));
+    } else if (release && /^Thanks to\b/i.test(line)) {
+      addThanks(release, logins(line), brief(tidy(line)));
+    } else if (release && /^- /.test(line)) {
+      // An item left out of the notes, such as a test, still has its contributor thanked.
+      const credit = line.search(/\bthanks\s+\[?@/i);
+      if (credit >= 0) addThanks(release, logins(line.slice(credit)));
+      if (section && isUserFacingItem(line) && section.items.length < 20) section.items.push(summarizeItem(line.slice(2)));
     }
   }
   if (!releases.some(item => compareVersions(item.version, current) === 0)) return [];

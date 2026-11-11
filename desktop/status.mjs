@@ -74,7 +74,9 @@ export function statusSnapshot(registry, text = english) {
 }
 
 // The words beside the icon: what needs the person, or what the one running agent is doing, or how many are working.
-export function statusTitle({ rows, attention, running }, { t, tn } = english) {
+// While a Codeshi window is in front there are none: the window already shows it. The icon and its menu stay.
+export function statusTitle({ rows, attention, running }, { t, tn } = english, { focused = false } = {}) {
+  if (focused) return '';
   if (attention === 1) { const row = rows.find(item => item.attention); return row.kind === 'approval' ? row.question ? t('Question for you') : t('Approval needed') : row.kind === 'failed' ? t('Tests failed') : t('Needs you'); }
   if (attention > 1) return tn(attention, '1 needs you', '{count} need you');
   if (running === 1) { const row = rows.find(item => item.kind === 'running'); return clip(row.agent ? `${row.agent} · ${row.action}` : row.action, 32); }

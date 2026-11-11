@@ -201,5 +201,9 @@ jobs:
             echo "## What's new"
             echo
             cat changes.md
+            echo
+            echo "---"
+            echo
+            echo "Codeshi is free and open source. If it's useful to you, [star it on GitHub](https://github.com/${GITHUB_REPOSITORY}) so more contributors find it, or [support it on Patreon](https://www.patreon.com/17048317/join)."
           } > notes.md
           gh release create "$GITHUB_REF_NAME" release-files/* --title "Codeshi $version" --notes-file notes.md --verify-tag

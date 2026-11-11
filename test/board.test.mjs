@@ -199,6 +199,33 @@ test('a card that worked in its own copy is accepted only once its changes are m
   assert.equal(env.board.accept(env.c, card.id).column, 'done');
 });
 
+test('a card’s place on the canvas is saved without changing what an agent reads, and survives a restart (#97)', async t => {
+  const env = setup(t);
+  const first = env.add({ title: 'Agree the API', at: { x: 10.4, y: -20.6 } }), second = env.add({ title: 'Build "the" <form> #2', dependsOn: [first.id], checks: [{ text: 'Tests pass', done: true }], notes: 'Email only.' });
+  assert.deepEqual(env.card(first.id).at, { x: 10, y: -21 }, 'A new card can start where it was made, in whole pixels.');
+  assert.equal(env.card(second.id).at, undefined, 'A card made in Columns has no place until the canvas gives it one.');
+  assert.deepEqual(env.board.place(env.c, { positions: { [second.id]: { x: 400, y: 9e9 }, [first.id]: null } }), { placed: 2 });
+  assert.deepEqual(env.card(second.id).at, { x: 400, y: 100000 }, 'A place stays within the canvas.');
+  assert.equal(env.card(first.id).at, null, 'null hands a card back to the canvas’s own layout.');
+  assert.equal(env.card(second.id).revision, 1, 'Moving a card changes nothing an agent reads, so its revision stays.');
+  // Every id is checked before anything moves.
+  assert.throws(() => env.board.place(env.c, { positions: { [second.id]: { x: 1, y: 1 }, 'not-a-card': { x: 0, y: 0 } } }), /no longer on the board/);
+  assert.deepEqual(env.card(second.id).at, { x: 400, y: 100000 });
+  for (const bad of [{}, { positions: [] }, { positions: {} }, { positions: { [second.id]: { x: 'a', y: 1 } } }]) assert.throws(() => env.board.place(env.c, bad), error => error.status === 400);
+  // A card that's working can still be moved on the canvas.
+  env.c.board.find(card => card.id === second.id).column = 'doing';
+  env.board.place(env.c, { positions: { [second.id]: { x: 5, y: 5 } } });
+  env.c.board.find(card => card.id === second.id).column = 'backlog';
+  const markdown = env.board.markdown(env.c, { now: new Date('2026-11-11T12:00:00Z') });
+  assert.match(markdown, /^# Task board\n\nExported from Codeshi on 2026-11-11\. 2 cards\./);
+  assert.match(markdown, /```mermaid\nflowchart LR\n {2}c1\["Agree the API"\]:::backlog\n {2}c2\["Build #quot;the#quot; #lt;form#gt; #35;2"\]:::backlog\n {2}c1 --> c2\n/, 'The chart escapes what Mermaid would read as its own syntax.');
+  assert.match(markdown, /## Backlog\n\n### Agree the API\n\n- Agent: Codex\n/);
+  assert.match(markdown, /- Waits for: “Agree the API”\n\nEmail only\.\n\nDone means:\n\n- \[x\] Tests pass\n/);
+  assert.doesNotMatch(markdown, new RegExp(first.id), 'Card ids stay out of the export.');
+  await env.reopen();
+  assert.deepEqual(env.card(second.id).at, { x: 5, y: 5 }, 'Places are kept in the workspace’s journal.');
+});
+
 test('through the real server: the board is read and changed for the workspace chat', { skip: scriptCLIs }, async t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-board-server-'))), a = repository(path.join(root, 'a')), cli = path.join(root, 'codex-mock.mjs');
   fs.writeFileSync(cli, `#!${process.execPath}\nimport ${JSON.stringify(pathToFileURL(fixture).href)};\n`, { mode: 0o700 });
@@ -213,6 +240,11 @@ test('through the real server: the board is read and changed for the workspace c
   assert.equal(made.status, 201); assert.equal(made.body.board.cards[0].title, 'From the page');
   const id = made.body.card.id;
   assert.equal((await call(`/api/board/cards/${id}/edit`, { priority: 'high' })).body.card.priority, 'high');
+  const placed = await call('/api/board/place', { positions: { [id]: { x: 120, y: 40 } } });
+  assert.equal(placed.status, 200); assert.deepEqual(placed.body.board.cards[0].at, { x: 120, y: 40 });
+  assert.equal((await call('/api/board/place', { positions: {} })).status, 400);
+  const exported = await call('/api/board/export');
+  assert.equal(exported.status, 200); assert.equal(exported.body.filename, 'codeshi-board.md'); assert.match(exported.body.markdown, /## Ready\n\n### From the page/);
   assert.equal((await call(`/api/board/cards/${id}/move`, { column: 'doing' })).status, 409);
   assert.equal((await call(`/api/board/cards/${id}/accept`, {})).status, 409);
   assert.equal((await call('/api/board/run', { ids: [] })).status, 400);

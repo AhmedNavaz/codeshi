@@ -115,3 +115,10 @@
   .plan-view-main { position: relative; }
   .plan-drawer { position: absolute; inset: 0; width: auto; z-index: 2; }
 }
+
+/* On macOS the window's close, minimise and zoom buttons sit over the page's top-left corner, so the Plan view and
+   the board start below the title bar instead of under them. */
+.mac-titlebar .plan-view { margin-top: var(--titlebar-height); margin-bottom: 16px; height: calc(100dvh - var(--titlebar-height) - 16px); }
+@media (max-width: 760px) {
+  .mac-titlebar .plan-view { margin-bottom: 0; height: calc(100dvh - var(--titlebar-height)); }
+}

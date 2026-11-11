@@ -24,7 +24,7 @@ test('the macOS menu bar has Codeshi, File, Edit, View, Agent, Workspace, Window
   assert.deepEqual(labels(item('Appearance').submenu),['System','Light','Dark','Graphite']);
   assert.deepEqual(labels(item('Agent').submenu),['Use Codex','Use Claude Code','Use Gemini','Continue Locally…','-','Stop Run','Voice Input','Continue with…','-','Keep Awake','Alerts','-','Hand Off Near Usage Limits']);
   assert.deepEqual(labels(item('Workspace').submenu),['Frontend','R&D','-','Workspace Settings…','Remove Workspace…']);
-  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','Record Performance Trace','-','Roadmap','What’s New']);
+  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','-','Report a Bug','Share Design Feedback','Record Performance Trace','-','Roadmap','What’s New','-','Star Codeshi on GitHub','Support Codeshi on Patreon']);
   // These are the page's own shortcuts plus ⌘, ⌘N and ⌘G, which the page leaves to the menu.
   assert.deepEqual(Object.fromEntries(all.filter(entry=>entry.accelerator).map(entry=>[entry.label,entry.accelerator])),{'Settings…':'CmdOrCtrl+,','New Workspace':'CmdOrCtrl+N','Find in Conversation':'CmdOrCtrl+F','Find Next':'CmdOrCtrl+G','Filter Workspaces':'CmdOrCtrl+K','Show Git Activity':'CmdOrCtrl+Shift+G',Terminal:'Ctrl+`','Flow Mode':'CmdOrCtrl+Shift+F','Focus Message Box':'CmdOrCtrl+L','Stop Run':'CmdOrCtrl+.','Voice Input':'Alt+Cmd+V',Frontend:'CmdOrCtrl+1','R&D':'CmdOrCtrl+2'});
   for(const role of ['reload','forceReload','toggleDevTools'])assert(!roles.includes(role),`A packaged app leaves out ${role}.`);
@@ -73,7 +73,7 @@ test('page items and in-app release notes send commands, and external Help links
   for(const [label,command] of Object.entries(commands)){sent.length=0;item(label).click();assert.deepEqual(sent,[command],label);}
   assert.deepEqual(opened,[]);
   const repository='https://github.com/AhmedNavaz/codeshi';
-  const pages={'Codeshi Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`};
+  const pages={'Codeshi Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`,'Star Codeshi on GitHub':repository,'Support Codeshi on Patreon':'https://www.patreon.com/17048317/join'};
   for(const [label,url] of Object.entries(pages)){opened.length=0;item(label).click();assert.deepEqual(opened,[url],label);}
   // The five alert and status switches, the five handoff choices and Record Performance Trace are handled by the desktop app itself and tested separately.
   assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+11,'Every other item is a standard role.');
@@ -86,7 +86,7 @@ for(const platform of ['win32','linux'])test(`on ${platform} the menus have no a
   assert.deepEqual(labels(template),['File','Edit','View','Agent','Workspace','windowMenu','help']);
   assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Share Live…','Watch a Teammate…','-','Settings…','-','close','quit']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','delete','-','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces']);
-  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','Setup Guide','-','Report a Bug','Share Design Feedback','Record Performance Trace','-','Roadmap','What’s New','-','about']);
+  assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','Setup Guide','-','Report a Bug','Share Design Feedback','Record Performance Trace','-','Roadmap','What’s New','-','Star Codeshi on GitHub','Support Codeshi on Patreon','-','about']);
   for(const role of ['services','hide','hideOthers','unhide','pasteAndMatchStyle'])assert(!roles.includes(role),role);
   // & marks a keyboard mnemonic in Windows and Linux menus, so a workspace name doubles it to show it.
   assert.equal(item('workspace-2').label,'R&&D');assert.equal(menu().item('workspace-2').label,'R&D');

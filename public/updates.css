@@ -18,6 +18,27 @@
 .updates-release summary { display: flex; align-items: center; gap: 6px; padding: 15px 0 0; color: var(--muted); cursor: pointer; font-size: 12px; }
 .updates-release summary::before { content: ""; flex: none; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--icon-chevron-right) center / contain no-repeat; mask: var(--icon-chevron-right) center / contain no-repeat; }
 .updates-release[open] > summary::before { transform: rotate(90deg); }
+.updates-thanks h4 { margin-top: 8px; }
+.updates-thanks p { margin: 0 0 6px; color: var(--muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.updates-thanks .updates-contributor { font-size: inherit; font-weight: 600; }
+/* Under the notes and always in view: how to help Codeshi along. */
+.updates-support { padding: 14px 28px 16px; border-top: 1px solid var(--border); }
+.updates-support p { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.updates-support > div { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+/* Two cards, each with its own colour, so they read as invitations and not as more footer links. */
+.updates-action { --tint: var(--warning); --tint-bg: var(--warning-bg); --tint-border: var(--warning-border); display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); color: var(--text); text-align: left; transition: border-color .15s, background-color .15s, transform .15s; }
+.updates-action-patreon { --tint: var(--danger); --tint-bg: var(--danger-bg); --tint-border: var(--danger-border); }
+.updates-action-icon { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 9px; background: var(--tint-bg); color: var(--tint); }
+.updates-action-icon .icon { width: 18px; height: 18px; transition: fill .15s, transform .15s; }
+.updates-action-text { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.updates-action-text strong { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.updates-action-text small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.updates-action-out { width: 14px; height: 14px; color: var(--muted); opacity: .6; transition: opacity .15s, transform .15s, color .15s; }
+.updates-action:is(:hover, :focus-visible) { border-color: var(--tint-border); background: var(--tint-bg); transform: translateY(-1px); }
+.updates-action:is(:hover, :focus-visible) .updates-action-icon .icon { fill: currentColor; transform: scale(1.12); }
+.updates-action:is(:hover, :focus-visible) .updates-action-out { opacity: 1; color: var(--tint); transform: translate(1px, -1px); }
+.updates-action:active { transform: none; }
+@media (prefers-reduced-motion: reduce) { .updates-action, .updates-action * { transition: none; } .updates-action:is(:hover, :focus-visible), .updates-action:is(:hover, :focus-visible) * { transform: none; } }
 .updates-empty { color: var(--muted); font-size: 12px; line-height: 1.75; }
 /* The foot lines up with the wider content of this dialog. */
 .updates-footer { padding-left: 28px; padding-right: 28px; }

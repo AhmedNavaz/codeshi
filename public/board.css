@@ -94,3 +94,44 @@
 .board-run-why { padding-left: 22px; color: var(--warning); font-size: 11px; }
 
 @media (max-width: 1100px) { .board-columns { grid-template-columns: repeat(5, 220px); } }
+
+/* The Canvas view (#97): the same cards placed freely on a dotted plane that pans and zooms as one, with arrows behind them
+   for what waits for what. */
+.board-modes { align-self: center; }
+.board-canvas.canvas-mode { position: relative; padding: 0; overflow: hidden; }
+.board-space { position: absolute; inset: 0; overflow: hidden; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+  background-image: radial-gradient(circle, var(--border) 1px, transparent 1.2px); background-size: 18px 18px; }
+.board-space.panning { cursor: grabbing; }
+.board-world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
+.board-links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.board-link { fill: none; stroke: var(--border-strong); stroke-width: 1.5; }
+.board-link.done { stroke: var(--success); opacity: .7; }
+.board-link.related { stroke: var(--accent); stroke-width: 2; opacity: 1; }
+.board-link.picked { stroke: var(--accent); stroke-width: 2.5; opacity: 1; }
+.board-link.drafting { stroke: var(--accent); stroke-dasharray: 5 4; }
+.board-links marker path { fill: var(--border-strong); }
+.board-link-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
+.board-link-remove { position: absolute; left: 0; top: 0; transform-origin: 0 0; width: 22px; height: 22px; padding: 0; border: 1px solid var(--accent); border-radius: 50%; background: var(--surface-raised); color: var(--accent); font-size: 14px; line-height: 1; box-shadow: var(--shadow-sm, 0 1px 3px rgb(0 0 0 / .2)); cursor: pointer; z-index: 2; }
+.board-link-remove:hover { background: var(--accent); color: var(--bg); }
+
+.board-node { position: absolute; left: 0; top: 0; width: 220px; }
+.board-node .board-card { cursor: grab; }
+.board-node.moving { z-index: 3; }
+.board-node.moving .board-card { cursor: grabbing; box-shadow: 0 8px 24px rgb(0 0 0 / .28); border-color: var(--border-strong); }
+.board-node.link-target .board-card { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
+.board-card-column { flex: none; color: var(--faint); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.board-port { position: absolute; right: -6px; top: 50%; width: 12px; height: 12px; margin-top: -6px; border: 2px solid var(--border-strong); border-radius: 50%; background: var(--bg); cursor: crosshair; opacity: 0; transition: opacity .12s, border-color .12s, transform .12s; }
+.board-node:hover .board-port, .board-node:focus-within .board-port, .board-space:has(.board-link.drafting) .board-port { opacity: 1; }
+.board-port:hover { border-color: var(--accent); transform: scale(1.25); }
+
+.board-canvas-tools { position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); box-shadow: 0 2px 8px rgb(0 0 0 / .18); cursor: default; }
+.board-tool { min-width: 26px; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: 12px var(--font); cursor: pointer; font-variant-numeric: tabular-nums; }
+.board-tool:hover:enabled { background: var(--hover); }
+.board-tool:disabled { color: var(--faint); cursor: default; }
+.board-tool:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.board-zoom-level { min-width: 48px; color: var(--muted); }
+.board-tool-gap { width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
+.board-canvas-hint { position: absolute; right: 14px; bottom: 16px; margin: 0; max-width: 46ch; color: var(--faint); font-size: 11px; text-align: right; pointer-events: none; }
+.board-canvas-empty { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); margin: 0; color: var(--muted); pointer-events: none; }
+@media (max-width: 900px) { .board-canvas-hint { display: none; } }
+@media (prefers-reduced-motion: reduce) { .board-port { transition: none; } }

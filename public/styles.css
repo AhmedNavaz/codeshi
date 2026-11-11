@@ -612,9 +612,10 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 8px; }
 .composer { container: composer / inline-size; }
-.composer-toolbar { flex-wrap: nowrap; }
-/* Controls move to another line instead of shrinking until they overlap. */
-.composer-controls { display: flex; align-items: center; flex: 1 1 auto; flex-wrap: wrap; gap: 2px; min-width: 0; }
+/* The controls keep to one line. When they and the actions don't both fit, the actions take the next line, at the right,
+   so a lone control never drops under the others. Controls wrap among themselves only when they alone are too wide. */
+.composer-toolbar { flex-wrap: wrap; row-gap: 2px; }
+.composer-controls { display: flex; align-items: center; flex: 0 0 auto; flex-wrap: wrap; gap: 2px; min-width: 0; max-width: 100%; }
 .composer-controls > * { flex: 0 1 auto; min-width: 0; }
 .composer-controls .picker select { min-width: 0; }
 .composer-actions { flex: none; }
@@ -632,6 +633,15 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
    show as icons; Add to run loses its label only when space is short. */
 .composer:has(#stop-button:not([hidden])) .composer-controls .picker:is(.mode-control, .approval-control, .effort-picker) select { width: 30px; field-sizing: fixed; padding: 0 0 0 30px !important; color: transparent; background-image: none !important; }
 @container composer (max-width: 660px) { .composer:has(#steer-button:not([hidden])) .steer-label { display: none; } .composer:has(#steer-button:not([hidden])) .steer-button { padding: 0 9px; } }
+/* In a narrow box, such as the Lounge's chat column, the running row gives up Stop's label and some spacing to stay on one line. */
+@container composer (max-width: 600px) {
+  .composer:has(#stop-button:not([hidden])) .composer-actions { gap: 6px; }
+  .composer:has(#stop-button:not([hidden])) .attach-files { margin-right: 2px; }
+  .composer:has(#stop-button:not([hidden])) .stop-label { display: none; }
+  .composer:has(#stop-button:not([hidden])) .stop-button { padding: 0 9px; }
+  .composer:has(#stop-button:not([hidden])) .queue-button { padding: 0 11px; }
+}
+@container composer (min-width: 561px) and (max-width: 600px) { .composer:has(#stop-button:not([hidden])) .composer-toolbar { column-gap: 4px; } }
 .composer-controls .picker select option { color: var(--text); }
 .provider-selector { display: inline-flex; gap: 2px; margin-right: 4px; padding: 2px; border-radius: var(--radius); background: var(--chip-bg); }
 .provider-button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 12px; }
@@ -1299,14 +1309,14 @@ button.commit-hash:hover { text-decoration: underline; }
 .ledger-row { min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .ledger-row .panel-row-meta { overflow-wrap: anywhere; }
 .task-card-line, .task-agents { flex-wrap: wrap; }
-.results-body { display: grid; gap: 8px; font-size: 12px; }
+.results-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; font-size: 12px; }
 .results-controls { display: flex; flex-wrap: wrap; gap: 6px 10px; }
 .results-control { display: grid; gap: 2px; min-width: 0; color: var(--faint); font-size: var(--font-ui-xs); }
 .results-select { max-width: 100%; min-height: 24px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-raised); color: var(--text); font: inherit; font-size: 11.5px; }
 .results-table { width: 100%; border-collapse: collapse; font-size: var(--font-ui-sm); font-variant-numeric: tabular-nums; }
 .results-table th, .results-table td { padding: 3px 4px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
 .results-table th:first-child { text-align: left; color: var(--text); font-weight: 500; }
-.results-table tr:first-child th { color: var(--faint); font-weight: 500; }
+.results-table tr:first-child th { color: var(--faint); font-weight: 500; white-space: normal; vertical-align: bottom; }
 .results-comparison, .results-notes { display: grid; gap: 4px; }
 .results-comparison p, .results-notes p, .results-needs { margin: 0; }
 .results-needs { padding-left: 16px; color: var(--muted); }
@@ -1317,6 +1327,17 @@ button.commit-hash:hover { text-decoration: underline; }
 .results-metric summary { cursor: pointer; color: var(--text); line-height: 1.45; }
 .results-metric .results-table { margin-top: 2px; }
 .results-foot { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.results-share-dialog { width: min(560px, calc(100vw - 48px)); }
+.results-share-dialog[open] { display: flex; flex-direction: column; }
+.results-share-body { display: grid; gap: 6px; font-size: var(--font-ui-sm); }
+.results-share-body h3 { margin: 6px 0 0; color: var(--text-strong); font-size: var(--font-ui-sm); font-weight: 600; }
+.results-share-body h3:first-child { margin-top: 0; }
+.results-share-list { margin: 0; padding-left: 18px; color: var(--muted); line-height: 1.5; }
+.results-share-preview summary { display: flex; align-items: center; gap: 6px; width: fit-content; cursor: pointer; color: var(--link); line-height: 1.6; list-style: none; }
+.results-share-preview summary::-webkit-details-marker { display: none; }
+.results-share-preview summary::before { content: ""; width: 5px; height: 5px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform 120ms ease; }
+.results-share-preview[open] summary::before { transform: rotate(45deg); }
+.results-share-preview pre { max-height: 240px; margin: 6px 0 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--code-bg); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .results-tasks .text-link { font-size: 11px; }
 
 /* One layout for every dialog. The head holds the title, an optional line under it and the close button; the body

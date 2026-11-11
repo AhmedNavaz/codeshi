@@ -147,7 +147,9 @@
     const tasksToggle = button(showTasks ? 'Hide the tasks' : `Show the ${plural(data.tasks.length, 'task')}`, () => { showTasks = !showTasks; renderSection(); });
     const exportPlain = button('Export report', () => exportReport(false)), exportPrompts = button('Export with prompts', () => exportReport(true));
     exportPrompts.title = 'Includes the first 200 characters of each request and routing reasons. Check it before sharing.';
-    const foot = node('div', 'results-foot'); foot.append(tasksToggle, exportPlain, exportPrompts);
+    const shareButton = button('Share…', openShare);
+    shareButton.title = 'Post your results on Codeshi’s GitHub Discussions. You see everything before anything leaves this computer.';
+    const foot = node('div', 'results-foot'); foot.append(tasksToggle, exportPlain, exportPrompts, shareButton);
     host.replaceChildren(controls, table, comparison, notes, foot);
     if (showTasks) host.append(taskList());
     if (section) section.hidden = false;
@@ -204,6 +206,50 @@
       const report = await api.api(query(prompts ? { prompts: '1' } : {})), url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })), link = document.createElement('a');
       link.href = url; link.download = `codeshi-smart-results${prompts ? '-with-prompts' : ''}.json`; document.body?.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) { api.showNotice(error.message); }
+  }
+  // ---- Sharing (#139): Codeshi sends nothing. It saves a copy without requests, task IDs or times of day, then opens a
+  // prefilled Discussions post that the person attaches the file to and decides whether to submit.
+  const DISCUSSIONS = 'https://github.com/AhmedNavaz/codeshi/discussions/new';
+  let shareDialog = null, shared = null, shareFocus = null;
+  function buildShare() {
+    const dialog = node('dialog', 'panel-dialog results-share-dialog'); dialog.id = 'results-share-dialog';
+    dialog.setAttribute('aria-labelledby', 'results-share-title'); dialog.setAttribute('aria-describedby', 'results-share-intro');
+    const head = node('header', 'panel-dialog-head'), heading = node('div'), title = node('h2', null, 'Share your results'); title.id = 'results-share-title';
+    const intro = node('p', null, 'Codeshi sends nothing itself. It saves a file and opens a new post on Codeshi’s GitHub Discussions. You attach the file there and decide whether to post it. Posts are public.'); intro.id = 'results-share-intro';
+    const close = button('', closeShare, 'icon-button'); close.setAttribute('aria-label', 'Close'); close.title = 'Close';
+    close.innerHTML = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+    heading.append(title, intro); head.append(heading, close);
+    const body = node('div', 'panel-dialog-body results-share-body'); body.id = 'results-share-body';
+    const foot = node('footer', 'panel-dialog-foot');
+    const cancel = button('Cancel', closeShare, 'secondary-button'), go = button('Save file and open GitHub', confirmShare, 'primary-button'); go.id = 'results-share-go';
+    foot.append(cancel, go);
+    dialog.append(head, body, foot); document.body.append(dialog);
+    dialog.addEventListener('cancel', event => { event.preventDefault(); closeShare(); });
+    return dialog;
+  }
+  function closeShare() { shareDialog?.close(); if (shareFocus?.isConnected) shareFocus.focus(); }
+  async function openShare() {
+    shareDialog ||= buildShare(); shareFocus = document.activeElement; shared = null;
+    const body = $('results-share-body'), go = $('results-share-go');
+    body.replaceChildren(node('p', 'panel-muted', 'Preparing the copy to share…')); go.disabled = true;
+    if (!shareDialog.open) shareDialog.showModal();
+    try { shared = await api.api(query({ share: '1' })); }
+    catch (error) { body.replaceChildren(node('p', 'results-verdict warn', error.message)); return; }
+    const kept = node('ul', 'results-share-list'), dropped = node('ul', 'results-share-list');
+    for (const text of ['Task counts, tests passed, retries and times you were asked', 'Working time and new tokens, with how many tasks reported them', 'Agents, models and effort, routing modes and task sizes', 'Each comparison with its arithmetic, and the dates of the range and of each task']) kept.append(node('li', '', text));
+    for (const text of ['Your requests and routing reasons, even if you exported them before', 'File and folder names, and anything from your code', 'Task IDs: tasks are numbered 1, 2, 3 in the order they started', 'Times of day: only the date is kept']) dropped.append(node('li', '', text));
+    const preview = (label, text) => { const block = node('details', 'results-share-preview'); block.append(node('summary', '', label), node('pre', '', text)); return block; };
+    body.replaceChildren(node('h3', '', 'Included'), kept, node('h3', '', 'Left out'), dropped,
+      preview('See the post', `${shared.post.title}\n\n${shared.post.body}`), preview(`See the file (${shared.fileName})`, JSON.stringify(shared.report, null, 2)));
+    go.disabled = false; go.focus();
+  }
+  async function confirmShare() {
+    if (!shared) return;
+    const file = URL.createObjectURL(new Blob([JSON.stringify(shared.report, null, 2)], { type: 'application/json' })), link = document.createElement('a');
+    link.href = file; link.download = shared.fileName; document.body?.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(file), 1000);
+    const url = `${DISCUSSIONS}?category=smart-results&title=${encodeURIComponent(shared.post.title)}&body=${encodeURIComponent(shared.post.body)}`;
+    try { if (window.relayDesktop?.openExternal) await window.relayDesktop.openExternal(url); else window.open(url, '_blank', 'noopener,noreferrer'); closeShare(); api.showNotice(`Saved ${shared.fileName}. Attach it to the post on GitHub before you submit.`); }
+    catch (error) { api.showNotice(error.message || 'GitHub could not be opened.'); }
   }
   function openDetails(current) {
     mode = current;

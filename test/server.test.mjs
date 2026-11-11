@@ -714,6 +714,11 @@ test('Smart results come from the workspace’s saved tasks, without requests un
   assert.deepEqual(chosen.baseline.choice, { provider: 'codex', model: 'gpt-5', effort: null });
   assert.equal(chosen.range.days, 30);
   assert.equal((await fetch(`${f.url}/api/results?projectId=${project.id}&baseline=nope`)).status, 400);
+  const shared = await (await fetch(`${f.url}/api/results?projectId=${project.id}&share=1&prompts=1`)).json();
+  assert.equal(shared.report.format, 'codeshi-smart-results-shared', 'The copy to share, never with requests even when prompts are asked for.');
+  assert.match(shared.fileName, /^codeshi-smart-results-shared-\d{4}-\d{2}-\d{2}\.json$/);
+  assert.equal(typeof shared.post.title, 'string');
+  assert.ok(shared.post.body.includes(shared.fileName));
 });
 
 test('the page gets its language as /locale.js, from Settings or else the browser, and Settings lists the catalogs (#27)', async t => {

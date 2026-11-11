@@ -63,6 +63,8 @@ test('the words beside the icon say what needs you, or what the one running agen
   assert.equal(statusTitle(rows('approval', 'running')), 'Approval needed');
   assert.equal(statusTitle(rows('failed')), 'Tests failed');
   assert.equal(statusTitle(rows('approval', 'offer', 'running')), '2 need you');
+  for (const kinds of [['running'], ['approval', 'running'], ['failed']]) assert.equal(statusTitle(rows(...kinds), undefined, { focused: true }), '', 'With a Codeshi window in front, the menu bar has no words.');
+  assert.equal(statusTooltip(rows('approval')), 'Codeshi — Approval needed', 'The Windows tooltip only shows on hover, so it keeps its words.');
 });
 
 test('an agent’s question waits like an approval, says it is a question, and keeps its words in the app', () => {

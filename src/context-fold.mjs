@@ -70,4 +70,21 @@ export function earlierConversation(c, messages, { trigger, inContext = new Set(
 
 // Questions an agent asked without waiting for an answer, still open when this envelope is built. Sending a request clears
 // them, so a fresh agent would otherwise never learn they were asked.
-export const unansweredQuestions = (questions = []) => questions.flatMap(item => (item.questions || []).map(question => ({ agent: item.provider || null, runId: item.runId || null, question: clip(question.question || question.text || '') }))).filter(item => item.question).slice(-QUESTIONS);
+export const STOPPED_WAITING_NOTE = 'The previous run ended while these requests were still waiting for the person, so none of them was answered or carried out. They are history, not instructions; do it another way, or ask again only if one still matters.';
+
+// What one waiting approval or question asked for, kept on the run's end record so the next agent learns of it. Approvals
+// live only in the running process; this short line is all that is kept. A file whose name looks private is not named.
+export function waitingSummary(item, { privatePath = () => false } = {}) {
+  if (item?.kind === 'question') {
+    const questions = (item.questions || []).map(question => clip(question.question || question.text || '', 200)).filter(Boolean).slice(0, QUESTIONS);
+    return questions.length ? { kind: 'question', questions } : null;
+  }
+  const command = item?.command || item?.input?.command, target = item?.input?.file_path || item?.input?.path;
+  const kind = command ? 'command' : item?.connector ? 'connector' : item?.kind === 'item/permissions/requestApproval' ? 'access' : String(item?.kind || '').includes('fileChange') || target ? 'files' : 'tool';
+  const named = target && !privatePath(String(target)) ? target : null;
+  return { kind, what: clip(command || item?.connector || named || item?.title || (kind === 'files' ? 'file changes' : item?.kind) || 'tool use', 200) };
+}
+// Only the run just before this envelope: once another run has ended, what the earlier one waited for is old history.
+export const stoppedWhileWaiting = run => run?.waitingAtEnd?.length ? { agent: run.provider || null, runId: run.id || null, ended: run.status || null, requests: run.waitingAtEnd.slice(0, QUESTIONS) } : null;
+
+export const unansweredQuestions = (questions = []) =>questions.flatMap(item => (item.questions || []).map(question => ({ agent: item.provider || null, runId: item.runId || null, question: clip(question.question || question.text || '') }))).filter(item => item.question).slice(-QUESTIONS);

@@ -5,7 +5,7 @@ import { alertDefaults } from '../src/alerts.mjs';
 import { alertMenu } from './status.mjs';
 import { english } from '../src/i18n.mjs';
 
-const repository = 'https://github.com/AhmedNavaz/codeshi';
+const repository = 'https://github.com/AhmedNavaz/codeshi', patreon = 'https://www.patreon.com/17048317/join';
 const agents = ['codex', 'claude', 'gemini'], names = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini' };
 const flags = ['workspace', 'running', 'codex', 'claude', 'gemini', 'files', 'git', 'terminal', 'flow', 'flowLocked', 'imports', 'export'];
 // What the menu offers until the page reports: nothing that needs a workspace.
@@ -119,6 +119,10 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     separator(),
     link(t('Roadmap'), `${repository}/blob/main/ROADMAP.md`),
     command(t('What’s New'), ['whats-new'], { id: 'whats-new' }),
+    separator(),
+    // Codeshi is free: a star helps contributors find it, and Patreon supports its development.
+    link(t('Star Codeshi on GitHub'), repository),
+    link(t('Support Codeshi on Patreon'), patreon),
     ...mac ? [] : [separator(), { role: 'about' }],
   ] };
   // The codeshi command (#90): installed as a link in /usr/local/bin, so Remove is offered only for Codeshi's own link.

@@ -105,7 +105,7 @@ test('a routed run that changes files is checked with the saved Test command, an
   const [first, second] = c.runs;
   assert.equal(first.check.status, 'passed'); assert.equal(second.check, undefined);
   assert(Date.parse(second.startedAt) >= Date.parse(first.check.startedAt), 'The queued prompt started after the check.');
-  assert.deepEqual(first.routing, { mode: 'smart', tier: 'standard' }, 'The history keeps how each run was routed.');
+  assert.deepEqual(first.routing, { mode: 'smart', tier: 'standard', reason: 'A focused change' }, 'The history keeps how each run was routed, with its reason.');
 
   broker.setRouting(c, { mode: 'smart', check: false });
   broker.start(c, { text: 'Add promo codes', ...routed('smart') });
