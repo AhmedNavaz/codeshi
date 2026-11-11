@@ -29,6 +29,34 @@ export function runSteps(messages) {
 // The first line of a prompt, short enough to read in a sentence.
 const brief = text => { const line = String(text || '').trim().split('\n')[0]; return line.length > 90 ? line.slice(0, 90).replace(/\s+\S*$/, '') + '…' : line; };
 
+// Tasks beside the main conversation (#88): the ones working, waiting on you, or ended since the recap starts. A plan's
+// steps (#89) fold into one line for the plan. Merging, keeping and discarding are your own actions, so they're left out.
+const QUIET = new Set(['integrated', 'kept', 'discarded', 'cancelled', 'detached', 'lost']);
+function taskRecap(broker, c, from, running) {
+  const tasks = [], plans = new Map();
+  for (const task of c.parallelTasks || []) {
+    if (task.closed || QUIET.has(task.status) || task.purpose === 'project-review') continue;
+    const lane = broker.tasks?.lanes?.get(task.id), approvals = lane?.broker?.pendingCount?.() || 0;
+    const ended = Date.parse(task.endedAt || '') >= from, check = task.stepCheck?.status || null;
+    const working = task.status === 'running' || running.has(task.id);
+    if (!working && !approvals && !ended && check !== 'failed') continue;
+    let files = [];
+    if (lane?.c) {
+      const runs = new Set((lane.c.runs || []).filter(run => Date.parse(run.endedAt || run.startedAt) >= from || run.id === lane.c.activeRun?.id).map(run => run.id));
+      files = runSteps(lane.c.messages.filter(message => runs.has(message.runId))).files;
+    }
+    const entry = { id: task.id, title: brief(task.title), folder: task.folderName, provider: task.provider, status: working ? 'running' : task.status, approvals, files: files.slice(0, 20), fileCount: files.length, unmerged: task.mode === 'worktree' && task.status === 'complete', check };
+    if (!task.plan) { tasks.push(entry); continue; }
+    const plan = (c.orchestrations || []).find(item => item.id === task.plan.id);
+    if (!plans.has(task.plan.id)) {
+      const all = (c.parallelTasks || []).filter(item => item.plan?.id === task.plan.id && item.status !== 'cancelled');
+      plans.set(task.plan.id, { id: task.plan.id, goal: brief(plan?.goal || plan?.title || 'A plan'), total: all.length, done: all.filter(item => ['complete', 'integrated', 'kept'].includes(item.status)).length, steps: [] });
+    }
+    plans.get(task.plan.id).steps.push({ ...entry, number: task.plan.number });
+  }
+  return { tasks, plans: [...plans.values()] };
+}
+
 export function buildRecap({ registry, since, now = new Date(), git = workspaceGit }) {
   const from = Date.parse(since);
   if (!Number.isFinite(from) || from > now.getTime()) fail('Give the time the recap starts from.');
@@ -48,11 +76,12 @@ export function buildRecap({ registry, since, now = new Date(), git = workspaceG
     const waiting = resume ? { providers: resume.providers || [], resetsAt: resets } : null;
     const queue = c.queue?.length ? { count: c.queue.length, paused: Boolean(c.queuePaused) } : null;
     const handoff = c.handoffOffer ? { from: c.handoffOffer.from?.provider || null, to: c.handoffOffer.to?.provider || null } : null;
-    if (!runs.length && !approvals && !waiting && !handoff) continue;
+    const { tasks, plans } = taskRecap(broker, c, from, new Set([...(broker.tasks?.lanes?.values() || [])].filter(lane => lane.broker?.running).map(lane => lane.task?.id)));
+    if (!runs.length && !approvals && !waiting && !handoff && !tasks.length && !plans.length) continue;
     // Uncommitted files, for workspaces where something ran; reads only, with Git hooks and filters off.
     let uncommitted = null;
-    if (runs.length) { try { uncommitted = git(project.folders).repositories.reduce((sum, repo) => sum + (repo.available ? repo.totalChanges || 0 : 0), 0); } catch { uncommitted = null; } }
-    workspaces.push({ projectId: project.id, name: project.name, runs, approvals, waiting, queue, handoff, uncommitted });
+    if (runs.length || tasks.length || plans.length) { try { uncommitted = git(project.folders).repositories.reduce((sum, repo) => sum + (repo.available ? repo.totalChanges || 0 : 0), 0); } catch { uncommitted = null; } }
+    workspaces.push({ projectId: project.id, name: project.name, runs, tasks, plans, approvals, waiting, queue, handoff, uncommitted });
   }
   return { since: new Date(from).toISOString(), until: now.toISOString(), workspaces };
 }

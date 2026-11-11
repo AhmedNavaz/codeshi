@@ -4461,6 +4461,19 @@ test('dictation keeps what was said before a pause when the recognizer starts ag
   assert.equal(ui.$('voice-status').dataset.state, '');
 });
 
+test('the recap says what tasks and plans did while you were away (#88)', async () => {
+  const ui = await browser({ voiceUI: true, recapUI: true });
+  const step = (number, status, extra = {}) => ({ id: `s${number}`, number, status, approvals: 0, files: [], fileCount: 0, unmerged: false, check: null, ...extra });
+  const recap = { since: '2026-11-02T10:00:00.000Z', until: '2026-11-02T10:24:00.000Z', workspaces: [{ projectId: 'project-one', name: 'Shop', runs: [], approvals: 0, waiting: null, queue: null, handoff: null, uncommitted: null,
+    plans: [{ id: 'p1', goal: 'Checkout rewrite', done: 2, total: 4, steps: [step(1, 'complete', { check: 'failed', unmerged: true }), step(3, 'running')] }],
+    tasks: [{ id: 't1', title: 'Fix the header', folder: 'web', provider: 'claude', status: 'complete', approvals: 1, files: ['src/header.css'], fileCount: 1, unmerged: true, check: null }] }] };
+  assert.deepEqual([...ui.window.relayRecap.spoken(recap).map(part => part.text)], [
+    'While you were away.',
+    'In Shop: The plan “Checkout rewrite” has 2 of 4 steps done, step 3 working, tests failed on step 1, so the steps after it wait, 1 step ready for you to merge.',
+    'Claude finished the task “Fix the header” in web, changed header.css, ready for you to merge, 1 approval waiting.',
+  ]);
+});
+
 test('coming back after two minutes or more shows what ran, changed and is waiting, and can read it aloud', async () => {
   let now = Date.parse('2026-11-02T10:00:00.000Z');
   const ui = await browser({ voiceUI: true, recapUI: true, moreProjects: true, clock: () => now });
@@ -5554,13 +5567,14 @@ test('Flow’s What happened card explains each recent decision with its recorde
   ] });
   await ui.window.relayUI.refresh(); await flush();
   const items = ui.$('flow-card-happened').querySelectorAll('.flow-happened-item');
-  assert.deepEqual(items.map(item => item.dataset.kind), ['handoff', 'handoff', 'retry', 'route'], 'Newest finished runs first; assessments and the running run are left out.');
+  assert.deepEqual(items.map(item => item.dataset.kind), ['handoff', 'handoff', 'retry'], 'The newest three finished runs, newest first; assessments and the running run are left out.');
   assert.match(items[0].textContent, /^Switched from Claude to Gemini.*Stopped at a usage limit.*claude quota is near/);
   assert.match(items[1].textContent, /^Handed the task from Codex to Claude.*Stopped.*Codex weekly limit at 91%\./);
   assert.match(items[2].textContent, /^Tests failed, so it tried again with Codex.*Tests passed/);
-  assert.match(items[3].textContent, /^Chose Codex.*for a complex task.*Tests failed.*A cross-folder refactor\./, 'The reason is the one recorded with the run.');
-  assert.equal(items[3].querySelector('.flow-happened-outcome').dataset.tone, 'bad');
-  assert.equal(ui.$('flow-card-happened').querySelectorAll('button').map(item => item.textContent).join(), 'Timeline');
+  assert.equal(items[0].querySelector('.flow-happened-outcome').dataset.tone, 'bad');
+  assert.equal(ui.$('flow-card-happened').querySelectorAll('button').length, 0, 'Timeline is offered once, on Files changed.');
+  chat.runs = chat.runs.slice(0, 2); await ui.window.relayUI.refresh(); await flush();
+  assert.match(ui.$('flow-card-happened').querySelector('.flow-happened-item').textContent, /^Chose Codex.*for a complex task.*Tests failed.*A cross-folder refactor\./, 'The reason is the one recorded with the run.');
 });
 
 test('Flow mode card polish: extra task indicators, multi-window quota glance, and active agent highlighting (#136)', async () => {

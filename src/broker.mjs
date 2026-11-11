@@ -1358,7 +1358,7 @@ export class Broker extends EventEmitter {
       this.record(c, { type: 'run_metadata', metadata: { rateLimit: event.rate_limit_info } });
       if (event.rate_limit_info?.status === 'rejected') {
         const info = event.rate_limit_info, period = { five_hour: '5-hour', seven_day: 'weekly', seven_day_opus: 'weekly Opus', seven_day_sonnet: 'weekly Sonnet', overage: 'extra usage' }[info.rateLimitType];
-        const resets = Number.isFinite(info.resetsAt) ? new Date(info.resetsAt * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : null;
+        const resets = Number.isFinite(info.resetsAt) ? new Date(info.resetsAt * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }) : null;
         run.failed = true; run.errorCategory = 'quota';
         if (Number.isFinite(info.resetsAt)) run.limitResetsAt = info.resetsAt * 1000;
         this.agentError(run, `Claude usage limit reached${period ? ` for the ${period} window` : ''}.${resets ? ` It resets ${resets}.` : ''} Switch to Codex or continue after the reset.`);

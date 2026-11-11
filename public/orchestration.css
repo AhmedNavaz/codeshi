@@ -100,6 +100,8 @@
 .orchestration-progress-step[data-status=running] .orchestration-progress-state { color: var(--link); }
 .orchestration-progress-step:is([data-status=complete], [data-status=integrated], [data-status=kept]) .orchestration-progress-state { color: var(--success); }
 .orchestration-progress-step:is([data-status=failed], [data-status=blocked], [data-status=lost]) .orchestration-progress-state { color: var(--danger); }
+.orchestration-progress-step[data-check=failed] .orchestration-progress-state { color: var(--danger); }
+.orchestration-progress-step[data-check=accepted] .orchestration-progress-state { color: var(--warning); }
 .orchestration-progress-reason { padding: 0 6px 4px 28px; color: var(--faint); font-size: 11.5px; line-height: 1.4; overflow-wrap: anywhere; }
 .orchestration-folder-option { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; }
 .orchestration-folder-option select { min-width: 0; max-width: 60%; font: 12px var(--font); }

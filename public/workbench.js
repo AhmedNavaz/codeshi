@@ -23,7 +23,7 @@
   // A binary file travels as base64 (#25). Its size and, for the four image types Codeshi shows, its type come from the first bytes.
   const base64Size = value => Math.floor(value.length * 3 / 4) - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
   const imageType = value => { let head = ''; try { head = atob(value.slice(0, 16)); } catch { return null; } return head.startsWith('\x89PNG') ? 'image/png' : head.startsWith('\xff\xd8\xff') ? 'image/jpeg' : head.startsWith('GIF8') ? 'image/gif' : head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP' ? 'image/webp' : null; };
-  const date = value => { if (!value) return ''; const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+  const date = value => { if (!value) return ''; const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }); };
   const download = (name, value) => { const a = node('a'), url = URL.createObjectURL(new Blob([describe(value)], { type: 'application/json' })); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
   async function perform(fn) {
     if (busy) return; busy = true; error.hidden = true; modal.setAttribute('aria-busy', 'true');

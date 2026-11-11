@@ -16,7 +16,7 @@
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const providerName = provider => ({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini' })[provider];
   const openExternal = async url => { if (window.relayDesktop?.openExternal) await window.relayDesktop.openExternal(url); else window.open(url, '_blank', 'noopener,noreferrer'); };
-  const date = value => { if (!value) return ''; const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+  const date = value => { if (!value) return ''; const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? '' : parsed.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }); };
   let page = 'general', busy = false, sections = {}, accountSignature = '', keepAwake = null, handoff = null;
 
   async function perform(fn) {

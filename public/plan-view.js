@@ -84,8 +84,8 @@
   // A card's state: its task's while the plan runs, otherwise the agent it would run with.
   function stateOf(snap, step) {
     if (snap.running) {
-      const task = taskFor(snap, step), status = task?.status || 'missing';
-      return { status, text: orchestration().taskLabel(task), provider: task?.runningProvider || task?.provider || 'auto', reason: task?.reason || '' };
+      const task = taskFor(snap, step), status = task?.status || 'missing', check = orchestration().checkOf?.(task) || null;
+      return { status, text: orchestration().taskLabel(task), provider: task?.runningProvider || task?.provider || 'auto', reason: task?.reason || '', check };
     }
     const routed = orchestration().routeText(step);
     return { status: snap.draft ? 'draft' : 'idle', text: routed.text, provider: routed.provider, reason: '' };
@@ -109,8 +109,10 @@
     const line = (snap.running ? state.reason || state.text : state.text).replace(/ effort$/, '');
     meta.append(icon, node('span', 'plan-node-route', line));
     button.append(top, title, meta);
+    // Its tests, once it has finished (#89): passed, failed and holding the steps after it, or not tested.
+    if (state.check) { const chip = node('span', 'plan-node-check', state.check.text); chip.dataset.tone = state.check.tone; button.append(chip); }
     const waits = step.dependsOn.map(id => `step ${numberOf(snap.steps, id)}`);
-    button.setAttribute('aria-label', `Step ${number}, ${orchestration().roleName(step.role)}: ${step.title.trim() || 'untitled'}. ${waits.length ? `After ${listed(waits)}.` : 'Starts first.'} ${state.text}.`);
+    button.setAttribute('aria-label', `Step ${number}, ${orchestration().roleName(step.role)}: ${step.title.trim() || 'untitled'}. ${waits.length ? `After ${listed(waits)}.` : 'Starts first.'} ${state.text}${state.check ? `, ${state.check.text}` : ''}.`);
     button.title = state.reason || step.title;
     button.addEventListener('click', () => select(step.id));
     return button;
@@ -200,13 +202,19 @@
     fact('Runs after', step.dependsOn.length ? listed(step.dependsOn.map(id => `step ${numberOf(snap.steps, id)}`)) : 'Starts first');
     fact('Files', step.files.join(', '));
     fact('Check', step.check || '');
-    fact('Why it waits', state.reason);
+    const check = state.check, stale = snap.running ? orchestration().staleFrom?.(task) || [] : [];
+    if (check) fact('Tests', [check.text, check.reason].filter(Boolean).join('. '));
+    if (check?.command) fact('Test command', check.command);
+    if (stale.length) fact('Built on', `An older version of ${listed(stale.map(id => `step ${numberOf(snap.steps, id)}`))}, which changed after this step started.`);
+    fact(check?.held ? 'Holds' : 'Why it waits', check?.held && check.tone !== 'running' ? 'The steps after it, until you check it again or continue anyway.' : task?.status === 'waiting' ? state.reason : '');
     const parts = [node('h4', 'plan-drawer-step-title', step.title), node('p', 'plan-drawer-instructions', step.instructions), facts];
-    if (task) {
-      const open = node('button', 'primary-button', 'Open its task'); open.type = 'button';
-      open.addEventListener('click', () => { dialog.close(); orchestration().openTask(task.id)?.catch?.(error => window.relayUI?.showNotice?.(error.message)); });
-      parts.push(open);
-    }
+    if (check?.output && check.tone === 'failed') { const output = node('pre', 'plan-drawer-output', check.output.trim().split('\n').slice(-20).join('\n')); output.setAttribute('aria-label', 'The end of the test output'); parts.push(output); }
+    const actions = node('div', 'plan-drawer-actions');
+    const tool = (text, cls, handler) => { const b = node('button', cls, text); b.type = 'button'; b.disabled = snap.busy; b.addEventListener('click', handler); return b; };
+    if (task) actions.append(tool('Open its task', 'primary-button', () => { dialog.close(); orchestration().openTask(task.id)?.catch?.(error => window.relayUI?.showNotice?.(error.message)); }));
+    if (check?.retry && check.tone !== 'running') actions.append(tool('Check again', 'secondary-button', () => orchestration().stepAction('recheck', step.id)));
+    if (check?.held && check.tone === 'failed') actions.append(tool('Continue anyway', 'secondary-button', () => orchestration().stepAction('continue', step.id)));
+    if (actions.childElementCount) parts.push(actions);
     body.replaceChildren(...parts);
   }
 

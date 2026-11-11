@@ -8,13 +8,13 @@ import { MutationCoordinator } from './mutation-lock.mjs';
 // looking should never run code. A commit is a deliberate action, so these use the person's own Git setup instead, as a
 // commit from their terminal would: their identity and signing, filters such as Git LFS, and the project's commit hooks.
 // A hook that stops the commit is reported with its output, and committing without hooks is a separate, explicit choice.
-// Codeshi never pushes.
+// The panel's commit never pushes; Open pull request (pull-request.mjs) is the one deliberate push.
 const HOOKS = ['pre-commit', 'prepare-commit-msg', 'commit-msg'];
 const MESSAGE_LIMIT = 20000, OUTPUT_LIMIT = 6000;
 // Details reach the panel with the message: why a commit stopped, and a hook's output.
 const fail = (message, status = 400, details = null) => { throw Object.assign(new Error(message), { status, ...details ? { details } : {} }); };
 
-function git(cwd, args, { timeout = 30000 } = {}) {
+export function git(cwd, args, { timeout = 30000 } = {}) {
   return new Promise(resolve => execFile(gitExecutable(), ['--no-pager', '--literal-pathspecs', ...args], {
     cwd, timeout, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8',
     // Nothing waits for a terminal: no credential prompt, pager or editor.
@@ -58,7 +58,7 @@ async function targets(root, scope, paths) {
 const busy = new Set();
 let mutations;
 const withGitMutation = (root, operation, work) => (mutations ||= new MutationCoordinator()).withMutation(root, operation, work);
-async function exclusive(folder, operation, work, { withMutation = withGitMutation } = {}) {
+export async function exclusive(folder, operation, work, { withMutation = withGitMutation } = {}) {
   const place = await locate(folder);
   if (busy.has(place.root)) fail('Another Git action is still running in this repository.', 409);
   busy.add(place.root);
@@ -98,7 +98,7 @@ export async function committer(folder) {
   return { name: name.status ? null : name.stdout.trim() || null, email: email.status ? null : email.stdout.trim() || null };
 }
 
-function firstLines(text) { return String(text).trim().split('\n').filter(Boolean).slice(0, 3).join(' ').slice(0, 400) || 'unknown error.'; }
+export function firstLines(text) { return String(text).trim().split('\n').filter(Boolean).slice(0, 3).join(' ').slice(0, 400) || 'unknown error.'; }
 
 async function hooksInstalled(root) {
   const where = (await git(root, ['rev-parse', '--git-path', 'hooks'])).stdout.trim();

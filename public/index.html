@@ -81,6 +81,7 @@
     <script src="/alerts.js" defer></script>
     <script src="/project-commands.js" defer></script>
     <script src="/github-context.js" defer></script>
+    <script src="/pull-request.js" defer></script>
     <script src="/project-review.js" defer></script>
     <script src="/flow.js" defer></script>
     <script src="/flow-lounge-puzzles.js" defer></script>
@@ -695,6 +696,25 @@
         <p class="review-hint">For a pull request this includes its reviews, review comments on the code, and the failing checks with the part of each log that shows the failure.</p>
         <p id="github-context-error" class="project-error" role="alert" hidden></p>
         <div class="review-actions github-context-actions"><button id="github-context-branch" class="secondary-button" type="button">This branch’s pull request</button><span class="github-context-spacer"></span><button id="github-context-cancel" class="secondary-button" type="button">Cancel</button><button id="github-context-add" class="primary-button" type="submit">Add to message</button></div>
+      </form>
+    </dialog>
+    <dialog id="pull-request-dialog" class="review-dialog pull-request-dialog" aria-labelledby="pull-request-title" aria-describedby="pull-request-description">
+      <header class="panel-dialog-head review-heading"><div><h2 id="pull-request-title">Open pull request</h2><p id="pull-request-description">Pushes this branch to GitHub with your own Git login, then opens the pull request with gh. Nothing is pushed until you click. Agents never push.</p></div><button id="pull-request-close" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
+      <form id="pull-request-form" class="review-body pull-request-body" novalidate>
+        <div id="pull-request-route" class="pull-request-route" aria-live="polite"></div>
+        <div id="pull-request-notes" class="pull-request-notes"></div>
+        <label id="pull-request-branch-field" class="github-context-field" hidden><span>New branch for these commits</span><input id="pull-request-branch" type="text" autocomplete="off" spellcheck="false" /></label>
+        <details id="pull-request-commits" class="pull-request-commits" hidden><summary id="pull-request-commits-summary"></summary><ol id="pull-request-commit-list"></ol></details>
+        <div id="pull-request-text" class="pull-request-text" hidden>
+          <label class="github-context-field"><span>Title</span><input id="pull-request-name" type="text" autocomplete="off" maxlength="256" /></label>
+          <label class="github-context-field"><span>Description</span><textarea id="pull-request-body" rows="9" spellcheck="true"></textarea></label>
+          <p class="review-hint">Drafted from the branch’s commits, your request and Codeshi’s last test result, with no model. Secrets and local paths were removed. Edit anything before opening.</p>
+          <label class="pull-request-draft"><input id="pull-request-draft" type="checkbox" /> <span>Open as a draft</span></label>
+        </div>
+        <div id="pull-request-done" class="pull-request-done" role="status" hidden></div>
+        <p id="pull-request-error" class="project-error" role="alert" hidden></p>
+        <pre id="pull-request-output" class="git-commit-output" hidden></pre>
+        <div class="review-actions"><span class="github-context-spacer"></span><button id="pull-request-cancel" class="secondary-button" type="button">Cancel</button><button id="pull-request-submit" class="primary-button" type="submit" disabled>Open pull request</button></div>
       </form>
     </dialog>
     <dialog id="automatic-review-dialog" class="review-dialog automatic-review-dialog" aria-labelledby="automatic-review-title" aria-describedby="automatic-review-description">

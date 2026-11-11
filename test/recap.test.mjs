@@ -77,6 +77,33 @@ test('the recap lists what ran, changed and is waiting since a time, and leaves 
   assert.throws(() => buildRecap({ since: 'yesterday', registry: registry([]) }), /time the recap starts/);
 });
 
+test('the recap includes tasks and folds a plan’s steps into one entry (#88)', () => {
+  const since = '2026-11-02T10:00:00.000Z', now = new Date('2026-11-02T10:30:00.000Z'), after = '2026-11-02T10:20:00.000Z', before = '2026-11-02T09:00:00.000Z';
+  const task = (id, status, extra = {}) => ({ id, title: `Task ${id}\nmore`, folderName: 'web', provider: 'codex', status, endedAt: status === 'running' ? null : after, ...extra });
+  const main = conversation('c-main', [], [], {
+    orchestrations: [{ id: 'p1', goal: 'Checkout rewrite' }],
+    parallelTasks: [
+      task('solo', 'complete', { mode: 'worktree' }),
+      task('live', 'waiting'), // Its lane is running, so it counts as working.
+      task('old', 'complete', { endedAt: before }),
+      task('merged', 'integrated'), task('closed', 'complete', { closed: true }),
+      task('s1', 'complete', { plan: { id: 'p1', number: 1 }, stepCheck: { status: 'failed' }, endedAt: before }),
+      task('s2', 'running', { plan: { id: 'p1', number: 2 } }),
+      task('s3', 'integrated', { plan: { id: 'p1', number: 3 } }),
+      task('s4', 'cancelled', { plan: { id: 'p1', number: 4 } }),
+    ],
+  });
+  const laneConversation = conversation('lane', [{ id: 'r', startedAt: after, endedAt: after }], [{ role: 'activity', runId: 'r', text: 'File changes: [{"path":"src/a.js"}]' }]);
+  const reg = registry([{ id: 'w', name: 'shop', conversation: main }]);
+  reg.brokers.get('w').broker.tasks = { lanes: new Map([
+    ['solo', { task: { id: 'solo' }, c: laneConversation, broker: { running: null, pendingCount: () => 1 } }],
+    ['live', { task: { id: 'live' }, c: null, broker: { running: {}, pendingCount: () => 0 } }],
+  ]) };
+  const [recap] = buildRecap({ since, now, registry: reg, git: () => ({ repositories: [] }) }).workspaces;
+  assert.deepEqual(recap.tasks.map(item => [item.id, item.title, item.status, item.approvals, item.files, item.unmerged]), [['solo', 'Task solo', 'complete', 1, ['src/a.js'], true], ['live', 'Task live', 'running', 0, [], false]], 'Old, merged and closed tasks are left out; a running lane counts as working.');
+  assert.deepEqual(recap.plans.map(plan => [plan.goal, plan.done, plan.total, plan.steps.map(step => [step.number, step.status, step.check])]), [['Checkout rewrite', 2, 3, [[1, 'complete', 'failed'], [2, 'running', null]]]], 'A step whose tests failed stays in the recap until it is dealt with; cancelled steps don’t count.');
+});
+
 test('the recap route answers for every workspace and checks its starting time', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-recap-route-'));
   const relay = createRelayServer({ workspace: root, dataDir: path.join(root, '.relay-data'), lock: false });

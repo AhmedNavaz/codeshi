@@ -344,7 +344,7 @@
   let timeFormat = null; // Creating a formatter for each message took longer than drawing it.
   function messageTime(value) {
     const date = new Date(value);
-    timeFormat ||= new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+    timeFormat ||= new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", hour12: true });
     return Number.isNaN(date.getTime()) ? "" : timeFormat.format(date);
   }
   // Assistant replies use a small Markdown subset, built as DOM nodes so provider text is never parsed as HTML.
@@ -1418,7 +1418,7 @@
     return [...new Set([state.conversation?.lastRun?.provider, state.provider, ...connected])].filter(provider => connected.includes(provider));
   }
   function resumeText(resume) {
-    const time = iso => { const date = new Date(iso), today = date.toDateString() === new Date().toDateString(); return date.toLocaleString(undefined, today ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" }); };
+    const time = iso => { const date = new Date(iso), today = date.toDateString() === new Date().toDateString(); return date.toLocaleString(undefined, today ? { hour: "numeric", minute: "2-digit", hour12: true } : { weekday: "short", hour: "numeric", minute: "2-digit", hour12: true }); };
     const agents = resume.providers.map(provider => {
       const status = resume.agents?.[provider];
       return label(provider) + (status?.quota === 'unknown' || status?.quota === 'stale' ? " (waiting for fresh usage)" : status?.limited === false ? " (ready)" : status?.resetsAt ? ` (resets ${time(status.resetsAt)})` : status ? " (checking every 10 min)" : "");

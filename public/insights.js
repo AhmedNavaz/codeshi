@@ -5,7 +5,7 @@
   const name = provider => provider === 'gemini' ? 'Gemini' : provider === 'claude' ? 'Claude' : 'Codex';
   const title = value => value === 'xhigh' ? 'X-High' : value ? value[0].toUpperCase() + value.slice(1) : 'Provider default';
   const duration = ms => { const seconds = Math.max(0, Math.floor(ms / 1000)); return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`; };
-  const date = value => !value || Number.isNaN(new Date(value).getTime()) ? 'Date unavailable' : new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const date = value => !value || Number.isNaN(new Date(value).getTime()) ? 'Date unavailable' : new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
   const action = (text, fn, cls) => { const button = el('button', text, cls); button.type = 'button'; button.addEventListener('click', fn); return button; };
   const external = async url => { if (window.relayDesktop) await window.relayDesktop.openExternal(url); else window.open(url, '_blank', 'noopener,noreferrer'); };
   const catalog = {}, loadingModels = {}, attemptedModels = {};
@@ -130,7 +130,7 @@
     // Opening the line explains a pause; otherwise it holds the token and context counts.
     $('run-detail').textContent = !running ? '' : state.streamConnected === false ? 'The app connection was interrupted. The agent may still be running; reconnecting to restore its live status.' : phase === 'approval' ? 'Review the permission request below to let the agent continue.' : quiet ? `No activity from ${agent} for ${duration(silence)}. This can happen during a long request; you can wait or stop the run.` : '';
     const metrics = [];
-    if (run.routingQuota && window.relayRouting) metrics.push(`Allowance at dispatch: ${window.relayRouting.quotaText(run.routingQuota)}${run.routingQuota.observedAt ? ` · observed ${new Date(run.routingQuota.observedAt).toLocaleTimeString()}` : ''} · account-wide, including other clients`);
+    if (run.routingQuota && window.relayRouting) metrics.push(`Allowance at dispatch: ${window.relayRouting.quotaText(run.routingQuota)}${run.routingQuota.observedAt ? ` · observed ${new Date(run.routingQuota.observedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true })}` : ''} · account-wide, including other clients`);
     if (run.budgetEnforcement) metrics.push(`API spend limit: $${run.budgetEnforcement.maxSpendUSD} · ${run.budgetEnforcement.spend === 'native' ? 'enforced by the native adapter' : 'checked as usage is reported; in-flight overshoot is possible'}`);
     if (run.connection === 'local') metrics.push('No cloud model charges');
     // Codex's inputTokens include its cached input; Claude reports the input it read from and wrote to its cache apart from input_tokens.
@@ -201,6 +201,8 @@
     $('git-summary').dataset.clean = String(repo.totalChanges === 0);
     $('git-summary').append(el('span', repo.branch, 'git-branch'), el('span', `${repo.totalChanges} changed`, 'git-change-count'));
     if (repo.githubURL) $('git-summary').append(action('Open on GitHub ↗', () => external(repo.githubURL), 'text-link'));
+    // Pushing is never automatic: this opens a preview of the remote, branch and commits first (#18).
+    if (repo.githubURL && repo.branch !== 'Detached HEAD' && window.relayPullRequest) { const open = action('Open pull request', () => window.relayPullRequest.open(repo), 'text-link git-pull-request'); open.disabled = Boolean(gitWriting); $('git-summary').append(open); }
     if (repo.error) $('git-content').append(el('p', repo.error, 'import-error'));
     $('git-commit').hidden = gitView !== 'changes';
     if (gitView === 'changes') {
@@ -259,7 +261,11 @@
     result.hidden = !commitOutcome; result.replaceChildren();
     if (!commitOutcome) return;
     result.dataset.kind = commitOutcome.kind;
-    if (commitOutcome.kind === 'done') { const { commit } = commitOutcome; result.append(el('span', `Committed ${commit.shortHash}${commit.branch ? ` on ${commit.branch}` : ''} · not pushed`)); return; }
+    if (commitOutcome.kind === 'done') {
+      const { commit } = commitOutcome; result.append(el('span', `Committed ${commit.shortHash}${commit.branch ? ` on ${commit.branch}` : ''} · not pushed`));
+      if (repo.githubURL && commit.branch && window.relayPullRequest) { const open = action('Open pull request', () => window.relayPullRequest.open(repo), 'secondary-button'); open.disabled = Boolean(gitWriting); result.append(open); }
+      return;
+    }
     result.append(el('span', commitOutcome.message));
     if (commitOutcome.output) result.append(el('pre', commitOutcome.output, 'git-commit-output'));
     if (commitOutcome.hooks) { const skip = action('Commit without hooks', () => commit(true), 'secondary-button'); skip.title = 'Runs git commit --no-verify'; skip.disabled = gitWriting; result.append(skip); }
@@ -344,7 +350,9 @@
     try { const result = await api.api(`/api/git/diff?folderId=${encodeURIComponent(repo.folderId)}&path=${encodeURIComponent(file.path)}`, {}, projectId); if (request === diffRequest) renderDiff(result); }
     catch (error) { if (request === diffRequest) $('diff-content').replaceChildren(el('p', error.message, 'inspector-empty')); }
   }
-  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff };
+  // The pull request dialog reads the folder shown here and hands back Git activity after it pushes.
+  const updateGit = (data, projectId) => { if (data && api.getState().projectId === projectId) { gitData = data; if (commitOutcome?.kind === 'done') commitOutcome = null; renderGit(); nextSteps(); } };
+  window.relayGit = { open: () => setGitPanel(true), close: () => { if (!$('git-panel').hidden) setGitPanel(false, false); }, openDiff, showDiff, update: updateGit, refresh: loadGit };
   // A changed image shows as pictures: before and after side by side, or the one side an added or deleted image has.
   function renderImages(images) {
     const view = el('div', undefined, 'diff-images'), size = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -398,7 +406,7 @@
   }
   function resetLabel(value) {
     const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return '';
-    return 'resets ' + at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    return 'resets ' + at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit', hour12: true } : { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true });
   }
   const describeWindow = row => `${row.label}: ${remaining(row)}% left${resetLabel(row.resetsAt) ? ', ' + resetLabel(row.resetsAt) : ''}`;
   function usageWindows(provider) {
@@ -467,7 +475,7 @@
       const value = row.disabled ? 'Disabled' : percent ? `${left}% left` : Number.isFinite(row.remainingAmount) ? `${row.remainingAmount.toLocaleString()} units left` : row.status;
       top.append(el('span', row.label, 'usage-window-label'), el('strong', value)); bottom.append(el('span', row.disabled ? row.statusDescription || 'Quota limit disabled by the provider' : resetCountdown(row.resetsAt)));
       const at = new Date(row.resetsAt || '');
-      if (!Number.isNaN(at.getTime())) { const time = el('time', at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' })); time.setAttribute('datetime', at.toISOString()); time.title = at.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'short' }); bottom.append(time); }
+      if (!Number.isNaN(at.getTime())) { const time = el('time', at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit', hour12: true } : { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true })); time.setAttribute('datetime', at.toISOString()); time.title = at.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'short', hour12: true }); bottom.append(time); }
       item.append(top);
       if (percent) { const track = el('div', undefined, 'usage-track'), fill = el('i'); fill.style.width = left + '%'; track.append(fill); track.setAttribute('role', 'img'); track.setAttribute('aria-label', `${left}% of the ${row.label} allowance left`); item.append(track); }
       item.append(bottom); section.append(item);
@@ -476,7 +484,7 @@
     if (usageErrors[provider]) section.append(el('p', 'Could not refresh. ' + usageErrors[provider] + (result?.fetchedAt ? ' The last successful reading is shown.' : ''), 'usage-error'));
     $('usage-details').replaceChildren(section);
     const checked = result?.fetchedAt || 0, busy = Boolean(usageLoading[provider]);
-    $('usage-updated').textContent = checked ? 'Checked ' + new Date(checked).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) + ' · reset times in your time zone' : 'Reported by each provider';
+    $('usage-updated').textContent = checked ? 'Checked ' + new Date(checked).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true }) + ' · reset times in your time zone' : 'Reported by each provider';
     $('refresh-usage').disabled = busy; $('refresh-usage').textContent = busy ? 'Refreshing…' : 'Refresh';
     positionUsage();
   }

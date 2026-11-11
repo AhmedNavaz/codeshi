@@ -616,7 +616,7 @@
     const resume = S.draft ? null : S.c?.resume, switching = S.draft ? null : S.c?.limitSwitching, waiting = $('waiting');
     waiting.hidden = !resume && !switching;
     if (resume) {
-      const time = iso => { const date = new Date(iso); return date.toLocaleString(undefined, date.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+      const time = iso => { const date = new Date(iso); return date.toLocaleString(undefined, date.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit', hour12: true } : { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); };
       const agents = (resume.providers || []).map(provider => { const status = resume.agents?.[provider]; return name(provider) + (status?.limited === false ? ' (ready)' : status?.resetsAt ? ` (resets ${time(status.resetsAt)})` : ''); }).join(', ');
       $('waiting-text').textContent = `Waiting for a usage reset: ${agents}`;
     } else if (switching) $('waiting-text').textContent = `${name(switching.provider)} reached its usage limit. Finding an agent with room…`;

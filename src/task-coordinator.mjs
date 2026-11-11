@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readLedger } from './task-ledger.mjs';
+import { evaluateIntegration, stepPrompt } from './orchestration.mjs';
+import { runSteps } from './recap.mjs';
 import { applyPlan, checkCombined, createWorktree, folderIdentity, integrationPlan, keepBranch, planIsolation, prepareWorktree, removeWorktree, snapshotWorktree, uncommittedCount, unrestricted } from './task-isolation.mjs';
 
 // Independent tasks in one workspace (#88). Each task is a lane: a broker of its own, scoped to one folder, with its own
@@ -16,6 +18,10 @@ const waitsFor = task => task.dependsOn ? [].concat(task.dependsOn) : [];
 // The dependency folders brought into a task's copy, which never become part of its changes.
 const brought = task => (task.setup?.dependencies || []).map(item => item.path);
 const line = text => { const first = String(text || '').trim().split('\n')[0]; return first.length > 80 ? `${first.slice(0, 79).trimEnd()}…` : first; };
+const clip = (text, limit) => { const value = String(text || '').trim(); return value.length > limit ? `${value.slice(0, limit - 1).trimEnd()}…` : value; };
+// A plan step that finished in place is built on once its tests pass (#89). Failed or interrupted tests hold the steps
+// after it until you check it again or choose to continue anyway. A step in its own copy waits for your merge instead.
+const gated = task => Boolean(task.plan && task.status === 'complete' && task.stepCheck && (task.stepCheck.status === 'running' || ((task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted)));
 
 export class TaskCoordinator {
   constructor(main, { BrokerClass, acquireFolders = () => ({ release() {}, setProcess() {} }), withFolders = async (paths, operation, work) => work(), tests = null }) {
@@ -196,11 +202,16 @@ export class TaskCoordinator {
       for (const task of (c.parallelTasks || []).filter(item => item.status === 'waiting' && !item.held && !this.preparing.has(item.id))) {
         const wait = reason => { if (task.reason !== reason) this.update(c, task, { reason }); };
         if (!this.available(task)) { this.update(c, task, { status: 'detached', reason: `${task.folderName} is no longer in this workspace.` }); continue; }
-        const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !(before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete')));
+        const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !(before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete')) || gated(before));
         if (pending) {
           // A step that ended without finishing can't be built on, so this one says what it needs instead of waiting quietly.
           const ended = { stopped: 'stopped', failed: 'did not finish', discarded: 'was discarded', cancelled: 'was cancelled', lost: 'lost its copy', detached: 'lost its folder', blocked: 'is blocked' }[pending.status];
-          wait(ended ? `Waiting for “${pending.title}”, which ${ended}. Continue it in its task, or cancel this one.` : pending.mode === 'worktree' && pending.status === 'complete' ? `Waiting for “${pending.title}” to be merged.` : `Waiting for “${pending.title}”.`);
+          const check = pending.status === 'complete' ? pending.stepCheck : null, copy = pending.mode === 'worktree';
+          wait(ended ? `Waiting for “${pending.title}”, which ${ended}. Continue it in its task, or cancel this one.`
+            : check?.status === 'running' ? `Waiting for the tests on “${pending.title}”.`
+            : check?.outcome === 'failed' && !check.accepted ? `The tests failed on “${pending.title}”. Fix it in its task, or ${copy ? 'merge it anyway' : 'continue anyway from the plan'}.`
+            : check?.status === 'interrupted' && !check.accepted ? `The tests on “${pending.title}” were interrupted. Check it again or continue anyway from the plan.`
+            : copy && pending.status === 'complete' ? `Waiting for “${pending.title}” to be merged.` : `Waiting for “${pending.title}”.`);
           continue;
         }
         try { this.admit(c, task); } catch (error) { wait(error.message); continue; }
@@ -257,6 +268,8 @@ export class TaskCoordinator {
       if (task.includeHistory) for (const message of c.messages.filter(item => ['user', 'assistant'].includes(item.role) && item.text?.trim() && !item.reviewId && !item.rewound).slice(-20)) lane.broker.record(conversation, { type: 'message', message: { id: randomUUID(), role: message.role, text: message.text, provider: message.provider, status: 'complete', createdAt: message.createdAt } });
     }
     if (first) lane.broker.record(lane.c, { type: 'execution_policy', policy: this.main.execution.current(c, task.execution.taskId) });
+    // A plan step's brief is written now, not when the plan started (#89): it carries what the steps before it actually did.
+    if (first && task.plan) { const brief = this.stepBrief(c, task); if (brief) this.update(c, task, brief); }
     const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` };
     if (task.routing) lane.broker.dispatch(lane.c, input, { execution: task.execution }).catch(error => { this.update(c, task, { status: task.preparationCancelled ? 'stopped' : 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
     else lane.broker.start(lane.c, input, { execution: task.execution });
@@ -292,14 +305,107 @@ export class TaskCoordinator {
     const selected = lane.c.activeRun || (status !== 'running' ? lane.c.lastRun : null);
     const provider = selected?.provider || task.provider, model = selected ? selected.model ?? null : task.model, effort = selected ? selected.effort ?? null : task.effort;
     if (status === task.status && provider === task.provider && model === task.model && effort === task.effort) return;
-    this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), provider, model, effort, ...(selected?.routing ? { routing: selected.routing } : {}) });
+    // A plan step that finishes is checked before anything builds on it, so the hold is saved with the status (#89). Working
+    // on it again drops the old result; the next finish checks it afresh.
+    const finished = task.plan && status === 'complete' && task.status !== 'complete', check = finished ? { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() } : null;
+    this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), provider, model, effort, ...(selected?.routing ? { routing: selected.routing } : {}), ...(check ? { stepCheck: check } : task.plan && status === 'running' && task.stepCheck ? { stepCheck: null } : {}) });
+    if (check) this.stepEnded(c, task, check.id).catch(error => console.error('Codeshi could not check a plan step:', error.message));
     if (status !== 'running') setImmediate(() => this.tick(c));
+  }
+
+  // ---- Plan steps (#89): briefs written from what earlier steps did, and each finished step checked before it is built on.
+  planOf(c, task) { return task.plan ? (c.orchestrations || []).find(plan => plan.id === task.plan.id) || null : null; }
+  stepOf(c, task) { const plan = this.planOf(c, task); return { plan, step: plan?.steps?.find(item => item.id === task.plan.stepId) || null }; }
+  stepTask(c, plan, stepId) {
+    if (!plan.steps?.some(step => step.id === stepId)) throw fail('Choose a step from this plan.', 400);
+    const task = plan.tasks?.[stepId] && (c.parallelTasks || []).find(item => item.id === plan.tasks[stepId]);
+    if (!task) throw fail('That step’s task is no longer here.', 404);
+    return task;
+  }
+  // The step's prompt, with each earlier step's report, files and tests, and which version of each it was built on.
+  stepBrief(c, task) {
+    const { plan, step } = this.stepOf(c, task);
+    if (!plan || !step) return null;
+    const results = {}, builtOn = {};
+    for (const id of step.dependsOn) {
+      const before = plan.tasks?.[id] && (c.parallelTasks || []).find(item => item.id === plan.tasks[id]);
+      if (!before) continue;
+      results[id] = { status: before.status, branch: before.integration?.branch || null, files: before.stepResult?.files || [], summary: before.stepResult?.summary || '', check: before.stepCheck?.status === 'running' ? null : before.stepCheck || null };
+      if (before.stepResult?.at) builtOn[id] = before.stepResult.at;
+    }
+    return { text: stepPrompt(plan, step, task.plan.number, results), builtOn };
+  }
+  // What a finished step reported and changed, then its tests on its result. A result that arrives after the step was
+  // worked on again, or checked again, belongs to an older version and is dropped.
+  async stepEnded(c, task, id, { recheck = false } = {}) {
+    const { plan, step } = this.stepOf(c, task), current = () => !this.closed && task.stepCheck?.id === id;
+    if (!plan || !step) { if (current()) this.update(c, task, { stepCheck: null }); return; }
+    const conversation = this.lanes.get(task.id)?.c, run = conversation?.lastRun;
+    if (!recheck) {
+      const messages = conversation?.messages || [];
+      const reply = messages.findLast(message => message.role === 'assistant' && message.text?.trim() && (!run || message.runId === run.id))?.text || '';
+      const result = { summary: clip(reply, 3000), files: runSteps(messages).files.slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
+      this.update(c, task, { stepResult: result });
+      if (step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
+    }
+    const ran = await this.runStepCheck(c, task);
+    if (!current()) return;
+    const evaluated = evaluateIntegration({ step, checkResult: ran.result ? { status: ran.result.status, exitCode: ran.result.exitCode } : null, filesChanged: task.stepResult?.files?.length ?? null });
+    const reason = ran.reason && evaluated.outcome === 'unverified' ? ran.reason : ran.result?.status === 'timed-out' ? 'The tests were still running after 10 minutes, so they were stopped.' : evaluated.outcome === 'failed' ? `Exit code ${ran.result.exitCode ?? 'none'}.` : evaluated.reason;
+    const outcome = { id, status: 'done', outcome: evaluated.outcome, reason, ...(ran.command ? { command: ran.command } : {}), ...(ran.result ? { exitCode: ran.result.exitCode ?? null, output: String(ran.result.output || '').slice(-4000) } : {}), at: new Date().toISOString() };
+    this.update(c, task, { stepCheck: outcome });
+    this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId: step.id, outcome: evaluated.outcome, status: evaluated.status, reason, ...(ran.command ? { command: ran.command } : {}) });
+    if (evaluated.outcome === 'failed' && plan.steps.some(other => other.dependsOn.includes(step.id))) this.main.message(c, 'system', `The tests failed on step ${task.plan.number}, “${step.title}”, so the steps after it wait. Fix it in its task, or ${task.mode === 'worktree' ? 'merge it anyway' : 'continue anyway from the plan'}.`);
+    setImmediate(() => this.tick(c));
+  }
+  // The test command marked in the Run panel, on a temporary copy of the step's result: the folder as it is for a step
+  // that worked in place, or the folder with the step's copy merged on top. Neither the folder nor the copy is touched.
+  async runStepCheck(c, task) {
+    let command = null;
+    try { command = this.tests?.saved?.(); } catch { /* No Run panel, no command. */ }
+    if (!command?.command) return { reason: 'No test command is marked in the Run panel, so Codeshi didn’t check this step.' };
+    if (!this.main.execution.allows(c, task.execution, { action: 'check', sequence: true })) return { reason: 'This task’s execution policy doesn’t allow automatic checks.' };
+    if (!task.repoRoot || !fs.existsSync(task.repoRoot)) return { reason: `${task.folderName} isn’t a Git repository, so its tests can’t run on a separate copy.` };
+    if (this.checking.has(task.id)) return { reason: 'Its tests were already running.' };
+    let plan = { writes: [] };
+    if (task.mode === 'worktree') {
+      if (!task.worktree || !fs.existsSync(task.worktree)) return { reason: 'Its working copy is gone.' };
+      plan = this.planFor(c, task).plan;
+      if (plan.conflicts) return { reason: 'Its changes conflict with the folder, so the tests can’t run until that is resolved.' };
+    }
+    const abort = new AbortController();
+    this.checking.set(task.id, abort); this.main.emit('update', { conversationId: c.id });
+    try {
+      const result = await checkCombined({ root: task.repoRoot, prefix: task.prefix || '', plan, command: command.command, directory: command.directory || '', target: path.join(this.directory(task), `check-${randomUUID().slice(0, 8)}`), signal: abort.signal });
+      // A copy's result is the one the merge review shows, so the tests needn't run twice.
+      if (task.mode === 'worktree' && !this.closed) this.update(c, task, { check: { digest: plan.digest, status: result.status, exitCode: result.exitCode, output: result.output, command: command.command, at: new Date().toISOString() } });
+      return { command: command.command, result };
+    } catch (error) { return { command: command.command, result: { status: 'failed', exitCode: null, output: String(error.message).slice(0, 2000) } }; }
+    finally { this.checking.delete(task.id); this.main.emit('update', { conversationId: c.id }); }
+  }
+  recheckStep(c, plan, stepId) {
+    const task = this.stepTask(c, plan, stepId);
+    if (task.status !== 'complete') throw fail('Only a finished step can be checked again.');
+    if (task.stepCheck?.status === 'running' || this.checking.has(task.id)) throw fail('Its tests are already running.');
+    const check = { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() };
+    this.update(c, task, { stepCheck: check });
+    this.stepEnded(c, task, check.id, { recheck: true }).catch(error => console.error('Codeshi could not check a plan step:', error.message));
+  }
+  // Building on a step whose tests failed, or were interrupted, is your call, and it is recorded as yours.
+  continueStep(c, plan, stepId) {
+    const task = this.stepTask(c, plan, stepId), check = task.stepCheck;
+    if (task.status !== 'complete' || !check || !(check.outcome === 'failed' || check.status === 'interrupted') || check.accepted) throw fail('Nothing is holding the steps after this one.');
+    this.update(c, task, { stepCheck: { ...check, accepted: true, acceptedAt: new Date().toISOString() } });
+    this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId, outcome: check.outcome || 'unverified', status: 'accepted', reason: check.status === 'interrupted' ? 'You chose to continue without the tests.' : 'You chose to continue past the failed tests.', accepted: true, ...(check.command ? { command: check.command } : {}) });
+    this.tick(c);
   }
   // After a restart. Whatever a lane was doing ended with the app, so its run is marked interrupted by its own journal, and
   // what was waiting waits for the person, as the queue does. Each lane still holds only its own folder.
   restore() {
     for (const { c, task } of this.all()) {
       if (ENDED.has(task.status)) continue;
+      // Tests that were running on a plan step ended with the app: that isn't evidence either way, so the steps after it wait.
+      if (task.stepCheck?.status === 'running') this.update(c, task, { stepCheck: { ...task.stepCheck, status: 'interrupted', outcome: 'unverified', reason: 'Codeshi closed while the tests were running.' } });
       if (!this.available(task) && !['detached', 'lost'].includes(task.status)) { this.update(c, task, { status: 'detached', reason: `${task.folderName} is no longer in this workspace. Its history stays, and it can't run.` }); continue; }
       if (task.mode === 'worktree' && !fs.existsSync(task.worktree)) { if (task.status !== 'lost') this.update(c, task, { status: 'lost', reason: 'Its working copy is gone, so there is nothing to merge. Its history stays.' }); continue; }
       if (task.status === 'waiting') { if (!task.held) this.update(c, task, { held: true, reason: 'Codeshi restarted. Start it when you’re ready.' }); continue; }
@@ -320,6 +426,7 @@ export class TaskCoordinator {
       runningPhase: active?.phase || null,
       runningStep: active?.plan?.steps?.find(s => s.status === "active")?.text || null,
       approvals: lane?.broker.pendingCount() || 0,
+      testing: this.checking.has(task.id),
       hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status)
     };
   }

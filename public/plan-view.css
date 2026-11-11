@@ -53,6 +53,14 @@
 .plan-node-title.untitled { color: var(--faint); font-style: italic; }
 .plan-node-meta { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--muted); font-size: 11px; }
 .plan-node-route { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A finished step's tests (#89). */
+.plan-node-check { justify-self: start; max-width: 100%; padding: 1px 7px; border-radius: 999px; background: var(--surface-strong); color: var(--muted); font-size: 10.5px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-node-check[data-tone=passed] { background: var(--success-bg); color: var(--success); }
+.plan-node-check[data-tone=failed] { background: var(--danger-bg); color: var(--danger); }
+.plan-node-check[data-tone=accepted] { background: var(--warning-bg); color: var(--warning); }
+.plan-node-check[data-tone=running] { color: var(--link); }
+.plan-drawer-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.plan-drawer-output { max-height: 180px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-input); color: var(--muted); font: 11px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan-view .agent-icon.codex { color: var(--codex); }
 .plan-view .agent-icon.claude { color: var(--claude); }
 .plan-view .agent-icon.gemini { color: var(--gemini); }

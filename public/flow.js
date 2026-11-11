@@ -386,7 +386,7 @@
   }
 
   // The same model-aware five-hour headline and secondary allowance shown in Agents.
-  const resetWords = value => { const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return ''; return 'resets ' + at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+  const resetWords = value => { const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return ''; return 'resets ' + at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit', hour12: true } : { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); };
   const remaining = row => Math.max(0, Math.min(100, Math.round(100 - row.usedPercent)));
   const level = percent => percent <= 10 ? 'critical' : percent <= 25 ? 'low' : 'ok';
   function planRows() {
@@ -599,7 +599,7 @@
   }
 
   // Files changed: each run that changed files, newest first, with the same Undo as the run's line in the chat.
-  const when = value => { const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return ''; return at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+  const when = value => { const at = new Date(value || ''); if (Number.isNaN(at.getTime())) return ''; return at.toLocaleString(undefined, at.toDateString() === new Date().toDateString() ? { hour: 'numeric', minute: '2-digit', hour12: true } : { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); };
   function changedRuns() {
     const c = api.getState().conversation, saved = c?.checkpoints || {}, runs = c?.runs || [];
     return Object.entries(saved).filter(([, entry]) => entry?.files).map(([runId, entry]) => ({ runId, files: entry.files, undone: entry.undone || null, run: runs.find(run => run.id === runId) || null }))
@@ -656,7 +656,7 @@
   }
   function happenings() {
     const runs = api.getState().conversation?.runs || [];
-    return runs.filter(run => run.endedAt && run.relation !== 'assessment').slice(-4).reverse().map(run => ({ run, ...decision(run), outcome: outcome(run) }));
+    return runs.filter(run => run.endedAt && run.relation !== 'assessment').slice(-3).reverse().map(run => ({ run, ...decision(run), outcome: outcome(run) }));
   }
   function renderHappened(card) {
     const rows = happenings();
@@ -664,7 +664,6 @@
     if (signature === card.signature) return;
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
-    card.foot.append(button('flow-button', 'Timeline', () => window.relayTimeline?.open?.()));
     if (!rows.length) { body.append(node('p', 'flow-empty', 'Nothing yet. After each run, the agent Codeshi chose, any handoff or retry, and how it ended appear here.')); return; }
     const list = node('ul', 'flow-happened');
     for (const row of rows) {

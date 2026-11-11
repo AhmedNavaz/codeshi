@@ -117,7 +117,7 @@
     host.replaceChildren();
     const rows = kit.group(host, t('Updates'));
     if (!state?.supported) { kit.row(rows, { label: t('Updates'), description: window.relayDesktop?.platform === 'win32' ? t('Updates install in the Codeshi app for macOS. On Windows, run the installer again or download the latest release.') : t('Updates install in the Codeshi app for macOS. This copy is updated from its source instead.'), keywords: 'version' }); return; }
-    const checked = state.checkedAt ? new Date(state.checkedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : null;
+    const checked = state.checkedAt ? new Date(state.checkedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }) : null;
     const summary = state.status === 'checking' ? t('Checking for updates…')
       : ['ready', 'waiting'].includes(state.status) ? t('Codeshi {version} is downloaded and checked. Restart to use it.', { version: state.latest.version })
       : offered() || ['downloading', 'installing'].includes(state.status) ? t('Codeshi {version} is available.', { version: state.latest.version })

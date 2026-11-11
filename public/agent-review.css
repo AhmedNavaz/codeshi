@@ -68,3 +68,31 @@
 .github-context-spacer { flex: 1; }
 .github-context-body[aria-busy="true"] .primary-button, .github-context-body[aria-busy="true"] #github-context-branch { opacity: .6; }
 @media (max-width: 650px) { .github-context-actions { flex-wrap: wrap; } .github-context-spacer { display: none; } }
+
+/* Open pull request (#18): where the branch goes, what it holds, and the text to edit. */
+.pull-request-dialog { width: min(600px, calc(100vw - 40px)); }
+.pull-request-dialog[open] { display: flex; flex-direction: column; }
+.pull-request-body { display: grid; gap: 12px; padding-top: 12px; overflow-y: auto; }
+.pull-request-route { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 24px; font-size: 12.5px; }
+.pull-request-repo { color: var(--text-strong); font-weight: 600; }
+.pull-request-remote { padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--faint); font-size: 11px; }
+.pull-request-ref { padding: 2px 6px; border-radius: 5px; background: var(--code-bg); color: var(--text); font: 12px/1.4 var(--mono); overflow-wrap: anywhere; }
+.pull-request-arrow { color: var(--faint); }
+.pull-request-notes { display: grid; gap: 6px; }
+.pull-request-notes:empty { display: none; }
+.pull-request-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.pull-request-note.warning { color: var(--warning); }
+.pull-request-note .text-link { font-size: inherit; }
+.pull-request-commits { border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.pull-request-commits summary { padding: 7px 10px; color: var(--muted); cursor: pointer; }
+.pull-request-commits ol { display: grid; gap: 4px; max-height: 150px; margin: 0; padding: 0 10px 8px; overflow-y: auto; list-style: none; }
+.pull-request-commits li { display: flex; gap: 8px; min-width: 0; }
+.pull-request-commits li > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pull-request-text { display: grid; gap: 10px; }
+.pull-request-text textarea { min-height: 150px; max-height: 320px; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 8px; background: var(--surface-input); color: var(--text); font: 12.5px/1.5 var(--mono); resize: vertical; }
+.pull-request-text textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.pull-request-text .review-hint { margin: 0; }
+.pull-request-draft { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.pull-request-done { display: grid; gap: 6px; justify-items: start; color: var(--success); font-size: 13px; }
+.pull-request-done .muted { color: var(--muted); }
+.pull-request-body[aria-busy="true"] .primary-button { opacity: .6; }

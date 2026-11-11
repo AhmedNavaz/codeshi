@@ -281,7 +281,7 @@ export class HandoffMonitor {
     let at = run.limitResetsAt || null;
     if (!at) { try { at = limitState(await this.usage(run.provider, this.broker.usageOptions(run.provider)), c.lastRun?.effectiveModel || c.model).resetsAt; } catch {} }
     const time = at ? new Date(at) : null;
-    return time && Number.isFinite(time.getTime()) ? time.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : null;
+    return time && Number.isFinite(time.getTime()) ? time.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true }) : null;
   }
 
   // After a run stops on a limit: continue on an agent with room, or wait for the first reset. Returns false if neither

@@ -26,7 +26,7 @@
     const hours = Math.floor(minutes / 60);
     return hours ? `${hours} h${minutes % 60 ? ` ${minutes % 60} min` : ''}` : `${minutes} min`;
   }
-  const time = iso => new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const time = iso => new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
 
   // One line per run: who, how it ended, what it was asked, then what it did.
   function runLine(run) {
@@ -37,8 +37,32 @@
     if (run.tests) did.push('ran the tests'); else if (run.commands) did.push(`ran ${plural(run.commands, 'command')}`);
     return { kind: run.status === 'running' ? 'working' : run.status === 'complete' ? 'done' : 'stopped', text: `${agent(run)} ${verb} “${run.prompt || 'a task'}”`, detail: did.join(' · ') };
   }
+  const changed = item => item.fileCount ? (item.fileCount <= 3 ? `changed ${join(item.files.map(base))}` : `changed ${plural(item.fileCount, 'file')}`) : '';
+  // A task beside the main conversation (#88): who, how it stands, and what's left for you.
+  function taskLine(task) {
+    const who = agents[task.provider] || 'An agent';
+    const verb = task.status === 'running' ? 'is working on' : task.status === 'complete' ? 'finished' : task.status === 'failed' ? 'didn’t finish' : task.status === 'waiting' ? 'is waiting to start' : 'stopped on';
+    const did = [changed(task), task.check === 'failed' ? 'tests failed' : task.check === 'passed' ? 'tests passed' : '', task.unmerged ? 'ready for you to merge' : '', task.approvals ? `${plural(task.approvals, 'approval')} waiting` : ''].filter(Boolean);
+    return { kind: task.approvals ? 'approval' : task.status === 'running' ? 'working' : task.status === 'complete' ? 'done' : task.status === 'waiting' ? 'waiting' : 'stopped', text: `${who} ${verb} the task “${task.title}” in ${task.folder}`, detail: did.join(' · ') };
+  }
+  // A plan's steps fold into one line: how far it got, then what's working and what needs you.
+  function planLine(plan) {
+    const working = plan.steps.filter(step => step.status === 'running'), failed = plan.steps.filter(step => step.check === 'failed');
+    const unmerged = plan.steps.filter(step => step.unmerged).length, approvals = plan.steps.reduce((sum, step) => sum + step.approvals, 0);
+    const stopped = plan.steps.filter(step => ['stopped', 'failed'].includes(step.status));
+    const steps = list => join(list.map(step => String(step.number)));
+    const did = [
+      working.length ? `step${working.length === 1 ? '' : 's'} ${steps(working)} working` : '',
+      failed.length ? `tests failed on step${failed.length === 1 ? '' : 's'} ${steps(failed)}, so the steps after ${failed.length === 1 ? 'it' : 'them'} wait` : '',
+      stopped.length ? `step${stopped.length === 1 ? '' : 's'} ${steps(stopped)} stopped` : '',
+      unmerged ? `${plural(unmerged, 'step')} ready for you to merge` : '',
+      approvals ? `${plural(approvals, 'approval')} waiting` : '',
+    ].filter(Boolean);
+    const kind = approvals || failed.length ? 'approval' : working.length ? 'working' : plan.done === plan.total ? 'done' : stopped.length ? 'stopped' : 'waiting';
+    return { kind, text: `The plan “${plan.goal}” has ${plan.done} of ${plural(plan.total, 'step')} done`, detail: did.join(' · ') };
+  }
   function lines(workspace) {
-    const rows = workspace.runs.map(runLine);
+    const rows = [...workspace.runs.map(runLine), ...(workspace.plans || []).map(planLine), ...(workspace.tasks || []).map(taskLine)];
     if (workspace.approvals) rows.push({ kind: 'approval', text: `${plural(workspace.approvals, 'approval')} waiting for you` });
     if (workspace.handoff) rows.push({ kind: 'approval', text: `A handoff to ${agents[workspace.handoff.to] || 'another agent'} is offered` });
     if (workspace.waiting) rows.push({ kind: 'waiting', text: `Waiting for a usage limit to reset${workspace.waiting.resetsAt ? `, about ${time(workspace.waiting.resetsAt)}` : ''}; it continues with ${join(workspace.waiting.providers.map(name => agents[name] || name)) || 'the next agent with room'}` });

@@ -296,7 +296,7 @@ test('Claude’s rejected rate limit event continues on another agent, with the 
   await continued(env, 'codex'); await done(env);
   assert(run);
   assert.deepEqual(errors(env.c), []);
-  const shown = new Date(resetsAt * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const shown = new Date(resetsAt * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true });
   assert.equal(notes(env.c).at(-1), `Claude reached its usage limit, which resets ${shown}, so Codeshi handed the task to Codex.`);
   const unknown = setup(t, { preferences: allowed });
   unknown.broker.handoff.usage = async provider => provider === 'codex' ? { available: false } : { available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', usedPercent: 20 }] };

@@ -121,6 +121,21 @@
   const LIVE = ['waiting', 'running'];
   const folders = () => state().projects?.find(project => project.id === state().projectId)?.folders || [];
   const planTasks = plan => (plan.steps || []).map((step, index) => ({ step, number: index + 1, task: (conversation()?.parallelTasks || []).find(task => task.id === plan.tasks?.[step.id]) || null }));
+  // A finished step's tests (#89): a tone for colour, a short label, why, and whether it holds the steps after it.
+  function checkOf(task) {
+    const check = task?.stepCheck;
+    if (!check || !['complete', 'integrated', 'kept'].includes(task.status)) return null;
+    const open = task.status === 'complete';
+    if (check.status === 'running' || task.testing) return { tone: 'running', text: 'Testing…', reason: 'Running the project’s tests on this step’s result.', held: open };
+    if (check.status === 'interrupted') return { tone: check.accepted ? 'accepted' : 'failed', text: check.accepted ? 'Not tested · continued' : 'Tests interrupted', reason: check.reason || '', command: check.command || null, held: open && !check.accepted, retry: open };
+    const [tone, text] = { passed: ['passed', 'Tests passed'], failed: check.accepted ? ['accepted', 'Tests failed · continued'] : ['failed', 'Tests failed'], no_change: ['quiet', 'No changes'] }[check.outcome] || ['quiet', 'Not tested'];
+    return { tone, text, reason: check.reason || '', command: check.command || null, output: check.output || '', held: open && check.outcome === 'failed' && !check.accepted, retry: open };
+  }
+  // The earlier steps that finished again after this one started, so this one was built on an older version of them.
+  function staleFrom(plan, task) {
+    if (!task?.builtOn || task.status === 'waiting') return [];
+    return Object.entries(task.builtOn).filter(([id, at]) => { const before = (conversation()?.parallelTasks || []).find(item => item.id === plan.tasks?.[id]); return before?.stepResult?.at && before.stepResult.at !== at; }).map(([id]) => id);
+  }
   function runPlan() {
     const plan = openPlan(); if (!plan || !edit || edit.dirty || busy) return;
     const assignments = {};
@@ -146,12 +161,16 @@
       const item = node('li', 'orchestration-progress-step'), open = node('button', 'orchestration-progress-open'); open.type = 'button';
       item.dataset.status = task?.status || 'missing';
       const icon = node('i', `agent-icon ${task?.runningProvider || task?.provider || 'auto'}`); icon.setAttribute('aria-hidden', 'true');
-      open.append(node('span', 'orchestration-step-number', String(number)), node('span', 'orchestration-step-name', step.title), icon, node('span', 'orchestration-progress-state', task ? (TASK_LABEL[task.status] || task.status) : 'Closed'));
+      const check = checkOf(task), stale = staleFrom(plan, task), label = task ? `${TASK_LABEL[task.status] || task.status}${check ? ` · ${check.text}` : ''}` : 'Closed';
+      if (check) item.dataset.check = check.tone;
+      open.append(node('span', 'orchestration-step-number', String(number)), node('span', 'orchestration-step-name', step.title), icon, node('span', 'orchestration-progress-state', label));
       open.title = task?.reason || `Open step ${number}’s task`; open.disabled = !task || busy;
-      open.setAttribute('aria-label', `Step ${number}, ${step.title}: ${task ? TASK_LABEL[task.status] || task.status : 'closed'}. Open its task.`);
+      open.setAttribute('aria-label', `Step ${number}, ${step.title}: ${task ? label : 'closed'}. Open its task.`);
       open.addEventListener('click', () => { if (task) api.setTask(task.id).catch(error => api.showNotice(error.message)); });
       item.append(open);
       if (task?.reason && task.status === 'waiting') item.append(node('span', 'orchestration-progress-reason', task.reason));
+      else if (check?.held && check.tone === 'failed') item.append(node('span', 'orchestration-progress-reason', `${check.reason} The steps after it wait. Open the Plan to check it again or continue anyway.`));
+      if (stale.length) item.append(node('span', 'orchestration-progress-reason', `Step ${stale.map(id => plan.steps.findIndex(other => other.id === id) + 1).join(' and ')} changed after this step started.`));
       return item;
     }));
     $('orchestration-stop').hidden = !live || plan.status === 'stopped'; $('orchestration-stop').disabled = busy;
@@ -455,6 +474,12 @@
     },
     routeText: step => route(step),
     taskLabel: task => task ? TASK_LABEL[task.status] || task.status : 'Closed',
+    checkOf, staleFrom: task => { const plan = runningPlan(); return plan ? staleFrom(plan, task) : []; },
+    // Check a finished step's tests again, or build on it anyway (#89).
+    stepAction(kind, stepId) {
+      const plan = runningPlan(); if (!plan) return;
+      action({ action: kind, id: plan.id, stepId }, () => api.announce(kind === 'recheck' ? 'Checking the step again.' : 'The steps after it can start.'));
+    },
     roleName: role => roleNames[role] || 'Builder',
     tierName: tier => (TIERS.find(([value]) => value === tier) || TIERS[1])[1],
     stepDetail, syncDetail,

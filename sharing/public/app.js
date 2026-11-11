@@ -63,7 +63,7 @@ import { sealSolution, validateSolution } from '/format.mjs';
     request = await (await api()).json();
     const pkg = request.package;
     $('goal').textContent = pkg.goal || 'Friend help request';
-    $('expiry').textContent = `Expires ${new Date(request.expiresAt).toLocaleString()}. Sharing mode: ${pkg.mode === 'source' ? 'selected source' : 'context only'}.`;
+    $('expiry').textContent = `Expires ${new Date(request.expiresAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short', hour12: true })}. Sharing mode: ${pkg.mode === 'source' ? 'selected source' : 'context only'}.`;
     paragraph('Problem', pkg.problem);
     paragraph('Expected outcome', pkg.expectedOutcome);
     paragraph('Decisions', pkg.decisions.join('\n'));

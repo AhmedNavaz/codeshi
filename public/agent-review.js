@@ -86,7 +86,7 @@
     const titles = { running: 'Review in progress', complete: report.findings.length ? `${report.findings.length} finding${report.findings.length === 1 ? '' : 's'} to consider` : 'No actionable findings reported', unstructured: 'Review response needs attention', failed: 'Review did not finish', interrupted: 'Review interrupted' };
     const heading = node('div', undefined, 'review-result-heading'); heading.append(node('h3', titles[report.status] || 'Code review'));
     if (report.status === 'running') heading.append(button('Stop review', () => perform(async () => { await api.post(report.background ? `/api/reviews/${report.id}/stop` : `/api/conversations/${api.getState().conversation.id}/stop`, {}, scope); if (current()) await api.refresh(); })));
-    host.append(heading, node('p', `${report.builderConnection === 'local' ? 'Local · ' + (report.builderModel || 'Ollama') : name(report.builder)} → ${name(report.provider)} · Read only · ${new Date(report.startedAt).toLocaleString()}`, 'review-result-meta'));
+    host.append(heading, node('p', `${report.builderConnection === 'local' ? 'Local · ' + (report.builderModel || 'Ollama') : name(report.builder)} → ${name(report.provider)} · Read only · ${new Date(report.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}`, 'review-result-meta'));
     host.append(node('p', `Goal: ${report.goal}`, 'review-result-summary'));
     if (report.stale) host.append(node('p', `Outdated review. ${report.staleReason} Run a new review before preparing fixes.`, 'review-stale'));
     if (report.summary) host.append(node('p', report.summary, 'review-result-summary'));

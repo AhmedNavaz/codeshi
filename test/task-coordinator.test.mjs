@@ -416,6 +416,56 @@ test('the combined result is checked before merging, in a temporary copy, and fa
   assert.equal(fs.readFileSync(path.join(env.folders.a, 'value.txt'), 'utf8'), 'ours+theirs\n');
 });
 
+// Gated plan runs (#89): a finished step's tests run on a copy of its result before anything builds on it, a failure holds
+// the steps after it, and the next step's brief is written when it starts, from what the earlier step actually did.
+test('a plan step is tested before the steps after it start, and a failure holds them until you check again or continue', { skip: scriptCLIs }, async t => {
+  let command = { command: 'node -e "console.log(\'contract broken\');process.exit(2)"', directory: '' };
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a'), { 'value.txt': 'base\n' }) }), { tests: { saved: () => command, run() { throw new Error('A step’s tests run on a copy.'); } }, policy: { maxConcurrent: 5 } });
+  const step = (id, extra = {}) => ({ id, title: `Step ${id}`, instructions: `Do ${id}.`, files: [], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [], ...extra });
+  const codex = { provider: 'codex', model: null, effort: null };
+  const plan = env.broker.orchestrationAction(env.c, { action: 'create', goal: 'Agree the contract, then build the page.' }).orchestrations[0];
+  env.broker.orchestrationAction(env.c, { action: 'update', id: plan.id, revision: 0, steps: [step('s1', { role: 'backend', artifact: 'contract' }), step('s2', { dependsOn: ['s1'], role: 'frontend' })] });
+  env.broker.orchestrationAction(env.c, { action: 'run', id: plan.id, revision: 1, folderId: 'a', assignments: { s1: codex, s2: codex } });
+  const saved = () => env.c.orchestrations.find(item => item.id === plan.id), first = () => env.task(saved().tasks.s1), second = () => env.task(saved().tasks.s2);
+
+  await until(() => first().stepCheck?.status === 'done', 'the first step’s tests');
+  assert.deepEqual([first().mode, first().stepCheck.outcome, first().stepCheck.exitCode, first().stepCheck.command], ['direct', 'failed', 2, command.command]);
+  assert.match(first().stepCheck.output, /contract broken/);
+  await until(() => /tests failed on “1\. Step s1”/.test(second().reason || ''), 'the second step to be held');
+  assert.equal(second().status, 'waiting', 'Nothing builds on a step whose tests failed.');
+  assert.deepEqual([saved().stepOutcomes.s1.outcome, saved().stepOutcomes.s1.status], ['failed', 'blocked']);
+  assert.equal(saved().artifacts.s1.kind, 'contract', 'The step’s report is recorded as the contract it was asked for.');
+  assert.match(env.c.messages.at(-1).text, /tests failed on step 1/);
+  assert.doesNotMatch(git(env.folders.a, 'worktree', 'list'), /check-/, 'The tests ran on a temporary copy that is gone.');
+  assert.throws(() => env.broker.orchestrationAction(env.c, { action: 'continue', id: plan.id, stepId: 's2' }), /Nothing is holding/);
+
+  // Continuing anyway is recorded as your decision, and the next step is told the tests failed.
+  env.broker.orchestrationAction(env.c, { action: 'continue', id: plan.id, stepId: 's1' });
+  assert.equal(first().stepCheck.accepted, true);
+  assert.equal(saved().stepOutcomes.s1.accepted, true);
+  await until(() => second().status === 'complete' && second().stepCheck?.status === 'done', 'the second step');
+  const brief = env.captured(fs.realpathSync(env.folders.a)).map(capture => capture.context.currentRequest).find(text => text.includes('step 2 of 2'));
+  assert.ok(brief, 'The second step ran.');
+  assert.match(brief, /Step 1: Step s1 \(backend\)/);
+  assert.match(brief, /Tests failed on its result: node -e/);
+  assert.match(brief, /Its contract, in its own words:\n {4}Codex: You are doing step 1 of 2/, 'It gets what the first step actually reported.');
+  assert.match(brief, /Check the files themselves/);
+  assert.deepEqual(Object.keys(second().builtOn), ['s1']);
+
+  // Checking again with tests that pass replaces the result.
+  command = { command: 'node -e "process.exit(0)"', directory: '' };
+  env.broker.orchestrationAction(env.c, { action: 'recheck', id: plan.id, stepId: 's1' });
+  assert.throws(() => env.broker.orchestrationAction(env.c, { action: 'recheck', id: plan.id, stepId: 's1' }), /already running/);
+  await until(() => first().stepCheck?.status === 'done', 'the tests to run again');
+  assert.deepEqual([first().stepCheck.outcome, saved().stepOutcomes.s1.outcome], ['passed', 'passed']);
+  assert.equal(second().builtOn.s1, first().stepResult.at, 'A check again isn’t a new version of the step.');
+
+  // Tests cut short by a restart aren't evidence either way.
+  env.broker.tasks.update(env.c, first(), { stepCheck: { id: 'cut', status: 'running', at: new Date().toISOString() } });
+  await env.reopen();
+  assert.deepEqual([first().stepCheck.status, first().stepCheck.outcome], ['interrupted', 'unverified']);
+});
+
 test('a dependency keeps its work in order, and a copy has to be merged before what depends on it starts', { skip: scriptCLIs }, async t => {
   const env = setup(t, root => ({ a: repository(path.join(root, 'a'), { 'a.txt': '1\n' }), b: repository(path.join(root, 'b')) }), { policy: { maxConcurrent: 5 } });
   env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }); const main = env.broker.running;

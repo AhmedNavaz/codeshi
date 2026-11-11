@@ -160,20 +160,41 @@ export function stepBrief(plan, step, { artifacts = {}, sourceRevision = null } 
   };
 }
 
+const ARTIFACT_NAMES = { contract: 'contract', schema: 'schema or migration plan', diff: 'changes', test_evidence: 'test evidence', findings: 'findings' };
+const clipped = (value, limit) => { const flat = String(value || '').trim(); return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat; };
+// What Codeshi recorded about an earlier step, for the step that builds on it: where its work is, its tests and its report.
+function upstreamLines(step, result) {
+  const lines = [], check = result.check;
+  if (result.status === 'integrated') lines.push('  Its changes were merged into the folder.');
+  else if (result.status === 'kept') lines.push(`  Its changes were kept on the branch ${result.branch || 'it made'}, not in the folder.`);
+  if (result.files?.length) lines.push(`  Files it changed: ${result.files.slice(0, 20).join(', ')}`);
+  if (check?.outcome === 'passed') lines.push(`  Tests passed on its result: ${check.command}`);
+  else if (check?.outcome === 'failed') lines.push(`  Tests failed on its result${check.command ? `: ${check.command}` : ''}. The person chose to continue anyway, so expect to find what is broken.`);
+  else if (check?.reason) lines.push(`  Not checked: ${check.reason}`);
+  if (result.summary) lines.push(`  Its ${step.artifact ? ARTIFACT_NAMES[step.artifact] : 'report'}, in its own words:`, ...clipped(result.summary, 3000).split('\n').map(line => `    ${line}`));
+  return lines;
+}
+
 // What a step's task is asked (#108). It runs as its own task, in a fresh session, so it gets the plan's goal, its own
-// step and the steps it builds on, and is told to do only its part.
-export function stepPrompt(plan, step, number) {
+// step and the steps it builds on, and is told to do only its part. The brief is written when the step starts (#89), so
+// results holds what each earlier step actually did: its report, files and test result.
+export function stepPrompt(plan, step, number, results = {}) {
   const brief = stepBrief(plan, step), steps = plan.steps || [], position = new Map(steps.map((item, index) => [item.id, index + 1]));
   const goal = plan.goal.length > 4000 ? `${plan.goal.slice(0, 3999).trimEnd()}…` : plan.goal;
+  const reported = step.dependsOn.some(id => results[id]);
   return [
     `You are doing step ${number} of ${steps.length} in a plan. Each step runs as its own task, and other agents do the other steps, so do only this one.`,
     '', 'The plan is for:', goal,
     ...(plan.summary ? ['', `Plan: ${plan.summary}`] : []),
-    ...(step.dependsOn.length ? ['', 'This step builds on these steps, which have finished:', ...step.dependsOn.map(id => `- Step ${position.get(id)}: ${steps.find(item => item.id === id)?.title || ''}`)] : []),
+    ...(step.dependsOn.length ? ['', 'This step builds on these steps, which have finished:', ...step.dependsOn.flatMap(id => {
+      const before = steps.find(item => item.id === id);
+      return [`- Step ${position.get(id)}: ${before?.title || ''}${before?.role && before.role !== 'builder' ? ` (${before.role})` : ''}`, ...(results[id] && before ? upstreamLines(before, results[id]) : [])];
+    })] : []),
+    ...(reported ? ['', 'Those reports are what the earlier agents said. Check the files themselves before relying on them.'] : []),
     '', `Step ${number}: ${step.title}${brief.role !== 'builder' ? ` (${brief.role})` : ''}`, step.instructions,
     ...(step.files.length ? ['', `Files or folders it expects to change: ${step.files.join(', ')}`] : []),
     ...(step.check ? ['', `Acceptance check: ${step.check}`] : []),
-    ...(brief.upstreamArtifacts.length ? ['', 'From the steps before it:', ...brief.upstreamArtifacts.map(item => `- Step ${position.get(item.stepId)} (${item.kind}): ${String(item.content).slice(0, 2000)}`)] : []),
+    ...(brief.upstreamArtifacts.filter(item => !results[item.stepId]?.summary).length ? ['', 'From the steps before it:', ...brief.upstreamArtifacts.filter(item => !results[item.stepId]?.summary).map(item => `- Step ${position.get(item.stepId)} (${item.kind}): ${String(item.content).slice(0, 2000)}`)] : []),
   ].join('\n');
 }
 
@@ -326,6 +347,8 @@ export function applyOrchestration(c, record) {
       outcome: record.outcome,
       status: record.status,
       reason: record.reason || null,
+      ...(record.command ? { command: record.command } : {}),
+      ...(record.accepted ? { accepted: true } : {}),
       updatedAt: record.at,
     };
     plan.revision = (plan.revision || 0) + 1;
@@ -350,7 +373,7 @@ export function orchestrationAction(broker, c, input = {}) {
     broker.record(c, { type: 'orchestration_plan', id, plan: { id, goal, source: 'manual', status: 'draft', summary: '', steps: [], review: true, revision: 0, artifacts: {}, stepOutcomes: {} } });
     return broker.view(c);
   }
-  if (!['update', 'discard', 'artifact', 'outcome', 'run', 'stop', 'close'].includes(input.action)) fail('Choose update, discard, artifact, outcome, run, stop, close or create.');
+  if (!['update', 'discard', 'artifact', 'outcome', 'run', 'stop', 'close', 'recheck', 'continue'].includes(input.action)) fail('Choose update, discard, artifact, outcome, run, stop, close, recheck, continue or create.');
   const plan = (c.orchestrations || []).find(item => item.id === input.id);
   if (!plan) fail('That plan is no longer in this conversation.', 404);
   if (plan.status === 'planning') fail('Wait for the planner to finish.', 409);
@@ -373,6 +396,13 @@ export function orchestrationAction(broker, c, input = {}) {
     broker.record(c, { type: 'orchestration_stop', id: plan.id });
     const parts = [stopped && `${stopped} step${stopped === 1 ? '' : 's'} stopped`, cancelled && `${cancelled} that hadn’t started cancelled`].filter(Boolean);
     broker.message(c, 'system', `Stopped the plan${parts.length ? `: ${parts.join(', ')}` : ''}. Finished steps keep their work, and a step in its own copy still waits for you to review and merge it.`);
+    return broker.view(c);
+  }
+  // A finished step's tests (#89): run them again, or build on the step even though they failed.
+  if (input.action === 'recheck' || input.action === 'continue') {
+    if (!broker.tasks || !plan.tasks) fail('This plan hasn’t run.', 409);
+    if (input.action === 'recheck') broker.tasks.recheckStep(c, plan, input.stepId);
+    else broker.tasks.continueStep(c, plan, input.stepId);
     return broker.view(c);
   }
   if (input.action === 'discard' && OPEN_PLANS.includes(plan.status)) { broker.record(c, { type: 'orchestration_discard', id: plan.id }); setTimeout(() => broker.queue.tick(c), 0); return broker.view(c); }
