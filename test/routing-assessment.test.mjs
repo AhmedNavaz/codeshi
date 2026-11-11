@@ -95,6 +95,17 @@ test('Saver uses local rules only on Send, making no agent assessment call and k
   assert.equal(c.messages.findLast(message => message.role === 'user').routing.ratedBy, 'local');
 });
 
+test('a plan step routed when it starts keeps the size it was planned with and costs no assessment (#12)', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t); let calls = 0;
+  broker.router.worker = async () => { calls++; return JSON.stringify({ tier: 'light', effort: 'low', reason: 'Looks small' }); };
+  const accepted = await broker.dispatch(c, { ...input, requestId: 'plan-step', text: 'Fix a typo in the README', routing: { mode: 'smart', planned: 'deep' } });
+  await broker.running.done;
+  assert.equal(calls, 0, 'The plan already sized the step.');
+  assert.deepEqual([accepted.model, accepted.effort], ['gpt-codex', 'high'], 'A deep step, though its words read as light.');
+  assert.deepEqual([c.lastRun.routing.assessment.source, c.lastRun.routing.assessment.tier], ['plan', 'deep']);
+  assert.match(c.messages.findLast(message => message.role === 'user').routing.reason, /complex step, as planned/i);
+});
+
 test('a Send reads each agent once and starts on that reading, and a full limit costs no assessment', { skip: scriptCLIs }, async t => {
   const { broker, c, input, workspace } = setup(t); let reads = 0, assessed = 0;
   broker.checks.usage = async () => { reads++; return usage(); };

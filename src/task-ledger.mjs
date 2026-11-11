@@ -26,7 +26,7 @@ export function taskIdentity(c, { runId, text, retryOf = null, review = null }) 
 // reasoning. previous is the same session's earlier total, for an agent that reports a running total for the whole session.
 export function normalizeUsage(provider, raw, { previous = null } = {}) {
   if (!raw || typeof raw !== 'object') return null;
-  let tokens = {}, source = 'unknown', context = null, sessionTotal = null, coverage = null, costEstimateUSD = null;
+  let tokens = {}, source = 'unknown', context = null, sessionTotal = null, coverage = null, costEstimateUSD = null, byModel = null;
   const models = raw.modelUsage && typeof raw.modelUsage === 'object' ? Object.values(raw.modelUsage) : [];
   if (provider === 'claude' && models.some(model => number(model?.inputTokens) !== null || number(model?.outputTokens) !== null)) {
     // The SDK's usage is main-loop, per-turn usage. modelUsage is a cumulative session counter covering the query
@@ -47,10 +47,27 @@ export function normalizeUsage(provider, raw, { previous = null } = {}) {
       if (field === 'costEstimateUSD') costEstimateUSD = delta !== null && delta >= 0 ? delta : null;
       else tokens[field] = delta !== null && delta >= 0 ? delta : null;
     }
+    // The same counters per model (#84). Claude Code calls a small model for its own jobs inside a run, and a subagent or
+    // fallback can run on another model, so one total mixes models of very different size. Kept beside the total, never
+    // added to it. A model the earlier reading didn't list started at zero; a baseline without models leaves the split unknown.
+    sessionTotal.models = {};
+    for (const [name, model] of Object.entries(raw.modelUsage)) sessionTotal.models[name] = Object.fromEntries(FIELDS.map(field => [field, number(model?.[names[field]])]));
+    if (!previous || previous.models) {
+      byModel = {};
+      for (const [name, total] of Object.entries(sessionTotal.models)) {
+        const before = previous?.models?.[name];
+        byModel[name] = Object.fromEntries(FIELDS.map(field => {
+          const delta = total[field] === null || before && before[field] == null ? null : total[field] - (before?.[field] ?? 0);
+          return [field, delta !== null && delta >= 0 ? delta : null];
+        }));
+      }
+    }
     if (raw.pendingUsage) {
       coverage.scope = 'query-pipeline-plus-observed-messages'; costEstimateUSD = null;
       // Observed messages are a lower bound, not a complete native-session reading suitable for the next run's baseline.
+      // They don't name their model reliably either, so the split is unknown.
       sessionTotal = Object.fromEntries(Object.keys(names).map(key => [key, null]));
+      byModel = null;
     }
   } else if (typeof raw.input_tokens === 'number' || typeof raw.output_tokens === 'number') {
     source = 'claude-result';
@@ -82,14 +99,44 @@ export function normalizeUsage(provider, raw, { previous = null } = {}) {
     context = { used: raw.used, size: number(raw.size) };
     tokens = Object.fromEntries(FIELDS.map(key => [key, null]));
   } else return { provider, source, ...Object.fromEntries(FIELDS.map(key => [key, null])), reported: [], raw };
-  return { provider, source, ...tokens, ...(raw.partial ? { partial: true } : {}), reported: FIELDS.filter(key => tokens[key] !== null), ...(coverage ? { coverage } : {}), ...(source === 'claude-model-usage-total' ? { costEstimateUSD } : {}), ...(context ? { context } : {}), ...(sessionTotal ? { sessionTotal } : {}), raw };
+  const delegated = provider === 'claude' ? delegatedUsage(raw.delegated, source === 'claude-model-usage-total' || raw.partial === true) : null;
+  return { provider, source, ...tokens, ...(raw.partial ? { partial: true } : {}), reported: FIELDS.filter(key => tokens[key] !== null), ...(coverage ? { coverage } : {}), ...(source === 'claude-model-usage-total' ? { costEstimateUSD } : {}), ...(context ? { context } : {}), ...(sessionTotal ? { sessionTotal } : {}), ...(byModel ? { byModel } : {}), ...(delegated ? { delegated } : {}), raw };
+}
+
+// What Claude's subagents reported in their own messages during this run (#84). Only messages Codeshi saw are counted, so
+// it is a lower bound. The pipeline total and a stopped run's message count include subagents; a main-loop total does
+// not, so included says which.
+function delegatedUsage(raw, included) {
+  if (!raw || typeof raw !== 'object' || !(number(raw.messages) > 0)) return null;
+  return { input: number(raw.input_tokens), output: number(raw.output_tokens), cacheRead: number(raw.cache_read_input_tokens), cacheWrite: number(raw.cache_creation_input_tokens),
+    agents: number(raw.agents), messages: raw.messages, lowerBound: true, included };
+}
+
+// Adds one run's or one total's model split and subagent share into a running total. The split only covers the runs that
+// reported one, so splitRuns is kept beside it; tokens of other runs are never shared out between models.
+function addSplit(total, usage, runs = 1) {
+  if (usage?.byModel) {
+    total.byModel ||= {};
+    for (const [name, model] of Object.entries(usage.byModel)) {
+      const into = total.byModel[name] ||= Object.fromEntries(FIELDS.map(key => [key, null]));
+      for (const key of FIELDS) if (typeof model[key] === 'number') into[key] = (into[key] || 0) + model[key];
+    }
+    total.splitRuns = (total.splitRuns || 0) + (usage.splitRuns ?? runs);
+  }
+  if (usage?.delegated) {
+    const into = total.delegated ||= { input: null, output: null, cacheRead: null, cacheWrite: null, agents: 0, runs: 0, lowerBound: true, included: true };
+    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) if (typeof usage.delegated[key] === 'number') into[key] = (into[key] || 0) + usage.delegated[key];
+    into.agents += usage.delegated.agents || 0; into.runs += usage.delegated.runs ?? runs; into.included &&= usage.delegated.included !== false;
+  }
 }
 
 // Adds runs up field by field. A field no run reported stays unknown, and reportedBy says how many of the runs each sum covers.
 export function sumUsage(entries) {
   const total = Object.fromEntries(FIELDS.map(key => [key, null])), reportedBy = Object.fromEntries(FIELDS.map(key => [key, 0]));
   for (const usage of entries) for (const key of FIELDS) if (usage && typeof usage[key] === 'number') { total[key] = (total[key] || 0) + usage[key]; reportedBy[key]++; }
-  return { ...total, reportedBy, runs: entries.length, runsWithTokens: entries.filter(usage => usage?.reported?.length).length, partialRuns: entries.filter(usage => usage?.partial).length };
+  const result = { ...total, reportedBy, runs: entries.length, runsWithTokens: entries.filter(usage => usage?.reported?.length).length, partialRuns: entries.filter(usage => usage?.partial).length };
+  for (const usage of entries) addSplit(result, usage);
+  return result;
 }
 
 // Attribute only whole invocations we can identify. Native planning, summaries and delegation may be included in a
@@ -306,6 +353,7 @@ export function combineUsage(list) {
       total.reportedBy[key] += usage.reportedBy?.[key] || 0;
     }
     total.runs += usage.runs || 0; total.runsWithTokens += usage.runsWithTokens || 0; total.partialRuns += usage.partialRuns || 0;
+    addSplit(total, usage, 0);
   }
   return total;
 }

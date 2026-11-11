@@ -654,6 +654,24 @@ test('a saved plan runs its steps as tasks that wait for the steps they depend o
   assert.ok(api.c().parallelTasks.every(task => task.closed));
 });
 
+// One policy for the whole task (#12): a step may wait hours for the steps before it, so in Flow a step left to Auto is
+// chosen when it starts, on fresh usage, at the size the plan gave it. A step whose agent you chose keeps it.
+test('in Flow, a plan step left to Auto is routed when it starts at its planned size; a chosen agent or Normal keeps the pick shown', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-plan-routing-')), workspace = path.join(root, 'project');
+  fs.mkdirSync(workspace);
+  const broker = new Broker({ workspace, dataDir: path.join(root, 'data') });
+  t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  broker.tasks.tick = () => {};
+  const c = broker.get(broker.create().id), codex = { provider: 'codex', model: null, effort: null };
+  const plan = { id: 'plan', steps: [step('s1', { tier: 'deep' }), step('s2', { agent: codex })] };
+  const run = () => Object.values(broker.tasks.fromPlan(c, plan, { assignments: { s1: { ...codex, auto: true }, s2: { ...codex, auto: true } } }, (item, number) => `Do ${item.id} (${number}).`).tasks).map(id => c.parallelTasks.find(task => task.id === id));
+  assert.deepEqual(run().map(task => task.routing ?? null), [null, null], 'Normal runs each step with the agent it showed.');
+  broker.setRouting(c, { mode: 'ultra' });
+  const [auto, chosen] = run();
+  assert.deepEqual(auto.routing, { mode: 'ultra', planned: 'deep' });
+  assert.equal(chosen.routing, undefined, 'A step whose agent you chose is never re-routed.');
+});
+
 test('stopping a plan stops the working step and cancels the steps that have not started', { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app);
   f.scenario({ hang: true });

@@ -589,9 +589,14 @@ test('routed prompts are routed again for the new agent, and a list that can’t
   env.broker.handoff.models = async () => ({ models: [{ id: 'claude-haiku', supportedEffortLevels: ['low', 'medium'] }, { id: 'claude-opus', supportedEffortLevels: ['low', 'high'] }] });
   queue(env, 'Fix a typo in the readme', { model: 'gpt-mini', effort: 'low', routing: { mode: 'balanced', reason: 'Light', tier: 'light' } });
   queue(env, 'Refactor the payment module', { model: 'gpt-max', effort: 'high', routing: { mode: 'balanced', reason: 'Deep', tier: 'deep', escalation: { provider: 'codex', model: 'gpt-max', modelName: 'Max', effort: 'xhigh' } } });
+  // Its words read as light, but it was queued as deep work, and it moves as what it was rated (#12).
+  queue(env, 'Fix the typo bug in the cache', { model: 'gpt-max', effort: 'high', routing: { mode: 'smart', reason: 'A complex task (debugging) · Codex has more allowance left', tier: 'deep' } });
   env.broker.queueAction(env.c, { action: 'pause' });
   await env.broker.handoff.check(run);
   await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
+  const rated = named(env, 'Fix the typo bug in the cache');
+  assert.deepEqual([rated.model, rated.routing.tier], ['claude-opus', 'deep']);
+  assert.equal(rated.routing.reason, 'Moved at a handoff · A complex task (debugging)', 'The old agent’s allowance note doesn’t move with it.');
   const light = named(env, 'Fix a typo in the readme'), deep = named(env, 'Refactor the payment module');
   assert.deepEqual([light.provider, light.model, light.effort, light.routing.mode], ['claude', 'claude-haiku', 'low', 'smart']);
   assert.deepEqual([deep.provider, deep.model, deep.effort, deep.routing.tier], ['claude', 'claude-opus', 'high', 'deep']);

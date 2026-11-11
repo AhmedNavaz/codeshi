@@ -312,7 +312,7 @@ export async function runClaude(config, { event, approval, question = null, meta
     }
     // Claude only sums a run up in its result, and a run that is stopped, as at a handoff, never gets one. Its messages each
     // carry their own usage, so what they add up to is kept until then, marked as a partial count.
-    const seenUsage = new Map();
+    const seenUsage = new Map(), subagents = subagentUsage();
     let lastModelUsage = null;
     const countMessage = ({ id, usage }) => {
       if (!id || !usage) return;
@@ -321,12 +321,13 @@ export async function runClaude(config, { event, approval, question = null, meta
         const reported = [...seenUsage.values()].map(item => item[key]).filter(value => typeof value === 'number' && Number.isFinite(value));
         return reported.length ? reported.reduce((total, value) => total + value, 0) : undefined;
       };
-      metadata({ usage: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cache_read_input_tokens: sum('cache_read_input_tokens'), cache_creation_input_tokens: sum('cache_creation_input_tokens'), partial: true,
+      metadata({ usage: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cache_read_input_tokens: sum('cache_read_input_tokens'), cache_creation_input_tokens: sum('cache_creation_input_tokens'), partial: true, ...subagents.reading(),
         ...(lastModelUsage ? { modelUsage: lastModelUsage, pendingUsage: { inputTokens: sum('input_tokens'), outputTokens: sum('output_tokens'), cacheReadInputTokens: sum('cache_read_input_tokens'), cacheCreationInputTokens: sum('cache_creation_input_tokens') } } : {}) } });
     };
     for await (const received of stream) {
       const message = received.type === 'result' && received.permission_denials?.length ? { ...received, permission_denials: received.permission_denials.filter(denial => !declined.has(denial.tool_use_id)) } : received;
       if (message.type === 'assistant' && message.message) {
+        subagents.add(message);
         countMessage(message.message);
         const reading = !message.parent_tool_use_id && !message.agent_id && claudeRequestContext(message.message.usage);
         if (reading) metadata({ contextUsage: { ...reading, model: message.message.model || null } });
@@ -337,7 +338,7 @@ export async function runClaude(config, { event, approval, question = null, meta
       if (message.context_usage && !message.parent_tool_use_id) metadata({ contextUsage: { used: message.context_usage.total_tokens, capacity: message.context_usage.raw_max_tokens,
         model: message.context_usage.model, source: 'claude-context-report', estimated: true, windowKind: 'compaction-policy-or-model' } });
       if (message.type === 'result') {
-        metadata({ ...(message.modelUsage ? { effectiveModel: Object.keys(message.modelUsage).join(', ') || 'unknown' } : {}), ...(message.usage || message.modelUsage ? { usage: { ...message.usage, ...(message.modelUsage ? { modelUsage: message.modelUsage } : {}) } } : {}), costUSD: message.total_cost_usd });
+        metadata({ ...(message.modelUsage ? { effectiveModel: Object.keys(message.modelUsage).join(', ') || 'unknown' } : {}), ...(message.usage || message.modelUsage ? { usage: { ...message.usage, ...(message.modelUsage ? { modelUsage: message.modelUsage } : {}), ...subagents.reading() } } : {}), costUSD: message.total_cost_usd });
         lastModelUsage = message.modelUsage || null;
         seenUsage.clear();
       }
@@ -347,6 +348,24 @@ export async function runClaude(config, { event, approval, question = null, meta
     if (expired) throw stuck();
   } catch (error) { throw expired ? stuck() : error; }
   finally { waitNoLonger(); close(); clearInterval(timer); }
+}
+// What Claude's subagents reported in their own messages over a whole run (#84). A subagent's messages name the tool call
+// that started it, and a message streamed more than once counts once. Only what reached Codeshi is counted, so it is a
+// lower bound, and nothing here is added to the run's total: Claude's own total already includes its subagents.
+export function subagentUsage() {
+  const seen = new Map(), agents = new Set();
+  return {
+    add(message) {
+      const parent = message.parent_tool_use_id || message.agent_id, id = message.message?.id, usage = message.message?.usage;
+      if (!parent || !id || !usage) return;
+      seen.set(id, usage); agents.add(parent);
+    },
+    reading() {
+      if (!seen.size) return {};
+      const sum = key => { const values = [...seen.values()].map(usage => usage[key]).filter(value => typeof value === 'number' && Number.isFinite(value)); return values.length ? values.reduce((a, b) => a + b, 0) : undefined; };
+      return { delegated: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens'), cache_read_input_tokens: sum('cache_read_input_tokens'), cache_creation_input_tokens: sum('cache_creation_input_tokens'), messages: seen.size, agents: agents.size } };
+    },
+  };
 }
 // Claude's to-do list becomes the run's plan instead of tool activity.
 function withoutTodos(message, todoIds, event) {

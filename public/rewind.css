@@ -12,8 +12,6 @@
 }
 .rewind-dialog[open] { display: flex; flex-direction: column; }
 .rewind-dialog::backdrop { background: var(--backdrop); }
-.rewind-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 12px 12px 20px; border-bottom: 1px solid var(--border); }
-.rewind-dialog h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 600; }
 #rewind-meta { margin: 3px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 #rewind-meta:empty { display: none; }
 .rewind-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 20px 16px; }
@@ -55,7 +53,6 @@
 .messages-rewound .text-link { font-size: 12px; }
 .message-rewound { opacity: .5; }
 .rewind-error { margin: 0; padding: 0 20px 10px; color: var(--danger); font-size: 12.5px; }
-.rewind-footer { display: flex; align-items: center; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
 .rewind-note { margin-right: auto; color: var(--muted); font-size: 12px; }
 
 .timeline-panel { overflow: hidden; }

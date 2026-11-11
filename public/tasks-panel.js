@@ -14,6 +14,20 @@
   // Whole seconds first, so a time never reads as 36m 60s.
   const duration = ms => { const seconds = Math.max(1, Math.round(ms / 1000)); if (seconds < 3600) return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`; const minutes = Math.round(seconds / 60); return `${Math.floor(minutes / 60)}h ${minutes % 60}m`; };
   const compact = value => value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e4 || (value >= 1e3 && value % 1000 === 0) ? `${Math.round(value / 1e3)}k` : value >= 1e3 ? `${(value / 1e3).toFixed(1)}k` : String(value);
+  // Claude's model IDs read as names: claude-haiku-5-5 is Haiku 5.5. Anything else shows as reported.
+  const modelText = id => { const match = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(id); return match ? `${match[1][0].toUpperCase()}${match[1].slice(1)} ${match[2]}.${match[3]}` : id; };
+  const fresh = usage => ['input', 'output', 'cacheWrite'].some(key => typeof usage?.[key] === 'number') ? (usage.input || 0) + (usage.output || 0) + (usage.cacheWrite || 0) : null;
+  // What Claude reported by model and by subagent (#84). Both are already inside the totals, never added to them.
+  function splitLines(usage) {
+    const lines = [], models = Object.entries(usage?.byModel || {}).map(([id, measured]) => [id, fresh(measured)]).sort((a, b) => (b[1] ?? -1) - (a[1] ?? -1));
+    if (models.length > 1) {
+      const covered = usage.splitRuns < usage.runsWithTokens ? `, from ${usage.splitRuns} of ${usage.runsWithTokens} runs` : '';
+      lines.push(`Claude by model${covered}: ${models.map(([id, tokens]) => `${modelText(id)} ${tokens === null ? 'not reported' : compact(tokens)}`).join(' · ')} new tokens. A second model is usually Claude Code’s own small helper calls, or a subagent.`);
+    }
+    const sub = usage?.delegated, subTokens = fresh(sub);
+    if (sub && subTokens !== null) lines.push(`Subagents: at least ${compact(subTokens)} new tokens${sub.agents ? ` from ${plural(sub.agents, 'subagent')}` : ''}, ${sub.included ? 'already in the total' : 'not in the total, which counts only Claude’s main turn'}.`);
+    return lines;
+  }
   const read = () => { try { return localStorage.getItem(PANEL_KEY) || 'agents'; } catch { return 'agents'; } };
   const remember = value => { try { localStorage.setItem(PANEL_KEY, value); } catch { /* A convenience only. */ } };
   const conversation = () => api.getState().conversation;
@@ -64,7 +78,9 @@
     for (const [role, measured] of Object.entries(task.roles || {})) {
       card.append(node('p', 'panel-muted', `${roleNames[role] || role}: ${plural(measured.runs, 'run')} · ${duration(measured.workingMs)} · ${usageText(measured.usage)}`));
     }
-    if (task.roles?.assessment || task.roles?.review) card.append(node('p', 'panel-muted', 'These calls are included in the total. Provider-internal planning, summaries and delegated work cannot be separated by role.'));
+    const split = splitLines(task.usage);
+    for (const line of split) card.append(node('p', 'panel-muted', line));
+    if (task.roles?.assessment || task.roles?.review || split.length) card.append(node('p', 'panel-muted', `${task.roles?.assessment || task.roles?.review ? 'These calls are included in the total. ' : ''}Summaries an agent writes within its own turn can’t be separated, and Codex and Gemini report one total per turn.`));
     // A plan's planning run and each step are tasks of their own; this adds the whole plan up (#84).
     const plan = task.plan && (ledger?.plans || []).find(item => item.id === task.plan.id);
     if (plan) {

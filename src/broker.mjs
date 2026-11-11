@@ -9,7 +9,7 @@ import { isAgy, agyUnsupported } from './gemini.mjs';
 import { resolveBinary } from './resolve-binary.mjs';
 import { fileURLToPath } from 'node:url';
 import { prepareContext, emptyContext, validateContext, continuationRequest } from './context.mjs';
-import { classifyError, capabilities, accountStatus } from './providers.mjs';
+import { classifyError, capabilities, accountStatus, subagentUsage } from './providers.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
 import { RunCheckpoints } from './checkpoints.mjs';
 import { normalizeUsage, readLedger, summarizePlans, taskIdentity, taskResult } from './task-ledger.mjs';
@@ -1281,6 +1281,8 @@ export class Broker extends EventEmitter {
     for (const id of toolIds) if (!run.seenTools.has(id)) { run.seenTools.add(id); if (run.c.activeRun) run.c.activeRun.toolCount = run.seenTools.size; }
     this.touch(run, phase);
     const { c, provider } = run;
+    // Claude's command line can start subagents, whose messages carry their own usage (#84).
+    if (provider === 'claude' && c.activeRun?.transport === 'cli' && event.type === 'assistant') (run.subagents ||= subagentUsage()).add(event);
     if (provider === 'claude' && c.activeRun?.transport === 'cli' && event.type === 'assistant' && !event.parent_tool_use_id && !event.agent_id) {
       const reading = claudeRequestContext(event.message?.usage);
       if (reading) this.record(c, { type: 'run_metadata', metadata: { contextUsage: reading } });
@@ -1387,7 +1389,7 @@ export class Broker extends EventEmitter {
     if (event.type === 'system' && event.subtype === 'init' && event.model) this.record(c, { type: 'run_metadata', metadata: { effectiveModel: event.model } });
     if (event.type === 'result') {
       if (c.activeRun?.transport === 'cli' && (event.usage || event.modelUsage)) {
-        this.record(c, { type: 'run_metadata', metadata: { usage: { ...event.usage, ...(event.modelUsage ? { modelUsage: event.modelUsage } : {}) }, ...(typeof event.total_cost_usd === 'number' ? { costUSD: event.total_cost_usd } : {}) } });
+        this.record(c, { type: 'run_metadata', metadata: { usage: { ...event.usage, ...(event.modelUsage ? { modelUsage: event.modelUsage } : {}), ...run.subagents?.reading() }, ...(typeof event.total_cost_usd === 'number' ? { costUSD: event.total_cost_usd } : {}) } });
         this.budget.check(run);
       }
       run.terminalSuccess = event.subtype === 'success' && !event.is_error;

@@ -46,7 +46,7 @@
 .plan-node-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .plan-node-number { flex: none; min-width: 16px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .plan-node-state, .plan-node-tier { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
-.plan-node[data-status=running] .plan-node-state { color: var(--accent); }
+.plan-node[data-status=running] .plan-node-state { color: var(--link); }
 .plan-node:is([data-status=complete], [data-status=integrated], [data-status=kept]) .plan-node-state { color: var(--success); }
 .plan-node:is([data-status=failed], [data-status=blocked], [data-status=lost]) .plan-node-state { color: var(--danger); }
 .plan-node-title { color: var(--text-strong); font-weight: 500; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }

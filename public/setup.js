@@ -25,6 +25,20 @@
     $('setup-progress').textContent = completed ? 'Review' : `${step + 1} of ${steps.length}`;
     $('open-setup').setAttribute('aria-label', completed ? 'Review setup and app defaults' : `Getting started, step ${step + 1} of ${steps.length}`);
   }
+  // Said to a screen reader without moving focus: results that arrive after the step was read.
+  function say(message) { const region = $('setup-announce'); if (region) region.textContent = message; }
+  // A step is rebuilt whenever a choice changes, which would drop keyboard focus. Each control has a key that survives
+  // the rebuild, so focus returns to the same control.
+  function focusKey(el) {
+    if (!el || !['BUTTON','SUMMARY'].includes(el.tagName) || !(el.closest('#setup-content') || el.closest('#setup-steps'))) return '';
+    const data = el.dataset || {}, provider = el.closest('.setup-agent')?.dataset.provider || '', choice = data.view || data.mode || data.appearance || '';
+    return [el.className,choice,provider,choice || el.className === 'setup-agent-select' ? '' : el.textContent].join('|');
+  }
+  function refocus(key, host) {
+    if (!key) return;
+    const match = [...$('setup-steps').querySelectorAll('button'),...host.querySelectorAll('button'),...host.querySelectorAll('summary')].find(el => focusKey(el) === key && !el.disabled);
+    (match || host.querySelector('.setup-ready') || host.querySelector('.onboarding-step-title'))?.focus();
+  }
   function error(message = '') { $('setup-error').textContent = message; $('setup-error').hidden = !message; }
   async function perform(fn) {
     if (busy) return; busy = true; error(); controls();
@@ -82,9 +96,9 @@
     }
   }
   function renderStep() {
-    const version = ++revision, host = $('setup-content'), entering = shownStep !== step; shownStep = step;
+    const version = ++revision, host = $('setup-content'), entering = shownStep !== step, held = entering ? '' : focusKey(document.activeElement); shownStep = step;
     host.replaceChildren(); host.classList.toggle('entering',entering); host.dataset.step = String(step); $('setup-steps').replaceChildren();
-    steps.forEach((title,index) => { const entry = button('',()=>move(index),'setup-step'); entry.append(node('span',undefined,'setup-step-bar'),node('span',title,'setup-step-label')); entry.setAttribute('aria-current',index === step ? 'step' : 'false'); entry.dataset.complete = String(index < step); $('setup-steps').append(entry); });
+    steps.forEach((title,index) => { const entry = button('',()=>move(index),'setup-step'); entry.append(node('span',undefined,'setup-step-bar'),node('span',title,'setup-step-label')); entry.setAttribute('aria-current',index === step ? 'step' : 'false'); entry.dataset.complete = String(index < step); if (index < step) entry.setAttribute('aria-label',title + ', done'); $('setup-steps').append(entry); });
     $('setup-next').textContent = step < last ? 'Continue' : reviewing ? 'Done' : 'Finish';
     $('setup-step-status').textContent = `Step ${step + 1} of ${steps.length}`;
     $('close-setup').textContent = reviewing ? 'Close' : 'Skip for now';
@@ -93,7 +107,7 @@
     if (step === STEP.style) workingStyle(host);
     if (step === STEP.agents) agents(host);
     if (step === STEP.defaults) preferencesStep(host,version);
-    if (entering) heading.focus();
+    if (entering) heading.focus(); else refocus(held,host);
   }
   function agents(host) {
     connectionSignature = connectionState();
@@ -107,17 +121,17 @@
       const select = button('',()=>{draft.provider=provider;draft.model=null;draft.effort=null;render();},'setup-agent-select'); select.setAttribute('aria-pressed',String(selected));
       select.append(node('i',undefined,'agent-icon '+provider),node('strong',providerName(provider)),node('span',selected ? 'Starts the conversation' : 'Start with this agent','setup-selection'));
       const [state,label] = api.getState().accountsChecking?.[provider] || !account && !check ? ['checking','Checking…'] : !account ? ['unknown',check.failure === 'timeout' ? 'Check timed out' : 'Not verified'] : !account.installed ? ['missing','Not installed'] : account.authenticated === true ? ['ready','Connected' + (plan ? ' · ' + titleCase(plan) : '')] : account.authenticated === false ? ['signin','Sign-in needed'] : ['unknown','Not verified'];
-      const status = node('span',label,'setup-account-state'); status.dataset.state = state; status.dataset.connected = String(account?.authenticated === true);
+      const status = node('span',label,'setup-account-state'); status.dataset.state = state; status.dataset.connected = String(account?.authenticated === true); status.id = 'setup-account-' + provider; select.setAttribute('aria-describedby',status.id);
       const billingNote = account?.installed === false
         ? (provider === 'gemini' ? `Connect Gemini through Google Antigravity` : `Install ${providerName(provider)} on ${computer}`)
         : account?.billingSource === 'subscription' ? (account.authMode === 'google-oauth' ? 'Uses your Google account allowance' : 'Uses your subscription') : account?.billingSource === 'api' ? 'Detected API billing' : 'Billing not reported yet';
       card.append(select,status,node('p',billingNote,'setup-billing'));
       if (account?.installed && account.authenticated !== true) card.append(button('Connect ' + providerName(provider),async()=>{
         const result = await api.post(`/api/providers/${provider}/connect`,{},null), url = result.authUrl || result.url;
-        card.append(node('p',result.message || 'Finish signing in with the provider, then refresh.','setup-billing'));
+        const message = result.message || 'Finish signing in with the provider, then refresh.'; card.append(node('p',message,'setup-billing')); say(message);
         if (url) card.append(button('Open sign-in page',()=>openLink(url)));
       }));
-      if (provider === 'gemini' && account?.source !== 'antigravity-acp') card.append(button('Install Google connection',async()=>{ card.append(node('p','Downloading the official Google connection…','setup-billing')); await api.post('/api/providers/gemini/install',{},null); await api.refreshAccounts({force:true}); render(); }));
+      if (provider === 'gemini' && account?.source !== 'antigravity-acp') card.append(button('Install Google connection',async()=>{ card.append(node('p','Downloading the official Google connection…','setup-billing')); say('Downloading the official Google connection…'); await api.post('/api/providers/gemini/install',{},null); await api.refreshAccounts({force:true}); render(); }));
       if (account?.installed === false) card.append(button(`How to install ${providerName(provider)}`,()=>openLink(installGuides[provider])));
       cards.append(card);
     }
@@ -188,13 +202,13 @@
       const kinds = [...new Set([...KINDS.filter(([file]) => names.has(file)).map(([,kind]) => kind), ...extra])];
       return { name: folder.displayName || folder.name, path: folder.path, available: folder.available !== false && Boolean(listing), git: repo?.available ? `Git · ${repo.branch}${repo.totalChanges ? ` · ${repo.totalChanges} change${repo.totalChanges === 1 ? '' : 's'}` : ' · no changes'}` : 'Not a Git repository', tracked: Boolean(repo?.available), kinds };
     }));
-    if (createdId === projectId && revision === version) { readiness = rows; render(); }
+    if (createdId === projectId && revision === version) { readiness = rows; render(); say(rows.map(row => [row.name,row.available ? row.git : 'Folder not found',...row.kinds].join(', ')).join('. ')); }
   }
   function workspace(host, version) {
     const count = api.getState().projects.length;
     host.append(node('p','A workspace is one project: one or more folders, such as a frontend and a backend, with one conversation for all of them. Agents work only inside its folders.','setup-description'));
     if (createdId) {
-      host.append(node('p',`${created} is ready.`,'setup-ready'));
+      const done = node('p',`${created} is ready.`,'setup-ready'); done.tabIndex = -1; host.append(done);
       const list = node('ul',undefined,'setup-readiness'); list.setAttribute('aria-label','Folders in ' + created);
       if (!readiness) { list.append(node('li','Checking the folders…','setup-footnote')); inspect(createdId,version); }
       else for (const row of readiness) {

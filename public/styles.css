@@ -31,7 +31,7 @@ summary::-webkit-details-marker { display: none; }
   height: var(--control-md); padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius);
   font-size: var(--font-ui-md); font-weight: 500; white-space: nowrap;
 }
-:is(.panel-dialog-foot, .compact-dialog .form-actions, .memory-dialog .form-actions) :is(.primary-button, .secondary-button) { height: var(--control-lg); padding: 0 14px; }
+:is(.panel-dialog-foot, .compact-dialog .form-actions, .remove-workspace-dialog .form-actions, .context-confirm footer, .review-body > .review-actions:last-child) :is(.primary-button, .secondary-button) { height: var(--control-lg); padding: 0 14px; }
 .primary-button { color: var(--on-accent); background: var(--accent); }
 .primary-button:hover:enabled { background: var(--accent-strong); }
 .secondary-button { color: var(--text); background: transparent; border-color: var(--border-strong); }
@@ -132,10 +132,10 @@ summary::-webkit-details-marker { display: none; }
 .remove-workspace { display: flex; align-items: center; gap: 6px; min-height: 24px; margin: 0 0 5px 26px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; }
 .remove-workspace::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-close) center / 14px no-repeat; mask: var(--icon-close) center / 14px no-repeat; }
 .remove-workspace:hover:enabled { color: var(--danger); background: var(--danger-bg); }
-.remove-workspace-dialog { width: min(440px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow); }
+.remove-workspace-dialog { width: min(440px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .remove-workspace-dialog::backdrop { background: var(--backdrop); }
 .remove-workspace-dialog h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
-.remove-workspace-dialog p { margin: 14px 0 20px; color: var(--muted); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.remove-workspace-dialog p { margin: 10px 0 18px; color: var(--muted); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .remove-workspace-dialog strong { color: var(--text-strong); }
 .remove-workspace-dialog .project-error { color: var(--danger); }
 .remove-workspace-dialog .form-actions { justify-content: flex-end; }
@@ -398,7 +398,7 @@ details[open] > summary > .disclosure-chevron, .activity-entry.open .activity-ou
 .activity-output-toggle { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; min-height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; }
 .activity-output-toggle:hover:enabled { color: var(--text); background: var(--hover); }
 div.activity-output-toggle { cursor: default; }
-.activity-view-image { flex: none; color: var(--accent); font-size: 11.5px; }
+.activity-view-image { flex: none; color: var(--link); font-size: 11.5px; }
 .activity-entry-title { flex: none; max-width: 100%; overflow: hidden; color: var(--text); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .activity-entry-detail { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); }
@@ -588,13 +588,13 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .context-compact:is([data-meter-state="preparing"], [data-meter-state="native"]) { background: var(--hover); color: var(--text); }
 .context-compact:is([data-meter-state="preparing"], [data-meter-state="native"]) .context-compact-glyph { animation: context-compact-breathe 1.8s ease-in-out infinite; }
 @keyframes context-compact-breathe { 50% { opacity: .5; transform: scale(.85); } }
-.context-confirm { width: min(430px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
+.context-confirm { width: min(430px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 20px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .context-confirm::backdrop { background: var(--backdrop); backdrop-filter: blur(4px); }
-.context-confirm-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.context-confirm-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .context-confirm-icon { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-raised); color: var(--muted); }
 .context-confirm-icon .icon { width: 20px; height: 20px; }
 .context-confirm-agent { display: block; margin-bottom: 3px; font-size: 11px; color: var(--muted); }
-.context-confirm h2 { margin: 0; color: var(--text-strong); font-size: 17px; line-height: 1.3; font-weight: 600; letter-spacing: -.02em; }
+.context-confirm h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); line-height: 1.35; font-weight: 600; }
 .context-reading { display: grid; gap: 9px; margin-bottom: 18px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
 .context-reading-line { display: flex; justify-content: space-between; gap: 16px; font-size: 11px; color: var(--muted); }
 .context-reading-line strong { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -604,8 +604,7 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .context-confirm .context-confirm-continuity { margin: 14px 0; }
 .context-confirm-note { color: var(--muted); }
 .context-confirm-repeat { padding: 8px 10px; border-left: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 0 6px 6px 0; }
-.context-confirm footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 22px; }
-.context-confirm footer button { border-radius: 8px; height: 32px; }
+.context-confirm footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 @media (prefers-reduced-motion: reduce) {
   .context-meter > span { transition: none; }
   .context-compact .context-compact-glyph { animation: none; }
@@ -830,9 +829,7 @@ button.commit-hash:hover { text-decoration: underline; }
 }
 .import-dialog[open] { display: flex; flex-direction: column; }
 .import-dialog::backdrop, #workbench::backdrop { background: var(--backdrop); }
-.import-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 12px 14px 20px; border-bottom: 1px solid var(--border); }
-.import-dialog h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
-.import-dialog header p { max-width: 720px; margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.import-dialog header p { max-width: 720px; }
 .import-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px 10px 20px; border-bottom: 1px solid var(--border); }
 .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius); background: var(--chip-bg); }
 .segmented button { height: 24px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -884,7 +881,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .import-message-heading strong { color: var(--text-strong); font-size: 12px; font-weight: 600; }
 .import-message-heading > span { min-width: 0; overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .import-message p { margin: 4px 0 0 18px; color: var(--text); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.import-dialog > footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px; padding: 12px 20px; border-top: 1px solid var(--border); }
+.import-dialog > footer { justify-content: space-between; flex-wrap: wrap; gap: 10px 20px; }
 .import-destination { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; font-size: 12px; }
 .import-destination > span { color: var(--muted); }
 .import-destination > strong { color: var(--text-strong); font-weight: 600; }
@@ -901,10 +898,7 @@ button.commit-hash:hover { text-decoration: underline; }
 /* Export dialog */
 .export-dialog { width: min(560px, calc(100vw - 32px)); max-width: none; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .export-dialog::backdrop { background: var(--backdrop); }
-.export-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 12px 14px 20px; border-bottom: 1px solid var(--border); }
-.export-dialog h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
-.export-dialog header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.export-body { display: grid; gap: 14px; padding: 16px 20px; }
+.export-body { display: grid; gap: 14px; padding: 14px 20px; }
 .export-options { display: grid; gap: 10px; }
 .export-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text); font-size: 12px; font-weight: 500; }
 .export-field select { height: 28px; padding: 0 8px; border: 1px solid var(--input-border); border-radius: 5px; background-color: var(--surface-input); color: var(--text); font-size: 12px; }
@@ -923,7 +917,6 @@ button.commit-hash:hover { text-decoration: underline; }
 .export-warning { color: var(--warning); }
 .export-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .export-dialog .project-error { margin: 0 20px 12px; }
-.export-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
 .import-dialog .agent-icon.file { color: var(--link); -webkit-mask-image: var(--icon-file); mask-image: var(--icon-file); }
 .import-toolbar .secondary-button { height: 28px; }
 .import-toolbar .secondary-button .icon { width: 14px; height: 14px; }
@@ -937,8 +930,8 @@ button.commit-hash:hover { text-decoration: underline; }
 }
 .diff-dialog[open] { display: flex; flex-direction: column; }
 .diff-dialog::backdrop { background: var(--backdrop); }
-.diff-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 12px 10px 20px; border-bottom: 1px solid var(--border); }
-.diff-dialog h2 { margin: 0; color: var(--text-strong); font: 600 13px/1.5 var(--mono); overflow-wrap: anywhere; }
+/* The title is a file path, so it keeps the code font. */
+.diff-dialog .panel-dialog-head h2 { font: 600 13px/1.5 var(--mono); overflow-wrap: anywhere; }
 #diff-meta { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 .diff-added { color: var(--success); font-family: var(--mono); }
 .diff-removed { color: var(--danger); font-family: var(--mono); }
@@ -1013,7 +1006,7 @@ button.commit-hash:hover { text-decoration: underline; }
   .import-layout { display: flex; flex-direction: column; }
   .import-list-pane { min-height: 140px; max-height: 40%; border-right: 0; border-bottom: 1px solid var(--border); }
   .import-preview-pane { flex: 1; min-height: 0; padding: 0 14px 12px; }
-  .import-dialog > footer { padding: 12px 14px; }
+  .import-dialog > footer { padding-left: 14px; padding-right: 14px; }
   .import-actions { margin-left: 0; justify-content: space-between; width: 100%; }
 }
 
@@ -1041,7 +1034,7 @@ button.commit-hash:hover { text-decoration: underline; }
 #workspace-permissions-reset { margin-top: 8px; }
 
 /* A workspace waiting for approval shows how many requests, even while another workspace is open. */
-.workspace-approval-badge { flex: none; min-width: 17px; margin-left: auto; padding: 0 5px; border-radius: 9px; background: var(--warning); color: var(--bg); font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center; }
+.workspace-approval-badge { flex: none; min-width: 17px; margin-left: auto; padding: 0 5px; border-radius: 9px; background: var(--warning); color: var(--bg); font-size: var(--font-ui-xs); font-weight: 700; line-height: 17px; text-align: center; }
 .approval-highlight { animation: highlight-pulse 1.8s ease-out; }
 
 /* Prompts queued to run after the current work (#32). */
@@ -1326,14 +1319,19 @@ button.commit-hash:hover { text-decoration: underline; }
 .results-foot { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .results-tasks .text-link { font-size: 11px; }
 
-/* Dialogs for the rare forms: limits, adding skills, and the full brief. */
+/* One layout for every dialog. The head holds the title, an optional line under it and the close button; the body
+   scrolls; the foot holds the actions on the right, with a link or note on the left. A dialog that only asks a
+   question (remove a workspace, refresh context) has no head or foot: the same 20px padding and the same buttons. */
 .panel-dialog { width: min(520px, calc(100vw - 48px)); max-height: calc(100vh - 64px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .panel-dialog[open] { display: flex; flex-direction: column; }
 .panel-dialog > form { display: contents; }
 .panel-dialog::backdrop { background: var(--backdrop); }
 .panel-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex: none; padding: 16px 12px 12px 20px; border-bottom: 1px solid var(--border); }
-.panel-dialog-head h2 { margin: 0 0 3px; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
-.panel-dialog-head p { margin: 0; }
+.panel-dialog-head > div { min-width: 0; }
+.panel-dialog-head h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
+.panel-dialog-head p { margin: 3px 0 0; color: var(--muted); font-size: var(--font-ui-sm); line-height: 1.5; }
+.panel-dialog-head p:empty { display: none; }
+.panel-dialog-head > .icon-button { flex: none; }
 .panel-dialog-body { min-height: 0; overflow: auto; padding: 14px 20px; }
 .panel-dialog-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; padding: 10px 20px 14px; border-top: 1px solid var(--border); }
 .panel-dialog-foot .text-link { margin-right: auto; }
@@ -1343,12 +1341,9 @@ button.commit-hash:hover { text-decoration: underline; }
 .limits-agents { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 0; padding: 0; border: 0; }
 .limits-agents legend { margin-bottom: 6px; padding: 0; color: var(--muted); font-size: 12px; }
 .limit-agent { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-size: 12px; }
-.memory-dialog { width: min(480px, calc(100vw - 48px)); padding: 18px 20px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); }
-.memory-dialog::backdrop { background: var(--backdrop); }
-.memory-dialog h2 { margin: 0 0 4px; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
+.memory-dialog { width: min(480px, calc(100vw - 48px)); }
 .memory-fields { display: flex; gap: 12px; margin: 10px 0; }
 .memory-fields select { height: 28px; padding: 0 6px; border: 1px solid var(--input-border); border-radius: var(--radius); background: var(--surface-input); color: var(--text); font: inherit; font-size: 12px; }
-.memory-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .memory-copy-dialog { width: min(560px, calc(100vw - 48px)); }
 #brief-memory .panel-section-foot { display: flex; gap: 12px; }
 .memory-copy-choices { margin: 10px 0 0; padding: 0; border: 0; min-width: 0; }

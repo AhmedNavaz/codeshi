@@ -12,16 +12,18 @@
   const changed = () => window.dispatchEvent(new CustomEvent('relay-project-review'));
   const dialog = node('dialog', 'project-review-dialog'); dialog.id = 'project-review-dialog';
   dialog.setAttribute('aria-labelledby', 'project-review-title');
-  const head = node('div', 'project-review-head'), title = node('h2', null, 'Run and review your project'); title.id = 'project-review-title';
-  const closeButton = button('Close', close); head.append(title, closeButton);
-  const intro = node('p', 'project-review-intro', 'Your agent maps how to run your project, whether it is a website, backend, tool or a set of services. Choose a profile to run it and review the result.');
+  // The head every dialog shares: the title and a line under it on the left, the close button on the right.
+  const head = node('header', 'panel-dialog-head'), heading = node('div'), title = node('h2', null, 'Run and review your project'); title.id = 'project-review-title';
+  const intro = node('p', null, 'Your agent maps how to run your project, whether it is a website, backend, tool or a set of services. Choose a profile to run it and review the result.');
+  const closeButton = button('', close, 'icon-button project-review-close'); closeButton.setAttribute('aria-label', 'Close'); closeButton.title = 'Close';
+  heading.append(title, intro); head.append(heading, closeButton);
   const content = node('div', 'project-review-content');
   const edit = node('div', 'project-review-edit'), label = node('label', null, 'What should change in this launch flow?');
   label.setAttribute('for', 'project-review-request');
   const input = node('textarea'); input.id = 'project-review-request'; input.rows = 2; input.placeholder = 'For example: use the staging API, or MongoDB is already running locally'; input.maxLength = 2000;
   const ask = button('Ask agent to update', () => configure(input.value));
   edit.append(label, input, ask, node('p', 'project-review-hint', 'Your agent prepares the changes in the background. You can keep working in chat.'));
-  dialog.append(head, intro, content, edit); document.body.append(dialog);
+  dialog.append(head, content, edit); document.body.append(dialog);
   let dialogSignature = '';
 
   function close() { dialog.close(); if (focusBefore?.isConnected) focusBefore.focus(); }

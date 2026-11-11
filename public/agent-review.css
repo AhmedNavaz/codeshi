@@ -1,12 +1,11 @@
-.review-dialog { width: min(850px, calc(100vw - 40px)); max-height: calc(100vh - 70px); padding: 0; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
+.review-dialog { width: min(850px, calc(100vw - 40px)); max-height: calc(100vh - 70px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .review-dialog::backdrop { background: var(--backdrop); }
-.review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 24px 24px 16px; }
-.review-heading h2 { margin: 6px 0 8px; color: var(--text-strong); font-size: 22px; font-weight: 600; letter-spacing: -.5px; }
-.review-heading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.review-tabs { display: flex; gap: 20px; padding: 0 24px; border-bottom: 1px solid var(--border); }
+.review-tabs { display: flex; gap: 20px; padding: 0 20px; border-bottom: 1px solid var(--border); }
 .review-tabs button { padding: 12px 0; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font-size: 12px; }
 .review-tabs button[aria-pressed=true] { border-bottom-color: var(--accent); color: var(--text-strong); }
-.review-body { padding: 20px 24px 24px; }
+.review-body { padding: 14px 20px 16px; }
+/* The actions that end a review dialog sit in the shared foot, across the body's padding. */
+.review-body > .review-actions:last-child { margin: 14px -20px -16px; padding: 10px 20px 14px; border-top: 1px solid var(--border); }
 .review-pair { margin: 0 0 20px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-strong); font-size: 12px; }
 .review-label { display: block; margin-bottom: 8px; color: var(--text-strong); font-size: 12px; font-weight: 500; }
 #review-goal { display: block; width: 100%; min-height: 70px; padding: 10px 12px; resize: vertical; border: 1px solid var(--input-border); border-radius: 6px; background: var(--surface-input); color: var(--text); font: 13px/1.6 var(--font); }
@@ -25,7 +24,7 @@
 .review-preview details, .review-scope { margin: 8px 0; border: 1px solid var(--border); border-radius: 6px; }
 .review-preview summary, .review-scope summary { padding: 10px 12px; font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
 .review-preview pre, .review-scope pre, .review-raw pre { max-height: 300px; margin: 0; padding: 12px; overflow: auto; background: var(--surface-input); font: 11px/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.review-error { margin: 12px 24px 0; padding: 10px 12px; border: 1px solid var(--danger); border-radius: 6px; color: var(--danger); font-size: 12px; line-height: 1.6; }
+.review-error { margin: 12px 20px 0; padding: 10px 12px; border: 1px solid var(--danger); border-radius: 6px; color: var(--danger); font-size: 12px; line-height: 1.6; }
 .review-result-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .review-result-heading h3 { margin: 0; color: var(--text-strong); font-size: 15px; }
 .review-result-meta, .review-result-summary { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
@@ -56,7 +55,7 @@
   .review-panel { position: fixed; z-index: 30; inset: 0 0 var(--statusbar-height) auto; width: min(340px, 80vw); box-shadow: var(--shadow-lg); }
 }
 .source-line.review-line { background: var(--hover); outline: 1px solid var(--accent); }
-@media (max-width: 650px) { .review-heading { padding: 18px 16px 12px; } .review-tabs { padding: 0 16px; } .review-body { padding: 16px; } .review-error { margin: 12px 16px 0; } }
+
 
 .github-context-dialog { width: min(520px, calc(100vw - 40px)); }
 .github-context-dialog[open] { display: flex; flex-direction: column; }

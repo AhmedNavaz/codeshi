@@ -155,6 +155,85 @@ test('Claude pipeline totals include auxiliary models once, with per-run deltas 
   assert.equal(missingBaseline.runs[0].usage.input, null, 'An unobserved earlier session cannot be attributed to this run.');
 });
 
+test('Claude usage is split by model per run across a resumed session, beside the total and never added to it (#84)', () => {
+  const model = (input, output, write = 5) => ({ inputTokens: input, outputTokens: output, cacheReadInputTokens: 20, cacheCreationInputTokens: write, thinkingTokens: 0, costUSD: 0.01 });
+  const first = { modelUsage: { 'claude-sonnet-5-5': model(100, 10), 'claude-haiku-5-5': model(200, 2, 0) } };
+  const second = { modelUsage: { 'claude-sonnet-5-5': model(150, 15), 'claude-haiku-5-5': model(260, 3, 0), 'claude-opus-5-5': model(40, 4) } };
+  const records = [
+    submission('first', 0), metadata(1, { usage: first }), end(1),
+    submission('next', 2, { context: { sessionMode: 'resumed' }, task: { id: 'first', parentRunId: 'first', relation: 'continuation' } }), metadata(3, { usage: second }), end(3),
+  ];
+  const { runs, tasks } = ledgerFromRecords(records);
+  assert.deepEqual(runs[0].usage.byModel['claude-haiku-5-5'], { input: 200, output: 2, cacheRead: 20, cacheWrite: 0, reasoning: 0 });
+  assert.deepEqual(runs[1].usage.byModel['claude-sonnet-5-5'], { input: 50, output: 5, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, 'A resumed run counts only what each model added.');
+  assert.equal(runs[1].usage.byModel['claude-haiku-5-5'].input, 60);
+  assert.equal(runs[1].usage.byModel['claude-opus-5-5'].input, 40, 'A model new to the session starts from zero.');
+  const split = tasks[0].usage;
+  assert.equal(split.input, 450, 'The total is unchanged by the split.');
+  assert.equal(Object.values(split.byModel).reduce((sum, item) => sum + item.input, 0), split.input, 'The split adds up to the total.');
+  assert.equal(split.splitRuns, 2);
+  const c = {};
+  for (const record of records) applyBudgetRecord(c, record);
+  assert.equal(c.budgetTotals.claude.models['claude-opus-5-5'].input, 40, 'The broker\'s baseline keeps each model for the next run.');
+
+  const unknown = ledgerFromRecords([submission('resumed', 0, { context: { sessionMode: 'resumed' } }), metadata(1, { usage: second }), end(1)]);
+  assert.equal(unknown.runs[0].usage.byModel, undefined, 'Without an earlier reading, a resumed run\'s split is unknown, never the whole session.');
+  const older = normalizeUsage('claude', second, { previous: { input: 300, output: 12, cacheRead: 40, cacheWrite: 5, reasoning: 0 } });
+  assert.equal(older.byModel, undefined, 'A baseline saved before per-model readings leaves the split unknown.');
+  assert.equal(older.input, 150);
+  const stopped = normalizeUsage('claude', { input_tokens: 5, partial: true, modelUsage: first.modelUsage, pendingUsage: { inputTokens: 5 } });
+  assert.equal(stopped.byModel, undefined, 'A stopped run\'s extra messages are not attributed to a model.');
+  const codex = normalizeUsage('codex', { total: { inputTokens: 100, cachedInputTokens: 10, outputTokens: 5 } });
+  assert.equal(codex.byModel, undefined);
+
+  const combined = combineUsage([split, sumUsage([normalizeUsage('codex', { total: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 1 } })])]);
+  assert.equal(combined.splitRuns, 2, 'A plan or role total keeps how many runs the split covers.');
+  assert.equal(combined.runsWithTokens, 3);
+  assert.equal(combined.byModel['claude-haiku-5-5'].input, 260);
+});
+
+test('Claude subagent messages are counted once each as a lower bound, and both Claude connections report them (#84)', async () => {
+  const seen = [], usage = (input, output) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: 0, cache_creation_input_tokens: 10 });
+  const modelUsage = { 'claude-sonnet-5-5': { inputTokens: 500, outputTokens: 50, cacheReadInputTokens: 0, cacheCreationInputTokens: 30, thinkingTokens: 0, costUSD: 0.1 } };
+  async function* queryImpl() {
+    yield { type: 'assistant', parent_tool_use_id: null, message: { id: 'main', content: [], usage: usage(100, 5) } };
+    yield { type: 'assistant', parent_tool_use_id: 'task-1', message: { id: 'sub-a', content: [], usage: usage(40, 2) } };
+    yield { type: 'assistant', parent_tool_use_id: 'task-1', message: { id: 'sub-a', content: [], usage: usage(40, 3) } };
+    yield { type: 'assistant', parent_tool_use_id: 'task-2', message: { id: 'sub-b', content: [], usage: usage(60, 4) } };
+    yield { type: 'result', subtype: 'success', usage: { input_tokens: 100, output_tokens: 5 }, modelUsage };
+  }
+  await runClaude({ workspace: '/project', prompt: 'Go', mode: 'edit', bin: '/x' }, { queryImpl, event() {}, metadata: value => seen.push(value), approval: async () => false });
+  const reported = seen.filter(value => value.usage).at(-1).usage;
+  assert.deepEqual(reported.delegated, { input_tokens: 100, output_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 20, messages: 2, agents: 2 });
+  const measured = normalizeUsage('claude', reported);
+  assert.equal(measured.input, 500, 'The pipeline total already holds the subagents, so nothing is added.');
+  assert.deepEqual([measured.delegated.input, measured.delegated.output, measured.delegated.agents, measured.delegated.lowerBound, measured.delegated.included], [100, 7, 2, true, true]);
+  const mainOnly = normalizeUsage('claude', { input_tokens: 100, output_tokens: 5, delegated: reported.delegated });
+  assert.equal(mainOnly.delegated.included, false, 'A main-turn total does not include subagents, and says so.');
+  assert.equal(mainOnly.input, 100);
+  assert.equal(normalizeUsage('claude', { input_tokens: 1, delegated: { messages: 0 } }).delegated, undefined);
+  const { tasks } = ledgerFromRecords([submission('one', 0), metadata(1, { usage: reported }), end(1)]);
+  assert.deepEqual([tasks[0].usage.delegated.input, tasks[0].usage.delegated.agents, tasks[0].usage.delegated.runs], [100, 2, 1]);
+
+  // The command-line connection, where Claude can start subagents.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-subagents-'));
+  const broker = new Broker({ workspace: root, dataDir: path.join(root, 'data') }), c = broker.get(broker.create().id);
+  try {
+    broker.record(c, { type: 'run_start', id: 'cli-run', provider: 'claude' });
+    broker.record(c, { type: 'run_metadata', metadata: { transport: 'cli' } });
+    const run = { id: 'cli-run', c, provider: 'claude', mode: 'edit', approvals: new Map(), steers: new Map() };
+    broker.event(run, { type: 'assistant', message: { id: 'main', content: [], usage: usage(100, 5) } });
+    broker.event(run, { type: 'assistant', parent_tool_use_id: 'task-1', message: { id: 'sub-a', content: [], usage: usage(40, 2) } });
+    broker.event(run, { type: 'result', subtype: 'success', is_error: false, result: 'Done', usage: { input_tokens: 100, output_tokens: 5 }, modelUsage });
+    broker.record(c, { type: 'run_end', status: 'complete' });
+    const ledger = await broker.ledger(c);
+    assert.deepEqual([ledger.runs[0].usage?.delegated?.input, ledger.runs[0].usage?.delegated?.agents], [40, 1], 'The command-line connection reports subagents too.');
+  } finally {
+    await broker.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a stopped Claude follow-up retains prior pipeline work and adds only new partial messages', async () => {
   const seen = [], base = { builder: { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 20, cacheCreationInputTokens: 5, thinkingTokens: 2, costUSD: 0.1 } };
   async function* queryImpl() {

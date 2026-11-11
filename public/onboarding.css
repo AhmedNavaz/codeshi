@@ -142,7 +142,7 @@
 .theme-preview.light > i { background: #f4efe6; border-color: #e8e0d3; }
 .theme-preview.light :is(i b, .theme-preview-canvas i) { background: #e5dccd; }
 .theme-preview.light > i b:first-child { background: #d9381e; }
-.theme-preview.light .theme-preview-canvas em { color: #2b7530; }
+.theme-preview.light .theme-preview-canvas em { color: #276b2b; }
 .theme-preview.light .theme-preview-canvas small { border-color: #d9cfbf; color: #71675c; }
 /* System shows both palettes, split along the diagonal. */
 .theme-preview.dark { border-color: #353535; background: #111111; color: #d9d4cc; }
@@ -161,6 +161,7 @@
 
 /* First project */
 .setup-ready { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--success) 35%, transparent); border-radius: 12px; background: var(--success-bg); color: var(--text-strong); font-size: 13px; }
+.setup-ready:focus { outline: none; }
 .setup-ready::before { content: ""; flex: none; width: 16px; height: 16px; background: var(--success); -webkit-mask: var(--icon-check) center / contain no-repeat; mask: var(--icon-check) center / contain no-repeat; }
 .setup-start-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 .setup-start-card { display: grid; grid-template-columns: 40px 1fr; align-items: start; column-gap: 14px; row-gap: 4px; padding: 20px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--surface-raised); color: var(--text); text-align: left; cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; }

@@ -119,7 +119,8 @@ test('a routed run that changes files is checked with the saved Test command, an
   assert.equal(env.runs.length, 1, 'A model chosen by hand is not routed, so it is not checked.');
 });
 
-test('in Ultra, passing tests send the finished changes for an independent read-only review when a second subscription agent has room', { skip: scriptCLIs }, async t => {
+// An Ultra build in a Git repository with a second subscription agent, Claude, connected to review it.
+function ultraBuild(t, claudePercent = 10) {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
   execFileSync('git', ['init', '-b', 'main'], { cwd: env.workspace });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: env.workspace });
@@ -137,8 +138,14 @@ test('in Ultra, passing tests send the finished changes for an independent read-
   broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
   broker.handoff.models = async provider => ({ data: provider === 'claude' ? [{ id: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] }] : [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
 
+  broker.checks.usage = async provider => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent: provider === 'claude' ? claudePercent : 10 }] });
   broker.setRouting(c, { mode: 'ultra', check: true });
   broker.start(c, { text: 'Add promo codes', ...routed('ultra') });
+  return { broker, c };
+}
+
+test('in Ultra, passing tests send the finished changes for an independent read-only review when a second subscription agent has room', { skip: scriptCLIs }, async t => {
+  const { broker, c } = ultraBuild(t);
   await until(() => c.runs.some(run => run.review) && !broker.running && !broker.backgroundReview);
   const reviewRun = c.runs.find(run => run.review);
   assert.equal(reviewRun.provider, 'claude');
@@ -146,6 +153,18 @@ test('in Ultra, passing tests send the finished changes for an independent read-
   assert.equal(c.reviews.length, 1);
   assert.equal(c.reviews[0].provider, 'claude');
   assert.equal(c.taskBudgets[c.runs[0].taskId].reviews, 1);
+});
+
+// The reviewer is held to Ultra's own 95% line (#12), with room for a usual run, as an agent taking over a task would be.
+test('Ultra asks a reviewer only with room under its 95% handoff line for a usual run', { skip: scriptCLIs }, async t => {
+  const fits = ultraBuild(t, 90);
+  await until(() => fits.c.runs.some(run => run.review) && !fits.broker.running && !fits.broker.backgroundReview);
+  assert.equal(fits.c.runs.find(run => run.review).provider, 'claude', 'At 90%, five points under the line is room for a usual run.');
+
+  const full = ultraBuild(t, 91);
+  await until(() => full.c.runs[0]?.check?.status === 'passed' && !full.broker.running);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(full.c.runs.some(run => run.review), false, 'At 91%, a usual run would take the reviewer past the line.');
 });
 
 test('failing tests are retried once, one step up and told what failed; a retry that still fails stops there and holds the queue', { skip: scriptCLIs }, async t => {
@@ -188,11 +207,11 @@ test('Saver, or an agent near its limit, offers the retry; accepting starts it, 
   assert.deepEqual(c.runs.map(run => run.check?.status), ['failed', 'passed', undefined], 'The retry passed, so the queue resumed and its prompt ran.');
   assert.equal(c.queuePaused, null);
 
-  const busy = env.open(85), b = busy.get(busy.create().id);
+  const busy = env.open(92), b = busy.get(busy.create().id);
   busy.setRouting(b, { mode: 'smart', check: true });
   busy.start(b, { text: 'Add promo codes', ...routed('smart') });
   await until(() => b.retryOffer);
-  assert.equal(b.retryOffer.blocked, 'Codex is at 85% of its limit', 'An agent near its limit asks first, even in Smart.');
+  assert.equal(b.retryOffer.blocked, 'Codex is at 92% of its limit, past Smart’s 90% handoff line', 'An agent past its mode’s line asks first, even in Smart.');
   busy.start(b, { text: 'Hello', provider: 'codex', mode: 'edit' });
   assert.equal(b.retryOffer, null, 'A new message replaces the offer.');
   await busy.running.done;
@@ -241,7 +260,28 @@ test('unavailable or stale quota makes a failed routed check ask before retrying
   assert.match(c.retryOffer.blocked, /allowance is unknown/);
   assert.equal(c.runs.length, 1);
   broker.checks.usage = async () => ({ available: true, checkedAt: new Date(Date.now() - 3600000).toISOString(), windows: [{ usedPercent: 1 }] });
-  assert.match(await broker.checks.limited(step, 80), /allowance is stale/);
+  assert.match(await broker.checks.limited(c, { provider: 'codex', routing: { mode: 'smart', tier: 'deep' } }, step), /allowance is stale/);
+});
+
+// One line for the whole task (#12): a retry goes ahead on its own exactly while the agent could keep the task, so a
+// Smart task never pauses at 85% for a retry when the same agent would carry on working there.
+test('an automatic retry follows the mode’s handoff line at the 80, 90 and 95% boundaries', () => {
+  const checks = new RunChecks({ usageOptions: () => ({}) }), c = { runs: [] };
+  const retryAt = async (mode, usedPercent, resetsAt = null) => {
+    checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', label: '5-hour', usedPercent, resetsAt }] });
+    return checks.limited(c, { provider: 'codex', routing: { mode, tier: 'deep' } }, step);
+  };
+  return (async () => {
+    assert.equal(await retryAt('smart', 85), null, 'Smart retries under its 90% line.');
+    assert.equal(await retryAt('smart', 89.9), null);
+    assert.equal(await retryAt('smart', 90), 'Codex is at 90% of its limit, past Smart’s 90% handoff line');
+    assert.equal(await retryAt('ultra', 94), null, 'Ultra retries under its 95% line.');
+    assert.equal(await retryAt('ultra', 95), 'Codex is at 95% of its limit, past Ultra’s 95% handoff line');
+    assert.equal(await retryAt('balanced', 85), null, 'A saved Balanced task is Smart.');
+    assert.equal(await retryAt('smart', 100), 'Codex has reached its limit');
+    // Past the line in a window about to reset, what is left would expire unused, so the task's agent may spend it (#153).
+    assert.equal(await retryAt('smart', 93, new Date(Date.now() + 15 * 60000).toISOString()), null);
+  })();
 });
 
 test('through the app, the Test command saved in Project commands checks a routed run, and the retry route answers', { skip: scriptCLIs }, async t => {

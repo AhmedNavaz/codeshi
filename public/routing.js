@@ -10,7 +10,8 @@
   // Which version of these rules chose an agent. Smart results (#139) only compare tasks routed by the same version, so
   // raise it whenever route(), classify() or the mode plans change what gets chosen.
   // 2: new work and handoffs share each mode's handoff line (#12).
-  const POLICY_VERSION = 2;
+  // 3: retries, reviewers, reset resumption and plan steps use that line too, and plan steps are chosen when they start.
+  const POLICY_VERSION = 3;
   const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
   const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
   const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
@@ -445,14 +446,6 @@
       ...(spendingRemainder ? { remainder: chosen.quota.burndown ? 'expiring' : 'asked' } : {}),
     };
     return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, handoffLine: { percent: chosen.line.line, fits: chosen.line.fits }, escalation: escalate(chosen.provider, chosen.models, choice) };
-  }
-
-  // Who plans an orchestrated message: the deepest work each mode allows, under the same allowance rules as any message.
-  // Cost saving plans with a standard model rather than its lightest, since a weak plan costs more runs than it saves.
-  // A planning run is read-only, so tests never retry it.
-  function planner(options) {
-    const routed = route({ ...options, tier: 'deep' });
-    return routed.error ? routed : { ...routed, reason: 'Plans the steps', escalation: null };
   }
 
   // A plan step (Orchestrate) is routed by the tier it was planned with, which then counts instead of how its text reads.

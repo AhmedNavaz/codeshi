@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { continuationRequest } from './context.mjs';
 import '../public/routing.js';
 import { providerUsage } from './providers.mjs';
+import { usualWindowSpend } from './usage-watch.mjs';
 
 // Resuming after a usage limit (#32). When a run stops on a limit, the conversation can wait for an agent to have room
 // again and then continue the unfinished task on whichever agent is ready first, from the shared conversation.
@@ -56,7 +57,8 @@ export class ResumeScheduler {
   }
 
   // limited: agents that also reached a limit during this task, which aren't taken as ready just for reporting no usage.
-  schedule(c, { providers, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', billingConfirmed = false, limited = [], requireQuota = false, execution = null } = {}) {
+  // routing: the routed task's mode and size, so the agent it resumes on is judged by that mode's handoff line (#12).
+  schedule(c, { providers, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', billingConfirmed = false, limited = [], requireQuota = false, execution = null, routing = null } = {}) {
     if (c.lastRun?.errorCategory !== 'quota' || this.broker.running?.c.id === c.id) throw Object.assign(new Error('Waiting for a reset is available after a run stops on a usage limit.'), { status: 409 });
     const chosen = [...new Set(Array.isArray(providers) ? providers : [])].filter(provider => this.broker.availableProviders().includes(provider));
     execution ||= this.broker.execution.token(c, c.lastRun?.taskId || c.lastRun?.id);
@@ -67,7 +69,7 @@ export class ResumeScheduler {
     for (const provider of chosen) this.broker.checkRunSettings(provider, mode, approvalPolicy);
     if (c.resume) this.end(c, 'replaced');
     const at = this.now();
-    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, execution, selection: { provider: c.lastRun.provider, model: c.lastRun.model, effort: c.lastRun.effort ?? null }, delegated, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}), ...(requireQuota ? { requireQuota: true } : {}) };
+    const resume = { id: randomUUID(), createdAt: new Date(at).toISOString(), expiresAt: new Date(at + RESUME_EXPIRES_MS).toISOString(), providers: chosen, execution, selection: { provider: c.lastRun.provider, model: c.lastRun.model, effort: c.lastRun.effort ?? null }, delegated, mode, approvalPolicy, billingConfirmed: billingConfirmed === true, attempts: c.resumeAttempts || 0, ...(limited.length ? { limited } : {}), ...(requireQuota ? { requireQuota: true } : {}), ...(globalThis.relayRouting.normalizeMode(routing?.mode) ? { routing: { mode: globalThis.relayRouting.normalizeMode(routing.mode), ...(['light', 'standard', 'deep'].includes(routing.tier) ? { tier: routing.tier } : {}) } } : {}) };
     this.broker.record(c, { type: 'resume', resume });
     this.status.delete(c.id);
     this.arm(); this.tick();
@@ -129,6 +131,9 @@ export class ResumeScheduler {
           const quota = globalThis.relayRouting.assessQuota(usage, model, { now, threshold: 95 });
           state.quota = quota.state;
           if (quota.state !== 'ok') state.limited = true;
+          // A routed task resumes as any routed task is placed (#12): an agent under its mode's handoff line comes
+          // first, judged for continuing the task on the agent that ran it and for a move on any other.
+          else if (resume.routing?.mode) state.fits = globalThis.relayRouting.handoffFit(usage, model, { mode: resume.routing.mode, current: provider === resume.selection?.provider, tier: resume.routing.tier || null, usual: usualWindowSpend(c, provider), now }).fits;
         }
         // An agent that reports no usage is judged by the limit that stopped it, if it reported one.
         if (state.limited === null && (c.lastRun?.provider === provider || resume.limited?.includes(provider))) {
@@ -139,7 +144,8 @@ export class ResumeScheduler {
         const reset = Date.parse(state.resetsAt);
         status.checks.set(provider, state.limited && Number.isFinite(reset) && reset > now ? Math.min(reset + 15000, now + this.checkMs) : now + this.checkMs);
       }
-      if (!ready && state.limited !== true) ready = provider;
+      // Past the line still counts when no agent is under it: allowance short of the limit is not unusable.
+      if (state.limited !== true && (!ready || state.fits !== false && status.agents.get(ready)?.fits === false)) ready = provider;
     }
     status.nextCheckAt = status.checks.size ? Math.min(...status.checks.values()) : now + this.checkMs;
     this.broker.emit('update', { conversationId: c.id });

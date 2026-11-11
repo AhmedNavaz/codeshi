@@ -1,7 +1,10 @@
 /* Design tokens. Every component in styles.css and workbench.css reads these.
    The palette is the logo's: Graphite is Ink (warm black surfaces, cream text), Dark is a near-black take on it for low
    light and OLED screens, and Light is Paper (cream surfaces, ink text). Vermilion, the seal's colour, is the one accent, for primary actions, selection and focus. Errors use
-   crimson, so a failure never reads as the accent. */
+   crimson, so a failure never reads as the accent.
+   --accent is a fill: it is too dim for small text on dark surfaces. Text in the accent's colour, such as a running state
+   or an eyebrow, uses --link. Status text (success, warning, danger, link, muted, faint) keeps 4.5:1 on every surface a
+   badge sits on, plain and on its tint, in all three themes; test/theme-contrast.test.mjs checks it. */
 :root {
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
   --mono: "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
@@ -106,14 +109,14 @@
   --code-bg: #161513;
   --code-inline-bg: #fff4e314;
   --hover: #fff4e30f;
-  --list-active: #36322e;
+  --list-active: #302d2a;
   --chip-bg: #fff4e312;
   --border: #2c2926;
   --border-strong: #3e3a35;
   --input-border: #3e3a35;
   --text: #d6cec2;
   --text-strong: #f4ede1;
-  --muted: #aaa194;
+  --muted: #b0a79a;
   --faint: #a39a8d;
   --accent: #d9381e;
   --accent-strong: #c2301a;
@@ -135,9 +138,9 @@
   --warning: #e2c08d;
   --warning-bg: #e2c08d14;
   --warning-border: #e2c08d4d;
-  --danger: #f26b85;
-  --danger-bg: #f26b851a;
-  --danger-border: #f26b8559;
+  --danger: #f5829a;
+  --danger-bg: #f5829a1a;
+  --danger-border: #f5829a59;
   --syntax-text: #d4d4d4;
   --syntax-keyword: #569cd6;
   --syntax-string: #ce9178;
@@ -217,7 +220,7 @@
   --accent-strong: #bf3019;
   --on-accent: #ffffff;
   --focus: #d9381e;
-  --link: #b02e17;
+  --link: #a82b15;
   --selection: #f6cdbf;
   --search-match: #bf8a0040;
   --search-match-current: #f2cc60;
@@ -226,11 +229,11 @@
   --codex-bg: #0b7a6214;
   --claude: #a4552a;
   --claude-bg: #a4552a14;
-  --gemini: #1a63c7;
-  --gemini-bg: #1a63c714;
-  --success: #2b7530;
-  --success-bg: #2b753014;
-  --warning: #8a5d00;
+  --gemini: #1757b0;
+  --gemini-bg: #1757b014;
+  --success: #276b2b;
+  --success-bg: #276b2b14;
+  --warning: #805600;
   --warning-bg: #bf8a0014;
   --warning-border: #bf8a0059;
   --danger: #b51f45;

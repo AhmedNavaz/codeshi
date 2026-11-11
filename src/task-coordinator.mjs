@@ -130,13 +130,17 @@ export class TaskCoordinator {
     return task;
   }
   // An approved Orchestrate plan, each step started as its own task (#108). Every step is checked before any is recorded,
-  // and the tasks are recorded held, so a plan that can't start starts nothing. Each step gets exactly the agent, model and
-  // effort the plan showed, and the conversation's own access and permission setting, never more. Steps wait for the
+  // and the tasks are recorded held, so a plan that can't start starts nothing. A step with an agent you chose gets exactly
+  // that agent, model and effort; a step left to Auto in Flow is routed when it starts. Every step gets the conversation's
+  // own access and permission setting, never more. Steps wait for the
   // steps they depend on, and Tasks at once and the task limits decide when each starts, as for any task.
   fromPlan(c, plan, input = {}, prompt) {
     const folders = this.main.workspaceFolders, folderId = input.folderId || (folders.length === 1 ? folders[0].id : null);
     if (!folderId || !folders.some(folder => folder.id === folderId)) throw fail('Choose the folder these steps work in.', 400);
     const mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', assignments = input.assignments && typeof input.assignments === 'object' ? input.assignments : {};
+    // A step left to Auto is chosen when it starts, as any routed task is (#12): a step that waits for earlier ones may
+    // start hours later, when the usage it was shown with no longer holds. It keeps the size the plan gave it.
+    const defaults = this.main.execution.defaults(c), routed = Boolean(c.routing) && defaults.automation.routing;
     const chosen = plan.steps.map((step, index) => {
       const pick = assignments[step.id], number = index + 1;
       if (!pick || typeof pick !== 'object' || typeof pick.provider !== 'string') throw fail(`Choose an agent for step ${number}.`, 400);
@@ -146,13 +150,14 @@ export class TaskCoordinator {
       this.main.validateSelection(model, 'auto', effort);
       const allowed = this.main.budget.allows(c, provider, model);
       if (!allowed.allowed) throw fail(`Step ${number}: ${allowed.reason}`);
-      return { step, number, provider, model, effort };
+      const routing = pick.auto === true && !step.agent && routed ? { mode: defaults.routingMode, planned: step.tier, ...(c.routing.allowApi === true ? { allowApi: true } : {}) } : null;
+      return { step, number, provider, model, effort, routing };
     });
     // Each attempt has its own request IDs, so a plan that failed to start can be run again; the plan's status stops a double run.
     const ids = {}, made = [], attempt = randomUUID().slice(0, 8);
     try {
-      for (const { step, number, provider, model, effort } of chosen) {
-        const task = this.start(c, { text: prompt(step, number), title: `${number}. ${step.title}`, provider, model, effort, mode, approvalPolicy, folderId, requestId: `plan-${plan.id}-${attempt}-${step.id}`, dependsOn: step.dependsOn.map(id => ids[id]), executionRevision: input.executionRevision }, { held: true, plan: { id: plan.id, stepId: step.id, number } });
+      for (const { step, number, provider, model, effort, routing } of chosen) {
+        const task = this.start(c, { text: prompt(step, number), title: `${number}. ${step.title}`, provider, model, effort, ...(routing ? { routing } : {}), mode, approvalPolicy, folderId, requestId: `plan-${plan.id}-${attempt}-${step.id}`, dependsOn: step.dependsOn.map(id => ids[id]), executionRevision: input.executionRevision }, { held: true, plan: { id: plan.id, stepId: step.id, number } });
         ids[step.id] = task.id; made.push(task.id);
       }
     } catch (error) {

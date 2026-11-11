@@ -231,7 +231,10 @@ export class HandoffMonitor {
       const fallback = { model: to.model ?? null, effort: c.efforts[to.provider]?.[to.model || 'default'] ?? null };
       try {
         const result = await Promise.race([this.models(to.provider, this.broker.usageOptions(to.provider)), new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Timed out')), 5000); timer.unref?.(); })]);
-        return globalThis.relayRouting.routeTo(to.provider, result?.models || result?.data || result || [], { text: item.text, attachments: item.attachments?.length || 0, mode: item.routing?.mode }) || fallback;
+        // The size the prompt was queued with, not a fresh guess from its words (#12). It is still rated and routed with
+        // fresh usage when it runs; this only places it with the agent that took over.
+        const tier = item.routing?.assessment?.tier || item.routing?.tier, assessment = ['light', 'standard', 'deep'].includes(tier) ? { tier, reason: item.routing.assessment?.reason || String(item.routing.reason || '').split(' · ').find(part => part && part !== 'Moved at a handoff') || 'as queued' } : null;
+        return globalThis.relayRouting.routeTo(to.provider, result?.models || result?.data || result || [], { text: item.text, attachments: item.attachments?.length || 0, mode: item.routing?.mode, assessment }) || fallback;
       } catch { return fallback; }
     };
     try { return await this.broker.queue.move(c, { from, to, choose, ...options }); }
@@ -307,7 +310,7 @@ export class HandoffMonitor {
       const providers = await this.subscriptionAgents();
       if (this.closed || this.broker.running || c.lastRun?.id !== run.id || !this.broker.execution.allows(c, run.execution, { action: 'handoff' })) return done(true);
       if (!providers.length) return done(false);
-      this.broker.resume.schedule(c, { providers, execution: run.execution, mode: run.mode, approvalPolicy: run.approvalPolicy, limited: providers, requireQuota: true });
+      this.broker.resume.schedule(c, { providers, execution: run.execution, mode: run.mode, approvalPolicy: run.approvalPolicy, limited: providers, requireQuota: true, routing: run.routing || null });
       this.broker.message(c, 'system', `${limit}, and no other agent has confirmed room, so the task waits for a fresh allowance reading after a reset.`);
       this.broker.emit('notify', { conversationId: c.id, kind: 'waiting', title: 'Waiting for a reset', body: `${from} reached its usage limit and no other agent has room. Codeshi will continue when one does.` });
       return done(true);

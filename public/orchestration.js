@@ -104,14 +104,15 @@
 
   function route(step) {
     const routed = api.routeFor(step.instructions || step.title || 'Plan step', 0, null, { tier: step.tier, only: step.agent?.provider || null });
-    // assignment: exactly what Run as tasks sends for this step, so a step runs with the agent its row shows.
+    // assignment: what Run as tasks sends for this step. A step whose agent you chose runs with exactly that agent.
     if (!routed) {
       const p = step.agent?.provider || state().provider;
       const model = step.agent ? step.agent.model : state().model || null, effort = step.agent ? step.agent.effort : state().effort || null;
       return { provider: p, text: `${names[p] || p} · ${model || 'default model'}`, assignment: { provider: p, model: model || null, effort: effort || null } };
     }
     if (routed.error) return { provider: 'auto', text: routed.error, assignment: null };
-    return { provider: routed.provider, text: `${step.agent ? '' : 'Auto: '}${choiceText(routed)}`, assignment: { provider: routed.provider, model: routed.model || null, effort: routed.effort || null } };
+    // A step left to Auto shows what Auto would pick now; in Flow it is chosen again when it starts (#12).
+    return { provider: routed.provider, text: `${step.agent ? '' : 'Auto: '}${choiceText(routed)}`, assignment: { provider: routed.provider, model: routed.model || null, effort: routed.effort || null, ...(step.agent ? {} : { auto: true }) } };
   }
   // The plan the card shows: one still being made or edited, or one whose steps run as tasks until it is closed (#108).
   const RUN = ['running', 'stopped'];

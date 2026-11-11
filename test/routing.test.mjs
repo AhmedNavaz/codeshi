@@ -387,7 +387,7 @@ test('the broker saves the Auto mode with the workspace and records what Auto ch
   broker.start(c, { text: 'Fix the typo in the README', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light', extra: 'ignored' } });
   await broker.running.done;
   const prompt = c.messages.find(message => message.role === 'user');
-  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', policy: 2, tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
+  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', policy: globalThis.relayRouting.POLICY_VERSION, tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
   assert.deepEqual(c.lastRun.routing, { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' });
   broker.queueAction(c, { action: 'pause' });
   broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' } });

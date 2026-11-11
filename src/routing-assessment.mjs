@@ -299,8 +299,12 @@ export class RoutingDispatcher {
       };
       const attachments = input.attachments?.length || 0;
       const previousText = c.messages.findLast(message => message.role === 'user' && !message.reviewId && !message.steer && !message.rewound)?.text || c.context?.goal || '';
-      // Planning (Orchestrate, #12) gets the deepest work the mode allows, so there is nothing to rate.
-      let assessment = planning ? { tier: 'deep', effort: TIER_EFFORT.deep, reason: 'plans the steps', source: 'plan' } : globalThis.relayRouting.triage(input.text, { attachments, previous: c.lastRun?.routing?.assessment });
+      // Planning (Orchestrate, #12) gets the deepest work the mode allows, and a plan step the size it was planned with,
+      // so there is nothing to rate.
+      const planned = !planning && globalThis.relayRouting.plannedStep(input.routing.planned);
+      let assessment = planning ? { tier: 'deep', effort: TIER_EFFORT.deep, reason: 'plans the steps', source: 'plan' }
+        : planned ? { ...planned, effort: TIER_EFFORT[planned.tier], source: 'plan' }
+        : globalThis.relayRouting.triage(input.text, { attachments, previous: c.lastRun?.routing?.assessment });
       if (!assessment) {
         if (routingMode === 'saver' || policy.override && (!policy.overrideUsed || policy.override.scope === 'pinned')) {
           // Saver (#128): local rules only, no agent call; light and standard models at low effort.

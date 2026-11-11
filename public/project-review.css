@@ -1,9 +1,7 @@
-.project-review-dialog { width: min(660px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--text); background: var(--bg); box-shadow: 0 24px 80px #0006; }
-.project-review-dialog::backdrop { background: #0006; }
-.project-review-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px 8px; }
-.project-review-head h2 { margin: 0; font-size: 17px; }
-.project-review-intro { margin: 0; padding: 0 20px 14px; color: var(--muted); font-size: 13px; line-height: 1.5; }
-.project-review-content { max-height: 48vh; overflow: auto; padding: 0 20px 16px; }
+.project-review-dialog { width: min(660px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); color: var(--text); background: var(--overlay-bg); box-shadow: var(--shadow-lg); }
+.project-review-dialog::backdrop { background: var(--backdrop); }
+.project-review-close::before { content: ""; width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--icon-close) center / contain no-repeat; mask: var(--icon-close) center / contain no-repeat; }
+.project-review-content { max-height: 48vh; overflow: auto; padding: 14px 20px 16px; }
 .project-review-map { list-style: none; margin: 8px 0; padding: 0 0 0 10px; border-left: 2px solid var(--border); }
 .project-review-step { position: relative; padding: 6px 0 10px 8px; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
 .project-review-step::before { content: ''; position: absolute; left: -15px; top: 11px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }

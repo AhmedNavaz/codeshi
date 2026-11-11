@@ -5,7 +5,6 @@ import { providerUsage } from './providers.mjs';
 import { runSteps } from './recap.mjs';
 import { usualWindowSpend } from './usage-watch.mjs';
 import { workspaceBaseline } from './workspace-baseline.mjs';
-import { assessQuota } from './task-budget.mjs';
 import '../public/routing.js';
 
 // Checking routed runs with the workspace's own tests (#12, stage 2; #128). With Check with tests on, a routed run that
@@ -13,15 +12,17 @@ import '../public/routing.js';
 // command from the agent or the repository. It runs as the usual Test session, so it shows in that panel and Stop works.
 //
 // When the tests fail, routing tries once more one step up: the same agent, so it keeps its session, with a stronger
-// model or more effort, told what failed. Smart and Ultra retry on their own unless that agent is close to its limit;
-// Saver, and a retry that would go past the limit, ask first. A retry is never retried: if the tests still fail, the
-// work stops there. In Ultra, once the tests pass and a second subscription agent is connected with room, the finished
-// changes are sent for an independent read-only review (#15) within the task budget. Queued prompts wait for the check.
+// model or more effort, told what failed. Smart and Ultra retry on their own while that agent is under the mode's
+// handoff line (#12), the same line that decides whether a running task moves; Saver, and a retry past that line, ask
+// first. A retry is never retried: if the tests still fail, the work stops there. In Ultra, once the tests pass and a
+// second subscription agent has room under that line, the finished changes are sent for an independent read-only review
+// (#15) within the task budget. Queued prompts wait for the check.
 export const CHECK_LIMIT_MS = 10 * 60 * 1000;
 export const CHECK_PAUSE = 'The tests failed after the last run.';
 const OUTPUT_TAIL = 4000;
 const names = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
-const AUTOMATIC = { smart: 80, ultra: 90, balanced: 80, quality: 90 };
+// Modes that retry without asking. Saver asks first: it keeps extra work restrained (#128).
+const AUTOMATIC = new Set(['smart', 'ultra']);
 const seconds = ms => ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.floor(ms / 60000)}m ${Math.round(ms % 60000 / 1000)}s`;
 const effortName = effort => effort ? `${effort[0].toUpperCase()}${effort.slice(1)} effort` : '';
 export const stepName = step => [names[step.provider], step.modelName || step.model, effortName(step.effort)].filter(Boolean).join(' · ');
@@ -146,8 +147,11 @@ export class RunChecks {
     }
     if (!candidates.length || this.closed || this.broker.running || c.lastRun?.id !== run.id) return false;
     const goal = (c.messages.find(message => message.role === 'user' && message.runId === (run.retryOf || run.id))?.text || run.prompt || c.context?.goal || 'Review the finished changes').slice(0, 4000);
-    const choice = globalThis.relayRouting.route({ text: goal, mode: 'ultra', candidates, quotaThreshold: 90 });
-    if (choice.error || choice.quota.state !== 'ok') return false;
+    // The task's own mode and rating (#12). A reviewer is extra work on another agent, so like a handoff destination it
+    // needs room under the mode's line for a usual run; an agent past it is never asked to review.
+    const mode = globalThis.relayRouting.normalizeMode(run.routing?.mode) || 'ultra', assessment = run.routing?.assessment?.tier ? run.routing.assessment : null;
+    const choice = globalThis.relayRouting.route({ text: goal, assessment, mode, candidates });
+    if (choice.error || choice.quota.state !== 'ok' || !choice.handoffLine?.fits) return false;
     const review = { snapshot, goal, builder: run.provider, provider: choice.provider, model: choice.model || null };
     try {
       this.broker.start(c, {
@@ -201,8 +205,8 @@ export class RunChecks {
     if (run.retryOf || !step) return this.hold(c, CHECK_PAUSE, run.retryOf ? 'Tests still fail' : 'Tests failed', run.retryOf ? `They still fail after ${agent} tried again. Open the workspace to see why.` : `${agent} can’t go a step higher. Open the workspace to see what failed.`);
     // Someone started another run while the tests ran: theirs comes first, and this result stays on the timeline.
     if (this.broker.running) return;
-    const automatic = AUTOMATIC[run.routing.mode];
-    const blocked = automatic ? await this.limited(step, automatic) : null;
+    const automatic = AUTOMATIC.has(globalThis.relayRouting.normalizeMode(run.routing.mode));
+    const blocked = automatic ? await this.limited(c, run, step) : null;
     if (!this.broker.execution.allows(c, run.execution, { action: 'manual' }) || this.closed || this.broker.running) return;
     if (automatic && !blocked && this.broker.execution.allows(c, run.execution, { action: 'retry' })) {
       try { this.retry(c, run, step, command, result); return; }
@@ -213,14 +217,20 @@ export class RunChecks {
     this.hold(c, CHECK_PAUSE, 'Tests failed', `Retry with ${stepName(step)}?`);
   }
 
-  // Why an automatic retry should wait for the person: the agent has reached, or is close to, its limit.
-  async limited(step, threshold) {
+  // Why an automatic retry should wait for the person: the agent is past the mode's handoff line (#12), judged as for the
+  // task it keeps working on, or its allowance can't be confirmed. Past the line but in windows about to reset, what is
+  // left would expire unused, so the retry goes ahead as a running task would stay (#153).
+  async limited(c, run, step) {
     let usage = null;
     try { usage = await this.usage(step.provider, this.broker.usageOptions(step.provider)); } catch { return `${names[step.provider]}'s allowance could not be checked`; }
-    const quota = assessQuota(usage, step.model, { threshold });
+    const routing = globalThis.relayRouting, mode = routing.normalizeMode(run.routing.mode);
+    const fit = routing.handoffFit(usage, step.model, { mode, current: step.provider === run.provider, tier: step.tier || run.routing.tier || null, usual: usualWindowSpend(c, step.provider) });
+    if (fit.fits) return null;
+    const quota = fit.quota;
     if (quota.state === 'unknown' || quota.state === 'stale') return `${names[step.provider]}'s allowance is ${quota.state}`;
     if (quota.state === 'exhausted') return `${names[step.provider]} has reached its limit`;
-    return quota.state === 'near' ? `${names[step.provider]} is at ${Math.round(quota.usedPercent)}% of its limit` : null;
+    const used = Math.round(fit.window?.usedPercent ?? quota.usedPercent);
+    return `${names[step.provider]} is at ${used}% of its limit, past ${routing.modeNames[mode]}’s ${fit.line}% handoff line`;
   }
 
   retry(c, run, step, command, result, automatic = true) {

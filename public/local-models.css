@@ -2,17 +2,13 @@
 .local-dialog::backdrop { background: var(--backdrop); }
 .local-dialog[open] { display: flex; flex-direction: column; }
 .local-heading, .local-actions { flex-shrink: 0; }
-.local-heading { display: flex; justify-content: space-between; gap: 20px; padding: 24px 26px 18px; border-bottom: 1px solid var(--border); }
-.local-heading h2 { margin: 5px 0 8px; color: var(--text-strong); font-size: 22px; letter-spacing: -.5px; }
-.local-heading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.local-heading .local-eyebrow { color: var(--accent); font-size: 10px; letter-spacing: 1px; font-weight: 600; }
-.local-body { min-height: 0; padding: 18px 26px 8px; overflow: auto; }
+.local-heading .local-eyebrow { margin: 0 0 2px; color: var(--link); font-size: var(--font-ui-xs); letter-spacing: 1px; font-weight: 600; }
+.local-body { min-height: 0; padding: 14px 20px 8px; overflow: auto; }
 .local-status, .local-context { margin: 0 0 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); color: var(--muted); font-size: 12px; line-height: 1.65; }
 .local-field { display: grid; gap: 8px; margin: 16px 0; color: var(--text-strong); font-size: 12px; }
 .local-field select, .local-field textarea { width: 100%; border: 1px solid var(--input-border); border-radius: 6px; padding: 9px 10px; background: var(--surface-input); color: var(--text); font: 12px/1.65 var(--font); }
 .local-field textarea { min-height: 85px; resize: vertical; }
 .local-model-detail, .local-requirements { margin: 10px 0 16px; color: var(--muted); font-size: 11px; line-height: 1.7; }
-.local-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 16px 26px; border-top: 1px solid var(--border); }
 .local-actions > div { display: flex; gap: 8px; }
 .local-error { margin: 10px 0 0; padding: 10px; border: 1px solid var(--danger); border-radius: 6px; color: var(--danger); font-size: 12px; line-height: 1.6; }
 .continuation { flex-wrap: wrap; }

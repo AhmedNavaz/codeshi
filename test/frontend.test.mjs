@@ -1227,6 +1227,28 @@ test('setup resumes its saved step without importing, and failed saves keep the 
   ui.$('setup-back').click();await flush();assert.match(ui.$('setup-step-status').textContent,/4 of 4/);assert.equal(ui.$('setup-error').hidden,false);assert.match(ui.$('setup-error').textContent,/could not be written/);
 });
 
+test('setup keeps keyboard focus on a choice when the step is rebuilt, and tells a screen reader what the folders are',async()=>{
+  const ui=await browser({empty:true,existing:false,desktop:true,setup:true,insights:true}),focused=()=>ui.document.activeElement;
+  await flush();ui.document.querySelector('.onboarding-cta').click();await flush();
+  assert.equal(focused().className,'onboarding-step-title','A new step starts at its heading.');
+  ui.pickedFolders.push('/workspace/example/frontend');const zone=ui.document.querySelector('.setup-drop');zone.focus();zone.click();await flush();await flush();await flush();
+  assert.equal(focused().className,'setup-ready','With the folder button gone, focus lands on the result.');
+  assert.match(ui.$('setup-announce').textContent,/frontend, /,'The folder check is announced when it arrives.');
+  ui.$('setup-next').click();await flush();
+  assert.deepEqual(ui.$('setup-steps').children.map(entry=>entry.getAttribute('aria-label')),['Workspace, done',null,null,null]);
+  const card=view=>ui.document.querySelectorAll('.setup-style').find(entry=>entry.dataset.view===view);
+  card('flow').focus();card('flow').click();await flush();
+  assert.equal(focused(),card('flow'),'Choosing a style keeps focus on it.');assert.equal(card('flow').getAttribute('aria-checked'),'true');assert.equal(card('flow').tabIndex,0);
+  ui.$('setup-next').click();await flush();
+  const agent=name=>ui.document.querySelectorAll('.setup-agent-select').find(entry=>entry.textContent.startsWith(name));
+  agent('Claude').focus();agent('Claude').click();await flush();
+  assert.equal(focused(),agent('Claude'),'Choosing an agent keeps focus on it.');
+  assert.equal(agent('Claude').getAttribute('aria-describedby'),'setup-account-claude');assert.ok(ui.$('setup-account-claude'),'Each agent button is described by its connection status.');
+  ui.$('setup-next').click();await flush();
+  const access=mode=>ui.document.querySelectorAll('.setup-access-option').find(entry=>entry.dataset.mode===mode);
+  access('read').focus();access('read').click();await flush();
+  assert.equal(focused(),access('read'),'Choosing what agents can do keeps focus on it.');
+});
 test('onboarding finishes folder setup and the summary before discovering project conversations',async()=>{
   const ui=await browser({empty:true,existing:false,desktop:true,setup:true,insights:true}),setup=ui.$('setup-dialog');
   ui.document.querySelector('.onboarding-cta').click();await flush();

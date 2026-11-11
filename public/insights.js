@@ -138,6 +138,13 @@
     if (measured) {
       const fields = [[measured.input, 'fresh input'], [measured.cacheRead, 'cache read'], [measured.cacheWrite, 'cache write'], [measured.output, 'output']];
       metrics.push(`This run${measured.partial ? ' (partial)' : ''}: ${fields.map(([value, label]) => `${typeof value === 'number' ? value.toLocaleString() : 'unknown'} ${label}`).join(' · ')} tokens`);
+      // Claude's own split of that total (#84): by model, and what its subagents reported. Neither is added to it.
+      const fresh = usage => ['input', 'output', 'cacheWrite'].some(key => typeof usage?.[key] === 'number') ? (usage.input || 0) + (usage.output || 0) + (usage.cacheWrite || 0) : null;
+      const modelText = id => { const match = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(id); return match ? `${match[1][0].toUpperCase()}${match[1].slice(1)} ${match[2]}.${match[3]}` : id; };
+      const models = Object.entries(measured.byModel || {}).map(([id, usage]) => [id, fresh(usage)]).sort((a, b) => (b[1] ?? -1) - (a[1] ?? -1));
+      if (models.length > 1) metrics.push(`By model: ${models.map(([id, tokens]) => `${modelText(id)} ${tokens === null ? 'not reported' : tokens.toLocaleString()}`).join(' · ')} new tokens · a second model is usually Claude Code’s own helper calls, or a subagent`);
+      const sub = measured.delegated, subTokens = fresh(sub);
+      if (sub && subTokens !== null) metrics.push(`Subagents: at least ${subTokens.toLocaleString()} new tokens${sub.agents ? ` from ${sub.agents} subagent${sub.agents === 1 ? '' : 's'}` : ''} · ${sub.included ? 'included above' : 'not included above'}`);
     }
     const watch = !running && c.usageWatch?.runId === run.id ? c.usageWatch : null;
     if (typeof watch?.tokens === 'number') metrics.push(`Total: ${watch.tokens.toLocaleString()} tokens${watch.usual ? ` · usual for ${agent}: about ${watch.usual.toLocaleString()} a run, from your last ${watch.samples} runs` : ''}`);

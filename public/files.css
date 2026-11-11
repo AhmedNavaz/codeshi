@@ -20,7 +20,7 @@ select, #setup-content select, #workbench select, .git-toolbar select, .import-d
 .explorer[hidden] { display: none !important; }
 .explorer-heading { display: flex; align-items: center; flex: none; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .explorer-heading > div { flex: 1; min-width: 0; }
-.explorer-heading h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.explorer-heading h2 { margin: 0; font-size: var(--font-ui-lg); font-weight: 600; }
 .explorer-heading p { margin: 3px 0 0; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-heading .icon-button { width: 24px; height: 24px; }
 .explorer-heading .icon-button .icon { width: 14px; height: 14px; }

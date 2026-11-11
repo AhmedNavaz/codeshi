@@ -29,7 +29,7 @@
 .board-priority.high { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
 .board-priority.low { background: var(--surface-strong); color: var(--muted); }
 .board-card-state { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
-.board-card-state[data-tone=running] { color: var(--accent); }
+.board-card-state[data-tone=running] { color: var(--link); }
 .board-card-state[data-tone=attention] { color: var(--warning); font-weight: 600; }
 .board-card-state[data-tone=done] { color: var(--success); }
 .board-card-state[data-tone=trouble] { color: var(--danger); }

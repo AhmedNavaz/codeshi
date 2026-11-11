@@ -10,10 +10,9 @@
 .git-toolbar { position: relative; }
 .git-toolbar::after { content: ''; position: absolute; pointer-events: none; right: 24px; top: 17px; width: 12px; height: 12px; background: var(--muted); mask: var(--icon-chevron-down) center / contain no-repeat; -webkit-mask: var(--icon-chevron-down) center / contain no-repeat; }
 .git-toolbar select { background-image: none; }
-.compact-dialog { width: min(460px, calc(100vw - 32px)); padding: 22px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
+.compact-dialog { width: min(460px, calc(100vw - 32px)); padding: 0 20px 16px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); }
 .compact-dialog::backdrop { background: var(--backdrop); }
-.compact-dialog header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
-.compact-dialog h2 { margin: 0; color: var(--text-strong); font-size: var(--font-ui-lg); font-weight: 600; line-height: 1.35; }
+.compact-dialog > .panel-dialog-head { margin: 0 -20px 14px; }
 .compact-dialog p { font-size: 13px; line-height: 1.65; }
 .compact-dialog label { display: grid; gap: 8px; font-size: 12px; color: var(--muted); }
 .compact-dialog input { width: 100%; height: 34px; margin: 8px 0 12px; padding: 0 10px; border: 1px solid var(--input-border); border-radius: 5px; background: var(--surface-input); color: var(--text-strong); }
@@ -38,7 +37,7 @@
 .usage-provider[data-provider="codex"] .agent-icon { color: var(--codex); }
 .usage-provider[data-provider="claude"] .agent-icon { color: var(--claude); -webkit-mask-image: var(--icon-claude); mask-image: var(--icon-claude); }
 .usage-provider[data-provider="gemini"] .agent-icon { color: var(--gemini); -webkit-mask-image: var(--icon-gemini); mask-image: var(--icon-gemini); }
-.usage-plan-badge { padding: 0 6px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: 10px; line-height: 17px; text-transform: capitalize; }
+.usage-plan-badge { padding: 0 6px; border-radius: 9px; background: var(--chip-bg); color: var(--muted); font-size: var(--font-ui-xs); line-height: 17px; text-transform: capitalize; }
 .usage-window-row + .usage-window-row { margin-top: 12px; }
 .usage-window-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 12px; }
 .usage-window-label { color: var(--text); }

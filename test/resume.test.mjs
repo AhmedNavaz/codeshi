@@ -78,6 +78,30 @@ test('a run stopped on a limit waits, then continues on whichever agent resets f
   assert.equal(fs.existsSync(env.marker), false);
 });
 
+// One line for the whole task (#12): a routed task resumes as it would be placed, first on an agent under its mode's
+// handoff line. Past the line still counts when no agent is under it, so a wait never lasts longer than before.
+test('a routed task resumes first on an agent under its mode’s handoff line, and past it only when none is', { skip: scriptCLIs }, async t => {
+  const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
+  await run(broker, c, 'Quota stop', 'codex');
+  const usage = {}, clock = controlled(broker, usage);
+  const at = usedPercent => ({ available: true, checkedAt: new Date(clock.now).toISOString(), windows: [{ id: 'primary', usedPercent, resetsAt: null }] });
+  const ready = async (routing, codex, claude) => {
+    usage.codex = at(codex); usage.claude = at(claude);
+    c.resume = { id: `wait-${codex}-${claude}`, createdAt: new Date(clock.now).toISOString(), expiresAt: new Date(clock.now + RESUME_EXPIRES_MS).toISOString(), providers: ['codex', 'claude'], execution: broker.execution.token(c, c.lastRun.taskId || c.lastRun.id), selection: { provider: 'codex', model: null, effort: null }, delegated: true, requireQuota: true, ...(routing ? { routing } : {}) };
+    broker.resume.status.delete(c.id);
+    return broker.resume.firstReady(c);
+  };
+  const smart = { mode: 'smart', tier: 'standard' };
+  assert.equal(await ready(smart, 89, 10), 'codex', 'Under the line, the task stays with the agent that ran it.');
+  assert.equal(await ready(smart, 92, 50), 'claude', 'Past Smart’s 90% line, an agent with room comes first.');
+  assert.equal(await ready(smart, 92, 93), 'codex', 'With no agent under the line, allowance short of the limit is still used.');
+  assert.equal(await ready({ mode: 'ultra', tier: 'standard' }, 92, 50), 'codex', 'Ultra’s line is 95%.');
+  assert.equal(await ready({ mode: 'saver', tier: 'standard' }, 85, 50), 'claude', 'Saver’s line is 80%.');
+  assert.equal(await ready(smart, 96, 50), 'claude', 'At the 95% safety margin an agent is never resumed on.');
+  assert.equal(await ready(null, 92, 50), 'codex', 'A task that wasn’t routed keeps the earlier rule.');
+  c.resume = null;
+});
+
 test('a wait survives a restart, ends when cancelled, and gives way to a message sent by hand', { skip: scriptCLIs }, async t => {
   const env = setup(t), first = env.open(), c = first.get(first.create().id);
   await run(first, c, 'Quota stop', 'codex');
