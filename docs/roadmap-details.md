@@ -134,6 +134,8 @@ Bring the work around the code into the project conversation, so an agent sees w
 
 ## Onboarding and execution mode selection
 
+**Status:** shipped. The new setup arrived in 0.39.0, and its keyboard and screen-reader pass in 0.44.0. The scope below is kept for reference.
+
 Redesign the first-run onboarding experience ([#129](https://github.com/AhmedNavaz/codeshi/issues/129)) so users start directly with their project codebase and make an informed choice between Codeshi's two execution styles:
 1. **Workspace and folder setup first.** Rather than confronting new users with accounts, API credentials, or permissions before they have loaded a project, onboarding prompts the user to create or name their workspace and select project folder(s) upfront.
 2. **Normal vs Flow mode selection with clear comparison.** Present a visually engaging side-by-side card comparing the two core operating styles:
@@ -143,6 +145,8 @@ Redesign the first-run onboarding experience ([#129](https://github.com/AhmedNav
 3. **Persistent preference and easy toggling.** The chosen style sets the workspace's default layout, while clearly explaining that users can switch between Normal and Flow at any point with one click in the status bar or Settings.
 
 ## Interface polish, typography scale and settings structure
+
+**Status:** shipped. Themes, the text scale, workspace rows and Settings pages arrived in 0.39.0; badge contrast in every theme and one layout for every dialog in 0.44.0. The scope below is kept for reference.
 
 Enhance legibility, visual hierarchy, and navigation across the desktop interface ([#127](https://github.com/AhmedNavaz/codeshi/issues/127), [#130](https://github.com/AhmedNavaz/codeshi/issues/130)):
 1. **Typography scale upgrade.** Increase micro-font sizes across cramped UI areas: sidebar workspace items, task metrics, status bar controls, and secondary chips (scaling up from 10–11px to readable 12.5–14px).
@@ -178,6 +182,13 @@ Design boundaries:
 - Notes go into the message box for you to read; nothing is sent to an agent on its own.
 - The page never sees the notes or the boxes, and gets no access to Codeshi.
 - Models suited to design work, such as Astra and Fable, stay a manual choice in Normal. Flow's routing doesn't pick them.
+
+## Connect GitHub and move to another computer
+
+Two separate pieces, both without a Codeshi account or server. Codeshi stores nothing new in either.
+
+- **[#159, Connect GitHub](https://github.com/AhmedNavaz/codeshi/issues/159):** list your repositories and clone one as a workspace. It uses your `gh` login when present; otherwise **Sign in with GitHub** asks for read-only access and keeps the token in the system keychain.
+- **[#160, Move to another computer](https://github.com/AhmedNavaz/codeshi/issues/160):** pair two computers with a QR code and a six-digit code, review what will move, then pick each workspace's local folder, or clone it through #159. An encrypted backup file covers offline moves. Agent logins and keychain items never move, and nothing on the old computer is deleted. Ongoing sync is deferred.
 
 ## Public help requests
 

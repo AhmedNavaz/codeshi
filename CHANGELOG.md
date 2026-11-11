@@ -4,6 +4,19 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-11-11
+
+### Added
+- **Claude's usage by model** ([#84](https://github.com/AhmedNavaz/codeshi/issues/84)). Claude Code calls a small model such as Haiku for its own jobs inside most runs. Its tokens were part of the run's total but couldn't be told apart. The **Tasks** panel and a run's details now split Claude's new tokens by model, for example *Sonnet 5.5 40k · Haiku 5.5 13k*. A run in a resumed session counts only what each model added. When Claude is connected through its command line and starts subagents, a line also shows at least how many new tokens they used. Both are already inside the total and are never added to it. Codex and Gemini report one total per turn, so they have no split.
+
+### Changed
+- **One handoff line for the whole task** ([#12](https://github.com/AhmedNavaz/codeshi/issues/12)). Smart, Saver and Ultra already used their 80, 90 and 95% lines to choose an agent and to decide when a task moves. The rest of a routed task now uses the same lines. In Smart and Ultra, a retry after failed tests now asks first only from 90% (Smart) or 95% (Ultra), not from 80% or 90%. Ultra asks another agent to review only when it has room under 95% for a usual run, not under a fixed 90%. After a reset, a waiting task resumes first on an agent under its mode's line, and past it only when no agent is. A step of an Orchestrate plan left to Auto is now chosen when it starts, from fresh usage and at the size the plan gave it, rather than when you pressed **Run**. A step whose agent you chose keeps it. A queued prompt that moves at a handoff keeps the size it was rated as. Routed runs record routing policy 3, so Smart results compare them only with each other.
+- **One layout for every dialog** ([#130](https://github.com/AhmedNavaz/codeshi/issues/130)). Dialogs now share one header and one footer: the title with a short line under it, the close button at the top right, and the actions at the bottom right at one height. This covers Previous conversations, Export, Changes, Undo changes, Ask a friend, Continue locally, the review dialogs, Add from GitHub, Run and review your project, workspace and folder settings, and the memory and skill forms. Their titles follow **Text size**, and the review dialogs' close button is the same icon as everywhere else. What's New keeps its logo heading, and Settings keeps its page title.
+
+### Fixed
+- **Setup with the keyboard and a screen reader** ([#129](https://github.com/AhmedNavaz/codeshi/issues/129)). Choosing a working style, an agent or what agents can do keeps keyboard focus on that choice. After you choose folders, focus moves to the result. A screen reader hears what each folder is, each agent's connection status with its button, and which steps are done.
+- **Badges are easier to read in every theme** ([#127](https://github.com/AhmedNavaz/codeshi/issues/127)). Status text such as Working, Finished, Failed, a waiting approval or a routing mode's limit now reaches WCAG AA contrast in Light, Dark and Graphite, on selected rows and tinted cards too. Running states and labels in the accent's colour use a brighter shade of it, because vermilion itself was too dim for small text. In Graphite, selected rows are a little darker and red and grey text a little lighter. In Light, green, amber, blue and link text are a little darker. The Working badge on Flow's plans card, the approval count in the sidebar and the plan badge in usage are no longer smaller than other badges. A test now checks every badge colour against the theme it appears in.
+
 ## [0.43.0] - 2026-11-11
 
 ### Added

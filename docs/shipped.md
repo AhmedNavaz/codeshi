@@ -154,3 +154,8 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | Design notes in the preview: mark several parts of a page with a note on each ([#125](https://github.com/AhmedNavaz/codeshi/issues/125), first slice) | [0.43.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.43.0) |
 | Watch a teammate's conversation live, read-only, with suggestions ([#24](https://github.com/AhmedNavaz/codeshi/issues/24), first slice) | [0.43.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.43.0) |
 | Weather in Flow's Your space, and smaller Appearance and Stay connected rows | [0.43.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.43.0) |
+| One handoff line for retries, Ultra's reviewer, resuming after a reset and Orchestrate steps ([#12](https://github.com/AhmedNavaz/codeshi/issues/12)) | [0.44.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.44.0) |
+| Claude's usage split by model in the Tasks panel and run details ([#84](https://github.com/AhmedNavaz/codeshi/issues/84)) | [0.44.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.44.0) |
+| One header and footer layout for every dialog ([#130](https://github.com/AhmedNavaz/codeshi/issues/130)) | [0.44.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.44.0) |
+| Setup with the keyboard and a screen reader ([#129](https://github.com/AhmedNavaz/codeshi/issues/129)) | [0.44.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.44.0) |
+| Badge text that passes WCAG AA contrast in Light, Dark and Graphite ([#127](https://github.com/AhmedNavaz/codeshi/issues/127)) | [0.44.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.44.0) |
