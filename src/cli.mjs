@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline/promises';
+import tty from 'node:tty';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -119,9 +120,44 @@ export function startApp(location, { spawnImpl = spawn, env = process.env, node 
   const { ELECTRON_RUN_AS_NODE, ...appEnv } = env;
   const child = location.kind === 'bundle' ? spawnImpl('open', ['-g', '-a', location.path, '--args', '--background'], { ...quiet, env: appEnv })
     : location.kind === 'binary' ? spawnImpl(location.path, ['--background'], { ...quiet, env: appEnv })
-    : spawnImpl(node, [path.join(location.path, 'desktop', 'launch.mjs'), '--background'], { ...quiet, cwd: location.path, env: appEnv });
+    : spawnImpl(node, [path.join(location.path, 'desktop', 'launch.mjs'), '--background'], { ...quiet, windowsHide: true, cwd: location.path, env: appEnv });
   child.on?.('error', () => {});
   child.unref?.();
+}
+
+// Windows GUI executables (Codeshi.exe with ELECTRON_RUN_AS_NODE=1) lose their console standard input handle even when
+// a terminal owns standard output. Recover the console input stream so interactive sessions and approvals work.
+export function consoleInput({
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  env = process.env,
+  platform = process.platform,
+  openSync = fs.openSync,
+  fstatSync = fs.fstatSync,
+  closeSync = fs.closeSync,
+  isatty = tty.isatty,
+  ReadStream = tty.ReadStream,
+} = {}) {
+  if (platform !== 'win32' || !env.ELECTRON_RUN_AS_NODE || stdin.isTTY || (!stdout.isTTY && !stderr.isTTY)) {
+    return { stdin, close() {} };
+  }
+  try {
+    const stat = fstatSync(0);
+    if (!stat?.isCharacterDevice?.() || stat.isFIFO?.() || stat.isFile?.()) return { stdin, close() {} };
+  } catch (error) {
+    if (error?.code !== 'EBADF') return { stdin, close() {} };
+  }
+  let fd = null;
+  try {
+    fd = openSync('\\\\.\\CONIN$', 'r+');
+    if (!isatty(fd)) { closeSync(fd); return { stdin, close() {} }; }
+    const stream = new ReadStream(fd);
+    return { stdin: stream, close() { try { stream.destroy(); } catch { /* Already closed. */ } } };
+  } catch {
+    if (fd !== null) try { closeSync(fd); } catch { /* Already closed. */ }
+    return { stdin, close() {} };
+  }
 }
 
 // The open app's engine, or one started in the background for this command. A test's CODESHI_CONNECTION is never started.
@@ -197,7 +233,7 @@ export function describePending(item) {
 
 const firstLine = (text, width = 120) => { const line = String(text || '').split('\n').find(part => part.trim()) || ''; return line.length > width ? `${line.slice(0, width - 1)}…` : line; };
 
-export async function main(argv, { stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), version = '0.0.0', fetchImpl = fetch, signals = process } = {}) {
+export async function main(argv, { stdin: givenStdin, stdout = process.stdout, stderr = process.stderr, env = process.env, cwd = process.cwd(), version = '0.0.0', fetchImpl = fetch, signals = process } = {}) {
   let options;
   const say = line => { try { stderr.write(`${line}\n`); } catch { /* A closed terminal only loses progress. */ } };
   // Ctrl+C, or a closed pipe on standard output (codeshi run … | head), stops following, never the run.
@@ -210,26 +246,30 @@ export async function main(argv, { stdin = process.stdin, stdout = process.stdou
   const emit = value => out(`${JSON.stringify({ v: CLI_SCHEMA, ...value })}\n`);
   if (options.command === 'help') { out(`${HELP}\n`); return EXIT.ok; }
   if (options.command === 'version') { out(`codeshi ${version}\n`); return EXIT.ok; }
-  if (options.command === 'session') {
-    // Not a terminal on both ends (a pipe, a script): there's no one to type, so the help says what to use instead.
-    if (!stdin.isTTY || !stdout.isTTY) { out(`${HELP}\n`); return EXIT.ok; }
-    try {
-      const { session } = await import('./cli-session.mjs');
-      return await session({ options, env, cwd, version, fetchImpl, stdin, stdout, stderr });
-    } catch (error) {
-      if (!(error instanceof CliError)) throw error;
-      say(error.message); return error.code;
-    }
-  }
+  const needStdin = !givenStdin && (options.command === 'session' ? stdout.isTTY : ['run', 'continue', 'wait'].includes(options.command));
+  const recovered = needStdin ? consoleInput({ stdin: process.stdin, stdout, stderr, env }) : null;
+  const stdin = givenStdin || recovered?.stdin || process.stdin;
   const finish = (result, code) => {
     if (options.json || options.jsonl) emit(options.jsonl ? { type: 'result', ...result } : result);
     return code;
   };
-  // Ctrl+C while a run is followed stops following, never the run. Listening from the start means one pressed while the
-  // message is being sent is handled the same way, instead of ending the command with the run's start unreported.
-  const following = ['run', 'continue', 'wait'].includes(options.command);
-  if (following) signals.on?.('SIGINT', interrupt);
   try {
+    if (options.command === 'session') {
+      // Not a terminal on both ends (a pipe, a script): there's no one to type, so the help says what to use instead.
+      if (!stdin.isTTY || !stdout.isTTY) { out(`${HELP}\n`); return EXIT.ok; }
+      try {
+        const { session } = await import('./cli-session.mjs');
+        return await session({ options, env, cwd, version, fetchImpl, stdin, stdout, stderr });
+      } catch (error) {
+        if (!(error instanceof CliError)) throw error;
+        say(error.message); return error.code;
+      }
+    }
+    // Ctrl+C while a run is followed stops following, never the run. Listening from the start means one pressed while the
+    // message is being sent is handled the same way, instead of ending the command with the run's start unreported.
+    const following = ['run', 'continue', 'wait'].includes(options.command);
+    if (following) signals.on?.('SIGINT', interrupt);
+    try {
     // Stop and wait have nothing to act on when Codeshi isn't open, so they don't start it.
     const api = client(await connect({ env, start: !['stop', 'wait'].includes(options.command), say: options.json || options.jsonl ? () => {} : say }), { fetchImpl });
     const projects = await api.get('/api/projects');
@@ -355,6 +395,7 @@ export async function main(argv, { stdin = process.stdin, stdout = process.stdou
     say(error.message);
     return finish({ result: 'error', error: error.message }, error.code);
   } finally { if (following) signals.removeListener?.('SIGINT', interrupt); }
+  } finally { recovered?.close(); }
 
   function report(view, runId, { workspace, followed }) {
     const run = view.lastRun?.id === runId ? view.lastRun : (view.runs || []).find(item => item.id === runId) || null;

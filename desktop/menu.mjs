@@ -34,6 +34,11 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
   // & marks a keyboard mnemonic in Windows and Linux menus; doubled, it shows as itself.
   const text = name => mac ? name : name.replaceAll('&', '&&');
   const settings = command(t('Settings…'), ['settings'], { accelerator: 'CmdOrCtrl+,' }), setup = command(t('Setup Guide'), ['setup-guide']);
+  // The codeshi command (#90): a link in /usr/local/bin on macOS and a small launcher on the PATH on Windows. Remove is
+  // offered only for Codeshi's own. It sits in the Codeshi menu on macOS and in File on Windows.
+  const cli = !shellCommand ? [] : [shellCommand.state === 'installed'
+    ? { label: t('Remove ‘codeshi’ Command'), id: 'codeshi-command', click: () => shellCommand.uninstall() }
+    : { label: t('Install ‘codeshi’ Command…'), id: 'codeshi-command', click: () => shellCommand.install() }];
   const file = { label: t('File'), submenu: [
     command(t('New Workspace'), ['new-workspace'], { accelerator: 'CmdOrCtrl+N' }),
     command(t('Add Folder to Workspace…'), ['add-folder'], { enabled: page.workspace && !page.running }),
@@ -49,7 +54,7 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command(t('Share Live…'), ['share-live'], { enabled: page.workspace }),
     command(t('Watch a Teammate…'), ['watch-teammate']),
     separator(),
-    ...mac ? [] : [settings, separator()],
+    ...mac ? [] : [settings, ...cli, separator()],
     { role: 'close' },
     ...mac ? [] : [{ role: 'quit' }],
   ] };
@@ -85,8 +90,8 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     command(t('Continue Locally…'), ['local-models'], { enabled: page.workspace && !page.running }),
     separator(),
     command(t('Stop Run'), ['stop'], { accelerator: 'CmdOrCtrl+.', enabled: page.running }),
-    // Speech is recognized on the Mac itself; other systems get voice input later.
-    ...mac ? [command(t('Voice Input'), ['voice'], { accelerator: 'Alt+Cmd+V', enabled: page.workspace })] : [],
+    // Speech is recognized on the computer itself, on macOS and Windows (#73); Linux gets voice input later.
+    ...mac || platform === 'win32' ? [command(t('Voice Input'), ['voice'], { accelerator: mac ? 'Alt+Cmd+V' : 'Ctrl+Alt+V', enabled: page.workspace })] : [],
     // The page's Continue button continues with the same agent unless a usage limit stopped the run.
     command(page.continue ? t('Continue with {agent}', { agent: names[page.continue] }) : t('Continue with…'), ['continue'], { id: 'continue', enabled: page.continue !== null }),
     separator(),
@@ -128,10 +133,6 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     link(t('Support Codeshi on Patreon'), patreon),
     ...mac ? [] : [separator(), { role: 'about' }],
   ] };
-  // The codeshi command (#90): installed as a link in /usr/local/bin, so Remove is offered only for Codeshi's own link.
-  const cli = !mac || !shellCommand ? [] : [shellCommand.state === 'installed'
-    ? { label: t('Remove ‘codeshi’ Command'), id: 'codeshi-command', click: () => shellCommand.uninstall() }
-    : { label: t('Install ‘codeshi’ Command…'), id: 'codeshi-command', click: () => shellCommand.install() }];
   const application = { label: 'Codeshi', submenu: [{ role: 'about' }, ...updates ? [command(t('Check for Updates…'), ['check-updates'], { id: 'check-updates' })] : [], separator(), settings, setup, ...cli, separator(), { role: 'services' }, separator(), { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator(), { role: 'quit' }] };
   return [...mac ? [application] : [], file, edit, view, agent, workspace, { role: 'windowMenu' }, help];
 }

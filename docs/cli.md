@@ -12,9 +12,11 @@ Codeshi doesn't need to be open. When it isn't, the command starts it in the bac
 
 On macOS, choose **Codeshi › Install ‘codeshi’ Command…**. It links `/usr/local/bin/codeshi` to the command inside the app, and macOS asks for an administrator's password if that folder needs one. The command runs with the Node built into Codeshi, so nothing else needs installing. **Codeshi › Remove ‘codeshi’ Command** removes the link. If a `codeshi` that isn't Codeshi's is already there, it's left alone and the install says so.
 
-From a source checkout, run `bin/codeshi` (it uses the `node` on your PATH).
+On Windows, choose **File › Install ‘codeshi’ Command…**. It writes `codeshi.cmd`, a small launcher for the command inside the app, into `%LOCALAPPDATA%\Microsoft\WindowsApps`, a folder Windows keeps on your PATH, so it needs no administrator and works in Command Prompt, PowerShell and Windows Terminal windows that are already open. In Git Bash, run `codeshi.cmd`. The command runs with the Node built into Codeshi. **File › Remove ‘codeshi’ Command** removes the launcher. If you move the Codeshi folder, install the command again. A `codeshi.cmd` there that isn't Codeshi's is left alone and the install says so.
 
-Windows and Linux installs come later.
+From a source checkout, run `bin/codeshi`, or `bin\codeshi.cmd` on Windows (it uses the `node` on your PATH).
+
+A Linux install comes later.
 
 ## The session
 
@@ -154,9 +156,9 @@ Without a terminal (a script, a pipe, `--no-input`, or a message read from stand
 
 ## How it connects
 
-When Codeshi isn't open, every command but `stop` and `wait` starts it in the background first and waits up to 45 seconds for it; those two have nothing to act on. The command inside the app opens the app itself (`open -g -a Codeshi.app --args --background` on macOS); a source checkout starts `desktop/launch.mjs --background`. A started app loads no page until its window is wanted, so it costs little while it runs in the background.
+When Codeshi isn't open, every command but `stop` and `wait` starts it in the background first and waits up to 45 seconds for it; those two have nothing to act on. The command inside the app opens the app itself (`open -g -a Codeshi.app --args --background` on macOS, `Codeshi.exe --background` on Windows); a source checkout starts `desktop/launch.mjs --background`. A started app loads no page until its window is wanted, so it costs little while it runs in the background.
 
-While Codeshi runs, it writes `cli.json` in its data folder (`~/Library/Application Support/Codeshi` on macOS) with the address of its local engine, an access token made for that launch and the app's process ID. Only your user can read it, and Codeshi removes it when it quits. The command reads it, checks that the app is still running, and talks to the engine on `127.0.0.1` only. `CODESHI_CONNECTION` can name another file, for example a copy of Codeshi run from source with its own data folder.
+While Codeshi runs, it writes `cli.json` in its data folder (`~/Library/Application Support/Codeshi` on macOS, `%APPDATA%\Codeshi` on Windows) with the address of its local engine, an access token made for that launch and the app's process ID. Only your user can read it, and Codeshi removes it when it quits. The command reads it, checks that the app is still running, and talks to the engine on `127.0.0.1` only. `CODESHI_CONNECTION` can name another file, for example a copy of Codeshi run from source with its own data folder.
 
 The command never runs an engine of its own, so the app and the terminal can't both run work in a workspace.
 
@@ -166,4 +168,4 @@ The command never runs an engine of its own, so the app and the terminal can't b
 - Attaching images or files to a message from the session (paste a path instead).
 - Flow routing from the command line: a run uses the agent you name or the one picked in the app.
 - Starting tasks in their own copy, workflows (`codeshi workflow run`), `codeshi skills` and `codeshi doctor`.
-- Installing on Windows and Linux.
+- Installing on Linux.

@@ -4,7 +4,7 @@
   // Voice mode (#11). Push to talk: the microphone button or ⌥⌘V starts listening, and again stops it. What you say
   // appears in the message box as it is heard, for you to review and send; "Send when I stop talking" sends it after
   // a three-second countdown that Esc cancels. When a run you started by voice finishes, its reply is read aloud as
-  // written, without code or tables, in the system's own voice; that costs no agent usage. Speech is recognized on this Mac by Codeshi Speech; audio never leaves it.
+  // written, without code or tables, in the system's own voice; that costs no agent usage. Speech is recognized on this computer by Codeshi Speech (macOS, and Windows since #73); audio never leaves it.
   //
   // Conversation mode (#72) works hands-free, and belongs to Flow: the arrow beside the microphone there switches between
   // it and dictation. Outside Flow the microphone always dictates. The microphone stays on until you end it: saying "send" as the last word,
@@ -38,7 +38,8 @@
     status.hidden = !text; status.dataset.state = state;
     $('voice-status-text').textContent = text || '';
     // Where speech goes matters most while the microphone is on. It sits inside the status, so a screen reader hears it too.
-    if ($('voice-status-where')) $('voice-status-where').hidden = state !== 'listening';
+    // The page says "On this Mac"; on Windows speech is recognized on the PC just the same (#73).
+    if ($('voice-status-where')) { if (!mac) $('voice-status-where').textContent = t('On this PC'); $('voice-status-where').hidden = state !== 'listening'; }
     $('voice-status-actions').replaceChildren(...actions.map(([label, handler]) => { const action = node('button', label, 'text-link'); action.type = 'button'; action.addEventListener('click', handler); return action; }));
   }
   function render() {
@@ -457,10 +458,12 @@
   });
 
   // The Voice part of Settings.
-  // What macOS currently allows, in one sentence.
+  // What the system currently allows, in one sentence. Windows (#73) has one switch, for the microphone, and never asks.
   function permissions(info) {
     if (info.helper !== 'ready') return t('The speech helper is prepared the first time you use voice input.');
     if (info.error) return info.error;
+    if (!mac) return (info.microphone === 'denied' ? t('Windows isn’t letting desktop apps use the microphone.') : t('The microphone is allowed.'))
+      + (info.onDevice === false ? ' ' + t('Windows has no speech recognition installed for this language. Add it in Settings › Time & language › Language & region, under the language’s options.') : '');
     const both = [info.speech, info.microphone];
     const state = value => value === 'authorized' ? t('allowed') : value === 'not-determined' ? t('not asked yet') : t('not allowed');
     let text = both.every(value => value === 'authorized') ? t('Speech recognition and the microphone are allowed.')
@@ -476,15 +479,16 @@
     if (!kit) return;
     host.replaceChildren();
     if (support?.supported) {
-      const input = kit.group(host, t('Voice input'), t('Speak a message with {shortcut} or the microphone in the message box. Speech is recognized on this Mac by Codeshi Speech and the audio never leaves it; what you say appears in the message box for you to review.', { shortcut }));
+      const input = kit.group(host, t('Voice input'), mac ? t('Speak a message with {shortcut} or the microphone in the message box. Speech is recognized on this Mac by Codeshi Speech and the audio never leaves it; what you say appears in the message box for you to review.', { shortcut })
+        : t('Speak a message with {shortcut} or the microphone in the message box. Speech is recognized on this PC by Windows’ offline speech recognition and the audio never leaves it; what you say appears in the message box for you to review.', { shortcut }));
       const denied = [support.speech, support.microphone].includes('denied');
-      kit.row(input, { label: t('Permissions'), description: permissions(support) + (denied ? ' ' + t('To allow it, open System Settings › Privacy & Security, then Speech Recognition and Microphone, and turn on Codeshi Speech.') : ''), keywords: 'microphone speech recognition privacy' });
+      kit.row(input, { label: t('Permissions'), description: permissions(support) + (denied ? ' ' + (mac ? t('To allow it, open System Settings › Privacy & Security, then Speech Recognition and Microphone, and turn on Codeshi Speech.') : t('To allow it, open Settings › Privacy & security › Microphone, and turn on microphone access and “Let desktop apps access your microphone”.')) : ''), keywords: 'microphone speech recognition privacy' });
       kit.select(input, { label: t('Mode'), description: prefs.mode === 'conversation' ? t('Hands-free, in Flow: {shortcut} starts a conversation that keeps listening until you say “stop listening”, press Esc or click the microphone. Say “send” at the end to send. Listening pauses while Codeshi speaks. Outside Flow the microphone dictates.', { shortcut }) : t('What you say goes into the message box, and you send it. In Flow, the arrow beside the microphone also changes this.'), keywords: 'voice dictation conversation hands-free', options: [['dictation', t('Dictation')], ['conversation', t('Conversation')]], value: prefs.mode === 'conversation' ? 'conversation' : 'dictation', onChange: value => { save({ mode: value }); render(); } });
       if (prefs.mode === 'conversation') {
         kit.toggle(input, { label: t('Send after a pause'), description: t('Sends after 2 seconds of silence, without saying “send”.'), keywords: 'voice conversation automatic send silence', checked: prefs.pauseSend, onChange: value => save({ pauseSend: value }) });
         kit.select(input, { label: t('While the agent works'), description: t('Where a message you send by voice goes during a run. Approvals are read out; say “approve”, then “yes, approve”, or “deny”.'), keywords: 'voice conversation queue add to run approvals', options: [['add', t('Add it to the run when the agent allows, otherwise queue')], ['queue', t('Queue it for after the run')]], value: prefs.whileWorking === 'queue' ? 'queue' : 'add', onChange: value => save({ whileWorking: value }) });
       } else kit.toggle(input, { label: t('Send when I stop talking'), description: t('After a 3-second countdown, which Esc cancels.'), keywords: 'voice dictation automatic send', checked: prefs.sendAfter, onChange: value => save({ sendAfter: value }) });
-    } else kit.note(host, t('Voice input is available on macOS for now. Replies can still be read aloud when a run finishes.'));
+    } else kit.note(host, t('Voice input is available on macOS and Windows for now. Replies can still be read aloud when a run finishes.'));
     const aloud = kit.group(host, t('Reading aloud'));
     kit.select(aloud, { label: t('Read the reply aloud'), description: t('When a run finishes, its reply is read as written, without code or tables.'), keywords: 'speech speak voice summary reply response', options: [['voice', t('After runs I started by voice')], ['always', t('After every run')], ['never', t('Never')]], value: prefs.readAloud, onChange: value => save({ readAloud: value }) });
     if (!synth()) return;

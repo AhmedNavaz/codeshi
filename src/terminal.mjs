@@ -72,6 +72,17 @@ export function cliCommand(connection, { execPath = process.execPath, entry = CL
   // styles, which the page's security policy blocks, so the command is asked for 256 colours.
   return { file: execPath, args: [entry], env: { ELECTRON_RUN_AS_NODE: '1', CODESHI_CONNECTION: connection, CODESHI_EMBEDDED: '1', COLORTERM: '', FORCE_COLOR: '2' } };
 }
+// On Windows, Codeshi.exe / electron.exe is a GUI executable: spawned directly inside ConPTY it drops its output, so it
+// starts through cmd.exe with paths in environment variables where cmd's quote and metacharacter rules cannot corrupt them.
+export function windowsCliLaunch({ file, args = [], env = {} }, shellEnv = process.env) {
+  const comspec = shellEnv.ComSpec || path.win32.join(shellEnv.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
+  const command = ['"%CODESHI_CLI_EXEC%"', ...args.map((_, index) => `"%CODESHI_CLI_ARG_${index}%"`)].join(' ');
+  return {
+    file: comspec,
+    args: `/d /s /c "${command}"`,
+    env: { ...env, CODESHI_CLI_EXEC: file, ...Object.fromEntries(args.map((value, index) => [`CODESHI_CLI_ARG_${index}`, value])) },
+  };
+}
 
 export class TerminalSessions {
   constructor({ registry, pty = null, shell = loginShell(), stopGrace = 1500, tree = processTree, flushMs = 8, platform = process.platform, endTree = endProcessTree, cli = null } = {}) {
@@ -141,7 +152,9 @@ export class TerminalSessions {
     const { folder, cwd } = this.folder(project, folderId || project.folders[0]?.id);
     const session = this.create({ projectId, folder, cwd, size: this.size(cols, rows), place: { tabId: null, pane: 0, split: null, order: ++this.opened }, kind: 'cli', shell: 'codeshi' });
     if (existing) this.discard(existing);
-    return this.launch(session, this.cli.file, [...this.cli.args, '--workspace', projectId], this.cli.env, 'codeshi');
+    const argv = [...this.cli.args, '--workspace', projectId];
+    const target = this.platform === 'win32' ? windowsCliLaunch({ file: this.cli.file, args: argv, env: this.cli.env }) : { file: this.cli.file, args: argv, env: this.cli.env };
+    return this.launch(session, target.file, target.args, target.env, 'codeshi');
   }
 
   folder(project, folderId) {

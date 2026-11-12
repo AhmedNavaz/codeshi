@@ -9,8 +9,8 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const identity=process.env.AI_RELAY_SIGN_IDENTITY;
 // npm installs node-pty's macOS helper without its execute bit; the terminal's shell cannot start without it.
 for(const arch of ['arm64','x64']){const helper=path.join(root,'node_modules','node-pty','prebuilds',`darwin-${arch}`,'spawn-helper');if(fs.existsSync(helper))fs.chmodSync(helper,0o755);}
-// Voice input's speech helper is built for this architecture and ships inside the app (macOS only).
-if(process.platform==='darwin')console.log('Built '+await buildHelper());
+// Voice input's speech helper is built for this architecture and ships inside the app (macOS and Windows).
+if(process.platform==='darwin'||process.platform==='win32')console.log('Built '+await buildHelper());
 // The Agent SDK's bundled Claude Code binary is left out: Codeshi always runs the user's own installed Claude Code.
 // On macOS 26 and later the app icon comes from the layers in assets/AppIcon.icon, compiled by `npm run icons` into
 // assets/Assets.car so any build machine can ship them; earlier macOS versions use icon.icns. The car goes into the app

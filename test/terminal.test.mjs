@@ -5,8 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { CLI_ENTRY, MAX_SESSIONS, SCROLLBACK, TerminalSessions, cliCommand, loginShell, prepareHelper, processTree, shellArguments } from '../src/terminal.mjs';
+import { CLI_ENTRY, MAX_SESSIONS, SCROLLBACK, TerminalSessions, cliCommand, loginShell, prepareHelper, processTree, shellArguments, windowsCliLaunch } from '../src/terminal.mjs';
 import { createRelayServer } from '../src/server.mjs';
+import { writeConnection } from '../desktop/cli.mjs';
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, ms = 8000) { const end = Date.now() + ms; while (!check()) { if (Date.now() > end) throw new Error('Timed out waiting'); await wait(20); } }
@@ -55,7 +56,7 @@ test('a terminal opens the person’s login shell in the chosen folder, as a tab
 test('the CLI tab runs the codeshi command on this engine, one per workspace, apart from the shells', async t => {
   const { registry, projects } = workspaces(t), pty = fakePty();
   const cli = cliCommand('/data/cli.json', { execPath: '/Applications/Codeshi.app/Contents/MacOS/Codeshi' });
-  const sessions = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1, cli });
+  const sessions = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1, platform: 'darwin', cli });
   t.after(() => sessions.close());
   assert.equal(cliCommand(null), null, 'Without a connection file there is no CLI tab.');
   assert.equal(path.basename(CLI_ENTRY), 'codeshi.mjs');
@@ -73,10 +74,40 @@ test('the CLI tab runs the codeshi command on this engine, one per workspace, ap
   assert.equal(sessions.state('project-0').cli.id, again.id);
   await sessions.stop('project-0', again.id);
   assert.equal(sessions.state('project-0').cli, null);
-  const plain = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1 });
+  const plain = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1, platform: 'darwin' });
   t.after(() => plain.close());
   assert.throws(() => plain.start('project-0', { kind: 'cli' }), /works in the Codeshi app/);
   assert.equal(plain.state('project-0').cliAvailable, false);
+});
+
+test('on Windows, the CLI tab starts through cmd.exe with paths kept in environment variables', async t => {
+  const launch = windowsCliLaunch(
+    { file: 'C:\\Program Files\\Codeshi & Co\\Codeshi.exe', args: ['C:\\Users\\me (1)\\100%\\codeshi.mjs', '--workspace', 'ws & 1'], env: { ELECTRON_RUN_AS_NODE: '1' } },
+    { ComSpec: 'C:\\Windows\\System32\\cmd.exe' },
+  );
+  assert.equal(launch.file, 'C:\\Windows\\System32\\cmd.exe');
+  assert.equal(launch.args, '/d /s /c ""%CODESHI_CLI_EXEC%" "%CODESHI_CLI_ARG_0%" "%CODESHI_CLI_ARG_1%" "%CODESHI_CLI_ARG_2%""');
+  assert.deepEqual(launch.env, {
+    ELECTRON_RUN_AS_NODE: '1',
+    CODESHI_CLI_EXEC: 'C:\\Program Files\\Codeshi & Co\\Codeshi.exe',
+    CODESHI_CLI_ARG_0: 'C:\\Users\\me (1)\\100%\\codeshi.mjs',
+    CODESHI_CLI_ARG_1: '--workspace',
+    CODESHI_CLI_ARG_2: 'ws & 1',
+  });
+
+  const { registry } = workspaces(t), pty = fakePty();
+  const cli = cliCommand('C:\\Users\\me\\AppData\\Roaming\\Codeshi\\cli.json', { execPath: 'C:\\Program Files\\Codeshi\\Codeshi.exe' });
+  const sessions = new TerminalSessions({ registry, pty, shell: 'cmd.exe', flushMs: 1, platform: 'win32', endTree: async () => {}, cli });
+  t.after(() => sessions.close());
+  sessions.start('project-0', { kind: 'cli', cols: 100, rows: 30 });
+  const [spawned] = pty.spawned;
+  assert.match(spawned.file, /cmd\.exe$/i);
+  assert.equal(typeof spawned.args, 'string');
+  assert.equal(spawned.options.env.CODESHI_CLI_EXEC, 'C:\\Program Files\\Codeshi\\Codeshi.exe');
+  assert.equal(spawned.options.env.CODESHI_CLI_ARG_0, CLI_ENTRY);
+  assert.deepEqual([spawned.options.env.CODESHI_CLI_ARG_1, spawned.options.env.CODESHI_CLI_ARG_2], ['--workspace', 'project-0']);
+  assert.equal(spawned.options.env.ELECTRON_RUN_AS_NODE, '1');
+  assert.equal(spawned.options.env.CODESHI_EMBEDDED, '1');
 });
 
 test('a workspace keeps several shells: tabs of their own, or two panes of a tab split side by side or stacked', async t => {
@@ -296,4 +327,42 @@ test('on Windows, a real shell runs commands through the HTTP routes, and ending
     await until(() => closed);
   }
   assert.equal((await post('input', { id, data: 'dir\r' })).status, 409);
+});
+
+test('on Windows, the CLI tab runs through Electron in a real pseudo-terminal, handles commands and exits cleanly', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-cli-live-')));
+  const workspace = path.join(root, 'my & app (1)');
+  fs.mkdirSync(workspace, { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: workspace });
+  const connection = path.join(root, 'cli.json');
+  const relay = createRelayServer({ workspace, dataDir: path.join(root, '.relay-data'), accessToken: 'tok', lock: false });
+  const { default: electron } = await import('electron');
+  const sessions = new TerminalSessions({ registry: relay.registry, cli: cliCommand(connection, { execPath: electron }) });
+  t.after(async () => {
+    for (const session of sessions.sessions.values()) try { session.process?.kill?.(); } catch {}
+    await sessions.close();
+    await relay.close({ force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await new Promise(resolve => relay.server.listen(0, '127.0.0.1', resolve));
+  writeConnection(connection, { url: `http://127.0.0.1:${relay.server.address().port}`, token: 'tok', version: 'test' });
+  const [project] = relay.registry.list();
+  const started = sessions.start(project.id, { kind: 'cli', cols: 100, rows: 30 });
+  assert.equal(started.status, 'running');
+  let screen = '', exited = null;
+  const strip = value => value.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[=>]/g, '');
+  const unsubscribe = sessions.subscribe(project.id, started.id, null, event => {
+    if (event.type === 'reset' || event.type === 'data') screen += event.data;
+    if (event.type === 'exit') exited = event.session;
+  });
+  t.after(unsubscribe);
+  await until(() => /for shortcuts/.test(strip(screen)), 20000);
+  assert.match(strip(screen), /Codeshi \d+\.\d+/);
+  assert.match(strip(screen), /my & app \(1\) ⎇ main/);
+  sessions.resize(project.id, started.id, { cols: 110, rows: 32 });
+  sessions.write(project.id, started.id, '/help\r');
+  await until(() => /Commands[\s\S]*\/handoff/.test(strip(screen)), 15000);
+  sessions.write(project.id, started.id, '/exit\r');
+  await until(() => exited !== null, 15000);
+  assert.equal(exited.exitCode, 0);
 });

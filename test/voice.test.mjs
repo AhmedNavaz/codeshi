@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { VoiceSessions, buildHelper } from '../src/voice.mjs';
+import { VoiceSessions, buildHelper, helperPath, windowsCompiler } from '../src/voice.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { scriptCLIs } from './platform.mjs';
 
@@ -84,11 +84,43 @@ test('a helper that ends early keeps what it heard, and failures are reported pl
   assert.deepEqual(errors.find(event => event.type === 'error'), { type: 'error', code: 'speech-denied', message: 'Allow Codeshi Speech in System Settings.' });
 });
 
-test('other systems are told voice input is on macOS, and a language must look like one', async () => {
-  const windows = new VoiceSessions({ platform: 'win32', helper: 'Codeshi Speech' });
-  assert.deepEqual(await windows.status(), { supported: false });
-  await assert.rejects(windows.start(), /available on macOS/);
+test('other systems are told voice input is on macOS and Windows, and a language must look like one', async () => {
+  const linux = new VoiceSessions({ platform: 'linux', helper: 'Codeshi Speech' });
+  assert.deepEqual(await linux.status(), { supported: false });
+  await assert.rejects(linux.start(), /available on macOS and Windows/);
   await assert.rejects(new VoiceSessions({ platform: 'darwin', helper: 'Codeshi Speech' }).start({ locale: 'en; rm -rf /' }), /Choose a language/);
+});
+
+test('Windows has its own helper, built with the C# compiler and System.Speech that Windows carries', async () => {
+  assert.match(helperPath('x64', 'win32'), /native[\\/]bin[\\/]win32-x64[\\/]Codeshi Speech\.exe$/);
+  assert.match(helperPath('arm64', 'darwin'), /native[\\/]bin[\\/]darwin-arm64[\\/]Codeshi Speech$/);
+  assert.deepEqual(await new VoiceSessions({ platform: 'win32', helper: path.join(os.tmpdir(), 'no-such-codeshi-speech.exe') }).status(), { supported: true, helper: 'missing' });
+  const only32 = file => /\\Framework\\/.test(file);
+  assert.deepEqual(windowsCompiler({ env: { WINDIR: 'D:\\Windows' }, exists: only32 }), { compiler: 'D:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe', speech: 'D:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\WPF\\System.Speech.dll' });
+  assert.equal(windowsCompiler({ env: {}, exists: () => false }), null);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-speech-win-')), out = path.join(directory, 'Codeshi Speech.exe');
+  try {
+    const calls = [];
+    const built = await buildHelper({ platform: 'win32', out, tools: () => ({ compiler: 'csc.exe', speech: 'System.Speech.dll' }), run: (file, args, _options, done) => { calls.push([file, ...args]); fs.writeFileSync(args.find(arg => arg.startsWith('/out:')).slice(5), ''); done(null, '', ''); } });
+    assert.equal(built, out); assert(fs.existsSync(out));
+    assert.equal(calls[0][0], 'csc.exe'); assert(calls[0].includes('/r:System.Speech.dll')); assert.match(calls[0].at(-1), /native[\\/]windows[\\/]speech[\\/]Program\.cs$/);
+    await assert.rejects(buildHelper({ platform: 'win32', out, tools: () => null }), /\.NET Framework 4/);
+    await assert.rejects(buildHelper({ platform: 'win32', out, tools: () => ({ compiler: 'csc.exe', speech: 'System.Speech.dll' }), run: (_file, _args, _options, done) => done(new Error('failed'), 'Program.cs(3,1): error CS1002: ; expected', '') }), /could not be built: Program\.cs\(3,1\): error CS1002/);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('Codeshi Speech for Windows builds, and reports what Windows allows without opening the microphone', { skip: process.platform !== 'win32' || !windowsCompiler(), timeout: 300000 }, async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'throughline-speech-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const out = await buildHelper({ out: path.join(directory, 'Codeshi Speech.exe') });
+  const check = JSON.parse(execFileSync(out, ['--check']).toString().trim().split('\n').at(-1));
+  assert.equal(check.type, 'check');
+  assert(['authorized', 'denied'].includes(check.microphone));
+  assert.equal(typeof check.onDevice, 'boolean');
+  // A language Windows has no recognizer for is reported, not guessed at.
+  const unsupported = spawnSync(out, ['--locale', 'xx-YY'], { encoding: 'utf8', input: 'stop\n' });
+  assert.equal(unsupported.status, 2);
+  assert.match(unsupported.stdout, /"code":"language"/);
 });
 
 test('a copy run from source builds the helper on first use, once, and explains a missing compiler', { skip: scriptCLIs }, async t => {

@@ -156,9 +156,10 @@ test('other systems flash the taskbar button instead of bouncing an icon, with n
   assert.deepEqual(linux.labels(linux.item('Alerts').submenu),['Banners','Sounds','Flash the Taskbar Button','-','Alert Settings…']);
 });
 
-test('Voice Input is in the Agent menu on macOS, where speech is recognized on the Mac, and nowhere else yet',()=>{
+test('Voice Input is in the Agent menu on macOS and Windows, where speech is recognized on the computer, and not on Linux yet',()=>{
   const mac=menu();assert.equal(mac.item('Voice Input').accelerator,'Alt+Cmd+V');mac.item('Voice Input').click();assert.deepEqual(mac.sent,[['voice']]);
-  assert(!menu({platform:'win32'}).all.some(entry=>entry.label==='Voice Input'));
+  const windows=menu({platform:'win32'});assert.equal(windows.item('Voice Input').accelerator,'Ctrl+Alt+V');windows.item('Voice Input').click();assert.deepEqual(windows.sent,[['voice']]);
+  assert(!menu({platform:'linux'}).all.some(entry=>entry.label==='Voice Input'));
 });
 
 test('Flow disables the native Terminal menu entry', () => {

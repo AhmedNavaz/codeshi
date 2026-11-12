@@ -4,3 +4,6 @@ desktop/preview-toolbar.html text eol=lf
 
 # The codeshi launcher is a shell script, run as it is on macOS.
 bin/codeshi text eol=lf
+
+# The Windows launcher is a batch file, which cmd reads reliably only with Windows line endings.
+bin/codeshi.cmd text eol=crlf

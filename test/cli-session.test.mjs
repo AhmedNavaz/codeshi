@@ -88,17 +88,21 @@ test('when Codeshi is closed the command starts the app with no window, and wait
   assert.equal(spawned[0].command, 'open'); assert.equal(spawned[0].options.env.ELECTRON_RUN_AS_NODE, undefined, 'The app runs as an app, not as Node.');
   startApp({ kind: 'source', path: '/src/codeshi' }, { spawnImpl, env: {}, node: '/bin/node' });
   assert.deepEqual([spawned[1].command, ...spawned[1].args], ['/bin/node', path.join('/src/codeshi', 'desktop', 'launch.mjs'), '--background']);
+  assert.equal(spawned[1].options.windowsHide, true);
+  startApp({ kind: 'binary', path: 'C:\\Codeshi\\Codeshi.exe' }, { spawnImpl, env: { ELECTRON_RUN_AS_NODE: '1' } });
+  assert.deepEqual([spawned[2].command, ...spawned[2].args], ['C:\\Codeshi\\Codeshi.exe', '--background']);
+  assert.equal(spawned[2].options.windowsHide, undefined, 'A GUI executable starts without suppressing future window activation.');
   assert.throws(() => startApp(null), error => error.code === EXIT.unavailable);
 
   // Not open: started once, then found when its engine is ready.
   let reads = 0; const said = [];
   const found = await connect({ env: { HOME: '/nowhere' }, say: line => said.push(line), poll: 5, location: { kind: 'source', path: '/src/codeshi' }, spawnImpl,
     readImpl: () => { if (++reads < 3) throw Object.assign(new Error('closed'), { code: EXIT.unavailable }); return { url: 'http://127.0.0.1:1', token: 't', pid: 1, version: 1 }; } });
-  assert.equal(found.token, 't'); assert.equal(spawned.length, 3); assert.deepEqual(said, ['Starting Codeshi in the background…']);
+  assert.equal(found.token, 't'); assert.equal(spawned.length, 4); assert.deepEqual(said, ['Starting Codeshi in the background…']);
   // A connection named for a test, or start: false (stop, wait), is never started.
   await assert.rejects(connect({ env: { CODESHI_CONNECTION: '/none.json' }, spawnImpl, readImpl: () => { throw new Error('closed'); } }), /closed/);
   await assert.rejects(connect({ env: {}, start: false, spawnImpl, readImpl: () => { throw new Error('closed'); } }), /closed/);
-  assert.equal(spawned.length, 3);
+  assert.equal(spawned.length, 4);
   await assert.rejects(connect({ env: { HOME: '/nowhere' }, wait: 30, poll: 5, location: { kind: 'source', path: '/x' }, spawnImpl, readImpl: () => { throw new Error('closed'); } }), /didn't start/);
 });
 

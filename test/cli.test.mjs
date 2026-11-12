@@ -9,8 +9,8 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { scriptCLIs } from './platform.mjs';
 import { createRelayServer } from '../src/server.mjs';
-import { EXIT, chooseWorkspace, connectionCandidates, describePending, main, parseArgs, readConnection } from '../src/cli.mjs';
-import { commandState, installCommand, removeConnection, uninstallCommand, writeConnection } from '../desktop/cli.mjs';
+import { EXIT, chooseWorkspace, connectionCandidates, consoleInput, describePending, main, parseArgs, readConnection } from '../src/cli.mjs';
+import { commandState, installCommand, removeConnection, uninstallCommand, windowsCommandLink, writeConnection } from '../desktop/cli.mjs';
 import { menuTemplate } from '../desktop/menu.mjs';
 
 // The codeshi command (#90): a client of the open app's engine, tested against the real server and the mock agent.
@@ -269,12 +269,135 @@ test('the command is installed as a link to the app’s own, never over somethin
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('the Codeshi menu offers to install the command, or to remove it once installed, on macOS only', () => {
+test('on Windows the command is a launcher on the PATH for the app’s own, never over something else', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-cli-cmd-')), target = path.join(root, 'app', 'bin', 'codeshi.cmd'), link = path.join(root, 'WindowsApps', 'codeshi.cmd');
+  const on = { platform: 'win32', link, target, env: { PATH: `C:\\Windows;${path.dirname(link)}${path.sep}` } };
+  try {
+    assert.match(windowsCommandLink({ LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' }), /^C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\codeshi\.cmd$/);
+    assert.equal(commandState(on), 'missing');
+    assert.deepEqual(await installCommand(on), { installed: true, changed: true });
+    assert.equal(fs.readFileSync(link, 'utf8'), `@echo off\r\nrem Codeshi's codeshi command. Installed from Codeshi's File menu, which also removes it.\r\n"${target}" %*\r\n`);
+    assert.equal(commandState(on), 'installed');
+    assert.deepEqual(await installCommand(on), { installed: true, changed: false });
+    // Codeshi moved to another folder: its own launcher is replaced, and only the current app's is removed.
+    const moved = { ...on, target: path.join(root, 'moved', '100% new', 'codeshi.cmd') };
+    assert.equal(commandState(moved), 'other-link');
+    assert.deepEqual(await uninstallCommand(moved), { removed: false });
+    assert.deepEqual(await installCommand(moved), { installed: true, changed: true });
+    assert.match(fs.readFileSync(link, 'utf8'), /100%% new/, 'A percent sign in the folder name is written so cmd reads it as itself.');
+    assert.deepEqual(await uninstallCommand(moved), { removed: true });
+    assert.equal(commandState(on), 'missing');
+    fs.writeFileSync(link, '@echo someone else’s\r\n');
+    await assert.rejects(installCommand(on), /already exists and isn't from Codeshi/);
+    assert.deepEqual(await uninstallCommand(on), { removed: false }, 'Remove leaves what isn’t Codeshi’s.');
+    assert.equal(fs.readFileSync(link, 'utf8'), '@echo someone else’s\r\n');
+    fs.rmSync(link);
+    await assert.rejects(installCommand({ ...on, env: { PATH: 'C:\\Windows' } }), /isn't on your PATH/);
+    assert.equal(commandState(on), 'missing');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the launcher inside the Windows app runs the command with the app’s own Node and passes its exit code on', { skip: process.platform !== 'win32' && 'cmd runs it on Windows' }, async () => {
+  const launcher = fileURLToPath(new URL('../bin/codeshi.cmd', import.meta.url));
+  const text = fs.readFileSync(launcher, 'utf8');
+  assert.match(text, /\.\.\\\.\.\\\.\.\\Codeshi\.exe/); assert.match(text, /set ELECTRON_RUN_AS_NODE=1/);
+  // From a checkout there is no Codeshi.exe three folders up, so it uses the Node on the PATH: this test's own.
+  const run = args => new Promise(resolve => execFile(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${launcher}" ${args}`], { windowsVerbatimArguments: true, env: { ...process.env, PATH: `${path.dirname(process.execPath)};${process.env.PATH}` } }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr })));
+  if (path.basename(process.execPath).toLowerCase() !== 'node.exe') return;
+  const version = await run('--version');
+  assert.equal(version.code, 0); assert.match(version.stdout, /^codeshi \d+\.\d+\.\d+/);
+  const unknown = await run('no-such-command');
+  assert.equal(unknown.code, EXIT.usage); assert.match(unknown.stderr, /Unknown command/);
+});
+
+test('the menu offers to install the command, or to remove it once installed: in the Codeshi menu on macOS and File on Windows', () => {
   const calls = [], base = { packaged: true, version: '1', osVersion: '26', arch: 'arm64', appearance: 'system', keepAwake: false, send: () => {}, open: () => {} };
   const item = (platform, state) => menuTemplate({ ...base, platform, command: { state, install: () => calls.push('install'), uninstall: () => calls.push('uninstall') } }).flatMap(menu => menu.submenu || []).find(entry => entry.id === 'codeshi-command');
   item('darwin', 'missing').click(); item('darwin', 'other').click(); item('darwin', 'installed').click();
   assert.equal(item('darwin', 'missing').label, 'Install ‘codeshi’ Command…');
   assert.equal(item('darwin', 'installed').label, 'Remove ‘codeshi’ Command');
   assert.deepEqual(calls, ['install', 'install', 'uninstall']);
-  assert.equal(item('win32', 'missing'), undefined);
+  assert.equal(item('win32', 'missing').label, 'Install ‘codeshi’ Command…');
+  assert.equal(item('win32', 'installed').label, 'Remove ‘codeshi’ Command');
+  const menus = platform => menuTemplate({ ...base, platform, command: { state: 'missing', install() {}, uninstall() {} } });
+  assert(menus('win32').find(menu => menu.label === 'File').submenu.some(entry => entry.id === 'codeshi-command'));
+  assert(menus('darwin').find(menu => menu.label === 'Codeshi').submenu.some(entry => entry.id === 'codeshi-command'));
+  assert(!menus('darwin').find(menu => menu.label === 'File').submenu.some(entry => entry.id === 'codeshi-command'));
+  // Linux has no installer yet, so the app passes no command there.
+  assert.equal(menuTemplate({ ...base, platform: 'linux' }).flatMap(menu => menu.submenu || []).find(entry => entry.id === 'codeshi-command'), undefined);
+});
+
+test('on Windows in Node mode, consoleInput recovers the console input stream without replacing pipes or files', () => {
+  const original = { isTTY: false }, ttyOut = { isTTY: true }, pipeOut = { isTTY: false };
+  const charStat = { isCharacterDevice: () => true, isFIFO: () => false, isFile: () => false };
+  const pipeStat = { isCharacterDevice: () => false, isFIFO: () => false, isFile: () => false };
+  const fileStat = { isCharacterDevice: () => false, isFIFO: () => false, isFile: () => true };
+
+  // Skipped outside Windows Node-mode, or when stdin is already a TTY or no standard stream is attached to a console.
+  assert.equal(consoleInput({ stdin: original, stdout: ttyOut, stderr: ttyOut, env: { ELECTRON_RUN_AS_NODE: '1' }, platform: 'darwin' }).stdin, original);
+  assert.equal(consoleInput({ stdin: original, stdout: ttyOut, stderr: ttyOut, env: {}, platform: 'win32' }).stdin, original);
+  assert.equal(consoleInput({ stdin: { isTTY: true }, stdout: ttyOut, stderr: ttyOut, env: { ELECTRON_RUN_AS_NODE: '1' }, platform: 'win32' }).stdin.isTTY, true);
+  assert.equal(consoleInput({ stdin: original, stdout: pipeOut, stderr: pipeOut, env: { ELECTRON_RUN_AS_NODE: '1' }, platform: 'win32' }).stdin, original);
+
+  // Pipes, files and unexpected fstat errors keep the original stream.
+  for (const stub of [() => pipeStat, () => fileStat, () => { throw Object.assign(new Error('nope'), { code: 'EACCES' }); }]) {
+    let opened = false;
+    const picked = consoleInput({ stdin: original, stdout: ttyOut, stderr: ttyOut, env: { ELECTRON_RUN_AS_NODE: '1' }, platform: 'win32', fstatSync: stub, openSync: () => { opened = true; return 9; } });
+    assert.equal(picked.stdin, original); assert.equal(opened, false);
+  }
+
+  // If CONIN$ cannot be opened or isn't a TTY, fd is closed cleanly and original stdin stays.
+  const closed = [];
+  const notTty = consoleInput({ stdin: original, stdout: ttyOut, stderr: ttyOut, env: { ELECTRON_RUN_AS_NODE: '1' }, platform: 'win32', fstatSync: () => charStat, openSync: () => 42, isatty: () => false, closeSync: fd => closed.push(fd) });
+  assert.equal(notTty.stdin, original); assert.deepEqual(closed, [42]);
+  const failedOpen = consoleInput({ stdin: original, stdout: ttyOut, stderr: ttyOut, env: { ELECTRON_RUN_AS_NODE: '1' }, platform: 'win32', fstatSync: () => charStat, openSync: () => { throw new Error('ENOENT'); } });
+  assert.equal(failedOpen.stdin, original);
+
+  // On an attached Windows console (both chr and EBADF on fd 0), CONIN$ becomes a destroyable ReadStream.
+  for (const stat of [() => charStat, () => { throw Object.assign(new Error('bad fd'), { code: 'EBADF' }); }]) {
+    let destroyed = false, pathOpened = null;
+    class FakeReadStream { constructor(fd) { this.fd = fd; this.isTTY = true; } destroy() { destroyed = true; } }
+    const recovered = consoleInput({ stdin: original, stdout: pipeOut, stderr: ttyOut, env: { ELECTRON_RUN_AS_NODE: '1' }, platform: 'win32', fstatSync: stat, openSync: p => { pathOpened = p; return 77; }, isatty: fd => fd === 77, ReadStream: FakeReadStream });
+    assert.equal(pathOpened, '\\\\.\\CONIN$');
+    assert.equal(recovered.stdin.fd, 77);
+    assert.equal(recovered.stdin.isTTY, true);
+    recovered.close();
+    assert.equal(destroyed, true);
+  }
+});
+
+test('on Windows, packaged Node mode treats a console as interactive for run, while keeping pipes as pipes', { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-win-node-')));
+  const conn = path.join(root, 'cli.json');
+  const app = createRelayServer({ workspace: root, dataRoot: path.join(root, 'data'), accessToken: 'tok', lock: false });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  writeConnection(conn, { url: `http://127.0.0.1:${app.server.address().port}`, token: 'tok', version: 'test' });
+  const { default: electron } = await import('electron');
+  const { default: pty } = await import('node-pty');
+  const ptys = [];
+  t.after(async () => {
+    for (const term of ptys) try { term.kill(); } catch {}
+    await app.close({ force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const runInPty = (command, extraEnv = {}) => new Promise((resolve, reject) => {
+    let out = '';
+    const term = pty.spawn(process.env.ComSpec || 'cmd.exe', `/d /s /c "${command}"`, {
+      cols: 120, rows: 24, cwd: root,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', CODESHI_CONNECTION: conn, CLI_EXEC: electron, CLI_ENTRY: entry, ...extraEnv },
+    });
+    ptys.push(term);
+    term.onData(chunk => { out += chunk; });
+    term.onExit(({ exitCode }) => resolve({ code: exitCode, out: out.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g, '') }));
+    setTimeout(() => reject(new Error(`Timed out:\n${out}`)), 15000).unref();
+  });
+
+  const interactive = await runInPty('"%CLI_EXEC%" "%CLI_ENTRY%" run');
+  assert.equal(interactive.code, EXIT.usage);
+  assert.match(interactive.out, /Write the message after codeshi run, or pipe it in/);
+
+  const piped = await runInPty('echo. | "%CLI_EXEC%" "%CLI_ENTRY%" run');
+  assert.equal(piped.code, EXIT.usage);
+  assert.match(piped.out, /The message is empty/);
 });

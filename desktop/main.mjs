@@ -79,19 +79,20 @@ else {
         if(answer.response===0)shell.showItemInFolder(file);
       }catch(error){dialog.showErrorBox(t('The performance trace was not saved'),error?.message||String(error));}
     };
-    // Codeshi › Install 'codeshi' Command (#90): a link to bin/codeshi in this app, which runs the CLI with the app's own Node.
-    const commandTarget=path.join(root,'bin','codeshi');
+    // Install 'codeshi' Command (#90), in the Codeshi menu on macOS and File on Windows: a link to bin/codeshi in this
+    // app, or on Windows a launcher for bin\codeshi.cmd. Either runs the CLI with the app's own Node.
+    const commandTarget=path.join(root,'bin',process.platform==='win32'?'codeshi.cmd':'codeshi');
     const command=async install=>{
       const {t}=text,owner=win&&!win.isDestroyed()?win:undefined;
       try{
         const result=install?await installCommand({target:commandTarget}):await uninstallCommand({target:commandTarget});
         if(result.cancelled)return;
         await dialog.showMessageBox(owner,{type:'info',message:install?t('The codeshi command is installed'):t('The codeshi command is removed'),
-          detail:install?t('In a terminal, run codeshi in a project folder to work with your agents there. codeshi --help lists the commands for scripts. If Codeshi isn’t open, it starts in the background.'):t('Install it again from the Codeshi menu at any time.'),buttons:[t('OK')]});
+          detail:install?t('In a terminal, run codeshi in a project folder to work with your agents there. codeshi --help lists the commands for scripts. If Codeshi isn’t open, it starts in the background.'):process.platform==='darwin'?t('Install it again from the Codeshi menu at any time.'):t('Install it again from the File menu at any time.'),buttons:[t('OK')]});
       }catch(error){dialog.showErrorBox(install?t('The codeshi command was not installed'):t('The codeshi command was not removed'),error?.message||String(error));}
       updateMenu();
     };
-    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),tracing:tracer.isRecording(),recordTrace,command:process.platform==="darwin"?{state:commandState({target:commandTarget}),install:()=>command(true),uninstall:()=>command(false)}:null,
+    const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),tracing:tracer.isRecording(),recordTrace,command:process.platform==="darwin"||process.platform==="win32"?{state:commandState({target:commandTarget}),install:()=>command(true),uninstall:()=>command(false)}:null,
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
       send:(...command)=>{if(win&&!win.isDestroyed())win.webContents.send('relay:menu-command',...command);updateMenu();}})));
     app.setAboutPanelOptions({applicationName:'Codeshi',applicationVersion:app.getVersion(),version:''});
@@ -312,7 +313,7 @@ else {
       result.geminiImports=await win.webContents.executeJavaScript(`!!document.querySelector('#import-provider-select option[value="gemini"]')`);
       // The terminal's native module loads in this build and runs a shell, and its renderer loaded under the page's policy.
       result.terminal=await new Promise(resolve=>{try{prepareHelper();const shell=createRequire(import.meta.url)('node-pty').spawn(...process.platform==='win32'?[process.env.ComSpec||'cmd.exe',['/d','/c','echo terminal-ok']]:['/bin/sh',['-c','echo terminal-ok']],{name:'xterm-256color',cols:80,rows:24,cwd:os.tmpdir(),env:process.platform==='win32'?process.env:{PATH:'/usr/bin:/bin'}});let output='';shell.onData(data=>{output+=data;});shell.onExit(()=>resolve(output.includes('terminal-ok')));setTimeout(()=>resolve(false),5000);}catch(error){console.error(error);resolve(false);}});
-      // Voice input loaded, and in a packaged Mac build its speech helper is inside and answers without asking for anything.
+      // Voice input loaded, and in a packaged Mac or Windows build its speech helper is inside and answers without asking for anything.
       result.voiceUI=await win.webContents.executeJavaScript(`typeof window.relayVoice?.toggle==='function'&&!!document.getElementById('voice-input')`);
       // The status item shows in the menu bar, and an alert panel loads and shows without taking focus (#13).
       // On Windows the icon is in the notification area, with all four of its drawings loaded (#74).
@@ -362,7 +363,7 @@ else {
       }
       smokeStep('menus');
       await win.webContents.executeJavaScript(`document.documentElement.dataset.smokeTest = 'true'`);
-      if(process.platform==='darwin'&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));
+      if((process.platform==='darwin'||process.platform==='win32')&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));
       result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'&&typeof window.WebLinksAddon?.WebLinksAddon==='function'`);
       // The menu bar is Codeshi's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
       const settled=async done=>{for(let tries=0;!done()&&tries<250;tries++)await new Promise(resolve=>setTimeout(resolve,20));return done();};

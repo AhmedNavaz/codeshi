@@ -4,23 +4,42 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-// Voice input (#11): speech is recognized on this Mac by a small helper, "Codeshi Speech"
-// (native/macos/speech), with Apple's on-device recognizer. Audio never leaves the computer. One listening session
-// runs at a time; the page follows its transcript as it is heard, and listening stops when asked or after two minutes.
+// Voice input (#11, #73): speech is recognized on this computer by a small helper, "Codeshi Speech". On macOS
+// (native/macos/speech) it uses Apple's on-device recognizer; on Windows (native/windows/speech) the offline engine in
+// .NET's System.Speech. Both speak the same protocol, and audio never leaves the computer. One listening session runs
+// at a time; the page follows its transcript as it is heard, and listening stops when asked or after two minutes.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SOURCE = path.join(root, 'native', 'macos', 'speech');
+const SOURCE = path.join(root, 'native', 'macos', 'speech'), WINDOWS_SOURCE = path.join(root, 'native', 'windows', 'speech');
 export const LISTEN_LIMIT = 2 * 60 * 1000;
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 
-export const helperPath = (arch = process.arch) => path.join(root, 'native', 'bin', `darwin-${arch}`, 'Codeshi Speech');
+export const helperPath = (arch = process.arch, platform = process.platform) => path.join(root, 'native', 'bin', `${platform}-${arch}`, platform === 'win32' ? 'Codeshi Speech.exe' : 'Codeshi Speech');
 
-// Builds the helper with the Swift compiler from Xcode or its command line tools: at packaging time for the release,
-// or on first use when running from source. Its usage descriptions are embedded, and it is signed so macOS can keep
-// its permissions.
-export function buildHelper({ arch = process.arch, out = helperPath(arch), run = execFile } = {}) {
+// Windows carries a C# compiler and System.Speech in .NET Framework 4, which is part of every Windows 10 and 11.
+export function windowsCompiler({ env = process.env, exists = fs.existsSync } = {}) {
+  const base = path.win32.join(env.WINDIR || env.SystemRoot || 'C:\\Windows', 'Microsoft.NET');
+  for (const name of ['Framework64', 'Framework']) {
+    const folder = path.win32.join(base, name, 'v4.0.30319'), compiler = path.win32.join(folder, 'csc.exe'), speech = path.win32.join(folder, 'WPF', 'System.Speech.dll');
+    if (exists(compiler) && exists(speech)) return { compiler, speech };
+  }
+  return null;
+}
+
+// Builds the helper at packaging time for the release, or on first use when running from source. On macOS that takes
+// the Swift compiler from Xcode or its command line tools; the helper's usage descriptions are embedded, and it is
+// signed so macOS can keep its permissions. On Windows it takes the C# compiler Windows already has.
+export function buildHelper({ arch = process.arch, platform = process.platform, out = helperPath(arch, platform), run = execFile, tools = windowsCompiler } = {}) {
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  const exec = (file, args) => new Promise((resolve, reject) => run(file, args, { timeout: 5 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => error ? reject(Object.assign(error, { stderr: String(stderr || '') })) : resolve(String(stdout || ''))));
+  const exec = (file, args) => new Promise((resolve, reject) => run(file, args, { timeout: 5 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => error ? reject(Object.assign(error, { stderr: String(stderr || ''), stdout: String(stdout || '') })) : resolve(String(stdout || ''))));
   const temporary = `${out}.build-${process.pid}`;
+  if (platform === 'win32') {
+    const found = tools();
+    if (!found) return Promise.reject(new Error('Voice input needs .NET Framework 4, which is part of Windows, to build from source. Turn it on in Windows Features, then try again.'));
+    // The compiler reports its errors on standard output.
+    return exec(found.compiler, ['/nologo', '/optimize+', '/target:exe', '/platform:anycpu', `/r:${found.speech}`, `/out:${temporary}`, path.join(WINDOWS_SOURCE, 'Program.cs')])
+      .then(() => { fs.rmSync(out, { force: true }); fs.renameSync(temporary, out); return out; })
+      .catch(error => { fs.rmSync(temporary, { force: true }); throw new Error(`The speech helper could not be built: ${String(error.stdout || error.stderr || error.message).trim().split(/\r?\n/).slice(-3).join(' ')}`); });
+  }
   return exec('/usr/bin/xcrun', ['swiftc', '-O', '-swift-version', '5', '-target', `${arch === 'x64' ? 'x86_64' : 'arm64'}-apple-macos13.0`, path.join(SOURCE, 'main.swift'), '-o', temporary, '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', path.join(SOURCE, 'Info.plist')])
     .then(() => exec('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'local.throughline.speech', temporary]))
     .then(() => { fs.renameSync(temporary, out); return out; })
@@ -28,13 +47,13 @@ export function buildHelper({ arch = process.arch, out = helperPath(arch), run =
 }
 
 export class VoiceSessions {
-  constructor({ platform = process.platform, helper = helperPath(), build = () => buildHelper(), spawnImpl = spawn, limit = LISTEN_LIMIT, readyWait = 60000 } = {}) {
+  constructor({ platform = process.platform, helper = helperPath(process.arch, platform), build = () => buildHelper({ platform }), spawnImpl = spawn, limit = LISTEN_LIMIT, readyWait = 60000 } = {}) {
     Object.assign(this, { platform, helper, build, spawnImpl, limit, readyWait });
     this.session = null; this.building = null; this.closing = false;
   }
-  supported() { return this.platform === 'darwin'; }
+  supported() { return this.platform === 'darwin' || this.platform === 'win32'; }
   async ensureHelper() {
-    if (!this.supported()) fail('Voice input is available on macOS for now.', 409);
+    if (!this.supported()) fail('Voice input is available on macOS and Windows for now.', 409);
     if (fs.existsSync(this.helper)) return this.helper;
     this.building ||= this.build().finally(() => { this.building = null; });
     try { await this.building; } catch (error) { fail(error.message, 503); }
@@ -76,8 +95,9 @@ export class VoiceSessions {
     child.stderr.on('data', () => {});
     child.on('error', error => this.event(session, { type: 'error', code: 'helper', message: `The speech helper could not start: ${error.message}` }));
     child.on('close', () => { if (!session.done) this.event(session, session.text ? { type: 'final', text: session.text } : { type: 'error', code: 'helper', message: 'Voice input stopped unexpectedly.' }); });
-    // macOS asks for permission the first time; a request nobody answers should not listen forever.
-    session.waiting = setTimeout(() => { if (session.status === 'starting') this.event(session, { type: 'error', code: 'permission-wait', message: 'Codeshi Speech is waiting for permission. Answer the macOS prompt, then try again.' }); }, this.readyWait);
+    // macOS asks for permission the first time; a request nobody answers should not listen forever. Windows asks
+    // nothing, so there a helper that never gets ready has failed to start.
+    session.waiting = setTimeout(() => { if (session.status === 'starting') this.event(session, this.platform === 'win32' ? { type: 'error', code: 'helper', message: 'Windows speech recognition did not start. Try again in a moment.' } : { type: 'error', code: 'permission-wait', message: 'Codeshi Speech is waiting for permission. Answer the macOS prompt, then try again.' }); }, this.readyWait);
     session.limit = setTimeout(() => this.stop(session.id).catch(() => {}), this.limit);
     return { id: session.id, status: session.status };
   }
