@@ -35,13 +35,11 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 
 | Feature | Status | Issue |
 | --- | --- | --- |
-| Hands-free voice conversations: conversation mode with "send" by voice and voice approvals, shipped in Flow on macOS in 0.40.0. Left: a long session with real agents. Windows is #73 | First version shipped in 0.40.0 | [#72](https://github.com/AhmedNavaz/codeshi/issues/72) |
-| Project memory: a recheck when a branch or dependency changes, and reviewed suggestions. Copy to AGENTS.md shipped in 0.40.0 | First version shipped in 0.26.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
-| Rewind stage 3: commits on the Timeline. Rewinding the conversation with a checkpoint shipped in 0.41.0 | Stages 1 and 2 shipped in 0.20.0 and 0.28.0 | [#20](https://github.com/AhmedNavaz/codeshi/issues/20) |
-| iPhone Live Activities, which need a native app. Lock-screen notifications shipped in 0.41.0 | Remote access shipped in 0.27.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
+| Project memory: suggested memories you review before they're saved. Copy to AGENTS.md shipped in 0.40.0, and a recheck only when a named file, the branch or the dependencies change in 0.47.0 | First version shipped in 0.26.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
+| iPhone Live Activities, which need a native app. Lock-screen notifications shipped in 0.41.0, and replies read aloud on the phone in 0.47.0 | Remote access shipped in 0.27.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
 | Voice input on Windows | Help wanted | [#73](https://github.com/AhmedNavaz/codeshi/issues/73) |
 | Status in the Windows notification area: trying it on a real Windows PC. Built with automated tests only | First version shipped in 0.42.0, help wanted | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
-| Accessibility: a VoiceOver and NVDA check of the whole app. Menus, popovers, the file tree and search shipped in 0.42.0 | First pass shipped in 0.42.0, help wanted | [#26](https://github.com/AhmedNavaz/codeshi/issues/26) |
+| Accessibility: a VoiceOver and NVDA check of the whole app. Menus, popovers, the file tree and search shipped in 0.42.0, and side panel tabs, Flow, message headings and the board canvas in 0.47.0 | First pass shipped in 0.42.0, help wanted | [#26](https://github.com/AhmedNavaz/codeshi/issues/26) |
 | Interface translations: the first languages, and the remaining panels, phone page and server messages. The base and main surfaces shipped in 0.42.0 | Base shipped in 0.42.0, help wanted | [#27](https://github.com/AhmedNavaz/codeshi/issues/27) |
 
 ## Exploring
@@ -52,8 +50,8 @@ Larger ideas that need design work first, so join the issue before building. The
 | --- | --- |
 | **Task board and schedules.** A board per project, and cards or prompts that run at a set time. The board you run by hand shipped in 0.43.0, and a canvas view in 0.45.1; schedules and Flow choosing cards are next. [Plan](docs/roadmap-details.md#task-board-and-schedules) | [#132](https://github.com/AhmedNavaz/codeshi/issues/132) |
 | **Codeshi CLI.** Run, inspect, stop and continue the same workflows from a terminal, on the same engine as the desktop app. An interactive `codeshi` session and script commands shipped in 0.43.0 on macOS, sharing the window's conversation; Flow routing, workflows and Windows and Linux installs are next. Smart, Saver and Ultra don't apply to messages from the terminal yet, and it doesn't show the Flow mode. [Reference](docs/cli.md) | [#90](https://github.com/AhmedNavaz/codeshi/issues/90) |
-| **Connect GitHub.** Pick one of your repositories and open it as a workspace, using your `gh` login or a read-only sign-in. No Codeshi account or server. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | [#159](https://github.com/AhmedNavaz/codeshi/issues/159) |
-| **Move Codeshi to another computer, with no account.** Pair two computers with a QR code and a six-digit code, review what moves, and pick each workspace's local folder. An encrypted file covers offline moves. Ongoing sync is later. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | [#160](https://github.com/AhmedNavaz/codeshi/issues/160) |
+| **Connect GitHub.** Pick one of your repositories and open it as a workspace. **From GitHub** in New workspace, using your `gh` login, shipped in 0.47.0; a read-only sign-in without `gh` and GitHub Enterprise are next. No Codeshi account or server. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | [#159](https://github.com/AhmedNavaz/codeshi/issues/159) |
+| **Move Codeshi to another computer, with no account.** A backup file locked with a passphrase, with each workspace's folder picked on the new computer, shipped in 0.47.0. Next: pairing two computers with a QR code and a six-digit code and moving directly, without a file. Ongoing sync is later. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | [#160](https://github.com/AhmedNavaz/codeshi/issues/160) |
 | **Designer module.** Design websites and app screens in Codeshi and guide agents section by section. Design notes in the preview shipped in 0.43.0: mark several parts of a page, with a note on each, sent as one message. A layout canvas and handing design work to team workflows are next. [Plan](docs/roadmap-details.md#designer-module) | [#125](https://github.com/AhmedNavaz/codeshi/issues/125) |
 | **Race mode.** Two agents take the same task in separate worktrees; keep the better result | [#16](https://github.com/AhmedNavaz/codeshi/issues/16) |
 | **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription. Watching a teammate's conversation read-only, with suggestions, shipped in 0.43.0; steering and running together are next | [#24](https://github.com/AhmedNavaz/codeshi/issues/24) |
@@ -61,6 +59,7 @@ Larger ideas that need design work first, so join the issue before building. The
 
 ## Recently shipped
 
+- **0.47.0:** commits in Timeline, opening a GitHub repository as a workspace, a Codeshi backup file for moving computers, alerts set up by moment with Try it, replies read aloud on the phone, and memories that no longer need a recheck after every commit.
 - **0.46.0:** a plan's steps tested before later steps build on them, Open pull request in the Git panel, tasks and plans in the recap, and a 12-hour clock.
 - **0.45.1:** the board as a canvas, a What happened card in Flow, sharing for Smart results, folded plan rows with totals, and waiting approvals kept across handoffs.
 - **0.44.0:** one handoff line for a whole routed task, Claude's usage split by model, one layout for every dialog, setup with the keyboard and a screen reader, and badges that pass contrast checks in every theme.

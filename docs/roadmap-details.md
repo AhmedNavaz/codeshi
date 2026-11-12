@@ -187,8 +187,8 @@ Design boundaries:
 
 Two separate pieces, both without a Codeshi account or server. Codeshi stores nothing new in either.
 
-- **[#159, Connect GitHub](https://github.com/AhmedNavaz/codeshi/issues/159):** list your repositories and clone one as a workspace. It uses your `gh` login when present; otherwise **Sign in with GitHub** asks for read-only access and keeps the token in the system keychain.
-- **[#160, Move to another computer](https://github.com/AhmedNavaz/codeshi/issues/160):** pair two computers with a QR code and a six-digit code, review what will move, then pick each workspace's local folder, or clone it through #159. An encrypted backup file covers offline moves. Agent logins and keychain items never move, and nothing on the old computer is deleted. Ongoing sync is deferred.
+- **[#159, Connect GitHub](https://github.com/AhmedNavaz/codeshi/issues/159):** list your repositories and clone one as a workspace. *The `gh` version shipped in 0.47.0 as **From GitHub** in New workspace.* It uses your `gh` login when present; otherwise **Sign in with GitHub** asks for read-only access and keeps the token in the system keychain.
+- **[#160, Move to another computer](https://github.com/AhmedNavaz/codeshi/issues/160):** pair two computers with a QR code and a six-digit code, review what will move, then pick each workspace's local folder, or clone it through #159. An encrypted backup file covers offline moves; *it shipped in 0.47.0 as **Export** and **Import Codeshi Backup…**, and pairing is next.* Agent logins and keychain items never move, and nothing on the old computer is deleted. Ongoing sync is deferred.
 
 ## Public help requests
 

@@ -4,6 +4,8 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-11-12
+
 ### Added
 - **Commits in Timeline** ([#20](https://github.com/AhmedNavaz/codeshi/issues/20)). Timeline now shows each folder's commits on its current branch among the checkpoints, in time order, from the oldest checkpoint on (or the latest 15 before there is one), up to 30 per folder. Each commit says who made it as far as Codeshi knows: **From the Git panel** for a commit made there, **During Claude's run** (or another agent's) for one made while a run was working, and otherwise its author. Clicking a commit's message opens its files and lines read only. A merge shows what it brought into the branch, and **Open on GitHub** appears when the folder's `origin` is on GitHub. Nothing in Git is written, and restoring files still goes through checkpoints.
 - **An evaluation task for each starter skill** ([#86](https://github.com/AhmedNavaz/codeshi/issues/86)). `npm run eval` has six new tasks, one per starter skill, for running with and without it: a view that handles every state, an endpoint that checks who may call it, a migration that works on existing data and can be undone, an accessible toolbar, a review that has to find two seeded defects, and tests that must catch four realistic slips. A failed check now lists which of its parts failed, by the check's own names, without storing the agent's code or reply. Results so far are in `evals/README.md`.

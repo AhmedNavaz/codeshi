@@ -1,6 +1,6 @@
 {
   "name": "codeshi",
-  "version": "0.46.0",
+  "version": "0.47.0",
   "description": "Claude Code, Codex, Gemini and local models in one conversation. Switch agents mid-task, keep going when one hits its limit, and use the plans you already pay for.",
   "keywords": [
     "claude-code",

@@ -171,3 +171,10 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | Open pull request in the Git panel: remote and branch shown first, title and description drafted with no model ([#18](https://github.com/AhmedNavaz/codeshi/issues/18)) | [0.46.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.46.0) |
 | Tasks and plans in the While you were away recap ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)) | [0.46.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.46.0) |
 | A 12-hour clock for every time shown | [0.46.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.46.0) |
+| Commits in Timeline among the checkpoints, with who made them and their changes read only ([#20](https://github.com/AhmedNavaz/codeshi/issues/20)) | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
+| Open one of your GitHub repositories as a workspace from New workspace, through `gh` ([#159](https://github.com/AhmedNavaz/codeshi/issues/159)) | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
+| Export and Import Codeshi Backup: a passphrase-locked file to move workspaces to another computer ([#160](https://github.com/AhmedNavaz/codeshi/issues/160)) | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
+| Replies read aloud on a connected phone ([#23](https://github.com/AhmedNavaz/codeshi/issues/23)) | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
+| An evaluation task for each starter skill, measured with and without it ([#86](https://github.com/AhmedNavaz/codeshi/issues/86)) | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
+| Alerts set up by moment in Settings, with Try it, and an Alerts step in the setup guide | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
+| Memories need a recheck only when a named file, the branch or the dependencies change ([#21](https://github.com/AhmedNavaz/codeshi/issues/21)) | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
