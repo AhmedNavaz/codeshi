@@ -204,6 +204,13 @@
       else connect.append(control);
     }
   }
+  // Moving an element takes focus off it. When the button or control in use moves with the header or into a card,
+  // focus goes back to it so the keyboard and screen readers stay where they were (#26).
+  function keepFocus(move) {
+    const focused = document.activeElement;
+    move();
+    if (focused && focused !== document.body && focused !== document.activeElement && focused.isConnected && !focused.closest('[hidden]')) focused.focus({ preventScroll: true });
+  }
   function restoreControls() { for (const { control, marker } of movedControls.splice(0)) { marker.parentNode.insertBefore(control, marker); marker.remove(); } }
   // In Flow the header leaves the chat column and spans the window, so the seal sits beside the window controls,
   // search is in the middle of the window and the way out is at its far right. Leaving puts it back where it was.
@@ -798,12 +805,12 @@
         saved = { panel: openSidePanel(), bottom: window.relayPanel?.isOpen?.() ? window.relayPanel.active() : null };
         window.relayAgents?.close?.(); window.relayGit?.close?.(); window.relayBrief?.close?.(); window.relayTasks?.close?.(); window.relayTimeline?.close?.(); window.relayReviews?.closePanel?.();
         if (saved.bottom) window.relayPanel?.hide?.();
-        on = true; shell.classList.add('flow'); liftHeader(); moveControls(); place(); tick(); ensureRouting();
+        on = true; shell.classList.add('flow'); keepFocus(() => { liftHeader(); moveControls(); }); place(); tick(); ensureRouting();
       } else {
         on = false; closeDetail(); closePeek(); window.relayPanel?.hide?.(); releaseRouting();
         clearTimeout(ticker); ticker = null;
         const previous = saved; saved = null;
-        shell.classList.remove('flow'); restoreControls(); dropHeader();
+        shell.classList.remove('flow'); keepFocus(() => { restoreControls(); dropHeader(); });
         if (previous?.panel) api.showSidePanel?.(previous.panel);
         if (previous?.bottom) window.relayPanel?.show?.(previous.bottom);
       }
@@ -842,7 +849,10 @@
   }
   function render() {
     const state = api.getState(), tight = narrow();
-    toggle.setAttribute('aria-pressed', String(on)); toggle.disabled = Boolean(lockReason() || checkingMode || transitioning);
+    toggle.setAttribute('aria-pressed', String(on)); toggle.disabled = Boolean(lockReason());
+    // While the view is checked and changes, the button stays focusable, so pressing it from the keyboard keeps focus
+    // on it instead of dropping to the page (#26). Another press meanwhile only explains the wait.
+    toggle.setAttribute('aria-disabled', String(Boolean(checkingMode || transitioning)));
     brand(); renderStatus();
     const loungeToggle = $('toggle-flow-lounge');
     if (loungeToggle) loungeToggle.hidden = !on;

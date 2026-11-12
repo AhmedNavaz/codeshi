@@ -52,6 +52,11 @@ html:has(body.phone), body.phone { position: fixed; inset: 0; overflow: hidden; 
 /* An agent writes several messages in a row, so a line shows where each starts and the last one is easy to find. */
 .m-agent + .m-agent { padding-top: 16px; border-top: 1px solid var(--border-strong); }
 .m-who { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--muted); font-size: 12.5px; }
+/* Read aloud: a quiet speaker under a finished reply, with a full-size tap area that lines up with the text. */
+.m-read { display: grid; place-items: center; width: 36px; height: 32px; margin: 2px 0 -6px -9px; border-radius: 16px; color: var(--muted); }
+.m-read .icon { width: 17px; height: 17px; }
+.m-read:active { background: var(--hover); }
+.m-read.reading { color: var(--accent); }
 .m-error { display: flex; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--danger-bg); color: var(--danger); font-size: 14px; }
 .m-error .icon { width: 18px; height: 18px; margin-top: 2px; }
 .m-note { color: var(--muted); font-size: 13px; line-height: 1.45; }

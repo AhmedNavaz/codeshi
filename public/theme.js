@@ -54,7 +54,9 @@
   const applySize = () => { if (textSize === 'large') document.documentElement.setAttribute('data-ui-size', 'large'); else document.documentElement.removeAttribute('data-ui-size'); };
   applySize();
   window.relayTheme = {
-    choose: value => apply(value, true), preference: () => preference, current: () => document.documentElement.getAttribute('data-theme') || 'dark',
+    choose: value => apply(value, true), preference: () => preference,
+    // A choice saved elsewhere, such as by an imported backup (#160), shown without saving it again.
+    follow: value => apply(value), current: () => document.documentElement.getAttribute('data-theme') || 'dark',
     textSize: () => textSize,
     setTextSize(value) { textSize = value === 'large' ? 'large' : 'default'; try { localStorage.setItem(SIZE_KEY, textSize); } catch {} applySize(); },
   };

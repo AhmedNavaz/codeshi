@@ -98,6 +98,11 @@
       }) });
       box.id = 'settings-suggestions';
     }
+    // Move to another computer (#160): one file, locked with a passphrase, holds workspaces and settings.
+    if (window.relayBackup) {
+      const move = kit.group(host, t('Move to another computer'));
+      kit.row(move, { label: t('Codeshi backup'), description: t('Save your workspaces, their conversations, memory, skills, board cards and tasks, and these settings to one file locked with a passphrase. Import it on the other computer. Sign-ins never move.'), keywords: 'backup export import move migrate transfer new computer laptop restore', control: [kit.button(t('Export…'), () => window.relayBackup.open('export')), kit.button(t('Import…'), () => window.relayBackup.open('import'))] });
+    }
     const bridge = window.relayDesktop;
     if (bridge?.getKeepAwake && bridge?.setKeepAwake) {
       const work = kit.group(host, t('While agents work'));

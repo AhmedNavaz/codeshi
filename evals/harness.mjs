@@ -25,7 +25,7 @@ function pinnedFolders(root, fixture) {
   const folders = {}, snapshot = {};
   for (const [name, files] of Object.entries(fixture.folders)) {
     const folder = path.join(root, name); fs.mkdirSync(folder, { recursive: true });
-    for (const [file, content] of Object.entries(files)) fs.writeFileSync(path.join(folder, file), content);
+    for (const [file, content] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(folder, file)), { recursive: true }); fs.writeFileSync(path.join(folder, file), content); }
     gitIn(folder, ['init', '-q']); gitIn(folder, ['add', '.']); gitIn(folder, ['commit', '-qm', 'Fixture']);
     folders[name] = fs.realpathSync(folder);
     snapshot[name] = gitIn(folder, ['rev-parse', 'HEAD']).stdout.trim();
@@ -33,14 +33,19 @@ function pinnedFolders(root, fixture) {
   return { folders, snapshot };
 }
 
-function runCheck(fixture, folders, replies) {
+export function runCheck(fixture, folders, replies) {
   const results = [];
-  if (fixture.checkReply) results.push({ command: `last reply matches ${fixture.checkReply}`, passed: fixture.checkReply.test(replies.at(-1) || '') });
+  // A failed check names the parts it failed: the check's own test names, or a reply's missing findings, never the agent's text.
+  if (fixture.checkReply) {
+    const reply = replies.at(-1) || '', passed = fixture.checkReply.test(reply), parts = Object.entries(fixture.replyParts || {});
+    results.push({ command: `last reply matches ${fixture.checkReply}`, passed, ...(!passed && parts.length ? { failed: parts.filter(([, pattern]) => !pattern.test(reply)).map(([part]) => part) } : {}) });
+  }
   for (const [name, files] of Object.entries(fixture.check || {})) {
     const directory = path.join(folders[name], '.eval-check'); fs.mkdirSync(directory, { recursive: true });
     for (const [file, content] of Object.entries(files)) fs.writeFileSync(path.join(directory, file), content);
-    const result = spawnSync(process.execPath, ['--test', ...Object.keys(files).map(file => path.join(directory, file))], { cwd: folders[name], encoding: 'utf8', timeout: 60000, env: { PATH: process.env.PATH } });
-    results.push({ folder: name, command: `node --test .eval-check`, passed: result.status === 0, exitCode: result.status });
+    const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', ...Object.keys(files).map(file => path.join(directory, file))], { cwd: folders[name], encoding: 'utf8', timeout: 60000, env: { PATH: process.env.PATH } });
+    const failed = [...String(result.stdout || '').matchAll(/^\s*not ok \d+ - (.+)$/gm)].map(match => match[1].trim().slice(0, 120)).filter(part => !part.includes('.eval-check'));
+    results.push({ folder: name, command: `node --test .eval-check`, passed: result.status === 0, exitCode: result.status, ...(result.status !== 0 && failed.length ? { failed: [...new Set(failed)].slice(0, 12) } : {}) });
     fs.rmSync(directory, { recursive: true, force: true });
   }
   return { passed: results.every(result => result.passed), results };

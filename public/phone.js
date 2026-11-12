@@ -127,9 +127,11 @@
       if (!update.delta) S.earlier = update.earlier || 0;
       S.step = update.step || (update.delta ? S.step : null);
       S.cursor = Number.isSafeInteger(update.cursor) ? update.cursor : null;
+      const before = S.c;
       S.c = update; S.loaded = true;
       adoptSettings();
       render();
+      readFinished(before, update);
       offerHomeScreen();
       offerNotifications();
     } catch (error) {
@@ -168,7 +170,7 @@
   }
   // Moving to another conversation starts from nothing, so an answer still on its way can't land in the wrong one.
   function changedView({ keepComposer = false } = {}) {
-    stopListening();
+    stopListening(); stopReading();
     S.view++; S.cursor = null; S.messages = []; S.step = null; S.earlier = 0; S.limit = 40; S.retry = null; S.loaded = false;
     clearFeed(); dockSignature = null; pinned = true;
     if (!keepComposer) { $('input').value = recall(draftKey()) || ''; sizeInput(); }
@@ -331,6 +333,7 @@
       const row = node('div', 'm m-agent');
       if (showAgent) { const tag = node('div', 'm-who'); tag.append(glyph(message.provider), name(message.provider)); row.append(tag); }
       row.append(message.orchestrationId ? node('p', 'm-plan', planText(message)) : markdown(message.text));
+      if (!message.orchestrationId && !writing(message) && speech()) row.append(speakerButton(message));
       return row;
     }
     // Stopping is something you did, not something that went wrong.
@@ -339,8 +342,9 @@
     return foldable(node('div', 'm m-note', message.text));
   }
   // What a row is drawn from: a planner's reply is drawn from its plan, so it's redrawn when the plan changes.
+  // A reply still being written gets its speaker button once its run ends, so that's part of the key too.
   function rowKey(message, showAgent) {
-    return `${message.role}\n${showAgent}\n${message.text}${message.orchestrationId && message.role === 'assistant' ? `\n${planText(message)}` : ''}`;
+    return `${message.role}\n${showAgent}\n${writing(message)}\n${message.text}${message.orchestrationId && message.role === 'assistant' ? `\n${planText(message)}` : ''}`;
   }
   function renderFeed() {
     const c = S.c, draft = Boolean(S.draft);
@@ -915,6 +919,77 @@
     } finally { S.uploading--; renderComposer(); }
   }));
 
+  // ---- Replies read aloud (#23), in the phone's own voice, as on the computer: paragraph by paragraph, without code or
+  // tables. Speaking text needs no secure connection, so this works on Same Wi-Fi too. Each finished reply has a speaker
+  // button, and Read replies aloud reads each one as its run finishes while the page is open. A reply that finished while
+  // the page was hidden isn't read on coming back. Reading stops on a second tap, on moving elsewhere, when the mic
+  // starts, or when the page is hidden.
+  const READ_ALOUD = 'codeshi:phone-read-aloud';
+  const speech = () => window.speechSynthesis && typeof window.SpeechSynthesisUtterance === 'function' ? window.speechSynthesis : null;
+  const readsAloud = () => recall(READ_ALOUD) === 'on';
+  const writing = message => Boolean(message.runId && isRunning() && message.runId === S.c?.activeRun?.id);
+  const speakers = new Map();
+  let reading = null, readTurn = 0, unread = null, voiceReady = false;
+  function speakerButton(message) {
+    const speaker = button('', () => { if (reading === message.id) stopReading(); else readAloud(message); }, 'm-read');
+    speaker.append(icon('speaker'));
+    speakers.set(message.id, speaker); showReading(speaker, message.id);
+    return speaker;
+  }
+  function showReading(speaker, id) {
+    const on = reading === id;
+    speaker.classList.toggle('reading', on); speaker.setAttribute('aria-pressed', String(on)); speaker.setAttribute('aria-label', on ? 'Stop reading' : 'Read aloud');
+    speaker.querySelector('use')?.setAttribute('href', on ? '#i-stop' : '#i-speaker');
+  }
+  const showAllReading = () => { for (const [id, speaker] of speakers) { if (rows.get(id)?.element.contains(speaker)) showReading(speaker, id); else speakers.delete(id); } };
+  function stopReading() {
+    if (reading === null) return;
+    reading = null; readTurn++; speech()?.cancel(); showAllReading();
+  }
+  function readAloud(message) {
+    const synth = speech(); if (!synth) return;
+    const parts = L.spokenParts(message.text);
+    if (!parts.length) { toast('This reply is code or tables only, so there’s nothing to read.'); return; }
+    stopListening(); synth.cancel();
+    const turn = ++readTurn, done = () => { if (turn === readTurn) { reading = null; showAllReading(); } };
+    reading = message.id; voiceReady = true;
+    parts.forEach((part, index) => {
+      const utterance = new window.SpeechSynthesisUtterance(part);
+      utterance.lang = navigator.language || 'en-US';
+      if (index === parts.length - 1) utterance.onend = done;
+      utterance.onerror = done;
+      synth.speak(utterance);
+    });
+    showAllReading();
+  }
+  // Called with the conversation before and after an update. A run seen working that has now finished has its last
+  // reply read, if that's turned on.
+  function readFinished(before, after) {
+    // Seen working with the page open again, so its reply can be read after all.
+    if (after?.activeRun?.id && after.activeRun.id === unread && !document.hidden) unread = null;
+    const id = before?.activeRun?.id;
+    if (!id || after?.activeRun || after?.lastRun?.id !== id || after.lastRun.status !== 'complete') return;
+    // Not while you're dictating: reading would stop the microphone, and it would hear the reply.
+    if (!readsAloud() || document.hidden || unread === id || listening) return;
+    const reply = [...S.messages].reverse().find(message => message.role === 'assistant' && message.runId === id && !message.orchestrationId && message.text);
+    if (reply) readAloud(reply);
+  }
+  // iPhones speak only after the page has first spoken during a tap, so with reading on, the first tap says nothing aloud.
+  document.addEventListener('pointerdown', () => { const synth = speech(); if (voiceReady || !synth || !readsAloud()) return; voiceReady = true; const silent = new window.SpeechSynthesisUtterance(''); silent.volume = 0; synth.speak(silent); }, { passive: true });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { unread = S.c?.activeRun?.id || null; stopReading(); } });
+  mic?.addEventListener('click', stopReading);
+  function readAloudSetting(host) {
+    if (!speech()) return;
+    host.append(segmented('Read replies aloud', [['off', 'Off'], ['on', 'On']], readsAloud() ? 'on' : 'off', value => {
+      remember(READ_ALOUD, value === 'on' ? 'on' : null);
+      // Turning it on is a tap, which is when an iPhone lets the page start speaking.
+      if (value === 'on') { const silent = new window.SpeechSynthesisUtterance(''); silent.volume = 0; speech().speak(silent); voiceReady = true; }
+      else stopReading();
+      drawSheet();
+    }));
+    host.append(node('p', '', 'Each reply is read in your phone’s voice when its run finishes, while Codeshi is open. Code and tables are skipped. Any reply has its own speaker button.'));
+  }
+
   // ---- Sheets. Opening one puts the keyboard away first, and nothing inside takes focus, so it doesn't come back.
   const sheet = $('sheet');
   let sheetView = null, onSheetClosed = null;
@@ -989,6 +1064,7 @@
     if (!S.projects.length) host.append(node('p', 'sheet-text', 'Add a workspace in Codeshi on your computer.'));
     const foot = node('div', 'sheet-foot');
     foot.append(segmented('Appearance', [['system', 'System'], ['light', 'Light'], ['dark', 'Dark'], ['graphite', 'Graphite']], window.relayPhoneTheme?.choice() || 'system', value => { window.relayPhoneTheme?.choose(value); drawSheet(); }));
+    readAloudSetting(foot);
     foot.append(node('p', '', 'Work and sign-ins stay on your computer. Review, merging, files and the terminal are there too.'));
     const move = button('Move to another browser', () => attempt(moveToAnotherBrowser), 'link');
     const home = homeScreenAvailable() ? button('Add to Home Screen', () => homeScreenSheet(), 'link') : null;

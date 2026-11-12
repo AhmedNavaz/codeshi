@@ -17,9 +17,10 @@ import http from 'node:http';
 import {createAppearance} from './appearance.mjs';
 import {menuTemplate,menuState} from './menu.mjs';
 import {runningEdit,statusSnapshot,statusTitle,statusMenu,statusTooltip,statusClickTarget,taskbarIsLight} from './status.mjs';
-import {alertPlan,progressPillOn} from '../src/alerts.mjs';
+import {alertPlan,alertSample,pillSample,progressPillOn} from '../src/alerts.mjs';
 import {english} from '../src/i18n.mjs';
 import {createOverlay} from './overlay.mjs';
+import {giveFrontBack} from './front.mjs';
 import {closeWithin,writeShutdownLog} from './shutdown.mjs';
 import {commandState,connectionFile,installCommand,removeConnection,uninstallCommand,writeConnection} from './cli.mjs';
 import {createPreview} from './preview.mjs';
@@ -187,7 +188,7 @@ else {
     // In the Windows notification area (#74) an icon does the same, with the words in its tooltip.
     // The progress pill shows only while no Codeshi window is in front; focus moving between its windows passes through none.
     if(process.platform==='darwin'){
-      overlay=createOverlay({BrowserWindow,screen,ipcMain,root,open:openTarget,isFocused:()=>Boolean(BrowserWindow.getFocusedWindow())});
+      overlay=createOverlay({BrowserWindow,screen,ipcMain,root,open:openTarget,isFocused:()=>Boolean(BrowserWindow.getFocusedWindow()),yieldFront:()=>{giveFrontBack().catch(()=>{});}});
       // The menu bar status drops its words at once when a window comes forward, and gets them back after focus has settled.
       app.on('browser-window-focus',()=>{overlay?.refresh();syncStatus();});app.on('browser-window-blur',()=>setTimeout(()=>{overlay?.refresh();syncStatus();},150));
     }
@@ -227,6 +228,31 @@ else {
     ipcMain.handle('relay:update:cancel',event=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.cancel();});
     ipcMain.handle('relay:update:skip',(event,version)=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.skip(version);});
     ipcMain.handle('relay:update:automatic',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');return updater.setAutomatic(enabled);});
+    // Try it in Settings › Alerts: the real banner or panel, Dock badge and bounce for one moment, as chosen, with a
+    // made-up example (src/alerts.mjs); the page plays the sound. It says what showed, and whether macOS refused the
+    // banner. The Dock bounces only while another app is in front, so the bounce waits a few seconds for you to leave.
+    let tryBadge=null,tryBounce=null;
+    ipcMain.handle('relay:alert:try',async(event,input)=>{
+      if(!trusted(event))throw Error('Untrusted renderer');
+      const sample=alertSample(input?.moment,relay.getNotificationPreferences(),{panelAvailable:Boolean(overlay),t:text.t});
+      if(!sample)throw Error('Unknown alert moment');
+      const {plan,kind,title,body}=sample,result={panel:false,banner:null,badge:false,bounce:null};
+      if(plan.panel){overlay.show({kind,title,body});result.panel=true;}
+      else if(plan.notification){
+        if(!Notification.isSupported())result.banner='refused';
+        else result.banner=await new Promise(resolve=>{const notice=new Notification({title,body,silent:true});const timer=setTimeout(()=>resolve(notificationsRefused?'refused':'sent'),1500);notice.on('show',()=>{clearTimeout(timer);resolve('shown');});notice.on('failed',()=>{clearTimeout(timer);notificationsRefused=true;resolve('refused');});notice.on('click',()=>openTarget(null));notice.show();});
+      }
+      if(plan.badge&&app.dock){clearTimeout(tryBadge);app.dock.setBadge(String(attention+1));result.badge=true;tryBadge=setTimeout(()=>app.dock?.setBadge(attention?String(attention):''),6000);}
+      if(plan.bounce&&win&&!win.isDestroyed()){
+        const bounce=()=>{if(process.platform==='darwin')app.dock?.bounce('informational');else if(!win.isDestroyed())win.flashFrame(true);};
+        tryBounce?.();
+        if(!win.isFocused()){bounce();result.bounce='now';}
+        else{const timer=setTimeout(()=>tryBounce?.(),8000),onBlur=()=>{tryBounce?.();bounce();};win.once('blur',onBlur);tryBounce=()=>{clearTimeout(timer);win.off('blur',onBlur);tryBounce=null;};result.bounce='when-away';}
+      }
+      return result;
+    });
+    // Show the pill: the pill under the menu bar with an example line, for a few seconds, even with Codeshi in front.
+    ipcMain.handle('relay:pill:try',event=>{if(!trusted(event))throw Error('Untrusted renderer');if(!overlay)return false;overlay.show(pillSample(text.t));return true;});
     ipcMain.on('relay:menu-state',(event,input)=>{if(!trusted(event))return;const next=menuState(input);if(next){page=next;updateMenu();}});
     // Point and tell (#19): the workspace's app in a preview window, one for each interface opened (#142); an element
     // picked in any of them goes to the message box of that window's workspace.
@@ -261,6 +287,9 @@ else {
     ipcMain.handle('relay:preview:close',(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const urls=Array.isArray(input?.urls)?input.urls.slice(0,24).map(String):[];return preview.close({projectId:String(input?.projectId||''),urls});});
     // Several folders can be chosen at once; the page adds every one of them.
     ipcMain.handle('relay:pick-folder',async event=>{if(!trusted(event))throw Error('Untrusted renderer');const choice=await dialog.showOpenDialog(win,{properties:['openDirectory','multiSelections'],message:'Choose one or more project folders. Hold ⌘ to select several.'});return choice.canceled||!choice.filePaths.length?null:choice.filePaths;});
+    // A Codeshi backup (#160): where to save one, or which one to import. The page gets the path; the server reads and
+    // writes the file.
+    ipcMain.handle('relay:pick-backup',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const filters=[{name:'Codeshi Backup',extensions:['codeshibackup']}];if(input?.mode==='save'){const name=String(input?.name||'Codeshi Backup.codeshibackup').replace(/[\\/:]/g,'-').slice(0,120);const choice=await dialog.showSaveDialog(win,{defaultPath:path.join(app.getPath('documents'),name),filters,properties:['createDirectory','showOverwriteConfirmation']});return choice.canceled||!choice.filePath?null:choice.filePath;}const choice=await dialog.showOpenDialog(win,{properties:['openFile'],filters});return choice.canceled||!choice.filePaths.length?null:choice.filePaths[0];});
     ipcMain.handle('relay:open-external',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const url=new URL(input);if(url.username||url.password||(url.protocol!=='https:' && !(url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname))))throw Error('Only HTTPS or local test links without credentials may open');await shell.openExternal(url.href);return true;});
     win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
     win.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(origin+'/'))event.preventDefault();});

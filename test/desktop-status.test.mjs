@@ -5,6 +5,7 @@ import test from 'node:test';
 import { alertMenu, currentAction, overlayBounds, progressLine, progressTrack, statusClickTarget, statusMenu, statusSnapshot, statusTitle, statusTooltip, taskbarIsLight } from '../desktop/status.mjs';
 import { alertPreferences } from '../src/alerts.mjs';
 import { createOverlay } from '../desktop/overlay.mjs';
+import { appDetails, appOrder, giveFrontBack } from '../desktop/front.mjs';
 
 // A registry stand-in: workspaces with their main conversation and, when an agent works, its run.
 function registry(workspaces) {
@@ -87,7 +88,7 @@ test('the status menu opens the right workspace or request and only changes Keep
   const item = label => template.find(entry => entry.label === label);
   // The status item's own Alerts menu turns each way on or off; hiding the status item has its own item.
   const submenu = item('Alerts').submenu, way = label => submenu.find(entry => entry.label === label);
-  assert.deepEqual(labels(submenu), ['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon', '-', 'Alert Settings…']);
+  assert.deepEqual(labels(submenu), ['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon', '-', 'Pill Under the Menu Bar', '-', 'Alert Settings…']);
   assert.deepEqual(['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon'].map(label => [way(label).type, way(label).checked]), [['checkbox', true], ['checkbox', true], ['checkbox', true], ['checkbox', true]]);
   item('payments-api — Approval needed: npm install').click(); item('acme-shop — Codex · Reading files').click();
   item('Keep Awake').click(); way('Sounds').click(); way('Badge on the Dock Icon').click(); way('Alert Settings…').click(); item('Hide from Menu Bar').click();
@@ -99,14 +100,21 @@ test('the status menu opens the right workspace or request and only changes Keep
 test('the Alerts menu lists the ways each system has: the taskbar flashes elsewhere, and Windows has its notification area', () => {
   const changes = [], labels = items => items.map(item => item.type === 'separator' ? '-' : item.label);
   const mac = alertMenu(alertPreferences({ statusItem: false }), { set: patch => changes.push(patch) });
-  assert.deepEqual(labels(mac), ['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon', 'Status in the Menu Bar', '-', 'Alert Settings…']);
+  assert.deepEqual(labels(mac), ['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon', '-', 'Status in the Menu Bar', 'Pill Under the Menu Bar', '-', 'Alert Settings…']);
   mac.find(entry => entry.label === 'Status in the Menu Bar').click(); mac.find(entry => entry.label === 'Banners').click();
   assert.deepEqual(changes, [{ statusItem: true }, { banner: { on: false } }]);
   const windows = alertMenu(alertPreferences(), { platform: 'win32', set: patch => changes.push(patch) });
-  assert.deepEqual(labels(windows), ['Banners', 'Sounds', 'Flash the Taskbar Button', 'Status in the Notification Area', '-', 'Alert Settings…']);
+  assert.deepEqual(labels(windows), ['Banners', 'Sounds', 'Flash the Taskbar Button', '-', 'Status in the Notification Area', '-', 'Alert Settings…']);
   windows.find(entry => entry.label === 'Status in the Notification Area').click();
   assert.deepEqual(changes.at(-1), { statusItem: false });
   assert.deepEqual(labels(alertMenu(alertPreferences(), { platform: 'linux' })), ['Banners', 'Sounds', 'Flash the Taskbar Button', '-', 'Alert Settings…']);
+  // A way is ticked only while it tells you about some moment, as Settings shows it; ticked with none, it gets all three.
+  const none = alertMenu(alertPreferences({ sound: { on: true, attention: false, finished: false, stopped: false }, progressPill: true }), { set: patch => changes.push(patch) });
+  assert.deepEqual(['Sounds', 'Pill Under the Menu Bar'].map(label => none.find(entry => entry.label === label).checked), [false, true]);
+  none.find(entry => entry.label === 'Sounds').click(); none.find(entry => entry.label === 'Pill Under the Menu Bar').click();
+  assert.deepEqual(changes.slice(-2), [{ sound: { on: true, attention: true, finished: true, stopped: true } }, { progressPill: false }]);
+  const status = statusMenu({ rows: [], attention: 0, running: 0 }).find(item => item.label === 'Alerts').submenu.map(item => item.label).filter(Boolean);
+  assert.deepEqual(status, ['Banners', 'Sounds', 'Bounce the Dock Icon', 'Badge on the Dock Icon', 'Pill Under the Menu Bar', 'Alert Settings…'], 'The status item’s own menu has the pill but leaves its status to Hide from Menu Bar.');
 });
 
 test('in the Windows notification area the state is in the tooltip, a click opens what needs you, and the menu uses Windows words (#74)', () => {
@@ -183,23 +191,21 @@ test('the progress pill reads like the menu bar for one run, and gives the count
   const edited = busy(['$ npm test', 'Edit\n{"file_path":"/w/cart.js","old_string":"a","new_string":"b"}'], ['Read\n{"file_path":"/w/a.js"}']);
   track = progressTrack(track, edited);
   assert.equal(progressLine(edited, track.latest).detail, 'acme-shop: Codex · Editing · 1 file changed');
-  // Nothing running, or only dismissed runs, says nothing.
+  // Nothing running says nothing.
   const quiet = statusSnapshot(registry([{ id: 'idle', name: 'idle', c: conversation('i') }]));
   assert.equal(progressLine(quiet, progressTrack(track, quiet).latest), null);
   assert.equal(progressTrack(track, quiet).latest, null, 'A run that ended is forgotten.');
-  assert.equal(progressLine(two, null, undefined, new Set(['run:r1', 'run:r2'])), null);
-  assert.equal(progressLine(two, null, undefined, new Set(['run:r1'])).title, '2 working', 'A run started since the × brings the pill back.');
 });
 
-test('the progress pill shows only away from Codeshi, stays put as its words change, gives way to alerts and hides with its × until another run (#75)', () => {
+test('the progress pill shows only away from Codeshi, stays put as its words change, gives way to alerts and hides with its × until Codeshi has been in front again (#75)', () => {
   const panel = { sent: [], shown: 0, bounds: 0, hidden: 0 }, handlers = {}, opened = [];
   class Panel {
     constructor() { panel.window = this; this.webContents = { isLoading: () => false, once() {}, send: (_channel, content) => panel.sent.push(`${content.kind}: ${content.title}${content.body ? ` | ${content.body}` : ''}`), setWindowOpenHandler() {}, on() {} }; }
     setAlwaysOnTop() {} setVisibleOnAllWorkspaces() {} loadFile() {} setBounds() { panel.bounds++; } hide() { panel.hidden++; } destroy() {} isDestroyed() { return false; } showInactive() { panel.shown++; }
   }
   const screen = { getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 25, width: 1440, height: 875 } }) };
-  let focused = false;
-  const overlay = createOverlay({ BrowserWindow: Panel, screen, ipcMain: { on: (name, callback) => { handlers[name] = callback; }, off() {} }, root: '/app', open: target => opened.push(target), mac: true, isFocused: () => focused });
+  let focused = false, clock = 0, yielded = 0;
+  const overlay = createOverlay({ BrowserWindow: Panel, screen, ipcMain: { on: (name, callback) => { handlers[name] = callback; }, off() {} }, root: '/app', open: target => opened.push(target), mac: true, isFocused: () => focused, yieldFront: () => { yielded++; }, now: () => clock });
   const click = name => handlers[name]({ sender: panel.window.webContents });
   const one = busy(['$ npm test']);
   overlay.progress(one, { enabled: false });
@@ -223,19 +229,77 @@ test('the progress pill shows only away from Codeshi, stays put as its words cha
   click('overlay:open');
   assert.deepEqual(opened, [{ projectId: 'api' }]);
   focused = true; overlay.refresh(); focused = false;
-  // × hides it while the same runs go on; a new run brings it back.
-  overlay.refresh(); click('overlay:dismiss');
-  assert.equal(overlay.pill, null);
+  // × hides it for this time away, whatever runs go on or start, and leaves the person in the app they were in.
+  clock = 10000; overlay.refresh(); click('overlay:dismiss');
+  assert.deepEqual([overlay.pill, yielded], [null, 0], 'Codeshi did not come forward, so there is no front to give back.');
   const before = panel.sent.length;
   overlay.progress(busy(['$ npm test', 'Grep\n{"pattern":"y"}'], ['Read\n{"file_path":"/w/a.js"}']), { enabled: true });
-  assert.equal(panel.sent.length, before, 'Dismissed runs stay hidden as their steps change.');
-  overlay.progress(statusSnapshot(registry([{ id: 'shop', name: 'acme-shop', c: conversation('s', { activeRun: { id: 'r3', provider: 'codex', phase: 'starting' } }), running: { provider: 'codex', approvals: new Map() } }])), { enabled: true });
-  assert.equal(panel.sent.at(-1), 'progress: Codex · Starting | acme-shop', 'The next run shows again.');
+  const next = statusSnapshot(registry([{ id: 'shop', name: 'acme-shop', c: conversation('s', { activeRun: { id: 'r3', provider: 'codex', phase: 'starting' } }), running: { provider: 'codex', approvals: new Map() } }]));
+  overlay.progress(next, { enabled: true });
+  assert.equal(panel.sent.length, before, 'It stays hidden as steps change and as another run starts.');
+  // Back from a visit to Codeshi, it shows again.
+  clock = 20000; focused = true; overlay.refresh(); focused = false; overlay.refresh();
+  assert.equal(panel.sent.at(-1), 'progress: Codex · Starting | acme-shop');
+  // macOS brings Codeshi forward on a press in the panel, which takes the pill away before the press is heard.
+  // The × still counts, the front goes back, and the focus the press caused is not a visit.
+  clock = 30000; focused = true; overlay.hide(); overlay.refresh();
+  assert.equal(overlay.pill, null);
+  clock = 30040; click('overlay:dismiss');
+  assert.equal(yielded, 1, 'The front is given back.');
+  clock = 30200; overlay.refresh(); focused = false; overlay.refresh();
+  assert.equal(overlay.pill, null, 'Still hidden once the other app is in front again.');
+  // The press heard first, and Codeshi coming forward after it.
+  clock = 40000; focused = true; overlay.refresh(); focused = false; overlay.refresh();
+  assert.notEqual(overlay.pill, null);
+  clock = 50000; click('overlay:dismiss'); clock = 50030; focused = true; overlay.hide(); overlay.refresh(); focused = false; overlay.refresh();
+  assert.equal(overlay.pill, null);
+  // A press long after the panel went is about nothing.
+  clock = 60000; const opens = opened.length; click('overlay:open'); click('overlay:dismiss');
+  assert.deepEqual([opened.length, yielded], [opens, 1]);
+  clock = 70000; focused = true; overlay.refresh(); focused = false; overlay.refresh();
+  assert.equal(panel.sent.at(-1), 'progress: Codex · Starting | acme-shop');
   // When the work ends, the pill goes.
   const hiddenBefore = panel.hidden;
   overlay.progress(statusSnapshot(registry([{ id: 'idle', name: 'idle', c: conversation('i') }])), { enabled: true });
   assert.deepEqual([overlay.pill, panel.hidden], [null, hiddenBefore + 1]);
   overlay.dispose();
+});
+
+test('a press that brought Codeshi forward still opens what the panel named', () => {
+  const handlers = {}, opened = []; let window = null, focused = false, clock = 0;
+  class Panel {
+    constructor() { window = this; this.webContents = { isLoading: () => false, once() {}, send() {}, setWindowOpenHandler() {}, on() {} }; }
+    setAlwaysOnTop() {} setVisibleOnAllWorkspaces() {} loadFile() {} setBounds() {} hide() {} destroy() {} isDestroyed() { return false; } showInactive() {}
+  }
+  const screen = { getCursorScreenPoint: () => ({ x: 0, y: 0 }), getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 25, width: 1440, height: 875 } }) };
+  let yielded = 0;
+  const overlay = createOverlay({ BrowserWindow: Panel, screen, ipcMain: { on: (name, callback) => { handlers[name] = callback; }, off() {} }, root: '/app', open: target => opened.push(target.approvalId), mac: true, isFocused: () => focused, yieldFront: () => { yielded++; }, now: () => clock });
+  overlay.show({ kind: 'approval', title: 'Approval needed', projectId: 'shop', approvalId: 'a1' });
+  // The window's focus takes the alert away first, then the press arrives.
+  focused = true; overlay.hide(); clock = 50; handlers['overlay:open']({ sender: window.webContents });
+  assert.deepEqual([opened, yielded], [['a1'], 0]);
+  handlers['overlay:open']({ sender: window.webContents });
+  assert.equal(opened.length, 1, 'Once.');
+  // An alert's × gives the front back too.
+  focused = false; overlay.show({ kind: 'approval', title: 'Approval needed', projectId: 'shop', approvalId: 'a2' });
+  focused = true; overlay.hide(); clock = 100; handlers['overlay:dismiss']({ sender: window.webContents });
+  assert.deepEqual([opened.length, yielded], [1, 1]);
+  overlay.dispose();
+});
+
+test('the front goes back to the app behind Codeshi, and only when Codeshi is in front', async () => {
+  assert.deepEqual(appOrder('ASN:0x0-0x2f3af38-"Codeshi": ASN:0x0-0x27af7ad-"ChatGPT": ASN:0x0-0x2b02b-"Finder":'), ['ASN:0x0-0x2f3af38', 'ASN:0x0-0x27af7ad', 'ASN:0x0-0x2b02b']);
+  assert.deepEqual(appDetails('[ NULL ]  ASN:0x0-0x27af7ad: \n    bundle path="/Applications/ChatGPT.app"\n    pid = 81069 !cgsConnection'), { pid: 81069, path: '/Applications/ChatGPT.app' });
+  assert.deepEqual(appDetails('    bundle path=[ NULL ] \n'), { pid: null, path: null });
+  const info = { 'ASN:0x0-0x1': 'bundle path="/Applications/Codeshi.app"\n pid = 7 !', 'ASN:0x0-0x2': 'bundle path=[ NULL ]\n pid = 8 !', 'ASN:0x0-0x3': 'bundle path="/Applications/Notes.app"\n pid = 9 !' };
+  const machine = front => { const calls = []; return { calls, execFile: (file, args, _options, done) => { calls.push([file.split('/').pop(), ...args].join(' ')); done(null, file.endsWith('open') ? '' : args[0] === 'front' ? `${front}:\n` : args[0] === 'visibleProcessList' ? 'ASN:0x0-0x1-"Codeshi": ASN:0x0-0x2-"Helper": ASN:0x0-0x3-"Notes":' : info[args[3]]); } }; };
+  const ours = machine('ASN:0x0-0x1');
+  assert.equal(await giveFrontBack({ pid: 7, execFile: ours.execFile, platform: 'darwin' }), true);
+  assert.equal(ours.calls.at(-1), 'open /Applications/Notes.app', 'The first app behind it that can be opened.');
+  const theirs = machine('ASN:0x0-0x3');
+  assert.equal(await giveFrontBack({ pid: 7, execFile: theirs.execFile, platform: 'darwin' }), false);
+  assert(!theirs.calls.some(call => call.startsWith('open')), 'Another app is in front already, so nothing is brought forward.');
+  assert.equal(await giveFrontBack({ pid: 7, execFile: ours.execFile, platform: 'win32' }), false);
 });
 
 test('the panel announces alerts, but its progress pill is quiet: no announcement and no drop animation', () => {

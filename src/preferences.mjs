@@ -42,7 +42,7 @@ export function preferencePatch(input, previous = {}, { languages = ['en'] } = {
   }
   if (input.onboarding !== undefined) {
     const value = input.onboarding;
-    if (!value || typeof value !== 'object' || !Number.isInteger(value.step) || value.step < 0 || value.step > 3) fail('Choose a valid setup step.');
+    if (!value || typeof value !== 'object' || !Number.isInteger(value.step) || value.step < 0 || value.step > 4) fail('Choose a valid setup step.');
     patch.onboarding = { ...previous.onboarding, step: value.step, dismissed: value.dismissed === true };
     if (value.completed === true) patch.onboarding.completedAt = new Date().toISOString();
   }

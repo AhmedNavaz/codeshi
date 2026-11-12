@@ -36,6 +36,11 @@ export function fileHash(folder, relative) {
   const found = readableFile(folder, relative);
   return found && found.stat.size <= 2 * 1024 * 1024 ? sha256(fs.readFileSync(found.file)) : null;
 }
+// A file's text as it is now, with the same limits as fileHash.
+export function fileText(folder, relative) {
+  const found = readableFile(folder, relative);
+  return found && found.stat.size <= 2 * 1024 * 1024 ? fs.readFileSync(found.file, 'utf8') : null;
+}
 export const headOf = folder => git(folder, ['rev-parse', '--short', 'HEAD'])?.trim() || null;
 export const revisionOf = folder => ({ head: headOf(folder), branch: git(folder, ['symbolic-ref', '--short', '-q', 'HEAD'])?.trim() || null });
 function git(folder, args) {

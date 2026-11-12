@@ -6,7 +6,7 @@
 /* The way in: the seal and the word, at the right of the header. In Flow it reads Leave Flow. */
 .flow-entry { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; margin-left: 6px; padding: 0 11px 0 8px; border: 1px solid var(--border-strong); border-radius: 14px; background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; -webkit-app-region: no-drag; }
 .flow-entry:hover:enabled { background: var(--hover); color: var(--text-strong); }
-.flow-entry:disabled { opacity: .4; }
+.flow-entry:disabled, .flow-entry[aria-disabled="true"] { opacity: .4; }
 .flow-entry-mark { width: 14px; height: 14px; }
 .flow-entry[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 50%, transparent); color: var(--link); }
 

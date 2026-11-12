@@ -14,6 +14,8 @@ import { cliCommand, createTerminalRoutes } from './terminal.mjs';
 import { createVoiceRoutes } from './voice.mjs';
 import { buildRecap } from './recap.mjs';
 import { createWorkspaceRoutes } from './workspace-routes.mjs';
+import { createGitHubRepoRoutes } from './github-repos.mjs';
+import { createBackupRoutes } from './backup.mjs';
 import { randomBytes } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
 import { createReviewRoutes } from './agent-review-routes.mjs';
@@ -46,7 +48,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/updates.js': ['updates.js', 'text/javascript; charset=utf-8'], '/updater.js': ['updater.js', 'text/javascript; charset=utf-8'], '/updates.css': ['updates.css', 'text/css; charset=utf-8'],
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
-  '/github-context.js': ['github-context.js', 'text/javascript; charset=utf-8'], '/pull-request.js': ['pull-request.js', 'text/javascript; charset=utf-8'], '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
+  '/github-context.js': ['github-context.js', 'text/javascript; charset=utf-8'], '/pull-request.js': ['pull-request.js', 'text/javascript; charset=utf-8'], '/github-repos.js': ['github-repos.js', 'text/javascript; charset=utf-8'], '/backup.js': ['backup.js', 'text/javascript; charset=utf-8'], '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
   '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'], '/plan-view.js': ['plan-view.js', 'text/javascript; charset=utf-8'], '/plan-view.css': ['plan-view.css', 'text/css; charset=utf-8'], '/board.js': ['board.js', 'text/javascript; charset=utf-8'], '/board.css': ['board.css', 'text/css; charset=utf-8'], '/watch-along.js': ['watch-along.js', 'text/javascript; charset=utf-8'], '/watch-along.css': ['watch-along.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
@@ -113,6 +115,20 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   let sharing=(sharingURL||config.sharingURL)?new SharingClient({baseUrl:sharingURL||config.sharingURL,storePath:path.join(registry.dataRoot,'sharing-client.json'),createKey:process.env.AI_RELAY_SHARING_CREATE_KEY}):null;
   const configureSharing=input=>{const baseUrl=validateSharingURL(input.baseUrl);sharing=new SharingClient({baseUrl,storePath:path.join(registry.dataRoot,'sharing-client.json'),createKey:process.env.AI_RELAY_SHARING_CREATE_KEY});saveSettings({sharingURL:baseUrl});return {baseUrl};};
   const workspaceRoutes = createWorkspaceRoutes({ registry, body, json });
+  const githubRepoRoutes = createGitHubRepoRoutes({ registry, body, json, settings: () => config, saveSettings });
+  // A backup's settings (#160) go through the same checks as the ones changed in Settings; any that don't pass are left.
+  const applyBackupSettings = incoming => {
+    const applied = [], listed = languages(localesDir).map(item => item.id), patch = {};
+    for (const [key, field] of [['appearance', 'theme'], ['language', 'language'], ['defaults', 'defaults'], ['contextLimit', 'contextLimit'], ['verificationCadence', 'verificationCadence'], ['suggestions', 'suggestions']]) {
+      if (incoming[key] === undefined) continue;
+      try { Object.assign(patch, preferencePatch({ [field]: incoming[key] }, config, { languages: listed })); applied.push(key); } catch { /* Left as it is here. */ }
+    }
+    if (Object.keys(patch).length) saveSettings(patch);
+    if (incoming.notifications && typeof incoming.notifications === 'object') { try { setNotificationPreferences(alertPreferences(incoming.notifications)); applied.push('notifications'); } catch { /* Left as it is here. */ } }
+    if (incoming.handoff && typeof incoming.handoff === 'object') { try { setHandoffPreferences({ threshold: incoming.handoff.threshold, automatic: incoming.handoff.automatic === true }); applied.push('handoff'); } catch { /* Left as it is here. */ } }
+    return applied;
+  };
+  const backupRoutes = createBackupRoutes({ registry, body, json, settings: () => config, applySettings: incoming => applyBackupSettings(incoming) });
   const conversationRoutes = createConversationRoutes({ registry, body, json, importer });
   const reviewRoutes = createReviewRoutes({ registry, body, json });
   const checkpointRoutes = createCheckpointRoutes({ registry, body, json });
@@ -342,6 +358,8 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (await terminalRoutes.route({ req, res, url })) return;
       if (await voiceRoutes.route({ req, res, url })) return;
       if (await workspaceRoutes({ req, res, url })) return;
+      if (await githubRepoRoutes({ req, res, url })) return;
+      if (await backupRoutes({ req, res, url })) return;
       if (await conversationRoutes({ req, res, url })) return;
       if (await reviewRoutes({ req, res, url })) return;
       if (await checkpointRoutes({ req, res, url })) return;

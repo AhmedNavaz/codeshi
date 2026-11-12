@@ -86,6 +86,8 @@ export function createWorkspaceRoutes({ registry, body, json, readGitHub = githu
         if (!current || current.path !== folder.path) fail('That folder is no longer in this workspace.', 404);
         return work();
       }, { workspaces: [root] }) });
+      // A commit from the panel is noted in the workspace's conversation, so Timeline can say where it came from.
+      if (result?.commit?.hash) { try { const broker = registry.broker(projectId); broker.record(broker.get(registry.mainConversationId(projectId)), { type: 'git_commit', folderId: folder.id, hash: result.commit.hash }); } catch { /* The commit stands either way. */ } }
       json(res, 200, { ...result, git: await gitActivity(project.folders) }); return true;
     }
     if (!['/api/git', '/api/git/diff'].includes(url.pathname)) return false;

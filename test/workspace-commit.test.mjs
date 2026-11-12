@@ -134,6 +134,8 @@ test('the Git routes stage and commit only on POST, and answer with refreshed Gi
   const committed = await call('/api/git/commit', { folderId, message: 'Route', expected: ['web/app.js'] });
   assert.equal(committed.data.commit.subject, 'Route');
   assert.equal(committed.data.git.repositories[0].totalChanges, 1, 'Only the relay’s own data folder is left.');
+  const timeline = await call('/api/checkpoints');
+  assert.deepEqual(timeline.data.entries.filter(entry => entry.kind === 'commit').map(entry => [entry.subject, entry.by || null])[0], ['Route', 'panel'], 'Timeline says the commit came from the Git panel.');
 });
 
 test('Git mutations share leases with sibling-folder work and preserve the index on refusal or failure', async t => {

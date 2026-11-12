@@ -82,6 +82,8 @@
     <script src="/project-commands.js" defer></script>
     <script src="/github-context.js" defer></script>
     <script src="/pull-request.js" defer></script>
+    <script src="/github-repos.js" defer></script>
+    <script src="/backup.js" defer></script>
     <script src="/project-review.js" defer></script>
     <script src="/flow.js" defer></script>
     <script src="/flow-lounge-puzzles.js" defer></script>
@@ -166,14 +168,22 @@
         <button id="add-project" type="button" aria-expanded="false" aria-controls="project-panel" hidden>New workspace</button>
 
         <section id="project-panel" class="project-panel" aria-labelledby="project-panel-title" hidden>
-          <div class="project-panel-heading"><div><h2 id="project-panel-title">New workspace</h2><p>Add one or more project folders. Their files stay in their current locations.</p></div><button id="close-project" class="close-project icon-button" type="button" aria-label="Close workspace form"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
-          <form id="project-form" class="project-form">
+          <div class="project-panel-heading"><div><h2 id="project-panel-title">New workspace</h2><p id="project-panel-description">Add one or more project folders. Their files stay in their current locations.</p></div><button id="close-project" class="close-project icon-button" type="button" aria-label="Close workspace form"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+          <div class="project-source" role="tablist" aria-label="Add from"><button id="project-source-folders" class="project-source-tab" type="button" role="tab" aria-selected="true" aria-controls="project-form">Folders</button><button id="project-source-github" class="project-source-tab" type="button" role="tab" aria-selected="false" aria-controls="github-repos" tabindex="-1">From GitHub</button></div>
+          <section id="github-repos" class="github-repos" role="tabpanel" aria-labelledby="project-source-github" hidden>
+            <p id="github-repos-status" class="github-repos-status" role="status"></p>
+            <label class="github-repos-search"><span class="sr-only">Search repositories</span><input id="github-repos-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search your repositories" aria-controls="github-repos-list" disabled /></label>
+            <div id="github-repos-list" class="github-repos-list" role="list" aria-label="Your repositories" aria-busy="true"></div>
+            <div class="github-clone-folder"><label for="github-clone-folder">Clone into</label><input id="github-clone-folder" autocomplete="off" spellcheck="false" placeholder="~/Developer" /><button id="github-clone-pick" class="secondary-button" type="button" hidden>Choose…</button></div>
+            <p id="github-repos-error" class="project-error" role="alert" hidden></p>
+          </section>
+          <form id="project-form" class="project-form" role="tabpanel" aria-labelledby="project-source-folders">
             <label>Workspace name <span>optional</span><input id="project-name" name="name" autocomplete="off" placeholder="e.g. Customer portal" maxlength="100" /></label>
             <label>Folders <span>one path per line</span><textarea id="project-paths" name="folders" autocomplete="off" placeholder="~/projects/frontend&#10;~/projects/backend" rows="3" required spellcheck="false"></textarea></label>
             <div class="form-actions"><button id="pick-folder" class="secondary-button" type="button" hidden>Choose folders…</button><button id="save-project" class="primary-button" type="submit">Create workspace <span aria-hidden="true">→</span></button></div>
           </form>
           <p id="project-error" class="project-error" role="alert" hidden></p>
-          <p class="panel-alternative">After opening the workspace, you can review previous conversations linked to its folders.</p>
+          <p id="project-panel-alternative" class="panel-alternative">After opening the workspace, you can review previous conversations linked to its folders.</p>
         </section>
 
         <section id="folder-panel" class="project-panel" aria-labelledby="folder-panel-title" hidden>
@@ -674,6 +684,10 @@
         <label class="memory-copy-retire"><input id="memory-copy-retire" type="checkbox"> Retire these memories afterwards. Agents will read them from AGENTS.md instead.</label>
         <p id="memory-copy-error" class="project-error" role="alert" hidden></p></div><footer class="panel-dialog-foot"><button id="memory-copy-cancel" class="secondary-button" type="button">Cancel</button><button id="memory-copy-submit" class="primary-button" type="submit">Copy</button></footer></form>
     </dialog>
+    <dialog id="backup-dialog" class="panel-dialog backup-dialog" aria-labelledby="backup-title" aria-describedby="backup-description">
+      <form id="backup-form" novalidate><header class="panel-dialog-head"><div><h2 id="backup-title">Export Codeshi backup</h2><p id="backup-description"></p></div></header><div class="panel-dialog-body">
+        <div id="backup-content"></div><p id="backup-error" class="project-error" role="alert" hidden></p></div><footer class="panel-dialog-foot"><span id="backup-status" class="backup-status" role="status"></span><button id="backup-cancel" class="secondary-button" type="button">Cancel</button><button id="backup-submit" class="primary-button" type="submit">Export</button></footer></form>
+    </dialog>
     <dialog id="memory-dialog" class="panel-dialog memory-dialog" aria-labelledby="memory-dialog-title">
       <form id="memory-form"><header class="panel-dialog-head"><div><h2 id="memory-dialog-title">Remember this</h2><p>Every agent in this workspace will be told this when it's relevant. Keep it to what matters.</p></div></header><div class="panel-dialog-body">
         <label class="brief-label" for="memory-text">What to remember</label><textarea id="memory-text" class="brief-note" rows="5" maxlength="2000" required></textarea>
@@ -686,6 +700,12 @@
       <div class="rewind-body"><p id="rewind-summary" class="rewind-summary"></p><div id="rewind-conversation" class="rewind-conversation" hidden><label class="rewind-conversation-choice"><input id="rewind-conversation-check" type="checkbox"><span><strong>Also rewind the conversation</strong><span id="rewind-conversation-detail" class="rewind-conversation-detail"></span></span></label></div><div id="rewind-files" class="rewind-files"></div></div>
       <p id="rewind-error" class="project-error rewind-error" role="alert" hidden></p>
       <footer class="panel-dialog-foot rewind-footer"><span id="rewind-note" class="rewind-note"></span><button id="cancel-rewind" class="secondary-button" type="button">Cancel</button><button id="confirm-rewind" class="primary-button" type="button" disabled>Undo changes</button></footer>
+    </dialog>
+    <dialog id="commit-dialog" class="rewind-dialog commit-dialog" aria-labelledby="commit-title" aria-describedby="commit-summary">
+      <header class="panel-dialog-head"><div><h2 id="commit-title">Commit</h2><p id="commit-meta"></p></div><button id="close-commit" class="icon-button" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
+      <div class="rewind-body"><p id="commit-summary" class="rewind-summary"></p><p id="commit-body" class="commit-body" hidden></p><div id="commit-files" class="rewind-files"></div></div>
+      <p id="commit-error" class="project-error rewind-error" role="alert" hidden></p>
+      <footer class="panel-dialog-foot rewind-footer"><span class="rewind-note">Read only. Restoring files uses checkpoints.</span><button id="commit-github" class="secondary-button" type="button" hidden>Open on GitHub</button><button id="done-commit" class="secondary-button" type="button">Close</button></footer>
     </dialog>
 
     <dialog id="github-context-dialog" class="review-dialog github-context-dialog" aria-labelledby="github-context-title" aria-describedby="github-context-description">

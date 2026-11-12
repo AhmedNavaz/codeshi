@@ -21,13 +21,22 @@
   }
   const act = input => change(input).catch(error => api.showNotice(error.message));
 
+  // Why an entry needs a recheck, each reason in its own sentence. Editing and saving it counts as checking it again.
+  const branchName = name => name ? `‘${name}’` : 'no branch';
+  const recheckReason = entry => [
+    entry.folderGone && 'Its folder is no longer in this workspace.',
+    entry.changedFiles?.length && `Changed since this was saved: ${entry.changedFiles.join(', ')}.`,
+    entry.dependenciesChanged?.length && `Dependencies changed in ${entry.dependenciesChanged.join(', ')}.`,
+    entry.branchChanged && `Saved on ${branchName(entry.savedBranch)}, now on ${branchName(entry.currentBranch)}.`,
+    'Edit and save it once you have checked it.'
+  ].filter(Boolean).join(' ');
   const kind = entry => { const dot = node('span', 'kind-dot'); dot.dataset.kind = entry.kind; dot.setAttribute('aria-hidden', 'true'); return dot; };
   function renderEntry(entry) {
     const row = node('li', `panel-row${entry.status === 'retired' ? ' retired' : ''}`), folder = foldersOf().find(item => item.id === entry.folderId);
     const title = node('div', 'panel-row-title'); title.append(kind(entry), node('span', 'panel-row-text', entry.text));
     const meta = node('div', 'panel-row-meta');
     meta.append(node('span', '', [KINDS[entry.kind], folder?.displayName || folder?.name, entry.source?.commit].filter(Boolean).join(' · ')));
-    if (entry.needsRecheck && entry.status !== 'retired') { const flag = node('span', 'bad', 'Needs recheck'); flag.title = entry.changedFiles?.length ? `Changed since this was saved: ${entry.changedFiles.join(', ')}` : 'Its folder is no longer in this workspace.'; meta.append(flag); }
+    if (entry.needsRecheck && entry.status !== 'retired') { const flag = node('span', 'bad', 'Needs recheck'), why = recheckReason(entry); flag.title = why; flag.append(node('span', 'sr-only', `: ${why}`)); meta.append(flag); }
     const actions = node('span', 'panel-row-actions');
     actions.append(button('Edit', () => open(entry)));
     if (window.relaySkills && entry.status === 'active') actions.append(button('Make a skill', () => window.relaySkills.fromMemory(entry)));

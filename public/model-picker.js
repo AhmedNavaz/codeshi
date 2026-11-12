@@ -117,7 +117,8 @@
         note.textContent = provider === 'local' ? t('Not set up') : t('Not connected');
         if (!query) {
           const setup = node('button', undefined, 'picker-row picker-setup');
-          setup.type = 'button'; setup.dataset.nav = 'true';
+          // Every row in the list is an option, so a screen reader counts and reads them as the list it is (#26).
+          setup.type = 'button'; setup.dataset.nav = 'true'; setup.setAttribute('role', 'option'); setup.setAttribute('aria-selected', 'false');
           setup.append(node('span', provider === 'local' ? t('Set up local models…') : t('Connect {agent}…', { agent: names[provider] }), 'picker-row-name'));
           setup.addEventListener('click', () => { close(); if (provider === 'local') window.relayLocal?.open(); else if (window.relaySettings) window.relaySettings.open('accounts'); else $('relay-settings')?.click(); });
           section.push(setup);
@@ -130,7 +131,7 @@
         section.push(...visible.map(row => optionRow(provider, row)));
         if (visible.length < rows.length) {
           const more = node('button', undefined, 'picker-row picker-more');
-          more.type = 'button'; more.dataset.nav = 'true';
+          more.type = 'button'; more.dataset.nav = 'true'; more.setAttribute('role', 'option'); more.setAttribute('aria-selected', 'false');
           more.append(node('span', provider === 'local' ? t('More Local models') : t('More {agent} models', { agent: names[provider] }), 'picker-row-name'), node('span', String(rows.length - visible.length), 'picker-row-tag'));
           more.addEventListener('click', () => { expanded.add(provider); render(); highlight(more.dataset.index ? +more.dataset.index : active); });
           section.push(more);

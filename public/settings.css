@@ -14,6 +14,7 @@
 .settings-search:focus-within { border-color: var(--focus); outline: 1px solid var(--focus); }
 .settings-search > .icon { flex: none; width: 14px; height: 14px; color: var(--muted); }
 .settings-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text-strong); font: 12px var(--font); }
+.settings-dialog .settings-search input:focus-visible { outline: 0; }
 .settings-search input::placeholder { color: var(--faint); }
 #settings-nav { display: grid; align-content: start; gap: 2px; }
 #settings-nav button { display: flex; align-items: center; gap: 10px; height: var(--control-lg); padding: 0 10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--muted); font: var(--font-ui-base) var(--font); white-space: nowrap; text-align: left; cursor: pointer; }

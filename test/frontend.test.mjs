@@ -63,6 +63,8 @@ function documentFixture(){
   const meta=document.createElement('meta');meta.setAttribute('name','theme-color');root.append(meta);
   const appearance=document.getElementById('appearance-options')||root;for(const match of html.matchAll(/<button\b[^>]*data-appearance="([^"]+)"[^>]*>/g)){const button=document.createElement('button');button.setAttribute('data-appearance',match[1]);appearance.append(button);}
   for(const match of html.matchAll(/<button\b[^>]*data-page="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)){const button=document.createElement('button');button.setAttribute('data-page',match[1]);button.textContent=match[2].replace(/<[^>]+>/g,'');document.getElementById('settings-nav').append(button);}
+  // Each side panel draws its own row of tabs to the other panels.
+  for(const match of html.matchAll(/<aside id="(\w+-panel)"[^>]*>[\s\S]*?<div class="panel-tabs"[^>]*>([\s\S]*?)<\/div>/g)){const list=document.createElement('div');list.className='panel-tabs';list.setAttribute('role','tablist');for(const tab of match[2].matchAll(/<button class="panel-tab"[^>]*data-panel="(\w+)" aria-selected="(\w+)"/g)){const button=document.createElement('button');button.className='panel-tab';button.setAttribute('role','tab');button.setAttribute('data-panel',tab[1]);button.dataset.panel=tab[1];button.setAttribute('aria-selected',tab[2]);list.append(button);}document.getElementById(match[1]).append(list);}
   for(const id of ['send-button','stop-button','conversation-state'])document.getElementById(id).append(document.createElement('span'),document.createElement('span'));
   for(const id of ['save-project','save-folder'])document.getElementById(id).append(document.createTextNode('Save '),document.createElement('span'));
   return document;
@@ -818,13 +820,13 @@ test('background discovery failures stay quiet, and a failed dismissal does not 
 
 test('the setup launcher shows only while setup is unfinished, and Settings reopens the guide',async()=>{
   const fresh=await browser({setup:true,savedPreferences:{onboarding:{step:1}}});assert.equal(fresh.$('open-setup').hidden,false);assert.equal(fresh.$('setup-dialog').open,false,'Setup does not interrupt someone who already has workspaces.');
-  fresh.$('open-setup').click();await flush();assert.equal(fresh.$('setup-dialog').dataset.screen,'flow','Resuming skips the welcome.');assert.match(fresh.$('setup-step-status').textContent,/2 of 4/);assert.equal(fresh.$('close-setup').textContent,'Skip for now');
+  fresh.$('open-setup').click();await flush();assert.equal(fresh.$('setup-dialog').dataset.screen,'flow','Resuming skips the welcome.');assert.match(fresh.$('setup-step-status').textContent,/2 of 5/);assert.equal(fresh.$('close-setup').textContent,'Skip for now');
   fresh.$('close-setup').click();await flush();assert.equal(fresh.$('setup-dialog').open,false);assert.equal(fresh.$('open-setup').hidden,true,'Closing setup removes the sidebar launcher.');
   const done=await browser({setup:true,workbench:true,savedPreferences:{onboarding:{step:2,completedAt:'2026-10-29T00:00:00.000Z'}}});assert.equal(done.$('open-setup').hidden,true);
   done.$('relay-settings').click();await flush();assert.equal(done.$('settings').open,true);done.$('open-setup-guide').click();await flush();
-  assert.equal(done.$('settings').open,false);assert.equal(done.$('setup-dialog').open,true);assert.match(done.$('setup-step-status').textContent,/1 of 4/,'The guide starts from the beginning once setup is complete.');
+  assert.equal(done.$('settings').open,false);assert.equal(done.$('setup-dialog').open,true);assert.match(done.$('setup-step-status').textContent,/1 of 5/,'The guide starts from the beginning once setup is complete.');
   assert.equal(done.$('close-setup').textContent,'Close');assert.equal(done.$('setup-back').disabled,true);
-  done.$('setup-next').click();await flush();done.$('setup-next').click();await flush();done.$('setup-next').click();await flush();assert.equal(done.$('setup-next').textContent,'Done');
+  for(let index=0;index<4;index++){done.$('setup-next').click();await flush();}assert.equal(done.$('setup-next').textContent,'Done');
   done.$('setup-next').click();await flush();assert.equal(done.$('setup-dialog').open,false,'Reviewing skips the welcome and the summary.');
 });
 
@@ -1122,7 +1124,7 @@ test('first run welcomes, walks through the workspace, the working style, the ag
   assert.equal(dialog.open,true);assert.equal(dialog.dataset.screen,'welcome');assert.equal(ui.$('setup-flow').hidden,true);assert.match(ui.$('setup-hero-content').textContent,/Your workspace for AI coding agents/);
   assert.equal(ui.$('launch-screen').classList.contains('done'),true,'The launch screen gives way once setup knows what to show.');
   ui.document.querySelector('.onboarding-cta').click();await flush();
-  assert.equal(dialog.dataset.screen,'flow');assert.equal(ui.$('setup-hero').hidden,true);assert.match(ui.$('setup-step-status').textContent,/1 of 4/);
+  assert.equal(dialog.dataset.screen,'flow');assert.equal(ui.$('setup-hero').hidden,true);assert.match(ui.$('setup-step-status').textContent,/1 of 5/);
   assert.match(ui.$('setup-content').textContent,/Start with your workspace/,'Setup starts with the workspace.');assert.match(ui.$('setup-content').textContent,/add folders later from the sidebar/);
   ui.$('setup-back').click();await flush();assert.equal(dialog.dataset.screen,'welcome','Back from the first step returns to the welcome.');ui.document.querySelector('.onboarding-cta').click();await flush();
   ui.$('setup-next').click();await flush();
@@ -1146,7 +1148,8 @@ test('first run welcomes, walks through the workspace, the working style, the ag
   assert.deepEqual(saved.defaults,{provider:'claude',model:'model-one',effort:'high',mode:'read',billing:'subscription',view:'flow'});assert.equal(saved.theme,undefined);
   assert.deepEqual(ui.requests.filter(request=>request.path==='/api/appearance'&&request.method==='POST').map(request=>request.body.theme),['light'],'The theme is saved once, the same way as from the status bar.');
   assert.equal(saved.onboarding.step,3);assert.equal(saved.onboarding.dismissed,true);
-  ui.$('open-setup').click();await flush();assert.equal(dialog.dataset.screen,'flow');assert.match(ui.$('setup-step-status').textContent,/4 of 4/,'Setup resumes where it was left.');
+  ui.$('open-setup').click();await flush();assert.equal(dialog.dataset.screen,'flow');assert.match(ui.$('setup-step-status').textContent,/4 of 5/,'Setup resumes where it was left.');
+  ui.$('setup-next').click();await flush();assert.match(ui.$('setup-content').textContent,/Know when an agent needs you/,'Alerts are the last step.');assert.equal(ui.$('setup-next').textContent,'Finish');
   ui.$('setup-next').click();await flush();assert.equal(dialog.dataset.screen,'done');
   const summary=ui.$('setup-hero-content').textContent;
   assert.match(summary,/You start in Flow/);assert.match(summary,/Claude Code/);assert.match(summary,/Light theme/);assert.match(summary,/read only/);assert.match(summary,/No workspace yet/);
@@ -1190,7 +1193,7 @@ test('an appearance chosen in the status bar survives reopening the setup checkl
   appearanceButton(ui,'light').click();await flush();assert.equal(palette(ui),'light');
   ui.window.relaySetup.open();await flush();
   assert.deepEqual(pressedCards(ui),['Light'],'Setup shows the choice made in the status bar.');
-  ui.$('setup-next').click();await flush();assert.equal(ui.$('setup-dialog').dataset.screen,'done');
+  ui.$('setup-next').click();await flush();ui.$('setup-next').click();await flush();assert.equal(ui.$('setup-dialog').dataset.screen,'done');
   assert.equal(palette(ui),'light','Moving through setup keeps the choice made since the page loaded.');assert.deepEqual(appearanceSaves(ui),['light']);
 });
 
@@ -1221,11 +1224,11 @@ test('Settings, setup, the status bar and other windows agree on one appearance 
 
 test('setup resumes its saved step without importing, and failed saves keep the current step',async()=>{
   const ui=await browser({empty:true,existing:false,setup:true,insights:true,savedPreferences:{onboarding:{step:3,dismissed:true}}});
-  assert.equal(ui.$('setup-dialog').open,false);ui.$('open-setup').click();await flush();assert.match(ui.$('setup-step-status').textContent,/4 of 4/,'A saved step resumes where it was left.');
+  assert.equal(ui.$('setup-dialog').open,false);ui.$('open-setup').click();await flush();assert.match(ui.$('setup-step-status').textContent,/4 of 5/,'A saved step resumes where it was left.');
   assert.equal(ui.document.querySelector('.setup-import-card'),null);assert.equal(ui.$('import-dialog').open,false);
   assert.equal(ui.requests.some(request=>request.path==='/api/import-sources'),false,'Onboarding does not discover or import chats.');
   ui.setIntercept((request,next)=>request.path==='/api/preferences'&&request.method==='POST'?response({error:'Preferences could not be written.'},503):next());
-  ui.$('setup-back').click();await flush();assert.match(ui.$('setup-step-status').textContent,/4 of 4/);assert.equal(ui.$('setup-error').hidden,false);assert.match(ui.$('setup-error').textContent,/could not be written/);
+  ui.$('setup-back').click();await flush();assert.match(ui.$('setup-step-status').textContent,/4 of 5/);assert.equal(ui.$('setup-error').hidden,false);assert.match(ui.$('setup-error').textContent,/could not be written/);
 });
 
 test('setup keeps keyboard focus on a choice when the step is rebuilt, and tells a screen reader what the folders are',async()=>{
@@ -1236,7 +1239,7 @@ test('setup keeps keyboard focus on a choice when the step is rebuilt, and tells
   assert.equal(focused().className,'setup-ready','With the folder button gone, focus lands on the result.');
   assert.match(ui.$('setup-announce').textContent,/frontend, /,'The folder check is announced when it arrives.');
   ui.$('setup-next').click();await flush();
-  assert.deepEqual(ui.$('setup-steps').children.map(entry=>entry.getAttribute('aria-label')),['Workspace, done',null,null,null]);
+  assert.deepEqual(ui.$('setup-steps').children.map(entry=>entry.getAttribute('aria-label')),['Workspace, done',null,null,null,null]);
   const card=view=>ui.document.querySelectorAll('.setup-style').find(entry=>entry.dataset.view===view);
   card('flow').focus();card('flow').click();await flush();
   assert.equal(focused(),card('flow'),'Choosing a style keeps focus on it.');assert.equal(card('flow').getAttribute('aria-checked'),'true');assert.equal(card('flow').tabIndex,0);
@@ -1257,7 +1260,7 @@ test('onboarding finishes folder setup and the summary before discovering projec
   assert.equal(setup.open,true);assert.equal(setup.dataset.screen,'flow');assert.match(ui.$('setup-content').textContent,/frontend is ready/);
   assert.equal(ui.document.querySelectorAll('.setup-readiness-row').length,1,'Setup shows what the new folder is.');assert.match(ui.document.querySelector('.setup-readiness-row').textContent,/frontend/);
   assert.equal(ui.$('previous-chats-notice').hidden,true);assert.equal(ui.requests.some(request=>request.path==='/api/import-sources'),false);
-  for(let index=0;index<4;index++){ui.$('setup-next').click();await flush();}assert.equal(setup.dataset.screen,'done');assert.equal(setup.open,true);assert.match(ui.$('setup-hero-content').textContent,/frontend is ready/);
+  for(let index=0;index<5;index++){ui.$('setup-next').click();await flush();}assert.equal(setup.dataset.screen,'done');assert.equal(setup.open,true);assert.match(ui.$('setup-hero-content').textContent,/frontend is ready/);
   assert.equal(ui.requests.some(request=>request.path==='/api/import-sources'),false,'Discovery waits until the user enters the workspace.');
   ui.document.querySelector('.onboarding-cta').click();await flush();assert.equal(setup.open,false);
   assert.equal(ui.requests.filter(request=>request.path==='/api/preferences'&&request.method==='POST').at(-1).body.onboarding.completed,true);
@@ -4028,6 +4031,7 @@ test('the terminal opens shells as tabs named after their folders, splits a tab 
   assert.equal(ui.$('terminal-panel').hidden, false); assert.equal(ui.$('bottom-panel').hidden, false);
   assert.equal(ui.$('status-terminal').getAttribute('aria-pressed'), 'true');
   assert.equal(ui.$('bottom-tab-terminal').getAttribute('aria-selected'), 'true');
+  assert.deepEqual([ui.$('bottom-tab-terminal').tabIndex, ui.$('bottom-tab-run').tabIndex], [0, -1], 'The strip is one stop in the Tab order (#26).');
   assert.equal(ui.$('terminal-start').hidden, false);
   const folders = ui.$('terminal-folders').querySelectorAll('button');
   assert.deepEqual(folders.map(button => button.textContent), ['Frontend', 'Backend'], 'Each folder is a button that opens the shell there.');
@@ -4624,6 +4628,44 @@ test('Timeline lists saved points, previews a restore, and closes it when switch
   assert.equal(points()[1].disabled, true, 'Restores wait for active work.');
 });
 
+test('Timeline shows commits among checkpoints, says who made them, and opens one read only', async () => {
+  const ui = await browser({ insights: true, agentsUI: true, rewindUI: true, moreProjects: true });
+  const run = { id: 'run-one', kind: 'run', provider: 'claude', prompt: 'Add the promo field', at: '2026-11-06T08:00:00Z', status: 'complete', files: 1, checkpoints: [] };
+  const hash = 'a'.repeat(40);
+  const commits = [
+    { id: 'commit:frontend:' + hash, kind: 'commit', folderId: 'frontend', folder: 'Frontend', hash, shortHash: 'aaaaaaa', author: 'Ahmed', at: '2026-11-06T08:05:00Z', subject: 'Add the promo field', by: 'panel', url: 'https://github.com/o/r/commit/' + hash },
+    { id: 'commit:frontend:b', kind: 'commit', folderId: 'frontend', folder: 'Frontend', hash: 'b'.repeat(40), shortHash: 'bbbbbbb', author: 'Ahmed', at: '2026-11-06T08:01:00Z', subject: 'Agent commit', by: 'run', provider: 'claude', runId: 'run-one' },
+    { id: 'commit:frontend:c', kind: 'commit', folderId: 'frontend', folder: 'Frontend', hash: 'c'.repeat(40), shortHash: 'ccccccc', author: 'Sam', at: '2026-11-06T07:00:00Z', subject: 'Earlier work' }
+  ];
+  const opened = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/checkpoints') return response({ entries: [commits[0], commits[1], run, commits[2]] });
+    if (request.path === '/api/checkpoints/commit') { opened.push(request.params); return response({ folderId: 'frontend', folder: 'Frontend', hash, shortHash: 'aaaaaaa', subject: 'Add the promo field', body: 'Shown at checkout.', totalFiles: 2, merge: false, files: [{ path: 'promo.js', status: 'added', diff: '@@ -0,0 +1 @@\n+export const promo = true;' }, { path: 'logo.png', status: 'modified', binary: true, diff: null }] }); }
+    if (request.path.startsWith('/api/checkpoints/')) throw new Error(`Opening a commit must not touch checkpoints: ${request.path}`);
+    return next();
+  });
+  ui.window.relayUI.showSidePanel('timeline'); await flush();
+  const cards = [...ui.$('timeline-content').querySelectorAll('article')];
+  assert.deepEqual(cards.map(card => card.classList.contains('commit-entry')), [true, true, false, true], 'Commits sit among checkpoints in time order.');
+  assert.match(cards[0].textContent, /Commit.*Add the promo field.*aaaaaaa.*From the Git panel/);
+  assert.match(cards[1].textContent, /During Claude’s run/);
+  assert.match(cards[3].textContent, /By Sam/);
+  assert.equal(cards[0].querySelectorAll('.checkpoint-actions button').length, 0, 'A commit offers no restore.');
+  cards[0].querySelector('.commit-subject').click(); await flush();
+  assert.deepEqual([opened[0].folderId, opened[0].hash], ['frontend', hash]);
+  assert.equal(ui.$('commit-dialog').open, true);
+  assert.equal(ui.$('commit-title').textContent, 'Add the promo field');
+  assert.match(ui.$('commit-summary').textContent, /changed 2 files/);
+  assert.equal(ui.$('commit-body').textContent, 'Shown at checkout.');
+  const files = ui.$('commit-files').querySelectorAll('.rewind-file');
+  assert.match(files[0].textContent, /Added.*promo\.js.*\+1/);
+  assert.match(files[1].textContent, /Binary file/);
+  assert.equal(ui.$('commit-github').hidden, false);
+  assert.equal(ui.$('commit-dialog').querySelector('.primary-button'), null, 'Viewing a commit has nothing to confirm.');
+  ui.$('done-commit').click();
+  assert.equal(ui.$('commit-dialog').open, false);
+});
+
 test('Timeline ignores a late history response from the previous workspace', async () => {
   const ui = await browser({ insights: true, agentsUI: true, rewindUI: true, moreProjects: true });
   const pending = deferred();
@@ -4660,18 +4702,27 @@ test('alerts play their sound once, only when allowed, and Settings chooses whic
   const { posts } = alertSettings(ui);
   await ui.window.relaySettings.open('alerts'); await flush();
   assert.equal(ui.$('settings-title').textContent, 'Alerts');
-  assert.deepEqual(ui.document.querySelectorAll('tr').map(row => row.dataset.channel).filter(Boolean), ['sound', 'phone'], 'In a browser, sounds apply, and a paired phone is notified by the server.');
+  const card = moment => ui.document.querySelectorAll('.alert-moment').find(item => item.dataset.moment === moment);
+  const chip = (moment, channel) => card(moment).querySelectorAll('.alert-chip').find(item => item.dataset.channel === channel);
+  assert.deepEqual(ui.document.querySelectorAll('.alert-moment').map(item => item.dataset.moment), ['attention', 'finished', 'stopped'], 'Needs you comes first.');
+  assert.deepEqual(card('attention').querySelectorAll('.alert-chip').map(item => item.dataset.channel), ['sound', 'phone'], 'In a browser, sounds apply, and a paired phone is notified by the server.');
+  assert.equal(ui.document.querySelectorAll('h3').some(heading => heading.textContent === 'While agents work'), false, 'Live status belongs to the desktop app.');
   assert.equal(ui.document.querySelectorAll('p').some(line => line.textContent === 'Banners and the Dock icon are part of the desktop app.'), true);
-  const master = ui.labelledInput('Sound'), box = label => ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === label);
-  assert.equal(master.checked, false); assert.equal(box('Sound when a task finishes').disabled, true, 'Each moment waits for sounds to be turned on, keeping its choice.');
-  master.checked = true; master.dispatchEvent(new UIEvent('change')); await flush();
-  const finished = box('Sound when a task finishes');
-  assert.equal(finished.disabled, false);
-  finished.checked = false; finished.dispatchEvent(new UIEvent('change')); await flush();
-  assert.deepEqual(posts, [{ sound: { on: true } }, { sound: { finished: false } }]);
+  assert.equal(chip('finished', 'sound').getAttribute('aria-pressed'), 'false');
+  assert.match(card('attention').textContent, /Tip: turn on Sound/, 'Needs you suggests a sound while it has none.');
+  // Turning a chip on while its way is off turns the way on for that moment only, and plays the sound.
+  chip('finished', 'sound').click(); await flush();
+  assert.deepEqual(posts.at(-1), { sound: { on: true, attention: false, finished: true, stopped: false } });
+  assert.deepEqual(tones.slice(-4), [659.25, 1318.5, 987.77, 1975.54], 'Turning the sound on plays it.');
+  assert.deepEqual(['attention', 'finished', 'stopped'].map(moment => chip(moment, 'sound').getAttribute('aria-pressed')), ['false', 'true', 'false']);
+  chip('finished', 'sound').click(); await flush();
+  assert.deepEqual(posts.at(-1), { sound: { finished: false } }, 'Turned off, it leaves the other moments alone.');
+  assert.equal(card('finished').querySelector('.alert-try').disabled, true, 'Try it waits for something to be on.');
+  chip('stopped', 'sound').click(); await flush();
   const before = tones.length;
-  ui.document.querySelectorAll('button').find(button => button.getAttribute('aria-label') === 'Play the Stopped sound').click();
-  assert.deepEqual(tones.slice(before), [493.88, 987.76, 369.99, 739.98], 'Play lets you hear each sound first.');
+  card('stopped').querySelector('.alert-try').click(); await flush();
+  assert.deepEqual(tones.slice(before), [493.88, 987.76, 369.99, 739.98], 'Try it plays the sound.');
+  assert.match(card('stopped').querySelector('.alert-try-result').textContent, /The sound played/);
 });
 
 // A stand-in for the saved alert settings, which records each change and keeps it the way the server does.
@@ -4687,30 +4738,66 @@ function alertSettings(ui) {
   return { posts, saved: () => saved };
 }
 
-test('Alerts in Settings turn each way on or off for each moment, with the banner style and the menu bar status in the Mac app', async () => {
-  const ui = await browser({ workbench: true, alertsUI: true, desktop: true, desktopControls: true }), { posts, saved } = alertSettings(ui);
+test('setup ends with Needs you: a chip for each way, Try it, and the pill under the menu bar', async () => {
+  const ui = await browser({ setup: true, alertsUI: true, desktop: true, savedPreferences: { onboarding: { step: 4 } } }), { posts, saved } = alertSettings(ui), played = [], tried = [];
+  // A stand-in for Web Audio that records the first note of each sound played: 880 Hz is Needs you.
+  ui.window.AudioContext = class { constructor() { this.state = 'running'; this.currentTime = 0; this.destination = {}; this.notes = 0; }
+    createGain() { return { gain: { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
+    createOscillator() { return { type: '', frequency: { setValueAtTime: (value, at) => { if (value === 880 && at < 0.1) played.push(['attention', 70]); } }, connect() {}, start() {}, stop() {} }; } };
+  ui.window.relayDesktop = { ...ui.window.relayDesktop, tryAlert: async moment => { tried.push(moment); return { panel: false, banner: 'shown', badge: true, bounce: 'when-away' }; }, tryPill: async () => { tried.push('pill'); return true; } };
+  ui.$('open-setup').click(); await flush(); await flush();
+  assert.match(ui.$('setup-step-status').textContent, /5 of 5/); assert.match(ui.$('setup-content').textContent, /Know when an agent needs you/);
+  assert.deepEqual(ui.document.querySelectorAll('.alert-moment').map(card => card.dataset.moment), ['attention'], 'Only Needs you; the rest is in Settings.');
+  const chips = () => ui.document.querySelectorAll('.alert-chip');
+  assert.deepEqual(chips().map(chip => [chip.dataset.channel, chip.textContent, chip.getAttribute('aria-pressed')]),
+    [['banner', 'Banner', 'true'], ['sound', 'Sound', 'false'], ['bounce', 'Dock bounce', 'true'], ['badge', 'Dock badge', 'true']], 'A phone is left to Settings.');
+  chips().find(chip => chip.dataset.channel === 'sound').click(); await flush(); await flush();
+  assert.deepEqual(posts.at(-1), { sound: { on: true, attention: true, finished: false, stopped: false } });
+  assert.deepEqual(played, [['attention', 70]], 'Turning the sound on plays it.');
+  assert.equal(chips().find(chip => chip.dataset.channel === 'sound').getAttribute('aria-pressed'), 'true');
+  ui.document.querySelector('.alert-try').click(); await flush(); await flush();
+  assert.deepEqual(tried, ['attention']); assert.deepEqual(played.at(-1), ['attention', 70]);
+  assert.match(ui.document.querySelector('.alert-try-result').textContent, /The sound played\. The banner showed in the corner of the screen\. The Dock icon shows a 1 for a few seconds\. Switch to another app/);
+  ui.findButton('Show the pill').click(); await flush(); assert.deepEqual(tried.at(-1), 'pill');
+  const pill = ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === 'Pill under the menu bar'); assert.equal(pill.checked, false);
+  pill.checked = true; pill.dispatchEvent(new UIEvent('change')); await flush(); await flush();
+  assert.deepEqual(posts.at(-1), { progressPill: true });
+  chips().find(chip => chip.dataset.channel === 'banner').click(); await flush(); await flush();
+  assert.deepEqual([saved().banner.on, saved().banner.attention, saved().banner.finished], [true, false, true], 'Turning a chip off leaves the other moments alone.');
+  ui.$('setup-next').click(); await flush(); assert.equal(ui.$('setup-dialog').dataset.screen, 'done');
+  assert.match(ui.$('setup-hero-content').textContent, /When an agent needs you: sound, Dock bounce, Dock badge/);
+});
+
+test('Alerts in Settings: live status first, then a card for each moment with a chip for each way, and Try it shows the real thing', async () => {
+  const ui = await browser({ workbench: true, alertsUI: true, desktop: true, desktopControls: true }), { posts, saved } = alertSettings(ui), tried = [];
+  ui.window.relayDesktop = { ...ui.window.relayDesktop, tryAlert: async moment => { tried.push(moment); return { panel: false, banner: 'refused', badge: false, bounce: null }; }, tryPill: async () => { tried.push('pill'); return true; } };
   await ui.window.relaySettings.open('preferences', 'Alerts'); await flush();
-  const rows = ui.document.querySelectorAll('tr').filter(row => row.dataset.channel);
-  assert.deepEqual(rows.map(row => [row.dataset.channel, row.querySelectorAll('th')[0].textContent, row.querySelectorAll('input').map(input => input.checked)]), [
-    ['banner', 'Banner', [true, true, true, true]], ['sound', 'Sound', [false, true, true, true]], ['bounce', 'Bounce the Dock icon', [true, true, true, true]], ['badge', 'Badge on the Dock icon', [true, true, true, true]],
-    ['phone', 'Phone notification', [true, true, true, true]],
+  assert.deepEqual(ui.$('settings-content').querySelectorAll('.settings-page').find(page => page.dataset.page === 'alerts').querySelectorAll('h3').map(heading => heading.textContent).slice(0, 3), ['While agents work', 'When something happens', 'Banners and sounds']);
+  const card = moment => ui.document.querySelectorAll('.alert-moment').find(item => item.dataset.moment === moment);
+  const chip = (moment, channel) => card(moment).querySelectorAll('.alert-chip').find(item => item.dataset.channel === channel);
+  assert.deepEqual(ui.document.querySelectorAll('.alert-moment').map(item => [item.dataset.moment, item.querySelector('.alert-moment-name').textContent, item.querySelector('.alert-moment-covers').textContent]), [
+    ['attention', 'Needs you', 'An approval, a question or a handoff offer'], ['finished', 'Finished', 'A task is done, or continues by itself after a usage limit'], ['stopped', 'Stopped', 'An error, a usage limit or failing tests'],
   ]);
-  assert.deepEqual(ui.document.querySelectorAll('th').filter(column => column.scope === 'col').map(column => [column.textContent, column.title]), [['Needs you', 'An approval, a question or a handoff offer'], ['Finished', 'A task finishes, or continues by itself after a usage limit'], ['Stopped', 'An error, a usage limit or failing tests']]);
-  const box = label => ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === label);
-  // A way turned off keeps its moments for when it is turned back on.
-  const bounce = box('Bounce the Dock icon when a task finishes'); bounce.checked = false; bounce.dispatchEvent(new UIEvent('change')); await flush();
-  const banner = ui.labelledInput('Banner'); banner.checked = false; banner.dispatchEvent(new UIEvent('change')); await flush();
-  assert.equal(box('Banner when an agent needs you').disabled, true); assert.equal(box('Banner when an agent needs you').checked, true);
-  assert.equal(ui.document.querySelectorAll('tr').find(row => row.dataset.channel === 'banner').dataset.off, '');
-  const again = ui.labelledInput('Banner'); again.checked = true; again.dispatchEvent(new UIEvent('change')); await flush();
-  // The progress pill (#75) is a choice of its own: it doesn't wait for the panel to be chosen as the banner style.
-  const progress = ui.labelledInput('Show what agents are doing in a pill under the menu bar');
-  assert.deepEqual([progress.disabled, progress.checked], [false, false]);
-  progress.checked = true; progress.dispatchEvent(new UIEvent('change')); await flush();
-  ui.findButton('Panel at the top of the screen').click(); await flush();
-  assert.equal(ui.findButton('Panel at the top of the screen').getAttribute('aria-pressed'), 'true');
-  const status = ui.labelledInput('Show what agents are doing in the menu bar'); status.checked = false; status.dispatchEvent(new UIEvent('change')); await flush();
-  assert.deepEqual(posts, [{ bounce: { finished: false } }, { banner: { on: false } }, { banner: { on: true } }, { progressPill: true }, { banner: { panel: true } }, { statusItem: false }]);
+  assert.deepEqual(card('attention').querySelectorAll('.alert-chip').map(item => [item.dataset.channel, item.textContent, item.getAttribute('aria-pressed')]), [
+    ['banner', 'Banner', 'true'], ['sound', 'Sound', 'false'], ['bounce', 'Dock bounce', 'true'], ['badge', 'Dock badge', 'true'], ['phone', 'Phone', 'true'],
+  ]);
+  chip('finished', 'bounce').click(); await flush();
+  assert.equal(chip('finished', 'bounce').getAttribute('aria-pressed'), 'false');
+  assert.equal(chip('attention', 'bounce').getAttribute('aria-pressed'), 'true', 'Each moment has its own choice.');
+  // Try it says what showed, and how to fix a refused banner.
+  card('attention').querySelector('.alert-try').click(); await flush(); await flush();
+  assert.deepEqual(tried, ['attention']);
+  assert.match(card('attention').querySelector('.alert-try-result').textContent, /macOS didn’t show the banner\. Allow Codeshi in System Settings › Notifications, or choose the panel below\./);
+  assert.match(card('attention').querySelector('.alert-try-result').textContent, /A connected phone gets it for real alerts only/);
+  // The pill and the menu bar status are live status, with the pill shown on request.
+  ui.findButton('Show the pill').click(); await flush(); assert.equal(tried.at(-1), 'pill');
+  const pill = ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === 'Pill under the menu bar'); assert.deepEqual([pill.disabled, pill.checked], [false, false]);
+  pill.checked = true; pill.dispatchEvent(new UIEvent('change')); await flush();
+  ui.findButton('Panel under the menu bar').click(); await flush();
+  assert.equal(ui.findButton('Panel under the menu bar').getAttribute('aria-pressed'), 'true');
+  assert.equal(chip('attention', 'banner').textContent, 'Panel', 'The chip names the banner style chosen.');
+  const status = ui.labelledInput('Status in the menu bar'); status.checked = false; status.dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(posts, [{ bounce: { finished: false } }, { progressPill: true }, { banner: { panel: true } }, { statusItem: false }]);
   assert.deepEqual([saved().bounce.finished, saved().banner.panel, saved().progressPill, saved().statusItem], [false, true, true, false]);
   // The menus' Alert Settings… opens this section, even with Settings already open on another tab.
   await ui.window.relaySettings.open('accounts'); ui.menu('alert-settings'); await flush();
@@ -5159,8 +5246,8 @@ test('Settings searches across pages, restores its page on Escape and handles no
   assert.deepEqual(visiblePages(), ['alerts']); assert.equal(visibleRows().length, 1); assert.match(visibleRows()[0], /Volume/);
   // Redrawing one module after a saved preference must preserve search results.
   await ui.window.relaySettings.open('alerts'); await flush();
-  ui.labelledInput('Sound').checked = true; ui.labelledInput('Sound').dispatchEvent(new UIEvent('change')); await flush();
-  assert.deepEqual(posts, [{ sound: { on: true } }]);
+  ui.document.querySelectorAll('.alert-chip').find(chip => chip.dataset.channel === 'sound').click(); await flush();
+  assert.deepEqual(posts, [{ sound: { on: true, attention: true, finished: false, stopped: false } }]);
   search('sound volume');
   const volume = ui.document.querySelectorAll('input').find(input => input.getAttribute('aria-label') === 'Sound volume');
   volume.value = '35'; volume.dispatchEvent(new UIEvent('change')); await flush();
@@ -7574,7 +7661,7 @@ test('a restore can also rewind the conversation, and folded messages show as on
 
 test('Settings, the composer and the model picker use the interface language, and General offers each language with a catalog (#27)', async () => {
   const messages = { 'Keep awake': 'Mantener activo', View: 'Vista', Send: 'Enviar', 'Describe the task or ask a question…': 'Describe la tarea o haz una pregunta…', Language: 'Idioma',
-    'Same as the computer ({language})': 'Igual que el ordenador ({language})', 'Use {agent} for your next message': 'Usar {agent} para el próximo mensaje', 'Ways to alert you': 'Formas de avisarte' };
+    'Same as the computer ({language})': 'Igual que el ordenador ({language})', 'Use {agent} for your next message': 'Usar {agent} para el próximo mensaje', 'When something happens': 'Cuando pasa algo' };
   const ui = await browser({ workbench: true, desktop: true, alertsUI: true, locale: { language: 'es', messages } });
   const languages = [{ id: 'en', name: 'English', direction: 'ltr' }, { id: 'es', name: 'Español', direction: 'ltr' }];
   const every = { attention: true, finished: true, stopped: true }, alerts = { banner: { on: true, ...every, panel: false }, sound: { on: false, ...every, volume: 70, background: false }, bounce: { on: true, ...every }, badge: { on: true, ...every }, phone: { on: true, ...every }, statusItem: true };
@@ -7590,7 +7677,7 @@ test('Settings, the composer and the model picker use the interface language, an
   const page = name => ui.$('settings-content').querySelectorAll('.settings-page').find(section => section.dataset.page === name);
   const labels = name => page(name).querySelectorAll('.settings-row-label').map(label => label.textContent);
   assert.deepEqual(labels('general'), ['Vista', 'Mantener activo', 'Idioma'], 'A text without a translation stays English.');
-  assert(page('alerts').querySelectorAll('h3').some(heading => heading.textContent === 'Formas de avisarte'), 'Pages other modules draw are translated too.');
+  assert(page('alerts').querySelectorAll('h3').some(heading => heading.textContent === 'Cuando pasa algo'), 'Pages other modules draw are translated too.');
   // Following the computer names the language that gives; each language is listed by its own name.
   const select = ui.$('settings-language');
   assert.deepEqual(select.querySelectorAll('option').map(option => [option.value, option.textContent]), [['system', 'Igual que el ordenador (Español)'], ['en', 'English'], ['es', 'Español']]);
@@ -7741,6 +7828,8 @@ test('the board’s canvas places cards by dragging, draws arrows for waits, and
   const nodes = () => space.querySelectorAll('.board-node'), nodeOf = id => nodes().find(item => item.dataset.card === id), face = id => nodeOf(id).querySelector('.board-card');
   assert.equal(nodes().length, 4, 'Every card is on the canvas, placed or not.');
   assert.match(face(ids.form).textContent, /Backlog/, 'On the canvas a card says which column it’s in.');
+  assert.equal(face(ids.form).getAttribute('aria-describedby'), 'board-canvas-keys');
+  assert.match(space.querySelectorAll('p').find(item => item.id === 'board-canvas-keys').textContent, /and the arrow keys move this card\. Open it to choose which cards it waits for/, 'A screen reader hears the keyboard way to do what dragging does (#26).');
   assert.equal(nodeOf(ids.api).style.transform, 'translate(0px, 0px)');
   assert.match(nodeOf(ids.loose).style.transform, /translate\(0px, 468px\)/, 'A card nobody placed sits below the placed ones.');
   const arrows = () => space.querySelectorAll('.board-link-hit');
@@ -7806,4 +7895,43 @@ test('What’s New thanks a release’s contributors, and a name opens their Git
   assert.deepEqual(lines,[sentence,'Thanks to @second2 and @fourth for contributing to this release.'],'A sentence naming two people shows once, and people only named share a line.');
   const names=blocks[0].querySelectorAll('.updates-contributor');assert.deepEqual(names.map(name=>name.textContent),['@first-one','@third','@second2','@fourth'],'A login that isn’t a GitHub name is left out.');
   names[1].click();await flush();assert.deepEqual(ui.externalLinks,['https://github.com/third']);
+});
+
+test('the side panel tabs keep one Tab stop, move with the arrow keys and keep focus when the panel changes (#26)',async()=>{
+  const ui=await browser({layoutUI:true,insights:true,agentsUI:true,wide:true});await flush();
+  ui.window.relayAgents.open();await flush();
+  const tab=(panel,name)=>ui.$(panel+'-panel').querySelectorAll('.panel-tab').find(item=>item.dataset.panel===name);
+  assert.deepEqual(ui.$('agents-panel').querySelectorAll('.panel-tab').map(item=>item.tabIndex),[0,-1,-1,-1,-1],'Only the tab showing is in the Tab order.');
+  tab('agents','git').focus();tab('agents','git').click();await flush();
+  assert.equal(ui.$('git-panel').hidden,false);
+  assert.equal(ui.document.activeElement,tab('git','git'),'Focus moves to the same tab in the panel now showing, not to the page.');
+  const home=new UIEvent('keydown',{key:'Home'});tab('git','git').dispatchEvent(home);await flush();
+  assert.equal(home.defaultPrevented,true);assert.equal(ui.$('agents-panel').hidden,false);assert.equal(ui.document.activeElement,tab('agents','agents'));
+  const left=new UIEvent('keydown',{key:'ArrowLeft'});tab('agents','agents').dispatchEvent(left);await flush();
+  assert.equal(left.defaultPrevented,true,'The arrow keys wrap around the row.');
+  tab('agents','git').click();await flush();
+  assert.equal(ui.document.activeElement,tab('agents','agents'),'A click with the mouse leaves focus where it was.');
+});
+
+test('each message starts with a heading, so a screen reader can move from message to message (#26)',async()=>{
+  const ui=await browser({setup:true}),chat=ui.canonical.get('project-one');
+  chat.messages.push({id:'u1',runId:'run-1',role:'user',text:'Add multiplication',createdAt:'2026-11-01T10:00:00Z'},{id:'a1',runId:'run-1',role:'assistant',provider:'codex',text:'Added it.',createdAt:'2026-11-01T10:01:00Z'});
+  await ui.window.relayUI.refresh();
+  const you=ui.$('message-u1').querySelector('h3');
+  assert.equal(you.textContent,'You');assert(you.classList.contains('sr-only'),'Read by screen readers, not shown.');
+  const thread=ui.$('messages').querySelectorAll('.run-thread-heading')[0];
+  assert.equal(thread.getAttribute('role'),'heading');assert.equal(thread.getAttribute('aria-level'),'3');assert.match(thread.textContent,/Codex/);
+});
+
+test('entering and leaving Flow from the keyboard keeps focus on the Flow button (#26)',async()=>{
+  const ui=await flowBrowser({desktop:true,desktopControls:true}),toggle=ui.$('toggle-flow'),shell=ui.$('app-shell');
+  // A browser takes focus off an element that moves; Flow moves the header that holds the button.
+  for(const host of [shell,ui.$('conversation-header').parentNode]){const insert=host.insertBefore.bind(host);host.insertBefore=(child,before)=>{if(child.contains?.(ui.document.activeElement))ui.document.activeElement=ui.document.body;return insert(child,before);};}
+  toggle.focus();toggle.click();
+  assert.equal(toggle.disabled,false,'The button stays focusable while the view is checked.');assert.equal(toggle.getAttribute('aria-disabled'),'true');
+  await flush();
+  assert.equal(shell.classList.contains('flow'),true);assert.equal(toggle.getAttribute('aria-disabled'),'false');
+  assert.equal(ui.document.activeElement,toggle,'Focus is still on the button after the header moves.');
+  toggle.click();await flush();
+  assert.equal(shell.classList.contains('flow'),false);assert.equal(ui.document.activeElement,toggle);
 });

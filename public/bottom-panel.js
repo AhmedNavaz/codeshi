@@ -21,6 +21,8 @@
     for (const tool of TOOLS) {
       if (content[tool]) content[tool].hidden = !open || tool !== active;
       $(`bottom-tab-${tool}`)?.setAttribute('aria-selected', String(tool === active));
+      // One stop in the Tab order for the strip: the tab showing. The arrow keys reach the others (#26).
+      if ($(`bottom-tab-${tool}`)) $(`bottom-tab-${tool}`).tabIndex = tool === active ? 0 : -1;
       const tools = $(`${tool}-tools`); if (tools) tools.hidden = tool !== active;
       $(`status-${tool}`)?.setAttribute('aria-pressed', String(open && tool === active));
     }
@@ -49,8 +51,8 @@
   $('bottom-hide')?.addEventListener('click', hide);
   // The tab strip moves with the arrow keys, as tabs do.
   panel.querySelector('.bottom-tabs')?.addEventListener('keydown', event => {
-    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-    const next = TOOLS[(TOOLS.indexOf(active) + (event.key === 'ArrowRight' ? 1 : TOOLS.length - 1)) % TOOLS.length];
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const next = event.key === 'Home' ? TOOLS[0] : event.key === 'End' ? TOOLS.at(-1) : TOOLS[(TOOLS.indexOf(active) + (event.key === 'ArrowRight' ? 1 : TOOLS.length - 1)) % TOOLS.length];
     event.preventDefault(); show(next); $(`bottom-tab-${next}`)?.focus();
   });
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');

@@ -110,6 +110,7 @@
 .setup-connection-tools { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
 .setup-connection-tools .secondary-button { min-height: 30px; font-size: 12px; }
 .setup-footnote { margin: 0; color: var(--faint); font-size: 12px; line-height: 1.6; }
+.setup-footnote .text-link { padding: 0; font-size: inherit; vertical-align: baseline; }
 .setup-advanced { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
 .setup-advanced summary { display: flex; align-items: center; gap: 6px; width: max-content; color: var(--muted); font-size: 12.5px; list-style: none; cursor: pointer; }
 .setup-advanced summary::-webkit-details-marker { display: none; }
@@ -250,3 +251,15 @@
   .onboarding-mark .mark-seal { opacity: 1; }
   .setup-advanced summary::before { transition: none; }
 }
+/* Alerts step: the Needs you card from Settings › Alerts (alerts.css), and the pill with its switch. */
+.setup-alert-card { padding: 14px 16px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); }
+.setup-alert-live { display: flex; align-items: center; gap: 12px 16px; padding: 14px 16px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); }
+.setup-alert-live-text { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.setup-alert-live-text strong { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.setup-alert-show { flex: none; }
+#setup-content .setup-alert-card + .setup-section-title { margin-top: 24px; }
+#setup-content .setup-alert-live + .setup-footnote, #setup-content .setup-alert-card + .setup-footnote { margin-top: 16px; }
+@media (max-width: 560px) { .setup-alert-live { flex-wrap: wrap; } }
+/* The pill's switch is Settings' own switch, not one of setup's full-width fields. */
+#setup-content .setup-alert-live .settings-switch { width: 30px; min-height: 0; height: 18px; padding: 0; border-color: var(--border-strong); border-radius: 10px; background: var(--surface-strong); }
+#setup-content .setup-alert-live .settings-switch:checked { border-color: var(--accent); background: var(--accent); }

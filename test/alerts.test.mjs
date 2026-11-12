@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { alertDefaults, alertPlan, alertPreferences, alertSound, mergeAlertPreferences, momentOf, progressPillOn } from '../src/alerts.mjs';
+import { alertDefaults, alertPlan, alertPreferences, alertSample, alertSound, mergeAlertPreferences, momentOf, pillSample, progressPillOn } from '../src/alerts.mjs';
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
@@ -89,4 +89,16 @@ test('the progress pill is a choice of its own, whichever way banners show and w
   assert.throws(() => mergeAlertPreferences(on, { progressPill: 'yes' }), /on or off/);
   assert.throws(() => mergeAlertPreferences(on, { banner: { progress: true } }), /on or off/);
   assert.equal(progressPillOn(null), false);
+});
+
+test('Try it plans each moment as if you were in another app, with an example that names no real work', () => {
+  const preferences = mergeAlertPreferences(alertPreferences(), { bounce: { finished: false }, banner: { panel: true } });
+  const attention = alertSample('attention', preferences);
+  assert.equal(attention.kind, 'handoff', 'Not an approval, which would stay until answered.');
+  assert.deepEqual([attention.plan.panel, attention.plan.notification, attention.plan.badge, attention.plan.bounce], [true, false, true, true]);
+  assert.deepEqual([alertSample('finished', preferences).plan.bounce, alertSample('finished', preferences, { panelAvailable: false }).plan.notification], [false, true]);
+  assert.match(alertSample('stopped', preferences).title, /^Example/);
+  assert.equal(alertSample('toString', preferences), null); assert.equal(alertSample('', preferences), null);
+  assert.equal(alertSample('finished', preferences, { t: text => `«${text}»` }).title, '«Example: task finished»');
+  assert.deepEqual(pillSample(), { kind: 'progress', title: 'Codex · Editing · 2 files changed', body: 'Example' });
 });

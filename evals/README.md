@@ -16,6 +16,19 @@ Small repeatable tasks for finding out whether a change to Codeshi helps, before
 | `long-thread` | Shop decisions carried through unrelated folder work and a return to the shop, across three real broker turns |
 | `review` | A read-only review that has to find a seeded bug |
 
+One task per starter skill, for running with and without it. Each is an ordinary request that leaves out the point its starter covers. They were written knowing the starters, so they show whether a procedure is followed where it matters, not how often real work needs it.
+
+| Fixture | Starter | What the hidden check looks for |
+| --- | --- | --- |
+| `view-states` | `frontend-implementation` | A new view that, like its neighbours, handles loading, error and no data, and escapes names |
+| `api-endpoint` | `api-contracts` | A new endpoint that only lets the user or an admin call it, refuses bad input in the project's error shape and leaks nothing |
+| `data-migration` | `database-migration-planning` | A migration that works on a table that already has rows, and whose undo removes only what it added |
+| `accessible-toolbar` | `accessibility` | A labelled search field, a × that is a named button, and a result count that is announced |
+| `review-intent` | `independent-review` | A read-only review that finds both seeded defects: a use that is never recorded, and a case-sensitive check |
+| `test-writing` | `test-authoring` | Tests that pass on the real code and fail on each of four realistic slips |
+
+A failed check lists which of its parts failed, by the check's own names. It never stores the agent's code or reply.
+
 ## Running
 
 Recorded runs replay a saved trace through the real broker. They need no account and spend nothing, and they are what CI runs:
@@ -142,6 +155,25 @@ And skills, one run each with `claude:haiku`:
 | `bug-repair`, `test-authoring` starter on | Yes | 43,310 | 2,074 | 13.0 s |
 | `bug-repair`, no skill | Yes | 31,033 | 1,287 | 9.2 s |
 
-A skill clearly helps when it holds something the agent can't otherwise know. A general procedure on a task that doesn't need it costs more, with no gain in this run. The other starter skills have not been measured.
+A skill clearly helps when it holds something the agent can't otherwise know. A general procedure on a task that doesn't need it costs more, with no gain in this run.
+
+Then each starter on its own task, with `claude:haiku` on November 12, 2026. With and without ran in alternating pairs, three rounds, within a stated budget of 40 runs and 2M tokens. The budget ran out three runs early, so `review-intent` without and `test-writing` both ways have two runs. Tokens are input, cache reads, cache writes and output together; three runs show the median and range, two show both values. Work is the median agent working time.
+
+| Fixture | Starter | Verified with | Verified without | Tokens with | Tokens without | Output with | Output without | Work with | Work without |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `view-states` | `frontend-implementation` | 1 of 3 | 2 of 3 | 58,636 (47,116–59,316) | 44,378 (43,161–85,031) | 2,684 | 1,835 | 15.3 s | 11.4 s |
+| `api-endpoint` | `api-contracts` | 3 of 3 | 3 of 3 | 80,485 (68,155–93,548) | 52,748 (52,648–53,044) | 5,682 | 1,719 | 26.9 s | 12.1 s |
+| `data-migration` | `database-migration-planning` | 3 of 3 | 3 of 3 | 76,372 (63,266–109,641) | 57,840 (45,528–62,758) | 4,106 | 2,456 | 23.5 s | 15.4 s |
+| `accessible-toolbar` | `accessibility` | 3 of 3 | 3 of 3 | 59,562 (46,693–59,639) | 51,719 (42,501–52,373) | 2,880 | 1,614 | 17.3 s | 11.5 s |
+| `review-intent` | `independent-review` | 3 of 3 | 2 of 2 | 32,302 (31,829–32,967) | 30,096 and 30,489 | 1,932 | 1,137 and 1,360 | 19.1 s | 13.4 s |
+| `test-writing` | `test-authoring` | 2 of 2 | 2 of 2 | 75,813 and 77,769 | 33,954 and 46,171 | 4,219 and 4,496 | 2,196 and 2,798 | 23.8 s | 13.4 s |
+
+What this shows, for Haiku on these tasks:
+
+- **No starter made a task pass more often.** Five tasks passed every time either way, so their checks didn't tell the two apart: Haiku already handled what each starter covers.
+- **`frontend-implementation` did worse.** Both failed runs with it missed the loading and error states, which the other views handle and the starter tells it to check. One run without it missed loading, error and empty. An earlier pair under the same check, before it was split into named parts, went the same way: failed with, passed without. That makes 1 of 4 with and 3 of 4 without. Results don't keep the agent's code, so why isn't known.
+- **Every starter cost more.** Median total tokens rose by 7% to 92%, median output by 1.5 to 3.3 times, and median working time by 1.4 to 2.2 times. The starters ask for more reading, checking and reporting, and the agent did it.
+
+So the starters stay opt-in, and none should be turned on by default on the strength of these runs. A starter may still help a weaker or rushed agent, or on larger real work these small tasks don't represent. Neither was measured here. These were 35 runs on one model; other agents and larger tasks are not measured.
 
 Not measured yet: long real tasks, whether smaller prompts lead to more re-reading on them, and other agents on this comparison. The fixtures are small enough that **Repeat reads** barely moves.

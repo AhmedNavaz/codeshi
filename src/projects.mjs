@@ -7,11 +7,11 @@ import { Broker } from './broker.mjs';
 import { acquireProjectLock, withFileGuard, MutationCoordinator } from './mutation-lock.mjs';
 
 const journalName = /^[\da-f-]{36}\.jsonl$/;
-const stableId = value => createHash('sha256').update(value).digest('hex').slice(0, 16);
+export const stableId = value => createHash('sha256').update(value).digest('hex').slice(0, 16);
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 const tokenPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 function folderAvailable(directory) { try { return fs.statSync(directory).isDirectory(); } catch { return false; } }
-function canonicalFolder(input) {
+export function canonicalFolder(input) {
   if (typeof input !== 'string' || !input.trim()) throw fail('Enter an absolute project folder path or a path starting with ~/.');
   let directory = input.trim();
   if (directory === '~') directory = os.homedir();
@@ -141,7 +141,8 @@ export class ProjectRegistry extends EventEmitter {
         const { removedAt, ...saved } = previous;
         const renamed = { ...saved, name }; this.projects.set(previous.id, renamed); try { this.persist(); } catch (error) { this.reload(); throw error; } changed = true; return renamed;
       }
-      let id = stableId(folders[0].path); if (this.projects.has(id)) id = stableId(randomUUID());
+      // A backup being imported names the ID it prepared its files for (#160); otherwise the first folder's.
+      let id = /^[a-f\d]{16}$/.test(input.id || '') && !this.projects.has(input.id) ? input.id : stableId(folders[0].path); if (this.projects.has(id)) id = stableId(randomUUID());
       const created = { id, name: displayName(input.name, folders[0].displayName), path: folders[0].path, folders, folderAliases: aliases, conversationId: null, createdAt: new Date().toISOString() };
       this.projects.set(id, created); try { this.persist(); } catch (error) { this.reload(); throw error; } changed = true; return created;
     });
@@ -209,6 +210,20 @@ export class ProjectRegistry extends EventEmitter {
     if (!entry.folders.some(folder => folder.id === folderId)) throw fail('Workspace folder not found.', 404);
     if (entry.folders.length === 1) throw fail('Keep at least one workspace folder. Add another folder before removing this one.');
     return this.changeFolders(id, entry.folders.filter(folder => folder.id !== folderId), { ...entry.folderAliases });
+  }
+
+  // After a backup is imported (#160): the moved conversation becomes the workspace's own when it has none worth
+  // keeping, and names of folders the backup knew are kept, so its history still says which folder it meant.
+  adoptImport(id, { conversationId = null, folderAliases = {} } = {}) {
+    this.assertOpen();
+    const entry = withFileGuard(this.filename, () => {
+      this.reload(); const previous = this.entry(id), aliases = { ...previous.folderAliases }, current = new Set(previous.folders.map(folder => folder.name));
+      for (const [folderId, name] of Object.entries(folderAliases)) if (/^[a-f\d]{16}$/.test(folderId) && tokenPattern.test(name) && !aliases[folderId] && !current.has(name)) aliases[folderId] = name;
+      if (conversationId !== null && !/^[\da-f-]{36}$/.test(conversationId)) throw fail('Invalid conversation.');
+      const next = { ...previous, folderAliases: aliases, ...(conversationId ? { conversationId } : {}) };
+      this.projects.set(id, next); try { this.persist(); } catch (error) { this.reload(); throw error; } return next;
+    });
+    this.emit('projects', { projectId: id }); return this.public(entry);
   }
 
   retireBroker(id, keepLock = false, message = 'Workspace folders changed. Refresh the project before continuing.') {

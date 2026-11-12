@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { continuationRequest } from './context.mjs';
-import { failedAttempts, fileHash, foldersInText, headOf, revisionOf } from './task-context.mjs';
+import { failedAttempts, fileHash, fileText, foldersInText, headOf, revisionOf } from './task-context.mjs';
 
 // Project memory (#21): what should outlive a single task, shared by every agent in a workspace. Entries are records in the
 // conversation's journal, and nothing enters without the person's approval, so a file or a command can't plant an instruction.
@@ -8,6 +8,36 @@ import { failedAttempts, fileHash, foldersInText, headOf, revisionOf } from './t
 // cancels a pending handoff offer and a planned review.
 export const MEMORY_KINDS = ['convention', 'decision', 'solution', 'failed-approach'];
 const MAX_ENTRIES = 200, MAX_TEXT = 2000, SEND_BYTES = 4000, MAX_SUGGESTIONS = 8;
+// What a memory rests on besides the files it names. Rules you set, conventions and decisions, hold until a file they name
+// changes. Facts found in the code, working fixes and failed approaches, also need a recheck after a branch switch or a change
+// to the dependencies of their folder. A commit by itself changes neither, and a version bump isn't a dependency change.
+const FACT_KINDS = new Set(['solution', 'failed-approach']);
+const MANIFEST_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies', 'bundleDependencies', 'bundledDependencies', 'overrides', 'resolutions', 'engines', 'packageManager', 'workspaces', 'require', 'require-dev', 'imports', 'scopes'];
+const jsonManifest = text => { try { const data = JSON.parse(text); return JSON.stringify(MANIFEST_KEYS.map(key => [key, data?.[key] ?? null])); } catch { return text; } };
+const OWN_TABLES = new Set(['package', 'project', 'tool.poetry', 'workspace.package']);
+const tomlManifest = text => { let table = ''; return text.split(/\r?\n/).filter(line => { const header = line.match(/^\s*\[\s*([^\]]+?)\s*\]/); if (header) table = header[1]; return !(OWN_TABLES.has(table) && /^\s*version\s*=/.test(line)); }).join('\n'); };
+const asIs = text => text;
+// Manifests at the top of a folder. Lock files are left out: they change on routine updates within the same ranges.
+const MANIFESTS = { 'package.json': jsonManifest, 'composer.json': jsonManifest, 'deno.json': jsonManifest, 'Cargo.toml': tomlManifest, 'pyproject.toml': tomlManifest, 'pubspec.yaml': text => text.replace(/^version:.*$/gm, ''), 'go.mod': asIs, 'requirements.txt': asIs, 'Pipfile': asIs, 'Gemfile': asIs, 'Package.swift': asIs };
+export function dependencyFingerprint(folder) {
+  const found = {};
+  for (const [name, read] of Object.entries(MANIFESTS)) {
+    const text = fileText(folder, name);
+    if (text !== null) found[name] = createHash('sha256').update(read(text)).digest('hex');
+  }
+  return found;
+}
+// Where an entry was saved: the folder's commit and branch, and its dependencies. Saving an edit counts as checking it again.
+function groundsOf(folderId, folders) {
+  const folder = folders.find(item => item.id === (folderId || folders[0]?.id));
+  if (!folder) return { source: {}, dependencies: null };
+  const commit = headOf(folder);
+  return { source: commit ? { commit, revision: revisionOf(folder), folderId: folder.id } : {}, dependencies: { folderId: folder.id, files: dependencyFingerprint(folder) } };
+}
+export function editedEntry(entry, clean, folders) {
+  const grounds = groundsOf(clean.folderId, folders), { commit, revision, folderId, ...source } = entry.source || {};
+  return { ...clean, files: attachedFiles(clean.text, folders, clean.folderId), dependencies: grounds.dependencies, source: { ...source, ...grounds.source } };
+}
 const fail = message => Object.assign(new Error(message), { status: 400 });
 const signature = entry => `${entry.id}:${entry.updatedAt}`;
 const STOP_WORDS = new Set(['this', 'that', 'with', 'from', 'have', 'will', 'should', 'would', 'could', 'there', 'their', 'then', 'them', 'they', 'when', 'what', 'which', 'into', 'also', 'only', 'make', 'each', 'some', 'file', 'files', 'code', 'task', 'please', 'after', 'before', 'failed', 'error']);
@@ -34,10 +64,9 @@ export function cleanEntryInput(input = {}, folders = []) {
 }
 
 export function newEntry(input, folders, { now = new Date().toISOString() } = {}) {
-  const clean = cleanEntryInput(input, folders), folder = folders.find(item => item.id === (clean.folderId || folders[0]?.id));
-  const commit = folder ? headOf(folder) : null;
-  return { id: randomUUID(), ...clean, status: 'active', createdAt: now, updatedAt: now, files: attachedFiles(clean.text, folders, clean.folderId),
-    source: { ...(typeof input.messageId === 'string' ? { messageId: input.messageId.slice(0, 200) } : {}), ...(typeof input.runId === 'string' ? { runId: input.runId.slice(0, 200) } : {}), ...(commit ? { commit, revision: revisionOf(folder), folderId: folder.id } : {}), suggested: input.suggested === true } };
+  const clean = cleanEntryInput(input, folders), grounds = groundsOf(clean.folderId, folders);
+  return { id: randomUUID(), ...clean, status: 'active', createdAt: now, updatedAt: now, files: attachedFiles(clean.text, folders, clean.folderId), dependencies: grounds.dependencies,
+    source: { ...(typeof input.messageId === 'string' ? { messageId: input.messageId.slice(0, 200) } : {}), ...(typeof input.runId === 'string' ? { runId: input.runId.slice(0, 200) } : {}), ...grounds.source, suggested: input.suggested === true } };
 }
 
 // Whether what an entry rests on has moved. It stays usable, but is no longer stated as fact.
@@ -49,13 +78,24 @@ export function entryState(entry, folders, cache = new Map()) {
   });
   const changed = current.filter(file => file.current !== file.sha256).map(file => file.path);
   const folderGone = Boolean(entry.folderId) && !folders.some(folder => folder.id === entry.folderId);
-  const folder = folders.find(item => item.id === (entry.source?.folderId || entry.folderId || folders[0]?.id));
-  const key = 'revision\0' + folder?.id;
-  if (entry.source?.revision && !cache.has(key)) cache.set(key, folder ? revisionOf(folder) : null);
-  const revision = entry.source?.revision ? cache.get(key) : null;
-  const branchChanged = Boolean(entry.source?.revision) && JSON.stringify(entry.source.revision) !== JSON.stringify(revision);
-  return { needsRecheck: changed.length > 0 || folderGone || branchChanged, changedFiles: changed, folderGone, branchChanged,
-    validationHash: createHash('sha256').update(JSON.stringify({ files: current.map(file => [file.folderId, file.path, file.current]), revision, folderGone })).digest('hex') };
+  const fact = FACT_KINDS.has(entry.kind), savedBranch = entry.source?.revision?.branch ?? null;
+  let currentBranch = null, branchChanged = false, dependenciesChanged = [];
+  if (fact && entry.source?.revision) {
+    const folder = folders.find(item => item.id === (entry.source.folderId || entry.folderId || folders[0]?.id)), key = 'revision\0' + folder?.id;
+    if (!cache.has(key)) cache.set(key, folder ? revisionOf(folder) : null);
+    currentBranch = cache.get(key)?.branch ?? null;
+    branchChanged = savedBranch !== currentBranch;
+  }
+  const owner = fact && entry.dependencies?.files ? folders.find(item => item.id === entry.dependencies.folderId) : null;
+  if (owner) {
+    const key = 'dependencies\0' + owner.id;
+    if (!cache.has(key)) cache.set(key, dependencyFingerprint(owner));
+    const saved = entry.dependencies.files, now = cache.get(key);
+    dependenciesChanged = [...new Set([...Object.keys(saved), ...Object.keys(now)])].filter(name => saved[name] !== now[name]).sort();
+  }
+  return { needsRecheck: changed.length > 0 || folderGone || branchChanged || dependenciesChanged.length > 0, changedFiles: changed, folderGone, branchChanged,
+    ...(branchChanged ? { savedBranch, currentBranch } : {}), dependenciesChanged,
+    validationHash: createHash('sha256').update(JSON.stringify({ files: current.map(file => [file.folderId, file.path, file.current]), branch: fact ? currentBranch : null, dependenciesChanged, folderGone })).digest('hex') };
 }
 
 export function memoryView(c, folders) {
@@ -82,7 +122,7 @@ export function memoryForTask(c, { words, scope, folders, fresh, provider, limit
     const state = entryState(entry, folders, cache), version = signature(entry) + ':' + state.validationHash;
     if (delivered.has(version)) { ids.push(version); continue; }
     const folder = folders.find(item => item.id === entry.folderId);
-    const item = { kind: entry.kind, text: entry.text, ...(folder ? { folder: folder.displayName || folder.name } : {}), savedAt: entry.createdAt, ...(entry.source?.commit ? { commit: entry.source.commit } : {}), ...(state.needsRecheck ? { needsRecheck: true, ...(state.branchChanged ? { branchChanged: true } : {}), ...(state.changedFiles.length ? { changedFiles: state.changedFiles } : {}) } : {}) };
+    const item = { kind: entry.kind, text: entry.text, ...(folder ? { folder: folder.displayName || folder.name } : {}), savedAt: entry.createdAt, ...(entry.source?.commit ? { commit: entry.source.commit } : {}), ...(state.needsRecheck ? { needsRecheck: true, ...(state.branchChanged ? { branchChanged: true, savedOnBranch: state.savedBranch } : {}), ...(state.changedFiles.length ? { changedFiles: state.changedFiles } : {}), ...(state.dependenciesChanged.length ? { dependenciesChanged: state.dependenciesChanged } : {}) } : {}) };
     const size = Buffer.byteLength(JSON.stringify(item));
     if (spent + size > limit) { left++; continue; }
     spent += size; sent.push(item); ids.push(version);

@@ -92,12 +92,12 @@ export function progressTrack(previous = { texts: new Map(), latest: null }, sna
   return { texts, latest: texts.has(latest) ? latest : null };
 }
 
-// The pill's one line, or null when it has nothing to say: nothing running, or only runs dismissed with its ×. One
+// The pill's one line, or null when nothing is running. One
 // run reads like the menu bar ("Codex · Editing · 3 files changed") with its workspace; several give the count and
 // the run whose step changed last ("2 working", "Shop: Codex · Editing").
-export function progressLine(snapshot, latest, { t, tn } = english, dismissed = new Set()) {
+export function progressLine(snapshot, latest, { t, tn } = english) {
   const running = (snapshot?.rows || []).filter(row => row.kind === 'running' && row.key);
-  if (!running.some(row => !dismissed.has(row.key))) return null;
+  if (!running.length) return null;
   const row = running.find(item => item.key === latest) || running[0];
   if (running.length === 1) return { title: clip(row.text, 60), detail: clip(row.name, 40), projectId: row.projectId };
   return { title: tn(running.length, '1 working', '{count} working'), detail: clip(`${row.name}: ${row.text}`, 70), projectId: row.projectId };
@@ -148,13 +148,25 @@ export function statusMenu(snapshot, { platform = 'darwin', text = english, keep
 // item's menu. Alert Settings… chooses each way for each moment, and how banners show. Other systems have no Dock:
 // the taskbar button flashes instead of the icon bouncing. Windows has its status in the notification area (#74).
 export function alertMenu(preferences, { platform = 'darwin', text = english, statusItem = true, set = () => {}, settings = () => {} } = {}) {
-  const { t } = text, mac = platform === 'darwin', windows = platform === 'win32', way = (label, channel) => ({ label, type: 'checkbox', checked: preferences[channel].on, click: () => set({ [channel]: { on: !preferences[channel].on } }) });
+  // A way is ticked when it tells you about at least one moment, as Settings shows it. Ticking a way that has no
+  // moment left turns it on for all three.
+  const { t } = text, mac = platform === 'darwin', windows = platform === 'win32', moments = ['attention', 'finished', 'stopped'];
+  const way = (label, channel) => {
+    const value = preferences[channel], some = moments.some(moment => value[moment]), checked = Boolean(value.on && some);
+    return { label, type: 'checkbox', checked, click: () => set({ [channel]: checked ? { on: false } : { on: true, ...some ? {} : Object.fromEntries(moments.map(moment => [moment, true])) } }) };
+  };
+  // Live status after the alerts, as in Settings: the menu bar status and the pill under it (#75) both say what
+  // agents are doing, quietly. The status item's own menu leaves its status out, as it has Hide from Menu Bar.
+  const live = [
+    ...(mac || windows) && statusItem ? [{ label: mac ? t('Status in the Menu Bar') : t('Status in the Notification Area'), type: 'checkbox', checked: preferences.statusItem, click: () => set({ statusItem: !preferences.statusItem }) }] : [],
+    ...mac && typeof preferences.progressPill === 'boolean' ? [{ label: t('Pill Under the Menu Bar'), type: 'checkbox', checked: preferences.progressPill, click: () => set({ progressPill: !preferences.progressPill }) }] : [],
+  ];
   return [
     way(t('Banners'), 'banner'),
     way(t('Sounds'), 'sound'),
     way(mac ? t('Bounce the Dock Icon') : t('Flash the Taskbar Button'), 'bounce'),
     ...mac ? [way(t('Badge on the Dock Icon'), 'badge')] : [],
-    ...(mac || windows) && statusItem ? [{ label: mac ? t('Status in the Menu Bar') : t('Status in the Notification Area'), type: 'checkbox', checked: preferences.statusItem, click: () => set({ statusItem: !preferences.statusItem }) }] : [],
+    ...live.length ? [{ type: 'separator' }, ...live] : [],
     { type: 'separator' },
     { label: t('Alert Settings…'), click: settings },
   ];

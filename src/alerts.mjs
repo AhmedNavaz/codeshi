@@ -83,6 +83,22 @@ export function alertPlan(notice, preferences, { focused = false, panelAvailable
   return { moment, badge: !focused && on('badge'), bounce: !focused && on('bounce'), notification: banner && !panel, panel, sound: !QUIET.has(notice?.kind) && on('sound') && preferences.sound.volume > 0 };
 }
 
+// Try it in Settings › Alerts: what one moment would do right now, as chosen, with a made-up example to show. It is
+// planned as if Codeshi weren't in front, since that is when alerts come; the page plays the sound itself.
+const SAMPLES = {
+  attention: ['handoff', 'Example: an agent needs you', 'This is how Codeshi tells you an approval or a question is waiting.'],
+  finished: ['finished', 'Example: task finished', 'This is how Codeshi tells you a task is done.'],
+  stopped: ['stopped', 'Example: task stopped', 'This is how Codeshi tells you a task stopped with an error, a limit or failing tests.'],
+};
+export function alertSample(moment, preferences, { panelAvailable = true, t = value => value } = {}) {
+  const sample = Object.hasOwn(SAMPLES, String(moment)) ? SAMPLES[moment] : null;
+  if (!sample) return null;
+  const [kind, title, body] = sample;
+  return { moment, kind, title: t(title), body: t(body), plan: alertPlan({ kind }, preferences, { focused: false, panelAvailable }) };
+}
+// The pill as it reads while an agent works, for Show the pill.
+export const pillSample = (t = value => value) => ({ kind: 'progress', title: t('Codex · Editing · 2 files changed'), body: t('Example') });
+
 // Whether the pill under the menu bar may show live progress (#75). It is a choice of its own, like the menu bar
 // status: either, both or neither. Whether Codeshi is in front, and whether anything is running, is decided where it shows.
 export const progressPillOn = preferences => preferences?.progressPill === true;

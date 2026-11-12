@@ -1002,9 +1002,19 @@
     const head = element("div", "activity-entry-header");
     // A step with more to show is a button; one that is only its line stays text, which keeps it searchable.
     const viewable = !more && Boolean(step.image) && !isFolderReference(step.image);
-    const toggle = element(more || viewable ? "button" : "div", "activity-output-toggle");
+    const toggle = element(more ? "button" : "div", "activity-output-toggle");
     toggle.append(element("span", "activity-entry-title", step.verb));
     if (step.files?.length) toggle.append(fileList(step.files));
+    else if (viewable) {
+      // An image the agent read: its path opens it in the file preview, as a changed file's path opens that file.
+      const list = element("span", "activity-entry-detail activity-files"), row = element("span", "activity-file-row"), name = element("span", "activity-file");
+      const path = step.detail || displayPath(step.image) || step.image, split = path.lastIndexOf("/");
+      if (split >= 0) name.append(element("span", "activity-file-directory", path.slice(0, split + 1)));
+      name.append(element("span", "activity-file-name", path.slice(split + 1)));
+      name.title = `View image: ${step.image}`;
+      activate(name, () => openImageFile(step.image));
+      row.append(name); list.append(row); toggle.append(list);
+    }
     else if (step.detail) { const detail = element(step.mono ? "code" : "span", "activity-entry-detail", step.detail); detail.title = step.cmd || step.title || step.detail; toggle.append(detail); }
     if (more) toggle.append(element("span", "disclosure-chevron"));
     head.append(toggle, copyButton("activity-copy", "Copy", step.output || step.copy || step.raw));
@@ -1014,12 +1024,6 @@
       head.append(remember);
     }
     entry.append(node, head);
-    // An image the agent read opens in the file preview when its row is clicked.
-    if (viewable) {
-      toggle.type = "button"; toggle.title = "View image";
-      toggle.append(element("span", "activity-view-image", "View image"));
-      toggle.addEventListener("click", () => openImageFile(step.image));
-    }
     if (!more) return entry;
     const output = element("pre", "activity-output", step.diff ? undefined : step.output), outputId = "activity-output-" + entryId;
     // An edit shows the lines it removed and added in their colours.
@@ -1122,6 +1126,8 @@
     if (message.createdAt) time.dateTime = message.createdAt;
     actions.append(time);
     if (user && message.steer) heading.append(element("span", "message-steer-label", "Added while working"));
+    // Each message opens with a heading, so a screen reader can move from message to message (#26).
+    heading.setAttribute("role", "heading"); heading.setAttribute("aria-level", "3");
     if (user && message.runId && !message.steer) {
       const jumpRun = element("button", "message-action message-jump-run", "Activity");
       jumpRun.type = "button";
@@ -1167,6 +1173,7 @@
     for(let i=0;i<parts.length;i+=3){if(parts[i]){if(user)body.append(document.createTextNode(parts[i]));else renderProse(body,parts[i]);}if(parts[i+2]!==undefined){const block=element('div','code-block'),head=element('div','code-head'),pre=element('pre');head.append(element('span','code-language',parts[i+1].trim()||'code'),copyButton('code-copy','Copy code',parts[i+2]));pre.append(highlightedCode(parts[i+2],parts[i+1].trim()));block.append(head,pre);body.append(block);}}
     } finally { replyImages = null; }
     if (!user || message.steer) row.append(heading);
+    else { const you = element("h3", "sr-only", "You"); row.append(you); }
     row.append(body);
     // A prompt stays at the top of its turn while the results scroll past (see .message-prompt). A long one shows its
     // first lines until opened, so it never fills the view; an opened one scrolls normally.
@@ -1318,6 +1325,7 @@
         }
         if (parts.headKey !== headKey) {
           const heading = element("div", "message-heading run-thread-heading");
+          heading.setAttribute("role", "heading"); heading.setAttribute("aria-level", "3");
           const avatar = element("span", `message-avatar ${connection === "local" ? "local" : provider}`);
           avatar.setAttribute("aria-hidden", "true");
           heading.append(avatar, element("span", "message-author", connection === "local" ? "Local · Ollama" : label(provider)));
@@ -2886,6 +2894,8 @@
     terminal: () => { if (!state.projectId || !window.relayTerminal || window.relayFlow?.isOn?.()) return false; window.relayTerminal.toggle(); return true; },
     voice: () => Boolean(state.projectId && window.relayVoice?.toggle()),
     "local-models": () => window.relayLocal?.open(),
+    "backup-export": () => { if (covered() || !window.relayBackup) return false; window.relayBackup.open("export"); return true; },
+    "backup-import": () => { if (covered() || !window.relayBackup) return false; window.relayBackup.open("import"); return true; },
     "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), "share-live": press("share-live"), "watch-teammate": press("watch-teammate"), files: () => { if ($('files-dialog')?.open) { $('close-files').click(); return true; } return press('toggle-explorer')(); }, "keep-awake": press("keep-awake"),
     "add-folder": () => { if (covered()) return false; toggleFolderForm(true); return true; },
     agent: provider => ["codex", "claude", "gemini"].includes(provider) && press("select-" + provider)(),
@@ -2980,7 +2990,31 @@
   // The side panel's tabs: Agents, Brief, Tasks, Git and Timeline, each opened by its own module.
   const sidePanelOpeners = { agents: () => $("open-agents").click(), git: () => $("open-git").click(), brief: () => window.relayBrief?.open(), tasks: () => window.relayTasks?.open(), timeline: () => window.relayTimeline?.open() };
   const showSidePanel = name => { const panel = $(`${name}-panel`); if (panel?.hidden !== false) sidePanelOpeners[name]?.(); };
-  document.querySelectorAll(".panel-tab").forEach(tab => tab.addEventListener("click", () => showSidePanel(tab.dataset.panel)));
+  // Each panel draws its own copy of the tab row, so the tab that was used is hidden with its panel. When a tab had
+  // focus, focus moves to the same tab in the panel now showing rather than falling back to the page (#26).
+  const focusSidePanelTab = name => {
+    const panel = $(`${name}-panel`), tab = panel && !panel.hidden ? [...panel.querySelectorAll(".panel-tab")].find(item => item.dataset.panel === name) : null;
+    if (tab) tab.focus();
+  };
+  const openSidePanelTab = (name, keepFocus) => {
+    showSidePanel(name);
+    if (!keepFocus) return;
+    focusSidePanelTab(name);
+    // Some panels finish opening a moment later, after what they show is loaded.
+    requestAnimationFrame(() => { if (!$(`${name}-panel`)?.contains?.(document.activeElement)) focusSidePanelTab(name); });
+  };
+  document.querySelectorAll(".panel-tab").forEach(tab => {
+    // One stop in the Tab order per row: the tab of the panel showing. The arrow keys move between the others.
+    tab.tabIndex = tab.getAttribute("aria-selected") === "true" ? 0 : -1;
+    tab.addEventListener("click", () => openSidePanelTab(tab.dataset.panel, document.activeElement === tab));
+    tab.addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || event.altKey || event.metaKey || event.ctrlKey) return;
+      const tabs = [...tab.parentNode.querySelectorAll(".panel-tab")].filter(item => !item.hidden);
+      const at = tabs.indexOf(tab), next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (at + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+      event.preventDefault();
+      if (tabs[next] && tabs[next] !== tab) openSidePanelTab(tabs[next].dataset.panel, true);
+    });
+  });
   $("run-plan-toggle").addEventListener("click", () => {
     const list = $("run-plan-list"); list.hidden = !list.hidden;
     $("run-plan-toggle").setAttribute("aria-expanded", String(!list.hidden));

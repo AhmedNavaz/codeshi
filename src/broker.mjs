@@ -21,7 +21,7 @@ import { waitingSummary } from './context-fold.mjs';
 import { privatePath } from './task-context.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
-import { attachedFiles, cleanEntryInput, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
+import { cleanEntryInput, editedEntry, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
 import { planCopy, writeCopy } from './memory-instructions.mjs';
 import { applyBudgetRecord, isExplicitRetry, TaskBudgets } from './task-budget.mjs';
 import { SkillCatalog } from './skills.mjs';
@@ -312,6 +312,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'memory_add') c.memory = [...(c.memory || []), record.entry];
     if (record.type === 'memory_update') c.memory = (c.memory || []).map(entry => entry.id === record.id ? { ...entry, ...record.changes, updatedAt: record.at } : entry);
     if (record.type === 'memory_remove') c.memory = (c.memory || []).filter(entry => entry.id !== record.id);
+    if (record.type === 'git_commit') c.gitCommits = [...(c.gitCommits || []), { folderId: record.folderId, hash: record.hash, at: record.at }].slice(-500);
     if (record.type === 'memory_dismiss') c.memoryDismissed = [...(c.memoryDismissed || []), record.key];
     if (record.type === 'skills') { c.skills = record.skills; c.skillDirs = record.dirs; }
     if (record.type === 'quota_observation') { c.quotaReadings ||= {}; c.quotaReadings[record.provider] = { windows: record.windows, observedAt: Object.hasOwn(record, 'observedAt') ? record.observedAt : record.at }; observeReading(c, record.provider, c.quotaReadings[record.provider]); }
@@ -544,9 +545,8 @@ export class Broker extends EventEmitter {
       if ((c.memory || []).filter(entry => entry.status === 'active').length >= memoryLimit) throw Object.assign(new Error(`Memory holds up to ${memoryLimit} entries. Retire some first.`), { status: 409 });
       this.record(c, { type: 'memory_add', entry: newEntry(input, this.workspaceFolders) });
     } else if (input.action === 'edit') {
-      found();
-      const clean = cleanEntryInput(input, this.workspaceFolders);
-      this.record(c, { type: 'memory_update', id: input.id, changes: { ...clean, files: attachedFiles(clean.text, this.workspaceFolders, clean.folderId) } });
+      const entry = found(), clean = cleanEntryInput(input, this.workspaceFolders);
+      this.record(c, { type: 'memory_update', id: input.id, changes: editedEntry(entry, clean, this.workspaceFolders) });
     } else if (input.action === 'retire' || input.action === 'restore') {
       found();
       this.record(c, { type: 'memory_update', id: input.id, changes: { status: input.action === 'retire' ? 'retired' : 'active' } });

@@ -140,14 +140,75 @@
     else if (dialog.open && current?.preview && !busy) render(current.preview);
   });
 
+  // A commit in Timeline (#20): its files and lines, read only. Nothing in Git changes, and restoring stays with checkpoints.
+  const commitDialog = $('commit-dialog'), STATUS = { added: 'Added', modified: 'Modified', deleted: 'Deleted', renamed: 'Renamed', copied: 'Copied', type: 'Type changed' };
+  let commitRequest = 0, commitUrl = null;
+  const external = url => window.relayDesktop ? window.relayDesktop.openExternal(url) : window.open(url, '_blank', 'noopener,noreferrer');
+  const by = commit => commit.by === 'panel' ? 'From the Git panel' : commit.by === 'run' ? `During ${commit.local ? 'the local model' : { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }[commit.provider] || 'the agent'}’s run` : commit.author ? `By ${commit.author}` : '';
+  function commitFile(file, multiple, folder) {
+    const item = node('details', undefined, 'rewind-file'), summary = node('summary');
+    item.dataset.status = file.status;
+    const name = (multiple ? `${folder}/` : '') + file.path;
+    summary.append(node('span', STATUS[file.status] || 'Modified', 'rewind-action'), node('code', file.originalPath ? `${file.originalPath} → ${name}` : name, 'rewind-path'));
+    if (file.diff) summary.append(node('span', `+${file.diff.split('\n').filter(value => value.startsWith('+')).length}`, 'diff-added'), node('span', `-${file.diff.split('\n').filter(value => value.startsWith('-')).length}`, 'diff-removed'));
+    item.append(summary);
+    const body = node('div', undefined, 'rewind-diff');
+    if (file.binary) body.append(node('p', 'Binary file. Its contents are not shown.', 'rewind-diff-note'));
+    else if (file.diff) body.append(diffLines(file.diff));
+    else body.append(node('p', file.diff === '' ? 'Only the file’s permissions changed.' : 'Not shown: this commit already shows many changed lines.', 'rewind-diff-note'));
+    if (file.truncated) body.append(node('p', `${file.truncated} more lines not shown.`, 'rewind-diff-note'));
+    item.append(body);
+    return item;
+  }
+  async function openCommit(entry) {
+    const projectId = api.getState().projectId, mine = ++commitRequest, multiple = (api.getState().projects?.find(project => project.id === projectId)?.folders?.length || 1) > 1;
+    commitUrl = entry.url || null; $('commit-github').hidden = !commitUrl;
+    $('commit-title').textContent = entry.subject || entry.shortHash;
+    const when = new Date(entry.at);
+    $('commit-meta').textContent = [entry.shortHash, multiple ? entry.folder : '', by(entry), Number.isNaN(when.getTime()) ? '' : when.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })].filter(Boolean).join(' · ');
+    $('commit-summary').textContent = 'Reading the commit…'; $('commit-body').hidden = true; $('commit-files').replaceChildren(); $('commit-error').hidden = true;
+    commitDialog.setAttribute('aria-busy', 'true');
+    if (!commitDialog.open) commitDialog.showModal();
+    try {
+      const commit = await api.api(`/api/checkpoints/commit?folderId=${encodeURIComponent(entry.folderId)}&hash=${encodeURIComponent(entry.hash)}`, {}, projectId);
+      if (mine !== commitRequest) return;
+      const shown = commit.files.length < commit.totalFiles ? ` The first ${commit.files.length} are listed.` : '';
+      $('commit-summary').textContent = commit.totalFiles ? `This commit changed ${plural(commit.totalFiles, 'file')}${commit.merge ? ', compared with the branch it was merged into' : ''}.${shown}${commit.linesUnavailable ? ' Its lines could not be shown.' : ''}` : 'This commit changed no files in this folder.';
+      $('commit-body').textContent = commit.body || ''; $('commit-body').hidden = !commit.body;
+      const list = node('div', undefined, 'rewind-list');
+      commit.files.forEach(file => list.append(commitFile(file, multiple, commit.folder)));
+      if (commit.files.length === 1) list.firstChild.open = true;
+      $('commit-files').replaceChildren(...(commit.files.length ? [list] : []));
+    } catch (error) { if (mine === commitRequest) { $('commit-summary').textContent = ''; $('commit-error').textContent = error.message; $('commit-error').hidden = false; } }
+    finally { if (mine === commitRequest) commitDialog.removeAttribute('aria-busy'); }
+  }
+  const closeCommit = () => { commitRequest++; if (commitDialog?.open) commitDialog.close(); };
+  $('close-commit')?.addEventListener('click', closeCommit);
+  $('done-commit')?.addEventListener('click', closeCommit);
+  $('commit-github')?.addEventListener('click', () => { if (commitUrl) Promise.resolve(external(commitUrl)).catch(error => api.showNotice(error.message)); });
+  window.addEventListener('relay-state', () => { if (commitDialog?.open && api.getState().taskId) closeCommit(); });
+
+  function commitCard(entry, multiple) {
+    const item = node('article', undefined, 'checkpoint-card commit-entry'), head = node('div', undefined, 'checkpoint-heading'), when = new Date(entry.at);
+    head.append(node('strong', entry.merge ? 'Merge commit' : 'Commit'), node('time', Number.isNaN(when.getTime()) ? 'Time unavailable' : when.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })));
+    const subject = node('button', entry.subject || entry.shortHash, 'checkpoint-prompt commit-subject'); subject.type = 'button'; subject.title = 'Show this commit’s changes';
+    subject.addEventListener('click', () => openCommit(entry));
+    const meta = node('p', undefined, 'checkpoint-meta');
+    meta.append(node('code', entry.shortHash, 'commit-hash'), document.createTextNode([multiple ? entry.folder : '', by(entry)].filter(Boolean).map(text => ` · ${text}`).join('')));
+    item.append(head, subject, meta);
+    return item;
+  }
+
   const panel = $('timeline-panel'), host = $('timeline-content');
   let shown = null, historyRequest = 0, lastProject = null;
   const scope = () => { const state = api.getState(); return JSON.stringify([state.projectId, state.taskId, state.conversation?.id, state.conversation?.checkpointRevision, state.conversation?.status]); };
   const remember = value => { try { localStorage.setItem('throughline:side-panel', value); } catch { /* A convenience. */ } };
   function renderTimeline(entries) {
     host.replaceChildren();
-    if (!entries.length) { host.append(node('p', 'No checkpoints yet. Files are saved before and after each agent run.', 'panel-empty')); return; }
+    if (!entries.some(entry => entry.kind !== 'commit')) host.append(node('p', 'No checkpoints yet. Files are saved before and after each agent run.', 'panel-empty'));
+    const multiple = (api.getState().projects?.find(project => project.id === api.getState().projectId)?.folders?.length || 1) > 1;
     for (const entry of entries) {
+      if (entry.kind === 'commit') { host.append(commitCard(entry, multiple)); continue; }
       const item = node('article', undefined, 'checkpoint-card'), head = node('div', undefined, 'checkpoint-heading');
       const title = entry.kind === 'run' ? entry.local ? 'Local model' : { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }[entry.provider] || 'Agent' : entry.kind === 'restore' ? entry.pending ? 'Recovery checkpoint · restore started' : 'Workspace restored' : 'Undo / redo';
       const when = new Date(entry.at);
@@ -184,7 +245,7 @@
     if (!panel) return;
     panel.hidden = !open;
     if (keep) remember(open ? 'timeline' : 'none');
-    if (open) { window.relayAgents?.close(); window.relayGit?.close(); window.relayBrief?.close(); window.relayTasks?.close(); window.relayReviews?.closePanel?.(); loadTimeline(); }
+    if (open) { window.relayAgents?.close(); window.relayGit?.close(); window.relayBrief?.close(); window.relayTasks?.close(); window.relayReviews?.closePanel?.(); loadTimeline(true); }
     window.dispatchEvent(new CustomEvent('relay-side-panel'));
   }
   $('refresh-timeline')?.addEventListener('click', () => loadTimeline(true));

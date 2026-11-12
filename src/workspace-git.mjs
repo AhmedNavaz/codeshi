@@ -8,12 +8,12 @@ export function githubRepository(remote = '') {
   const match = remote.trim().match(/^(?:git@github\.com:|https:\/\/github\.com\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
   return match ? `https://github.com/${match[1]}/${match[2]}` : null;
 }
-function runner(folder, spawnImpl, { timeout = 5000, maxBuffer = 1024 * 1024, encoding = 'utf8' } = {}) {
+export function runner(folder, spawnImpl, { timeout = 5000, maxBuffer = 1024 * 1024, encoding = 'utf8' } = {}) {
   return (args, extra = []) => spawnImpl(gitExecutable(), [...prefix, ...extra, ...args], { cwd: folder.path, shell: false, encoding, timeout, maxBuffer, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_PAGER: 'cat' } });
 }
-function isRepository(run) { const inside = run(['rev-parse', '--is-inside-work-tree']); return inside.status === 0 && String(inside.stdout || '').trim() === 'true'; }
+export function isRepository(run) { const inside = run(['rev-parse', '--is-inside-work-tree']); return inside.status === 0 && String(inside.stdout || '').trim() === 'true'; }
 // Status and diff can invoke attributes filters. Returns -c overrides that disable configured external drivers.
-function filterOverrides(run) {
+export function filterOverrides(run) {
   const config = run(['config', '--null', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$']);
   if (config.error || ![0, 1].includes(config.status)) return { error: 'Could not inspect Git filter settings safely.' };
   const overrides = [];

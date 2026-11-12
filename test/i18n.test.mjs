@@ -102,7 +102,7 @@ test('every t() and tn() in the app has a plain quoted text, so each can be tran
   const { keys, unreadable } = extract();
   assert.deepEqual(unreadable, [], 'Write t(\'…\', { value }) instead of building the text, so npm run i18n can find it.');
   assert(keys.size > 600, 'The page, Settings, the composer and the menus are translatable.');
-  for (const text of ['Keep awake', 'Send', 'Describe the task or ask a question…', 'Open Codeshi', 'Ways to alert you', 'Settings…']) assert(keys.has(text), text);
+  for (const text of ['Keep awake', 'Send', 'Describe the task or ask a question…', 'Open Codeshi', 'When something happens', 'Settings…']) assert(keys.has(text), text);
   assert.deepEqual(keys.get('{count} queued prompts move too.'), { one: '1 queued prompt moves too.' });
   for (const name of ['Codeshi', 'Codex', 'Claude', 'Gemini', 'Flow']) assert.equal(keys.has(name), false, `${name} is a name, never translated.`);
   assert.equal(createText().load({ language: 'es', messages: { Codeshi: 'Kodeshi', Send: 'Enviar' } }).t('Codeshi'), 'Codeshi');

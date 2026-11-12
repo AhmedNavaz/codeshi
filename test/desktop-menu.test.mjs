@@ -18,7 +18,7 @@ test('the macOS menu bar has Codeshi, File, Edit, View, Agent, Workspace, Window
   const {template,all,item,roles,labels}=menu();
   assert.deepEqual(labels(template),['Codeshi','File','Edit','View','Agent','Workspace','windowMenu','help']);
   assert.deepEqual(labels(item('Codeshi').submenu),['about','-','Settings…','Setup Guide','-','services','-','hide','hideOthers','unhide','-','quit']);
-  assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Share Live…','Watch a Teammate…','-','close']);
+  assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Export Codeshi Backup…','Import Codeshi Backup…','-','Share Live…','Watch a Teammate…','-','close']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','pasteAndMatchStyle','delete','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces','-','Speech']);
   assert.deepEqual(labels(item('View').submenu),['Show Git Activity','Show Files','Terminal','Flow Mode','Focus Message Box','-','Appearance','-','resetZoom','zoomIn','zoomOut','-','togglefullscreen']);
   assert.deepEqual(labels(item('Appearance').submenu),['System','Light','Dark','Graphite']);
@@ -62,7 +62,7 @@ test('menu items enable and tick from the page, the saved appearance and Keep Aw
 
 test('page items and in-app release notes send commands, and external Help links open fixed GitHub pages',()=>{
   const {all,sent,opened,item}=menu();
-  const commands={'Review Changes with Other Agent…':['review'],'Ask a Friend…':['ask-friend'],'Share Live…':['share-live'],'Watch a Teammate…':['watch-teammate'],'Settings…':['settings'],'Setup Guide':['setup-guide'],'New Workspace':['new-workspace'],'Add Folder to Workspace…':['add-folder'],'Previous Chats…':['previous-chats'],'Export Conversation…':['export'],'Find in Conversation':['find'],'Find Next':['find-next'],'Find Previous':['find-previous'],'Filter Workspaces':['filter-workspaces'],'Show Git Activity':['git'],'Show Files':['files'],'Focus Message Box':['focus-message'],System:['appearance','system'],Light:['appearance','light'],Dark:['appearance','dark'],Graphite:['appearance','graphite'],'Use Codex':['agent','codex'],'Use Claude Code':['agent','claude'],'Stop Run':['stop'],continue:['continue'],'Keep Awake':['keep-awake'],Frontend:['workspace',1],'R&D':['workspace',2],'Workspace Settings…':['workspace-settings'],'Remove Workspace…':['remove-workspace']};
+  const commands={'Review Changes with Other Agent…':['review'],'Ask a Friend…':['ask-friend'],'Export Codeshi Backup…':['backup-export'],'Import Codeshi Backup…':['backup-import'],'Share Live…':['share-live'],'Watch a Teammate…':['watch-teammate'],'Settings…':['settings'],'Setup Guide':['setup-guide'],'New Workspace':['new-workspace'],'Add Folder to Workspace…':['add-folder'],'Previous Chats…':['previous-chats'],'Export Conversation…':['export'],'Find in Conversation':['find'],'Find Next':['find-next'],'Find Previous':['find-previous'],'Filter Workspaces':['filter-workspaces'],'Show Git Activity':['git'],'Show Files':['files'],'Focus Message Box':['focus-message'],System:['appearance','system'],Light:['appearance','light'],Dark:['appearance','dark'],Graphite:['appearance','graphite'],'Use Codex':['agent','codex'],'Use Claude Code':['agent','claude'],'Stop Run':['stop'],continue:['continue'],'Keep Awake':['keep-awake'],Frontend:['workspace',1],'R&D':['workspace',2],'Workspace Settings…':['workspace-settings'],'Remove Workspace…':['remove-workspace']};
   commands['What’s New']=['whats-new'];
   commands.Terminal=['terminal'];
   commands['Flow Mode']=['flow'];
@@ -75,8 +75,8 @@ test('page items and in-app release notes send commands, and external Help links
   const repository='https://github.com/AhmedNavaz/codeshi';
   const pages={'Codeshi Guide':`${repository}/blob/main/docs/guide.md`,'Keyboard Shortcuts':`${repository}/blob/main/docs/guide.md#keyboard-shortcuts`,'Report a Bug':`${repository}/issues/new?template=bug_report.yml&version=0.7.0&system=macOS+26.1.0%2C+Apple+Silicon`,'Share Design Feedback':`${repository}/issues/new?template=ux_feedback.yml`,Roadmap:`${repository}/blob/main/ROADMAP.md`,'Star Codeshi on GitHub':repository,'Support Codeshi on Patreon':'https://www.patreon.com/17048317/join'};
   for(const [label,url] of Object.entries(pages)){opened.length=0;item(label).click();assert.deepEqual(opened,[url],label);}
-  // The five alert and status switches, the five handoff choices and Record Performance Trace are handled by the desktop app itself and tested separately.
-  assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+11,'Every other item is a standard role.');
+  // The six alert and live status switches, the five handoff choices and Record Performance Trace are handled by the desktop app itself and tested separately.
+  assert.equal(all.filter(entry=>entry.click).length,Object.keys(commands).length+Object.keys(pages).length+12,'Every other item is a standard role.');
   for(const entry of all)assert(!(entry.role&&entry.click),`${entry.role} keeps its native behaviour.`);
   const intel=[];menu({arch:'x64',osVersion:'15.7.1',open:url=>intel.push(url)}).item('Report a Bug').click();assert.match(intel[0],/&system=macOS\+15\.7\.1%2C\+Intel$/);
 });
@@ -84,7 +84,7 @@ test('page items and in-app release notes send commands, and external Help links
 for(const platform of ['win32','linux'])test(`on ${platform} the menus have no app menu: Settings and Exit join File, Setup Guide and About join Help, and & stays literal`,()=>{
   const {template,item,roles,labels}=menu({platform});
   assert.deepEqual(labels(template),['File','Edit','View','Agent','Workspace','windowMenu','help']);
-  assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Share Live…','Watch a Teammate…','-','Settings…','-','close','quit']);
+  assert.deepEqual(labels(item('File').submenu),['New Workspace','Add Folder to Workspace…','-','Previous Chats…','Export Conversation…','Review Changes with Other Agent…','Ask a Friend…','-','Export Codeshi Backup…','Import Codeshi Backup…','-','Share Live…','Watch a Teammate…','-','Settings…','-','close','quit']);
   assert.deepEqual(labels(item('Edit').submenu),['undo','redo','-','cut','copy','paste','delete','-','selectAll','-','Find in Conversation','Find Next','Find Previous','-','Filter Workspaces']);
   assert.deepEqual(labels(item('help').submenu),['Codeshi Guide','Keyboard Shortcuts','Setup Guide','-','Report a Bug','Share Design Feedback','Record Performance Trace','-','Roadmap','What’s New','-','Star Codeshi on GitHub','Support Codeshi on Patreon','-','about']);
   for(const role of ['services','hide','hideOthers','unhide','pasteAndMatchStyle'])assert(!roles.includes(role),role);
@@ -106,11 +106,11 @@ test('menu state from the page is used only in the expected shape',()=>{
 
 test('the Agent menu has one Alerts menu that turns each way of alerting on or off, and opens their settings',()=>{
   const changes=[],open=menu({notifications:alertPreferences({sound:{on:false}}),setNotifications:patch=>changes.push(patch)});
-  assert.deepEqual(open.labels(open.item('Alerts').submenu),['Banners','Sounds','Bounce the Dock Icon','Badge on the Dock Icon','Status in the Menu Bar','-','Alert Settings…']);
+  assert.deepEqual(open.labels(open.item('Alerts').submenu),['Banners','Sounds','Bounce the Dock Icon','Badge on the Dock Icon','-','Status in the Menu Bar','Pill Under the Menu Bar','-','Alert Settings…']);
   const banners=open.item('Banners'),sounds=open.item('Sounds');
   assert.deepEqual([banners.type,banners.checked,sounds.checked,disabled(sounds)],['checkbox',true,false,false]);
-  banners.click();sounds.click();open.item('Bounce the Dock Icon').click();open.item('Status in the Menu Bar').click();
-  assert.deepEqual(changes,[{banner:{on:false}},{sound:{on:true}},{bounce:{on:false}},{statusItem:false}]);
+  banners.click();sounds.click();open.item('Bounce the Dock Icon').click();open.item('Status in the Menu Bar').click();open.item('Pill Under the Menu Bar').click();
+  assert.deepEqual(changes,[{banner:{on:false}},{sound:{on:true}},{bounce:{on:false}},{statusItem:false},{progressPill:true}]);
   open.item('Alert Settings…').click();assert.deepEqual(open.sent,[['alert-settings']],'Alert Settings… opens the Alerts section of Settings.');
   assert(!menu().all.some(entry=>/^(Notify When|Play Sounds|Show Alerts Near|Show Status in Menu Bar)/.test(entry.label||'')),'The separate alert items are gone.');
 });
@@ -149,7 +149,7 @@ test('the installed app offers Check for Updates… after About, which asks the 
 
 test('other systems flash the taskbar button instead of bouncing an icon, with no Dock badge, and Windows has its notification area',()=>{
   const changes=[],windows=menu({platform:'win32',setNotifications:patch=>changes.push(patch)});
-  assert.deepEqual(windows.labels(windows.item('Alerts').submenu),['Banners','Sounds','Flash the Taskbar Button','Status in the Notification Area','-','Alert Settings…']);
+  assert.deepEqual(windows.labels(windows.item('Alerts').submenu),['Banners','Sounds','Flash the Taskbar Button','-','Status in the Notification Area','-','Alert Settings…']);
   windows.item('Status in the Notification Area').click();assert.deepEqual(changes,[{statusItem:false}]);
   assert(!windows.all.some(entry=>/Menu Bar|Dock/.test(entry.label||'')));
   const linux=menu({platform:'linux'});

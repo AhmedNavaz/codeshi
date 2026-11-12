@@ -132,5 +132,14 @@
   // network. getRandomValues exists everywhere, and a request ID only has to be unique.
   const requestId = source => [...source.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 
-  root.relayPhoneLogic = { spans, blocks, describeStep, mergeMessages, duration, requestId, shortPath };
+  // A reply as it would be said, a paragraph at a time, as on the computer: code blocks and tables are left out because
+  // they don't read well, and Markdown marks and link addresses are dropped. A fence still open runs to the end.
+  function spokenParts(text) {
+    return String(text ?? '').replace(/\r\n/g, '\n').replace(/```[\s\S]*?(?:```|$)/g, '\n\n').replace(/^\s*\|.*$/gm, '').split(/\n\s*\n/)
+      .map(part => part.replace(/`([^`]+)`/g, '$1').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1').replace(/\*([^*\s][^*]*)\*/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/^\s*(?:#{1,6}|[-*+]|\d+[.)]|>)\s+/gm, '').replace(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/gm, ' ').replace(/\s+/g, ' ').trim())
+      .filter(part => /[\p{L}\p{N}]/u.test(part));
+  }
+
+  root.relayPhoneLogic = { spans, blocks, describeStep, mergeMessages, duration, requestId, shortPath, spokenParts };
 })(typeof window === 'undefined' ? globalThis : window);

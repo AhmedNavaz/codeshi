@@ -6,7 +6,8 @@ import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest, emptyContext, prepareContext } from '../src/context.mjs';
 import { exportConversation } from '../src/conversation-export.mjs';
-import { memoryForTask, memorySuggestions, newEntry } from '../src/project-memory.mjs';
+import { memoryForTask, memorySuggestions, memoryView, newEntry } from '../src/project-memory.mjs';
+import { execFileSync } from 'node:child_process';
 
 function workspace(t, files = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-memory-')));
@@ -86,6 +87,73 @@ test('an entry whose file changed is marked for a recheck rather than sent as fa
   assert.deepEqual([send().needsRecheck, send().changedFiles], [true, ['a.js']]);
   fs.rmSync(path.join(env.desktop.path, 'a.js'));
   assert.equal(send().needsRecheck, true);
+});
+
+function gitRepo(folder) {
+  const git = (...args) => execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', '-c', 'commit.gpgsign=false', ...args], { cwd: folder.path, stdio: 'pipe' });
+  git('init', '-q', '-b', 'main'); git('add', '-A'); git('commit', '-q', '--allow-empty', '-m', 'start');
+  return git;
+}
+const stateOf = (saved, folders) => memoryView(conversation({ memory: [saved] }), folders).entries[0];
+
+test('a commit flags no memory; a branch switch flags working fixes and failed approaches, but not your rules', t => {
+  const env = workspace(t, { 'desktop/a.js': 'one' }), { folders, desktop } = env, git = gitRepo(desktop);
+  const rule = entry({ kind: 'convention', text: 'Dates are UTC', folderId: 'desktop' }, folders);
+  const fix = entry({ kind: 'solution', text: 'Restart the watcher after changing routes', folderId: 'desktop' }, folders);
+  const shared = entry({ kind: 'failed-approach', text: 'Caching the session broke logout' }, folders);
+  assert.deepEqual([rule, fix, shared].map(item => item.source.revision.branch), ['main', 'main', 'main']);
+  git('commit', '-q', '--allow-empty', '-m', 'unrelated');
+  for (const item of [rule, fix, shared]) assert.equal(stateOf(item, folders).needsRecheck, false, `A commit by itself leaves "${item.text}" as it was.`);
+  git('switch', '-q', '-c', 'feature');
+  assert.equal(stateOf(rule, folders).needsRecheck, false, 'A rule you set holds on any branch.');
+  for (const item of [fix, shared]) assert.deepEqual(['needsRecheck', 'branchChanged', 'savedBranch', 'currentBranch'].map(key => stateOf(item, folders)[key]), [true, true, 'main', 'feature']);
+  const sent = memoryForTask(conversation({ memory: [fix] }), { words: 'watcher routes', scope: ['desktop'], folders, fresh: true, provider: 'claude' }).entries[0];
+  assert.deepEqual([sent.needsRecheck, sent.branchChanged, sent.savedOnBranch], [true, true, 'main']);
+  git('switch', '-q', 'main');
+  assert.equal(stateOf(fix, folders).needsRecheck, false, 'Back on its branch, it holds again.');
+});
+
+test('a dependency change flags facts about the code, and a version bump or a lock file does not', t => {
+  const manifest = deps => JSON.stringify({ name: 'app', version: '1.0.0', dependencies: deps });
+  const env = workspace(t, { 'desktop/package.json': manifest({ react: '^18.0.0' }), 'desktop/package-lock.json': '{}' }), { folders, desktop } = env;
+  const write = (name, text) => fs.writeFileSync(path.join(desktop.path, name), text);
+  const rule = entry({ kind: 'decision', text: 'Forms use controlled inputs', folderId: 'desktop' }, folders);
+  const fix = entry({ kind: 'solution', text: 'Wrap the router in StrictMode last', folderId: 'desktop' }, folders);
+  assert.equal(stateOf(fix, folders).needsRecheck, false);
+  write('package.json', JSON.stringify({ name: 'app', version: '1.4.0', scripts: { test: 'node --test' }, dependencies: { react: '^18.0.0' } }, null, 2));
+  write('package-lock.json', '{"lockfileVersion":3}');
+  assert.equal(stateOf(fix, folders).needsRecheck, false, 'A new version, a script or the lock file is not a dependency change.');
+  write('package.json', manifest({ react: '^19.0.0' }));
+  assert.deepEqual([stateOf(fix, folders).needsRecheck, stateOf(fix, folders).dependenciesChanged], [true, ['package.json']]);
+  assert.equal(stateOf(rule, folders).needsRecheck, false, 'A rule you set is not flagged by dependencies.');
+  write('package.json', manifest({ react: '^18.0.0' }));
+  assert.equal(stateOf(fix, folders).needsRecheck, false);
+  write('requirements.txt', 'flask==3.0\n');
+  assert.deepEqual(stateOf(fix, folders).dependenciesChanged, ['requirements.txt'], 'A manifest that appears counts too.');
+});
+
+test('Cargo.toml and pyproject.toml ignore their own version but not a dependency version', t => {
+  const cargo = (own, serde) => `[package]\nname = "app"\nversion = "${own}"\n\n[dependencies.serde]\nversion = "${serde}"\n`;
+  const env = workspace(t, { 'desktop/Cargo.toml': cargo('0.1.0', '1.0'), 'desktop/pyproject.toml': '[project]\nname = "tool"\nversion = "1"\ndependencies = ["httpx>=0.27"]\n' }), { folders, desktop } = env;
+  const fix = entry({ kind: 'solution', text: 'Enable the derive feature', folderId: 'desktop' }, folders);
+  fs.writeFileSync(path.join(desktop.path, 'Cargo.toml'), cargo('0.2.0', '1.0'));
+  fs.writeFileSync(path.join(desktop.path, 'pyproject.toml'), '[project]\nname = "tool"\nversion = "2"\ndependencies = ["httpx>=0.27"]\n');
+  assert.equal(stateOf(fix, folders).needsRecheck, false);
+  fs.writeFileSync(path.join(desktop.path, 'Cargo.toml'), cargo('0.2.0', '2.0'));
+  assert.deepEqual(stateOf(fix, folders).dependenciesChanged, ['Cargo.toml']);
+});
+
+test('memories saved before this rule are no longer flagged by a commit, and saving an edit checks one again', async t => {
+  const env = workspace(t), { folders, desktop } = env, git = gitRepo(desktop), broker = open(t, env), c = broker.get(broker.create().id);
+  const old = entry({ kind: 'convention', text: 'Dates are UTC', folderId: 'desktop' }, folders);
+  delete old.dependencies;
+  git('commit', '-q', '--allow-empty', '-m', 'later');
+  assert.equal(stateOf(old, folders).needsRecheck, false, 'An entry from 0.30.0 to 0.46.0 kept the commit, and a later commit flagged it.');
+  const [saved] = broker.changeMemory(c, { action: 'add', kind: 'solution', text: 'Clear the build cache first', folderId: 'desktop', messageId: 'm1' }).entries;
+  git('switch', '-q', '-c', 'feature');
+  assert.equal(broker.memory(c).entries[0].needsRecheck, true);
+  const [edited] = broker.changeMemory(c, { action: 'edit', id: saved.id, kind: 'solution', text: 'Clear the build cache first', folderId: 'desktop' }).entries;
+  assert.deepEqual([edited.needsRecheck, edited.source.revision.branch, edited.source.messageId], [false, 'feature', 'm1'], 'Saving it again checks it on this branch, and keeps where it came from.');
 });
 
 test('a resumed session revalidates already-delivered memory and resends changed validation state', t => {

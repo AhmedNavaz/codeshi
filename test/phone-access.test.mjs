@@ -332,7 +332,7 @@ test('a phone shows a planner’s reply as the plan it proposed, says where to a
   const block = name => { const start = source.indexOf(`  function ${name}(`); assert.notEqual(start, -1, name); return source.slice(start, source.indexOf('\n  }\n', start) + 4); };
   const node = (tag, cls = '', text = '') => { const element = { tag, cls, text, children: [], append(...items) { element.children.push(...items); } }; return element; };
   const S = { c: out, draft: null, messages: out.messages };
-  const context = { S, node, foldable: element => element, markdown: text => node('div', 'md', text), glyph: () => node('i'), name: provider => provider[0].toUpperCase() + provider.slice(1), icon: () => node('svg'), isRunning: () => false };
+  const context = { S, node, foldable: element => element, markdown: text => node('div', 'md', text), glyph: () => node('i'), name: provider => provider[0].toUpperCase() + provider.slice(1), icon: () => node('svg'), isRunning: () => false, writing: () => false, speech: () => null };
   vm.createContext(context);
   vm.runInContext(`${block('planText')}${block('messageRow')}${block('rowKey')}${block('canContinue')}this.messageRow = messageRow; this.rowKey = rowKey; this.canContinue = canContinue; this.planText = planText;`, context);
   const reply = () => context.messageRow(out.messages[1], true).children.find(child => child.cls === 'm-plan')?.text;

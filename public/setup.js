@@ -1,11 +1,12 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), api = window.relayUI, dialog = $('setup-dialog'), desktop = window.relayDesktop;
-  // First run: a welcome, four short steps and a summary, then the app. The workspace comes first, so everything after
-  // it is about a real project: then the way you want to work (Normal or Flow), the agents, and your defaults.
+  // First run: a welcome, five short steps and a summary, then the app. The workspace comes first, so everything after
+  // it is about a real project: then the way you want to work (Normal or Flow), the agents, your defaults, and how
+  // Codeshi tells you that an agent needs you or is done.
   // Existing profiles open normally after updates. The step number is saved so setup can resume.
-  const steps = ['Workspace', 'Working style', 'Agents', 'Defaults'], titles = ['Start with your workspace', 'Choose your working style', 'Connect your agents', 'Make it yours'], last = steps.length - 1;
-  const STEP = { workspace: 0, style: 1, agents: 2, defaults: 3 };
+  const steps = ['Workspace', 'Working style', 'Agents', 'Defaults', 'Alerts'], titles = ['Start with your workspace', 'Choose your working style', 'Connect your agents', 'Make it yours', 'Know when an agent needs you'], last = steps.length - 1;
+  const STEP = { workspace: 0, style: 1, agents: 2, defaults: 3, alerts: 4 };
   const installGuides = { claude: 'https://code.claude.com/docs/en/overview', codex: 'https://github.com/openai/codex', gemini: 'https://antigravity.google/docs/install' };
   const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
   const button = (text, fn, cls = 'secondary-button') => { const el = node('button', text, cls); el.type = 'button'; el.addEventListener('click', () => perform(fn)); return el; };
@@ -16,7 +17,7 @@
   const computer = desktop?.platform === 'darwin' ? 'this Mac' : 'this computer';
   let connectionSignature = '';
   const connectionState = () => { const state = api.getState(); return JSON.stringify([state.accounts, state.accountsChecking, state.accountChecks]); };
-  let preferences, screen = 'welcome', reviewing = false, shownStep = -1, advancedOpen = false;
+  let preferences, screen = 'welcome', reviewing = false, shownStep = -1, advancedOpen = false, alertState = null, alertError = '';
   let step = 0, busy = false, revision = 0, catalog = {}, draft = {provider:'codex',model:null,effort:null,mode:'edit',billing:'subscription',view:'normal'}, projectName = '', projectPaths = '', created = '', createdId = '', readiness = null;
   function progress() {
     const completed = preferences?.onboarding?.completedAt;
@@ -31,7 +32,7 @@
   // the rebuild, so focus returns to the same control.
   function focusKey(el) {
     if (!el || !['BUTTON','SUMMARY'].includes(el.tagName) || !(el.closest('#setup-content') || el.closest('#setup-steps'))) return '';
-    const data = el.dataset || {}, provider = el.closest('.setup-agent')?.dataset.provider || '', choice = data.view || data.mode || data.appearance || '';
+    const data = el.dataset || {}, provider = el.closest('.setup-agent')?.dataset.provider || '', choice = data.view || data.mode || data.appearance || data.channel || '';
     return [el.className,choice,provider,choice || el.className === 'setup-agent-select' ? '' : el.textContent].join('|');
   }
   function refocus(key, host) {
@@ -90,6 +91,8 @@
       item(count > 0,count ? (created ? `${created} is ready` : `${count} workspace${count === 1 ? ' is' : 's are'} ready`) : 'No workspace yet',count ? 'Your conversation is waiting.' : 'Choose your project folders from the sidebar.');
       item(true,draft.view === 'flow' ? 'You start in Flow' : 'You start in Normal',draft.view === 'flow' ? 'Codeshi chooses the agent and model for each message.' : 'You choose the agent, model and effort for each message.');
       item(connected,draft.view === 'flow' ? `${providerName(draft.provider)} is connected` : `${providerName(draft.provider)} starts the conversation`,connected ? 'Connected with your own account.' : 'Connect it in Settings before your first message.');
+      const heard = alertNames();
+      if (heard) item(heard.length > 0,heard.length ? `When an agent needs you: ${heard.join(', ')}` : 'No alerts when an agent needs you',heard.length ? 'While you’re in another app. More in Settings › Alerts.' : 'Turn them on in Settings › Alerts.');
       item(true,{light:'Light theme',dark:'Dark theme',graphite:'Graphite theme'}[window.relayTheme?.preference()] || 'System theme',draft.mode === 'read' ? 'New workspaces start read only.' : 'Agents can edit files in your workspaces.');
       const open = button('Open Codeshi',()=>complete(),'primary-button onboarding-cta');
       host.append(node('p','You can change any of this later in Settings, and switch between Normal and Flow at any time.','onboarding-tagline'),summary,open); open.focus();
@@ -107,6 +110,7 @@
     if (step === STEP.style) workingStyle(host);
     if (step === STEP.agents) agents(host);
     if (step === STEP.defaults) preferencesStep(host,version);
+    if (step === STEP.alerts) alertsStep(host,version);
     if (entering) heading.focus(); else refocus(held,host);
   }
   function agents(host) {
@@ -180,6 +184,40 @@
       api.api(`/api/providers/${requested}/models`,{},null).then(result=>{catalog[requested]=result.models || [];if(revision===version){populate();note.textContent='Provider default follows the agent’s recommended model. You can change models for each message.';}}).catch(()=>{if(revision===version) note.textContent='Models could not be loaded. Provider default remains available; refresh this step after connecting.';}).finally(()=>{if(revision===version)model.input.disabled=false;});
     }
   }
+  // How Codeshi tells you that an agent needs you (Settings › Alerts), kept short: the Needs you card with Try it, and
+  // on a Mac the pill under the menu bar. Choosing saves at once, as with the theme. Finished, Stopped, the volume, the
+  // banner style and a phone's lock screen are left to Settings.
+  const SETUP_WAYS = ['banner','sound','bounce','badge'];
+  const alertNames = () => {
+    const kit = window.relayAlerts; if (!alertState || !kit) return null;
+    const mac = kit.ways(alertState).mac, short = { banner: alertState.banner?.panel && mac ? 'panel' : 'banner', sound: 'sound', bounce: mac ? 'Dock bounce' : 'taskbar flash', badge: 'Dock badge' };
+    return kit.ways(alertState).rows.filter(([channel]) => SETUP_WAYS.includes(channel) && kit.active(alertState,channel,'attention')).map(([channel]) => short[channel]);
+  };
+  async function saveAlerts(patch) { alertState = await api.post('/api/notifications',patch,null); }
+  function alertsStep(host,version) {
+    const kit = window.relayAlerts;
+    host.append(node('p','When an agent asks for an approval or has a question while you’re in another app, Codeshi lets you know. Choose how, then use Try it to see and hear exactly what you’ll get.','setup-description'));
+    if (!kit) { host.append(node('p','Alerts aren’t available here. You can choose them later in Settings › Alerts.','setup-footnote')); return; }
+    if (!alertState) {
+      host.append(node('p',alertError || 'Loading your alert settings…','setup-footnote'));
+      if (!alertError) api.api('/api/notifications',{},null).then(value=>{alertState=value;}).catch(e=>{alertError=(e.message || 'Alert settings could not be loaded.') + ' You can choose them later in Settings › Alerts.';}).finally(()=>{if(revision===version)render();});
+      return;
+    }
+    const { mac, desktop: app } = kit.ways(alertState), box = node('div',undefined,'setup-alert-card');
+    box.append(kit.momentCard('attention',alertState,{only:SETUP_WAYS,save:async patch=>{let saved=alertState;await perform(async()=>{await saveAlerts(patch);saved=alertState;});if(revision===version)render();return saved;}}));
+    host.append(box);
+    // The pill says what agents are doing while you're elsewhere; it's quiet, so it's offered beside the alerts.
+    if (mac && typeof alertState.progressPill === 'boolean') {
+      host.append(node('h3','While agents work','setup-section-title'));
+      const row = node('div',undefined,'setup-alert-live'), words = node('span',undefined,'setup-alert-live-text');
+      words.append(node('strong','Pill under the menu bar'),node('span','While you’re in another app, a small pill says what agents are doing, such as “Codex · Editing”. It makes no sound.'));
+      const show = button('Show the pill',()=>kit.showPill(),'secondary-button setup-alert-show');
+      const toggle = node('input',undefined,'settings-switch'); toggle.type = 'checkbox'; toggle.setAttribute('role','switch'); toggle.checked = alertState.progressPill; toggle.setAttribute('aria-label','Pill under the menu bar');
+      toggle.addEventListener('change',()=>perform(async()=>{await saveAlerts({progressPill:toggle.checked});if(revision===version)render();}));
+      row.append(words,show,toggle); host.append(row);
+    }
+    host.append(node('p',app ? 'Finished and Stopped, the volume, the banner style and phone notifications are in Settings › Alerts.' : 'Banners and the Dock icon are part of the desktop app. Finished, Stopped and the volume are in Settings › Alerts.','setup-footnote'));
+  }
   async function createWorkspace(folders, name) {
     const project = await api.post('/api/projects',{folders,...(name ? {name} : {})},null);
     await api.refreshProjects(); await api.selectProject(project.id);
@@ -247,6 +285,8 @@
     manual.append(node('summary','Enter folder paths instead'),paths.wrap,button('Create workspace',async()=>{const folders=[...new Set(projectPaths.split('\n').map(text=>text.trim()).filter(Boolean))];if(!folders.length)throw Error('Enter at least one project folder.');await save();await create(folders);}));
     host.append(manual);
     if (!count) host.append(node('p','You can also skip this and add folders later from the sidebar.','setup-footnote'));
+    // Moving from another computer (#160): a Codeshi backup brings its workspaces, conversations and settings.
+    if (!count && window.relayBackup) { const line = node('p',undefined,'setup-footnote'), link = node('button','Import a Codeshi backup','text-link'); link.type='button'; link.addEventListener('click',()=>window.relayBackup.open('import')); line.append('Moving from another computer? ',link,'.'); host.append(line); }
   }
   // Normal and Flow side by side: a small picture of each layout and three short lines, so the choice reads at a glance.
   const STYLES = [
@@ -283,7 +323,7 @@
     host.append(grid,node('p','You can switch at any time with the Flow button in the header, or in Settings › General.','setup-footnote'));
   }
   async function open({review = false} = {}) {
-    await ready; draft = {view:'normal',...preferences.defaults}; error();
+    await ready; draft = {view:'normal',...preferences.defaults}; alertState = null; alertError = ''; error();
     reviewing = review; step = review ? 0 : Math.min(preferences.onboarding?.step || 0, last); hideLaunch(); show('flow');
   }
   $('open-setup').addEventListener('click',()=>perform(()=>open()));
@@ -305,5 +345,13 @@
     if (value.firstRun) show('welcome');
     return value;
   }).catch(e=>{preferences={defaults:draft,onboarding:{step:0}};api.showNotice('Setup preferences could not be loaded. '+e.message);}).finally(()=>{hideLaunch();window.dispatchEvent(new CustomEvent('relay-setup-ready'));});
+  // A backup imported while setup is open counts as the workspace step done, and its settings become setup's defaults.
+  window.addEventListener('relay-backup-imported', async event => {
+    if (!dialog.open || screen !== 'flow') return;
+    const first = event.detail?.workspaces?.[0];
+    try { const value = await api.api('/api/preferences'); preferences = value; draft = {view:'normal',...value.defaults}; } catch { /* Setup keeps what it had. */ }
+    if (first) { created = first.name; createdId = first.id; readiness = null; try { await api.selectProject(first.id); } catch { /* Selected from the sidebar instead. */ } }
+    render();
+  });
   window.relaySetup = {open,ready};
 })();

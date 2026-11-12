@@ -35,7 +35,7 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 
 | Feature | Status | Issue |
 | --- | --- | --- |
-| Hands-free voice conversations: conversation mode with "send" by voice, shipped in Flow on macOS in 0.40.0. Left: answering approvals by voice, other platforms | First version shipped in 0.40.0 | [#72](https://github.com/AhmedNavaz/codeshi/issues/72) |
+| Hands-free voice conversations: conversation mode with "send" by voice and voice approvals, shipped in Flow on macOS in 0.40.0. Left: a long session with real agents. Windows is #73 | First version shipped in 0.40.0 | [#72](https://github.com/AhmedNavaz/codeshi/issues/72) |
 | Project memory: a recheck when a branch or dependency changes, and reviewed suggestions. Copy to AGENTS.md shipped in 0.40.0 | First version shipped in 0.26.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
 | Rewind stage 3: commits on the Timeline. Rewinding the conversation with a checkpoint shipped in 0.41.0 | Stages 1 and 2 shipped in 0.20.0 and 0.28.0 | [#20](https://github.com/AhmedNavaz/codeshi/issues/20) |
 | iPhone Live Activities, which need a native app. Lock-screen notifications shipped in 0.41.0 | Remote access shipped in 0.27.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |

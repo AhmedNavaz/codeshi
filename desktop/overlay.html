@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-5eJ1QpR/yU3Ozru7+zOF5JMKORGkPLSupYAoXoJSUoo='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-ME98Vd/3WYyLHRtulDJ5pSzCTvgk/M4ya+R4tG4aHwU='">
 <title>Codeshi alert</title>
 <style>
   /* Codeshi's Paper and Ink colours (public/editor-theme.css), with the seal's vermilion for the mark. */
@@ -56,8 +56,14 @@
     document.getElementById('open').setAttribute('aria-label', progress ? `${value.title}${value.body ? `, ${value.body}` : ''}. Open in Codeshi.` : `${value.title}${value.projectName ? ` in ${value.projectName}` : ''}. Open in Codeshi.`);
     alert.hidden = false;
   });
-  document.getElementById('open').addEventListener('click', () => window.relayOverlay.open());
-  document.getElementById('dismiss').addEventListener('click', () => window.relayOverlay.dismiss());
+  // A press in the panel can bring Codeshi forward, which takes the panel away before the click completes. So the
+  // press itself acts; the click that may follow it is ignored, and a click with no press (a screen reader's) acts.
+  let pressed = 0;
+  for (const [id, act] of [['open', () => window.relayOverlay.open()], ['dismiss', () => window.relayOverlay.dismiss()]]) {
+    const button = document.getElementById(id);
+    button.addEventListener('pointerdown', event => { if (event.button !== 0) return; pressed = Date.now(); act(); });
+    button.addEventListener('click', () => { if (Date.now() - pressed > 1000) act(); });
+  }
 </script>
 </body>
 </html>

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fixtures, fixtureById } from '../evals/fixtures.mjs';
-import { compareResults, parsePolicy, repeatedFileReads, reportMarkdown, runFixture } from '../evals/harness.mjs';
+import { compareResults, parsePolicy, repeatedFileReads, reportMarkdown, runCheck, runFixture } from '../evals/harness.mjs';
 import { scriptCLIs } from './platform.mjs';
 import { checkPin, experimentInputs, fingerprint, validatePin } from '../evals/experiment.mjs';
 
@@ -59,13 +59,50 @@ test('recorded Claude routing uses the SDK assessor and CLI builder without losi
 });
 
 test('every kind of task the issue asks for has a fixture with a check the agent cannot see', () => {
-  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'review', 'routing-assessment']);
+  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'review', 'view-states', 'api-endpoint', 'data-migration', 'accessible-toolbar', 'review-intent', 'test-writing', 'routing-assessment']);
   for (const fixture of fixtures) {
     assert(fixture.check || fixture.checkReply, fixture.id);
     assert(fixture.rubric, fixture.id);
     assert(fixture.trace?.length, fixture.id);
     for (const [folder, files] of Object.entries(fixture.folders)) for (const name of Object.keys(files)) assert.equal(fixture.check?.[folder]?.[name], undefined, `${fixture.id}: ${name} is hidden, so it can't also be in the repository.`);
   }
+});
+
+// Writes a fixture with an answer on top and runs its hidden check, the way an evaluation does after the agent finishes.
+const answer = (t, fixture, files = {}, reply = '') => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-answer-')), folders = {};
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const [name, content] of Object.entries(fixture.folders)) {
+    folders[name] = path.join(root, name);
+    for (const [file, text] of Object.entries({ ...content, ...files[name] })) { fs.mkdirSync(path.dirname(path.join(folders[name], file)), { recursive: true }); fs.writeFileSync(path.join(folders[name], file), text); }
+  }
+  return runCheck(fixture, folders, [reply]);
+};
+
+test('each starter skill has a task, and its hidden check refuses the slip that starter is about while allowing other sound answers', t => {
+  const starters = fs.readdirSync(new URL('../starter-skills/', import.meta.url), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
+  assert.deepEqual(fixtures.filter(fixture => fixture.starter).map(fixture => fixture.starter).sort(), starters);
+  const slips = {
+    'view-states': [{ web: { 'orders.mjs': 'export function renderOrders(state) {\n  return `<ul>${state.orders.map(order => `<li>#${order.number} ${order.customer}</li>`).join(\'\')}</ul>`;\n}\n' } }],
+    'api-endpoint': [{ api: { 'routes.mjs': fixtureById('api-endpoint').folders.api['routes.mjs'] + "\nexport function renameUser({ params, body }) {\n  const found = users.get(params.id);\n  if (!found) return fail(404, 'not_found', 'No such user.');\n  if (!body.name) return fail(400, 'invalid_name', 'Give a name.');\n  found.name = body.name;\n  return { status: 200, body: publicUser(found) };\n}\n" } }],
+    'data-migration': [{ db: { 'migrations/003_add_country.mjs': "export function up(db) { db.addColumn('users', 'country', { required: true }); db.update('users', row => { row.country = 'DE'; }); }\nexport function down(db) { db.dropColumn('users', 'country'); }\n" } },
+      { db: { 'migrations/003_add_country.mjs': "export function up(db) { db.addColumn('users', 'country', { required: true, default: 'DE' }); }\nexport function down(db) { db.dropTable('users'); }\n" } }],
+    'accessible-toolbar': [{ web: { 'toolbar.mjs': "export function renderToolbar({ query = '', count = 0 } = {}) {\n  return `<div class=\"toolbar\"><h2>Results</h2><input type=\"search\" placeholder=\"Search\" value=\"${query}\"><span class=\"clear\">×</span><p>${count} results</p></div>`;\n}\n" } }],
+    'test-writing': [{}, { lib: { 'duration.test.mjs': "import assert from 'node:assert/strict';\nimport test from 'node:test';\nimport { parseDuration } from './duration.mjs';\ntest('parses', () => { assert.equal(parseDuration('1h30m'), 5400); assert.equal(parseDuration('45s'), 45); });\n" } }],
+  };
+  for (const [id, wrong] of Object.entries(slips)) for (const files of wrong) assert.equal(answer(t, fixtureById(id), files).passed, false, `${id} should refuse ${JSON.stringify(files).slice(0, 80)}`);
+  const review = fixtureById('review-intent');
+  for (const reply of ['Looks good: the discount maths is right and both tests pass.', 'applyCoupon never records the use in usedCoupons, so WELCOME10 can be reused.'])
+    assert.equal(answer(t, review, {}, reply).passed, false, reply);
+  assert.equal(answer(t, review, {}, 'Bug 1: nothing is ever added to `customer.usedCoupons`, so a customer can apply WELCOME10 repeatedly. Bug 2: the lookup normalises with toUpperCase() but the used check compares the raw code.').passed, true);
+  // Other sound answers pass too: a default instead of a backfill, and a label around the field with hidden button text.
+  assert.equal(answer(t, fixtureById('data-migration'), { db: { 'migrations/003_country.mjs': "export const up = db => db.addColumn('users', 'country', { required: true, default: 'DE' });\nexport const down = db => db.dropColumn('users', 'country');\n" } }).passed, true);
+  assert.equal(answer(t, fixtureById('accessible-toolbar'), { web: { 'toolbar.mjs': "export function renderToolbar({ query = '', count = 0 } = {}) {\n  return `<div class=\"toolbar\"><label>Search <input type=\"search\" value=\"${query}\"></label><button type=\"button\"><span aria-hidden=\"true\">×</span><span class=\"visually-hidden\">Clear search</span></button><div aria-live=\"polite\">${count} results</div></div>`;\n}\n" } }).passed, true);
+  // A failed check says which parts failed, by the check's own names and never with the agent's text.
+  assert.deepEqual(answer(t, fixtureById('api-endpoint'), slips['api-endpoint'][0]).results[0].failed, ['someone else is refused with 403', 'a missing, empty or non-text name is refused with 400']);
+  assert.deepEqual(answer(t, fixtureById('data-migration'), slips['data-migration'][0]).results[0].failed, ['applies to a table that already has users, who get DE', 'country is required', 'undoing it removes only the country']);
+  assert.deepEqual(answer(t, review, {}, 'applyCoupon never records the use in usedCoupons, so WELCOME10 can be reused.').results[0].failed, ['names the case-sensitive check']);
+  assert.deepEqual(answer(t, fixtureById('test-writing'), slips['test-writing'][1]).results[0].failed, ['the tests catch: empty text gives 0', 'the tests catch: other text gives 0']);
 });
 
 test('recorded evaluations run every fixture through the real broker, verified by their hidden checks', { skip: scriptCLIs }, async () => {

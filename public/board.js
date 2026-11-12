@@ -12,6 +12,8 @@
   if (!dialog || !api) return;
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'secondary-button') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
+  // The modifier that moves a card on the canvas, named as the keyboard labels it.
+  const altKey = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? 'Option' : 'Alt';
   const plural = (count, word, many = `${word}s`) => `${count} ${count === 1 ? word : many}`;
   const listed = items => items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
   const COLUMNS = [
@@ -466,13 +468,16 @@
       const face = cardButton(card, true);
       face.addEventListener('pointerdown', event => startMove(event, card.id));
       face.addEventListener('keydown', event => nudge(event, card.id));
+      face.setAttribute('aria-describedby', 'board-canvas-keys');
       // The dot on the right edge starts an arrow to a card that will wait for this one.
       const port = node('span', 'board-port'); port.setAttribute('aria-hidden', 'true'); port.title = 'Drag to a card that should wait for this one';
       port.addEventListener('pointerdown', event => startLink(event, card.id));
       item.append(face, port); world.append(item);
     }
     const empty = cards().length ? [] : [node('p', 'board-canvas-empty', 'No cards yet. Double-click anywhere to add one, or use New card.')];
-    space.replaceChildren(world, ...empty, tools(), node('p', 'board-canvas-hint', 'Drag a card to place it. Drag its dot onto another card to make that card wait. Double-click to add a card.'));
+    // The keyboard way to do what dragging does, read with each card (#26).
+    const keys = node('p', 'sr-only', `${altKey} and the arrow keys move this card. Open it to choose which cards it waits for.`); keys.id = 'board-canvas-keys';
+    space.replaceChildren(world, ...empty, tools(), node('p', 'board-canvas-hint', `Drag a card to place it, or use ${altKey} and the arrow keys. Drag its dot onto another card to make that card wait. Double-click to add a card.`), keys);
     frame(() => {
       let changed = false;
       for (const item of world.querySelectorAll('.board-node')) { const measured = item.offsetHeight; if (measured && measured !== heights.get(item.dataset.card)) { heights.set(item.dataset.card, measured); changed = true; } }
