@@ -83,7 +83,7 @@ The **Testing cadence** preference shipped in 0.29.2 and applies in both views: 
 | Selection and automatic continuation | #12, #17, #32, #91 | Manual choice/fixed wait in Normal; common-policy automatic choices in Flow |
 | Queue editing | #113 | Normal explicit settings; Flow automatic versus pinned choices with policy provenance |
 | Manual concurrency and bounded fan-out | #88, #108 | Manual tasks remain shared; delegated creation/assignment belongs to Flow |
-| Plans, board execution and schedules | #97, [board/schedule execution #132](https://github.com/AhmedNavaz/codeshi/issues/132) | Shared cards, exact Normal execution, authorized Flow management |
+| Plans, board execution and schedules | #97, [One Plan #162](https://github.com/AhmedNavaz/codeshi/issues/162), [board/schedule execution #132](https://github.com/AhmedNavaz/codeshi/issues/132) | Shared cards, exact Normal execution, authorized Flow management |
 | Reviews and teams | #15, #89 | Explicit build/review stays in Normal; discretionary finite cycles and managed teams in Flow |
 | Race comparisons | #16 | Explicit comparison in Normal; separately authorized managed comparison in Flow |
 | Voice and contextual suggestions | #72, #106 | Dictation/suggestions shared; continuous hands-free loop in Flow |
