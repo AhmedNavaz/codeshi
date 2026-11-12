@@ -1,12 +1,13 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 // ACP is newline-delimited JSON-RPC. Bound frames before parsing, and fail all
 // outstanding requests on malformed output, timeout, exit or cancellation.
 export class GeminiClient extends EventEmitter {
-  constructor({ bin, cwd, args, env, spawnImpl = spawn }) {
+  constructor({ bin, cwd, args, env, spawnImpl = spawn, platform = process.platform, killTree = null } = {}) {
     super(); this.pending = new Map(); this.counter = 0; this.closed = false; this.silencePaused = false;
-    this.child = spawnImpl(bin, args, { cwd, env, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.realSpawn = spawnImpl === spawn; this.platform = platform; this.killTree = killTree;
+    this.child = spawnImpl(bin, args, { cwd, env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let buffer = '', diagnostic = '';
     this.child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-8000); this.emit('diagnostic', diagnostic); });
     this.child.stdout.setEncoding('utf8');
@@ -55,5 +56,17 @@ export class GeminiClient extends EventEmitter {
     for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(error); }
     this.pending.clear(); this.close();
   }
-  close() { if (!this.closed) { this.closed = true; this.child.stdin.end(); this.child.kill('SIGTERM'); } }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    try { this.child.stdin?.end(); } catch {}
+    if (this.child.exitCode != null || this.child.signalCode != null) return;
+    // Windows single-file runtimes (agy_acp_server.exe) spawn an unpacked child process that survives killing only the launcher PID.
+    if (this.platform === 'win32' && typeof this.child?.pid === 'number' && (this.killTree || this.realSpawn)) {
+      const kill = this.killTree || (pid => execFile('taskkill', ['/pid', String(pid), '/t', '/f'], { windowsHide: true }, () => { try { this.child.kill('SIGTERM'); } catch {} }));
+      kill(this.child.pid);
+      return;
+    }
+    try { this.child.kill('SIGTERM'); } catch {}
+  }
 }

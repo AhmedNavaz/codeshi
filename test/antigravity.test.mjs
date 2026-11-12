@@ -5,7 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { antigravityInvocation, antigravitySessionParams, antigravityQuestion, configureAntigravitySession, googleMetadata, connectGoogle, closeGoogleConnections, verifyAntigravity } from '../src/antigravity.mjs';
+import { PassThrough } from 'node:stream';
+import { antigravityInvocation, antigravitySessionParams, antigravityQuestion, antigravityInitializeTimeout, configureAntigravitySession, googleMetadata, connectGoogle, closeGoogleConnections, verifyAntigravity } from '../src/antigravity.mjs';
+import { GeminiClient } from '../src/acp-client.mjs';
+import { accountStatus, listModels, connectAccount, disconnectAccount } from '../src/providers.mjs';
 import { installAntigravity, googleRuntimePath } from '../src/antigravity-install.mjs';
 import { resolveBinary } from '../src/resolve-binary.mjs';
 import { runGemini } from '../src/gemini.mjs';
@@ -317,4 +320,79 @@ test('a Google network failure is reported as one, not as the runtime’s bare i
   await assert.rejects(googleMetadata(options, () => unreachable), error => /could not reach Google/.test(error.message) && error.category === 'network');
   const broken = new Client(); broken.request = async method => { if (method === 'initialize') return initialized; throw new Error('Internal error'); };
   await assert.rejects(googleMetadata(options, () => broken), /^Error: Internal error$/, 'Other failures keep their own message.');
+});
+
+test('Antigravity gives Windows single-file bundles time to unpack, hides console windows, and tears down process trees', async t => {
+  assert.equal(antigravityInitializeTimeout('win32'), 45000);
+  assert.equal(antigravityInitializeTimeout('darwin'), 15000);
+
+  let spawnOptions, killedPid;
+  const fakeChild = () => Object.assign(new EventEmitter(), {
+    pid: 4321, exitCode: null, signalCode: null,
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    kill() { this.killed = true; },
+  });
+  const child = fakeChild();
+  const client = new GeminiClient({
+    bin: 'agy_acp_server.exe', cwd: process.cwd(), args: [], env: {}, platform: 'win32',
+    spawnImpl: (_bin, _args, options) => { spawnOptions = options; return child; },
+    killTree: pid => { killedPid = pid; },
+  });
+  assert.equal(spawnOptions.windowsHide, true);
+  client.close();
+  assert.equal(killedPid, 4321);
+
+  let secondKilled = null;
+  const exited = Object.assign(fakeChild(), { pid: 9876, exitCode: 0 });
+  const exitedClient = new GeminiClient({
+    bin: 'agy_acp_server.exe', cwd: process.cwd(), args: [], env: {}, platform: 'win32',
+    spawnImpl: () => exited,
+    killTree: pid => { secondKilled = pid; },
+  });
+  exitedClient.close();
+  assert.equal(secondKilled, null, 'Already exited children do not invoke tree kill.');
+
+  const root = folder(t), options = { bin: path.join(root, 'agy_acp_server.exe'), googleRoot: root, relay: null };
+  const inflight = new Client(); inflight.request = () => new Promise(() => {});
+  const pending = googleMetadata(options, () => inflight);
+  await new Promise(resolve => setImmediate(resolve));
+  closeGoogleConnections();
+  assert.equal(inflight.closed, true, 'Closing Google connections aborts in-flight metadata probes too.');
+  void pending.catch(() => {});
+});
+
+test('Gemini account, model, sign-in and sign-out surface structured Antigravity status instead of HTTP 500 errors', async t => {
+  const root = folder(t), bin = path.join(root, 'agy_acp_server.exe');
+  const failing = fn => Object.assign(new Client(), { request: fn });
+
+  const timedOut = await accountStatus('gemini', { bin, googleRoot: root, clientFactory: () => failing(() => Promise.reject(new Error('Gemini protocol timed out: initialize'))) });
+  assert.equal(timedOut.installed, true); assert.equal(timedOut.available, true); assert.equal(timedOut.authenticated, 'unknown'); assert.equal(timedOut.errorCategory, 'timeout');
+
+  const modelTimeout = await listModels('gemini', { bin, googleRoot: root, clientFactory: () => failing(() => Promise.reject(new Error('Gemini protocol timed out: initialize'))) });
+  assert.equal(modelTimeout.source, 'unavailable'); assert.deepEqual(modelTimeout.models, []); assert.equal(modelTimeout.errorCategory, 'timeout');
+
+  const networkClient = new Client();
+  networkClient.request = async function (method) {
+    if (method === 'initialize') return initialized;
+    this.emit('diagnostic', 'CCPAConnectionError: Network connection failed\n');
+    throw new Error('Internal error');
+  };
+  const offline = await accountStatus('gemini', { bin, googleRoot: root, clientFactory: () => networkClient });
+  assert.equal(offline.installed, true); assert.equal(offline.available, false); assert.equal(offline.authenticated, 'unknown');
+  assert.equal(offline.errorCategory, 'network'); assert.match(offline.error, /could not reach Google/);
+
+  const oldClient = new Client(); oldClient.initialized = { ...initialized, agentInfo: { name: 'antigravity-acp', version: '1.0.0' } };
+  const mismatch = await accountStatus('gemini', { bin, googleRoot: root, clientFactory: () => oldClient });
+  assert.equal(mismatch.installed, true); assert.equal(mismatch.authenticated, 'unknown'); assert.equal(mismatch.errorCategory, 'execution'); assert.match(mismatch.error, /1\.4\.5/);
+
+  const missingClient = failing(() => Promise.reject(Object.assign(new Error('spawn agy_acp_server.exe ENOENT'), { code: 'ENOENT' })));
+  const missing = await accountStatus('gemini', { bin, googleRoot: root, clientFactory: () => missingClient });
+  assert.equal(missing.installed, false); assert.equal(missing.errorCategory, 'installation');
+
+  const realMissing = await accountStatus('gemini', { bin: path.join(root, 'absent', 'agy_acp_server.exe'), googleRoot: root });
+  assert.equal(realMissing.installed, false); assert.equal(realMissing.errorCategory, 'installation');
+
+  await assert.rejects(connectAccount('gemini', { bin, googleRoot: root, clientFactory: () => failing(() => Promise.reject(new Error('Gemini protocol timed out: initialize'))) }), error => error.status === 504);
+  await assert.rejects(connectAccount('gemini', { bin, googleRoot: root, clientFactory: () => failing(() => Promise.reject(new Error('ACP crashed'))) }), error => error.status === 502 && /ACP crashed/.test(error.message));
+  await assert.rejects(disconnectAccount('gemini', { bin, googleRoot: root, clientFactory: () => failing(() => Promise.reject(new Error('Gemini protocol timed out: initialize'))) }), error => error.status === 504);
 });

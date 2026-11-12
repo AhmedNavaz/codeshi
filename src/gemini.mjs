@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { GeminiClient } from './acp-client.mjs';
 import { acpApprovalRequest, acpToolItem, allowedWrites, writeKey } from './acp-tools.mjs';
-import { isAntigravityACP, antigravityInvocation, antigravityRelay, antigravitySessionParams, configureAntigravitySession, antigravityAccount, antigravityQuestion, verifyAntigravity, removeRuntimeSkill } from './antigravity.mjs';
+import { isAntigravityACP, antigravityInvocation, antigravityRelay, antigravitySessionParams, configureAntigravitySession, antigravityAccount, antigravityQuestion, verifyAntigravity, removeRuntimeSkill, antigravityInitializeTimeout } from './antigravity.mjs';
 import { probeCli } from './cli-probe.mjs';
 import { withBinaryPath } from './resolve-binary.mjs';
 import { readWorkspaceFile, writeWorkspaceFile } from './workspace-files.mjs';
@@ -146,7 +146,7 @@ export async function runGemini(config, { event, approval, question = null, meta
     }
   });
   try {
-    const initialized = await client.request('initialize', { protocolVersion: 1, clientInfo: { name: 'throughline', version: '0.11.0' }, clientCapabilities: { fs: { readTextFile: true, writeTextFile: config.mode !== 'read' }, terminal: false } });
+    const initialized = await client.request('initialize', { protocolVersion: 1, clientInfo: { name: 'throughline', version: '0.11.0' }, clientCapabilities: { fs: { readTextFile: true, writeTextFile: config.mode !== 'read' }, terminal: false } }, antigravity ? Math.max(30000, antigravityInitializeTimeout()) : 30000);
     if (initialized.protocolVersion !== 1) throw new Error('Unsupported Gemini ACP protocol version.');
     if (antigravity) verifyAntigravity(initialized);
     if (cancelled()) throw new Error('Gemini run cancelled.');

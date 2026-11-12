@@ -70,12 +70,15 @@ export function removeRuntimeSkill(workspace) {
 }
 // The relay is a convenience: without it the runtime connects directly, as it would on its own.
 export const antigravityRelay = (options, { commands = false } = {}) => options.relay !== undefined ? Promise.resolve(options.relay) : googleRelay({ commands }).catch(() => null);
+// On Windows, the standalone agy_acp_server.exe bundle takes ~20+ seconds to unpack and initialize.
+export const antigravityInitializeTimeout = (platform = process.platform) => platform === 'win32' ? 45000 : 15000;
 // The runtime reports a failed Google request as a bare "Internal error"; its log says what actually went wrong.
 export function googleConnectionError(error, log) {
+  if (/timed? out/i.test(error?.message || '')) return Object.assign(new Error(error.message), { category: 'timeout' });
   if (!/CCPAConnectionError|Network connection failed|URLError|SSLEOFError|timed out/i.test(log || '')) return error;
   return Object.assign(new Error('Codeshi could not reach Google’s Antigravity service. Check your internet connection, then refresh the Gemini status.'), { category: 'network' });
 }
-export const initializeAntigravity = client => client.request('initialize', { protocolVersion: 1, clientInfo: { name: 'throughline', version: '0.11.0' }, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false } }, 15000);
+export const initializeAntigravity = (client, timeout = antigravityInitializeTimeout()) => client.request('initialize', { protocolVersion: 1, clientInfo: { name: 'throughline', version: '0.11.0' }, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false } }, timeout);
 export function verifyAntigravity(initialized) {
   const version = initialized.agentInfo?.version?.match(/^(\d+)\.(\d+)\.(\d+)/);
   if (initialized.protocolVersion !== 1 || initialized.agentInfo?.name !== 'antigravity-acp' || !version || +version[1] < 1 || +version[1] === 1 && (+version[2] < 4 || +version[2] === 4 && +version[3] < 5)) throw new Error('Antigravity ACP 1.4.5 or newer is required. Reinstall the Google connection in Settings.');
@@ -97,12 +100,19 @@ export function antigravityAccount(session) {
   return { authenticated: true, authMode: 'google-oauth', billingSource: tier?.id && tier?.name ? 'subscription' : 'unknown', ...(tier?.name ? { planType: String(tier.name).slice(0, 120) } : {}) };
 }
 
-const connections = new Map();
-export function closeGoogleConnections() { for (const entry of connections.values()) entry.client.close(); connections.clear(); }
+const connections = new Map(), activeClients = new Set();
+export function closeGoogleConnections() {
+  for (const entry of connections.values()) entry.client.close();
+  connections.clear();
+  for (const client of activeClients) client.close();
+  activeClients.clear();
+}
 export function createGoogleMetadataClient({ bin, googleRoot, relay }, clientFactory) {
   const options = antigravityInvocation({ bin, googleRoot, mode: 'edit', relay });
   const cwd = path.join(options.env.GEMINI_HOME, 'metadata'); fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
   const client = clientFactory({ bin, cwd, ...options });
+  activeClients.add(client);
+  client.child?.once?.('close', () => activeClients.delete(client));
   // Metadata and login never grant tool, workspace-trust or question requests.
   client.on('message', message => { if (message.id !== undefined) client.send({ id: message.id, error: { code: -32601, message: 'No tools are permitted during connection setup.' } }); });
   let log = ''; client.on('diagnostic', text => { log = String(text); });
@@ -125,7 +135,7 @@ export async function googleMetadata(options, clientFactory = options => new Gem
       return { installed: true, available: true, version: initialized.agentInfo.version, authenticated: false, authMode: 'google-oauth', billingSource: 'unknown', models: [], capabilities, source: 'antigravity-acp', manualSelection: false, message: 'Sign in with Google to see the models available to your Antigravity account.' };
     }
   } catch (error) { throw googleConnectionError(error, log()); }
-  finally { client.close(); }
+  finally { activeClients.delete(client); client.close(); }
 }
 export async function connectGoogle(options, clientFactory = options => new GeminiClient(options)) {
   const key = options.googleRoot || defaultGoogleRoot();
@@ -142,16 +152,16 @@ export async function connectGoogle(options, clientFactory = options => new Gemi
     });
     const authentication = client.request('authenticate', { methodId: 'oauth-personal' }, 10 * 60 * 1000);
     let completed = false, failure;
-    const done = authentication.then(() => { completed = true; }, error => { failure = error; }).finally(() => { connections.delete(key); client.close(); });
+    const done = authentication.then(() => { completed = true; }, error => { failure = error; }).finally(() => { connections.delete(key); activeClients.delete(client); client.close(); });
     let timer;
     await Promise.race([done, firstURL, new Promise(resolve => { timer = setTimeout(resolve, 8000); })]); clearTimeout(timer);
     if (failure) throw failure;
     return { started: !completed, nativeFlow: true, ...(entry.url ? { authUrl: entry.url } : {}), message: completed ? 'Google sign-in completed. Refresh status to load your models.' : 'Complete Google sign-in in your browser, then refresh status. Credentials are managed by the official Antigravity runtime.' };
-  } catch (error) { client.close(); connections.delete(key); throw error; }
+  } catch (error) { activeClients.delete(client); client.close(); connections.delete(key); throw error; }
 }
 export async function disconnectGoogle(options, clientFactory = options => new GeminiClient(options)) {
   const current = connections.get(options.googleRoot || defaultGoogleRoot()); current?.client.close(); connections.delete(options.googleRoot || defaultGoogleRoot());
   const { client } = createGoogleMetadataClient({ ...options, relay: await antigravityRelay(options) }, clientFactory);
   try { const initialized = await initializeAntigravity(client); if (!initialized.agentCapabilities?.auth?.logout) throw new Error('Manage sign-out in the native Antigravity client.'); await client.request('logout'); return { disconnected: true }; }
-  finally { client.close(); }
+  finally { activeClients.delete(client); client.close(); }
 }

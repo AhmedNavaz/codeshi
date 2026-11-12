@@ -143,10 +143,11 @@ test('Git is started by its full path, never looked up in the working folder', t
   if (process.platform !== 'win32') assert.equal(gitExecutable({ PATH: tools }, process.platform), fs.existsSync('/usr/bin/git') ? '/usr/bin/git' : path.join(tools, 'git'));
 });
 
-test('Windows Codex install under LOCALAPPDATA is discovered', t => {
+test('Windows Codex and Antigravity ACP installs under LOCALAPPDATA are discovered without PATH', t => {
   const f = setup(t);
   const localAppData = path.join(f.root, 'local app data');
   const codex = f.executable(path.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe'));
+  const agyAcp = f.executable(path.join(localAppData, 'agy', 'bin', 'agy_acp_server.exe'));
   const options = {
     ...f.options,
     platform: 'win32',
@@ -155,6 +156,7 @@ test('Windows Codex install under LOCALAPPDATA is discovered', t => {
   };
 
   assert.equal(resolveBinary('codex', options), codex);
+  assert.equal(resolveBinary('gemini', options), agyAcp);
 });
 
 test('Linux user install locations are discovered without PATH', t => {

@@ -19,6 +19,7 @@ export function classifyError(error) {
   if (/ENOENT|not found|not installed|could not be found|Cannot find package/i.test(text)) return 'installation';
   if (/permission|approv|denied|sandbox|EACCES|EPERM/i.test(text)) return 'permission';
   if (/abort|cancel|stopped|interrupt/i.test(text)) return 'interrupted';
+  if (/timed? out|ETIMEDOUT/i.test(text)) return 'timeout';
   if (/protocol|JSON|without complet|oversized|invalid.*event|unexpected.*event/i.test(text)) return 'protocol';
   return 'execution';
 }
@@ -385,7 +386,8 @@ export function closeAccountConnections() { closeGoogleConnections(); for (const
 // Each Google check starts the Antigravity runtime and a session, which takes seconds. The app asks for the account
 // and its models together, so both share one check, and a signed-in result is reused briefly.
 const googleChecks = new Map();
-function sharedGoogleMetadata({ bin, googleRoot, refresh = false }) {
+function sharedGoogleMetadata({ bin, googleRoot, refresh = false, clientFactory }) {
+  if (clientFactory) return googleMetadata({ bin, googleRoot }, clientFactory);
   const key = JSON.stringify([bin, googleRoot || null]), current = googleChecks.get(key);
   if (current && (current.pending || !refresh && Date.now() - current.at < 60000)) return current.promise;
   const entry = { pending: true, at: 0 };
@@ -397,12 +399,18 @@ function sharedGoogleMetadata({ bin, googleRoot, refresh = false }) {
   googleChecks.set(key, entry);
   return entry.promise;
 }
-export async function accountStatus(provider, { bin = resolveBinary(provider), workspace = os.homedir(), googleRoot, refresh = false } = {}) {
+export async function accountStatus(provider, { bin = resolveBinary(provider), workspace = os.homedir(), googleRoot, refresh = false, clientFactory } = {}) {
   const base = { installed: false, available: false, authenticated: 'unknown', authMode: 'unknown', billingSource: 'unknown', usage: 'unknown', path: bin, capabilities: capabilities(provider) };
   if (!bin) return { ...base, ...(provider === 'gemini' ? { message: geminiSetup } : {}) };
   if (provider === 'gemini' && isAntigravityACP(bin)) {
-    const { models, ...status } = await sharedGoogleMetadata({ bin, googleRoot, refresh });
-    return { ...base, ...status, capabilities: { ...base.capabilities, ...status.capabilities, readOnly: 'unavailable', hooks: 'Antigravity manages native hooks and workspace trust. Codeshi does not grant workspace-trust questions automatically.' }, message: 'Google Antigravity connection. Sign in with Google to use the models and allowance available to your account. Coding uses native approvals; read-only work uses Codex or Claude.' };
+    try {
+      const { models, ...status } = await sharedGoogleMetadata({ bin, googleRoot, refresh, clientFactory });
+      return { ...base, ...status, capabilities: { ...base.capabilities, ...status.capabilities, readOnly: 'unavailable', hooks: 'Antigravity manages native hooks and workspace trust. Codeshi does not grant workspace-trust questions automatically.' }, message: 'Google Antigravity connection. Sign in with Google to use the models and allowance available to your account. Coding uses native approvals; read-only work uses Codex or Claude.' };
+    } catch (error) {
+      const category = error?.category || classifyError(error);
+      const missing = category === 'installation';
+      return { ...base, installed: !missing, available: category === 'timeout', authenticated: 'unknown', capabilities: { ...base.capabilities, readOnly: 'unavailable' }, error: error?.message || 'Google Antigravity connection status could not be checked.', errorCategory: category, message: error?.message || geminiSetup };
+    }
   }
   const version = await probeCli(bin, ['--version'], 4000);
   // An installed CLI that answers too slowly is unverified, not missing.
@@ -528,15 +536,20 @@ export async function listModels(provider, options = {}) {
   if (provider === 'gemini') {
     const bin = options.bin || resolveBinary(provider);
     if (isAntigravityACP(bin)) {
-      const result = await sharedGoogleMetadata({ bin, googleRoot: options.googleRoot, refresh: options.refresh });
-      if (Array.isArray(result?.models) && result.models.length > 0 && result.authenticated !== false) {
-        return { ...result, models: result.models.filter(m => String(m.id || m.model || m.value || '').toLowerCase().startsWith('gemini')) };
+      try {
+        const result = await sharedGoogleMetadata({ bin, googleRoot: options.googleRoot, refresh: options.refresh, clientFactory: options.clientFactory });
+        if (Array.isArray(result?.models) && result.models.length > 0 && result.authenticated !== false) {
+          return { ...result, models: result.models.filter(m => String(m.id || m.model || m.value || '').toLowerCase().startsWith('gemini')) };
+        }
+        const agyBin = resolveBinary('gemini', { googleRoot: options.googleRoot });
+        if (agyBin && isAgy(agyBin)) {
+          return fetchAgyModels(agyBin, options);
+        }
+        return result;
+      } catch (error) {
+        const category = error?.category || classifyError(error);
+        return { models: [], source: 'unavailable', manualSelection: false, errorCategory: category, message: error?.message || 'Google models could not be loaded.' };
       }
-      const agyBin = resolveBinary('gemini');
-      if (agyBin && isAgy(agyBin)) {
-        return fetchAgyModels(agyBin, options);
-      }
-      return result;
     }
     if (isAgy(bin)) {
       return fetchAgyModels(bin, options);
@@ -556,10 +569,14 @@ export async function listModels(provider, options = {}) {
   try { await client.initialize(); const result = await client.request('model/list', { limit: 100, includeHidden: false }); return { models: result.data, source: 'provider', nextCursor: result.nextCursor }; }
   finally { client.close(); }
 }
-export async function connectAccount(provider, { bin = resolveBinary(provider), workspace = os.homedir(), googleRoot } = {}) {
+export async function connectAccount(provider, { bin = resolveBinary(provider), workspace = os.homedir(), googleRoot, clientFactory } = {}) {
   clearUsage(provider);
   if (provider === 'gemini') {
-    if (isAntigravityACP(bin)) { googleChecks.clear(); return connectGoogle({ bin, googleRoot }); }
+    if (isAntigravityACP(bin)) {
+      googleChecks.clear();
+      try { return await connectGoogle({ bin, googleRoot }, clientFactory); }
+      catch (error) { throw error?.status ? error : Object.assign(error instanceof Error ? error : new Error(String(error)), { status: /timed? out/i.test(error?.message || '') || error?.category === 'timeout' ? 504 : 502 }); }
+    }
     if (isAgy(bin)) return { started: false, nativeFlow: true, message: 'Sign in to Google using the Antigravity app or CLI (agy), then refresh status in Codeshi.' };
     return { started: false, nativeFlow: true, message: geminiSetup };
   }
@@ -582,9 +599,13 @@ export async function connectAccount(provider, { bin = resolveBinary(provider), 
     return login;
   } catch (error) { client.close(); throw error; }
 }
-export async function disconnectAccount(provider, { bin = resolveBinary(provider), workspace = os.homedir(), googleRoot } = {}) {
+export async function disconnectAccount(provider, { bin = resolveBinary(provider), workspace = os.homedir(), googleRoot, clientFactory } = {}) {
   clearUsage(provider);
-  if (provider === 'gemini' && isAntigravityACP(bin)) { googleChecks.clear(); return disconnectGoogle({ bin, googleRoot }); }
+  if (provider === 'gemini' && isAntigravityACP(bin)) {
+    googleChecks.clear();
+    try { return await disconnectGoogle({ bin, googleRoot }, clientFactory); }
+    catch (error) { throw error?.status ? error : Object.assign(error instanceof Error ? error : new Error(String(error)), { status: /timed? out/i.test(error?.message || '') || error?.category === 'timeout' ? 504 : 502 }); }
+  }
   if (provider === 'gemini') throw Object.assign(new Error('Manage Google and Gemini authentication in the native Antigravity or Gemini CLI. Codeshi stores no credentials.'), { status: 400 });
   if (!bin) throw Object.assign(new Error('Install the provider CLI first.'), { status: 503 });
   if (provider === 'claude') { const result = spawnSync(bin, ['auth', 'logout'], { cwd: workspace, encoding: 'utf8', timeout: 5000, shell: false }); if (result.status !== 0) throw new Error(result.stderr || 'Claude logout failed.'); return { disconnected: true }; }

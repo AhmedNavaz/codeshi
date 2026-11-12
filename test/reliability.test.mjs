@@ -276,6 +276,7 @@ test('error categories distinguish unavailable account causes', () => {
   assert.equal(classifyError('UsageLimitExceeded'), 'quota'); assert.equal(classifyError("You've hit your limit · resets later"), 'quota'); assert.equal(classifyError('401 unauthorized'), 'authentication');
   assert.equal(classifyError({ message: 'Turn failed', codexErrorInfo: 'UsageLimitExceeded' }), 'quota');
   assert.equal(classifyError({ code: 'ENOENT' }), 'installation'); assert.equal(classifyError('permission denied'), 'permission');
+  assert.equal(classifyError('Gemini protocol timed out: initialize'), 'timeout');
   assert.equal(classifyError('invalid JSON protocol'), 'protocol');
 });
 
