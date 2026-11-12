@@ -4,7 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 // Runs the phone page's shipped read-aloud code (#23) against a fake speech engine, so what's tested is what ships.
-const source = fs.readFileSync(new URL('../public/phone.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../public/phone.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const section = source.slice(source.indexOf('  // ---- Replies read aloud (#23)'), source.indexOf('  // ---- Sheets.'));
 const logic = {};
 vm.runInNewContext(fs.readFileSync(new URL('../public/phone-logic.js', import.meta.url), 'utf8'), logic);

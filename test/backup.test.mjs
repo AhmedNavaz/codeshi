@@ -32,7 +32,7 @@ function oldComputer() {
   const broker = registry.broker(project.id), conversation = broker.get(registry.mainConversationId(project.id));
   broker.message(conversation, 'user', `Fix the bug in ${folder}/src/a.js please`);
   const folderId = project.folders[0].id, data = path.join(registry.dataRoot, project.id);
-  broker.record(conversation, { type: 'test_note', folderId, path: `${folder}/src/a.js`, snapshot: `${data}/skills/abc/skill/SKILL.md`, revisions: { [folderId]: 'abc123' } });
+  broker.record(conversation, { type: 'test_note', folderId, path: path.join(folder, 'src', 'a.js'), snapshot: path.join(data, 'skills', 'abc', 'skill', 'SKILL.md'), revisions: { [folderId]: 'abc123' } });
   write(path.join(data, 'attachments', 'feed.json'), '{"name":"shot.png"}');
   write(path.join(data, 'commands.json'), JSON.stringify({ version: 2, commands: [{ id: 'web', name: 'web', folderId, directory: '', command: 'npm run web' }] }));
   write(path.join(data, 'permissions.json'), JSON.stringify({ rules: [{ path: `${folder}/x` }] }));
@@ -64,7 +64,7 @@ test('only Codeshi’s own portable records leave a workspace’s data: no appro
 });
 
 test('folder IDs and paths are rewritten as whole values only, and untouched records keep their bytes', () => {
-  const rewrite = rewriter({ ids: new Map([['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb']]), prefixes: [['/old/app', '/new/app'], ['/data', '/elsewhere']] });
+  const rewrite = rewriter({ ids: new Map([['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb']]), prefixes: [['/old/app', '/new/app'], ['/data', '/elsewhere']], toSeparator: '/' });
   const line = JSON.stringify({ folderId: 'aaaaaaaaaaaaaaaa', path: '/old/app/src/a.js', root: '/old/app', other: '/data/z', text: 'see /old/app/src/a.js', revisions: { aaaaaaaaaaaaaaaa: 1 }, near: '/old/application' });
   assert.deepEqual(JSON.parse(rewrite.line(line)), { folderId: 'bbbbbbbbbbbbbbbb', path: '/new/app/src/a.js', root: '/new/app', other: '/elsewhere/z', text: 'see /old/app/src/a.js', revisions: { bbbbbbbbbbbbbbbb: 1 }, near: '/old/application' });
   const untouched = '{"b": 1,  "a":"x"}';
@@ -109,10 +109,10 @@ test('moving a workspace to a computer where its folder is elsewhere: records fo
   const data = path.join(registry.dataRoot, project.id), text = fs.readFileSync(journalOf(registry, project.id), 'utf8');
   const note = text.split('\n').filter(Boolean).map(line => JSON.parse(line)).find(record => record.type === 'test_note');
   assert.equal(note.folderId, newId);
-  assert.equal(note.path, `${fs.realpathSync(folder)}/src/a.js`);
-  assert.equal(note.snapshot, `${data}/skills/abc/skill/SKILL.md`, 'Paths into Codeshi’s own data follow it.');
+  assert.equal(note.path, path.join(fs.realpathSync(folder), 'src', 'a.js'));
+  assert.equal(note.snapshot, path.join(data, 'skills', 'abc', 'skill', 'SKILL.md'), 'Paths into Codeshi’s own data follow it.');
   assert.deepEqual(Object.keys(note.revisions), [newId]);
-  assert.match(text, new RegExp(`Fix the bug in ${computer.folder.replace(/[/\\^$*+?.()|[\]{}]/g, '\\$&')}/src/a.js`), 'What people wrote stays as written.');
+  assert(text.includes(JSON.stringify(`Fix the bug in ${computer.folder}/src/a.js`).slice(1, -1)), 'What people wrote stays as written.');
   assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'commands.json'), 'utf8')).commands[0].folderId, newId);
   assert.equal(fs.existsSync(path.join(data, 'attachments', 'feed.json')), true);
   assert.equal(fs.existsSync(path.join(data, 'permissions.json')), false, 'Always-allow approvals stay behind.');
