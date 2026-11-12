@@ -17,8 +17,17 @@
 
   $version = if ($env:CODESHI_VERSION) { $env:CODESHI_VERSION } else { $env:THROUGHLINE_VERSION }
   if (-not $version) {
-    try { $version = (Invoke-RestMethod -UseBasicParsing -Uri "https://api.github.com/repos/$repo/releases/latest").tag_name }
-    catch { Fail 'Could not reach GitHub.' }
+    # The releases page redirects to the latest tag. GitHub's API would answer too, but it refuses a network that has
+    # asked it 60 times in an hour.
+    $location = $null
+    try {
+      $request = [Net.HttpWebRequest]::Create("https://github.com/$repo/releases/latest")
+      $request.Method = 'HEAD'; $request.AllowAutoRedirect = $false; $request.UserAgent = 'codeshi-install'; $request.Timeout = 30000
+      $response = $request.GetResponse()
+      try { $location = $response.Headers['Location'] } finally { $response.Close() }
+    } catch { Fail 'Could not reach GitHub.' }
+    if ("$location" -notmatch '/releases/tag/([^/?#]+)$') { Fail 'Could not find the latest release.' }
+    $version = $Matches[1]
   }
   $version = "$version" -replace '^v', ''
   if ($version -notmatch '^\d+\.\d+\.\d+[0-9A-Za-z.+-]*$') { Fail 'Could not find the latest release.' }

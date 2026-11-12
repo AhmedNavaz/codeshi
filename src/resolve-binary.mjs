@@ -132,7 +132,7 @@ export function resolveBinary(provider, {
   const pathEntries = searchPath(env, platform);
 
   if (provider === 'gemini') {
-    const native = firstExecutable([...(googleRoot ? [googleRuntimePath(googleRoot)] : []), ...pathEntries.flatMap(directory => ['agy_acp_server.par', 'agy_acp_server.exe', 'antigravity-acp'].map(name => path.join(directory, name)))], platform, arch);
+    const native = firstExecutable([...(googleRoot ? [googleRuntimePath(googleRoot, platform)] : []), ...pathEntries.flatMap(directory => ['agy_acp_server.par', 'agy_acp_server.exe', 'antigravity-acp'].map(name => path.join(directory, name)))], platform, arch);
     if (native) return native;
 
     const agyNames = ['agy', 'antigravity'].flatMap(name => commandNames(name, platform));

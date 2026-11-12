@@ -202,7 +202,7 @@ test('Antigravity runtime installation fails checksum verification before extrac
   const root = folder(t); let extracted = false;
   await assert.rejects(installAntigravity(root, { platform: 'darwin', arch: 'arm64', fetchImpl: async url => { assert.match(url, /^https:\/\/dl\.google\.com\//); return new Response('untrusted archive'); }, spawnImpl: () => { extracted = true; } }), /checksum/);
   assert.equal(extracted, false); assert(!fs.existsSync(googleRuntimePath(root))); assert.deepEqual(fs.readdirSync(path.join(root, 'runtime')), []);
-  await assert.rejects(installAntigravity(root, { platform: 'unsupported', arch: 'unknown' }), /Automatic Antigravity/);
+  await assert.rejects(installAntigravity(root, { platform: 'unsupported', arch: 'unknown' }), /install Antigravity automatically/);
 });
 test('the installed Google ACP runtime takes priority while explicit Gemini API/enterprise overrides remain respected', t => {
   const root = folder(t), bin = googleRuntimePath(root); fs.mkdirSync(path.dirname(bin), { recursive: true }); fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o700 });

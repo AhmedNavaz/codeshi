@@ -207,9 +207,11 @@
   }
 
   // Accounts: one row for each agent, with its status, plan and usage, what to do next, and its details on request.
+  // Each agent's own install command differs by system: Windows has no bash to pipe a shell script into.
+  const onWindows = window.relayDesktop?.platform === 'win32' || (!window.relayDesktop?.platform && /Win/.test(navigator.platform || ''));
   const installGuides = {
-    codex: { command: 'npm install -g @openai/codex', url: 'https://github.com/openai/codex', note: () => t('Install the Codex CLI, or the ChatGPT or Codex app for macOS, on this computer, then refresh.') },
-    claude: { command: 'curl -fsSL https://claude.ai/install.sh | bash', url: 'https://code.claude.com/docs/en/overview', note: () => t('Install Claude Code and run claude in Terminal to sign in, then refresh.') },
+    codex: { command: 'npm install -g @openai/codex', url: 'https://github.com/openai/codex', note: () => onWindows ? t('Install the Codex CLI on this computer, then refresh.') : t('Install the Codex CLI, or the ChatGPT or Codex app for macOS, on this computer, then refresh.') },
+    claude: { command: onWindows ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash', url: 'https://code.claude.com/docs/en/overview', note: () => onWindows ? t('Install Claude Code and run claude in PowerShell to sign in, then refresh.') : t('Install Claude Code and run claude in Terminal to sign in, then refresh.') },
     gemini: { command: '', url: 'https://antigravity.google/docs/install', note: () => t('Codeshi downloads Google’s official Antigravity connection and checks it, then you sign in with Google. Google’s terms and account limits apply.') },
   };
   function accountLabel(account) { return !account.installed ? t('Not installed') : account.authenticated === true ? t('Connected') : account.authenticated === false ? t('Sign-in required') : t('Connection not confirmed'); }
