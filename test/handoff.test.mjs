@@ -648,6 +648,38 @@ test('Flow mode executes handoff autonomously without publishing an interactive 
   await env.broker.running.done;
 });
 
+// A Flow move that fails its last check leaves nothing the person can't see, and is tried again at the next check (#12).
+test('a Flow handoff that fails its last check is tried again, and one that keeps failing is explained in the conversation', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.execution.setDefault(env.c, { mode: 'flow', routingMode: 'smart' });
+  env.broker.start(env.c, { text: 'Build the feature', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'smart', reason: 'A test', tier: 'standard' } });
+  const run = await until(() => env.requests().length && env.broker.running, 'the Smart run');
+  // Each check reads Claude twice: room when the move is worked out, then past the line when it would start. A routed
+  // Flow move that fails makes no fresh offer, so there is no third read.
+  const usage = env.broker.handoff.usage;
+  let reads = 0;
+  env.broker.handoff.usage = async (provider, options) => provider === 'claude' && reads++ % 2 === 1 ? { ...(await usage(provider, options)), windows: [{ id: 'primary', label: '5-hour', usedPercent: 97, resetsAt: new Date(Date.now() + 3600000).toISOString() }] } : usage(provider, options);
+  await env.broker.handoff.check(run);
+  assert.equal(env.broker.running, run, 'Nothing moved: Claude was past the line at the last check.');
+  assert.equal(env.c.handoffOffer, null, 'Flow leaves no offer that only Normal would show.');
+  assert(!notes(env.c).some(text => /tried to hand/.test(text)), 'One miss is tried again quietly.');
+  await env.broker.handoff.check(run);
+  assert.equal(env.broker.running, run); assert.equal(env.c.handoffOffer, null);
+  const note = notes(env.c).filter(text => /tried to hand/.test(text));
+  assert.equal(note.length, 1, 'A second miss is explained, once.');
+  assert.match(note[0], /^Codex has used 92% of its 5-hour limit\. Codeshi tried to hand the task to Claude, but Claude/);
+  assert.match(note[0], /Codex keeps working, and Codeshi tries again at each usage check\.$/);
+  await env.broker.handoff.check(run);
+  assert.equal(notes(env.c).filter(text => /tried to hand/.test(text)).length, 1, 'It is said once a run.');
+  // Once Claude really has room, the task moves.
+  env.broker.handoff.usage = usage;
+  await env.broker.handoff.check(run);
+  await run.done;
+  assert.equal(env.broker.running?.provider, 'claude');
+  assert.match(notes(env.c).at(-1), /Codeshi handed the task to Claude/);
+  await env.broker.running.done;
+});
+
 test('continuing with another agent after a limit takes the queued prompts along, if that agent needs no charges accepted', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   env.usage.codex = 100;

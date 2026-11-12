@@ -1216,6 +1216,18 @@
     ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump();
     if (frames > 0) requestAnimationFrame(() => scrollToLatest(frames - 1));
   }
+  // A reply taller than the view is read from its start: following the end stops once the reply's first line is at
+  // the top, under its prompt. A reader who has gone past that point keeps the end, and so does a reply that fits.
+  let latestReply = null;
+  function followLatest() {
+    let top = ui.scroll.scrollHeight;
+    if (latestReply?.isConnected && latestReply.getBoundingClientRect && ui.scroll.getBoundingClientRect) {
+      const prompt = latestReply.closest?.(".turn")?.querySelector?.(":scope > .message-prompt:not(.expanded)");
+      const start = ui.scroll.scrollTop + latestReply.getBoundingClientRect().top - ui.scroll.getBoundingClientRect().top - (prompt?.offsetHeight || 0) - 8;
+      if (start > 0 && ui.scroll.scrollTop <= start + 1 && start < ui.scroll.scrollHeight - ui.scroll.clientHeight) top = start;
+    }
+    ui.scroll.scrollTop = top; updateJump();
+  }
   // Makes parent's children exactly these nodes, touching only what differs, so what stayed keeps its layout and scroll position.
   function syncChildren(parent, nodes) {
     let at = 0;
@@ -1265,7 +1277,7 @@
       return extra;
     };
     const rootKids = [], turns = new Map(), footer = $("transcript-footer"), progress = $("run-progress");
-    let footerHost = rootKids;
+    let footerHost = rootKids, reply = null;
     if (c?.earlier > 0) {
       const banner = element("div", "messages-earlier");
       const button = element("button", "text-link messages-load-earlier", `Load earlier messages (${c.earlier} older)`);
@@ -1357,6 +1369,7 @@
         }
         if (message.role !== "activity") {
           const row = messageNode(message, index);
+          if (message.role === "assistant" && index === messages.length - 1) reply = row;
           // Replies, errors and notes added while the agent worked belong to their run's thread.
           const inRun = message.role === "assistant" || (message.runId && (message.role === "error" || message.steer || thread?.key === message.runId));
           if (inRun) threadFor(message, index).kids.push(row); else { thread = null; place(row); }
@@ -1413,8 +1426,9 @@
     for (const entry of turns.values()) if (entry.node) syncChildren(entry.node, entry.kids);
     drawn.turns = turns;
     syncChildren(ui.messages, rootKids);
+    latestReply = reply;
     if (forceScroll) scrollToLatest();
-    else if (nearBottom) { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); requestAnimationFrame(() => { ui.scroll.scrollTop = ui.scroll.scrollHeight; updateJump(); }); }
+    else if (nearBottom) { followLatest(); requestAnimationFrame(followLatest); }
     else { ui.scroll.scrollTop = oldTop; updateJump(); }
   }
 
@@ -1747,12 +1761,8 @@
   // An offer to hand the task to another agent before a usage limit stops the run (#17).
   function renderHandoff() {
     const offer = state.conversation?.handoffOffer, section = $("handoff-offer");
-    const isFlow = state.flow || state.conversation?.execution?.active?.mode === "flow";
-    if (isFlow && (!offer || offer.to?.billingSource === "subscription")) {
-      section.hidden = true;
-      updateJump();
-      return;
-    }
+    // Flow moves a routed task by itself and leaves no offer (#12), so an offer here, in Flow too, waits for the person:
+    // its agent was pinned with automatic handoff off, or the destination needs its charges accepted.
     section.hidden = !offer || !isRunning();
     updateJump();
     if (section.hidden) return;
@@ -2070,14 +2080,17 @@
     document.title = currentProject() ? currentProject().name + " · Codeshi" : "Codeshi · Your project workspaces";
   }
   function render(forceScroll = false) { renderProjects(); renderStatus(); renderWorkspaceList(); renderMessages(forceScroll); renderControls(); renderFolderAsk(); window.dispatchEvent(new CustomEvent("relay-state")); }
-  // The message box grows with its text up to 200px. Lines can be a fraction of a pixel tall while scrollHeight is a
-  // whole number, so the box gets one pixel more, and it only scrolls once it has stopped growing; otherwise a message
-  // of three lines showed a scroll bar.
+  // The message box is one line when empty and grows with its text up to three lines, then scrolls. Lines can be a
+  // fraction of a pixel tall while scrollHeight is a whole number, so the box gets one pixel more, and it only scrolls
+  // once it has stopped growing; otherwise a message of three lines showed a scroll bar.
   function resizeInput() {
     ui.input.style.height = "auto";
     const needed = ui.input.scrollHeight + 1;
-    ui.input.style.height = `${Math.min(Math.max(needed, 64), 200)}px`;
-    ui.input.style.overflowY = needed > 200 ? "auto" : "hidden";
+    const style = typeof getComputedStyle === "function" ? getComputedStyle(ui.input) : null;
+    const line = parseFloat(style?.lineHeight), padding = parseFloat(style?.paddingTop) + parseFloat(style?.paddingBottom);
+    const most = Number.isFinite(line) && Number.isFinite(padding) ? Math.ceil(line * 3 + padding) + 1 : 83;
+    ui.input.style.height = `${Math.min(needed, most)}px`;
+    ui.input.style.overflowY = needed > most ? "auto" : "hidden";
   }
 
   let loadingEarlier = false;
@@ -2935,7 +2948,7 @@
   // Status, permission requests and Continue appear under the latest turn without a new message; a reader at the end keeps seeing them.
   let following = true;
   ui.scroll.addEventListener("scroll", () => { following = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight < 110; }, { passive: true });
-  if (typeof ResizeObserver === "function") new ResizeObserver(() => { if (following) ui.scroll.scrollTop = ui.scroll.scrollHeight; }).observe($("transcript-footer"));
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => { if (following) followLatest(); }).observe($("transcript-footer"));
   // From far away it goes straight there: scrolling past every turn would draw them all, and that moves the end further away.
   $("jump-latest").addEventListener("click", () => {
     const distance = ui.scroll.scrollHeight - ui.scroll.scrollTop - ui.scroll.clientHeight;

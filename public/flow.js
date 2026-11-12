@@ -301,15 +301,18 @@
         row.append(node("dt", undefined, "Running"), node("dd", undefined, `${agent}${model ? ` · ${model}` : ""}${run.effort ? ` (${run.effort} effort)` : ""}: ${phaseText}`));
         workingFacts.append(row);
       }
+      // Flow hands a routed task off by itself and says so in the conversation; an offer left here waits for you (#12).
+      const offer = c.handoffOffer;
+      if (offer) {
+        const row = node("div"), charges = offer.to?.billingSource !== "subscription";
+        row.append(node("dt", undefined, "Handoff"), node("dd", undefined, `Waiting for you: ${agentName(offer.from.provider)} has used ${Math.round(offer.from.usedPercent)}% of its limit. Hand off to ${agentName(offer.to.provider)}${charges ? " and accept its charges" : ""} in the conversation.`));
+        workingFacts.append(row);
+      }
     } else if (c?.resume || c?.limitSwitching) {
       const row = node("div");
       const waitAgent = agentName(c?.resume?.providers?.[0] || "agent");
       const reset = c?.resume?.resetsAt ? resetWords(c.resume.resetsAt) : "";
       row.append(node("dt", undefined, "Waiting"), node("dd", undefined, `${waitAgent} usage limit to reset${reset ? ` (${reset})` : ""}`));
-      workingFacts.append(row);
-    } else if (c?.handoffOffer) {
-      const row = node("div");
-      row.append(node("dt", undefined, "Handoff"), node("dd", undefined, `Moving from ${agentName(c.handoffOffer.from.provider)} to ${agentName(c.handoffOffer.to.provider)}: ${c.handoffOffer.reason || "usage threshold reached"}`));
       workingFacts.append(row);
     } else {
       const row = node("div");

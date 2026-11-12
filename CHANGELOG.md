@@ -4,6 +4,20 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Added
+- **Evaluations for long conversations** ([#85](https://github.com/AhmedNavaz/codeshi/issues/85)). `npm run eval` has two new tasks, `long-chat` and `long-chat-short`, where formats agreed many exchanges earlier are needed again in a conversation past the 48 KB a fresh agent takes word for word. `--context task-unfolded` runs them without the rolling brief, as a baseline. `long-chat-short` is marked as a known gap: in a chat of many short messages, the rolling brief keeps fewer earlier requests than the older cut-off did. The first live results for these, for today's context selection against the older one, and for Smart against a model picked by hand are in `evals/README.md`. They are a few small runs on Claude and support no claim.
+
+### Changed
+- **The message box starts at one line.** It was three lines tall when empty. It now grows with what you type, up to three lines, and then scrolls.
+- **A long reply stays at its start.** When a reply taller than the window arrived, the conversation jumped to its end and you had to scroll back up. It now stops with the reply's first line at the top, under your request. A reply that fits still shows whole, and if you have already scrolled further down, the conversation keeps following the end.
+
+### Fixed
+- **Less CPU and battery use while an agent works** ([#152](https://github.com/AhmedNavaz/codeshi/issues/152)). The moving highlight over the status line ("Reading files…") repainted that line on every frame, 120 times a second on a ProMotion display, for as long as a run lasted. In a ten-second trace this was nearly all of the window's drawing, at about half of one CPU core. The highlight looks the same and is now moved by the graphics card without repainting, and the line's words are only rewritten when they change. It is off with Reduce Motion. The result has not been measured again yet.
+- **A Flow handoff that fails its last check is tried again** ([#12](https://github.com/AhmedNavaz/codeshi/issues/12)). When Flow moved a task to another agent near a usage limit and the last check before the switch failed, it left a hidden offer that stopped every later attempt, so the task ran into its limit with no message. It now leaves no offer and tries again at each usage check. If it fails twice, the conversation says once why, and that the agent keeps working.
+- **Flow shows a handoff that waits for you** ([#12](https://github.com/AhmedNavaz/codeshi/issues/12)). An offer that needs your answer, because the other agent bills separately or automatic handoff is off for the task, was hidden in Flow, and Flow's card described it as "Moving from…" as if it were happening. The offer now shows in the conversation in Flow too, and the card says **Waiting for you**.
+- **Routing assessments run on Claude's small model** ([#84](https://github.com/AhmedNavaz/codeshi/issues/84)). Codeshi asked for Haiku, but Claude Code 2.1 runs a Haiku request on Sonnet in plan mode, which the assessment used. An assessment has no tools, so it now runs outside plan mode. In a few live runs its share fell from 2,000–4,800 new tokens to 420–2,490.
+- **Claude's subagent line counts each subagent's final reply** ([#84](https://github.com/AhmedNavaz/codeshi/issues/84)). Checked against a real run with two subagents, the line had counted 5 of 7 messages. Input and cache tokens now match Claude's own records. Output is still undercounted, so the line stays "at least".
+
 ## [0.48.0] - 2026-11-12
 
 ### Added

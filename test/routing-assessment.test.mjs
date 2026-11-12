@@ -372,6 +372,8 @@ test('Claude assessment disables tools, hooks, MCP and session persistence', asy
   });
   assert.deepEqual(options.tools, []); assert.deepEqual(options.mcpServers, {}); assert.equal(options.maxTurns, 1); assert.equal(options.persistSession, false); assert.equal(options.settings.disableAllHooks, true);
   assert.equal((await options.canUseTool('Bash', {}, {})).behavior, 'deny');
+  // Plan mode would run a Haiku assessment on Sonnet; with no tools there is nothing for it to restrict.
+  assert.equal(options.permissionMode, 'default');
 });
 
 test('Codex assessment is ephemeral, read-only, isolated from coding sessions and uses a constrained output schema', async () => {

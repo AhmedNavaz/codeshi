@@ -4927,11 +4927,13 @@ test('the message box grows a pixel past its text and only scrolls at its full h
   type('one\ntwo\nthree', 81);
   assert.equal(input.style.height, '82px');
   assert.equal(input.style.overflowY, 'hidden');
+  // Past three lines the box stops growing and scrolls.
   type('a long message\n'.repeat(20), 320);
-  assert.equal(input.style.height, '200px');
+  assert.equal(input.style.height, '83px');
   assert.equal(input.style.overflowY, 'auto');
+  // Empty, it is one line: the stylesheet's minimum height sets it, not a height written here.
   type('', 20);
-  assert.equal(input.style.height, '64px');
+  assert.equal(input.style.height, '21px');
   assert.equal(input.style.overflowY, 'hidden');
 });
 
@@ -6996,6 +6998,19 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
   await ui.window.relayUI.refresh(); await flush();
   assert.match(ui.$("flow-status-text").textContent, /Reviewer: Codex is reviewing changes/);
   assert.match(flowText(ui, "working"), /Reviewers*Codex: reviewing changes/);
+
+  // B2) Flow moves a routed task by itself (#12), so an offer left while it works waits for you: on the card and in the
+  // conversation, whether it needs charges accepted or its agent was pinned with automatic handoff off.
+  chat.activeRun = { id: "run-work", provider: "codex", phase: "tool", startedAt: new Date().toISOString() };
+  chat.handoffOffer = { id: "offer-api", runId: "run-work", from: { provider: "codex", usedPercent: 91.6, window: "5-hour" }, to: { provider: "claude", model: null, mode: "edit", approvalPolicy: "ask", billingSource: "api", usedPercent: 20 }, task: "Build the feature" };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(flowText(ui, "working"), /Handoff\s*Waiting for you: Codex has used 92% of its limit\. Hand off to Claude and accept its charges in the conversation\./);
+  assert.equal(ui.$("handoff-offer").hidden, false);
+  chat.handoffOffer = { ...chat.handoffOffer, id: "offer-pinned", to: { ...chat.handoffOffer.to, billingSource: "subscription" } };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.match(flowText(ui, "working"), /Hand off to Claude in the conversation\./);
+  assert.equal(ui.$("handoff-offer").hidden, false, "A subscription offer in Flow is shown too: Flow only leaves one when it needs you.");
+  chat.handoffOffer = null;
 
   // C) Wait reason
   chat.status = "incomplete";

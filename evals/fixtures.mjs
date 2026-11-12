@@ -2,7 +2,37 @@
 // the check's files are only written after the agent has finished, so it can't be edited or passed by reading it.
 const test = body => `import assert from 'node:assert/strict';\nimport test from 'node:test';\n${body}\n`;
 
-const CHANGE_NOTE = '---\nname: change-note\ndescription: Record a change in CHANGES.md in the format this project requires.\nlicense: MIT\n---\n\nUnder "## Unreleased" in CHANGES.md, add one line in exactly this format:\n\n- [<area>] <one sentence saying what changed>. (#<issue>)\n\nThe square brackets and the (#number) are required. Do not add anything else to the file.\n';
+// Ordinary chores in a long conversation, for the `long-chat` fixtures: a request and a reply of about `bytes`, whose first
+// paragraph is the outcome, as agents write them. None of them mentions invoices.
+const CHORES = ['Tidy the install section of the README', 'Rename the test helpers to match their files', 'Add a lint script to package.json', 'Make the buttons use the shared colours', 'Split utils.mjs into two smaller files', 'Add a note on branch names to CONTRIBUTING.md', 'Speed up the slow fixture loader in the tests', 'Add an .editorconfig', 'Sort the imports in index.mjs', 'Explain the release steps in docs/release.md', 'Remove the unused logo files', 'Add a health check script', 'Clean up the old migration notes', 'Make the error page show the request id', 'Document the environment variables', 'Pin the Node version in .nvmrc', 'Shorten the longest test names', 'Add a template for changelog entries'];
+const DETAIL = ['I read the files involved first and kept every change inside the folder.', 'The existing tests still pass, and I ran them twice to rule out a flaky one.', 'Nothing outside this chore changed, and no public function was renamed.', 'I left a short comment where the reason for a choice was not obvious from the code.', 'The formatting follows the surrounding code: two spaces, single quotes and no semicolons left out.', 'One older file used a different style, and I left it alone rather than mix two chores.', 'If you want this split into smaller commits, the changes fall into two groups that can be committed separately.', 'I checked the scripts in package.json still run from a clean checkout.'];
+const chores = (from, count, bytes) => Array.from({ length: count }, (_, offset) => {
+  const index = from + offset, round = Math.floor(index / CHORES.length), chore = CHORES[index % CHORES.length] + (round ? `, part ${round + 1}` : '');
+  let reply = `Done: ${chore.charAt(0).toLowerCase() + chore.slice(1)}.`;
+  for (let line = 0; reply.length < bytes; line++) reply += (line % 3 ? ' ' : '\n\n') + DETAIL[(index + line) % DETAIL.length];
+  return [{ role: 'user', text: `${chore}.` }, { role: 'assistant', text: reply }];
+}).flat();
+// The rolling brief (#85). Invoice formats are agreed once, `after` exchanges before a task that needs them, in a conversation
+// past the 48 KB a fresh agent takes word for word. `--context task,task-unfolded` compares folding the older part with
+// cutting it off, as before 0.38.0. With long replies the formats sit just past the cut-off's reach and within the fold's;
+// with short ones, past the fold's 16 requests and within the cut-off's reach. Both are placed to show a difference.
+const longChat = ({ id, title, before, after, bytes, knownGap = null }) => ({
+  id, title, ...(knownGap ? { knownGap } : {}),
+  folders: { app: { 'invoice.mjs': '// Invoices.\n' } },
+  history: () => [
+    ...chores(0, before, bytes),
+    { role: 'user', text: 'Invoice formats, for when we get to invoices: the number looks like INV-2026-0007 (INV, the year, the counter padded to four digits). Dates look like 05.01.2026, not ISO. Amounts use a decimal comma with the currency after, like 12,34 EUR.' },
+    { role: 'assistant', text: 'Noted. Nothing to change yet, since invoice.mjs is still empty.' },
+    ...chores(before, after, bytes),
+  ],
+  prompt: 'Add an exported function invoiceLine(invoice) to invoice.mjs. invoice is { year, counter, date, totalCents }, where date is a Date. Return the invoice number, the date and the total joined by " | ", each in the format we agreed earlier in this conversation.',
+  check: { app: { 'invoice.test.mjs': test("import { invoiceLine } from '../invoice.mjs';\nconst parts = () => invoiceLine({ year: 2026, counter: 7, date: new Date(2026, 0, 5, 12), totalCents: 1234 }).split(' | ');\ntest('invoice number', () => assert.equal(parts()[0], 'INV-2026-0007'));\ntest('date', () => assert.equal(parts()[1], '05.01.2026'));\ntest('amount', () => assert.equal(parts()[2], '12,34 EUR'));") } },
+  facts: ['INV-2026-0007', '05.01.2026', '12,34 EUR'],
+  rubric: 'Uses all three agreed formats without asking for them again.',
+  // The recorded agent can only write the formats it was told, so a recorded run fails when the envelope lost them.
+  trace: [{ requiresPrompt: ['INV-2026-0007', '05.01.2026', '12,34 EUR'], steps: [{ type: 'write', folder: 'app', file: 'invoice.mjs', content: "const two = value => String(value).padStart(2, '0');\nexport function invoiceLine({ year, counter, date, totalCents }) {\n  const number = `INV-${year}-${String(counter).padStart(4, '0')}`;\n  const day = `${two(date.getDate())}.${two(date.getMonth() + 1)}.${date.getFullYear()}`;\n  const amount = `${(totalCents / 100).toFixed(2).replace('.', ',')} EUR`;\n  return [number, day, amount].join(' | ');\n}\n" }, { type: 'say', text: 'Added invoiceLine with the agreed formats.' }], usage: { input: 2400, cached: 300, output: 160, reasoning: 40 } }],
+});
+const CHANGE_NOTE ='---\nname: change-note\ndescription: Record a change in CHANGES.md in the format this project requires.\nlicense: MIT\n---\n\nUnder "## Unreleased" in CHANGES.md, add one line in exactly this format:\n\n- [<area>] <one sentence saying what changed>. (#<issue>)\n\nThe square brackets and the (#number) are required. Do not add anything else to the file.\n';
 const CHANGE_CHECK = test("import fs from 'node:fs';\nimport { add } from '../math.mjs';\ntest('procedure', () => { assert.equal(add(2, 3), 5); assert.match(fs.readFileSync(new URL('../CHANGES.md', import.meta.url), 'utf8'), /^- \\[math\\] .+\\. \\(#12\\)$/m); });");
 
 // The starter skills' tasks (#86). Each is an ordinary request that leaves out the point its starter covers, so running
@@ -320,6 +350,10 @@ export const fixtures = [
       { requiresPrompt: ['EUR', 'semicolon', 'tax'], steps: [{ type: 'command', command: 'cat money.mjs', output: 'export function formatPrice(amount) { ... }' }, { type: 'write', folder: 'shop', file: 'receipt.mjs', content: "import { formatPrice } from './money.mjs';\nexport function receipt(amounts) { return amounts.map(formatPrice).join(';'); }\n" }, { type: 'say', text: 'Receipt uses the existing formatter and semicolon separator. Tax remains undecided.' }], usage: { input: 1800, cached: 600, output: 130, reasoning: 30 } },
     ],
   },
+  longChat({ id: 'long-chat', title: 'Formats agreed before many long replies', before: 4, after: 16, bytes: 5600 }),
+  longChat({ id: 'long-chat-short', title: 'Formats agreed before many short replies', before: 50, after: 30, bytes: 600,
+    // A recorded run under the current policy fails here: the fold keeps 16 requests, fewer than the cut-off reached.
+    knownGap: 'The rolling brief keeps only the 16 latest folded requests, so formats 30 short exchanges back are lost.' }),
   {
     id: 'review', title: 'Read-only review finds a seeded bug', readOnly: true,
     folders: { app: { 'discount.mjs': 'export function discount(price, percent) {\n  // percent is 0 to 100\n  return price * percent;\n}\n' } },

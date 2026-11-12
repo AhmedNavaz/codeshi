@@ -200,20 +200,26 @@ test('Claude subagent messages are counted once each as a lower bound, and both 
     yield { type: 'assistant', parent_tool_use_id: 'task-1', message: { id: 'sub-a', content: [], usage: usage(40, 2) } };
     yield { type: 'assistant', parent_tool_use_id: 'task-1', message: { id: 'sub-a', content: [], usage: usage(40, 3) } };
     yield { type: 'assistant', parent_tool_use_id: 'task-2', message: { id: 'sub-b', content: [], usage: usage(60, 4) } };
+    // Claude Code 2.1 doesn't stream a subagent's final reply; its usage comes on the Agent tool's result.
+    yield { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'task-1' }] }, tool_use_result: { agentId: 'a1', usage: { input_tokens: 5, output_tokens: 30, cache_read_input_tokens: 50, cache_creation_input_tokens: 2 } } };
+    // A reply that was already streamed, with the same context counts, isn't counted twice.
+    yield { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'task-2' }] }, tool_use_result: { agentId: 'a2', usage: { ...usage(60, 9) } } };
+    // Other tool results carry no subagent usage.
+    yield { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'read-1' }] }, tool_use_result: { file: {} } };
     yield { type: 'result', subtype: 'success', usage: { input_tokens: 100, output_tokens: 5 }, modelUsage };
   }
   await runClaude({ workspace: '/project', prompt: 'Go', mode: 'edit', bin: '/x' }, { queryImpl, event() {}, metadata: value => seen.push(value), approval: async () => false });
   const reported = seen.filter(value => value.usage).at(-1).usage;
-  assert.deepEqual(reported.delegated, { input_tokens: 100, output_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 20, messages: 2, agents: 2 });
+  assert.deepEqual(reported.delegated, { input_tokens: 105, output_tokens: 37, cache_read_input_tokens: 50, cache_creation_input_tokens: 22, messages: 3, agents: 2 });
   const measured = normalizeUsage('claude', reported);
   assert.equal(measured.input, 500, 'The pipeline total already holds the subagents, so nothing is added.');
-  assert.deepEqual([measured.delegated.input, measured.delegated.output, measured.delegated.agents, measured.delegated.lowerBound, measured.delegated.included], [100, 7, 2, true, true]);
+  assert.deepEqual([measured.delegated.input, measured.delegated.output, measured.delegated.agents, measured.delegated.lowerBound, measured.delegated.included], [105, 37, 2, true, true]);
   const mainOnly = normalizeUsage('claude', { input_tokens: 100, output_tokens: 5, delegated: reported.delegated });
   assert.equal(mainOnly.delegated.included, false, 'A main-turn total does not include subagents, and says so.');
   assert.equal(mainOnly.input, 100);
   assert.equal(normalizeUsage('claude', { input_tokens: 1, delegated: { messages: 0 } }).delegated, undefined);
   const { tasks } = ledgerFromRecords([submission('one', 0), metadata(1, { usage: reported }), end(1)]);
-  assert.deepEqual([tasks[0].usage.delegated.input, tasks[0].usage.delegated.agents, tasks[0].usage.delegated.runs], [100, 2, 1]);
+  assert.deepEqual([tasks[0].usage.delegated.input, tasks[0].usage.delegated.agents, tasks[0].usage.delegated.runs], [105, 2, 1]);
 
   // The command-line connection, where Claude can start subagents.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-subagents-'));
@@ -221,13 +227,14 @@ test('Claude subagent messages are counted once each as a lower bound, and both 
   try {
     broker.record(c, { type: 'run_start', id: 'cli-run', provider: 'claude' });
     broker.record(c, { type: 'run_metadata', metadata: { transport: 'cli' } });
-    const run = { id: 'cli-run', c, provider: 'claude', mode: 'edit', approvals: new Map(), steers: new Map() };
+    const run = { id: 'cli-run', c, provider: 'claude', mode: 'edit', approvals: new Map(), steers: new Map(), tools: new Map() };
     broker.event(run, { type: 'assistant', message: { id: 'main', content: [], usage: usage(100, 5) } });
     broker.event(run, { type: 'assistant', parent_tool_use_id: 'task-1', message: { id: 'sub-a', content: [], usage: usage(40, 2) } });
+    broker.event(run, { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'task-1' }] }, tool_use_result: { agentId: 'a1', usage: { input_tokens: 5, output_tokens: 30, cache_read_input_tokens: 50, cache_creation_input_tokens: 2 } } });
     broker.event(run, { type: 'result', subtype: 'success', is_error: false, result: 'Done', usage: { input_tokens: 100, output_tokens: 5 }, modelUsage });
     broker.record(c, { type: 'run_end', status: 'complete' });
     const ledger = await broker.ledger(c);
-    assert.deepEqual([ledger.runs[0].usage?.delegated?.input, ledger.runs[0].usage?.delegated?.agents], [40, 1], 'The command-line connection reports subagents too.');
+    assert.deepEqual([ledger.runs[0].usage?.delegated?.input, ledger.runs[0].usage?.delegated?.agents], [45, 1], 'The command-line connection reports subagents too.');
   } finally {
     await broker.close();
     fs.rmSync(root, { recursive: true, force: true });

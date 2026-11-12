@@ -44,8 +44,11 @@ const REPLY_IMAGES_NOTE = ' To show the person a screenshot or other image you m
 const FLOW_REVIEW_NOTE = 'Flow has a Review your app card with an agent-maintained launch map at .codeshi/preview.json in the primary folder. When asked to prepare or change project launch/review, inspect the project and maintain this file rather than asking the person to configure a Run window. JSON schema: version:1, profiles:[{id,name,services:[{id,name,description,folder (attached folder name or id),directory (relative),command (single line),kind (service or task),dependsOn:[step ids],ready:{url (loopback HTTP(S)) or port (local TCP)},timeoutMs (1000–180000)}],preview:{service,url (loopback)}}]. Maximum 4 profiles, 12 steps each. Tasks must exit successfully; services need readiness checks. Show prerequisites and explain setup effects; do not store secrets or perform installations, migrations or launches merely to prepare a map. The person starts the reviewed profile from the card; preview supports point-and-tell on desktop. A launch profile is separate from the coding model.';
 
 // policy 'task' sends the current task first and leaves out other folders' work (#85). 'recency' is the older selection, by
-// how recent each message is, kept so the two can be compared on the same work (#84).
+// how recent each message is, kept so the two can be compared on the same work (#84). 'task-unfolded' is 'task' without
+// the rolling brief, cutting the oldest history off as before 0.38.0; only evaluations use it, as a baseline.
 export function prepareContext(c, text, { workspace, workspaces, workspaceFolders, fresh = false, provider = c.provider, mode = c.mode, maxBytes = 192000, attachments = [], readAttachment, includeImages = true, session = {}, policy = 'recency', journal = null, skills = null, verification = null, rollover = null } = {}) {
+  const fold = policy !== 'task-unfolded';
+  if (!fold) policy = 'task';
   if (rollover) { fresh = true; policy = 'task'; maxBytes = Math.min(maxBytes, 96000, (rollover.thresholdTokens || 75000) * 2); }
   const restoredAfterCompaction = policy === 'task' && restoreAfterCompaction(c, provider, fresh);
   const reconstruct = fresh || restoredAfterCompaction;
@@ -84,7 +87,7 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   // A context refresh keeps only the exchanges since the third-latest request word for word.
   const suffix = task && rollover ? source.map((item, index) => item.role === 'user' && !item.steer ? index : -1).filter(index => index >= 0).at(-3) ?? 0 : 0;
   let historyStart = suffix, historyBudget = rollover ? 16000 : TASK_HISTORY_BYTES, earlier = null;
-  if (task && reconstruct) {
+  if (task && reconstruct && fold) {
     // The rolling brief (#85). When the conversation before this task no longer fits the history allowance, only the
     // latest exchanges stay word for word and everything older is folded into short excerpts with their sources, rather
     // than being cut off by age. A context refresh always folds what it leaves out. Nothing is folded on a resume.

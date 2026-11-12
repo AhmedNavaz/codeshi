@@ -126,7 +126,8 @@
       else actionText = { routing: 'Assessing task', starting: `Starting ${agent}`, reasoning: 'Thinking', responding: 'Writing', compacting: 'Organizing context' }[phase] || 'Working';
     } else if (run.status === 'complete') actionText = c.taskResult ? taskLine(c.taskResult) : `Completed in ${Number.isFinite(elapsed) ? duration(elapsed) : 'recorded duration'}`;
     else actionText = run.errorCategory === 'quota' ? 'Usage limit reached' : 'Run stopped';
-    $('run-action').textContent = actionText;
+    // This runs every second; rewriting the same words would still repaint the line, so only a change is written (#152).
+    if ($('run-action').textContent !== actionText) { $('run-action').textContent = actionText; $('run-action-shine').dataset.text = actionText; }
     // Opening the line explains a pause; otherwise it holds the token and context counts.
     $('run-detail').textContent = !running ? '' : state.streamConnected === false ? 'The app connection was interrupted. The agent may still be running; reconnecting to restore its live status.' : phase === 'approval' ? 'Review the permission request below to let the agent continue.' : quiet ? `No activity from ${agent} for ${duration(silence)}. This can happen during a long request; you can wait or stop the run.` : '';
     const metrics = [];

@@ -51,7 +51,7 @@
 /* The chat: a little larger and calmer, with a message box that asks what to build. */
 #app-shell.flow .message-text { font-size: 15px; line-height: 1.7; }
 #app-shell.flow .composer { border-radius: 18px; border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
-#app-shell.flow .composer textarea { min-height: 76px; padding: 16px 44px 6px 18px; font-size: 15px; }
+#app-shell.flow .composer textarea { min-height: 46px; padding: 16px 44px 6px 18px; font-size: 15px; }
 #app-shell.flow .composer textarea::placeholder { color: var(--muted); }
 #app-shell.flow .composer-toolbar { padding: 4px 10px 10px; }
 #app-shell.flow .empty-state h2 { font-size: 26px; font-weight: 600; letter-spacing: -.02em; }

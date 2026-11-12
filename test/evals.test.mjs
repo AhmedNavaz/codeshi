@@ -59,7 +59,7 @@ test('recorded Claude routing uses the SDK assessor and CLI builder without losi
 });
 
 test('every kind of task the issue asks for has a fixture with a check the agent cannot see', () => {
-  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'review', 'view-states', 'api-endpoint', 'data-migration', 'accessible-toolbar', 'review-intent', 'test-writing', 'routing-assessment']);
+  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'long-chat', 'long-chat-short', 'review', 'view-states', 'api-endpoint', 'data-migration', 'accessible-toolbar', 'review-intent', 'test-writing', 'routing-assessment']);
   for (const fixture of fixtures) {
     assert(fixture.check || fixture.checkReply, fixture.id);
     assert(fixture.rubric, fixture.id);
@@ -109,13 +109,23 @@ test('recorded evaluations run every fixture through the real broker, verified b
   for (const fixture of fixtures) {
     const result = await runFixture(fixture, parsePolicy({ agent: 'codex' }));
     assert.equal(result.failure, undefined, `${fixture.id}: ${result.failure}`);
-    assert.equal(result.check.passed, true, `${fixture.id}: ${JSON.stringify(result.check)}`);
-    assert.equal(result.outcome.verifiedCompletion, true);
+    // A known gap is a fixture the current policy is expected to fail, kept so a fix shows up as a pass.
+    assert.equal(result.check.passed, !fixture.knownGap, `${fixture.id}: ${JSON.stringify(result.check)}`);
+    assert.equal(result.outcome.verifiedCompletion, !fixture.knownGap);
     assert.equal(result.live, false);
     assert(Object.values(result.snapshot).every(commit => /^[\da-f]{40}$/.test(commit)));
     assert.equal(JSON.stringify(result.runs).includes('raw'), false, 'Results hold no raw agent output.');
-    assert.equal(result.outcome.missingUsage, 0);
+    // A recorded agent that wasn't given what it needs stops before it reports usage.
+    assert.equal(result.outcome.missingUsage, fixture.knownGap ? 1 : 0);
   }
+});
+
+test('the long-chat fixtures tell the rolling brief from the old cut-off, each way round', { skip: scriptCLIs }, async () => {
+  const kept = async (id, context) => (await runFixture(fixtureById(id), parsePolicy({ agent: 'codex', context }))).context.factsKept;
+  assert.equal(await kept('long-chat', 'task'), 3);
+  assert.equal(await kept('long-chat', 'task-unfolded'), 0);
+  assert.equal(await kept('long-chat-short', 'task'), 0);
+  assert.equal(await kept('long-chat-short', 'task-unfolded'), 3);
 });
 
 test('a fixture is pinned: the same one is the same commit and the same hash every time', { skip: scriptCLIs }, async () => {

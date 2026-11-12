@@ -175,34 +175,54 @@ export class HandoffMonitor {
     }
     const offer = await this.prepareOffer(c, run, top);
     if (!offer) return;
+    let failure = null;
     if (preferences.automatic && !run.automaticReview && offer.to.billingSource === 'subscription' && offer.to.quota === 'ok') {
       try {
         await this.executeOffer(c, run, offer, { automatic: true });
         return;
-      } catch (err) {}
+      } catch (err) { failure = err; }
     }
-    if (preferences.automatic && preferences.mode && offer.to.billingSource === 'subscription') return;
+    // Flow moves a routed task on its own and shows no offer to accept, so a move that failed its last check leaves none
+    // behind: a hidden offer would hold off every later check of the run. It is tried again at the next check, and a
+    // second miss is explained in the conversation, once a run, so a task never nears its limit unexplained (#12).
+    if (preferences.automatic && preferences.mode && offer.to.billingSource === 'subscription') {
+      if (c.handoffOffer && c.handoffOffer.to?.billingSource === 'subscription') { c.handoffOffer = null; this.broker.emit('update', { conversationId: c.id }); }
+      if (failure && this.broker.running === run) this.missed(c, run, offer, top, failure);
+      return;
+    }
     c.handoffOffer = offer;
     this.broker.emit('update', { conversationId: c.id });
     this.broker.emit('notify', { conversationId: c.id, kind: 'handoff', title: 'Usage limit is close', body: `${names[run.provider]} has used ${Math.round(top.usedPercent)}% of its limit. Hand off to ${names[offer.to.provider]}?` });
   }
 
+  missed(c, run, offer, top, failure) {
+    run.handoffMisses = (run.handoffMisses || 0) + 1;
+    if (run.handoffMisses < 2 || run.handoffMissNoted) return;
+    run.handoffMissNoted = true;
+    const from = names[run.provider], to = names[offer.to.provider];
+    const why = failure.why || String(failure.message || 'the move could not be confirmed').replace(/[.\s]+$/, '').replace(/^\w/, letter => letter.toLowerCase());
+    this.broker.message(c, 'system', `${from} has used ${Math.round(top.usedPercent)}% of its ${top.label ? `${top.label} ` : ''}limit. Codeshi tried to hand the task to ${to}, but ${why}. ${from} keeps working, and Codeshi tries again at each usage check.`);
+  }
+
   async executeOffer(c, run, offer, { billingConfirmed = false, queueBillingConfirmed = false, queueDigest, automatic = false } = {}) {
-    const stale = async reason => {
+    // why: the same reason as a clause, for the note an automatic move that keeps failing leaves in the conversation (#12).
+    const stale = async (reason, why) => {
       if (c.handoffOffer === offer) c.handoffOffer = null;
       const top = run && this.broker.running === run ? { usedPercent: offer.from.usedPercent, label: offer.from.window, resetsAt: offer.from.resetsAt } : null;
-      const fresh = top ? await this.offer(c, run, top) : null;
-      throw Object.assign(new Error(`${reason} Review the updated offer before switching.`), { status: 409, offer: fresh });
+      // A routed Flow move that failed is tried again at the next check rather than turned into an offer (#12).
+      const fresh = top && !(automatic && this.policy(run).mode) ? await this.offer(c, run, top) : null;
+      throw Object.assign(new Error(`${reason} Review the updated offer before switching.`), { status: 409, offer: fresh, why });
     };
-    if (!run || run.id !== offer.runId || run.c !== c) await stale('The task changed since this offer was made.');
+    const to = names[offer.to.provider];
+    if (!run || run.id !== offer.runId || run.c !== c) await stale('The task changed since this offer was made.', 'the task changed while the move was checked');
     if (automatic && run.automaticReview) throw Object.assign(new Error('This build has an approved reviewer. Choose a handoff explicitly to cancel that review sequence.'), { status: 409 });
-    if (this.scope(c, run) !== offer.scope) await stale('The task, its folders or the saved project context changed since this offer was made.');
+    if (this.scope(c, run) !== offer.scope) await stale('The task, its folders or the saved project context changed since this offer was made.', 'the task, its folders or the saved project context changed while the move was checked');
     // The person agreed to the prompts they were shown.
     if (queueDigest !== undefined && queueDigest !== (offer.queue?.digest ?? null)) await stale('The queued prompts changed since this offer was made.');
     const current = await this.destination(c, run);
-    if (!current || current.provider !== offer.to.provider || current.model !== offer.to.model || current.effort !== offer.to.effort || current.mode !== offer.to.mode || current.approvalPolicy !== offer.to.approvalPolicy || current.billingSource !== offer.to.billingSource) await stale(`${names[offer.to.provider]} is no longer available with the same settings.`);
-    if (automatic && current.quota !== 'ok') await stale(`${names[offer.to.provider]}'s current allowance could not be confirmed.`);
-    if (current.quota !== offer.to.quota) await stale(`${names[offer.to.provider]}'s allowance reading changed.`);
+    if (!current || current.provider !== offer.to.provider || current.model !== offer.to.model || current.effort !== offer.to.effort || current.mode !== offer.to.mode || current.approvalPolicy !== offer.to.approvalPolicy || current.billingSource !== offer.to.billingSource) await stale(`${to} is no longer available with the same settings.`, `${to} no longer had room, or the same model and access, when it was about to start`);
+    if (automatic && current.quota !== 'ok') await stale(`${to}'s current allowance could not be confirmed.`, `${to}'s allowance could not be confirmed when it was about to start`);
+    if (current.quota !== offer.to.quota) await stale(`${to}'s allowance reading changed.`, `${to}'s allowance reading changed when it was about to start`);
     if (offer.to.billingSource !== 'subscription' && (automatic || billingConfirmed !== true)) throw Object.assign(new Error(`${names[offer.to.provider]} is not billed to a subscription. Confirm its charges separately to hand off.`), { status: 409, offer, billingRequired: true });
 
     this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual', provider: offer.to.provider, model: offer.to.model, effort: offer.to.effort });

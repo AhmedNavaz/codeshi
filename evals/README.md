@@ -14,6 +14,8 @@ Small repeatable tasks for finding out whether a change to Codeshi helps, before
 | `skill-procedure` | Following a procedure only an enabled skill describes |
 | `skill-handoff` | The same, with a second agent finishing what the first one started |
 | `long-thread` | Shop decisions carried through unrelated folder work and a return to the shop, across three real broker turns |
+| `long-chat` | Formats agreed 17 exchanges back in a chat of long replies: past the old cut-off, within the rolling brief |
+| `long-chat-short` | The same formats 31 exchanges back in a chat of short replies: within the old cut-off, past the rolling brief |
 | `review` | A read-only review that has to find a seeded bug |
 
 One task per starter skill, for running with and without it. Each is an ordinary request that leaves out the point its starter covers. They were written knowing the starters, so they show whether a procedure is followed where it matters, not how often real work needs it.
@@ -71,7 +73,7 @@ The shared run budget covers every turn. Evaluation `--max-tokens` counts measur
 
 `--context-limit off|auto|<tokens>` pins Normal-mode rollover policy as part of the experiment (custom limits start at 8,000 tokens). Evaluation runs default to Off for an explicit baseline; the product defaults to Auto. For example, `npm run eval -- run --fixture long-thread --agent codex --context-limit 8000` exercises the policy with recorded providers; the dedicated regression trace raises its first reported request above the target and checks that the next thread starts fresh, keeps the task facts and does not inherit old token counters. The stock trace may remain below the target. A live comparison still requires `--live` and a new stated budget. Context limits are checked before turns; they do not constrain provider-internal tool loops, and these recorded counts are not live efficiency evidence.
 
-An agent is written `provider:model:effort`, and any part after the provider can be left out. `--context` compares `task`, the current selection, with `recency`, the older one. A run on another billing basis than a subscription fails rather than spending money.
+An agent is written `provider:model:effort`, and any part after the provider can be left out. `--context` compares `task`, the current selection, with `recency`, the older one. `task-unfolded` is `task` without the rolling brief from 0.38.0: history past the 48 KB allowance is cut off by age, as before. Only evaluations use it, as a baseline for `long-chat` and `long-chat-short`. `long-chat-short` is a known gap: a recorded run under `task` fails, and the tests expect that, so a fix shows up as a pass. A run on another billing basis than a subscription fails rather than spending money.
 
 ```sh
 npm run eval -- report    # compares everything saved
@@ -176,4 +178,72 @@ What this shows, for Haiku on these tasks:
 
 So the starters stay opt-in, and none should be turned on by default on the strength of these runs. A starter may still help a weaker or rushed agent, or on larger real work these small tasks don't represent. Neither was measured here. These were 35 runs on one model; other agents and larger tasks are not measured.
 
+### Longer conversations, live
+
+With `claude:haiku` on November 12, 2026, within a stated budget of 36 runs and 1.5M tokens. New tokens are input, cache writes and output; cache reads are listed apart.
+
+**`long-thread`, `task` against `recency`.** Three alternating rounds; each workload is three turns on one native session.
+
+| Context | Verified | First try | New tokens per workload | Cache reads | Work | Repeat reads |
+| --- | --- | --- | --- | --- | --- | --- |
+| `task` | 3 of 3 | 3 of 3 | 17,237, 17,406, 18,977 | 112,752–128,670 | 26.4–29.6 s | 0 |
+| `recency` | 3 of 3 | 3 of 3 | 27,675, 27,925, 28,291 | 171,084–189,930 | 27.5–31.9 s | 0 |
+
+The task selection kept every decision, the same as the old one, with about 37% fewer new tokens and 27% fewer cache reads. Working time was about the same. Nothing was read twice either way, so this task is too small to show re-reading.
+
+**The rolling brief, `task` against `task-unfolded`.** One run each: the budget left after `long-thread` covered one round, not three.
+
+| Fixture | Context | Formats in the prompt | Verified | New tokens | Cache reads | Work | First message |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `long-chat` | `task` (folded) | 3 of 3 | Yes | 17,446 | 33,829 | 11.8 s | 15 KB |
+| `long-chat` | `task-unfolded` | 0 of 3 | Yes | 41,607 | 56,862 | 15.6 s | 52 KB |
+| `long-chat-short` | `task` (folded) | 0 of 3 | Yes | 19,419 | 64,268 | 20.4 s | 11 KB |
+| `long-chat-short` | `task-unfolded` | 3 of 3 | Yes | 40,680 | 56,196 | 15.2 s | 52 KB |
+
+- **Every run passed, even without the formats in the prompt.** Claude's own transcripts show both runs that lacked them searching the conversation file the brief points to (`brief.originals`) and finding them there. Codeshi gives that path so the original can be looked up, and it worked as a safety net here. A weaker or less careful agent might guess instead.
+- **The rolling brief used less than half the new tokens in both.** Its first message was a third to a fifth of the size, and the search cost less than sending 52 KB of history.
+- **The rolling brief reaches less far back in a chat of short replies.** It keeps the 16 latest folded requests, so a conversation past 48 KB of mostly short exchanges keeps about 18 of them. The old cut-off kept around 60. Searching cost `long-chat-short` about 5 seconds of extra working time. With long replies the reach is about the same: 18 exchanges against about 16.
+- **`Decision:` lines are kept from any age** (up to 12), so a decision written that way survives either way. These fixtures state the formats in prose, as people usually do.
+
+That's one run each and two built fixtures, so it shows what each setting keeps, not how often real conversations need it. A real long conversation, other agents and repeated runs are not measured.
+
 Not measured yet: long real tasks, whether smaller prompts lead to more re-reading on them, and other agents on this comparison. The fixtures are small enough that **Repeat reads** barely moves.
+
+### Manual against routed, live
+
+The first live run of `compare`, with Claude on November 12, 2026: `small-edit` on Claude's default model, as someone who doesn't pick one would run it, against `routing-assessment` in Smart. Rounds alternated, one of each, three rounds. New tokens are input, cache writes and output; cache reads are left out, as in `compare`. The list price is Claude's own estimate at API rates: on a subscription it is not a charge, and each model counts against its own limits.
+
+| | Models | Verified | New tokens per run | Mean | Work per run | List price per run |
+| --- | --- | --- | --- | --- | --- | --- |
+| Manual | Opus 5.5 | 3 of 3 | 5,913, 5,956, 6,009 | 5,959 | 9.2–10.3 s | about $0.040 |
+| Routed | assessment, then Haiku 5.5 at low effort | 3 of 3 | 17,522, 8,296, 9,996 | 11,938 | 10.2–11.5 s | $0.010–0.014 |
+| Routed, assessment fixed | Haiku 5.5 at low effort, both calls | 1 of 1 | 7,434 | | 9.5 s | about $0.0016 |
+
+`compare` puts routed at 100% more tokens per verified run (90% range 48% to 153% more) and 9% more working time (2% to 17%), with no quality difference: all six passed.
+
+- **The assessment ran on Sonnet, not Haiku.** Codeshi asked for Haiku, but Claude Code 2.1 runs a Haiku request on Sonnet in plan mode, which read-only Claude runs use. In these three rounds the assessment was 2,000–4,800 new tokens and most of routed's list price. An assessment has no tools, so it now runs outside plan mode. The fixed run's assessment was 1,159 new tokens on Haiku, with no Sonnet call.
+- **Routed uses more tokens, on a smaller model.** Haiku started with a cold cache, so the builder wrote more to it than Opus did. Even fixed, one routed run used about 25% more new tokens than the manual mean.
+- **What that means depends on how a plan counts models.** By list price, routed was a quarter to a third of manual, and a twenty-fifth once fixed. Whether that saves subscription allowance depends on how Claude's limits weigh Haiku against Opus, and Codeshi doesn't know that.
+
+**Repeated after the fix.** The fix changed engine code, so `compare` doesn't pair new runs with the manual runs above. Three more alternating rounds ran the same day on the fixed engine:
+
+| | Models | Verified | New tokens per run | Mean | Work per verified run | List price per run |
+| --- | --- | --- | --- | --- | --- | --- |
+| Manual | Opus 5.5 | 3 of 3 | 5,958, 5,962, 5,952 | 5,957 | 10.0 s | $0.039–0.041 |
+| Routed | Haiku 5.5, assessment then builder at low effort | 3 of 3 | 8,724, 6,695, 8,772 | 8,064 | 11.4 s | $0.0014–0.0018 |
+
+`compare` puts routed at 35% more tokens per verified run (90% range 24% to 47% more) and 14% more working time (2% to 26%), with no quality difference: all six passed. Every routed call ran on Haiku, with no Sonnet call.
+
+- **The assessment is the difference.** Haiku's builder used 6,258–6,280 new tokens, about 5% more than Opus. The assessment added 420–2,490 more, depending on whether its prompt was already cached.
+- **By list price, routed was about a twenty-fifth of manual.** The same caveat applies: on a subscription that is not a charge, and Codeshi doesn't know how Claude's limits weigh Haiku against Opus.
+
+This is one small edit on one agent, three runs a side, so it shows a direction only and supports no claim. On a task this small, routing's assessment costs more tokens than a smaller builder saves. Larger tasks, where a light model might fail or need a retry, and Codex and Gemini are not measured.
+
+### Claude subagents
+
+A live Claude Code 2.1 run through its command line, which started two Haiku subagents, checked against Claude's own transcripts and totals:
+
+- Claude streams only a subagent's messages that call tools, each with the output count from the message's start. A subagent's final reply only arrives as usage on its Agent tool's result.
+- Before the fix, the subagent line counted 5 of 7 messages: 59% of cache reads, 98% of cache writes and 6% of output. It now adds each final reply. Input, cache reads and cache writes matched Claude's transcripts exactly, and the main loop plus subagents matched the run's total, apart from one small helper call.
+- Output is still undercounted, 642 of 1,288 in this run, because the streamed counts are partial. The line stays "at least".
+- Codeshi's usual Claude connection, the SDK, doesn't offer Claude the tool that starts subagents. Only the command-line connection can start them.

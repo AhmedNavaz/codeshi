@@ -279,7 +279,8 @@ export async function runClaude(config, { event, approval, question = null, meta
     }
     if (!config.reviewSnapshot) steerable(async text => { if (!open || cancelled()) throw new Error('This turn has finished.'); unread = true; deliver({ type: 'user', parent_tool_use_id: null, priority: 'next', message: { role: 'user', content: text } }); });
     const stream = query({ prompt: input(), options: {
-      cwd: config.workspace, pathToClaudeCodeExecutable: config.bin, permissionMode: config.mode === 'read' ? 'plan' : 'default',
+      // Plan mode runs a Haiku request on Sonnet in Claude Code 2.1 (#84). An assessment has no tools at all, so it doesn't need it.
+      cwd: config.workspace, pathToClaudeCodeExecutable: config.bin, permissionMode: config.mode === 'read' && !config.routingAssessment ? 'plan' : 'default',
       // Current versions of Claude Code replace TodoWrite with task tools unless told otherwise, and Claude's plan comes from TodoWrite.
       env: { ...process.env, CLAUDE_CODE_ENABLE_TASKS: 'false', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' },
       additionalDirectories: [...new Set(config.workspaces || [])].filter(directory => directory !== config.workspace),
@@ -327,6 +328,7 @@ export async function runClaude(config, { event, approval, question = null, meta
     };
     for await (const received of stream) {
       const message = received.type === 'result' && received.permission_denials?.length ? { ...received, permission_denials: received.permission_denials.filter(denial => !declined.has(denial.tool_use_id)) } : received;
+      if (message.type === 'user' && message.tool_use_result) subagents.add(message);
       if (message.type === 'assistant' && message.message) {
         subagents.add(message);
         countMessage(message.message);
@@ -353,13 +355,24 @@ export async function runClaude(config, { event, approval, question = null, meta
 // What Claude's subagents reported in their own messages over a whole run (#84). A subagent's messages name the tool call
 // that started it, and a message streamed more than once counts once. Only what reached Codeshi is counted, so it is a
 // lower bound, and nothing here is added to the run's total: Claude's own total already includes its subagents.
+// Claude Code 2.1 streams only a subagent's tool-calling messages, with the output count from their start. Its final
+// reply arrives only as the usage on the Agent tool's result, so that is added too; output stays an undercount.
 export function subagentUsage() {
-  const seen = new Map(), agents = new Set();
+  const seen = new Map(), agents = new Set(), parents = new Map();
   return {
     add(message) {
+      const reply = message.type === 'user' && message.tool_use_result, toolUse = reply && message.message?.content?.find?.(block => block?.type === 'tool_result')?.tool_use_id;
+      if (reply && typeof reply === 'object' && reply.agentId && reply.usage && toolUse) {
+        // Skip a reply already streamed as a message, which would have the same context counts.
+        const same = usage => ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].every(key => usage[key] === reply.usage[key]);
+        if (![...(parents.get(toolUse) || [])].some(id => same(seen.get(id)))) { seen.set(`reply:${toolUse}`, reply.usage); agents.add(toolUse); }
+        return;
+      }
       const parent = message.parent_tool_use_id || message.agent_id, id = message.message?.id, usage = message.message?.usage;
       if (!parent || !id || !usage) return;
       seen.set(id, usage); agents.add(parent);
+      if (!parents.has(parent)) parents.set(parent, new Set());
+      parents.get(parent).add(id);
     },
     reading() {
       if (!seen.size) return {};

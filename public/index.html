@@ -222,7 +222,7 @@
               <details id="run-details-disclosure" class="run-details-disclosure">
                 <summary class="run-progress-top" aria-label="Run status and details">
                   <span id="run-phase" class="run-phase sr-only" role="status" aria-live="polite">Starting</span>
-                  <span id="run-action" class="run-action">Starting agent</span>
+                  <span class="run-action-line"><span id="run-action" class="run-action">Starting agent</span><span id="run-action-shine" class="run-action-shine" aria-hidden="true" data-text="Starting agent"></span></span>
                   <span id="run-elapsed" class="run-elapsed"></span>
                   <span class="disclosure-chevron" aria-hidden="true"></span>
                 </summary>
@@ -266,7 +266,7 @@
             <p id="attachment-status" class="attachment-status" role="status" aria-live="polite" hidden></p>
             <input id="attachment-input" type="file" multiple hidden accept="image/png,image/jpeg,image/gif,image/webp,text/*,.docx,.md,.json,.js,.jsx,.ts,.tsx,.py,.html,.css,.scss,.csv,.yaml,.yml,.toml,.xml,.sh,.sql,.rs,.go,.java,.c,.cpp,.h,.swift,.rb,.vue,.svelte,.log" />
             <div class="composer-input">
-              <label class="sr-only" for="message-input">Message the selected assistant</label><textarea id="message-input" name="message" rows="3" placeholder="Describe a task…" autocomplete="off" spellcheck="true" aria-describedby="composer-hint"></textarea>
+              <label class="sr-only" for="message-input">Message the selected assistant</label><textarea id="message-input" name="message" rows="1" placeholder="Describe a task…" autocomplete="off" spellcheck="true" aria-describedby="composer-hint"></textarea>
               <button id="compact-context" class="context-compact" type="button" aria-label="Compact context" aria-haspopup="dialog" aria-controls="compact-confirmation" title="Compact context" hidden>
                 <svg class="icon context-compact-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 6 6M3 9h6V3m12 0-6 6m0-6v6h6M3 21l6-6m-6 0h6v6m12 0-6-6m0 6v-6h6"/></svg>
                 <svg class="icon context-compact-check" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>

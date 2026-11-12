@@ -1290,7 +1290,7 @@ export class Broker extends EventEmitter {
     this.touch(run, phase);
     const { c, provider } = run;
     // Claude's command line can start subagents, whose messages carry their own usage (#84).
-    if (provider === 'claude' && c.activeRun?.transport === 'cli' && event.type === 'assistant') (run.subagents ||= subagentUsage()).add(event);
+    if (provider === 'claude' && c.activeRun?.transport === 'cli' && (event.type === 'assistant' || event.type === 'user' && event.tool_use_result)) (run.subagents ||= subagentUsage()).add(event);
     if (provider === 'claude' && c.activeRun?.transport === 'cli' && event.type === 'assistant' && !event.parent_tool_use_id && !event.agent_id) {
       const reading = claudeRequestContext(event.message?.usage);
       if (reading) this.record(c, { type: 'run_metadata', metadata: { contextUsage: reading } });

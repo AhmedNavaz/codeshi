@@ -425,12 +425,25 @@ details[open] > summary > .disclosure-chevron, .activity-entry.open .activity-ou
 .messages-earlier { display: flex; justify-content: center; padding: 12px 0 6px; }
 .messages-load-earlier { font-size: 12px; padding: 4px 10px; border-radius: 4px; border: 0; background: transparent; color: var(--link); cursor: pointer; }
 .messages-load-earlier:hover { background: var(--hover); text-decoration: underline; }
-/* The live status line: a moving highlight over what the agent is doing. */
-.run-progress[data-state="active"] .run-action {
-  background: linear-gradient(90deg, var(--muted) 35%, var(--text-strong) 50%, var(--muted) 65%) 0 0 / 250% 100%;
-  -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.2s linear infinite;
+/* The live status line: a moving highlight over what the agent is doing. A bright copy of the words sits over them,
+   seen through a soft window that slides across while the copy slides back by the same amount, so the words stay
+   put. Both moves are transforms, which the graphics card animates without repainting the page on every frame; a
+   moving text-clipped background repainted the line 120 times a second for the whole run (#152). */
+.run-action-line { position: relative; display: flex; min-width: 0; overflow: hidden; }
+.run-action-shine { display: none; }
+.run-progress[data-state="active"] .run-action { color: var(--muted); }
+.run-progress[data-state="active"] .run-action-shine {
+  position: absolute; inset: 0; display: block; overflow: hidden; pointer-events: none;
+  -webkit-mask: linear-gradient(90deg, transparent 12.5%, #000 50%, transparent 87.5%); mask: linear-gradient(90deg, transparent 12.5%, #000 50%, transparent 87.5%);
+  animation: run-shine-window 2.2s linear infinite;
 }
-@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+.run-progress[data-state="active"] .run-action-shine::before {
+  content: attr(data-text); position: absolute; inset: 0; overflow: hidden; color: var(--text-strong); text-overflow: ellipsis; white-space: nowrap;
+  animation: run-shine-words 2.2s linear infinite;
+}
+@keyframes run-shine-window { from { transform: translateX(-75%); } to { transform: translateX(300%); } }
+@keyframes run-shine-words { from { transform: translateX(75%); } to { transform: translateX(-300%); } }
+@media (prefers-reduced-motion: reduce) { .run-progress[data-state="active"] .run-action-shine { display: none; } }
 .timeline-node { position: absolute; z-index: 1; left: -24px; top: 4px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--bg); }
 .activity-entry { color: var(--text); font-size: 12.5px; }
 .activity-entry-header { display: flex; align-items: center; min-width: 0; }
@@ -608,7 +621,7 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 #continue-button:hover:enabled, #connection-action:hover:enabled, #continue-choose:hover:enabled { background: var(--accent-strong); }
 .composer { border: 1px solid var(--input-border); border-radius: var(--radius-lg); background: var(--surface-input); box-shadow: var(--shadow-sm); transition: border-color .12s; }
 .composer:focus-within { border-color: var(--focus); }
-.composer textarea { display: block; width: 100%; min-height: 64px; max-height: 200px; padding: 12px 14px 4px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 14px; line-height: 1.55; }
+.composer textarea { display: block; width: 100%; min-height: 38px; max-height: 96px; padding: 12px 14px 4px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); font-size: 14px; line-height: 1.55; }
 .composer textarea::placeholder { color: var(--faint); }
 .composer textarea:focus-visible { outline: none; }
 /* The compact icon stays quiet until a refresh matters. Readings live in its details. */
