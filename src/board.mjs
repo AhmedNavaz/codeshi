@@ -344,8 +344,9 @@ export class Board {
     const steps = plan.steps || [], room = LIMITS.cards - this.cards(c).length;
     if (steps.length > room) throw fail(`This plan has ${steps.length} cards, and the Plan has room for ${Math.max(0, room)} more. Remove some finished cards, then plan again.`);
     const ids = new Map(steps.map(step => [step.id, randomUUID()])), notes = reviewDraft(steps), now = new Date().toISOString();
-    const batch = { id: plan.id, summary: plan.summary || '', ...(plan.questions?.length ? { questions: plan.questions } : {}) };
-    const source = { kind: 'orchestrate', planId: plan.id, goal: String(plan.goal || '').slice(0, LIMITS.goal), summary: plan.summary || '' };
+    const documents = (plan.documents || []).slice(0, 20).map(name => String(name).slice(0, 200));
+    const batch = { id: plan.id, summary: plan.summary || '', ...(plan.questions?.length ? { questions: plan.questions } : {}), ...(documents.length ? { documents } : {}) };
+    const source = { kind: 'orchestrate', planId: plan.id, goal: String(plan.goal || '').slice(0, LIMITS.goal), summary: plan.summary || '', ...(documents.length ? { documents } : {}) };
     const made = steps.map((step, index) => {
       const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : null, priority: 'normal', labels: [], due: null, folderId: null, dependsOn: [] };
       const fields = this.clean(c, input);

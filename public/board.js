@@ -22,6 +22,7 @@
   // The modifier that moves a card on the canvas, named as the keyboard labels it.
   const altKey = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? 'Option' : 'Alt';
   const plural = (count, word, many = `${word}s`) => `${count} ${count === 1 ? word : many}`;
+  const listNames = names => names.length < 3 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
   const listed = items => items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
   const COLUMNS = [
     ['backlog', 'Backlog', 'Work for later. Move a card to Ready when it’s clear enough to run.'],
@@ -736,6 +737,7 @@
       const row = node('section', 'board-draft-batch'), text = node('div', 'board-draft-text');
       row.setAttribute('aria-label', `Drafted cards from ${by}`);
       text.append(node('p', 'board-draft-lead', `${by} drafted ${plural(list.length, 'card')}${batch.summary ? `: ${batch.summary}` : '.'}`));
+      if (batch.documents?.length) text.append(node('p', 'board-draft-note board-draft-documents', `Planned from ${listNames(batch.documents)}.`));
       const noted = list.filter(card => card.draft.notes?.length).length;
       text.append(node('p', 'board-draft-note', `Nothing runs until you accept it. Open a card to edit it first.${noted ? ` The plan checks noted something on ${plural(noted, 'card')}.` : ''}`));
       if (batch.questions?.length) { const asks = node('ul', 'board-draft-questions'); asks.setAttribute('aria-label', 'Questions from the planner'); asks.append(...batch.questions.map(question => node('li', '', question))); text.append(node('p', 'board-draft-note', 'It asks:'), asks); }

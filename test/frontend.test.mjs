@@ -7143,7 +7143,7 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'false');
   ui.$('orchestrate-toggle').click(); await flush();
   assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('orchestrate-armed').hidden, false);
-  assert.equal(ui.$('orchestrate-armed-text').textContent, 'Orchestrate: one read-only run drafts cards on the Plan first, with the deepest work Smart allows. Nothing from them runs until you accept them.');
+  assert.equal(ui.$('orchestrate-armed-text').textContent, 'Orchestrate: one read-only run drafts cards on the Plan first, with the deepest work Smart allows. Attach a brief or spec to plan from it. Nothing from them runs until you accept them.');
   conversation.routing.mode = 'ultra'; await ui.window.relayUI.refresh(); await flush();
   assert.match(ui.$('orchestrate-armed-text').textContent, /the deepest work Ultra allows/);
   conversation.routing.mode = 'smart'; await ui.window.relayUI.refresh(); await flush();
@@ -8107,7 +8107,7 @@ test('the Plan shows drafted cards to accept or discard, lists cards by group in
   ui.window.confirm = () => true;
   const ids = { contract: 'd0000000-0000-4000-8000-000000000001', page: 'd0000000-0000-4000-8000-000000000002', rename: 'd0000000-0000-4000-8000-000000000003', search: 'd0000000-0000-4000-8000-000000000004', loose: 'd0000000-0000-4000-8000-000000000005' };
   const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'frontend', dependsOn: [], checks: [], group: null, role: 'builder', artifact: null, check: null, files: [], tier: 'standard', revision: 1, order: 1, attempts: [], createdAt: '2026-11-12T10:00:00.000Z', ...extra });
-  const batch = { id: 'plan-1', summary: 'Contract first, then the page.', questions: ['Should items sync across devices?'] };
+  const batch = { id: 'plan-1', summary: 'Contract first, then the page.', questions: ['Should items sync across devices?'], documents: ['brief.md', 'notes.txt', 'spec.docx'] };
   const draft = notes => ({ by: { kind: 'agent', provider: 'claude', model: 'opus' }, at: '2026-11-12T10:00:00.000Z', batch, notes });
   const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, cards: [
     card(ids.contract, 'Agree the API', 'backlog', { agent: null, auto: true, tier: 'deep', role: 'backend', artifact: 'contract', group: 'Contracts', draft: draft([]), source: { kind: 'orchestrate', planId: 'plan-1', goal: 'Add saved items.' } }),
@@ -8131,6 +8131,8 @@ test('the Plan shows drafted cards to accept or discard, lists cards by group in
   const banner = ui.$('board-drafts');
   assert.equal(banner.hidden, false);
   assert.match(banner.textContent, /Claude drafted 2 cards: Contract first, then the page\./);
+  // A plan from documents (#155) says which.
+  assert.equal(banner.querySelector('.board-draft-documents').textContent, 'Planned from brief.md, notes.txt and spec.docx.');
   assert.match(banner.textContent, /The plan checks noted something on 1 card\./);
   assert.match(banner.textContent, /It asks:Should items sync across devices\?/);
   banner.querySelectorAll('button').find(item => item.textContent === 'Accept all 2 cards').click(); await flush();

@@ -380,7 +380,7 @@
     $('orchestrate-toggle').setAttribute('aria-pressed', String(armed()));
     $('orchestrate-armed').hidden = !(show && armed());
     const agentOrMode = conversation()?.routing ? `with the deepest work ${modeName()} allows` : `with ${names[state().provider] || state().provider}`;
-    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run drafts cards on the Plan first, ${agentOrMode}. Nothing from them runs until you accept them.`;
+    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run drafts cards on the Plan first, ${agentOrMode}. Attach a brief or spec to plan from it. Nothing from them runs until you accept them.`;
     $('orchestrate-write').disabled = busy;
     renderCard();
     window.relayPlanView?.render();
