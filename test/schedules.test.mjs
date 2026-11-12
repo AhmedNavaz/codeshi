@@ -36,16 +36,21 @@ function setup(t) {
     const paths = list.map(folder => folder.path);
     const broker = new Broker({ workspace: paths[0], workspaceFolders: list, dataDir, bins, handoffPreferences: () => ({ threshold: 0, automatic: false }), acquireMutation: operation => mutations.acquireMany(paths, operation), acquireFolders: (where, operation) => mutations.acquireMany(where, operation), withFolders: (where, operation, work) => mutations.withMutations(where, operation, work) });
     broker.schedules.now = () => clock;
+    // Usage is recorded, never read from this computer's real accounts: unknown unless a test sets it.
+    broker.checks.usage = async provider => { reads.push(provider); return typeof usage === 'function' ? usage(provider) : usage; };
     return broker;
   };
+  let usage = { available: false };
+  const reads = [];
   const broker = open(), c = broker.get(broker.create().id);
-  broker.checks.usage = async () => ({ available: false });
   broker.budget.setPolicy(c, { maxConcurrent: 5 });
   t.after(async () => { await env.broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const env = { broker, c, list, dataDir, folder: fs.realpathSync(list[0].path),
     get schedules() { return env.broker.schedules; },
     get board() { return env.broker.board; },
     at: (...parts) => { clock = new Date(...parts).getTime(); return clock; },
+    reads,
+    usage: value => { usage = value; },
     card: id => env.c.board.find(item => item.id === id),
     schedule: id => env.c.schedules.find(item => item.id === id),
     task: id => env.c.parallelTasks.find(item => item.id === id),
@@ -110,11 +115,11 @@ test('a scheduled card runs once at its time as a Normal task, and a restart doe
   env.broker.execution.setDefault(env.c, { mode: 'flow' });
   const card = env.board.create(env.c, { title: 'Nightly tidy', column: 'ready', agent: { provider: 'claude' }, folderId: 'a' });
   const made = env.schedules.create(env.c, { target: { type: 'card', cardId: card.id }, when: { repeat: 'daily', time: '09:00' } });
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.equal(env.card(card.id).column, 'ready', 'Nothing runs before its time.');
   const notices = []; env.broker.on('notify', notice => notices.push(notice));
   env.at(2026, 10, 11, 9, 2);
-  env.schedules.tick();
+  await env.schedules.tick();
   const schedule = env.schedule(made.id), task = env.task(schedule.last.taskId);
   assert.equal(env.card(card.id).column, 'doing');
   assert.deepEqual([task.provider, task.board.cardId, schedule.runs, schedule.nextAt], ['claude', card.id, 1, new Date(local(2026, 10, 12, 9, 0)).toISOString()]);
@@ -125,15 +130,15 @@ test('a scheduled card runs once at its time as a Normal task, and a restart doe
   assert.match(env.captured()[0].context.currentRequest, /scheduled in Codeshi for .*Don’t push, deploy, publish or release anything/s, 'The agent is told nobody may be watching, and not to publish.');
   await until(() => env.card(card.id).column === 'review', 'the card to reach Review');
   // The same time is never started twice: not by another tick, nor after a restart.
-  env.schedules.tick();
+  await env.schedules.tick();
   await env.reopen();
   env.broker.schedules.now = () => local(2026, 10, 11, 9, 3);
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.equal(env.c.parallelTasks.length, 1);
   // The next day it runs again from Done, once you accepted it.
   env.board.accept(env.c, card.id);
   env.broker.schedules.now = () => local(2026, 10, 12, 9, 0);
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.equal(env.card(card.id).column, 'doing', 'A repeating card runs again from Done.');
   assert.equal(env.c.parallelTasks.length, 2);
 });
@@ -145,7 +150,7 @@ test('a time passed while Codeshi was closed, an edited card or a card still in 
   const notices = []; env.broker.on('notify', notice => notices.push(notice));
   // Codeshi was closed from 9:00 until 9:00 plus more than ten minutes.
   env.at(local(2026, 10, 11, 9, 0) + LATE_MS + 60000);
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.equal(env.card(card.id).column, 'ready', 'A late time doesn’t run unless you allowed it.');
   assert.match(env.schedule(late.id).missed.reason, /wasn’t open, or the computer was asleep/);
   assert.equal(env.schedule(late.id).nextAt, new Date(local(2026, 10, 12, 9, 0)).toISOString(), 'Missed times fold into one and the schedule carries on.');
@@ -153,7 +158,7 @@ test('a time passed while Codeshi was closed, an edited card or a card still in 
   assert.deepEqual(env.schedules.missed(env.c).map(item => item.title), ['Weekly report']);
   // Two days closed: one missed run, not two.
   env.at(2026, 10, 14, 12, 0);
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.equal(env.schedule(late.id).missed.dueAt, new Date(local(2026, 10, 12, 9, 0)).toISOString());
   assert.equal(env.schedule(late.id).nextAt, new Date(local(2026, 10, 15, 9, 0)).toISOString());
   env.schedules.dismiss(env.c, late.id);
@@ -161,19 +166,19 @@ test('a time passed while Codeshi was closed, an edited card or a card still in 
   // With Run late, a late time runs as soon as Codeshi can.
   env.schedules.edit(env.c, late.id, { runLate: true });
   env.at(local(2026, 10, 15, 9, 0) + 3 * 60 * 60 * 1000);
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.equal(env.card(card.id).column, 'doing');
   await until(() => env.card(card.id).column === 'review', 'the late run to finish');
   // Still in Review at the next time: that time is skipped and shown.
   env.at(2026, 10, 16, 9, 0);
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.match(env.schedule(late.id).missed.reason, /waiting in Review/);
   // An edited card doesn't run as it was scheduled; Run now takes the card as it is now.
   env.board.accept(env.c, card.id); env.board.move(env.c, card.id, { column: 'ready' });
   env.board.edit(env.c, card.id, { notes: 'Include the CI numbers too.' });
   assert.equal(env.board.view(env.c).schedules[0].changed, true);
   env.at(2026, 10, 17, 9, 0);
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.match(env.schedule(late.id).missed.reason, /changed after it was scheduled/);
   assert.equal(env.card(card.id).column, 'ready');
   env.schedules.runNow(env.c, late.id);
@@ -191,17 +196,79 @@ test('a scheduled prompt runs as its own task with the access saved with it, and
   const dueAt = new Date(local(2026, 10, 11, 9, 0)).toISOString();
   env.script(`Read the error log and summarize new errors.\n\n${env.schedules.note(dueAt)}`, 'hold');
   env.at(2026, 10, 11, 9, 0);
-  env.schedules.tick();
+  await env.schedules.tick();
   const task = env.task(env.schedule(made.id).last.taskId);
   assert.deepEqual([task.provider, task.accessMode, task.approvalPolicy], ['codex', saved.mode, saved.approvalPolicy]);
   assert.equal(env.broker.execution.current(env.c, task.execution.taskId).mode, 'normal');
   await until(() => env.task(task.id).status === 'running', 'the prompt to run');
   env.at(2026, 10, 12, 9, 0);
-  env.schedules.tick();
+  await env.schedules.tick();
   assert.match(env.schedule(made.id).missed.reason, /last run is still working/);
   assert.equal(env.c.parallelTasks.length, 1);
   env.release();
   await until(() => !['waiting', 'running'].includes(env.task(task.id).status), 'the prompt to finish');
+});
+
+test('a scheduled run checks its agent’s usage first: at the limit it waits for the reset or is missed, never on another agent', { skip: scriptCLIs }, async t => {
+  const env = setup(t), iso = (...parts) => new Date(local(...parts)).toISOString();
+  const limited = resetsAt => ({ available: true, windows: [{ id: 'five-hour', label: '5-hour', usedPercent: 100, resetsAt }] });
+  const card = env.board.create(env.c, { title: 'Nightly tidy', column: 'ready', agent: { provider: 'claude' }, folderId: 'a' });
+  const made = env.schedules.create(env.c, { target: { type: 'card', cardId: card.id }, when: { repeat: 'daily', time: '09:00' } });
+  let notices = []; env.broker.on('notify', notice => notices.push(notice));
+  // The limit resets within the ten minutes a time may start late, so it waits without Run late.
+  env.usage(limited(iso(2026, 10, 11, 9, 5)));
+  env.at(2026, 10, 11, 9, 0);
+  await env.schedules.tick();
+  assert.equal(env.card(card.id).column, 'ready', 'Nothing starts that would stop at once.');
+  assert.deepEqual(env.reads, ['claude'], 'Only its own agent is read.');
+  assert.deepEqual([env.schedule(made.id).waiting.provider, env.schedule(made.id).waiting.dueAt, env.schedule(made.id).waiting.resetsAt], ['claude', iso(2026, 10, 11, 9, 0), iso(2026, 10, 11, 9, 5)]);
+  assert.deepEqual(notices.map(notice => notice.kind), ['waiting']);
+  assert.match(notices[0].body, /Claude is at its usage limit until/);
+  assert.equal(env.schedules.resets.length, 1, 'The menu bar lists it.');
+  // Before the reset it isn't read again.
+  env.at(2026, 10, 11, 9, 3);
+  await env.schedules.tick();
+  assert.equal(env.reads.length, 1);
+  // The wait is saved, so it carries on after a restart.
+  await env.reopen();
+  notices = []; env.broker.on('notify', notice => notices.push(notice));
+  assert.equal(env.schedule(made.id).waiting.dueAt, iso(2026, 10, 11, 9, 0));
+  assert.ok(fs.existsSync(path.join(env.dataDir, 'schedules-pending')));
+  env.usage({ available: true, windows: [{ id: 'five-hour', label: '5-hour', usedPercent: 4, resetsAt: iso(2026, 10, 11, 14, 0) }] });
+  env.at(local(2026, 10, 11, 9, 5) + 20000);
+  await env.schedules.tick();
+  const schedule = env.schedule(made.id), task = env.task(schedule.last.taskId);
+  assert.deepEqual([env.card(card.id).column, schedule.waiting, schedule.last.dueAt, task.provider], ['doing', null, iso(2026, 10, 11, 9, 0), 'claude'], 'It runs for the time it waited for, on the same agent.');
+  assert.match(task.requestId, new RegExp(`${local(2026, 10, 11, 9, 0).toString(36)}`));
+  assert.deepEqual(notices.map(notice => [notice.kind, /Claude has room again/.test(notice.body)]), [['scheduled', true]]);
+  await until(() => env.card(card.id).column === 'review', 'the card to reach Review');
+  env.board.accept(env.c, card.id);
+  // A reset hours away, without Run late: missed, with the reset time, and nothing else runs it.
+  env.usage(limited(iso(2026, 10, 12, 13, 0)));
+  env.at(2026, 10, 12, 9, 0);
+  await env.schedules.tick();
+  assert.match(env.schedule(made.id).missed.reason, /^Claude had reached its usage limit, which resets at .*1:00 PM\. Tick Run late/);
+  assert.deepEqual([env.schedule(made.id).waiting, env.c.parallelTasks.length, env.card(card.id).column], [null, 1, 'done']);
+  // With Run late it waits, checked again every ten minutes while the limit holds, and announced once.
+  env.schedules.edit(env.c, made.id, { runLate: true });
+  env.usage(limited(iso(2026, 10, 13, 13, 0)));
+  env.at(2026, 10, 13, 9, 0);
+  notices = [];
+  await env.schedules.tick();
+  assert.equal(env.schedule(made.id).waiting.checkAt, iso(2026, 10, 13, 9, 10));
+  env.at(2026, 10, 13, 9, 10);
+  await env.schedules.tick();
+  assert.deepEqual([env.schedule(made.id).waiting.checkAt, notices.map(notice => notice.kind), env.c.parallelTasks.length], [iso(2026, 10, 13, 9, 20), ['waiting'], 1]);
+  // Pausing ends the wait; resumed, the schedule starts from its next time.
+  env.schedules.pause(env.c, made.id);
+  assert.equal(env.schedule(made.id).waiting, null);
+  env.schedules.pause(env.c, made.id, { paused: false });
+  // Usage that can't be read doesn't stop a run.
+  env.usage({ available: false });
+  env.at(2026, 10, 14, 9, 0);
+  await env.schedules.tick();
+  assert.equal(env.card(card.id).column, 'doing');
+  await until(() => env.card(card.id).column === 'review', 'the last run to finish');
 });
 
 test('scheduled runs and missed ones are alerts of their own, and a missed one shows in the recap', () => {

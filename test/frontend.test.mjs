@@ -7056,7 +7056,7 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
 });
 
 // Orchestrate (#12): one read-only run plans a message as steps, and the plan opens from the Plan button in the top bar.
-const orchestrateBrowser = options => flowBrowser({ orchestrationUI: true, ...options });
+const orchestrateBrowser = options => flowBrowser({ orchestrationUI: true, boardUI: true, ...options });
 const planAt = '2026-11-08T10:00:00.000Z';
 const planSteps = () => [
   { id: 's1', title: 'Add the API route', instructions: 'Add GET /api/items.', files: ['src/server.mjs'], tier: 'standard', dependsOn: [], agent: null },
@@ -7099,9 +7099,10 @@ test('Orchestrate is available in Normal mode: toggle arms planning, the Plan bu
   // The plan has a button of its own in the top bar, not a tab in the side panel.
   const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   assert.doesNotMatch(html, /data-panel="plan"|id="plan-panel"/);
-  assert(html.indexOf('id="open-plan"') > html.indexOf('class="header-lead"') && html.indexOf('id="open-board"') < html.indexOf('id="open-plan"') && html.indexOf('id="open-plan"') < html.indexOf('class="command-bar"'), 'Board and Plan sit at the left of the search, so the search stays centred, and Flow keeps them in view.');
-  assert.deepEqual([ui.$('open-plan').disabled, ui.$('open-plan').dataset.state, ui.$('open-plan-state').textContent], [false, 'ready', 'Ready']);
-  assert.match(ui.$('open-plan').title, /^Plan: 2 steps waiting for you\./);
+  // One Plan (#162): one Plan button, at the left of the search, so the search stays centred and Flow keeps it in view.
+  assert(html.indexOf('id="open-plan"') > html.indexOf('class="header-lead"') && !html.includes('id="open-board"') && html.indexOf('id="open-plan"') < html.indexOf('class="command-bar"'), 'One Plan button sits at the left of the search.');
+  // The button speaks for the Plan's cards; a plan made before them shows in its own card.
+  assert.deepEqual([ui.$('open-plan').disabled, ui.$('open-plan').dataset.state], [false, 'none']);
   ui.$('orchestrate-toggle').click(); await flush();
   assert.equal(ui.window.relayOrchestration.armed(), true);
   assert.equal(ui.$('plan-view').open, false, 'Turning Orchestrate on opens nothing.');
@@ -7142,7 +7143,7 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'false');
   ui.$('orchestrate-toggle').click(); await flush();
   assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('orchestrate-armed').hidden, false);
-  assert.equal(ui.$('orchestrate-armed-text').textContent, 'Orchestrate: one read-only run plans the steps first, with the deepest work Smart allows. Nothing from this plan runs until you approve it.');
+  assert.equal(ui.$('orchestrate-armed-text').textContent, 'Orchestrate: one read-only run drafts cards on the Plan first, with the deepest work Smart allows. Nothing from them runs until you accept them.');
   conversation.routing.mode = 'ultra'; await ui.window.relayUI.refresh(); await flush();
   assert.match(ui.$('orchestrate-armed-text').textContent, /the deepest work Ultra allows/);
   conversation.routing.mode = 'smart'; await ui.window.relayUI.refresh(); await flush();
@@ -7165,7 +7166,7 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   assert.equal(ui.$('orchestration-status').textContent, 'Codex · gpt-6.1-sol is planning the steps, read-only. Nothing from this plan runs until you approve it.');
   assert.equal(ui.$('orchestration-queue').textContent, '1 queued message waits until you approve or discard this plan.');
   assert.deepEqual(['orchestration-discard', 'orchestration-again', 'orchestration-write'].map(id => ui.$(id).hidden), [true, true, true], 'A plan being made is stopped with Stop, like any run.');
-  assert.match(flowText(ui, 'next'), /Codex is planning the steps\. The Plan button shows the plan when it’s ready\./);
+  assert.match(flowText(ui, 'next'), /Codex is drafting the plan\. Its cards show on the Plan when they’re ready\./);
   assert.match(flowText(ui, 'next'), /Then · 1 queued message · waiting for the plan/);
   assert.deepEqual([ui.$('open-plan').dataset.state, ui.$('open-plan-state').textContent], ['planning', 'Planning…']);
 
@@ -7194,7 +7195,7 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   assert.equal(ui.$('orchestration-title').textContent, 'Plan · Not ready');
   assert.match(flowText(ui, 'next'), /The plan isn’t ready\. Open the plan to plan again or write the steps yourself\./);
   assert.equal(ui.$('orchestration-queue').hidden, true);
-  assert.deepEqual([ui.$('open-plan').dataset.state, ui.$('open-plan-state').textContent], ['trouble', 'Not ready']);
+  assert.equal(ui.$('open-plan').dataset.state, 'none', 'The Plan button speaks for the Plan’s cards; this plan made none.');
 });
 
 test('In a narrow window, What’s next’s chip says when a plan is being made, waits or isn’t ready', async () => {
@@ -7394,12 +7395,11 @@ test('Plan again plans the same message and files again, never Continue, and a p
   typeInto((await expandStep(ui, 1)).querySelector('.orchestration-step-instructions'), 'List them with an empty state.'); await flush();
   ui.$('message-input').value = 'Tidy the settings page'; ui.fire('message-input', 'input');
   ui.$('orchestrate-toggle').click(); await flush();
+  // Writing it yourself (#162) opens the Plan with a new card from the message. Nothing replaces the open plan.
   ui.$('orchestrate-write').click(); await flush(); await flush();
-  assert.equal(actions.length, 0); assert.equal(ui.$('orchestration-confirm').hidden, false);
-  ui.$('orchestration-confirm-yes').click(); await flush(); await flush();
-  assert.deepEqual(actions.at(-1), { action: 'create', goal: 'Tidy the settings page' }); assert.equal(sends.length, 4);
-  assert.equal(ui.$('orchestration-title').textContent, 'Plan · No steps yet'); assert.equal(ui.$('message-input').value, '', 'The message became the plan.');
-  assert.equal(ui.$('orchestration-cost').textContent, 'Add the steps this plan needs.');
+  assert.equal(actions.length, 0); assert.equal(ui.$('orchestration-confirm').hidden, true); assert.equal(sends.length, 4);
+  assert.equal(ui.$('board-view').open, true); assert.equal(ui.window.relayOrchestration.armed(), false);
+  assert.equal(ui.$('message-input').value, 'Tidy the settings page', 'The message stays until the card is added.');
 });
 
 test('Orchestrate is offered only from the main conversation with a connected agent that can plan read-only, and not with Review after', async () => {
@@ -7421,9 +7421,9 @@ test('Orchestrate is offered only from the main conversation with a connected ag
   ui.$('orchestrate-toggle').click(); await flush();
   await sendMessage(ui);
   assert.equal(sends.length, 0); assert.match(ui.$('notice-text').textContent, /Review after doesn’t apply to planning/);
-  // Without a card on screen, a plan the server won't start says why in the notice.
+  // Writing it yourself opens the Plan with a new card, with no plan or request to the server (#162).
   ui.$('orchestrate-write').click(); await flush(); await flush();
-  assert.equal(ui.$('notice-text').textContent, 'Wait for the planner to finish.'); assert.equal(ui.$('orchestration-card').hidden, true);
+  assert.equal(ui.$('board-view').open, true); assert.equal(ui.requests.filter(request => request.path.endsWith('/orchestration')).length, 0);
 });
 
 test('Continue after a stop is never planned, and Orchestrate stays on for the next message', async () => {
@@ -7482,8 +7482,8 @@ test('The Plan view shows a plan as a chart and an outline, edits the same draft
   Object.assign(conversation, { routing: { mode: 'smart', allowApi: false, check: false }, orchestrations: [draftPlan({ steps })] });
   await ui.window.relayUI.refresh(); await flush();
   const dialog = ui.$('plan-view'), chart = ui.$('plan-view-chart');
-  assert.equal(ui.$('open-plan').disabled, false, 'The Plan button in the top bar opens the plan.');
-  ui.$('open-plan').click(); await flush();
+  // A plan made before One Plan (#162) opens in its own view, from its card, the thread or the Plan.
+  ui.window.relayPlanView.open(); await flush();
   assert.equal(dialog.open, true);
   assert.equal(ui.$('plan-view-title').textContent, 'Plan · 3 steps');
   assert.equal(ui.$('plan-view-summary').textContent, 'Route, then page.');
@@ -7542,24 +7542,25 @@ test('The Plan view shows a plan as a chart and an outline, edits the same draft
   assert.match(ui.$('plan-view-drawer-body').textContent, /Why it waits/);
   assert.equal(ui.$('plan-view-drawer-body').querySelector('.orchestration-step-title'), null, 'A running step is not edited.');
 
-  assert.deepEqual([ui.$('open-plan').dataset.state, ui.$('open-plan-state').textContent], ['running', '1/3'], 'The Plan button counts the finished steps.');
   ui.$('plan-view-close').click(); await flush();
   assert.equal(dialog.open, false);
 
   // A plan that is closed closes the view with it. With no plan, the view says how to start one and writes one by hand.
-  ui.$('open-plan').click(); await flush();
+  ui.window.relayPlanView.open(); await flush();
   conversation.orchestrations[0].status = 'closed';
   await ui.window.relayUI.refresh(); await flush();
   assert.equal(dialog.open, false, 'The view closes with its plan.');
   assert.deepEqual([ui.$('open-plan').dataset.state, ui.$('open-plan-state').hidden], ['none', true]);
   ui.$('message-input').value = 'Add a saved items export';
-  ui.$('open-plan').click(); await flush();
+  ui.window.relayPlanView.open(); await flush();
   assert.equal(dialog.open, true);
   assert.equal(ui.$('plan-view-title').textContent, 'Plan');
   assert.deepEqual(['plan-empty', 'plan-view-foot-slot', 'plan-view-modes', 'orchestration-add', 'plan-view-chart'].map(id => ui.$(id).hidden), [false, true, true, true, true]);
   assert.equal(ui.$('plan-empty-goal').value, 'Add a saved items export', 'It starts from the message being written.');
+  // Writing one by hand is a card on the Plan now (#162).
+  const before = actions.length;
   ui.$('plan-panel-write').click(); await flush();
-  assert.deepEqual([actions.at(-1).action, actions.at(-1).goal], ['create', 'Add a saved items export']);
+  assert.equal(actions.length, before); assert.equal(dialog.open, false); assert.equal(ui.$('board-view').open, true);
 });
 
 // Run as tasks (#108): a saved plan runs with exactly the agents its rows show, then the card follows each step's task.
@@ -7792,8 +7793,8 @@ test('the board shows a workspace’s cards in five columns, runs exactly the ca
     return next();
   });
   await ui.window.relayUI.refresh(); await flush();
-assert.equal(ui.$('open-board').disabled, false); assert.equal(ui.$('open-board-state').textContent, '1', 'The Board button says how many cards wait for you in Review.');
-  ui.$('open-board').click(); await flush();
+assert.equal(ui.$('open-plan').disabled, false); assert.equal(ui.$('open-plan-state').textContent, '1', 'The Plan button says how many cards wait for you in Review.');
+  ui.$('open-plan').click(); await flush();
   assert.equal(ui.$('board-view').open, true);
   const columns = ui.$('board-columns').children;
   assert.deepEqual(columns.map(column => column.dataset.column), ['backlog', 'ready', 'doing', 'review', 'done']);
@@ -7813,20 +7814,52 @@ assert.equal(ui.$('open-board').disabled, false); assert.equal(ui.$('open-board-
   // Running one Ready card runs exactly that card.
   find(ids.first).click(); await flush();
   action('Run').click(); await flush();
-  assert.deepEqual(posted.at(-1), { path: '/api/board/run', body: { ids: [ids.first] } });
+  // A card with its own agent needs no Auto pick (#162).
+  assert.deepEqual(posted.at(-1), { path: '/api/board/run', body: { ids: [ids.first], assignments: {}, billingConfirmed: false } });
   // Run Ready: cards with an agent are ticked, one waiting for an unticked card can't run alone, one without an agent can't be ticked.
   ui.$('board-run-ready').click(); await flush();
   assert.equal(ui.$('board-drawer-title').textContent, 'Run Ready cards');
   const rows = () => drawer().querySelectorAll('.board-run-row'), tick = index => rows()[index].querySelector('input');
   assert.deepEqual(rows().map(row => tick(rows().indexOf(row)).checked), [true, true, false]);
-  assert.equal(tick(2).disabled, true); assert.match(rows()[2].textContent, /Choose an agent first/);
+  assert.equal(tick(2).disabled, true); assert.match(rows()[2].textContent, /Choose an agent, or Auto, first/);
   assert.match(drawer().textContent, /can edit files, and asks before anything that needs approval/); assert.match(drawer().textContent, /Nothing is pushed or published/);
   tick(0).checked = false; tick(0).dispatchEvent(new UIEvent('change')); await flush();
   assert.match(rows()[1].textContent, /Waits for “Move the templates”/);
   assert.equal(action('Run 1 card').disabled, true, 'A card can’t run before the card it waits for, unless they run together.');
   tick(0).checked = true; tick(0).dispatchEvent(new UIEvent('change')); await flush();
   action('Run 2 cards').click(); await flush();
-  assert.deepEqual(posted.at(-1), { path: '/api/board/run', body: { ids: [ids.first, ids.second] } });
+  assert.deepEqual(posted.at(-1), { path: '/api/board/run', body: { ids: [ids.first, ids.second], assignments: {}, billingConfirmed: false } });
+  // Billing up front (#108): once accounts are checked, a card whose agent bills by use says so, and running it asks once.
+  const accounts = ui.window.relayUI.getState().accounts, before = posted.length;
+  accounts.codex = { installed: true, authenticated: true, billingSource: 'api' }; accounts.claude = { installed: true, authenticated: true, billingSource: 'subscription' };
+  let asked = []; ui.window.confirm = text => { asked.push(text); return false; };
+  find(ids.first).click(); await flush();
+  assert.match(find(ids.first).textContent, /Bills by use/); assert.doesNotMatch(find(ids.second).textContent, /Bills by use/, 'A subscription agent adds nothing to the card.');
+  assert.match(drawer().textContent, /Codex bills your API account\. You’re asked before it runs, as it may cost money\./);
+  action('Run').click(); await flush();
+  assert.equal(posted.length, before, 'Saying no runs nothing.');
+  assert.match(asked[0], /^Run “Move the templates” with charges\?/); assert.match(asked[0], /Codex bills your API account\. Running it may cost money\./); assert.match(asked[0], /Allow API and unconfirmed billing in Settings/);
+  ui.window.confirm = text => { asked.push(text); return true; };
+  action('Run').click(); await flush();
+  assert.deepEqual(posted.at(-1).body, { ids: [ids.first], assignments: {}, billingConfirmed: true });
+  find(ids.second).click(); await flush();
+  assert.match(drawer().textContent, /Uses your Claude subscription\./);
+  // Run Ready marks the card and asks once for the whole run.
+  asked = []; ui.$('board-run-ready').click(); await flush();
+  assert.match(rows()[0].textContent, /Bills by use/); assert.doesNotMatch(rows()[1].textContent, /Bills by use/);
+  action('Run 2 cards').click(); await flush();
+  assert.equal(asked.length, 1); assert.match(asked[0], /^Run “Move the templates” with charges\?/);
+  assert.equal(posted.at(-1).body.billingConfirmed, true);
+  // Allowed in Settings for this session: no question, and the run says yes.
+  asked = []; ui.window.relayBillingConfirmed = true;
+  ui.$('board-run-ready').click(); await flush();
+  action('Run 2 cards').click(); await flush();
+  assert.deepEqual([asked.length, posted.at(-1).body.billingConfirmed], [0, true]);
+  // An unchecked account isn't guessed at.
+  ui.window.relayBillingConfirmed = false; delete accounts.codex;
+  find(ids.first).click(); await flush();
+  assert.doesNotMatch(find(ids.first).textContent, /Bills by use|Billing not confirmed/);
+  delete accounts.claude;
   // A new card: written in the drawer, with no agent unless one is chosen.
   ui.$('board-new').click(); await flush();
   assert.match(ui.$('board-drawer-title').textContent, /New card · Backlog/);
@@ -7861,7 +7894,7 @@ test('the board’s canvas places cards by dragging, draws arrows for waits, and
   });
   await ui.window.relayUI.refresh(); await flush();
   const space = ui.$('board-space'); space.bounds = { left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 };
-  ui.$('open-board').click(); await flush();
+  ui.$('open-plan').click(); await flush();
   ui.$('board-canvas-mode').click(); await flush();
   assert.equal(space.hidden, false); assert.equal(ui.$('board-columns').hidden, true); assert.equal(ui.$('board-canvas-mode').getAttribute('aria-pressed'), 'true');
   const nodes = () => space.querySelectorAll('.board-node'), nodeOf = id => nodes().find(item => item.dataset.card === id), face = id => nodeOf(id).querySelector('.board-card');
@@ -7949,7 +7982,7 @@ test('board cards show labels, a due date and comments; a label filters the boar
     return next();
   });
   await ui.window.relayUI.refresh(); await flush();
-  ui.$('open-board').click(); await flush();
+  ui.$('open-plan').click(); await flush();
   const faces = () => ui.$('board-columns').querySelectorAll('.board-card'), face = id => faces().find(item => item.dataset.card === id);
   // The card says its labels (three at most, then how many more), when it's due and how many comments it has.
   assert.deepEqual(face(ids.api).querySelectorAll('.board-label').map(item => item.textContent), ['backend', 'API', '+2']);
@@ -7987,7 +8020,7 @@ test('board cards show labels, a due date and comments; a label filters the boar
   const day = drawer().querySelector('.board-due-input'); assert.equal(day.value, '2999-03-04');
   day.value = '2026-12-24'; day.dispatchEvent(new UIEvent('change')); await flush();
   drawer().querySelectorAll('button').find(item => item.textContent === 'Save').click(); await flush();
-  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.form}/edit`, body: { title: 'Build the form', notes: '', priority: 'normal', labels: ['Frontend', 'backend'], due: '2026-12-24', agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1 } });
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.form}/edit`, body: { title: 'Build the form', notes: '', priority: 'normal', labels: ['Frontend', 'backend'], due: '2026-12-24', agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'frontend', dependsOn: [], checks: [], group: null, role: 'builder', artifact: null, check: null, files: [], tier: 'standard', closed: false, revision: 1 } });
   // Comments are read when a card that has some opens, and say who wrote them and when.
   face(ids.api).click(); await flush();
   assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.api}/comments`, body: null });
@@ -8066,4 +8099,134 @@ test('entering and leaving Flow from the keyboard keeps focus on the Flow button
   assert.equal(ui.document.activeElement,toggle,'Focus is still on the button after the header moves.');
   toggle.click();await flush();
   assert.equal(shell.classList.contains('flow'),false);assert.equal(ui.document.activeElement,toggle);
+});
+
+// One Plan (#162): one Plan button, an agent's drafted cards to accept or discard, the Outline by group, and Auto.
+test('the Plan shows drafted cards to accept or discard, lists cards by group in the Outline, and runs a card on Auto (#162)', async () => {
+  const ui = await browser({ boardUI: true, wide: true }), posted = [];
+  ui.window.confirm = () => true;
+  const ids = { contract: 'd0000000-0000-4000-8000-000000000001', page: 'd0000000-0000-4000-8000-000000000002', rename: 'd0000000-0000-4000-8000-000000000003', search: 'd0000000-0000-4000-8000-000000000004', loose: 'd0000000-0000-4000-8000-000000000005' };
+  const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'frontend', dependsOn: [], checks: [], group: null, role: 'builder', artifact: null, check: null, files: [], tier: 'standard', revision: 1, order: 1, attempts: [], createdAt: '2026-11-12T10:00:00.000Z', ...extra });
+  const batch = { id: 'plan-1', summary: 'Contract first, then the page.', questions: ['Should items sync across devices?'] };
+  const draft = notes => ({ by: { kind: 'agent', provider: 'claude', model: 'opus' }, at: '2026-11-12T10:00:00.000Z', batch, notes });
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, cards: [
+    card(ids.contract, 'Agree the API', 'backlog', { agent: null, auto: true, tier: 'deep', role: 'backend', artifact: 'contract', group: 'Contracts', draft: draft([]), source: { kind: 'orchestrate', planId: 'plan-1', goal: 'Add saved items.' } }),
+    card(ids.page, 'Build the page', 'backlog', { agent: null, auto: true, group: 'Build', role: 'frontend', dependsOn: [ids.contract], draft: draft(['It doesn’t say what done means. Add a check before running it.']), createdAt: '2026-11-12T10:00:01.000Z' }),
+    card(ids.rename, 'Rename the helper', 'ready', { agent: null, auto: true, tier: 'light', group: 'Build', createdAt: '2026-11-12T10:00:02.000Z' }),
+    card(ids.search, 'Speed up search', 'doing', { group: 'Build', taskState: { id: 't1', status: 'running', approvals: 0, provider: 'codex' }, createdAt: '2026-11-12T10:00:03.000Z' }),
+    card(ids.loose, 'Update the docs', 'done', { createdAt: '2026-11-12T10:00:04.000Z' }),
+  ] };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response(board);
+    if (request.path.startsWith('/api/board/')) { posted.push({ path: request.path, body: clone(request.body) }); return response({ board }); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  // The one Plan button leads with the drafts waiting for you.
+  assert.deepEqual([ui.$('open-plan').dataset.state, ui.$('open-plan-state').textContent], ['ready', '2']);
+  assert.equal(ui.$('open-plan').title, 'Plan: 2 drafted cards waiting for you to accept or discard.');
+  ui.$('open-plan').click(); await flush();
+  assert.equal(ui.$('board-view').open, true);
+  // A banner says who drafted the cards, the plan's summary and its questions, with Accept all and Discard.
+  const banner = ui.$('board-drafts');
+  assert.equal(banner.hidden, false);
+  assert.match(banner.textContent, /Claude drafted 2 cards: Contract first, then the page\./);
+  assert.match(banner.textContent, /The plan checks noted something on 1 card\./);
+  assert.match(banner.textContent, /It asks:Should items sync across devices\?/);
+  banner.querySelectorAll('button').find(item => item.textContent === 'Accept all 2 cards').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: '/api/board/drafts', body: { action: 'accept', ids: [ids.contract, ids.page] } });
+  // A draft says so on its card and in its drawer, where it is accepted or discarded rather than run.
+  const find = id => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  assert.match(find(ids.page).textContent, /Draft/); assert.match(find(ids.page).textContent, /Auto/); assert.match(find(ids.page).textContent, /Frontend/);
+  assert.notEqual(find(ids.page).draggable, true, 'A draft isn’t dragged to Ready; it is accepted.');
+  find(ids.page).click(); await flush();
+  const drawer = () => ui.$('board-drawer-body'), action = text => drawer().querySelectorAll('button').find(item => item.textContent === text);
+  assert.equal(ui.$('board-drawer-title').textContent, 'Draft · Auto');
+  assert.match(drawer().textContent, /Claude · opus drafted this card\. Edit it, then accept or discard it\./);
+  assert.match(drawer().textContent, /doesn’t say what done means/);
+  assert.equal(action('Run'), undefined); assert.ok(action('Accept to Ready'));
+  action('Discard').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: '/api/board/drafts', body: { action: 'discard', ids: [ids.page] } });
+  // The Outline lists the cards by group, in the order they can run, with cards in no group last.
+  ui.$('board-outline-mode').click(); await flush();
+  assert.deepEqual([ui.$('board-outline').hidden, ui.$('board-columns').hidden], [false, true]);
+  const groups = () => ui.$('board-outline').querySelectorAll('.board-outline-group');
+  assert.deepEqual(groups().map(item => item.querySelector('.board-outline-name').textContent), ['Contracts', 'Build', 'Not in a group']);
+  assert.deepEqual(groups()[1].querySelectorAll('.board-outline-title').map(item => item.textContent), ['Rename the helper', 'Speed up search', 'Build the page']);
+  assert.match(groups()[1].querySelector('.board-outline-progress').textContent, /0 of 3 cards done/);
+  assert.match(groups()[1].querySelectorAll('.board-outline-meta')[2].textContent, /^Draft · Frontend · Auto · after “Agree the API”/);
+  // A group stops as one, and runs its Ready cards; a card on Auto runs with the agent shown for it.
+  groups()[1].querySelectorAll('button').find(item => item.textContent === 'Stop').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: '/api/board/stop', body: { ids: [ids.search] } });
+  groups()[1].querySelectorAll('button').find(item => item.textContent === 'Run 1 Ready card…').click(); await flush();
+  assert.equal(ui.$('board-drawer-title').textContent, 'Run Ready cards');
+  assert.match(drawer().textContent, /Rename the helper/);
+  action('Run 1 card').click(); await flush();
+  const run = posted.at(-1);
+  assert.deepEqual([run.path, run.body.ids, Object.keys(run.body.assignments)], ['/api/board/run', [ids.rename], [ids.rename]]);
+  assert.equal(typeof run.body.assignments[ids.rename].provider, 'string');
+  // A card's editor offers Auto beside the agents, a size, and the plan details folded away until used.
+  ui.$('board-columns-mode').click(); await flush();
+  find(ids.rename).click(); await flush();
+  const segment = name => drawer().querySelectorAll('.board-segment').find(item => item.getAttribute('aria-label') === name);
+  const agents = segment('Agent').querySelectorAll('button');
+  assert.deepEqual(agents.map(item => [item.textContent, item.getAttribute('aria-pressed')]), [['Auto', 'true'], ['Codex', 'false'], ['Claude', 'false'], ['Gemini', 'false']]);
+  assert.match(drawer().textContent, /Codeshi picks the agent, model and effort for a light card when it runs/);
+  assert.ok(segment('Size'));
+  assert.equal(drawer().querySelector('.board-more').open, true, 'A card in a group shows its plan details.');
+});
+
+test('a card or the whole Plan can be closed to agents, and the Plan or a card attaches to the next message with its size (#97)', async () => {
+  const ui = await browser({ boardUI: true, filesUI: true, wide: true }), posted = [];
+  const ids = { open: 'c0000000-0000-4000-8000-000000000011', shut: 'c0000000-0000-4000-8000-000000000012' };
+  const card = (id, title, extra = {}) => ({ id, title, column: 'ready', notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], closed: false, ...extra });
+  const board = { revision: 1, closed: false, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, schedules: [], cards: [card(ids.open, 'Build the form'), card(ids.shut, 'Salary bands', { closed: true })] };
+  const snapshot = { id: 'a'.repeat(64), name: 'Plan.md', mime: 'text/plain', kind: 'text', bytes: 3000, plan: { cards: 1, whole: true } };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response(board);
+    if (!request.path.startsWith('/api/board/')) return next();
+    posted.push({ path: request.path, body: request.body });
+    if (request.path === '/api/board/access') { board.closed = request.body.closed; return response({ closed: board.closed, board }); }
+    if (request.path === '/api/board/attach') return response({ attachment: snapshot, cards: 1, leftOut: 1 }, 201);
+    if (request.path === '/api/board/export') return response({ markdown: '# Plan\n', filename: 'codeshi-board.md' });
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  const face = id => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  assert.equal(face(ids.shut).querySelector('.board-card-closed').textContent, 'Closed');
+  assert.match(face(ids.shut).getAttribute('aria-label'), /closed to agents/);
+  assert.equal(face(ids.open).querySelector('.board-card-closed'), null);
+  // A closed card's drawer: its setting, and Run, Schedule and Attach turned off with the reason.
+  face(ids.shut).click(); await flush();
+  const drawer = () => ui.$('board-drawer-body'), named = text => drawer().querySelectorAll('button').find(item => item.textContent === text);
+  assert.equal(drawer().querySelector('.board-closed-edit').children[0].checked, true);
+  assert.equal(named('Run').disabled, true); assert.match(named('Run').title, /Closed to agents/);
+  assert.equal(named('Schedule…').disabled, true); assert.equal(named('Attach to message').disabled, true);
+  // Export asks whether to leave closed cards out.
+  ui.$('board-export').click(); await flush();
+  assert.equal(ui.$('board-export-menu').hidden, false);
+  assert.equal(ui.$('board-export-closed').textContent, 'Everything, including 1 closed card');
+  ui.$('board-export-open').click(); await flush();
+  assert(ui.requests.some(request => request.path === '/api/board/export'), 'The default leaves closed cards out.');
+  assert.equal(ui.$('board-export-menu').hidden, true);
+  // The whole Plan: closing it asks first, then the banner says what it means and nothing can run or be attached.
+  assert.equal(ui.$('board-agents').getAttribute('aria-pressed'), 'false');
+  let asked = ''; ui.window.confirm = text => { asked = text; return true; };
+  ui.$('board-agents').click(); await flush();
+  assert.match(asked, /Close this Plan to agents\?/);
+  assert.deepEqual(posted.at(-1), { path: '/api/board/access', body: { closed: true } });
+  assert.equal(ui.$('board-agents').getAttribute('aria-pressed'), 'true'); assert.equal(ui.$('board-agents-label').textContent, 'Closed to agents');
+  assert.equal(ui.$('board-closed-note').hidden, false); assert.equal(ui.$('board-attach').disabled, true);
+  assert.equal(face(ids.open).querySelector('.board-card-closed'), null, 'With the whole Plan closed, the banner says it once.');
+  ui.$('board-agents').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: '/api/board/access', body: { closed: false } });
+  assert.equal(ui.$('board-closed-note').hidden, true);
+  // Attach to message: the Plan joins the message's attachments with its size, and the Plan closes.
+  ui.$('board-attach').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: '/api/board/attach', body: {} });
+  assert.equal(ui.$('board-view').open, false);
+  assert.deepEqual([...ui.window.relayFiles.ids()], [snapshot.id]);
+  assert.match(ui.$('attachment-list').textContent, /Plan\.md.*3 KB/);
+  assert.equal(ui.$('notice-text').textContent, 'The Plan (1 card) is attached to your next message: 3 KB of text. 1 card closed to agents is left out.', 'It says what was attached, its size and what was left out.');
 });

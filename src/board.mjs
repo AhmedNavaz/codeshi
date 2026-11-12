@@ -1,15 +1,22 @@
 import { randomUUID } from 'node:crypto';
+import { ARTIFACT_KINDS, SPECIALIST_ROLES, reviewDraft, upstreamLines } from './orchestration.mjs';
+import { attachmentLimits } from './attachments.mjs';
 
 // The task board (#132, first stage): cards you write, sort and run by hand. Cards are records in the workspace chat's
 // journal, beside the tasks they start, so they live in Codeshi's data and a crash finds them as they were. Running a card
 // starts an ordinary task (#88) with the card's own agent under a Normal policy. From then on the task decides where the card
 // is: working puts it in Doing, finishing in Review, and stopping, failing or being discarded back in Ready with the reason.
 // Only you move a card to Done. Schedules live in src/schedules.mjs; Flow choosing cards from the backlog comes later.
+// One Plan (#162): the board is the Plan. A card also carries what an Orchestrate step had (a group, a role, the result it
+// should produce, an acceptance check, the files it expects to change, a size, and Auto), and a plan an agent drafts
+// arrives as draft cards that you edit, accept or discard. Cards run the way plan steps did: each finished card is tested
+// before the cards that wait for it start, and each card is briefed, when it starts, from what earlier cards actually did.
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 export const COLUMNS = ['backlog', 'ready', 'doing', 'review', 'done'];
 export const PRIORITIES = ['high', 'normal', 'low'];
-const PROVIDERS = ['codex', 'claude', 'gemini'];
-export const LIMITS = { cards: 300, title: 200, notes: 20000, checks: 20, check: 300, dependsOn: 20, reason: 500, summary: 600, labels: 8, label: 32, comments: 100, comment: 4000, promptComments: 8000 };
+const PROVIDERS = ['codex', 'claude', 'gemini'], TIERS = ['light', 'standard', 'deep'];
+export const LIMITS = { cards: 300, title: 200, notes: 20000, checks: 20, check: 300, dependsOn: 20, reason: 500, summary: 600, labels: 8, label: 32, comments: 100, comment: 4000, promptComments: 8000, group: 60, files: 12, path: 300, goal: 4000 };
+const ARTIFACT_NAME = { contract: 'Contract', schema: 'Schema', diff: 'Changes', test_evidence: 'Test evidence', findings: 'Findings' };
 // Tasks that can't change any more, and the ones whose changes are already in the folder.
 const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
 const LIVE = new Set(['waiting', 'running']);
@@ -62,7 +69,7 @@ export class Board {
     this.main = main;
     // The coordinator tells the board each time a task's record changes; the card follows its task from there.
     main.tasks.onTask = (c, task) => this.follow(c, task);
-    for (const c of main.conversations.values()) this.reconcile(c);
+    for (const c of main.conversations.values()) { this.reconcile(c); this.adopt(c); }
   }
   cards(c) { return c.board || []; }
   find(c, id) { const card = this.cards(c).find(item => item.id === id); if (!card) throw fail('That card is no longer on the board.', 404); return card; }
@@ -102,11 +109,43 @@ export class Board {
         changes.agent = { provider: agent.provider, model: model || null, effort };
       } else changes.agent = null;
     }
+    // Auto (#162) is a choice you make on the card: routing picks the agent when it runs. Choosing an agent turns it off.
+    if (!card || 'auto' in input) changes.auto = input.auto === true;
+    if (changes.auto) changes.agent = null;
+    else if (changes.agent && card?.auto && !('auto' in input)) changes.auto = false;
+    // What a plan step had (#162). The agent is told the role, the files, the result and the check; the group only sorts.
+    if (!card || 'group' in input) {
+      const group = input.group == null ? '' : text(String(input.group).replace(/\s+/g, ' '), LIMITS.group, 'group');
+      changes.group = group || null;
+    }
+    if (!card || 'role' in input) {
+      const role = input.role ?? 'builder';
+      if (!SPECIALIST_ROLES.includes(role)) throw fail('Choose builder, reviewer, frontend, backend, database, design or QA as the card’s role.', 400);
+      changes.role = role;
+    }
+    if (!card || 'artifact' in input) {
+      const artifact = input.artifact ?? null;
+      if (artifact !== null && !ARTIFACT_KINDS.includes(artifact)) throw fail('Choose a contract, schema, changes, test evidence or findings as what the card produces.', 400);
+      changes.artifact = artifact;
+    }
+    if (!card || 'check' in input) changes.check = text(input.check ?? '', LIMITS.check, 'acceptance check') || null;
+    if (!card || 'files' in input) {
+      const files = input.files ?? [];
+      if (!Array.isArray(files) || files.length > LIMITS.files || files.some(file => typeof file !== 'string' || !file.trim() || file.trim().length > LIMITS.path)) throw fail(`List up to ${LIMITS.files} files or folders, each as a path.`, 400);
+      changes.files = [...new Set(files.map(file => file.trim()))];
+    }
+    if (!card || 'tier' in input) {
+      const tier = input.tier ?? 'standard';
+      if (!TIERS.includes(tier)) throw fail('Choose light, standard or deep as the card’s size.', 400);
+      changes.tier = tier;
+    }
     if (!card || 'folderId' in input) {
       const folderId = input.folderId ?? null;
       if (folderId !== null && !this.folders().some(folder => folder.id === folderId)) throw fail('Choose a folder in this workspace.', 400);
       changes.folderId = folderId;
     }
+    // Closed to agents (#97): yours alone. Codeshi never puts it in a prompt, a brief, an attachment or an export.
+    if (!card || 'closed' in input) changes.closed = input.closed === true;
     if (!card && input.at != null) changes.at = position(input.at);
     if (!card || 'dependsOn' in input) {
       const ids = input.dependsOn ?? [];
@@ -144,11 +183,13 @@ export class Board {
   edit(c, id, input = {}) {
     const card = this.find(c, id);
     if (input.revision !== undefined && input.revision !== card.revision) throw fail('This card changed since you opened it. Look at it again before saving.');
-    const changes = this.clean(c, input, card), material = ['title', 'notes', 'agent', 'folderId', 'dependsOn'].some(key => key in changes && JSON.stringify(changes[key]) !== JSON.stringify(card[key]))
+    const changes = this.clean(c, input, card), material = ['title', 'notes', 'agent', 'auto', 'folderId', 'dependsOn', 'role', 'artifact', 'check', 'files', 'tier'].some(key => key in changes && JSON.stringify(changes[key] ?? null) !== JSON.stringify(card[key] ?? null))
       || 'checks' in changes && JSON.stringify(changes.checks.map(item => item.text)) !== JSON.stringify((card.checks || []).map(item => item.text));
     // What an agent is working from stays as it started. Ticking checks and the priority can change at any time.
     if (material && card.column === 'doing') throw fail('An agent is working on this card. Stop it first, or wait until it’s in Review.');
-    if (!Object.keys(changes).some(key => JSON.stringify(changes[key]) !== JSON.stringify(card[key]))) return this.public(c, card);
+    // Closing a card an agent is working from can't take back what it already has, or keep it out of that task's handoffs.
+    if (changes.closed && !card.closed && card.column === 'doing') throw fail('An agent is working on this card. Stop it before closing it to agents.');
+    if (!Object.keys(changes).some(key => JSON.stringify(changes[key] ?? null) !== JSON.stringify(card[key] ?? null))) return this.public(c, card);
     this.update(c, card, { ...changes, ...(material ? { revision: card.revision + 1 } : {}) });
     return this.public(c, card);
   }
@@ -157,6 +198,7 @@ export class Board {
   move(c, id, { column = null, before = null } = {}) {
     const card = this.find(c, id), to = column || card.column;
     if (!COLUMNS.includes(to)) throw fail('Choose a column.', 400);
+    if (to !== card.column && card.draft) throw fail('An agent drafted this card. Accept it first, or discard it.');
     if (to !== card.column) {
       const allowed = { backlog: ['ready'], ready: ['backlog'], done: ['ready', 'backlog'] }[card.column] || [];
       if (!allowed.includes(to)) throw fail(card.column === 'doing' ? 'An agent is working on this card. Stop it to move it.' : card.column === 'review' ? 'Accept this card, or send it back to Ready.' : `A card can’t be moved to ${COLUMN_NAME[to]} by hand. Running it moves it there.`);
@@ -173,6 +215,7 @@ export class Board {
     for (const other of this.cards(c).filter(item => item.dependsOn?.includes(id))) this.update(c, other, { dependsOn: other.dependsOn.filter(item => item !== id) });
     this.main.record(c, { type: 'board_card_remove', id });
     this.main.schedules?.forgetCard(c, id);
+    if (card.draft) setTimeout(() => this.main.queue?.tick(c), 0);
     return { removed: true };
   }
   // Where cards sit on the canvas (#97), several at once so Arrange and its undo are one step. null hands a card back to
@@ -210,13 +253,147 @@ export class Board {
     return { removed: true };
   }
 
+  // ---- Closed to agents (#97)
+  // The whole Plan, or one card, can be closed to agents. Codeshi then never puts it in a prompt: a closed card can't run,
+  // be scheduled or attached, the cards that build on it aren't told about it, attaching the Plan leaves it out, and so
+  // does an export unless you ask for everything. A Plan attachment sent before it was closed is left out of every later
+  // prompt, retry and handoff (see gate). What it can't promise: an agent allowed to read anywhere on this computer could
+  // still find Codeshi's own data files.
+  closed(c, card) { return c.planClosed === true || card?.closed === true; }
+  open(c) { return this.cards(c).filter(card => !this.closed(c, card)); }
+  access(c, { closed } = {}) {
+    if (typeof closed !== 'boolean') throw fail('Say whether agents can read the Plan.', 400);
+    if (closed === (c.planClosed === true)) return { closed };
+    const working = this.cards(c).filter(card => card.column === 'doing');
+    if (closed && working.length) throw fail(`${working.length === 1 ? `An agent is working on “${working[0].title}”` : `Agents are working on ${working.length} cards`}. Stop ${working.length === 1 ? 'it' : 'them'} before closing the Plan to agents.`);
+    this.main.record(c, { type: 'plan_access', closed, at: new Date().toISOString() });
+    return { closed };
+  }
+  // The Plan, or some of its cards, as text for an agent: what each card says, where it stands and what it waits for, with
+  // only your own comments. Closed cards aren't in it or named by the cards that wait for them. Task ids, places on the
+  // canvas and run history are left out.
+  agentText(c, chosen, { whole = false } = {}) {
+    const open = new Set(this.open(c).map(card => card.id)), all = this.list(c);
+    const shown = all.filter(card => open.has(card.id) && (whole || chosen.includes(card.id)));
+    const name = id => all.find(item => item.id === id)?.title.replace(/\s+/g, ' ');
+    const lines = whole ? ['# Plan', '', `This workspace’s Plan in Codeshi: ${shown.length} ${shown.length === 1 ? 'card' : 'cards'}. It is the person’s plan of the work, for reference. Do only what the message asks.`, ''] : [];
+    for (const card of shown) {
+      lines.push(`${whole ? '## ' : '# Card: '}${card.title.replace(/\s+/g, ' ')}`, '');
+      const facts = [`Status: ${card.draft ? 'Draft, not accepted yet' : COLUMN_NAME[card.column]}`];
+      if (card.group) facts.push(`Group: ${card.group}`);
+      if (card.role && card.role !== 'builder') facts.push(`Role: ${card.role}`);
+      if (card.priority !== 'normal') facts.push(`Priority: ${card.priority}`);
+      if (card.labels?.length) facts.push(`Labels: ${card.labels.join(', ')}`);
+      if (card.due) facts.push(`Due: ${card.due}`);
+      if (card.artifact) facts.push(`Produces: ${ARTIFACT_NAME[card.artifact]}`);
+      if (card.files?.length) facts.push(`Files: ${card.files.join(', ')}`);
+      if (card.check) facts.push(`Acceptance check: ${card.check}`);
+      const after = (card.dependsOn || []).filter(id => open.has(id)).map(name).filter(Boolean);
+      if (after.length) facts.push(`Waits for: ${after.map(title => `“${title}”`).join(', ')}`);
+      if (!whole) {
+        const next = all.filter(other => open.has(other.id) && other.dependsOn?.includes(card.id)).map(other => `“${other.title.replace(/\s+/g, ' ')}”`);
+        if (next.length) facts.push(`Cards that wait for it: ${next.join(', ')}`);
+      }
+      if (card.result?.summary && ['review', 'done'].includes(card.column)) facts.push(`What its agent reported: ${card.result.summary}`);
+      lines.push(...facts.map(fact => `- ${fact}`), '');
+      if (card.notes) lines.push(card.notes, '');
+      if (card.checks?.length) lines.push('Done means:', '', ...card.checks.map(item => `- [${item.done ? 'x' : ' '}] ${item.text}`), '');
+      const said = this.comments(c, card.id).filter(item => item.by?.kind === 'you');
+      if (said.length) lines.push('The person’s comments:', '', ...said.map(item => `- ${item.at.slice(0, 10)}: ${item.text.replace(/\n/g, '\n  ')}`), '');
+    }
+    return { text: `${lines.join('\n').trimEnd()}\n`, cards: shown.map(card => card.id), leftOut: whole ? all.length - shown.length : 0 };
+  }
+  // Attaching the Plan, or one card, to your next message: its text is saved as an attachment, so the message box shows
+  // its size and you can open exactly what will be sent. The attachment remembers its cards, so closing any of them, or
+  // the Plan, later keeps it out of every prompt from then on.
+  attach(c, { cardId = null } = {}) {
+    if (c.planClosed) throw fail('This Plan is closed to agents. Open it to agents to attach it.');
+    let made;
+    if (cardId) {
+      const card = this.find(c, cardId);
+      if (card.closed) throw fail(`“${card.title}” is closed to agents. Open it to agents to attach it.`);
+      made = this.agentText(c, [card.id]);
+    } else {
+      if (!this.cards(c).length) throw fail('The Plan has no cards to attach yet.');
+      made = this.agentText(c, [], { whole: true });
+      if (!made.cards.length) throw fail('Every card on the Plan is closed to agents, so there is nothing to attach.');
+    }
+    const bytes = Buffer.byteLength(made.text), most = attachmentLimits.textBytes;
+    if (bytes > most) throw fail(`${cardId ? 'This card’s' : 'The Plan’s'} text is ${Math.ceil(bytes / 1024)} KB, more than the ${most / 1024} KB an attachment can hold.${cardId ? ' Shorten its description or comments.' : ' Attach single cards instead.'}`, 413);
+    const card = cardId ? this.find(c, cardId) : null;
+    const name = card ? `Card – ${card.title.replace(/[\x00-\x1f\x7f/\\]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)}.md` : 'Plan.md';
+    const meta = this.main.attachments.put({ name, data: Buffer.from(made.text).toString('base64') }, { plan: { conversationId: c.id, cards: made.cards, whole: !card } });
+    return { attachment: meta, cards: made.cards.length, leftOut: made.leftOut };
+  }
+  // Why a Plan attachment must stay out of a prompt now, or null when it can go. Asked each time a prompt is put together,
+  // so a handoff or retry after closing leaves it out too.
+  gate(plan) {
+    const c = this.main.conversations.get(plan?.conversationId);
+    if (!c) return null;
+    if (c.planClosed) return 'the Plan was closed to agents after it was attached';
+    if ((plan.cards || []).some(id => this.cards(c).find(card => card.id === id)?.closed)) return 'a card in it was closed to agents after it was attached';
+    return null;
+  }
+
+  // ---- Drafts (#162)
+  // A plan an agent drafted becomes draft cards in Backlog, in its order, each waiting for the cards its step waited for.
+  // A draft can be edited like any card but can't run, be scheduled or move to Ready until you accept it. The plan checks
+  // (reviewDraft) are written on the cards they're about. Every card is checked before any is recorded, so a plan that
+  // doesn't fit adds nothing.
+  draft(c, plan, { by = null } = {}) {
+    const steps = plan.steps || [], room = LIMITS.cards - this.cards(c).length;
+    if (steps.length > room) throw fail(`This plan has ${steps.length} cards, and the Plan has room for ${Math.max(0, room)} more. Remove some finished cards, then plan again.`);
+    const ids = new Map(steps.map(step => [step.id, randomUUID()])), notes = reviewDraft(steps), now = new Date().toISOString();
+    const batch = { id: plan.id, summary: plan.summary || '', ...(plan.questions?.length ? { questions: plan.questions } : {}) };
+    const source = { kind: 'orchestrate', planId: plan.id, goal: String(plan.goal || '').slice(0, LIMITS.goal), summary: plan.summary || '' };
+    const made = steps.map((step, index) => {
+      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : null, priority: 'normal', labels: [], due: null, folderId: null, dependsOn: [] };
+      const fields = this.clean(c, input);
+      // A drafted step has no agent: it's Auto, shown as such on the draft, until you choose one or accept it.
+      return { id: ids.get(step.id), ...fields, agent: step.agent || null, auto: !step.agent, dependsOn: step.dependsOn.map(id => ids.get(id)).filter(Boolean), column: 'backlog', order: this.lastOrder(c, 'backlog') + 1 + index, revision: 1, createdBy: 'agent', createdAt: now, updatedAt: now, attempts: [], source, draft: { by, at: now, batch, notes: notes[step.id] || [] } };
+    });
+    for (const card of made) this.main.record(c, { type: 'board_card', card });
+    return made.map(card => card.id);
+  }
+  // A plan the planner just returned, or a draft plan saved before the Plan held them, moves onto the Plan as draft cards.
+  // One that doesn't fit stays a plan that says why, so nothing is lost.
+  adopt(c, id = null) {
+    for (const plan of (c.orchestrations || []).filter(item => (id ? item.id === id : true) && item.status === 'draft' && item.steps?.length)) {
+      try {
+        const cards = this.draft(c, plan, { by: plan.planner ? { kind: 'agent', provider: plan.planner.provider, model: plan.planner.model || null } : { kind: 'you' } });
+        this.main.record(c, { type: 'orchestration_moved', id: plan.id, cards });
+      } catch (error) {
+        this.main.record(c, { type: 'orchestration_result', id: plan.id, result: { status: 'failed', summary: error.message, steps: [] } });
+      }
+    }
+  }
+  // Accepting keeps the card as you left it and takes away the draft mark: one with an agent, or on Auto, goes to Ready.
+  // Accepting several keeps their order. Discarding removes them, and the cards that waited for one stop waiting.
+  drafts(c, { action, ids } = {}) {
+    if (!['accept', 'discard'].includes(action)) throw fail('Accept or discard the drafts.', 400);
+    if (!Array.isArray(ids) || !ids.length) throw fail('Choose the drafts.', 400);
+    const chosen = [...new Set(ids)].map(id => this.find(c, id));
+    for (const card of chosen) if (!card.draft) throw fail(`“${card.title}” isn’t a draft.`);
+    // Queued messages wait while a drafted plan's cards are undecided, so they look again once they are.
+    setTimeout(() => this.main.queue?.tick(c), 0);
+    if (action === 'discard') { for (const card of chosen) this.remove(c, card.id); return { discarded: chosen.length }; }
+    for (const card of [...chosen].sort((a, b) => a.order - b.order)) {
+      const ready = Boolean(card.agent || card.auto);
+      this.update(c, card, { draft: null, ...(ready ? { column: 'ready', order: this.lastOrder(c, 'ready') + 1 } : {}), acceptedDraftAt: new Date().toISOString() });
+    }
+    return { accepted: chosen.length };
+  }
+
   // ---- Export (#97)
   // The board as Markdown that reads well without Codeshi: a Mermaid chart of the cards and what waits for what, then each
   // column's cards with everything you wrote on them. Task ids, run history and the agents' own summaries are left out.
-  markdown(c, { now = new Date() } = {}) {
-    const all = this.list(c), short = new Map(all.map((card, index) => [card.id, `c${index + 1}`]));
+  // Cards closed to agents (#97) are left out unless you ask for everything, since an export can end up where an agent
+  // reads it; then each says it's closed.
+  markdown(c, { now = new Date(), includeClosed = false } = {}) {
+    const every = this.list(c), all = includeClosed ? every : every.filter(card => !this.closed(c, card)), short = new Map(all.map((card, index) => [card.id, `c${index + 1}`]));
     const folder = id => this.folders().find(item => item.id === id), folderName = id => { const found = folder(id); return found ? found.displayName || found.name : ''; };
-    const lines = ['# Task board', '', `Exported from Codeshi on ${now.toISOString().slice(0, 10)}. ${all.length} ${all.length === 1 ? 'card' : 'cards'}.`, ''];
+    const closedCount = every.filter(card => this.closed(c, card)).length;
+    const lines = ['# Plan', '', `Exported from Codeshi on ${now.toISOString().slice(0, 10)}. ${all.length} ${all.length === 1 ? 'card' : 'cards'}.${closedCount ? includeClosed ? ` ${closedCount === every.length ? 'The Plan is' : closedCount === 1 ? '1 card is' : `${closedCount} cards are`} closed to agents: keep this file where agents can’t read it.` : ` ${closedCount === 1 ? '1 card' : `${closedCount} cards`} closed to agents ${closedCount === 1 ? 'is' : 'are'} left out.` : ''}`, ''];
     if (all.length) {
       lines.push('```mermaid', 'flowchart LR');
       for (const card of all) lines.push(`  ${short.get(card.id)}["${label(card.title)}"]:::${card.column}`);
@@ -230,10 +407,17 @@ export class Board {
       for (const card of own) {
         lines.push(`### ${card.title.replace(/\s+/g, ' ')}`, '');
         const facts = [];
+        if (card.draft) facts.push('Draft: drafted by an agent, not accepted yet');
+        if (includeClosed && this.closed(c, card)) facts.push('Closed to agents');
+        if (card.group) facts.push(`Group: ${card.group}`);
+        if (card.role && card.role !== 'builder') facts.push(`Role: ${card.role}`);
         if (card.priority !== 'normal') facts.push(`Priority: ${card.priority}`);
         if (card.labels?.length) facts.push(`Labels: ${card.labels.join(', ')}`);
         if (card.due) facts.push(`Due: ${card.due}`);
-        facts.push(`Agent: ${card.agent ? `${card.agent.provider[0].toUpperCase()}${card.agent.provider.slice(1)}${card.agent.model ? ` (${card.agent.model}${card.agent.effort ? `, ${card.agent.effort}` : ''})` : ''}` : 'not chosen'}`);
+        facts.push(`Agent: ${card.agent ? `${card.agent.provider[0].toUpperCase()}${card.agent.provider.slice(1)}${card.agent.model ? ` (${card.agent.model}${card.agent.effort ? `, ${card.agent.effort}` : ''})` : ''}` : card.auto ? `Auto (${card.tier || 'standard'})` : 'not chosen'}`);
+        if (card.artifact) facts.push(`Produces: ${ARTIFACT_NAME[card.artifact]}`);
+        if (card.files?.length) facts.push(`Files: ${card.files.join(', ')}`);
+        if (card.check) facts.push(`Acceptance check: \`${card.check.replace(/`/g, "'")}\``);
         if (card.folderId && this.folders().length > 1 && folderName(card.folderId)) facts.push(`Works in: ${folderName(card.folderId)}`);
         const after = (card.dependsOn || []).map(id => all.find(item => item.id === id)?.title).filter(Boolean);
         if (after.length) facts.push(`Waits for: ${after.map(title => `“${title.replace(/\s+/g, ' ')}”`).join(', ')}`);
@@ -257,23 +441,42 @@ export class Board {
   // each starts, as for any task.
   // A schedule (src/schedules.mjs) runs its card with the access saved with it, an ID made from its time, and a note for
   // the agent; a repeating one can run a card again from Done.
-  run(c, { ids, executionRevision } = {}, { access = null, requestId = null, from = ['ready'], note = '', source = 'board' } = {}) {
+  // A card on Auto (#162) runs with the agent the page shows for it now, sent in assignments as plan steps' were. In Flow
+  // with routing on, it is chosen again when it starts, at the card's size, from fresh usage (#12); in Normal it runs with
+  // exactly what was shown. A schedule can't run an Auto card, as it has no page to show the choice.
+  // billingConfirmed (#108) is your yes, asked on the Plan before any card whose agent bills by use, or whose billing can't be
+  // confirmed. Without it such a card's task stops when it starts, as any run does, so nothing is charged unasked. A schedule
+  // never sends it, as no one is there to ask.
+  run(c, { ids, executionRevision, assignments = null, billingConfirmed = false } = {}, { access = null, requestId = null, from = ['ready'], note = '', source = 'board' } = {}) {
     if (!Array.isArray(ids) || !ids.length) throw fail('Choose the cards to run.', 400);
+    if (typeof billingConfirmed !== 'boolean') throw fail('Confirm billing explicitly.', 400);
     const chosen = [...new Set(ids)].map(id => this.find(c, id)), picked = new Set(chosen.map(card => card.id));
     const folders = this.folders(), mode = access?.mode || c.mode, approvalPolicy = access?.approvalPolicy || c.approvalPolicy || 'ask';
+    const defaults = this.main.execution.defaults(c), routed = Boolean(c.routing) && defaults.automation?.routing === true, who = new Map();
     for (const card of chosen) {
       const name = `“${card.title}”`;
+      if (card.draft) throw fail(`An agent drafted ${name}. Accept it before running it.`);
+      if (this.closed(c, card)) throw fail(c.planClosed ? 'This Plan is closed to agents. Open it to agents to run its cards.' : `${name} is closed to agents. Open it to agents to run it.`);
       if (!from.includes(card.column)) throw fail(card.column === 'doing' ? `${name} is still running.` : card.column === 'review' ? `${name} is waiting in Review.` : `${name} isn’t in Ready. Move it there to run it.`);
-      if (!card.agent) throw fail(`Choose an agent for ${name}.`, 400);
+      let pick = card.agent ? { provider: card.agent.provider, model: card.agent.model, effort: card.agent.effort, routing: null } : null;
+      if (!pick && card.auto) {
+        const given = assignments && typeof assignments === 'object' ? assignments[card.id] : null;
+        if (!given || typeof given !== 'object' || !PROVIDERS.includes(given.provider)) throw fail(`${name} is on Auto. Run it from the Plan, which shows the agent Auto picks, or choose an agent for it.`, 400);
+        const model = given.model ? text(given.model, 200, 'model') : null, effort = given.effort || null;
+        this.main.validateSelection(model, 'auto', effort);
+        pick = { provider: given.provider, model, effort, routing: routed ? { mode: defaults.routingMode, planned: card.tier || 'standard', ...(c.routing.allowApi === true ? { allowApi: true } : {}) } : null };
+      }
+      if (!pick) throw fail(`Choose an agent for ${name}.`, 400);
       const folderId = card.folderId || (folders.length === 1 ? folders[0].id : null);
       if (!folderId || !folders.some(folder => folder.id === folderId)) throw fail(`Choose the folder ${name} works in.`, 400);
       for (const id of card.dependsOn || []) {
         const before = this.cards(c).find(item => item.id === id);
         if (before && before.column !== 'done' && !picked.has(id)) throw fail(`${name} waits for “${before.title}”, which isn’t done. Run them together, or finish that one first.`);
       }
-      this.main.checkRunSettings(card.agent.provider, mode, approvalPolicy);
-      const allowed = this.main.budget.allows(c, card.agent.provider, card.agent.model);
+      this.main.checkRunSettings(pick.provider, mode, approvalPolicy);
+      const allowed = this.main.budget.allows(c, pick.provider, pick.model);
       if (!allowed.allowed) throw fail(`${name}: ${allowed.reason}`);
+      who.set(card.id, pick);
     }
     // Cards a chosen card waits for start first.
     const order = [], placed = new Set(), visit = card => { if (placed.has(card.id)) return; placed.add(card.id); for (const id of card.dependsOn || []) if (picked.has(id)) visit(this.find(c, id)); order.push(card); };
@@ -281,10 +484,12 @@ export class Board {
     const tasks = {}, made = [], attempt = randomUUID().slice(0, 8);
     try {
       for (const card of order) {
-        const folderId = card.folderId || folders[0].id, policyId = randomUUID(), id = requestId && chosen.length === 1 ? requestId : `board-${card.id}-${attempt}`;
-        // Normal: the card's own agent, model and effort, whatever the workspace's default is.
-        this.main.execution.ensure(c, policyId, { config: { mode: 'normal' }, source, requestId: id });
-        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: card.agent.provider, model: card.agent.model, effort: card.agent.effort, mode, approvalPolicy, folderId, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision }, { held: true, queueExecution: this.main.execution.token(c, policyId), board: { cardId: card.id, revision: card.revision } });
+        const folderId = card.folderId || folders[0].id, policyId = randomUUID(), id = requestId && chosen.length === 1 ? requestId : `board-${card.id}-${attempt}`, pick = who.get(card.id);
+        // Normal: the card's own agent, model and effort, whatever the workspace's default is. An Auto card routed in Flow
+        // runs under the workspace's own policy, which is what lets it be chosen again when it starts.
+        this.main.execution.ensure(c, policyId, pick.routing ? { source, requestId: id } : { config: { mode: 'normal' }, source, requestId: id });
+        // The text here is the card as it is now; the task is briefed again when it starts, with what earlier cards did.
+        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision }, { held: true, queueExecution: this.main.execution.token(c, policyId), board: { cardId: card.id, revision: card.revision, ...(card.group ? { group: card.group } : {}), ...(note ? { note } : {}) } });
         tasks[card.id] = task.id; made.push(task.id);
       }
     } catch (error) {
@@ -293,20 +498,32 @@ export class Board {
     }
     const now = new Date().toISOString();
     for (const card of order) {
-      const attemptRecord = { taskId: tasks[card.id], revision: card.revision, provider: card.agent.provider, model: card.agent.model, effort: card.agent.effort, startedAt: now };
+      const pick = who.get(card.id), attemptRecord = { taskId: tasks[card.id], revision: card.revision, provider: pick.provider, model: pick.model, effort: pick.effort, ...(card.auto ? { auto: true } : {}), startedAt: now };
       this.update(c, card, { column: 'doing', task: tasks[card.id], reason: null, result: null, attempts: [...(card.attempts || []), attemptRecord].slice(-20) });
     }
     for (const id of made) this.main.tasks.update(c, this.main.tasks.find(c, id), { held: false, reason: 'Starting' });
     this.main.tasks.tick(c);
     return { tasks, cards: this.list(c) };
   }
-  // What the agent is told: the card as you wrote it, with what done means.
-  prompt(c, card) {
-    const parts = [card.title];
+  // What the agent is told: the card as you wrote it, with what done means, its role, files, result and check, the plan it
+  // came from, and, once results is given (when it starts), what each card it builds on did: its report, files and tests.
+  prompt(c, card, results = {}) {
+    const parts = [];
+    if (card.source?.goal) parts.push('This card is part of a plan for:', card.source.goal, ...(card.source.summary ? ['', `Plan: ${card.source.summary}`] : []), '', 'Other agents do the other cards, so do only this one.', '');
+    parts.push(`${card.title}${card.role && card.role !== 'builder' ? ` (${card.role})` : ''}`);
     if (card.notes) parts.push('', card.notes);
+    if (card.files?.length) parts.push('', `Files or folders it expects to change: ${card.files.join(', ')}`);
     if (card.checks?.length) parts.push('', 'Done means:', ...card.checks.map(item => `- ${item.text}`));
-    const after = (card.dependsOn || []).map(id => this.cards(c).find(item => item.id === id)?.title).filter(Boolean);
-    if (after.length) parts.push('', `This builds on earlier cards: ${after.map(title => `“${title}”`).join(', ')}.`);
+    if (card.check) parts.push('', `Acceptance check: ${card.check}`);
+    if (card.artifact) parts.push('', `When you finish, your report is this card’s ${ARTIFACT_NAME[card.artifact].toLowerCase()}: the cards after it are told it.`);
+    // A card closed to agents (#97) isn't named, and its result isn't passed on.
+    const before = (card.dependsOn || []).map(id => this.cards(c).find(item => item.id === id)).filter(other => other && !this.closed(c, other));
+    if (before.length) {
+      const reported = before.some(other => results[other.id]);
+      parts.push('', reported ? 'This builds on these cards, which have finished:' : `This builds on earlier cards: ${before.map(other => `“${other.title}”`).join(', ')}.`);
+      if (reported) for (const other of before) parts.push(`- “${other.title}”${other.role && other.role !== 'builder' ? ` (${other.role})` : ''}`, ...(results[other.id] ? upstreamLines(other, results[other.id]) : []));
+      if (reported) parts.push('', 'Those reports are what the earlier agents said. Check the files themselves before relying on them.');
+    }
     // Only your own comments, newest kept when there are many: anyone else's reach an agent only once you accept them.
     const said = (card.comments || []).filter(item => item.by?.kind === 'you'), kept = [];
     let size = 0;
@@ -319,6 +536,53 @@ export class Board {
     parts.push('', 'This is a card from the project’s task board. When you finish, say in a few sentences what you changed and how you checked it. You review nothing yourself: the person accepts the card.');
     return parts.join('\n');
   }
+  // ---- One way to run (#162)
+  // The brief a card's task starts with, written when it starts: what each card it waits for actually did, from that card's
+  // task in this run, or from its accepted result when it finished earlier. builtOn says which version of each it saw.
+  brief(c, task) {
+    const card = this.cards(c).find(item => item.id === task.board?.cardId);
+    if (!card) return null;
+    const results = {}, builtOn = {};
+    for (const id of card.dependsOn || []) {
+      const other = this.cards(c).find(item => item.id === id); if (!other || this.closed(c, other)) continue;
+      const earlier = (c.parallelTasks || []).filter(item => item.board?.cardId === id && item.id !== task.id && ['complete', 'integrated', 'kept'].includes(item.status)).at(-1);
+      if (earlier) {
+        results[id] = { status: earlier.status, branch: earlier.integration?.branch || null, files: earlier.stepResult?.files || [], summary: earlier.stepResult?.summary || other.result?.summary || '', check: earlier.stepCheck?.status === 'running' ? null : earlier.stepCheck || null };
+        if (earlier.stepResult?.at) builtOn[id] = earlier.stepResult.at;
+      } else if (other.result) results[id] = { status: other.result.status, files: [], summary: other.result.summary || '', check: other.result.tests === 'passed' ? { outcome: 'passed', command: other.result.testCommand || '' } : null };
+    }
+    const note = task.board?.note ? `\n\n${task.board.note}` : '';
+    return { text: this.prompt(c, card, results) + note, builtOn };
+  }
+  // The card a task works on, as the step the coordinator tests and gates (#89): its title, role, result and check, and
+  // whether any card waits for it.
+  stepFor(c, task) {
+    const card = this.cards(c).find(item => item.id === task.board?.cardId);
+    if (!card) return null;
+    return { card, step: { id: card.id, title: card.title, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, dependsOn: card.dependsOn || [] }, dependents: this.cards(c).some(other => other.dependsOn?.includes(card.id)) };
+  }
+  // A finished card's tests: run them again, or let the cards after it build on it anyway. Either is yours to decide.
+  recheck(c, id) {
+    const card = this.find(c, id), task = this.task(c, card);
+    if (!task || card.column !== 'review') throw fail('Only a finished card can be checked again.');
+    this.main.tasks.recheckTask(c, task);
+    return this.public(c, this.find(c, id));
+  }
+  proceed(c, id) {
+    const card = this.find(c, id), task = this.task(c, card);
+    if (!task || card.column !== 'review') throw fail('Nothing is holding the cards after this one.');
+    this.main.tasks.continueTask(c, task);
+    return this.public(c, this.find(c, id));
+  }
+  // Stopping a group, or any set of cards, at once: those working stop and those waiting are cancelled.
+  stopMany(c, { ids } = {}) {
+    if (!Array.isArray(ids) || !ids.length) throw fail('Choose the cards to stop.', 400);
+    let stopped = 0;
+    for (const id of new Set(ids)) { const card = this.find(c, id); if (card.column === 'doing' && this.task(c, card)) { this.stop(c, id); stopped++; } }
+    if (!stopped) throw fail('None of these cards is running.');
+    return { stopped };
+  }
+
   // Stopping a card stops its task if it's working and cancels it if it hasn't started. Either way the card goes back to Ready.
   stop(c, id) {
     const card = this.find(c, id), task = this.task(c, card);
@@ -359,7 +623,8 @@ export class Board {
     const status = task.status;
     if (LIVE.has(status)) return card.column === 'doing' ? null : { column: 'doing', reason: null };
     if (status === 'complete' || (['integrated', 'kept'].includes(status) && task.integration)) {
-      if (card.column === 'review' && card.result?.status === status) return null;
+      // Its tests finish after the task does (#162), so the card's result follows them too.
+      if (card.column === 'review' && card.result?.status === status && card.result?.tests === this.tests(task) && Boolean(card.result?.testsAccepted) === Boolean(task.stepCheck?.accepted)) return null;
       return { column: 'review', ...(card.column === 'review' ? {} : { order: this.lastOrder(c, 'review') + 1 }), reason: null, result: this.result(task), attempts: this.ended(card, task) };
     }
     const why = {
@@ -381,7 +646,16 @@ export class Board {
     const lane = this.main.tasks.lanes.get(task.id), conversation = lane?.c, run = conversation?.lastRun;
     const reply = conversation?.messages?.findLast(message => message.role === 'assistant' && message.runId === run?.id && message.text?.trim())?.text || '';
     const files = task.integration?.files ?? (run && conversation.snapshots?.[run.id]?.files != null ? Number(conversation.snapshots[run.id].files) || 0 : null);
-    return { status: task.status, summary: clip(reply.replace(/\s+/g, ' '), LIMITS.summary), files, tests: run?.check?.status || null, inCopy: task.mode === 'worktree', at: new Date().toISOString() };
+    const check = task.stepCheck;
+    return { status: task.status, summary: clip(reply.replace(/\s+/g, ' '), LIMITS.summary), files, tests: this.tests(task) ?? run?.check?.status ?? null, ...(check?.reason ? { testsReason: clip(check.reason, LIMITS.reason) } : {}), ...(check?.command ? { testCommand: check.command } : {}), ...(check?.accepted ? { testsAccepted: true } : {}), inCopy: task.mode === 'worktree', at: new Date().toISOString() };
+  }
+  // What the card's own tests say (#162): running, passed, failed, interrupted, no changes to test, or not tested.
+  tests(task) {
+    const check = task.stepCheck;
+    if (!check) return null;
+    if (check.status === 'running') return 'running';
+    if (check.status === 'interrupted') return 'interrupted';
+    return { passed: 'passed', failed: 'failed', no_change: 'no-change' }[check.outcome] || 'unverified';
   }
   // After a restart, or anything else that moved a task while the board wasn't listening.
   reconcile(c) {
@@ -398,10 +672,11 @@ export class Board {
   // The card's drawer reads them on their own.
   public(c, card) {
     const task = this.task(c, card), lane = task && this.main.tasks.lanes.get(task.id), { comments, ...rest } = card;
-    return { ...rest, labels: card.labels || [], due: card.due || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, approvals: lane?.broker.pendingCount() || 0 } } : {}) };
+    const check = task?.stepCheck, held = Boolean(task && task.status === 'complete' && check && (check.status === 'running' || ((check.outcome === 'failed' || check.status === 'interrupted') && !check.accepted)));
+    return { ...rest, labels: card.labels || [], due: card.due || null, group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, closed: card.closed === true, draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null, holds: held } : {}) } } : {}) };
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   view(c) {
-    return { cards: this.list(c), schedules: this.main.schedules?.view(c) || [], revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
+    return { cards: this.list(c), closed: c.planClosed === true, schedules: this.main.schedules?.view(c) || [], revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
   }
 }

@@ -71,6 +71,8 @@ select, #setup-content select, #workbench select, .git-toolbar select, .import-d
 .composer.file-drop { outline: 2px dashed var(--link); outline-offset: -2px; background: var(--selection); }
 .message-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0 34px; }
 .saved-attachment { border: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text); padding: 6px 9px; border-radius: 5px; font-size: 11px; }
+/* A Plan attachment closed to agents after it was attached (#97): listed, but not sent. */
+.saved-attachment.withheld { color: var(--muted); border-style: dashed; }
 
 @media (max-width: 700px) {
   .sidebar .workspace-list { max-height: 60dvh; min-height: 0; }

@@ -56,6 +56,23 @@ test('the status lists busy workspaces, most urgent first, and leaves quiet ones
   assert.deepEqual(offer.rows.map(row => [row.kind, row.text]), [['offer', 'Tests failed · retry with Claude?']]);
 });
 
+test('a scheduled run’s approval says it is scheduled and opens its task, and a schedule waiting for a reset is listed (#132)', () => {
+  const c = conversation('m'), lanes = new Map();
+  const lane = (id, requestId, approval) => lanes.set(id, { broker: { running: { provider: 'claude', approvals: new Map([[approval.id, approval]]) } }, c: { activeRun: { id: `run-${id}` }, messages: [] }, task: { id, requestId, folderName: 'api', status: 'running' } });
+  lane('t1', 'schedule-abc-xyz-card', { id: 'ap1', title: 'Run the migration' });
+  lane('t2', 'plan-1', { id: 'ap2', kind: 'question', questions: [] });
+  const snapshot = statusSnapshot({ list: () => [{ id: 'p', name: 'payments' }], brokers: new Map([['p', { broker: { mainConversationId: 'm', conversations: new Map([['m', c]]), running: null, tasks: { lanes }, schedules: { resets: [{ id: 's1', title: 'Nightly tidy', provider: 'codex', resetsAt: null }] } } }]]) });
+  assert.deepEqual(snapshot.rows.map(row => [row.kind, row.text, row.approvalId || null, row.taskId || null]), [
+    ['approval', 'api: scheduled run needs approval', 'ap1', 't1'],
+    ['approval', 'api: has a question', 'ap2', 't2'],
+    ['waiting', 'Scheduled run waiting for Codex to reset', null, null],
+  ]);
+  assert.doesNotMatch(JSON.stringify(snapshot.rows), /Nightly tidy|Run the migration/, 'A card’s title and the request stay in the app.');
+  const opened = []; statusMenu(snapshot, { open: target => opened.push(target) })[2].click();
+  assert.deepEqual(opened, [{ projectId: 'p', approvalId: 'ap1', taskId: 't1' }], 'It opens the task, where the approval is answered.');
+  assert.equal(statusClickTarget({ rows: [snapshot.rows[0]] }).taskId, 't1');
+});
+
 test('the words beside the icon say what needs you, or what the one running agent is doing, or how many are working', () => {
   const rows = (...kinds) => ({ rows: kinds.map((kind, index) => ({ kind, attention: ['approval', 'failed', 'offer'].includes(kind), agent: 'Codex', action: index ? 'Reading files' : 'Editing checkout.js and 2 more files today' })), attention: kinds.filter(kind => ['approval', 'failed', 'offer'].includes(kind)).length, running: kinds.filter(kind => kind === 'running').length });
   assert.equal(statusTitle(rows()), '');

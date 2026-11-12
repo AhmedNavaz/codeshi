@@ -201,3 +201,65 @@
 .board-schedule-at .board-input { width: auto; flex: 1 1 0; }
 .board-schedule-late { display: flex; align-items: flex-start; gap: 8px; color: var(--text); line-height: 1.5; cursor: pointer; }
 .board-schedule-late input { flex: none; margin: 3px 0 0; accent-color: var(--accent); }
+
+/* One Plan (#162): drafted cards, groups, the Outline and a card's plan details. */
+.board-card-state[data-tone=draft] { color: var(--link); font-weight: 600; }
+.board-card-group { color: var(--faint); font-size: 10.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-card .orchestration-step-role { flex: none; }
+.board-drafts { flex: none; display: grid; gap: 1px; border-bottom: 1px solid var(--border); background: var(--border); }
+.board-draft-batch { display: flex; align-items: flex-start; gap: 16px; padding: 10px 16px; background: color-mix(in srgb, var(--link) 7%, var(--panel-bg)); }
+.board-draft-text { flex: 1 1 auto; min-width: 0; display: grid; gap: 3px; }
+.board-draft-lead { margin: 0; color: var(--text-strong); font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.board-draft-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.board-draft-questions, .board-draft-notes { margin: 2px 0 0; padding-left: 18px; color: var(--text); font-size: 11.5px; line-height: 1.5; }
+.board-draft-notes { margin: 0; color: var(--warning); }
+.board-draft-actions { flex: none; display: flex; gap: 8px; }
+.board-draft-actions button { height: 28px; }
+.board-earlier { flex: none; margin: 0; padding: 7px 16px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.board-outline { margin: 0 auto; padding: 0; max-width: 880px; list-style: none; display: grid; gap: 18px; }
+.board-outline-group { display: grid; gap: 6px; }
+.board-outline-head { display: flex; align-items: center; gap: 10px; min-height: 28px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.board-outline-head button { height: 26px; }
+.board-outline-name { margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.board-outline-progress { margin-right: auto; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.board-outline-cards { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.board-outline-card { display: grid; gap: 2px; width: 100%; padding: 6px 10px 6px 12px; border: 1px solid transparent; border-left: 3px solid var(--border-strong); border-radius: var(--radius); background: transparent; color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; }
+.board-outline-card:hover { background: var(--surface-strong); }
+.board-outline-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.board-outline-card[aria-pressed=true] { border-color: var(--accent); }
+.board-outline-card[data-column=doing] { border-left-color: var(--accent); }
+.board-outline-card[data-column=review] { border-left-color: var(--warning); }
+.board-outline-card[data-column=done] { border-left-color: var(--success); }
+.board-outline-card[data-tone=draft] { border-left-style: dashed; border-left-color: var(--link); }
+.board-outline-title { color: var(--text-strong); font-weight: 500; overflow-wrap: anywhere; }
+.board-outline-meta { color: var(--muted); font-size: 11px; }
+.board-outline-card[data-tone=trouble] .board-outline-meta { color: var(--danger); }
+.board-groups { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.board-group-area { position: absolute; left: 0; top: 0; border: 1px dashed var(--border-strong); border-radius: 12px; background: color-mix(in srgb, var(--surface-strong) 45%, transparent); pointer-events: none; }
+.board-group-name { position: absolute; left: 12px; top: 9px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.board-more { border-top: 1px solid var(--border); padding-top: 8px; }
+.board-more > summary { cursor: pointer; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.board-more[open] > summary { margin-bottom: 8px; }
+.board-more .board-field + .board-field { margin-top: 8px; }
+
+/* Closed to agents (#97): the Plan's switch, its banner, a closed card's mark and its setting in the drawer. */
+.board-agents { display: inline-flex; align-items: center; gap: 6px; }
+.board-agents .icon, .board-card-closed .icon, .board-closed-edit .icon { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.board-agents[aria-pressed=true] { border-color: var(--accent); color: var(--text-strong); }
+.board-closed-note { flex: none; margin: 0; padding: 7px 16px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--text); font-size: 12px; }
+.board-card-closed { flex: none; display: inline-flex; align-items: center; gap: 3px; padding-left: 6px; border-left: 1px solid var(--border); color: var(--muted); }
+.board-card-meta > .board-card-closed { overflow: visible; }
+/* An agent that bills by use (#108), said before a card runs: on the card, in Run Ready and under a schedule. */
+.board-card-billing { flex: none; padding-left: 6px; border-left: 1px solid var(--border); color: var(--warning); white-space: nowrap; }
+.board-card-meta > .board-card-billing { overflow: visible; }
+.board-run-label > .board-card-billing { font-size: 11px; }
+.board-billing-note { color: var(--warning); }
+.board-closed-edit { display: inline-flex; align-items: center; gap: 6px; width: fit-content; color: var(--text); cursor: pointer; }
+.board-closed-edit input[type=checkbox] { margin: 0; accent-color: var(--accent); }
+.board-closed-edit:has(input:disabled) { cursor: default; color: var(--muted); }
+/* Export asks what to include when some cards are closed to agents. */
+.board-export-wrap { position: relative; flex: none; display: inline-flex; }
+.board-export-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 5; display: grid; min-width: 240px; padding: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-raised); box-shadow: 0 6px 20px rgb(0 0 0 / 18%); }
+.board-export-menu[hidden] { display: none; }
+.board-export-menu button { height: 28px; padding: 0 10px; border: 0; border-radius: calc(var(--radius) - 1px); background: transparent; color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; }
+.board-export-menu button:hover, .board-export-menu button:focus-visible { background: var(--surface-strong); outline: none; }

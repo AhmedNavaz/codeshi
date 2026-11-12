@@ -241,10 +241,22 @@
       focusLine(line, endLine, id);
     },
     ids: () => files().map(file => file.id), uploading: () => uploads.has(api.getState().projectId), addFiles, addSnapshots,
+    // The Plan, or a card, attached from the Plan (#97): already saved as a text snapshot, so it only joins the message's
+    // attachments, under the same limits as a file. Says what it added, or throws why it can't.
+    attachSaved(meta, id = api.getState().projectId) {
+      if (!id || !meta?.id) throw Error('Select a workspace first.');
+      if (!files(id).some(f => f.id === meta.id)) {
+        if (files(id).length >= 6) throw Error('You can attach up to 6 files per message. Remove one first.');
+        if (files(id).filter(f => f.kind === 'text').reduce((sum, f) => sum + f.bytes, meta.bytes) > 128 * 1024) throw Error('Text attachments must total 128 KB or less. Remove one first.');
+        files(id).push(meta); save(id);
+      }
+      if (id === api.getState().projectId) { status(attachedLine(id), true); update(); }
+      return size(meta.bytes);
+    },
     take(id, ids) { held.set(id, new Set(ids)); const taken = files(id).filter(file => ids.includes(file.id)); if (id === api.getState().projectId) { status(); update(); } return taken; },
     giveBack(id) { if (!held.delete(id)) return; if (id === api.getState().projectId) { status(attachedLine(id), true); update(); } },
     accepted(id, ids) { held.delete(id); drafts.set(id, files(id).filter(file => !ids.includes(file.id))); save(id); pruneThumbnails(); if (id === api.getState().projectId) { status(); closePreview(); update(); } },
-    renderMessageAttachments(row, attachments = []) { if (!attachments.length) return; const host = el('div','message-attachments'), id = api.getState().projectId; for (const file of attachments) { const chip = button((file.kind === 'image' ? '▧ ' : '≡ ') + file.name + ' · ' + size(file.bytes),'saved-attachment',() => openSaved(file,id)); host.append(chip); } row.append(host); },
+    renderMessageAttachments(row, attachments = []) { if (!attachments.length) return; const host = el('div','message-attachments'), id = api.getState().projectId; for (const file of attachments) { const chip = button((file.kind === 'image' ? '▧ ' : '≡ ') + file.name + ' · ' + size(file.bytes) + (file.withheld ? ' · left out' : ''),'saved-attachment',() => openSaved(file,id)); if (file.withheld) { chip.classList.add('withheld'); chip.title = `Not sent to the agent: ${file.withheld}.`; } host.append(chip); } row.append(host); },
   };
   sync();
 })();

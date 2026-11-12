@@ -75,7 +75,7 @@ export function createOverlay({ BrowserWindow, screen, ipcMain, root, open, mac 
 
   function show(alert) {
     if (disposed) return;
-    current = { kind: alert.kind, title: String(alert.title || ''), body: String(alert.body || '').slice(0, 240), projectName: alert.projectName ? String(alert.projectName) : '', projectId: alert.projectId || null, approvalId: alert.approvalId || null };
+    current = { kind: alert.kind, title: String(alert.title || ''), body: String(alert.body || '').slice(0, 240), projectName: alert.projectName ? String(alert.projectName) : '', projectId: alert.projectId || null, approvalId: alert.approvalId || null, taskId: alert.taskId || null };
     pill = null; visible = false; alertAway = !isFocused();
     // Show the pill in Settings › Alerts sends the pill's own words as an alert, so it has the pill's size and goes the same way.
     deliver(current, current.kind === 'progress' ? PILL_SIZE : ALERT_SIZE);

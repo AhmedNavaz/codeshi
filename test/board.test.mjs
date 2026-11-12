@@ -10,6 +10,9 @@ import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
+import { LIMITS } from '../src/board.mjs';
+import { openPlan, parsePlan } from '../src/orchestration.mjs';
+import { prepareContext } from '../src/context.mjs';
 
 // The task board (#132, first stage): cards you write and run by hand, each run an ordinary task (#88).
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
@@ -23,7 +26,7 @@ function repository(folder) {
   return folder;
 }
 function setup(t, names = ['a'], { policy = null } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-board-')), bins = {}, dataDir = path.join(root, 'data');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-board-'))), bins = {}, dataDir = path.join(root, 'data');
   for (const provider of ['codex', 'claude']) { bins[provider] = path.join(root, `${provider}-mock.mjs`); fs.writeFileSync(bins[provider], `#!${process.execPath}\nimport ${JSON.stringify(pathToFileURL(fixture).href)};\n`, { mode: 0o700 }); }
   bins.gemini = path.join(root, 'missing-gemini');
   const list = names.map(name => ({ id: name, name, path: repository(path.join(root, 'w', name)) }));
@@ -217,7 +220,7 @@ test('a card’s place on the canvas is saved without changing what an agent rea
   env.board.place(env.c, { positions: { [second.id]: { x: 5, y: 5 } } });
   env.c.board.find(card => card.id === second.id).column = 'backlog';
   const markdown = env.board.markdown(env.c, { now: new Date('2026-11-11T12:00:00Z') });
-  assert.match(markdown, /^# Task board\n\nExported from Codeshi on 2026-11-11\. 2 cards\./);
+  assert.match(markdown, /^# Plan\n\nExported from Codeshi on 2026-11-11\. 2 cards\./);
   assert.match(markdown, /```mermaid\nflowchart LR\n {2}c1\["Agree the API"\]:::backlog\n {2}c2\["Build #quot;the#quot; #lt;form#gt; #35;2"\]:::backlog\n {2}c1 --> c2\n/, 'The chart escapes what Mermaid would read as its own syntax.');
   assert.match(markdown, /## Backlog\n\n### Agree the API\n\n- Agent: Codex\n/);
   assert.match(markdown, /- Waits for: “Agree the API”\n\nEmail only\.\n\nDone means:\n\n- \[x\] Tests pass\n/);
@@ -320,4 +323,248 @@ test('through the real server: the board is read and changed for the workspace c
   assert.equal((await call(`/api/board/cards/${id}/accept`, {})).body.card.column, 'done');
   assert.equal((await call(`/api/board/cards/${id}/remove`, {})).body.removed, true);
   assert.equal((await call('/api/board/cards/not-a-card/edit', {})).status, 404);
+});
+
+// One Plan (#162): an agent's plan arrives as draft cards on the Plan, and cards run the way plan steps did.
+const drafted = (env, { steps, summary = 'Contract first, then the page and its tests.', questions = [] }) => {
+  const id = `plan-${Math.random().toString(16).slice(2, 10)}`, plan = parsePlan(JSON.stringify({ summary, questions, steps }));
+  assert.equal(plan.status, 'draft', 'The fixture is a valid plan.');
+  env.broker.record(env.c, { type: 'orchestration_plan', id, plan: { id, goal: 'Add saved items, with an API and a page.', source: 'agent', status: 'draft', summary: plan.summary, steps: plan.steps, ...(plan.questions ? { questions: plan.questions } : {}), review: true, revision: 1, planner: { provider: 'claude', model: 'opus', effort: 'high' } } });
+  env.board.adopt(env.c, id);
+  return env.c.orchestrations.find(item => item.id === id);
+};
+
+test('an agent’s plan becomes draft cards you edit, accept or discard, with what the plan checks found (#162)', async t => {
+  const env = setup(t);
+  const plan = drafted(env, { questions: ['Should saved items sync across devices?'], steps: [
+    { title: 'Build the list page', instructions: 'Show the saved items.', tier: 'light', dependsOn: [], role: 'frontend' },
+    { title: 'Agree the API', instructions: 'Write the contract for /api/items.', done: ['The contract lists every field'], files: ['docs/items.md'], tier: 'deep', dependsOn: [1], role: 'backend', artifact: 'contract', phase: 'Contracts' },
+    { title: 'Check it all', instructions: 'Run the whole suite.', done: ['Suite passes'], tier: 'standard', dependsOn: [2], role: 'qa', check: 'npm test', phase: 'Verify' },
+    { title: 'Polish after QA', instructions: 'Tidy the page.', done: ['Looks right'], tier: 'light', dependsOn: [3], role: 'frontend', phase: 'Verify' },
+  ] });
+  assert.equal(plan.status, 'moved'); assert.equal(plan.cards.length, 4);
+  const cards = plan.cards.map(id => env.card(id)), [page, api, qa, polish] = cards;
+  // Each card keeps what its step said, waits for what its step waited for, and is Auto at the step's size until you choose.
+  assert.deepEqual(cards.map(card => [card.title, card.column, card.auto, card.agent, card.tier, card.role, card.group]), [
+    ['Build the list page', 'backlog', true, null, 'light', 'frontend', null],
+    ['Agree the API', 'backlog', true, null, 'deep', 'backend', 'Contracts'],
+    ['Check it all', 'backlog', true, null, 'standard', 'qa', 'Verify'],
+    ['Polish after QA', 'backlog', true, null, 'light', 'frontend', 'Verify'],
+  ]);
+  assert.deepEqual([api.dependsOn, qa.dependsOn, polish.dependsOn], [[page.id], [api.id], [qa.id]]);
+  assert.deepEqual([api.artifact, api.files, api.checks, qa.check], ['contract', ['docs/items.md'], [{ text: 'The contract lists every field', done: false }], 'npm test']);
+  assert.deepEqual(api.draft.by, { kind: 'agent', provider: 'claude', model: 'opus' });
+  assert.deepEqual(api.draft.batch, { id: plan.id, summary: 'Contract first, then the page and its tests.', questions: ['Should saved items sync across devices?'] });
+  assert.equal(api.source.goal, 'Add saved items, with an API and a page.');
+  // The plan checks are written on the cards they're about, and change nothing.
+  assert.match(page.draft.notes.join(' '), /doesn’t say what done means/);
+  assert.match(api.draft.notes.join(' '), /comes after building work \(card 1\)/);
+  assert.match(polish.draft.notes.join(' '), /builds on card 3, a QA card/);
+  assert.deepEqual(qa.draft.notes, []);
+  // A draft can be edited, but runs, moves to Ready and is scheduled only once accepted. Queued messages wait for it.
+  assert.equal(openPlan(env.c)?.id, plan.id, 'Queued messages wait while the plan’s cards are drafts.');
+  assert.throws(() => env.board.run(env.c, { ids: [page.id] }), /Accept it before running it/);
+  assert.throws(() => env.board.move(env.c, page.id, { column: 'ready' }), /Accept it first/);
+  assert.throws(() => env.broker.schedules.create(env.c, { target: { type: 'card', cardId: page.id }, when: { repeat: 'daily', time: '09:00' } }), /Accept it before scheduling it/);
+  assert.equal(env.board.edit(env.c, page.id, { checks: ['The list shows every item'], agent: { provider: 'codex' } }).draft.batch.id, plan.id, 'Editing keeps it a draft.');
+  assert.deepEqual([env.card(page.id).auto, env.card(page.id).agent.provider], [false, 'codex'], 'Choosing an agent turns Auto off.');
+  assert.throws(() => env.board.drafts(env.c, { action: 'keep', ids: [page.id] }), /Accept or discard/);
+  // Accepting keeps your edits and puts a card with an agent, or on Auto, in Ready.
+  env.board.drafts(env.c, { action: 'accept', ids: [page.id, api.id] });
+  assert.deepEqual([env.card(page.id).draft, env.card(page.id).column, env.card(api.id).column], [null, 'ready', 'ready']);
+  assert.throws(() => env.board.drafts(env.c, { action: 'accept', ids: [page.id] }), /isn’t a draft/);
+  // Discarding removes the rest, and the queue goes on.
+  env.board.drafts(env.c, { action: 'discard', ids: [qa.id, polish.id] });
+  assert.deepEqual([env.card(qa.id), env.card(polish.id)], [undefined, undefined]);
+  assert.equal(openPlan(env.c), null);
+  // A plan that doesn't fit on the Plan adds nothing, and says why.
+  const most = LIMITS.cards; LIMITS.cards = 3; t.after(() => { LIMITS.cards = most; });
+  const big = drafted(env, { steps: [{ title: 'One', instructions: 'One.', tier: 'light' }, { title: 'Two', instructions: 'Two.', tier: 'light' }] });
+  assert.deepEqual([big.status, env.c.board.length], ['failed', 2]);
+  assert.match(big.summary, /2 cards, and the Plan has room for 1 more/);
+});
+
+test('a card on Auto runs with the agent the Plan shows, and a schedule needs an agent it can name (#162)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const card = env.add({ title: 'Rename the helper', column: 'ready', agent: null, auto: true, tier: 'light' });
+  assert.deepEqual([card.auto, card.agent, card.tier], [true, null, 'light']);
+  assert.throws(() => env.board.run(env.c, { ids: [card.id] }), /is on Auto\. Run it from the Plan/);
+  assert.throws(() => env.board.run(env.c, { ids: [card.id], assignments: { [card.id]: { provider: 'nobody' } } }), /is on Auto/);
+  assert.throws(() => env.broker.schedules.create(env.c, { target: { type: 'card', cardId: card.id }, when: { repeat: 'daily', time: '09:00' } }), /on Auto\. Choose an agent/);
+  env.script(card, 'hold');
+  const { tasks } = env.board.run(env.c, { ids: [card.id], assignments: { [card.id]: { provider: 'claude', model: null, effort: null, auto: true } } }), task = env.task(tasks[card.id]);
+  // In Normal, with no routing, it runs with exactly what was shown; the card remembers it ran on Auto.
+  assert.deepEqual([task.provider, task.routing, env.card(card.id).attempts[0].auto], ['claude', undefined, true]);
+  env.board.stopMany(env.c, { ids: [card.id] });
+  await until(() => column(env, card) === 'ready', 'it to stop');
+  assert.throws(() => env.board.stopMany(env.c, { ids: [card.id] }), /None of these cards is running/);
+});
+
+test('your yes to charges, asked on the Plan, goes with each card’s task, and is never assumed (#108)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const asked = env.add({ title: 'Charged', column: 'ready' }), unasked = env.add({ title: 'Not asked', column: 'ready' });
+  assert.throws(() => env.board.run(env.c, { ids: [asked.id], billingConfirmed: 'yes' }), /Confirm billing explicitly/);
+  assert.equal(env.c.parallelTasks?.length || 0, 0, 'A refused run starts nothing.');
+  env.script(asked, 'hold'); env.script(unasked, 'hold');
+  const yes = env.board.run(env.c, { ids: [asked.id], billingConfirmed: true }).tasks[asked.id];
+  const no = env.board.run(env.c, { ids: [unasked.id] }).tasks[unasked.id];
+  assert.deepEqual([env.task(yes).billingConfirmed, env.task(no).billingConfirmed], [true, false], 'Without your yes, an agent billed by use stops when its task starts.');
+  // A schedule has no one to ask, so it never says yes.
+  const timed = env.add({ title: 'Nightly', column: 'ready' });
+  env.script(timed, 'hold');
+  const schedule = env.broker.schedules.create(env.c, { target: { type: 'card', cardId: timed.id }, when: { repeat: 'daily', time: '09:00' } });
+  env.broker.schedules.runNow(env.c, schedule.id);
+  const scheduled = env.c.parallelTasks.find(task => task.board?.cardId === timed.id);
+  assert.equal(scheduled.billingConfirmed, false);
+  env.board.stopMany(env.c, { ids: [asked.id, unasked.id, timed.id] });
+  await until(() => [asked, unasked, timed].every(card => column(env, card) === 'ready'), 'them to stop');
+});
+
+test('a finished card is tested before the cards after it start, and each card is briefed from what they did (#162)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  let command = { command: 'node -e "console.log(\'contract broken\');process.exit(2)"', directory: '' };
+  env.broker.tasks.tests = { saved: () => command };
+  const contract = env.add({ title: 'Agree the API', column: 'ready', role: 'backend', artifact: 'contract', group: 'Contracts' });
+  const page = env.add({ title: 'Build the page', column: 'ready', role: 'frontend', dependsOn: [contract.id], files: ['public/items.js'], check: 'npm test', group: 'Build' });
+  env.board.run(env.c, { ids: [page.id, contract.id] });
+  const taskOf = card => env.task(env.card(card.id).task);
+  await until(() => taskOf(contract)?.stepCheck?.status === 'done', 'the first card’s tests');
+  assert.equal(taskOf(contract).stepCheck.outcome, 'failed');
+  await until(() => /tests failed on “Agree the API”/.test(taskOf(page)?.reason || ''), 'the second card to be held');
+  assert.equal(taskOf(page).status, 'waiting', 'Nothing builds on a card whose tests failed.');
+  await until(() => env.card(contract.id).result?.tests === 'failed', 'the card’s result to show its tests');
+  const shown = env.board.list(env.c).find(item => item.id === contract.id);
+  assert.deepEqual([shown.column, shown.taskState.tests, shown.taskState.holds], ['review', 'failed', true]);
+  assert.match(shown.taskState.testOutput, /contract broken/);
+  assert.match(env.c.messages.at(-1).text, /tests failed on “Agree the API”, so the cards after it wait/);
+  assert.throws(() => env.board.proceed(env.c, page.id), /Nothing is holding|Only a finished/);
+  // Continuing anyway is your call; the next card is told the tests failed, and what the first card reported.
+  env.board.proceed(env.c, contract.id);
+  await until(() => env.card(page.id).column === 'review', 'the second card to finish');
+  const brief = env.captured(fs.realpathSync(env.folder('a'))).map(capture => capture.context.currentRequest).find(text => text.startsWith('Build the page'));
+  assert.ok(brief, 'The second card ran.');
+  assert.match(brief, /^Build the page \(frontend\)/);
+  assert.match(brief, /Files or folders it expects to change: public\/items\.js/);
+  assert.match(brief, /Acceptance check: npm test/);
+  assert.match(brief, /This builds on these cards, which have finished:\n- “Agree the API” \(backend\)/);
+  assert.match(brief, /Tests failed on its result: node -e/);
+  assert.match(brief, /Its contract, in its own words:/);
+  assert.match(brief, /Check the files themselves/);
+  assert.deepEqual(Object.keys(taskOf(page).builtOn), [contract.id]);
+  // Checking again with tests that pass replaces the result on the card.
+  command = { command: 'node -e "process.exit(0)"', directory: '' };
+  env.board.recheck(env.c, contract.id);
+  await until(() => env.card(contract.id).result?.tests === 'passed', 'the tests to pass');
+  assert.equal(env.board.list(env.c).find(item => item.id === contract.id).taskState.holds, false);
+  // The cards' tasks count toward their groups' totals.
+  const ledgers = await env.broker.tasks.ledgers();
+  assert.deepEqual([...new Set(ledgers.map(item => item.plan?.id))].sort(), ['group:Build', 'group:Contracts']);
+});
+
+// Closed to agents (#97): a card or the whole Plan that Codeshi never puts in a prompt, and the Plan attached to a message.
+test('a card or the Plan closed to agents can’t run, be scheduled or attached, and stays out of briefs and exports (#97)', async t => {
+  const env = setup(t);
+  const open = env.add({ title: 'Build the form', notes: 'Visible notes.', column: 'ready' });
+  const shut = env.add({ title: 'Salary bands', notes: 'SECRET-BANDS', column: 'ready', closed: true });
+  const after = env.add({ title: 'Wire it up', column: 'ready', dependsOn: [open.id, shut.id] });
+  assert.equal(shut.closed, true); assert.equal(open.closed, false);
+  assert.throws(() => env.board.run(env.c, { ids: [shut.id] }), /“Salary bands” is closed to agents/);
+  assert.throws(() => env.broker.schedules.create(env.c, { target: { type: 'card', cardId: shut.id }, when: { at: new Date(Date.now() + 3600000).toISOString(), repeat: 'once' } }), /closed to agents, so it can’t be scheduled/);
+  // The card after it isn't told its title or its result, even once it has one.
+  env.c.board.find(item => item.id === shut.id).result = { status: 'complete', summary: 'SECRET-RESULT' };
+  const prompt = env.board.prompt(env.c, env.card(after.id)), brief = env.board.brief(env.c, { id: 'x', board: { cardId: after.id } }).text;
+  for (const text of [prompt, brief]) { assert.match(text, /Build the form/); assert.doesNotMatch(text, /Salary bands|SECRET/); }
+  // Export leaves it out unless you ask for everything, and then says it's closed.
+  const plain = env.board.markdown(env.c), every = env.board.markdown(env.c, { includeClosed: true });
+  assert.doesNotMatch(plain, /Salary bands|SECRET/); assert.match(plain, /1 card closed to agents is left out/);
+  assert.match(every, /### Salary bands[\s\S]*- Closed to agents/); assert.match(every, /keep this file where agents can’t read it/);
+  // Attaching: the Plan without the closed card, a single open card, and never the closed one.
+  assert.throws(() => env.board.attach(env.c, { cardId: shut.id }), /closed to agents/);
+  const whole = env.board.attach(env.c, {}), single = env.board.attach(env.c, { cardId: open.id });
+  assert.deepEqual([whole.cards, whole.leftOut, whole.attachment.name, whole.attachment.kind, whole.attachment.plan], [2, 1, 'Plan.md', 'text', { cards: 2, whole: true }]);
+  assert.equal(single.attachment.name, 'Card – Build the form.md');
+  const text = env.broker.attachments.forAgent(whole.attachment.id).text;
+  assert.match(text, /^# Plan/); assert.match(text, /## Wire it up[\s\S]*Waits for: “Build the form”$/m); assert.doesNotMatch(text, /Salary bands|SECRET/);
+  assert.match(env.broker.attachments.forAgent(single.attachment.id).text, /Cards that wait for it: “Wire it up”/);
+  // Closing a card that was attached keeps the attachment out of every prompt from then on, and says so with the message.
+  env.board.edit(env.c, open.id, { closed: true });
+  assert.equal(env.broker.attachments.forAgent(whole.attachment.id).text, '[Left out: a card in it was closed to agents after it was attached.]');
+  assert.equal(env.broker.attachments.select([whole.attachment.id])[0].withheld, 'a card in it was closed to agents after it was attached');
+  env.board.edit(env.c, open.id, { closed: false });
+  assert.match(env.broker.attachments.forAgent(whole.attachment.id).text, /Build the form/);
+  // An upload can't claim to be a Plan attachment.
+  const uploaded = env.broker.attachments.put({ name: 'notes.md', data: Buffer.from('hello').toString('base64'), plan: { conversationId: env.c.id, cards: [open.id] } });
+  assert.equal(uploaded.plan, undefined); assert.equal(env.broker.attachments.read(uploaded.id).plan, undefined);
+  // The whole Plan: nothing runs, is attached or scheduled, and the setting survives a restart.
+  assert.deepEqual(env.board.access(env.c, { closed: true }), { closed: true });
+  assert.equal(env.board.view(env.c).closed, true);
+  assert.throws(() => env.board.run(env.c, { ids: [open.id] }), /This Plan is closed to agents/);
+  assert.throws(() => env.board.attach(env.c, {}), /This Plan is closed to agents/);
+  assert.equal(env.broker.attachments.forAgent(single.attachment.id).text, '[Left out: the Plan was closed to agents after it was attached.]');
+  assert.doesNotMatch(env.board.markdown(env.c), /Build the form/);
+  assert.throws(() => env.board.access(env.c, { closed: 'yes' }), /Say whether agents can read the Plan/);
+  await env.reopen();
+  assert.equal(env.board.view(env.c).closed, true, 'Closing the Plan is kept with the workspace.');
+  assert.equal(env.broker.attachments.forAgent(single.attachment.id).withheld, 'the Plan was closed to agents after it was attached');
+  env.board.access(env.c, { closed: false });
+  assert.equal(env.broker.attachments.forAgent(single.attachment.id).withheld, undefined);
+});
+
+test('a Plan attachment closed after it was sent is left out of the prompt every agent gets next, including after a switch (#97)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const card = env.add({ title: 'Checkout API', notes: 'PLAN-DETAIL-42', column: 'ready' });
+  const { attachment } = env.board.attach(env.c, { cardId: card.id });
+  const place = fs.realpathSync(env.folder('a')), scenarios = path.join(place, '.mock-scenarios.json');
+  // The mock agent repeats what it was asked unless told what to say; a real one might quote it too, which no setting can undo.
+  const asked = `Read the attached card.\n\nAttached file "${attachment.name}":\n${env.broker.attachments.forAgent(attachment.id).text}`;
+  fs.writeFileSync(scenarios, JSON.stringify({ ...JSON.parse(fs.readFileSync(scenarios, 'utf8')), [asked]: { text: 'I read it.' } }));
+  env.broker.start(env.c, { text: 'Read the attached card.', attachments: [attachment.id], provider: 'codex', mode: 'read', approvalPolicy: 'ask' });
+  await env.broker.running.done;
+  assert.match(JSON.stringify(env.captured(place).at(-1).context), /PLAN-DETAIL-42/, 'While it is open, the agent reads the card.');
+  // Switching agent sends the conversation again from the start, and the attachment goes with it.
+  env.broker.start(env.c, { text: 'Take over.', provider: 'claude', mode: 'read', approvalPolicy: 'ask' });
+  await env.broker.running.done;
+  assert.equal(env.captured(place).at(-1).provider, 'claude');
+  assert.match(env.captured(place).at(-1).prompt, /PLAN-DETAIL-42/, 'An open attachment stays with the conversation through a switch.');
+  env.board.edit(env.c, card.id, { closed: true });
+  // Once closed, a fresh start gets only a note that it was left out.
+  env.broker.start(env.c, { text: 'Carry on.', provider: 'codex', mode: 'read', approvalPolicy: 'ask', fresh: true });
+  await env.broker.running.done;
+  const next = env.captured(place).at(-1);
+  assert.equal(next.provider, 'codex');
+  assert.doesNotMatch(next.prompt, /PLAN-DETAIL-42/);
+  assert.match(next.prompt, /Left out: a card in it was closed to agents after it was attached/);
+  // Sending it again is listed with the message, marked as left out.
+  env.broker.start(env.c, { text: 'Once more.', attachments: [attachment.id], provider: 'codex', mode: 'read', approvalPolicy: 'ask' });
+  await env.broker.running.done;
+  assert.doesNotMatch(env.captured(place).at(-1).prompt, /PLAN-DETAIL-42/);
+  assert.equal(env.c.messages.findLast(message => message.role === 'user').attachments[0].withheld, 'a card in it was closed to agents after it was attached');
+});
+
+test('every agent’s prompt is put together without a closed Plan attachment: Codex, Claude, Gemini and Antigravity (#97)', async t => {
+  const env = setup(t);
+  const card = env.add({ title: 'Pricing rules', notes: 'PRIVATE-PRICING', column: 'ready' });
+  const { attachment } = env.board.attach(env.c, {});
+  env.c.messages.push({ id: 'm1', seq: 1, role: 'user', text: 'Plan with this.', attachments: [attachment], provider: 'codex', createdAt: new Date().toISOString() });
+  const build = (provider, fresh) => prepareContext(env.c, 'Next step.', { workspace: env.list[0].path, workspaceFolders: env.list, provider, fresh, attachments: [], readAttachment: id => env.broker.attachments.forAgent(id) }).prompt;
+  for (const provider of ['codex', 'claude', 'gemini', 'antigravity']) assert.match(build(provider, true), /PRIVATE-PRICING/, `${provider} reads it while it's open.`);
+  env.board.edit(env.c, card.id, { closed: true });
+  for (const provider of ['codex', 'claude', 'gemini', 'antigravity']) for (const fresh of [true, false]) {
+    const prompt = build(provider, fresh);
+    assert.doesNotMatch(prompt, /PRIVATE-PRICING|Pricing rules/, `${provider} never gets a closed card.`);
+    if (fresh) assert.match(prompt, /Left out: a card in it was closed to agents/);
+  }
+});
+
+test('a card or the Plan can’t be closed to agents while an agent works on it (#97)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const card = env.add({ title: 'Long job', column: 'ready' });
+  env.script(card, 'hold');
+  env.board.run(env.c, { ids: [card.id] });
+  await until(() => env.task(env.card(card.id).task)?.status === 'running', 'the card to start');
+  assert.throws(() => env.board.edit(env.c, card.id, { closed: true }), /Stop it before closing it to agents/);
+  assert.throws(() => env.board.access(env.c, { closed: true }), /An agent is working on “Long job”\. Stop it before closing the Plan to agents/);
+  env.board.stop(env.c, card.id);
+  await until(() => column(env, card) === 'ready', 'the card to stop');
+  assert.equal(env.board.edit(env.c, card.id, { closed: true }).closed, true);
 });

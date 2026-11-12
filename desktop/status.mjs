@@ -60,10 +60,15 @@ export function statusSnapshot(registry, text = english) {
     else if (c.runs?.some(run => run.check?.status === 'running')) add('running', t('Running the tests'), { action: t('Running the tests'), key: `tests:${projectId}` });
     else if (c.resume) add('waiting', t('Waiting for a usage limit to reset'));
     else if (c.queue?.length && c.queuePaused) add('paused', text.tn(c.queue.length, 'Queue paused · 1 waiting', 'Queue paused · {count} waiting'));
-    // Tasks beside the main conversation (#88). Their approvals are answered in the window, where the task says what it's asking.
+    // A scheduled time waiting for its agent's usage limit to reset (#132).
+    for (const wait of broker.schedules?.resets || []) add('waiting', t('Scheduled run waiting for {agent} to reset', { agent: agents[wait.provider] || t('Agent') }), { key: `schedule:${wait.id}` });
+    // Tasks beside the main conversation (#88). Their approvals are answered in the window, where the task says what it's
+    // asking: a row opens that task. A scheduled run says so, as it may have started while nobody was watching (#132).
     for (const { broker: lane, c: own, task } of broker.tasks?.lanes.values() || []) {
-      const run = lane.running, asking = run && [...run.approvals.values()][0];
-      if (asking) add('approval', asking.kind === 'question' ? t('{folder}: has a question', { folder: task.folderName }) : t('{folder}: approval needed', { folder: task.folderName }));
+      const run = lane.running, asking = run && [...run.approvals.values()][0], scheduled = String(task.requestId || '').startsWith('schedule-');
+      if (asking) add('approval', asking.kind === 'question'
+        ? scheduled ? t('{folder}: scheduled run has a question', { folder: task.folderName }) : t('{folder}: has a question', { folder: task.folderName })
+        : scheduled ? t('{folder}: scheduled run needs approval', { folder: task.folderName }) : t('{folder}: approval needed', { folder: task.folderName }), { approvalId: asking.id, taskId: task.id, ...(asking.kind === 'question' ? { question: true } : {}), ...(scheduled ? { scheduled: true } : {}) });
       else if (run && own?.activeRun) { const action = currentAction(own, text); add('running', `${task.folderName} · ${agents[run.provider] || t('Agent')} · ${action}`, { agent: agents[run.provider], action, key: `run:${own.activeRun.id}` }); }
       else if (task.worktree && task.status === 'complete') add('offer', t('{folder}: ready to merge', { folder: task.folderName }));
     }
@@ -115,7 +120,7 @@ export function statusClickTarget(snapshot) {
   const waiting = snapshot.rows.filter(row => row.attention);
   if (waiting.length !== 1) return null;
   const [row] = waiting;
-  return row.kind === 'approval' && row.approvalId ? { projectId: row.projectId, approvalId: row.approvalId } : { projectId: row.projectId };
+  return row.kind === 'approval' && row.approvalId ? { projectId: row.projectId, approvalId: row.approvalId, ...(row.taskId ? { taskId: row.taskId } : {}) } : { projectId: row.projectId };
 }
 
 // Windows colours its taskbar apart from its apps, so the icon follows the taskbar's own setting, read from the
@@ -128,7 +133,7 @@ export function statusMenu(snapshot, { platform = 'darwin', text = english, keep
   const separator = { type: 'separator' }, mac = platform === 'darwin', { t, tn } = text;
   const summary = snapshot.rows.length ? [snapshot.attention ? tn(snapshot.attention, '1 needs you', '{count} need you') : '', snapshot.running ? tn(snapshot.running, '1 working', '{count} working') : ''].filter(Boolean).join(' · ') || t('Waiting') : t('Nothing running');
   // An approval opens its own request card; it is never answered from here.
-  const rows = snapshot.rows.map(row => ({ label: `${row.name} — ${row.text}`, click: () => open(row.kind === 'approval' ? { projectId: row.projectId, approvalId: row.approvalId } : { projectId: row.projectId }) }));
+  const rows = snapshot.rows.map(row => ({ label: `${row.name} — ${row.text}`, click: () => open(row.kind === 'approval' ? { projectId: row.projectId, approvalId: row.approvalId, ...(row.taskId ? { taskId: row.taskId } : {}) } : { projectId: row.projectId }) }));
   return [
     { label: summary, enabled: false },
     ...rows.length ? [separator, ...rows] : [],

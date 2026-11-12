@@ -13,7 +13,7 @@ export function createBoardRoutes({ registry, body, json }) {
     }
     if (url.pathname === '/api/board/export') {
       if (req.method !== 'GET') fail('Use GET.', 405);
-      json(res, 200, { markdown: board.markdown(c), filename: 'codeshi-board.md' }); return true;
+      json(res, 200, { markdown: board.markdown(c, { includeClosed: url.searchParams.get('closed') === 'include' }), filename: 'codeshi-board.md' }); return true;
     }
     // A card's comments (#97), read when its drawer opens rather than with every board.
     const thread = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/comments$/);
@@ -26,6 +26,13 @@ export function createBoardRoutes({ registry, body, json }) {
     if (url.pathname === '/api/board/cards') { json(res, 201, { card: board.create(c, input), board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/place') { const result = board.place(c, input); json(res, 200, { ...result, board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/run') { const result = board.run(c, input); json(res, 202, { tasks: result.tasks, board: board.view(c) }); return true; }
+    // One Plan (#162): accept or discard an agent's draft cards, and stop several running cards, such as a group, at once.
+    if (url.pathname === '/api/board/drafts') { json(res, 200, { ...board.drafts(c, input), board: board.view(c) }); return true; }
+    // Closed to agents (#97): the whole Plan; a single card is closed with its other fields. Attaching puts the Plan, or a
+    // card, in your next message as a text attachment.
+    if (url.pathname === '/api/board/access') { json(res, 200, { ...board.access(c, input), board: board.view(c) }); return true; }
+    if (url.pathname === '/api/board/attach') { json(res, 201, board.attach(c, input)); return true; }
+    if (url.pathname === '/api/board/stop') { json(res, 200, { ...board.stopMany(c, input), board: board.view(c) }); return true; }
     // Schedules (#132): a card or a prompt run at a set time.
     const schedules = broker.schedules;
     if (url.pathname === '/api/board/schedules') { json(res, 201, { schedule: schedules.create(c, input), board: board.view(c) }); return true; }
@@ -36,7 +43,7 @@ export function createBoardRoutes({ registry, body, json }) {
       json(res, 200, { ...(result.id ? { schedule: result } : result), board: board.view(c) });
       return true;
     }
-    const match = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/(edit|move|remove|stop|accept|send-back|comment|uncomment)$/);
+    const match = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/(edit|move|remove|stop|accept|send-back|comment|uncomment|recheck|continue)$/);
     if (!match) fail('Not found.', 404);
     const [, id, action] = match;
     if (action === 'comment' || action === 'uncomment') {
@@ -44,7 +51,7 @@ export function createBoardRoutes({ registry, body, json }) {
       json(res, action === 'comment' ? 201 : 200, { ...result, comments: board.comments(c, id), card: board.public(c, board.find(c, id)), board: board.view(c) });
       return true;
     }
-    const result = action === 'edit' ? board.edit(c, id, input) : action === 'move' ? board.move(c, id, input) : action === 'remove' ? board.remove(c, id) : action === 'stop' ? board.stop(c, id) : action === 'accept' ? board.accept(c, id) : board.sendBack(c, id, input);
+    const result = action === 'edit' ? board.edit(c, id, input) : action === 'move' ? board.move(c, id, input) : action === 'remove' ? board.remove(c, id) : action === 'stop' ? board.stop(c, id) : action === 'accept' ? board.accept(c, id) : action === 'recheck' ? board.recheck(c, id) : action === 'continue' ? board.proceed(c, id) : board.sendBack(c, id, input);
     json(res, 200, { ...(result.id ? { card: result } : result), board: board.view(c) });
     return true;
   };

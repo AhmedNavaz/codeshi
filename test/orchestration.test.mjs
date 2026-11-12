@@ -21,8 +21,8 @@ const reply = {
   ],
 };
 const parsed = [
-  { id: 's1', title: 'Add the API route', instructions: 'Add GET /api/items returning the saved items.', files: ['src/server.mjs'], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [] },
-  { id: 's2', title: 'Show the items', instructions: 'List the items from /api/items on the page.', files: ['public/app.js', 'public/styles.css'], tier: 'light', dependsOn: ['s1'], agent: null, role: 'builder', artifact: null, check: null, skills: [] },
+  { id: 's1', title: 'Add the API route', instructions: 'Add GET /api/items returning the saved items.', files: ['src/server.mjs'], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [], phase: null, done: [] },
+  { id: 's2', title: 'Show the items', instructions: 'List the items from /api/items on the page.', files: ['public/app.js', 'public/styles.css'], tier: 'light', dependsOn: ['s1'], agent: null, role: 'builder', artifact: null, check: null, skills: [], phase: null, done: [] },
 ];
 // What the server's routing hands a planning run.
 const planned = { mode: 'smart', reason: 'Plans the steps', tier: 'deep' };
@@ -93,7 +93,7 @@ test('a planner reply becomes numbered steps that refer to earlier steps, withou
   // A fenced reply is read the same way, and text is trimmed.
   const fenced = '```json\n' + JSON.stringify({ ...reply, summary: `  ${reply.summary}  `, steps: [{ ...reply.steps[0], title: '  Add the API route ' }, reply.steps[1]] }) + '\n```';
   assert.deepEqual(parsePlan(fenced), { status: 'draft', summary: reply.summary, steps: parsed });
-  // The limits themselves are allowed: 5 steps, a 1,000-character summary, 120-character titles, 4,000 characters of
+  // The limits themselves are allowed: steps (any number up to the Plan's size), a 1,000-character summary, 120-character titles, 4,000 characters of
   // instructions and 12 paths of up to 300 characters.
   const most = { summary: 's'.repeat(1000), steps: Array.from({ length: 5 }, (_, index) => ({ title: index ? `Step ${index + 1}` : 'x'.repeat(120), instructions: 'y'.repeat(index ? 10 : 4000), files: index ? [] : Array.from({ length: 12 }, (_, file) => file ? `file${file}.js` : 'p'.repeat(300)), tier: 'standard', dependsOn: index ? [index] : [] })) };
   const planned = parsePlan(JSON.stringify(most));
@@ -103,7 +103,7 @@ test('a planner reply becomes numbered steps that refer to earlier steps, withou
   const padded = `{"notes":"${'n'.repeat(63000)}",${JSON.stringify(reply).slice(1)}`;
   assert.ok(Buffer.byteLength(padded) <= 64000); assert.equal(parsePlan(padded).status, 'draft');
   // Files and dependencies may be left out.
-  assert.deepEqual(parsePlan(JSON.stringify({ summary: 'One step.', steps: [{ title: 'Fix it', instructions: 'Fix the bug.', tier: 'deep' }] })).steps, [{ id: 's1', title: 'Fix it', instructions: 'Fix the bug.', files: [], tier: 'deep', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [] }]);
+  assert.deepEqual(parsePlan(JSON.stringify({ summary: 'One step.', steps: [{ title: 'Fix it', instructions: 'Fix the bug.', tier: 'deep' }] })).steps, [{ id: 's1', title: 'Fix it', instructions: 'Fix the bug.', files: [], tier: 'deep', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [], phase: null, done: [] }]);
 });
 
 test('a reply that is not a valid plan is reported, never guessed at', () => {
@@ -112,7 +112,8 @@ test('a reply that is not a valid plan is reported, never guessed at', () => {
     'I would start with the API, then the page.',
     JSON.stringify({ steps: reply.steps }),
     JSON.stringify({ summary: 'Nothing to do.', steps: [] }),
-    JSON.stringify({ summary: 'Too many.', steps: steps(6) }),
+    // A drafted plan has no fixed number of cards (#162), only the Plan's own size.
+    JSON.stringify({ summary: 'Too many.', steps: steps(301) }),
     JSON.stringify({ ...reply, summary: 's'.repeat(1001) }),
     JSON.stringify({ summary: 'Bad tier.', steps: [{ ...reply.steps[0], tier: 'huge' }] }),
     JSON.stringify({ summary: 'Later step first.', steps: [{ ...reply.steps[0], dependsOn: [2] }, reply.steps[1]] }),
@@ -172,11 +173,13 @@ test('the newest plan is open until it is put away, also when it never became a 
   assert.equal(openPlan({ orchestrations: [] }), null); assert.equal(openPlan({}), null);
 });
 
-test('the planning request asks for a bounded JSON plan of the fewest steps and carries the goal', () => {
+test('the planning request follows the planning method, asks for a JSON plan and carries the goal', () => {
   const prompt = planningRequest('Add a list of saved items.');
   assert.match(prompt, /read-only/i);
-  assert.match(prompt, /usually 2 to 4 and at most 5/);
-  assert.match(prompt, /fewest/);
+  // One planning method for every drafted plan (#162), sized to the work rather than to a fixed number of steps.
+  for (const rule of [/Read the project first/, /AGENTS\.md/, /Size the plan to the work/, /Contracts first/, /Working slices/, /Unknowns early/, /One outcome per card/, /Explicit dependencies/, /a way back/, /Questions, not guesses/]) assert.match(prompt, rule);
+  assert.doesNotMatch(prompt, /at most 5/);
+  assert.match(prompt, /questions \(an array/);
   assert.match(prompt, /Return only a JSON object/);
   assert.match(prompt, /Do not choose agents or models\./);
   assert.ok(prompt.endsWith('Add a list of saved items.'));
@@ -202,7 +205,13 @@ test('a planning run is read-only, leaves the conversation settings alone and sa
   assert.equal(c.mode, 'edit'); assert.equal(c.approvalPolicy, 'auto');
   const [plan] = c.orchestrations;
   assert.equal(plan.id, sent.body.runId);
-  assert.equal(plan.status, 'draft'); assert.equal(plan.source, 'agent'); assert.equal(plan.goal, 'Add a list of saved items.');
+  // The plan moves onto the Plan as draft cards (#162), in its order, each waiting for what its step waited for, on Auto.
+  assert.equal(plan.status, 'moved'); assert.equal(plan.source, 'agent');
+  const cards = plan.cards.map(id => c.board.find(card => card.id === id));
+  assert.deepEqual(cards.map(card => [card.title, card.column, card.auto, card.agent, card.tier, Boolean(card.draft)]), [['Add the API route', 'backlog', true, null, 'standard', true], ['Show the items', 'backlog', true, null, 'light', true]]);
+  assert.deepEqual(cards[1].dependsOn, [cards[0].id]);
+  assert.deepEqual(cards[0].draft.by, { kind: 'agent', provider: 'codex', model: 'gpt-6.1-sol' });
+  assert.equal(cards[0].source.goal, 'Add a list of saved items.'); assert.equal(plan.goal, 'Add a list of saved items.');
   assert.equal(plan.summary, reply.summary); assert.deepEqual(plan.steps, parsed);
   assert.equal(plan.review, true); assert.equal(plan.revision, 1);
   // Routing plans with the deepest work its mode allows, without rating the request first: the page's guess of the
@@ -217,7 +226,7 @@ test('a planning run is read-only, leaves the conversation settings alone and sa
   assert.equal(c.messages.find(message => message.runId === sent.body.runId && message.role === 'assistant').orchestrationId, plan.id);
   assert.deepEqual(api.broker().view(c).orchestrations.map(item => item.id), [plan.id]);
   await until(() => notices.length);
-  assert.deepEqual(notices.map(notice => [notice.kind, notice.title, notice.body]), [['finished', 'Plan ready', 'Codex proposed a plan. Nothing from it runs until you approve it.']]);
+  assert.deepEqual(notices.map(notice => [notice.kind, notice.title, notice.body]), [['finished', 'Plan drafted', 'Codex drafted 2 cards on the Plan. Nothing runs until you accept them.']]);
 });
 
 test('Orchestrate plans without routing in normal mode, from the main conversation', { skip: scriptCLIs }, async t => {
@@ -341,7 +350,7 @@ test('while a plan is open, queued messages wait for it, and planning never hand
   fs.writeFileSync(path.join(f.workspace, 'app.js'), 'export const value = 2;\n');
   fs.writeFileSync(release, '');
   await until(() => !broker.running && ended.length);
-  assert.equal(api.c().orchestrations[0].status, 'draft');
+  assert.equal(api.c().orchestrations[0].status, 'moved', 'The plan became draft cards on the Plan.');
   await broker.queue.tick(api.c());
   assert.equal(broker.running, null); assert.equal(api.c().queue.length, 1); assert.equal(api.c().queuePaused, null);
   // Planning is never checked with the tests, though a file changed while it ran.
@@ -356,9 +365,9 @@ test('while a plan is open, queued messages wait for it, and planning never hand
   assert.equal(own.status, 202, JSON.stringify(own.body));
   await until(() => !broker.running && f.captures().length === 2);
   await broker.queue.tick(api.c());
-  assert.equal(api.c().queue.length, 1, 'The queue waits for the plan.');
-  // Once the plan is put away, the queue goes on.
-  assert.equal((await api.plan({ action: 'discard', id: sent.body.runId })).status, 200);
+  assert.equal(api.c().queue.length, 1, 'The queue waits while the plan’s cards are drafts.');
+  // Once its drafts are decided, the queue goes on.
+  broker.board.drafts(api.c(), { action: 'discard', ids: api.c().orchestrations[0].cards });
   await until(() => f.captures().length === 3 && !broker.running);
   assert.match(f.captures().at(-1).payload.currentRequest, /Then rename the helper\.$/);
   assert.equal(api.c().queue.length, 0);
@@ -411,7 +420,7 @@ send({method:'turn/completed',params:{threadId:'plan-thread',turn:{status:'compl
   assert.equal(broker.view(c).canAddToRun, false, 'A note would be planned, not done, so it waits for the plan.');
   const done = broker.running.done; fs.writeFileSync(release, '');
   await done;
-  assert.deepEqual([c.orchestrations[0].status, c.orchestrations[0].steps], ['draft', parsed]);
+  assert.deepEqual([c.orchestrations[0].status, c.orchestrations[0].steps], ['moved', parsed]);
   assert.deepEqual([c.mode, c.approvalPolicy], ['edit', 'auto']);
 });
 

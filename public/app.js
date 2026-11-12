@@ -1163,6 +1163,8 @@
       const plan = state.conversation?.orchestrations?.find(item => item.id === message.orchestrationId);
       body.append(element('p', '', window.relayOrchestration?.describe(plan) || (streaming ? 'Planning the steps…' : 'The planner’s response.')));
       if (window.relayOrchestration?.isCurrent(plan)) { const view = element('button', 'secondary-button', 'View plan'); view.type = 'button'; view.addEventListener('click', () => window.relayPlanView?.open()); body.append(view); }
+      // A plan drafted onto the Plan (#162) opens there.
+      else if (plan?.status === 'moved') { const view = element('button', 'secondary-button', 'Open the Plan'); view.type = 'button'; view.addEventListener('click', () => window.relayBoard?.open()); body.append(view); }
       const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the planner…')); body.append(raw);
       row.append(heading, body, actions); return row;
     }
@@ -2919,6 +2921,8 @@
     "open-approval": async target => {
       if (!target || typeof target.projectId !== "string" || !state.projects.some(project => project.id === target.projectId)) return false;
       if (target.projectId !== state.projectId) await selectProject(target.projectId); else await refresh();
+      // A task's approval, such as a scheduled run's (#132), is answered in that task.
+      if (typeof target.taskId === "string" && window.relayTaskThreads) { await window.relayTaskThreads.select(target.taskId); await new Promise(resolve => requestAnimationFrame(resolve)); }
       const cards = [...($("pending-approvals")?.querySelectorAll("article") || [])], card = cards.find(item => item.dataset.approvalId === target.approvalId) || cards[0];
       if (card) { card.scrollIntoView?.({ behavior: "smooth", block: "center" }); card.focus?.(); card.classList.add("approval-highlight"); setTimeout(() => card.classList.remove("approval-highlight"), 2000); }
       return true;

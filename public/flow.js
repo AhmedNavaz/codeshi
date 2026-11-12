@@ -512,7 +512,8 @@
     const plan = window.relayOrchestration?.waiting?.();
     if (!plan) return null;
     const count = plan.steps?.length || 0;
-    if (plan.status === 'planning') return { chip: 'Planning', text: `${agentName(plan.planner?.provider)} is planning the steps. The Plan button shows the plan when it’s ready.` };
+    if (plan.status === 'planning') return { chip: 'Planning', text: `${agentName(plan.planner?.provider)} is drafting the plan. Its cards show on the Plan when they’re ready.` };
+    if (plan.status === 'moved') return { chip: 'Drafts waiting', board: true, text: `${plural(plan.drafts, 'drafted card')} ${plan.drafts === 1 ? 'waits' : 'wait'} on the Plan. Nothing from ${plan.drafts === 1 ? 'it' : 'them'} runs until you accept ${plan.drafts === 1 ? 'it' : 'them'}.` };
     if (plan.status === 'draft') return { chip: 'Plan waiting', text: count ? `A plan of ${plural(count, 'step')} is waiting. Nothing from it runs until you approve it.` : 'An empty plan is waiting. Open the plan to add its steps.' };
     return { chip: 'Plan not ready', text: 'The plan isn’t ready. Open the plan to plan again or write the steps yourself.' };
   }
@@ -532,6 +533,11 @@
       const openChart = node('button', 'secondary-button flow-plan-open', 'Open plan'); openChart.type = 'button';
       openChart.addEventListener('click', () => window.relayPlanView?.open());
       body.append(openChart);
+    }
+    else if (plan?.board) {
+      const openBoard = node('button', 'secondary-button flow-plan-open', 'Open the Plan'); openBoard.type = 'button';
+      openBoard.addEventListener('click', () => window.relayBoard?.open());
+      body.append(openBoard);
     }
     else if (running && !steps.length) {
       const activeItem = node('div', 'flow-current-work flow-task-running flow-plan-active');

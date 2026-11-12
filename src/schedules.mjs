@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { limitState } from './resume.mjs';
 
 // Schedules (#132, second stage): a board card or a prompt that runs once at a set time, or every day, every weekday or
 // every week. Normal only: a schedule binds the agent, model and effort, the folder, the workspace's access and
@@ -15,8 +16,16 @@ import { randomUUID } from 'node:crypto';
 // - A card edited after it was scheduled doesn't run: what it says has changed, so it waits for Run now, which uses
 //   the card as it is now. Saving the schedule again does the same.
 // - A scheduled run is told not to push, deploy or publish anything. Approvals wait for you as for any run.
+// - At its time, Codeshi reads the agent's usage first. An agent at its limit doesn't start a run that would stop at
+//   once: with Run late, or when the limit resets within the ten minutes, the time waits for the reset on the same agent
+//   (never another one), checked again at the reset and every ten minutes. Otherwise it is missed, with the reset time.
+//   A wait gives way to the schedule's next time, and ends as missed after a day. Usage that can't be read doesn't stop
+//   the run.
 export const REPEATS = ['once', 'daily', 'weekdays', 'weekly'];
 export const LATE_MS = 10 * 60 * 1000;
+export const RECHECK_MS = 10 * 60 * 1000;
+export const WAIT_MS = 24 * 60 * 60 * 1000;
+const READ_MS = 6000;
 export const LIMITS = { schedules: 50, title: 200, text: 20000, reason: 300 };
 const PROVIDERS = ['codex', 'claude', 'gemini'];
 const NAMES = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
@@ -79,8 +88,11 @@ export class Schedules {
   list(c) { return c.schedules || []; }
   find(c, id) { const schedule = this.list(c).find(item => item.id === id); if (!schedule) throw fail('That schedule is no longer here.', 404); return schedule; }
   update(c, schedule, changes) { this.main.record(c, { type: 'schedule_update', id: schedule.id, changes: { ...changes, updatedAt: new Date(this.now()).toISOString() } }); }
-  // Schedules with a time still to come. Only these keep Codeshi open in the menu bar after its window closes.
-  get waiting() { return this.all().filter(({ schedule }) => !schedule.paused && schedule.nextAt).length; }
+  // Schedules with a time still to come, or a time waiting for a usage limit to reset. Only these keep Codeshi open in
+  // the menu bar after its window closes.
+  get waiting() { return this.all().filter(({ schedule }) => !schedule.paused && (schedule.nextAt || schedule.waiting)).length; }
+  // Times waiting for a reset, for the menu bar.
+  get resets() { return this.all().filter(({ schedule }) => !schedule.paused && schedule.waiting).map(({ c, schedule }) => ({ id: schedule.id, title: this.title(c, schedule), provider: schedule.waiting.provider, resetsAt: schedule.waiting.resetsAt })); }
   folders() { return this.main.workspaceFolders; }
 
   arm() {
@@ -98,7 +110,9 @@ export class Schedules {
     const type = input.target?.type ?? previous?.target.type;
     if (type === 'card') {
       const cardId = input.target?.cardId ?? previous?.target.cardId, card = this.main.board.find(c, cardId);
-      if (!card.agent) throw fail(`Choose an agent for “${card.title}” before scheduling it.`, 400);
+      if (card.draft) throw fail(`An agent drafted “${card.title}”. Accept it before scheduling it.`, 400);
+      if (this.main.board.closed(c, card)) throw fail(c.planClosed ? 'This Plan is closed to agents, so its cards can’t be scheduled. Open it to agents first.' : `“${card.title}” is closed to agents, so it can’t be scheduled. Open it to agents first.`, 400);
+      if (!card.agent) throw fail(card.auto ? `“${card.title}” is on Auto. Choose an agent for it before scheduling it, so the schedule knows who runs it.` : `Choose an agent for “${card.title}” before scheduling it.`, 400);
       return { type: 'card', cardId: card.id, revision: card.revision };
     }
     if (type !== 'prompt') throw fail('Schedule a card or a prompt.', 400);
@@ -114,7 +128,7 @@ export class Schedules {
     if (!folderId || !folders.some(folder => folder.id === folderId)) throw fail('Choose the folder it works in.', 400);
     return { type: 'prompt', text, agent: { provider: agent.provider, model, effort }, folderId };
   }
-  provider(c, target) { return target.type === 'card' ? this.main.board.find(c, target.cardId).agent.provider : target.agent.provider; }
+  provider(c, target) { return target.type === 'card' ? this.main.board.find(c, target.cardId).agent?.provider || null : target.agent.provider; }
   create(c, input = {}) {
     if (this.list(c).length >= LIMITS.schedules) throw fail(`A workspace can have up to ${LIMITS.schedules} schedules. Remove some first.`);
     const target = this.target(c, input), when = cleanWhen(input.when), access = this.access(c), now = this.now();
@@ -135,7 +149,7 @@ export class Schedules {
     const next = nextOccurrence(when, now);
     if (!next && !schedule.paused) throw fail('That time has passed. Choose a time still to come.', 400);
     const title = 'title' in input ? (typeof input.title === 'string' && input.title.trim() ? clip(input.title, LIMITS.title) : (target.type === 'prompt' ? clip(target.text.split('\n')[0], LIMITS.title) : null)) : schedule.title ?? null;
-    this.update(c, schedule, { title, target, when, access, runLate: 'runLate' in input ? input.runLate === true : schedule.runLate, nextAt: next ? iso(next) : null, missed: null });
+    this.update(c, schedule, { title, target, when, access, runLate: 'runLate' in input ? input.runLate === true : schedule.runLate, nextAt: next ? iso(next) : null, missed: null, waiting: null });
     this.arm();
     return this.public(c, schedule);
   }
@@ -146,7 +160,7 @@ export class Schedules {
     if (paused === schedule.paused) return this.public(c, schedule);
     const next = paused ? null : nextOccurrence(schedule.when, this.now());
     if (!paused && !next) throw fail('That time has passed. Edit the schedule to choose a new one.');
-    this.update(c, schedule, { paused, nextAt: next ? iso(next) : null });
+    this.update(c, schedule, { paused, nextAt: next ? iso(next) : null, waiting: null });
     this.arm();
     return this.public(c, schedule);
   }
@@ -166,28 +180,73 @@ export class Schedules {
   }
 
   // ---- Running
+  // One look at every schedule at a time. Returns a promise, as each due time reads its agent's usage before it starts.
   tick() {
-    if (this.closed) return;
+    if (this.closed) return Promise.resolve();
+    this.ticking ||= this.check().catch(error => console.error('Codeshi could not check its schedules:', error.message)).finally(() => { this.ticking = null; this.arm(); });
+    return this.ticking;
+  }
+  async check() {
     const now = this.now();
     for (const { c, schedule } of this.all()) {
-      if (schedule.paused || !schedule.nextAt || Date.parse(schedule.nextAt) > now) continue;
-      const dueAt = schedule.nextAt, next = nextOccurrence(schedule.when, now);
-      // The next time is saved before anything starts, so this time is never started twice.
-      this.update(c, schedule, { nextAt: next ? iso(next) : null });
-      if (now - Date.parse(dueAt) > LATE_MS && !schedule.runLate) this.miss(c, schedule, dueAt, 'Codeshi wasn’t open, or the computer was asleep, at that time.');
-      else this.launch(c, schedule, dueAt);
+      if (this.closed) return;
+      if (schedule.paused) continue;
+      if (schedule.nextAt && Date.parse(schedule.nextAt) <= now) {
+        const dueAt = schedule.nextAt, next = nextOccurrence(schedule.when, now);
+        // The next time is saved before anything starts, so this time is never started twice. A time still waiting for
+        // a reset gives way to it: one run waits, not two.
+        this.update(c, schedule, { nextAt: next ? iso(next) : null, ...(schedule.waiting ? { waiting: null } : {}) });
+        if (now - Date.parse(dueAt) > LATE_MS && !schedule.runLate) this.miss(c, schedule, dueAt, 'Codeshi wasn’t open, or the computer was asleep, at that time.');
+        else await this.attempt(c, schedule, dueAt);
+      } else if (schedule.waiting && now >= Date.parse(schedule.waiting.checkAt)) await this.attempt(c, schedule, schedule.waiting.dueAt);
     }
-    this.arm();
   }
+  // Reads the agent's usage, then starts the run, waits for a reset or misses the time. Anything you did meanwhile, such
+  // as Run now, pausing, editing or removing the schedule, wins over what this read found.
+  async attempt(c, schedule, dueAt) {
+    const id = schedule.id, before = JSON.stringify([schedule.last, schedule.waiting, schedule.updatedAt]);
+    let limit = null;
+    try { limit = await this.limit(c, schedule); } catch { /* Usage that can't be read doesn't stop the run. */ }
+    schedule = this.list(c).find(item => item.id === id);
+    if (this.closed || !schedule || schedule.paused || JSON.stringify([schedule.last, schedule.waiting, schedule.updatedAt]) !== before) return;
+    if (limit?.limited === true) return this.wait(c, schedule, dueAt, limit);
+    this.launch(c, schedule, dueAt, { waited: Boolean(schedule.waiting) });
+  }
+  // Whether the schedule's own agent is at its limit for its model, read now. Null when it can't be told.
+  async limit(c, schedule) {
+    const target = schedule.target, provider = this.provider(c, target);
+    if (!provider || !this.main.availableProviders().includes(provider)) return null;
+    const model = target.type === 'card' ? this.main.board.find(c, target.cardId).agent?.model || null : target.agent.model;
+    let timer;
+    const usage = await Promise.race([this.main.checks.usage(provider, { ...this.main.usageOptions(provider), refresh: true }), new Promise(resolve => { timer = setTimeout(() => resolve(null), READ_MS); timer.unref?.(); })]).finally(() => clearTimeout(timer));
+    try { this.main.observeQuota(c, provider, usage); } catch { /* A reading kept for later is a nicety. */ }
+    return { provider, ...limitState(usage, model) };
+  }
+  // Without Run late a time may wait only as long as it may start late: ten minutes. With it, a day.
+  wait(c, schedule, dueAt, { provider, resetsAt }) {
+    const now = this.now(), due = Date.parse(dueAt), reset = resetsAt ? Date.parse(resetsAt) : NaN, until = due + (schedule.runLate ? WAIT_MS : LATE_MS);
+    const name = NAMES[provider] || provider, at = Number.isFinite(reset) ? this.clock(reset) : null;
+    if (now >= until || (!schedule.runLate && !(Number.isFinite(reset) && reset <= until))) {
+      return this.miss(c, schedule, dueAt, schedule.runLate
+        ? `${name} was still at its usage limit a day after this time.`
+        : `${name} had reached its usage limit${at ? `, which resets at ${at}` : ''}. Tick Run late to have a schedule wait for the reset.`);
+    }
+    const checkAt = Number.isFinite(reset) && reset > now ? Math.min(reset + 15000, now + RECHECK_MS) : now + RECHECK_MS;
+    const first = schedule.waiting?.dueAt !== dueAt;
+    this.update(c, schedule, { waiting: { dueAt, provider, resetsAt: Number.isFinite(reset) ? iso(reset) : null, since: first ? iso(now) : schedule.waiting.since, checkAt: iso(Math.min(checkAt, until)) } });
+    if (first) this.main.emit('notify', { conversationId: c.id, kind: 'waiting', title: 'A scheduled run is waiting for a usage reset', body: `${this.title(c, schedule)}: ${name} is at its usage limit${at ? ` until ${at}` : ''}.` });
+  }
+  clock(ms) { return new Date(ms).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }); }
   miss(c, schedule, dueAt, reason) {
-    this.update(c, schedule, { missed: { dueAt, reason: clip(reason, LIMITS.reason), at: new Date(this.now()).toISOString() } });
+    this.update(c, schedule, { missed: { dueAt, reason: clip(reason, LIMITS.reason), at: new Date(this.now()).toISOString() }, ...(schedule.waiting ? { waiting: null } : {}) });
     this.main.emit('notify', { conversationId: c.id, kind: 'missed', title: 'A scheduled run didn’t start', body: `${this.title(c, schedule)}: ${clip(reason, 160)}` });
   }
-  launch(c, schedule, dueAt, { manual = false } = {}) {
+  launch(c, schedule, dueAt, { manual = false, waited = false } = {}) {
     try {
+      const provider = waited ? schedule.waiting.provider : null;
       const taskId = this.start(c, schedule, dueAt, { manual });
-      this.update(c, schedule, { last: { dueAt, at: new Date(this.now()).toISOString(), taskId, manual }, missed: null, runs: (schedule.runs || 0) + 1 });
-      if (!manual) this.main.emit('notify', { conversationId: c.id, kind: 'scheduled', title: 'Scheduled run started', body: this.title(c, schedule) });
+      this.update(c, schedule, { last: { dueAt, at: new Date(this.now()).toISOString(), taskId, manual }, missed: null, waiting: null, runs: (schedule.runs || 0) + 1 });
+      if (!manual) this.main.emit('notify', { conversationId: c.id, kind: 'scheduled', title: 'Scheduled run started', body: provider ? `${this.title(c, schedule)}: ${NAMES[provider] || provider} has room again.` : this.title(c, schedule) });
       return taskId;
     } catch (error) {
       if (manual) throw error;

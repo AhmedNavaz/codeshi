@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 // Orchestrate (#12, #89, #97): one message becomes a short plan of steps, each done by the agent and role that suits it.
 // Specialist team workflows (#89) coordinate frontend, backend, database, design, QA and reviewer roles with shared
 // contracts, task-scoped briefs, structured artifacts and gated integration checks.
-export const planLimits = { steps: 5, title: 120, instructions: 4000, files: 12, path: 300, goal: 100000, summary: 1000, reply: 64000, plans: 10 };
+// steps bounds a plan written in the old step editor. A plan an agent drafts (#162) becomes draft cards on the Plan, so it
+// has no fixed number of cards: drafted is only the Plan's own size, and the board checks the room left.
+export const planLimits = { steps: 5, drafted: 300, title: 120, instructions: 4000, files: 12, path: 300, goal: 100000, summary: 1000, reply: 64000, plans: 10, phase: 60, done: 5, question: 300, questions: 5 };
 const PROVIDERS = ['codex', 'claude', 'gemini'], TIERS = ['light', 'standard', 'deep'];
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 export const SPECIALIST_ROLES = ['builder', 'reviewer', 'frontend', 'backend', 'database', 'design', 'qa'];
@@ -13,12 +15,27 @@ export const INTEGRATION_OUTCOMES = ['passed', 'failed', 'blocked', 'skipped', '
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 const text = (value, limit) => typeof value === 'string' && value.trim() && value.trim().length <= limit ? value.trim() : null;
 
-// What the planner is asked. The goal comes last, so the conversation's context reads as before it.
+// What the planner is asked: one planning method for every plan an agent drafts (#162), from common software engineering
+// practice, so plans are consistent and reviewable. The goal comes last, so the conversation's context reads as before it.
+export const planningMethod = [
+  'How to plan:',
+  '- Read the project first: its structure, stack, conventions and instruction files (AGENTS.md, CLAUDE.md). Extend the existing architecture rather than replacing it, unless the request asks for that.',
+  '- Size the plan to the work. A small change is 1 to 3 cards with no phases. A larger project gets phases, such as Foundations, Contracts, Build, Integrate and Verify, and as many cards as it needs.',
+  '- Contracts first. Where parts share an interface (an API, a schema, a component\'s props), one card defines it, with artifact "contract" or "schema", before the cards that use it, so those cards can run side by side against it.',
+  '- Working slices. Prefer cards that each leave the project working and testable end to end, starting with a thin version that runs, over cards that only make sense once every layer is done.',
+  '- Unknowns early. A risky or unfamiliar part gets an early card that tries it out, before work that depends on it.',
+  '- One outcome per card, with what done means, small enough to review in one sitting.',
+  '- Explicit dependencies, no hidden order. A card lists every earlier card it needs and nothing else, so cards that don\'t depend on each other can run at the same time.',
+  '- What the requirements ask for, and nothing more. Data migrations come with a way back. Security, accessibility and performance get their own cards only when the requirements or the project call for them. Tests are part of each card; a plan of more than 3 cards ends with a qa card that checks the whole result.',
+  '- Questions, not guesses. Where the requirements are unclear, don\'t invent an answer: ask it in questions.',
+].join('\n');
 export function planningRequest(goal) {
   return [
-    'Plan this request as steps for coding agents. This is a read-only planning run: inspect the project as needed, but do not edit files or run commands that change anything.',
-    `Use the fewest steps that do the job, usually 2 to 4 and at most ${planLimits.steps}. Each step must be a piece of work one agent can finish and check on its own, in order. Don't add steps for reviewing or testing the whole result; Codeshi does that after the last step.`,
-    'Return only a JSON object with summary (one or two sentences) and steps (an array). Each step has title (short), instructions (what to do and how to know it is done), files (the folders or files it expects to change, as paths relative to the project), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier steps it needs, starting at 1), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa") and optional artifact ("contract", "schema", "diff", "test_evidence", "findings"). Do not choose agents or models.',
+    'Plan this request as cards for coding agents. This is a read-only planning run: inspect the project as needed, but do not edit files or run commands that change anything.',
+    '',
+    planningMethod,
+    '',
+    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 short questions for the person, usually empty) and steps (an array of cards, in order). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (the folders or files it expects to change, as paths relative to the project), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.',
     '',
     'Request:',
     goal,
@@ -28,7 +45,9 @@ export function planningRequest(goal) {
 // The plan the card shows, while it is open: being made, a draft, or one that never became a plan and waits to be planned
 // again or put away. Queued messages wait while it is open (see PromptQueue.tick).
 export const OPEN_PLANS = ['planning', 'draft', 'unstructured', 'failed', 'interrupted'];
-export const openPlan = c => { const plan = c.orchestrations?.[0]; return plan && OPEN_PLANS.includes(plan.status) ? plan : null; };
+// A plan moved onto the Plan (#162) stays open while any of its cards is still a draft: queued messages wait for you to
+// accept or discard them, as they waited for a plan to be approved.
+export const openPlan = c => { const plan = c.orchestrations?.[0]; return plan && (OPEN_PLANS.includes(plan.status) || (plan.status === 'moved' && (c.board || []).some(card => card.draft?.batch?.id === plan.id))) ? plan : null; };
 
 // Orchestrate plans from the main conversation, which holds the plan. Review after belongs to the steps' combined
 // changes, not to the planning run.
@@ -75,7 +94,13 @@ function checkStep(raw, index, earlier, { fromPlanner }) {
     if (!check) fail(`Give step ${index + 1} an acceptance check of at most 300 characters.`);
   }
   const skills = Array.isArray(raw.skills) ? raw.skills.filter(s => typeof s === 'string' && s.trim()).map(s => s.trim().slice(0, 100)) : [];
-  return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills };
+  // A drafted card's phase and what done means (#162). Only the planner sends them: the old step editor has neither.
+  if (!fromPlanner) return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills };
+  const phase = raw.phase === undefined || raw.phase === null || raw.phase === '' ? null : text(raw.phase, planLimits.phase);
+  if (phase === null && raw.phase !== undefined && raw.phase !== null && raw.phase !== '') fail(`Give step ${index + 1} a phase of at most ${planLimits.phase} characters.`);
+  const done = raw.done ?? [];
+  if (!Array.isArray(done) || done.length > planLimits.done || done.some(item => !text(item, planLimits.question))) fail(`List at most ${planLimits.done} short statements of what done means for step ${index + 1}.`);
+  return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills, phase, done: done.map(item => item.trim()) };
 }
 
 // Verify specialist workflow dependency rules:
@@ -95,15 +120,39 @@ export function validateWorkflowOrder(steps) {
 
 function checkSteps(steps, options) {
   if (!Array.isArray(steps)) fail('Send the plan\'s steps as a list.');
-  if (steps.length > planLimits.steps) fail(`A plan has at most ${planLimits.steps} steps.`);
+  const most = options.fromPlanner ? planLimits.drafted : planLimits.steps;
+  if (steps.length > most) fail(`A plan has at most ${most} steps.`);
   const ids = [];
   const checkedSteps = steps.map((raw, index) => {
     const checked = checkStep(raw, index, ids, options);
     if (ids.includes(checked.id)) fail('Each step can appear only once.');
     ids.push(checked.id); return checked;
   });
-  validateWorkflowOrder(checkedSteps);
+  // A drafted plan isn't refused for its order: the plan checks name it on the draft, for you to fix (#162).
+  if (!options.fromPlanner) validateWorkflowOrder(checkedSteps);
   return checkedSteps;
+}
+
+// The plan checks (#162): what Codeshi notices in a drafted plan before you see it, locally and with no model call. Each
+// finding is a sentence on the card it is about; nothing is changed or refused for it. Circular waits can't happen here,
+// as a drafted card can only wait for earlier ones.
+const BUILDS = ['builder', 'frontend', 'backend', 'database'], CHECKS = ['qa', 'reviewer'], CONTRACTS = ['contract', 'schema'];
+export function reviewDraft(steps) {
+  const byId = new Map(steps.map(step => [step.id, step])), number = new Map(steps.map((step, index) => [step.id, index + 1]));
+  const before = id => { const seen = new Set(), next = [...(byId.get(id)?.dependsOn || [])]; while (next.length) { const at = next.pop(); if (seen.has(at)) continue; seen.add(at); next.push(...(byId.get(at)?.dependsOn || [])); } return seen; };
+  const notes = {};
+  const note = (id, text) => { (notes[id] ||= []).push(text); };
+  for (const step of steps) {
+    if (!step.done?.length && !step.check) note(step.id, 'It doesn’t say what done means. Add a check before running it.');
+    const checked = step.dependsOn.map(id => byId.get(id)).filter(other => other && CHECKS.includes(other.role));
+    if (BUILDS.includes(step.role || 'builder') && checked.length) note(step.id, `It builds on ${checked.map(other => `card ${number.get(other.id)}`).join(' and ')}, a ${checked[0].role === 'qa' ? 'QA' : 'review'} card. Checks should come after the work they check.`);
+    if (CONTRACTS.includes(step.artifact)) {
+      const built = [...before(step.id)].map(id => byId.get(id)).filter(other => other && BUILDS.includes(other.role || 'builder') && !CONTRACTS.includes(other.artifact));
+      if (built.length) note(step.id, `This ${step.artifact} comes after building work (${built.map(other => `card ${number.get(other.id)}`).join(', ')}). Contracts should come before the cards that use them.`);
+    }
+    if (step.instructions.length > 2500 || step.files.length > 8) note(step.id, 'It looks large for one run. Consider splitting it into smaller cards.');
+  }
+  return notes;
 }
 
 // The steps as the person edited them. An empty plan is a draft still being written.
@@ -163,7 +212,7 @@ export function stepBrief(plan, step, { artifacts = {}, sourceRevision = null } 
 const ARTIFACT_NAMES = { contract: 'contract', schema: 'schema or migration plan', diff: 'changes', test_evidence: 'test evidence', findings: 'findings' };
 const clipped = (value, limit) => { const flat = String(value || '').trim(); return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat; };
 // What Codeshi recorded about an earlier step, for the step that builds on it: where its work is, its tests and its report.
-function upstreamLines(step, result) {
+export function upstreamLines(step, result) {
   const lines = [], check = result.check;
   if (result.status === 'integrated') lines.push('  Its changes were merged into the folder.');
   else if (result.status === 'kept') lines.push(`  Its changes were kept on the branch ${result.branch || 'it made'}, not in the folder.`);
@@ -300,7 +349,9 @@ export function parsePlan(reply) {
     const plan = JSON.parse(reply.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'));
     const summary = text(plan?.summary, planLimits.summary);
     if (!summary || !Array.isArray(plan.steps) || !plan.steps.length) throw Error();
-    return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true }) };
+    // Questions the planner couldn't answer from the request (#162): kept for you, never answered for you.
+    const questions = Array.isArray(plan.questions) ? plan.questions.map(item => text(item, planLimits.question)).filter(Boolean).slice(0, planLimits.questions) : [];
+    return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true }), ...(questions.length ? { questions } : {}) };
   } catch { return { status: 'unstructured', summary: 'The planner\'s reply could not be read as a plan. Open its response, plan again, or write the steps yourself.', steps: [] }; }
 }
 
@@ -322,6 +373,8 @@ export function applyOrchestration(c, record) {
   if (record.type === 'orchestration_run') Object.assign(plan, { status: 'running', tasks: record.tasks, folderId: record.folderId, startedAt: record.at, updatedAt: record.at });
   if (record.type === 'orchestration_stop') Object.assign(plan, { status: 'stopped', updatedAt: record.at });
   if (record.type === 'orchestration_close') Object.assign(plan, { status: 'closed', updatedAt: record.at });
+  // A drafted plan became draft cards on the Plan (#162): the cards are the plan from then on.
+  if (record.type === 'orchestration_moved') Object.assign(plan, { status: 'moved', cards: record.cards, updatedAt: record.at });
   if (record.type === 'orchestration_artifact') {
     plan.artifacts ||= {};
     plan.artifacts[record.stepId] = {

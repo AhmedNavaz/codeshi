@@ -21,7 +21,9 @@ const line = text => { const first = String(text || '').trim().split('\n')[0]; r
 const clip = (text, limit) => { const value = String(text || '').trim(); return value.length > limit ? `${value.slice(0, limit - 1).trimEnd()}…` : value; };
 // A plan step that finished in place is built on once its tests pass (#89). Failed or interrupted tests hold the steps
 // after it until you check it again or choose to continue anyway. A step in its own copy waits for your merge instead.
-const gated = task => Boolean(task.plan && task.status === 'complete' && task.stepCheck && (task.stepCheck.status === 'running' || ((task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted)));
+// A card from the Plan (#162) is held the same way.
+const tested = task => Boolean(task.plan || task.board);
+const gated = task => Boolean(tested(task) && task.status === 'complete' && task.stepCheck && (task.stepCheck.status === 'running' || ((task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted)));
 
 export class TaskCoordinator {
   constructor(main, { BrokerClass, acquireFolders = () => ({ release() {}, setProcess() {} }), withFolders = async (paths, operation, work) => work(), tests = null }) {
@@ -270,6 +272,7 @@ export class TaskCoordinator {
     if (first) lane.broker.record(lane.c, { type: 'execution_policy', policy: this.main.execution.current(c, task.execution.taskId) });
     // A plan step's brief is written now, not when the plan started (#89): it carries what the steps before it actually did.
     if (first && task.plan) { const brief = this.stepBrief(c, task); if (brief) this.update(c, task, brief); }
+    else if (first && task.board) { const brief = this.main.board?.brief(c, task); if (brief) this.update(c, task, brief); }
     const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` };
     if (task.routing) lane.broker.dispatch(lane.c, input, { execution: task.execution }).catch(error => { this.update(c, task, { status: task.preparationCancelled ? 'stopped' : 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
     else lane.broker.start(lane.c, input, { execution: task.execution });
@@ -293,7 +296,7 @@ export class TaskCoordinator {
     broker.admit = () => this.admit(c, task);
     const lane = { broker, task, c: task.conversationId ? broker.conversations.get(task.conversationId) : null };
     broker.on('update', () => { if (lane.c) this.main.emit('update', { conversationId: lane.c.id }); this.sync(c, task); });
-    broker.on('notify', notice => this.main.emit('notify', { ...notice, conversationId: c.id, title: `${task.folderName}: ${notice.title}` }));
+    broker.on('notify', notice => this.main.emit('notify', { ...notice, conversationId: c.id, taskId: task.id, title: `${task.folderName}: ${notice.title}` }));
     this.lanes.set(task.id, lane);
     return lane;
   }
@@ -307,15 +310,20 @@ export class TaskCoordinator {
     if (status === task.status && provider === task.provider && model === task.model && effort === task.effort) return;
     // A plan step that finishes is checked before anything builds on it, so the hold is saved with the status (#89). Working
     // on it again drops the old result; the next finish checks it afresh.
-    const finished = task.plan && status === 'complete' && task.status !== 'complete', check = finished ? { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() } : null;
-    this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), provider, model, effort, ...(selected?.routing ? { routing: selected.routing } : {}), ...(check ? { stepCheck: check } : task.plan && status === 'running' && task.stepCheck ? { stepCheck: null } : {}) });
+    const finished = tested(task) && status === 'complete' && task.status !== 'complete', check = finished ? { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() } : null;
+    this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), provider, model, effort, ...(selected?.routing ? { routing: selected.routing } : {}), ...(check ? { stepCheck: check } : tested(task) && status === 'running' && task.stepCheck ? { stepCheck: null } : {}) });
     if (check) this.stepEnded(c, task, check.id).catch(error => console.error('Codeshi could not check a plan step:', error.message));
     if (status !== 'running') setImmediate(() => this.tick(c));
   }
 
   // ---- Plan steps (#89): briefs written from what earlier steps did, and each finished step checked before it is built on.
   planOf(c, task) { return task.plan ? (c.orchestrations || []).find(plan => plan.id === task.plan.id) || null : null; }
-  stepOf(c, task) { const plan = this.planOf(c, task); return { plan, step: plan?.steps?.find(item => item.id === task.plan.stepId) || null }; }
+  // A plan step's plan and step, or a Plan card as its step (#162), with whether anything waits for it.
+  stepOf(c, task) {
+    if (task.board) { const found = this.main.board?.stepFor(c, task); return { plan: null, step: found?.step || null, dependents: Boolean(found?.dependents) }; }
+    const plan = this.planOf(c, task), step = plan?.steps?.find(item => item.id === task.plan.stepId) || null;
+    return { plan, step, dependents: Boolean(step && plan.steps.some(other => other.dependsOn.includes(step.id))) };
+  }
   stepTask(c, plan, stepId) {
     if (!plan.steps?.some(step => step.id === stepId)) throw fail('Choose a step from this plan.', 400);
     const task = plan.tasks?.[stepId] && (c.parallelTasks || []).find(item => item.id === plan.tasks[stepId]);
@@ -338,15 +346,15 @@ export class TaskCoordinator {
   // What a finished step reported and changed, then its tests on its result. A result that arrives after the step was
   // worked on again, or checked again, belongs to an older version and is dropped.
   async stepEnded(c, task, id, { recheck = false } = {}) {
-    const { plan, step } = this.stepOf(c, task), current = () => !this.closed && task.stepCheck?.id === id;
-    if (!plan || !step) { if (current()) this.update(c, task, { stepCheck: null }); return; }
+    const { plan, step, dependents } = this.stepOf(c, task), current = () => !this.closed && task.stepCheck?.id === id;
+    if (!step) { if (current()) this.update(c, task, { stepCheck: null }); return; }
     const conversation = this.lanes.get(task.id)?.c, run = conversation?.lastRun;
     if (!recheck) {
       const messages = conversation?.messages || [];
       const reply = messages.findLast(message => message.role === 'assistant' && message.text?.trim() && (!run || message.runId === run.id))?.text || '';
       const result = { summary: clip(reply, 3000), files: runSteps(messages).files.slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
       this.update(c, task, { stepResult: result });
-      if (step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
+      if (plan && step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
     }
     const ran = await this.runStepCheck(c, task);
     if (!current()) return;
@@ -354,8 +362,8 @@ export class TaskCoordinator {
     const reason = ran.reason && evaluated.outcome === 'unverified' ? ran.reason : ran.result?.status === 'timed-out' ? 'The tests were still running after 10 minutes, so they were stopped.' : evaluated.outcome === 'failed' ? `Exit code ${ran.result.exitCode ?? 'none'}.` : evaluated.reason;
     const outcome = { id, status: 'done', outcome: evaluated.outcome, reason, ...(ran.command ? { command: ran.command } : {}), ...(ran.result ? { exitCode: ran.result.exitCode ?? null, output: String(ran.result.output || '').slice(-4000) } : {}), at: new Date().toISOString() };
     this.update(c, task, { stepCheck: outcome });
-    this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId: step.id, outcome: evaluated.outcome, status: evaluated.status, reason, ...(ran.command ? { command: ran.command } : {}) });
-    if (evaluated.outcome === 'failed' && plan.steps.some(other => other.dependsOn.includes(step.id))) this.main.message(c, 'system', `The tests failed on step ${task.plan.number}, “${step.title}”, so the steps after it wait. Fix it in its task, or ${task.mode === 'worktree' ? 'merge it anyway' : 'continue anyway from the plan'}.`);
+    if (plan) this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId: step.id, outcome: evaluated.outcome, status: evaluated.status, reason, ...(ran.command ? { command: ran.command } : {}) });
+    if (evaluated.outcome === 'failed' && dependents) this.main.message(c, 'system', plan ? `The tests failed on step ${task.plan.number}, “${step.title}”, so the steps after it wait. Fix it in its task, or ${task.mode === 'worktree' ? 'merge it anyway' : 'continue anyway from the plan'}.` : `The tests failed on “${step.title}”, so the cards after it wait. Fix it in its task, or ${task.mode === 'worktree' ? 'merge it anyway' : 'continue anyway from the Plan'}.`);
     setImmediate(() => this.tick(c));
   }
   // The test command marked in the Run panel, on a temporary copy of the step's result: the folder as it is for a step
@@ -383,9 +391,9 @@ export class TaskCoordinator {
     } catch (error) { return { command: command.command, result: { status: 'failed', exitCode: null, output: String(error.message).slice(0, 2000) } }; }
     finally { this.checking.delete(task.id); this.main.emit('update', { conversationId: c.id }); }
   }
-  recheckStep(c, plan, stepId) {
-    const task = this.stepTask(c, plan, stepId);
-    if (task.status !== 'complete') throw fail('Only a finished step can be checked again.');
+  recheckStep(c, plan, stepId) { this.recheckTask(c, this.stepTask(c, plan, stepId)); }
+  recheckTask(c, task) {
+    if (task.status !== 'complete') throw fail(task.board ? 'Only a card that finished in place can be checked again. One in its own copy is tested when you review it.' : 'Only a finished step can be checked again.');
     if (task.stepCheck?.status === 'running' || this.checking.has(task.id)) throw fail('Its tests are already running.');
     const check = { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() };
     this.update(c, task, { stepCheck: check });
@@ -394,9 +402,13 @@ export class TaskCoordinator {
   // Building on a step whose tests failed, or were interrupted, is your call, and it is recorded as yours.
   continueStep(c, plan, stepId) {
     const task = this.stepTask(c, plan, stepId), check = task.stepCheck;
-    if (task.status !== 'complete' || !check || !(check.outcome === 'failed' || check.status === 'interrupted') || check.accepted) throw fail('Nothing is holding the steps after this one.');
-    this.update(c, task, { stepCheck: { ...check, accepted: true, acceptedAt: new Date().toISOString() } });
+    this.continueTask(c, task);
     this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId, outcome: check.outcome || 'unverified', status: 'accepted', reason: check.status === 'interrupted' ? 'You chose to continue without the tests.' : 'You chose to continue past the failed tests.', accepted: true, ...(check.command ? { command: check.command } : {}) });
+  }
+  continueTask(c, task) {
+    const check = task.stepCheck;
+    if (task.status !== 'complete' || !check || !(check.outcome === 'failed' || check.status === 'interrupted') || check.accepted) throw fail(task.board ? 'Nothing is holding the cards after this one.' : 'Nothing is holding the steps after this one.');
+    this.update(c, task, { stepCheck: { ...check, accepted: true, acceptedAt: new Date().toISOString() } });
     this.tick(c);
   }
   // After a restart. Whatever a lane was doing ended with the app, so its run is marked interrupted by its own journal, and
@@ -524,7 +536,8 @@ export class TaskCoordinator {
   async ledgers(options = {}) {
     const lists = await Promise.all(this.all().filter(({ task }) => task.conversationId).map(async ({ task }) => {
       const ledger = await readLedger(path.join(this.directory(task), 'journal', `${task.conversationId}.jsonl`), options);
-      return ledger.tasks.map(item => ({ ...item, parallelTask: task.id, folder: task.folderName, ...(task.plan ? { plan: { id: task.plan.id, part: 'step', stepId: task.plan.stepId, number: task.plan.number } } : {}) }));
+      // A Plan card counts toward its group's total (#162), as a plan step counts toward its plan's.
+      return ledger.tasks.map(item => ({ ...item, parallelTask: task.id, folder: task.folderName, ...(task.plan ? { plan: { id: task.plan.id, part: 'step', stepId: task.plan.stepId, number: task.plan.number } } : task.board?.group ? { plan: { id: `group:${task.board.group}`, part: 'step', stepId: task.board.cardId } } : {}) }));
     }));
     return lists.flat();
   }

@@ -113,20 +113,20 @@ else {
       // A background start loads the page only now, so nothing renders while no one looks.
       if(!pageLoaded){loadPage().then(()=>openTarget(target),()=>{});return;}
       if(win.isMinimized())win.restore();win.show();win.focus();app.focus?.({steal:true});
-      if(target?.projectId)win.webContents.send('relay:menu-command',target.approvalId?'open-approval':'open-workspace',target.approvalId?{projectId:target.projectId,approvalId:target.approvalId}:target.projectId);
+      if(target?.projectId)win.webContents.send('relay:menu-command',target.approvalId?'open-approval':'open-workspace',target.approvalId?{projectId:target.projectId,approvalId:target.approvalId,...(target.taskId?{taskId:target.taskId}:{})}:target.projectId);
     }
     // A banner is the panel near the top of the screen when that is chosen (#13), or else a system notification, so
     // nothing is announced twice. Each way is skipped when it is turned off for this moment.
-    function notify({kind,title,body,projectId,projectName,approvalId}){
+    function notify({kind,title,body,projectId,projectName,approvalId,taskId}){
       const plan=alertPlan({kind},relay.getNotificationPreferences(),{focused:Boolean(win&&!win.isDestroyed()&&win.isFocused()),panelAvailable:Boolean(overlay)});
       if(plan.badge&&app.dock){attention++;app.dock.setBadge(String(attention));}
       if(plan.bounce){app.dock?.bounce(plan.moment==='attention'?'critical':'informational');if(process.platform!=='darwin'&&win&&!win.isDestroyed())win.flashFrame(true);}
-      if(plan.panel){overlay.show({kind,title,body,projectId,projectName,approvalId});return;}
+      if(plan.panel){overlay.show({kind,title,body,projectId,projectName,approvalId,taskId});return;}
       if(!plan.notification||notificationsRefused||!Notification.isSupported())return;
       // Banners are silent: the page plays alert sounds itself, as chosen in Settings, so a sound is never heard twice.
       const notice=new Notification({title:projectName?`${title} · ${projectName}`:title,body:String(body||'').slice(0,240),silent:true});
       // An approval opens its own request card; it is never answered from the notification.
-      notice.on('click',()=>openTarget(projectId?{projectId,approvalId:kind==='approval'?approvalId:null}:null));
+      notice.on('click',()=>openTarget(projectId?{projectId,approvalId:kind==='approval'?approvalId:null,taskId:kind==='approval'?taskId:null}:null));
       notice.on('failed',(_event,error)=>{notificationsRefused=true;console.warn('macOS did not show a Codeshi notification:',error);});
       notice.show();
     }

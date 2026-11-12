@@ -214,7 +214,7 @@ export class Broker extends EventEmitter {
     this.checks = new RunChecks(this, { tests });
     this.checkpoints = new RunCheckpoints(this);
     // A lane runs one task, so only the workspace's own broker coordinates others.
-    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); this.board = new Board(this); this.schedules = new Schedules(this); }
+    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); this.board = new Board(this); this.schedules = new Schedules(this); this.attachments.planGate = plan => this.board.gate(plan); }
     this.checks.restore();
     // The first check of a wait saved before a restart runs once startup has finished.
     if (this.resume.waiting) setTimeout(() => this.resume.tick(), 0);
@@ -348,6 +348,8 @@ export class Broker extends EventEmitter {
       }
       c.boardRevision = record.seq;
     }
+    // Closed to agents (#97): the whole Plan.
+    if (record.type === 'plan_access') { c.planClosed = record.closed === true; c.boardRevision = record.seq; }
     if (record.type === 'board_card_remove') { c.board = (c.board || []).filter(item => item.id !== record.id); c.boardRevision = record.seq; }
     // Schedules (#132): beside the cards, and the board is read again when one changes.
     if (record.type === 'schedule') { c.schedules = [...(c.schedules || []), record.schedule]; c.boardRevision = record.seq; }
@@ -1016,7 +1018,7 @@ export class Broker extends EventEmitter {
     const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     let sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
     const verification = verificationForRun(this.verificationCadence(), { retryOf, automaticReview });
-    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -1070,6 +1072,8 @@ export class Broker extends EventEmitter {
         for (const message of c.messages.filter(m => m.runId === runId && m.role === 'assistant')) this.record(c, { type: 'message_update', id: message.id, update: { status: success ? 'complete' : 'incomplete' } });
         this.record(c, { type: 'run_metadata', metadata: { elapsedMs: Date.now() - Date.parse(c.activeRun.startedAt), phase: success ? 'complete' : 'stopped', lastEventAt: c.activeRun.lastEventAt } });
         if (orchestrate) this.record(c, { type: 'orchestration_result', id: runId, result: planningResult(success, run.stopped, c.messages.filter(message => message.runId === runId && message.role === 'assistant').at(-1)?.text) });
+        // A drafted plan becomes draft cards on the Plan (#162), for you to edit, accept or discard.
+        if (orchestrate) this.board?.adopt(c, runId);
         if (review) this.record(c, { type: 'review_result', id: runId, result: success ? parseReviewResult(c.messages.filter(message => message.runId === runId && message.role === 'assistant').at(-1)?.text, review.snapshot) : { status: run.stopped ? 'interrupted' : 'failed', summary: run.stopped ? 'Review stopped. Start a new review when ready.' : 'The review did not finish. Check the agent response and try again.', findings: [] } });
         this.record(c, { type: 'run_end', status: run.stopped ? 'interrupted' : success ? 'complete' : 'incomplete', errorCategory: run.errorCategory, ...(waitingAtEnd.length ? { waitingAtEnd } : {}) });
         if (!review) this.checkpoints.after(c, run);
@@ -1088,7 +1092,7 @@ export class Broker extends EventEmitter {
           // A planning run says whether a plan is ready.
           const planned = orchestrate ? c.orchestrations.find(item => item.id === runId) : null;
           if (!review && !waiting && !run.stopped) this.emit('notify', planned
-            ? planned.status === 'draft' ? { conversationId: c.id, kind: 'finished', title: 'Plan ready', body: `${agent} proposed a plan. Nothing from it runs until you approve it.` }
+            ? planned.status === 'draft' || planned.status === 'moved' ? { conversationId: c.id, kind: 'finished', title: 'Plan drafted', body: `${agent} drafted ${planned.cards?.length || planned.steps?.length || 0} cards on the Plan. Nothing runs until you accept them.` }
             : { conversationId: c.id, kind: 'stopped', title: 'No plan yet', body: run.errorCategory === 'quota' ? `${agent} reached a usage limit while planning. Open the workspace to plan again.` : `${agent} didn’t return a plan. Open the workspace to plan again or write the steps yourself.` }
             : success
             ? { conversationId: c.id, kind: 'finished', title: 'Task finished', body: `${agent} finished${run.resume ? ' the work it continued while you were away' : ''}.` }
@@ -1168,7 +1172,7 @@ export class Broker extends EventEmitter {
                 if (account.authenticated === false) throw Object.assign(new Error('Sign in through the provider’s supported authentication flow before running.'), { category: 'authentication' });
                 if (account.billingSource !== 'subscription' && !billingConfirmed) throw Object.assign(new Error(`Billing source is ${account.billingSource}. Explicitly confirm this provider run before it may consume usage.`), { category: 'permission' });
                 run.billingSource = account.billingSource;
-                prepared = prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode, session: { sessionReason: 'cross-agent-handoff', previousProvider }, attachments, readAttachment: id => this.attachments.read(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: true, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+                prepared = prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode, session: { sessionReason: 'cross-agent-handoff', previousProvider }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: true, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
                 this.record(c, { type: 'run_metadata', metadata: { routingFallback: { from: previousProvider, fromModel: previousModel, to: provider, toModel: model, toEffort: effort ?? null, toTransport: actualTransport, freshSession: !sessionId, reason: `${previousProvider} quota is ${quota.state} (${globalThis.relayRouting.quotaText(quota)})` } } });
                 this.message(c, 'activity', `${previousProvider === 'codex' ? 'Codex' : previousProvider === 'claude' ? 'Claude' : 'Gemini'} is near its quota limit (${globalThis.relayRouting.quotaText(quota)}). Smart routing switched to ${provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex'}${model ? ` (${model})` : ''}.`, provider);
                 if (fallback.usage) this.observeQuota(c, provider, fallback.usage);

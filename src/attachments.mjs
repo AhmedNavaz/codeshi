@@ -41,7 +41,9 @@ export class AttachmentStore {
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
     if (fs.realpathSync(this.root) !== path.resolve(this.root)) fail('Attachment storage cannot be a symbolic link.');
   }
-  put({ name, data }) {
+  // plan (#97): a Plan attachment's cards, kept with its snapshot so a prompt put together later can leave it out once
+  // they're closed to agents. Only Codeshi's own Plan sets it; an upload can't.
+  put({ name, data }, { plan = null } = {}) {
     if (typeof data !== 'string' || data.length > Math.ceil(attachmentLimits.imageBytes / 3) * 4 || data.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(data)) fail('Invalid or oversized attachment.', 413);
     const bytes = Buffer.from(data, 'base64');
     if (bytes.toString('base64') !== data) fail('Invalid base64 attachment.');
@@ -53,11 +55,12 @@ export class AttachmentStore {
     let fd;
     try {
       fd = fs.openSync(temporary, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ ...meta, id, data })); fs.fsyncSync(fd);
+      fs.writeFileSync(fd, JSON.stringify({ ...meta, id, data, ...(plan ? { plan } : {}) })); fs.fsyncSync(fd);
       fs.closeSync(fd); fd = undefined;
-      try { fs.linkSync(temporary, file); } catch (error) { if (error.code !== 'EEXIST') throw error; this.read(id); }
+      // The same text attached again keeps its first snapshot, so a Plan link is added to it rather than lost.
+      try { fs.linkSync(temporary, file); } catch (error) { if (error.code !== 'EEXIST') throw error; const saved = this.read(id); if (plan && JSON.stringify(saved.plan || null) !== JSON.stringify(plan)) fs.renameSync(temporary, file); }
     } finally { if (fd !== undefined) fs.closeSync(fd); fs.rmSync(temporary, { force: true }); }
-    return { ...meta, id };
+    return { ...meta, id, ...(plan ? { plan: { cards: plan.cards.length, whole: plan.whole === true } } : {}) };
   }
   read(id) {
     if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) fail('Invalid attachment ID.');
@@ -71,16 +74,24 @@ export class AttachmentStore {
       // Checked against its ID before it is read, since reading a Word document means unpacking it.
       if (typeof saved.name !== 'string' || digest(Buffer.concat([Buffer.from(saved.name + '\0'), bytes])) !== id) fail('The saved attachment has changed.', 409);
       const { text, ...meta } = inspectAttachment(saved.name, bytes);
-      return { ...meta, id, data: bytes.toString('base64'), ...(meta.kind === 'text' ? { text } : {}) };
+      return { ...meta, id, data: bytes.toString('base64'), ...(meta.kind === 'text' ? { text } : {}), ...(saved.plan && typeof saved.plan === 'object' ? { plan: saved.plan } : {}) };
     } catch (error) { if (error.code === 'ENOENT') fail('An attachment is no longer available. Remove it and attach the file again.', 404); throw error; }
     finally { if (fd !== undefined) fs.closeSync(fd); }
+  }
+  // What an agent is given for an attachment: its text, unless it's a Plan attachment whose Plan or cards were closed to
+  // agents since (#97). Every prompt asks this, including retries, handoffs and context refreshes.
+  forAgent(id) {
+    const file = this.read(id), why = file.plan && this.planGate ? this.planGate(file.plan) : null;
+    return why ? { ...file, text: `[Left out: ${why}.]`, withheld: why } : file;
   }
   select(ids = []) {
     if (!Array.isArray(ids) || ids.length > attachmentLimits.count || new Set(ids).size !== ids.length) fail('Attach up to 6 different files per message.');
     const files = ids.map(id => this.read(id));
     if (files.reduce((n,f) => n + f.bytes, 0) > attachmentLimits.totalBytes) fail('Attachments must total 20 MB or less.', 413);
     if (files.filter(f => f.kind === 'text').reduce((n,f) => n + f.bytes, 0) > attachmentLimits.totalTextBytes) fail('Text attachments must total 128 KB or less.', 413);
-    return files.map(({ data, text, ...meta }) => meta);
+    // A Plan attachment closed to agents since it was attached is still listed with the message, marked as left out, and
+    // the agent gets only that note (forAgent), so a retry or a run after a usage reset doesn't fail over it.
+    return files.map(({ data, text, plan, ...meta }) => { const why = plan && this.planGate ? this.planGate(plan) : null; return { ...meta, ...(plan ? { plan: { cards: plan.cards?.length || 0, whole: plan.whole === true } } : {}), ...(why ? { withheld: why } : {}) }; });
   }
   imageInput(id) {
     const file = this.read(id);

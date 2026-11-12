@@ -1,7 +1,7 @@
-// Orchestrate (#12, #89, #97): a message can be planned as a few steps. Turned on for one message, one read-only
-// run plans it with the deepest work allowed; the plan then opens from the Plan button in the top bar, as a chart
-// (plan-view.js). This module keeps the draft being edited, each step's editor, the worst case and the plan's actions.
-// Nothing from a plan runs until it is approved, and queued messages wait for it. The server checks every saved plan again.
+// Orchestrate (#12, #89, #97): a message can be planned as steps. Turned on for one message, one read-only run plans it
+// with the deepest work allowed. Since One Plan (#162) the steps arrive as draft cards on the Plan (board.js), which you
+// accept or discard, and queued messages wait until you have. This module keeps Orchestrate's switch in the message box,
+// and the card and chart (plan-view.js) for a plan made before then, which is still running or stopped.
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), api = window.relayUI;
@@ -82,18 +82,14 @@
       window.relayPlanView?.open(); render(); $('orchestration-confirm-no').focus();
     });
   }
-  // A plan written by hand starts from the drafted message, without a model call.
-  async function writeYourself(goal) {
+  // Writing it yourself (#162) opens the Plan with a new card written from the message, without a model call. The message
+  // stays in the box until the card is added.
+  function writeYourself(goal) {
     goal = (goal || '').trim();
     if (!goal) { api.showNotice('Describe what the plan is for first.'); return; }
-    if (!(await mayReplace())) return;
-    const fromDraft = goal === $('message-input').value.trim();
-    if (await action({ action: 'create', goal })) {
-      armedFor = null;
-      window.relayPlanView?.open();
-      if (fromDraft) { $('message-input').value = ''; $('message-input').dispatchEvent(new CustomEvent('input')); }
-      api.announce('An empty plan is ready. Add its steps.');
-    }
+    armedFor = null; render(); api.renderControls(); window.relayPlanView?.close();
+    const first = goal.split('\n')[0].trim(), title = first.length > 200 ? `${first.slice(0, 199).trimEnd()}…` : first;
+    window.relayBoard?.open({ title, notes: goal === first && first.length <= 200 ? '' : goal });
   }
   // Plan again sends the planned message once more, with the files it had, and leaves the message box as it is.
   function planAgain() {
@@ -384,30 +380,12 @@
     $('orchestrate-toggle').setAttribute('aria-pressed', String(armed()));
     $('orchestrate-armed').hidden = !(show && armed());
     const agentOrMode = conversation()?.routing ? `with the deepest work ${modeName()} allows` : `with ${names[state().provider] || state().provider}`;
-    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run plans the steps first, ${agentOrMode}. Nothing from this plan runs until you approve it.`;
+    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run drafts cards on the Plan first, ${agentOrMode}. Nothing from them runs until you accept them.`;
     $('orchestrate-write').disabled = busy;
     renderCard();
-    renderEntry();
     window.relayPlanView?.render();
   }
-  // The Plan button in the top bar: it opens the plan, and says where the plan stands.
-  function renderEntry() {
-    const entry = $('open-plan'); if (!entry) return;
-    const plan = onMain() ? openPlan() || runningPlan() : null, count = plan?.steps?.length || 0;
-    let name = 'none', short = '', long = 'Plan: no plan yet. Orchestrate plans a message as steps.';
-    if (plan?.status === 'planning') { name = 'planning'; short = 'Planning…'; long = 'Plan: the steps are being planned.'; }
-    else if (plan?.status === 'draft') { name = 'ready'; short = count ? 'Ready' : 'Empty'; long = count ? `Plan: ${plural(count, 'step')} waiting for you. Nothing runs until you approve it.` : 'Plan: an empty plan is waiting for its steps.'; }
-    else if (plan?.status === 'running') {
-      const rows = planTasks(plan), done = rows.filter(row => row.task && ['complete', 'integrated', 'kept'].includes(row.task.status)).length, live = rows.some(row => row.task && LIVE.includes(row.task.status));
-      name = live ? 'running' : 'finished'; short = `${done}/${rows.length}`; long = `Plan: ${live ? 'running' : 'finished'}, ${done} of ${plural(rows.length, 'step')} done.`;
-    }
-    else if (plan?.status === 'stopped') { name = 'stopped'; short = 'Stopped'; long = 'Plan: stopped.'; }
-    else if (plan) { name = 'trouble'; short = 'Not ready'; long = 'Plan: the plan isn’t ready. Plan again or write the steps yourself.'; }
-    entry.dataset.state = name; entry.title = long; entry.setAttribute('aria-label', long);
-    entry.disabled = !state().projectId;
-    const badge = $('open-plan-state'); if (badge) { badge.textContent = short; badge.hidden = !short; }
-  }
-  $('open-plan')?.addEventListener('click', () => window.relayPlanView?.open());
+  // The Plan button belongs to the Plan (board.js) since #162.
 
   $('orchestrate-toggle').addEventListener('click', () => {
     armedFor = armed() ? null : state().projectId;
@@ -450,20 +428,27 @@
 
   window.relayOrchestration = {
     armed, render, mayReplace,
-    // The plan that holds the queue, for Flow's What's next.
-    waiting: () => onMain() ? openPlan() : null,
+    // The plan that holds the queue, for Flow's What's next: one being made or not ready, or one whose drafted cards still
+    // wait on the Plan for you (#162).
+    waiting: () => {
+      if (!onMain()) return null;
+      const plan = conversation()?.orchestrations?.[0], drafts = (window.relayBoard?.drafts?.() || []).filter(card => card.draft?.batch?.id === plan?.id).length;
+      if (plan?.status === 'moved') return drafts ? { ...plan, drafts } : null;
+      return openPlan();
+    },
     accepted(projectId) { if (armedFor === projectId) armedFor = null; render(); },
     // How the planner's reply reads in the thread, and the label on the message it planned.
     describe(plan) {
       if (!plan) return '';
       if (plan.status === 'planning') return 'Planning the steps…';
+      if (plan.status === 'moved') return `Drafted ${plural(plan.cards?.length || plan.steps?.length || 0, 'card')} on the Plan: ${plan.summary || plan.goal}${plan.questions?.length ? ` It asks: ${plan.questions.join(' ')}` : ''}`;
       if (plan.steps?.length) return `Proposed a plan of ${plural(plan.steps.length, 'step')}: ${plan.summary || plan.goal}`;
       return plan.summary || '';
     },
     label(plan) {
       if (!plan) return 'Orchestrate';
       if (plan.status === 'planning') return 'Orchestrate · planning the steps';
-      return plan.steps?.length ? 'Orchestrate · planned' : 'Orchestrate · not planned';
+      return plan.steps?.length || plan.status === 'moved' ? 'Orchestrate · planned' : 'Orchestrate · not planned';
     },
     // For the Plan view (plan-view.js): the plan the card shows, drawn from the same draft, and the same edits.
     snapshot() {
