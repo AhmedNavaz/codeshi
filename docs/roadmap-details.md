@@ -50,7 +50,7 @@ Flow-exclusive behavior means discretionary routing, handoff, recovery and futur
 | GitHub/CI context (#18) | Select context and actions explicitly | Gather relevant context within authorized repository scope; external text remains untrusted |
 | Contextual suggestions (#106) | Explain and offer a change for acceptance | Explain decisions and propose meaningful policy changes; suggestions grant no authority |
 | Multiplayer (#24) | Shared manual collaboration. Read-only watching with suggestions shipped in 0.43.0 | Shared observation/steering with explicit authority and no conflicting controllers |
-| CLI (#90) | Explicit agents and exact workflows. The interactive session and script commands shipped in 0.43.0 ([docs/cli.md](cli.md)) | Same backend Flow policy; no second orchestration engine |
+| CLI (#90) | Explicit agents and exact workflows. The interactive session and script commands shipped in 0.43.0 on macOS and in 0.48.0 on Windows ([docs/cli.md](cli.md)) | Same backend Flow policy; no second orchestration engine |
 
 Both modes retain context selection and native-compaction visibility, the canonical shared history and briefs, reviewed memory, portable skills, usage readings and task accounting, budgets and concurrency protection, recovery, read/edit access and tool approvals (including optional full auto-approval), import/export, conversation search, Ask a Friend, recaps, notifications and menu-bar status, keep-awake, themes, setup, updates, accessibility, translations and platform/adapter support. Phone notifications/Home Screen support, binary patches and collaboration improvements are also shared. Flow may change their presentation, not remove their protections or grant extra access. Durable memory changes remain reviewed.
 

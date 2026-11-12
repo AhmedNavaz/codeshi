@@ -178,3 +178,6 @@ Every feature Codeshi has shipped, with the release it arrived in. The [roadmap]
 | An evaluation task for each starter skill, measured with and without it ([#86](https://github.com/AhmedNavaz/codeshi/issues/86)) | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
 | Alerts set up by moment in Settings, with Try it, and an Alerts step in the setup guide | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
 | Memories need a recheck only when a named file, the branch or the dependencies change ([#21](https://github.com/AhmedNavaz/codeshi/issues/21)) | [0.47.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.47.0) |
+| Voice input on Windows, recognized on the PC through offline Windows speech recognition, in dictation and Flow's conversation mode ([#73](https://github.com/AhmedNavaz/codeshi/issues/73)) | [0.48.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.48.0) |
+| The `codeshi` command and the in-app CLI tab on Windows ([#90](https://github.com/AhmedNavaz/codeshi/issues/90)) | [0.48.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.48.0) |
+| Installing Google Antigravity from Settings on Windows, with PowerShell setup and startup/status reliability fixes | [0.48.0](https://github.com/AhmedNavaz/codeshi/releases/tag/v0.48.0) |

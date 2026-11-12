@@ -441,7 +441,7 @@ For a checkout promo-code feature: agree on API/data contracts; frontend and bac
 
 **Issue title:** Add a Codeshi CLI for shared workflows, provider handoff and desktop continuity
 
-**Tracking:** [#90](https://github.com/AhmedNavaz/codeshi/issues/90). A first slice shipped in 0.43.0 on macOS: an interactive `codeshi` session, and `codeshi status`, `run`, `continue`, `wait`, `stop` and `tasks`, work through the desktop app's engine, starting it without a window when it isn't open, with `--json`/`--jsonl` output, documented exit codes, terminal approvals and `needs_input` without a terminal ([reference](cli.md)). Flow routing, workflows, `skills`, `doctor` and Windows/Linux installs remain proposals.
+**Tracking:** [#90](https://github.com/AhmedNavaz/codeshi/issues/90). A first slice shipped in 0.43.0 on macOS and in 0.48.0 on Windows: an interactive `codeshi` session, and `codeshi status`, `run`, `continue`, `wait`, `stop` and `tasks`, work through the desktop app's engine, starting it without a window when it isn't open, with `--json`/`--jsonl` output, documented exit codes, terminal approvals and `needs_input` without a terminal ([reference](cli.md)). Flow routing, workflows, `skills`, `doctor` and a Linux install remain proposals.
 
 #### Problem
 

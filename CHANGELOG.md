@@ -4,6 +4,17 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-11-12
+
+### Added
+- **Voice input on Windows** ([#73](https://github.com/AhmedNavaz/codeshi/issues/73)). The microphone beside Send, Ctrl+Alt+V and **Agent › Voice Input** now work on Windows, in dictation and in Flow's conversation mode. Speech is recognized on your PC by the offline speech recognition that is part of Windows, so the audio never leaves it and nothing needs installing. It needs speech recognition for your language, which Windows installs with the language, and it does not add punctuation. **Settings › Voice** says what Windows allows.
+- **The `codeshi` command on Windows** ([#90](https://github.com/AhmedNavaz/codeshi/issues/90)). **File › Install ‘codeshi’ Command…** adds `codeshi` to Command Prompt, PowerShell and Windows Terminal, without an administrator and without restarting the terminal. It is the same command as on macOS: an interactive session, or `status`, `run`, `continue`, `wait`, `stop` and `tasks` for scripts, and it starts Codeshi in the background when it isn't open. **File › Remove ‘codeshi’ Command** takes it away.
+- **Install Google Antigravity on Windows from Settings.** In **Settings › Accounts**, **Install Google connection** now downloads and checks Google's official Antigravity runtime directly on Windows as well as macOS and Linux. **Settings › Accounts** also gives Windows PowerShell setup commands for Claude Code, and the Windows installer looks up the latest release without hitting GitHub's API limit.
+
+### Fixed
+- **The CLI tab and console input on Windows** ([#90](https://github.com/AhmedNavaz/codeshi/issues/90)). Opening **CLI** in the status bar on Windows now starts the interactive session cleanly inside the tab instead of opening blank and closing right away, and packaged `codeshi` commands read interactive terminal input while keeping piped scripts unchanged.
+- **Gemini status and Antigravity startup on Windows.** Codeshi now finds a standalone Antigravity ACP installation under `%LOCALAPPDATA%\agy\bin`, and gives the single-file Windows runtime time to unpack and initialize on startup. Background checks no longer flash console windows, and connection or timeout failures appear clearly in Settings instead of a local server error.
+
 ## [0.47.0] - 2026-11-12
 
 ### Added

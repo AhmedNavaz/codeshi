@@ -65,7 +65,7 @@ npm start        # Launches desktop app in isolated Dev profile
 
 *For browser-only mode without Electron: `npm run web` (available at `http://127.0.0.1:4318`).*
 
-Connect at least one agent: sign in to [Claude Code](https://code.claude.com/docs/en/overview) or the [Codex CLI](https://github.com/openai/codex). For Gemini on Mac, choose **Settings › Install Google connection** to pair with Antigravity ACP. For local models, install [Ollama](https://ollama.com/download) and run any tool-capable model.
+Connect at least one agent: sign in to [Claude Code](https://code.claude.com/docs/en/overview) or the [Codex CLI](https://github.com/openai/codex). For Gemini, choose **Settings › Install Google connection** to pair with Antigravity ACP. For local models, install [Ollama](https://ollama.com/download) and run any tool-capable model.
 
 ---
 
