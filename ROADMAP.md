@@ -1,6 +1,6 @@
 # Roadmap
 
-What Codeshi is working on, in priority order. **Now** is the current focus, **Next** follows it, **Later** is further out, and **Exploring** holds larger ideas that need design first. Each table is ordered with the most important item at the top. Priorities can change with feedback, so treat this as a plan rather than a promise.
+What Codeshi is working on, in priority order. **Now** is the current focus, **Next** follows it and **Later** is further out, each with the most important item at the top. **Final checks** lists features that are built and only need one try on the real service or device. **Ongoing checks** is testing that keeps going across releases, and **Exploring** holds larger ideas that need design first. Priorities can change with feedback, so treat this as a plan rather than a promise.
 
 A core goal is to get more verified work from the agent allowances people already have, without needing a higher subscription tier.
 
@@ -10,36 +10,55 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 
 | # | Feature | What's left | Issue |
 | --- | --- | --- | --- |
-| 1 | **Lower battery and resource use** | Measure idle, streaming, Lounge and preview workloads, fix what the measurements show, and set energy budgets. The Lounge's first mitigation shipped in 0.38.0, and 0.40.0 draws weather at most 30 times a second, paces games at 60 Hz speed and runs the setup glow once. Since 0.42.0, **Help › Record Performance Trace** measures the installed app. In 0.43.0, weather moved from the Lounge to Flow's **Your space**, and Clear draws nothing. Idle, streaming and preview workloads are not measured yet | [#152](https://github.com/AhmedNavaz/codeshi/issues/152) |
-| 2 | **Notarized macOS builds** | Downloads that open without a security prompt, with notification banners. Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
-| 3 | **One routing policy for the whole task** | Since 0.44.0, retries, Ultra's reviewer, resuming after a reset and Orchestrate steps use the same Smart, Saver or Ultra handoff line as the first assignment and handoffs. Left: Flow handoffs shown as a notice rather than an offer, model abilities that are verified rather than guessed from names, and automatic fallback to a local model. [Scope](docs/roadmap-details.md#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
-| 4 | **Evidence that routing and context changes help** | Budgeted live comparisons against a manually chosen agent, and long real tasks measured before and after. An Orchestrate plan's total for planning and every step shipped in 0.41.0, Claude's usage split by model in 0.44.0, and sharing for Smart results in 0.45.1. No savings are claimed until then | [#84](https://github.com/AhmedNavaz/codeshi/issues/84), [#139](https://github.com/AhmedNavaz/codeshi/issues/139), [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
+| 1 | **Notarized macOS builds** | Downloads that open without a security prompt, with notification banners. Waiting on an Apple Developer account | [#1](https://github.com/AhmedNavaz/codeshi/issues/1) |
+| 2 | **Flow manages a whole outcome** | Flow runs a bounded outcome under the backend task policy, with takeover, recovery and end-to-end tests. The focused view, cards and project review have shipped, and What happened in 0.45.1. [Agreed split](docs/roadmap-details.md#normal-and-flow-the-agreed-execution-split) | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
+| 3 | **One routing policy for the whole task** | Flow handoffs shown as a notice rather than an offer, model abilities that are verified rather than guessed from names, and automatic fallback to a local model. Since 0.44.0, retries, Ultra's reviewer, resuming after a reset and Orchestrate steps use the same Smart, Saver or Ultra handoff line as the first assignment and handoffs. [Scope](docs/roadmap-details.md#adaptive-agent-and-model-routing) | [#12](https://github.com/AhmedNavaz/codeshi/issues/12) |
+| 4 | **More agents and models** | Grok, DeepSeek, Qwen and free cloud tiers on your own accounts. Claude Code, Codex, Gemini and local Ollama models have shipped | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
 
 ## Next
 
 | # | Feature | What's left | Issue |
 | --- | --- | --- | --- |
-| 1 | **Flow manages a whole outcome** | Flow runs a bounded outcome under the backend task policy, with takeover, recovery and end-to-end tests. The focused view, cards and project review have shipped, and What happened in 0.45.1. [Agreed split](docs/roadmap-details.md#normal-and-flow-the-agreed-execution-split) | [#107](https://github.com/AhmedNavaz/codeshi/issues/107) |
-| 2 | **More agents and models** | Grok, DeepSeek, Qwen and free cloud tiers on your own accounts. Gemini and local Ollama models have shipped | [#4](https://github.com/AhmedNavaz/codeshi/issues/4) |
-| 3 | **Plans** | Plans drafted from an uploaded project document, a board, and cards you place yourself. Orchestrate's step plans shipped in 0.37.0, 0.41.0 shows them as a full-window chart with an outline, and 0.45.1 adds a canvas to the board | [#97](https://github.com/AhmedNavaz/codeshi/issues/97) |
-| 4 | **Parallel tasks from one request** | A split proposed by the agent, a total for the group, and a measured comparison with one agent working in order. Running an Orchestrate plan as tasks shipped in 0.39.0, and folding a plan's row with its total in 0.45.1 | [#108](https://github.com/AhmedNavaz/codeshi/issues/108) |
-| 5 | **Specialist roles** | One round of repair after a review, an independent review of the final result, and a measured comparison with one agent. Roles, artifacts and checks on Orchestrate steps shipped in 0.38.0. Since 0.46.0, a plan's step is tested before later steps build on it, and each step is briefed from what the earlier steps did | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
-| 6 | **GitHub in the conversation** | Trying **Open pull request** against GitHub itself: it shipped in 0.46.0 with automated tests only. Issues, pull requests and failing checks as context shipped in 0.39.0. [Scope](docs/roadmap-details.md#everything-in-the-thread) | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
+| 1 | **Linux builds** | Packaging. The test suite already runs on Linux in CI | [#5](https://github.com/AhmedNavaz/codeshi/issues/5) |
+| 2 | **Install with Homebrew** | `brew install --cask codeshi`. Depends on notarized builds (#1) | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
+| 3 | **Task board and schedules** | Cards or prompts that run at a set time, Flow choosing cards, labels and dictated cards. The board you run by hand shipped in 0.43.0, and a canvas view in 0.45.1. [Plan](docs/roadmap-details.md#task-board-and-schedules) | [#132](https://github.com/AhmedNavaz/codeshi/issues/132) |
+| 4 | **Plans** | Plans drafted from an uploaded project document, labels and comments on cards, and shared links. Orchestrate's step plans shipped in 0.37.0, 0.41.0 shows them as a full-window chart with an outline, and 0.45.1 adds a canvas to the board | [#97](https://github.com/AhmedNavaz/codeshi/issues/97) |
+| 5 | **Parallel tasks from one request** | A split proposed by the agent, a total for the group, and a measured comparison with one agent working in order. Running an Orchestrate plan as tasks shipped in 0.39.0, and folding a plan's row with its total in 0.45.1 | [#108](https://github.com/AhmedNavaz/codeshi/issues/108) |
+| 6 | **Specialist roles** | One round of repair after a review, an independent review of the final result, and a measured comparison with one agent. Roles, artifacts and checks on Orchestrate steps shipped in 0.38.0. Since 0.46.0, a plan's step is tested before later steps build on it, and each step is briefed from what the earlier steps did | [#89](https://github.com/AhmedNavaz/codeshi/issues/89) |
 | 7 | **Concurrent tasks, finished** | Local models, Review changes and undo inside a task. A task's copy getting your installed packages shipped in 0.40.0, and tasks and plans in the recap in 0.46.0 | [#88](https://github.com/AhmedNavaz/codeshi/issues/88) |
-| 8 | **Skills through each agent's own skill system** | The same skill on at least two agents, including after a handoff, with usage measured with and without it | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
-| 9 | **Task limits checked on a paid API account** | Everything else has shipped; it has only been tested with simulated providers | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
-| 10 | **Install with Homebrew** | `brew install --cask codeshi`. Depends on notarized builds (#1) | [#3](https://github.com/AhmedNavaz/codeshi/issues/3) |
-| 11 | **Linux builds** | Packaging. The test suite already runs on Linux in CI | [#5](https://github.com/AhmedNavaz/codeshi/issues/5) |
+| 8 | **Codeshi CLI, finished** | Flow routing, workflows, `skills`, `doctor` and a Linux install. An interactive `codeshi` session and script commands shipped in 0.43.0 on macOS and in 0.48.0 on Windows, sharing the window's conversation. [Reference](docs/cli.md) | [#90](https://github.com/AhmedNavaz/codeshi/issues/90) |
+| 9 | **Skills through each agent's own skill system** | Claude, Codex and Gemini each load skills their own way, instead of receiving them as instructions. Skill packs, starters and their evaluations shipped in 0.47.0 | [#86](https://github.com/AhmedNavaz/codeshi/issues/86) |
 
 ## Later
 
 | Feature | Status | Issue |
 | --- | --- | --- |
-| Project memory: suggested memories you review before they're saved. Copy to AGENTS.md shipped in 0.40.0, and a recheck only when a named file, the branch or the dependencies change in 0.47.0 | First version shipped in 0.26.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
-| iPhone Live Activities, which need a native app. Lock-screen notifications shipped in 0.41.0, and replies read aloud on the phone in 0.47.0 | Remote access shipped in 0.27.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
-| Status in the Windows notification area: trying it on a real Windows PC. Built with automated tests only | First version shipped in 0.42.0, help wanted | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
-| Accessibility: a VoiceOver and NVDA check of the whole app. Menus, popovers, the file tree and search shipped in 0.42.0, and side panel tabs, Flow, message headings and the board canvas in 0.47.0 | First pass shipped in 0.42.0, help wanted | [#26](https://github.com/AhmedNavaz/codeshi/issues/26) |
-| Interface translations: the first languages, and the remaining panels, phone page and server messages. The base and main surfaces shipped in 0.42.0 | Base shipped in 0.42.0, help wanted | [#27](https://github.com/AhmedNavaz/codeshi/issues/27) |
+| Connect GitHub: a read-only sign-in without `gh`, and GitHub Enterprise | **From GitHub** in New workspace, using your `gh` login, shipped in 0.47.0 | [#159](https://github.com/AhmedNavaz/codeshi/issues/159) |
+| Move to another computer directly, by pairing the two with a QR code and a six-digit code, without a file. Ongoing sync comes after that. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | A backup file locked with a passphrase shipped in 0.47.0 | [#160](https://github.com/AhmedNavaz/codeshi/issues/160) |
+| Task-scoped context: a before/after run on a long real task. Live runs on long built conversations found that in a chat of many short messages, the rolling brief can leave out requests the older cut-off kept | First version shipped in 0.26.0, the rolling brief in 0.38.0 | [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
+| Project memory: suggested memories you review before they're saved | First version shipped in 0.26.0, Copy to AGENTS.md in 0.40.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
+| Interface translations: the first languages, and the remaining panels, phone page and server messages | Base and main surfaces shipped in 0.42.0, help wanted | [#27](https://github.com/AhmedNavaz/codeshi/issues/27) |
+| iPhone Live Activities, which need a native app | Remote access shipped in 0.27.0, lock-screen notifications in 0.41.0 and replies read aloud in 0.47.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
+
+## Final checks
+
+Built and covered by automated tests. Each issue closes after one try on the real service or device, and a report from your own setup helps.
+
+| Feature | The check | Issue |
+| --- | --- | --- |
+| **Open pull request** | Opening a pull request on GitHub itself. Shipped in 0.46.0, tested against local repositories and a stand-in for `gh` | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
+| **Task limits on a paid API account** | A time, token or spend limit on a real pay-per-use account. Everything shipped by 0.38.0 and was tested with simulated providers | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
+| **Status in the Windows notification area** | The icon, tooltip, click and menu on a real Windows PC. Shipped in 0.42.0. Help wanted | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
+
+## Ongoing checks
+
+Testing that doesn't end with one release: it needs repeated runs, many setups and different people, and each new feature adds to it. These run alongside everything else, so they have no place in the order above. Results and traces from your own setup help most here.
+
+| Area | What's being checked | Issue |
+| --- | --- | --- |
+| **Battery and resource use** | Measuring idle, streaming, Lounge and preview workloads on different Macs and PCs, fixing what the measurements show, and keeping energy budgets as features are added. **Help › Record Performance Trace** (since 0.42.0) measures the installed app, and a trace recorded while Codeshi drains your battery is the most useful report | [#152](https://github.com/AhmedNavaz/codeshi/issues/152) |
+| **Evidence that Smart routing helps** | Budgeted live comparisons of Smart against a manually chosen agent, repeated across agents, models and task sizes, and Smart results reports people choose to share (**Share…**, since 0.45.1). No savings are claimed until the evidence passes its gates | [#84](https://github.com/AhmedNavaz/codeshi/issues/84), [#139](https://github.com/AhmedNavaz/codeshi/issues/139) |
+| **Accessibility with real screen readers** | VoiceOver and NVDA users trying the whole app, including each new view. Keyboard and screen reader passes shipped in 0.42.0, 0.44.0 and 0.47.0. Help wanted | [#26](https://github.com/AhmedNavaz/codeshi/issues/26) |
 
 ## Exploring
 
@@ -47,13 +66,9 @@ Larger ideas that need design work first, so join the issue before building. The
 
 | Idea | Issue |
 | --- | --- |
-| **Task board and schedules.** A board per project, and cards or prompts that run at a set time. The board you run by hand shipped in 0.43.0, and a canvas view in 0.45.1; schedules and Flow choosing cards are next. [Plan](docs/roadmap-details.md#task-board-and-schedules) | [#132](https://github.com/AhmedNavaz/codeshi/issues/132) |
-| **Codeshi CLI.** Run, inspect, stop and continue the same workflows from a terminal, on the same engine as the desktop app. An interactive `codeshi` session and script commands shipped in 0.43.0 on macOS and in 0.48.0 on Windows, sharing the window's conversation; Flow routing, workflows and a Linux install are next. Smart, Saver and Ultra don't apply to messages from the terminal yet, and it doesn't show the Flow mode. [Reference](docs/cli.md) | [#90](https://github.com/AhmedNavaz/codeshi/issues/90) |
-| **Connect GitHub.** Pick one of your repositories and open it as a workspace. **From GitHub** in New workspace, using your `gh` login, shipped in 0.47.0; a read-only sign-in without `gh` and GitHub Enterprise are next. No Codeshi account or server. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | [#159](https://github.com/AhmedNavaz/codeshi/issues/159) |
-| **Move Codeshi to another computer, with no account.** A backup file locked with a passphrase, with each workspace's folder picked on the new computer, shipped in 0.47.0. Next: pairing two computers with a QR code and a six-digit code and moving directly, without a file. Ongoing sync is later. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | [#160](https://github.com/AhmedNavaz/codeshi/issues/160) |
 | **Designer module.** Design websites and app screens in Codeshi and guide agents section by section. Design notes in the preview shipped in 0.43.0: mark several parts of a page, with a note on each, sent as one message. A layout canvas and handing design work to team workflows are next. [Plan](docs/roadmap-details.md#designer-module) | [#125](https://github.com/AhmedNavaz/codeshi/issues/125) |
-| **Race mode.** Two agents take the same task in separate worktrees; keep the better result | [#16](https://github.com/AhmedNavaz/codeshi/issues/16) |
 | **Live multiplayer.** Teammates in the same conversation in real time, each on their own subscription. Watching a teammate's conversation read-only, with suggestions, shipped in 0.43.0; steering and running together are next | [#24](https://github.com/AhmedNavaz/codeshi/issues/24) |
+| **Race mode.** Two agents take the same task in separate worktrees; keep the better result | [#16](https://github.com/AhmedNavaz/codeshi/issues/16) |
 | **Public help requests.** Post a reviewed request, with the agent's history, where anyone can pick it up and send back a fix you review, without access to your repository. Builds on Ask a Friend. [Plan](docs/roadmap-details.md#public-help-requests) | [#158](https://github.com/AhmedNavaz/codeshi/issues/158) |
 
 ## Recently shipped
