@@ -263,3 +263,24 @@
 .board-export-menu[hidden] { display: none; }
 .board-export-menu button { height: 28px; padding: 0 10px; border: 0; border-radius: calc(var(--radius) - 1px); background: transparent; color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; }
 .board-export-menu button:hover, .board-export-menu button:focus-visible { background: var(--surface-strong); outline: none; }
+
+/* Subtasks (#155): a major card's subtasks in its drawer, and how far they've got on its face. */
+.board-card-subtasks { flex: none; padding-left: 6px; border-left: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.board-subtasks { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.board-subtasks h4 { margin: 0; }
+.board-subtask-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.board-subtask { display: grid; gap: 3px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
+.board-subtask-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.board-subtask-number { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+.board-subtask-title { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.board-subtask-state { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.board-subtask-state[data-tone=running] { color: var(--link); }
+.board-subtask-state[data-tone=done] { color: var(--success); }
+.board-subtask-state[data-tone=trouble] { color: var(--danger); }
+.board-subtask-meta { margin: 0; color: var(--muted); font-size: 11.5px; }
+.board-subtask-summary { margin: 0; line-height: 1.5; overflow-wrap: anywhere; font-size: 12px; }
+.board-subtask-tools, .board-subtask-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.board-subtask-foot { justify-content: flex-start; }
+.board-subtask-form { display: grid; gap: 6px; padding-top: 4px; }
+.board-subtask-form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.board-subtask-form-row select { flex: 1 1 140px; width: auto; }

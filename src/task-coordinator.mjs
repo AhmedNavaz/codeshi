@@ -273,6 +273,8 @@ export class TaskCoordinator {
     // A plan step's brief is written now, not when the plan started (#89): it carries what the steps before it actually did.
     if (first && task.plan) { const brief = this.stepBrief(c, task); if (brief) this.update(c, task, brief); }
     else if (first && task.board) { const brief = this.main.board?.brief(c, task); if (brief) this.update(c, task, brief); }
+    // A major card (#155) is split into subtasks first, or carries on from its first unfinished one (src/subtasks.mjs).
+    if (task.board && this.main.board?.subtasks.begin(c, task, lane)) { this.sync(c, task); return; }
     const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` };
     if (task.routing) lane.broker.dispatch(lane.c, input, { execution: task.execution }).catch(error => { this.update(c, task, { status: task.preparationCancelled ? 'stopped' : 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
     else lane.broker.start(lane.c, input, { execution: task.execution });
@@ -305,6 +307,14 @@ export class TaskCoordinator {
     const lane = this.lanes.get(task.id);
     if (!lane?.c || this.closed || ENDED.has(task.status) || ['detached', 'lost', 'blocked'].includes(task.status)) return;
     const status = lane.broker.running ? 'running' : task.preparationCancelled ? 'stopped' : STOPPED[lane.c.status] || (lane.c.status === 'running' ? 'running' : task.status);
+    // A major card's task keeps running from one subtask to the next, or ends paused (#155). How it ended stays, though
+    // its last run completed, until someone works in the task again.
+    if (task.subtasksEnded) { if (!lane.broker.running) return; this.update(c, task, { subtasksEnded: false }); }
+    if (status === 'complete' && task.board && task.status === 'running') {
+      const next = this.main.board?.subtasks.ended(c, task, lane);
+      if (next === 'continue') return;
+      if (next?.status) { this.update(c, task, { status: next.status, reason: next.reason, subtasksEnded: true, endedAt: new Date().toISOString() }); setImmediate(() => this.tick(c)); return; }
+    }
     const selected = lane.c.activeRun || (status !== 'running' ? lane.c.lastRun : null);
     const provider = selected?.provider || task.provider, model = selected ? selected.model ?? null : task.model, effort = selected ? selected.effort ?? null : task.effort;
     if (status === task.status && provider === task.provider && model === task.model && effort === task.effort) return;

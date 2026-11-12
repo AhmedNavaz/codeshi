@@ -8020,7 +8020,7 @@ test('board cards show labels, a due date and comments; a label filters the boar
   const day = drawer().querySelector('.board-due-input'); assert.equal(day.value, '2999-03-04');
   day.value = '2026-12-24'; day.dispatchEvent(new UIEvent('change')); await flush();
   drawer().querySelectorAll('button').find(item => item.textContent === 'Save').click(); await flush();
-  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.form}/edit`, body: { title: 'Build the form', notes: '', priority: 'normal', labels: ['Frontend', 'backend'], due: '2026-12-24', agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'frontend', dependsOn: [], checks: [], group: null, role: 'builder', artifact: null, check: null, files: [], tier: 'standard', closed: false, revision: 1 } });
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.form}/edit`, body: { title: 'Build the form', notes: '', priority: 'normal', labels: ['Frontend', 'backend'], due: '2026-12-24', agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'frontend', dependsOn: [], checks: [], group: null, role: 'builder', artifact: null, check: null, files: [], tier: 'standard', closed: false, split: false, revision: 1 } });
   // Comments are read when a card that has some opens, and say who wrote them and when.
   face(ids.api).click(); await flush();
   assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.api}/comments`, body: null });
@@ -8176,6 +8176,73 @@ test('the Plan shows drafted cards to accept or discard, lists cards by group in
   assert.match(drawer().textContent, /Codeshi picks the agent, model and effort for a light card when it runs/);
   assert.ok(segment('Size'));
   assert.equal(drawer().querySelector('.board-more').open, true, 'A card in a group shows its plan details.');
+});
+
+test('a major card shows its subtasks as they run, with the ones to come to edit, remove or add, and Pause (#155)', async () => {
+  const ui = await browser({ boardUI: true, wide: true }), posted = [];
+  ui.window.confirm = () => true;
+  const ids = { major: 'e0000000-0000-4000-8000-000000000001', next: 'e0000000-0000-4000-8000-000000000002' };
+  const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'frontend', dependsOn: [], checks: [], group: null, role: 'builder', artifact: null, check: null, files: [], tier: 'standard', split: false, subtasks: [], revision: 1, order: 1, attempts: [], createdAt: '2026-11-12T10:00:00.000Z', ...extra });
+  const subtasks = [
+    { id: 's1', title: 'Add the cart', instructions: 'A cart model.', tier: 'light', agent: null, status: 'done', summary: 'Added the cart and its tests.', provider: 'codex', model: 'gpt-6.1-sol', by: { kind: 'agent' } },
+    { id: 's2', title: 'Add the receipt', instructions: 'A receipt page.', tier: 'deep', agent: null, status: 'running', by: { kind: 'agent' } },
+    { id: 's3', title: 'Email it', instructions: '', tier: 'standard', agent: { provider: 'claude', model: null, effort: null }, status: 'pending', by: { kind: 'you' } },
+  ];
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, schedules: [], cards: [
+    card(ids.major, 'Build checkout', 'doing', { split: true, subtasks, taskState: { id: 't1', status: 'running', approvals: 0, provider: 'codex' } }),
+    card(ids.next, 'Ship search', 'ready', { split: true }),
+  ] };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response(board);
+    if (request.path.startsWith('/api/board/')) { posted.push({ path: request.path, body: clone(request.body) }); return response({ board }); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  const face = id => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  // On its face: how far its subtasks have got, or that it splits when it starts.
+  assert.equal(face(ids.major).querySelector('.board-card-subtasks').textContent, '1/3 subtasks');
+  assert.match(face(ids.major).getAttribute('aria-label'), /1 of 3 subtasks done/);
+  assert.equal(face(ids.next).querySelector('.board-card-subtasks').textContent, 'Major');
+  face(ids.major).click(); await flush();
+  const drawer = () => ui.$('board-drawer-body'), panel = () => drawer().querySelector('.board-subtasks');
+  const rows = () => panel().querySelectorAll('.board-subtask');
+  assert.match(drawer().textContent, /Working: Subtask 2 of 3: Add the receipt/);
+  assert.equal(panel().querySelector('h4').textContent, 'Subtasks (1 of 3 done)');
+  assert.deepEqual(rows().map(row => [row.querySelector('.board-subtask-title').textContent, row.querySelector('.board-subtask-state').textContent, row.querySelector('.board-subtask-meta').textContent]), [
+    ['Add the cart', 'Done', 'Light · Codex · gpt-6.1-sol'], ['Add the receipt', 'Working', 'Deep'], ['Email it', 'Waiting', 'Standard · Claude, pinned · Added by you'],
+  ]);
+  assert.equal(rows()[0].querySelector('.board-subtask-summary').textContent, 'Added the cart and its tests.');
+  // Only the ones to come can be edited or removed.
+  assert.deepEqual(rows().map(row => row.querySelectorAll('button').map(item => item.textContent)), [[], [], ['Edit', 'Remove']]);
+  const press = (text, within = panel()) => within.querySelectorAll('button').find(item => item.textContent === text).click();
+  press('Pause after this subtask'); await flush();
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.major}/subtasks`, body: { action: 'pause' } });
+  press('Remove', rows()[2]); await flush();
+  assert.deepEqual(posted.at(-1).body, { action: 'remove', subtaskId: 's3' });
+  press('Edit', rows()[2]); await flush();
+  const form = () => panel().querySelector('.board-subtask-form');
+  const [title, notes] = form().querySelectorAll('.board-input');
+  assert.deepEqual([title.value, form().querySelector('select').value], ['Email it', 'claude']);
+  typeInto(notes, 'Send it to the buyer.'); await flush();
+  form().querySelector('select').value = ''; form().querySelector('select').dispatchEvent(new UIEvent('change')); await flush();
+  press('Save', form()); await flush();
+  assert.deepEqual(posted.at(-1).body, { action: 'edit', subtaskId: 's3', title: 'Email it', instructions: 'Send it to the buyer.', tier: 'standard', agent: null });
+  press('Add a subtask'); await flush();
+  typeInto(form().querySelector('.board-input'), 'Print it'); await flush();
+  form().querySelector('.board-segment').querySelectorAll('button').find(item => item.textContent === 'Light').click();
+  press('Add', form()); await flush();
+  assert.deepEqual(posted.at(-1).body, { action: 'add', title: 'Print it', instructions: '', tier: 'light', agent: null });
+  // A card that isn't running can be split again; the split setting saves with the card.
+  ui.$('board-drawer-close')?.click(); await flush();
+  face(ids.next).click(); await flush();
+  assert.match(panel().textContent, /It is split into subtasks when it starts, against the code the cards before it produced/);
+  const box = drawer().querySelector('.board-split-edit').querySelector('input');
+  assert.equal(box.checked, true);
+  box.checked = false; box.dispatchEvent(new UIEvent('change')); await flush();
+  drawer().querySelector('.board-save').click(); await flush();
+  assert.equal(posted.at(-1).path, `/api/board/cards/${ids.next}/edit`);
+  assert.equal(posted.at(-1).body.split, false);
 });
 
 test('a card or the whole Plan can be closed to agents, and the Plan or a card attaches to the next message with its size (#97)', async () => {

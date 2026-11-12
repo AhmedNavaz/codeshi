@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { ARTIFACT_KINDS, SPECIALIST_ROLES, reviewDraft, upstreamLines } from './orchestration.mjs';
 import { attachmentLimits } from './attachments.mjs';
+import { runSteps } from './recap.mjs';
+import { Subtasks } from './subtasks.mjs';
 
 // The task board (#132, first stage): cards you write, sort and run by hand. Cards are records in the workspace chat's
 // journal, beside the tasks they start, so they live in Codeshi's data and a crash finds them as they were. Running a card
@@ -67,6 +69,7 @@ const clip = (value, limit) => { const line = String(value || '').trim(); return
 export class Board {
   constructor(main) {
     this.main = main;
+    this.subtasks = new Subtasks(this);
     // The coordinator tells the board each time a task's record changes; the card follows its task from there.
     main.tasks.onTask = (c, task) => this.follow(c, task);
     for (const c of main.conversations.values()) { this.reconcile(c); this.adopt(c); }
@@ -146,6 +149,8 @@ export class Board {
     }
     // Closed to agents (#97): yours alone. Codeshi never puts it in a prompt, a brief, an attachment or an export.
     if (!card || 'closed' in input) changes.closed = input.closed === true;
+    // A major card (#155) is split into subtasks when it starts (src/subtasks.mjs).
+    if (!card || 'split' in input) changes.split = input.split === true;
     if (!card && input.at != null) changes.at = position(input.at);
     if (!card || 'dependsOn' in input) {
       const ids = input.dependsOn ?? [];
@@ -183,7 +188,7 @@ export class Board {
   edit(c, id, input = {}) {
     const card = this.find(c, id);
     if (input.revision !== undefined && input.revision !== card.revision) throw fail('This card changed since you opened it. Look at it again before saving.');
-    const changes = this.clean(c, input, card), material = ['title', 'notes', 'agent', 'auto', 'folderId', 'dependsOn', 'role', 'artifact', 'check', 'files', 'tier'].some(key => key in changes && JSON.stringify(changes[key] ?? null) !== JSON.stringify(card[key] ?? null))
+    const changes = this.clean(c, input, card), material = ['title', 'notes', 'agent', 'auto', 'folderId', 'dependsOn', 'role', 'artifact', 'check', 'files', 'tier', 'split'].some(key => key in changes && JSON.stringify(changes[key] ?? null) !== JSON.stringify(card[key] ?? null))
       || 'checks' in changes && JSON.stringify(changes.checks.map(item => item.text)) !== JSON.stringify((card.checks || []).map(item => item.text));
     // What an agent is working from stays as it started. Ticking checks and the priority can change at any time.
     if (material && card.column === 'doing') throw fail('An agent is working on this card. Stop it first, or wait until it’s in Review.');
@@ -298,6 +303,7 @@ export class Board {
       lines.push(...facts.map(fact => `- ${fact}`), '');
       if (card.notes) lines.push(card.notes, '');
       if (card.checks?.length) lines.push('Done means:', '', ...card.checks.map(item => `- [${item.done ? 'x' : ' '}] ${item.text}`), '');
+      if (card.subtasks?.length) lines.push('Subtasks:', '', ...card.subtasks.map((item, index) => `${index + 1}. [${item.status === 'done' ? 'x' : ' '}] ${item.title}`), '');
       const said = this.comments(c, card.id).filter(item => item.by?.kind === 'you');
       if (said.length) lines.push('The person’s comments:', '', ...said.map(item => `- ${item.at.slice(0, 10)}: ${item.text.replace(/\n/g, '\n  ')}`), '');
     }
@@ -348,7 +354,7 @@ export class Board {
     const batch = { id: plan.id, summary: plan.summary || '', ...(plan.questions?.length ? { questions: plan.questions } : {}), ...(documents.length ? { documents } : {}) };
     const source = { kind: 'orchestrate', planId: plan.id, goal: String(plan.goal || '').slice(0, LIMITS.goal), summary: plan.summary || '', ...(documents.length ? { documents } : {}) };
     const made = steps.map((step, index) => {
-      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : null, priority: 'normal', labels: [], due: null, folderId: null, dependsOn: [] };
+      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : null, priority: 'normal', labels: [], due: null, folderId: null, dependsOn: [], split: documents.length > 0 };
       const fields = this.clean(c, input);
       // A drafted step has no agent: it's Auto, shown as such on the draft, until you choose one or accept it.
       return { id: ids.get(step.id), ...fields, agent: step.agent || null, auto: !step.agent, dependsOn: step.dependsOn.map(id => ids.get(id)).filter(Boolean), column: 'backlog', order: this.lastOrder(c, 'backlog') + 1 + index, revision: 1, createdBy: 'agent', createdAt: now, updatedAt: now, attempts: [], source, draft: { by, at: now, batch, notes: notes[step.id] || [] } };
@@ -428,6 +434,7 @@ export class Board {
         lines.push(...facts.map(fact => `- ${fact}`), '');
         if (card.notes) lines.push(card.notes, '');
         if (card.checks?.length) lines.push('Done means:', '', ...card.checks.map(item => `- [${item.done ? 'x' : ' '}] ${item.text}`), '');
+        if (card.subtasks?.length) lines.push('Subtasks:', '', ...card.subtasks.map((item, index) => `${index + 1}. [${item.status === 'done' ? 'x' : ' '}] ${item.title}`), '');
         const said = this.comments(c, card.id);
         if (said.length) lines.push('Comments:', '', ...said.map(item => `- ${author(item.by)}, ${item.at.slice(0, 10)}: ${item.text.replace(/\n/g, '\n  ')}`), '');
       }
@@ -626,11 +633,11 @@ export class Board {
     if (status === 'complete' || (['integrated', 'kept'].includes(status) && task.integration)) {
       // Its tests finish after the task does (#162), so the card's result follows them too.
       if (card.column === 'review' && card.result?.status === status && card.result?.tests === this.tests(task) && Boolean(card.result?.testsAccepted) === Boolean(task.stepCheck?.accepted)) return null;
-      return { column: 'review', ...(card.column === 'review' ? {} : { order: this.lastOrder(c, 'review') + 1 }), reason: null, result: this.result(task), attempts: this.ended(card, task) };
+      return { column: 'review', ...(card.column === 'review' ? {} : { order: this.lastOrder(c, 'review') + 1 }), reason: null, result: this.result(task, c), attempts: this.ended(card, task) };
     }
     const why = {
-      stopped: 'Stopped before it finished.',
-      failed: `Didn’t finish${task.reason ? `: ${clip(task.reason, 300)}` : '.'}`,
+      stopped: task.subtasksEnded && task.reason ? task.reason : 'Stopped before it finished.',
+      failed: task.subtasksEnded && task.reason ? clip(task.reason, 400) : `Didn’t finish${task.reason ? `: ${clip(task.reason, 300)}` : '.'}`,
       blocked: `Blocked${task.reason ? `: ${clip(task.reason, 300)}` : '.'}`,
       cancelled: 'Cancelled before it started.',
       discarded: 'Its changes were discarded.',
@@ -643,10 +650,12 @@ export class Board {
   }
   ended(card, task) { return (card.attempts || []).map(item => item.taskId === task.id ? { ...item, outcome: task.status, endedAt: task.endedAt || new Date().toISOString(), provider: task.provider, model: task.model ?? null, effort: task.effort ?? null } : item); }
   // What a finished card shows in Review: the agent's own summary, the files it changed and its test result.
-  result(task) {
+  result(task, c = null) {
     const lane = this.main.tasks.lanes.get(task.id), conversation = lane?.c, run = conversation?.lastRun;
     const reply = conversation?.messages?.findLast(message => message.role === 'assistant' && message.runId === run?.id && message.text?.trim())?.text || '';
-    const files = task.integration?.files ?? (run && conversation.snapshots?.[run.id]?.files != null ? Number(conversation.snapshots[run.id].files) || 0 : null);
+    const split = c ? this.cards(c).find(card => card.id === task.board?.cardId)?.subtasks?.length : 0;
+    // A split card's changes are its every subtask's, not only the last run's.
+    const files = task.integration?.files ?? (split && conversation ? runSteps(conversation.messages || []).files.length : run && conversation.snapshots?.[run.id]?.files != null ? Number(conversation.snapshots[run.id].files) || 0 : null);
     const check = task.stepCheck;
     return { status: task.status, summary: clip(reply.replace(/\s+/g, ' '), LIMITS.summary), files, tests: this.tests(task) ?? run?.check?.status ?? null, ...(check?.reason ? { testsReason: clip(check.reason, LIMITS.reason) } : {}), ...(check?.command ? { testCommand: check.command } : {}), ...(check?.accepted ? { testsAccepted: true } : {}), inCopy: task.mode === 'worktree', at: new Date().toISOString() };
   }
@@ -674,7 +683,7 @@ export class Board {
   public(c, card) {
     const task = this.task(c, card), lane = task && this.main.tasks.lanes.get(task.id), { comments, ...rest } = card;
     const check = task?.stepCheck, held = Boolean(task && task.status === 'complete' && check && (check.status === 'running' || ((check.outcome === 'failed' || check.status === 'interrupted') && !check.accepted)));
-    return { ...rest, labels: card.labels || [], due: card.due || null, group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, closed: card.closed === true, draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null, holds: held } : {}) } } : {}) };
+    return { ...rest, labels: card.labels || [], due: card.due || null, group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null, holds: held } : {}) } } : {}) };
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   view(c) {

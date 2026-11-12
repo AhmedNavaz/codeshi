@@ -43,6 +43,9 @@ export function createBoardRoutes({ registry, body, json }) {
       json(res, 200, { ...(result.id ? { schedule: result } : result), board: board.view(c) });
       return true;
     }
+    // A major card's subtasks (#155): add, edit, remove, pause, resume, or clear to split again.
+    const split = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/subtasks$/);
+    if (split) { json(res, 200, { card: board.subtasks.act(c, split[1], input), board: board.view(c) }); return true; }
     const match = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/(edit|move|remove|stop|accept|send-back|comment|uncomment|recheck|continue)$/);
     if (!match) fail('Not found.', 404);
     const [, id, action] = match;

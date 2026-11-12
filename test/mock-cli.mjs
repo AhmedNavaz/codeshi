@@ -11,7 +11,8 @@ let prompt = '';
 for await (const chunk of process.stdin) prompt += chunk;
 const context = JSON.parse(prompt.slice(prompt.lastIndexOf('\n') + 1));
 const config = JSON.parse(fs.readFileSync('.mock-scenarios.json', 'utf8'));
-const scenario = config[context.currentRequest] || {};
+// A key starting with ~ matches any request that contains the rest of it, for prompts Codeshi puts together from parts.
+const scenario = config[context.currentRequest] || Object.entries(config).find(([key]) => key.startsWith('~') && String(context.currentRequest).includes(key.slice(1)))?.[1] || {};
 fs.appendFileSync('.mock-captures.jsonl', `${JSON.stringify({ provider, args: process.argv.slice(2), prompt, context, cwd: process.cwd(), electronRunAsNode: process.env.ELECTRON_RUN_AS_NODE ?? null })}\n`);
 
 // Split JSON records across writes, and leave one final event unterminated. This

@@ -31,7 +31,7 @@ export const planningMethod = [
 ].join('\n');
 // Documents (#155, with thanks to @seeebbii): the text files attached to an Orchestrate message, such as a brief, a spec
 // or a Word document, are the requirements to plan from. They follow the request, as any attachment does. A plan from
-// documents is drafted as major cards in phases.
+// documents is drafted as major cards in phases, each split into subtasks when it starts (src/subtasks.mjs).
 export const listNames = names => names.length < 3 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 export function planningRequest(goal, { documents = [] } = {}) {
   return [

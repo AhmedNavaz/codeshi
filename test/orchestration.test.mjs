@@ -217,6 +217,7 @@ test('an Orchestrate message with an attached brief is planned from it, and its 
   const cards = plan.cards.map(id => c.board.find(card => card.id === id));
   assert.deepEqual(cards[0].draft.batch.documents, ['brief.md']);
   assert.deepEqual(cards[0].source.documents, ['brief.md']);
+  assert.ok(cards.every(card => card.split === true), 'Cards planned from documents are major cards, split into subtasks when each starts.');
   // A plan from a message alone records no documents.
   f.scenario({ output: JSON.stringify(reply) });
   broker.board.drafts(api.c(), { action: 'discard', ids: plan.cards });
@@ -225,6 +226,7 @@ test('an Orchestrate message with an attached brief is planned from it, and its 
   await broker.running?.done;
   assert.equal(api.c().orchestrations[0].documents, undefined);
   assert.equal(api.c().board.find(card => card.id === api.c().orchestrations[0].cards[0]).draft.batch.documents, undefined);
+  assert.equal(api.c().board.find(card => card.id === api.c().orchestrations[0].cards[0]).split, false);
 });
 
 test('a planning run is read-only, leaves the conversation settings alone and saves the plan it returns', { skip: scriptCLIs }, async t => {

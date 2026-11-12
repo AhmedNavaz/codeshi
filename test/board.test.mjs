@@ -568,3 +568,111 @@ test('a card or the Plan can’t be closed to agents while an agent works on it 
   await until(() => column(env, card) === 'ready', 'the card to stop');
   assert.equal(env.board.edit(env.c, card.id, { closed: true }).closed, true);
 });
+
+// Subtasks (#155): a major card is split into subtasks when it starts, and each runs in the card's task.
+function scriptMatch(env, part, scenario) {
+  const folder = env.folder('a'), file = path.join(folder, '.mock-scenarios.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved[`~${part}`] = scenario; fs.writeFileSync(file, JSON.stringify(saved)); git(folder, 'commit', '-qam', 'script');
+}
+const requests = env => env.captured(fs.realpathSync(env.folder('a'))).map(capture => capture.context.currentRequest);
+
+test('a major card is split when it starts, each subtask runs in its task, and its tests run after the last (#155)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.tasks.tests = { saved: () => ({ command: 'node -e "process.exit(0)"', directory: '' }) };
+  const card = env.add({ title: 'Build checkout', column: 'ready', split: true, notes: 'A cart and a receipt.' });
+  assert.equal(card.split, true);
+  scriptMatch(env, 'This is a major card', { text: `Here it is:\n${JSON.stringify({ subtasks: [{ title: 'Add the cart', instructions: 'A cart model.', tier: 'light' }, { title: 'Add the receipt', instructions: 'A receipt page.', tier: 'deep' }] })}` });
+  scriptMatch(env, 'Subtask 1 of 2', { behavior: 'hold', text: 'Added the cart model and its tests.' });
+  env.board.run(env.c, { ids: [card.id] });
+  await until(() => env.card(card.id).subtasks?.[0]?.status === 'running', 'the first subtask');
+  const [split] = env.captured(fs.realpathSync(env.folder('a')));
+  assert.deepEqual(split.args.slice(split.args.indexOf('--sandbox'), split.args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only'], 'The split only reads.');
+  assert.ok(split.context.currentRequest.startsWith('Build checkout\n\nA cart and a receipt.'), 'The split is planned from the card’s own brief.');
+  assert.match(split.context.currentRequest, /Return only a JSON object with subtasks/);
+  assert.match(env.c.messages.at(-1).text, /“Build checkout” was split into 2 subtasks\./);
+  const { subtasks } = env.card(card.id), [first, second] = subtasks;
+  assert.deepEqual(subtasks.map(item => [item.title, item.tier, item.by.kind]), [['Add the cart', 'light', 'agent'], ['Add the receipt', 'deep', 'agent']]);
+  assert.equal(env.task(env.card(card.id).task).status, 'running');
+  // While it runs: the subtasks that haven't started are yours to edit, remove and add to; the running one isn't.
+  const act = input => env.board.subtasks.act(env.c, card.id, input);
+  assert.throws(() => act({ action: 'edit', subtaskId: first.id, title: 'Changed' }), /An agent is working on that subtask/);
+  act({ action: 'edit', subtaskId: second.id, instructions: 'A receipt page with totals.' });
+  act({ action: 'add', title: 'Email the receipt', tier: 'light', agent: { provider: 'claude' } });
+  act({ action: 'add', title: 'Not needed' });
+  act({ action: 'remove', subtaskId: env.card(card.id).subtasks.at(-1).id });
+  assert.throws(() => act({ action: 'clear' }), /Stop it before splitting it again/);
+  assert.equal(env.card(card.id).revision, 1, 'Subtasks aren’t a change to what the card says.');
+  env.release(env.folder('a'));
+  await until(() => env.card(card.id).column === 'review', 'the card to finish');
+  const done = env.card(card.id).subtasks;
+  assert.deepEqual(done.map(item => [item.title, item.status, item.provider]), [['Add the cart', 'done', 'codex'], ['Add the receipt', 'done', 'codex'], ['Email the receipt', 'done', 'claude']]);
+  assert.equal(done[0].summary, 'Added the cart model and its tests.');
+  // Each subtask continues the same task, told its place among the others.
+  const asked = requests(env);
+  assert.equal(asked.length, 4, 'One split, then one run for each subtask.');
+  assert.ok(asked[1].startsWith('Subtask 1 of 2 for the card “Build checkout”: Add the cart\n\nA cart model.'));
+  assert.match(asked[2], /^Subtask 2 of 3 for the card “Build checkout”: Add the receipt\n\nA receipt page with totals\./);
+  assert.match(asked[2], /Do only this subtask\. One more follows: “Email the receipt”\./);
+  assert.match(asked[3], /^Subtask 3 of 3[\s\S]*This is the card’s last subtask/);
+  const task = env.task(env.card(card.id).task);
+  assert.equal(task.status, 'complete');
+  await until(() => env.card(card.id).result?.tests === 'passed', 'the card’s tests after its last subtask');
+  // Export lists them.
+  assert.match(env.board.markdown(env.c), /Subtasks:\n\n1\. \[x\] Add the cart\n2\. \[x\] Add the receipt\n3\. \[x\] Email the receipt/);
+});
+
+test('a paused major card stops after its subtask, Run carries on from the next, and a bad split fails the card (#155)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  // Subtasks you write yourself make the card a major card, and it isn't split again.
+  const card = env.add({ title: 'Ship search', column: 'ready' });
+  const act = input => env.board.subtasks.act(env.c, card.id, input);
+  act({ action: 'add', title: 'Index the items', instructions: 'Build the index.' });
+  act({ action: 'add', title: 'Search box' });
+  assert.equal(env.card(card.id).split, true);
+  assert.throws(() => act({ action: 'pause' }), /Only a running card can be paused/);
+  scriptMatch(env, 'Subtask 1 of 2', { behavior: 'hold', text: 'Indexed.' });
+  env.board.run(env.c, { ids: [card.id] });
+  await until(() => env.card(card.id).subtasks[0].status === 'running', 'the first subtask');
+  act({ action: 'pause' });
+  env.release(env.folder('a'));
+  await until(() => env.card(card.id).column === 'ready', 'the card to pause');
+  assert.equal(env.card(card.id).reason, 'Paused after 1 of 2 subtasks. Run carries on from “Search box”.');
+  assert.deepEqual(env.card(card.id).subtasks.map(item => item.status), ['done', 'pending']);
+  let asked = requests(env);
+  assert.equal(asked.length, 1, 'No split: the card already had its subtasks.');
+  assert.ok(asked[0].startsWith('Ship search'), 'The first run of a task carries the card’s brief.');
+  assert.match(asked[0], /Subtask 1 of 2 for the card “Ship search”: Index the items\n\nBuild the index\./);
+  // Run carries on in a new task, told what the earlier subtasks did.
+  env.board.run(env.c, { ids: [card.id] });
+  await until(() => env.card(card.id).column === 'review', 'the card to finish');
+  asked = requests(env);
+  assert.match(asked[1], /Subtasks already done for this card, by earlier runs:\n- 1\. Index the items: Indexed\./);
+  assert.match(asked[1], /Subtask 2 of 2 for the card “Ship search”: Search box/);
+  assert.equal(env.card(card.id).subtasksPaused, false);
+  // Split again: once it's sent back, its next run splits it afresh, and a split that isn't JSON fails the card.
+  env.board.sendBack(env.c, card.id, { reason: 'Rethink it.' });
+  act({ action: 'clear' });
+  assert.deepEqual(env.card(card.id).subtasks, []);
+  scriptMatch(env, 'This is a major card', { text: 'I would rather not.' });
+  env.board.run(env.c, { ids: [card.id] });
+  await until(() => env.card(card.id).column === 'ready' && env.card(card.id).reason?.includes('JSON'), 'the split to fail');
+  assert.equal(env.card(card.id).reason, 'The split didn’t return its subtasks as JSON. Run the card again, or add its subtasks yourself.');
+});
+
+test('each subtask runs with the agent pinned on it, is routed at its size on Auto in Flow, or else uses the card’s agent (#155)', async () => {
+  const { Subtasks, parseSplit } = await import('../src/subtasks.mjs');
+  const card = { id: 'k', title: 'Card', split: true, subtasks: [{ id: 'a', title: 'One', instructions: 'Do one.', tier: 'light', agent: null, status: 'pending' }, { id: 'b', title: 'Two', instructions: '', tier: 'deep', agent: { provider: 'claude', model: null, effort: null }, status: 'pending' }] };
+  const calls = [], board = { cards: () => [card], update: (c, target, changes) => Object.assign(target, changes), main: { tasks: { update() {}, sync() {}, closed: false } } };
+  const lane = { c: {}, broker: { start: (c, input) => { calls.push(['start', input]); return {}; }, dispatch: async (c, input) => { calls.push(['dispatch', input]); } } };
+  const subtasks = new Subtasks(board), base = { id: 't', board: { cardId: 'k' }, provider: 'codex', model: 'gpt-6.1-sol', effort: 'medium', accessMode: 'edit', approvalPolicy: 'ask', billingConfirmed: false, execution: {} };
+  card.task = 't';
+  await subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[0]);
+  subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[1]);
+  card.subtasks[0].status = 'pending';
+  subtasks.launch({}, base, lane, card, card.subtasks[0]);
+  assert.deepEqual(calls.map(([how, input]) => [how, input.provider, input.model, input.routing?.planned ?? null, input.mode]), [['dispatch', 'codex', 'gpt-6.1-sol', 'light', 'edit'], ['start', 'claude', null, null, 'edit'], ['start', 'codex', 'gpt-6.1-sol', null, 'edit']]);
+  // The split's reply: JSON anywhere in it, each subtask with a title; a size it doesn't know is standard.
+  assert.deepEqual(parseSplit('Sure: {"subtasks":[{"title":"A","tier":"huge"}]}').map(item => [item.title, item.tier, item.status]), [['A', 'standard', 'pending']]);
+  assert.throws(() => parseSplit('{"subtasks":[]}'), /didn’t return any subtasks/);
+  assert.throws(() => parseSplit('{"subtasks":[{"instructions":"x"}]}'), /Subtask 1 from the split has no title/);
+});
