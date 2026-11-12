@@ -95,8 +95,8 @@
   const SIDEBAR_KEY = 'throughline:sidebar', LAST_PANEL_KEY = 'throughline:side-panel-last', shell = $('app-shell');
   const read = key => { try { return localStorage.getItem(key); } catch { return null; } };
   const write = (key, value) => { try { localStorage.setItem(key, value); } catch { /* A convenience only. */ } };
-  // In Flow mode (#107) the sidebar and the side panel step aside, so their buttons and ⌘B wait until it is left.
-  const flowing = () => Boolean(shell?.classList.contains('flow'));
+  // In Flow (#107) and the Plan (#162) the sidebar and the side panel step aside, so their buttons and ⌘B wait for Normal.
+  const flowing = () => Boolean(shell?.classList.contains('flow') || shell?.classList.contains('plan'));
   function sync() {
     $('toggle-sidebar')?.setAttribute('aria-pressed', String(!shell?.classList.contains('sidebar-collapsed')));
     $('toggle-side-panel')?.setAttribute('aria-pressed', String(sidePanels().some(panel => !panel.hidden)));

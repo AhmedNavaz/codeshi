@@ -1503,8 +1503,17 @@
   }
   async function queuePrompt() {
     if (ui.input.value.trim() === '/compact') { showNotice('Finish or stop the current run or reset wait before compacting context.'); return; }
-    const text = ui.input.value.trim(), attachments = window.relayFiles?.ids() || [], projectId = state.projectId, draft = ui.input.value;
+    const text = ui.input.value.trim(), projectId = state.projectId, draft = ui.input.value;
+    let attachments = window.relayFiles?.ids() || [];
     if (!text || state.pending || !state.conversation || $("queue-button").hidden) return;
+    // From the Plan view (#162) a queued question takes the Plan as it is when queued; drafting cards waits for the run.
+    const asking = window.relayBoard?.asking?.() || null;
+    if (asking?.draft) { showNotice("Cards can be drafted once the current run finishes. Switch to Ask to queue a question instead."); return; }
+    if (asking) {
+      try { attachments = [...new Set([...attachments, ...await asking.attach()])]; }
+      catch (error) { showNotice(`${error.message} Select × beside the Plan above the message box to queue it without the Plan.`); return; }
+      if (state.pending || state.projectId !== projectId || $("queue-button").hidden) return;
+    }
     try { window.relayAutomaticReview?.submission({}, { queued: true }); }
     catch (error) { showNotice(error.message); return; }
     if (state.localSelections[projectId]) { showNotice("Queue a cloud agent. Local models start from Continue locally."); return; }
@@ -1514,6 +1523,7 @@
     const added = await queueAction({ executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, action: "add", text, provider: routed?.provider || state.provider, model: (routed ? routed.model : state.model) || null, effort: (routed ? routed.effort : state.effort) || null, mode: state.mode, approvalPolicy: state.approvalPolicy || "ask", attachments, billingConfirmed: window.relayBillingConfirmed === true, ...(routed ? { routing: { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } } : {}) });
     if (added) {
       window.relayFiles?.accepted(projectId, attachments);
+      asking?.sent();
       draftAccepted();
       announce("Added to the queue.");
     } else { returnDraft(draft); window.relayFiles?.giveBack?.(projectId); }
@@ -1906,7 +1916,7 @@
       : 'Scheduling a refresh makes no model call. It takes effect on your next send to this agent.';
     $('compact-confirm-note').textContent = note + (autoRouting() ? ` Flow may choose another agent; this refresh applies only to ${label(provider)}.` : '')
       + (context?.cacheWarm && context?.adaptive && !['ready', 'due', 'native'].includes(kind) ? ' Recent activity allows a higher refresh target to keep useful context longer.' : '')
-      + (!window.relayFlow?.isOn?.() ? ' Change the refresh limit in Settings → General → Context limit.' : '');
+      + (!window.relayFlow?.isRouted?.() ? ' Change the refresh limit in Settings → General → Context limit.' : '');
     $('compact-confirm').hidden = ['ready', 'due', 'preparing', 'native'].includes(kind);
     $('compact-confirm').disabled = !view.canRefresh;
     $('compact-cancel').textContent = view.canRefresh ? 'Not now' : 'Close';
@@ -2003,8 +2013,9 @@
     ui.input.disabled = !state.ready || state.loading || state.pending === "new";
     // While work runs or waits for a reset, a message joins the queue instead of starting now (#32).
     const queueing = Boolean(state.conversation) && (running || Boolean(state.conversation?.resume));
+    const planAsking = window.relayBoard?.asking?.() || null;
     const canAdd = running && state.conversation?.canAddToRun === true, modKey = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘" : "Ctrl+";
-    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : t("Describe the task or ask a question…");
+    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : planAsking ? (planAsking.draft ? t("Describe the cards to draft, or attach a brief or spec…") : t("Ask about the Plan, a card, or the project…")) : t("Describe the task or ask a question…");
     $("steer-button").hidden = !canAdd;
     $("steer-button").disabled = !state.ready || busy || !ui.input.value.trim() || Boolean(window.relayFiles?.ids().length);
     $("steer-button").title = window.relayFiles?.ids().length ? t("Attachments go with a queued message") : t("Add this to the current run ({shortcut})", { shortcut: `${modKey}↵` });
@@ -2396,10 +2407,14 @@
     finally { state.pending = null; render(); }
   }
 
-  // again: Plan again (Orchestrate) sends a planned message once more, with its files, and leaves the message box as it is.
+  // again: a planning run (Orchestrate) with its own text and files, from the Plan's Draft with an agent or a message's Plan
+  // again. It leaves the message box as it is. again.onError, when given, hears a refusal instead of the chat's notice, since
+  // the Plan covers the chat. Resolves true once the run is accepted.
   async function run(continuing = false, again = null) {
-    const attachments = again ? again.attachments : continuing ? [] : window.relayFiles?.ids() || [];
-    const text = again ? again.text : ui.input.value.trim() || (attachments.length ? "Please review the attached files." : "");
+    // In the Plan view (#162) the message box sends the Plan and the open card with the message, or drafts cards (board.js).
+    const asking = !continuing && !again ? window.relayBoard?.asking?.() || null : null, drafting = Boolean(asking?.draft);
+    let attachments = again ? again.attachments : continuing ? [] : window.relayFiles?.ids() || [];
+    const text = again ? again.text : ui.input.value.trim() || (attachments.length ? (drafting ? "Plan the work the attached files describe." : "Please review the attached files.") : "");
     if (!continuing && !again && text === '/compact') {
       if (attachments.length) { showNotice('Remove attachments before compacting context. Your draft stays saved.'); return; }
       compactCurrentContext({ command: true });
@@ -2408,11 +2423,23 @@
     if (window.relayFiles?.uploading()) return;
     if (state.pending || state.loading || state.projectSaving || isRunning() || isOtherRunning() || !state.ready || (!state.localSelections[state.projectId] && !(autoRouting() && !continuing) && connection(state.provider).blocked) || (!continuing && !text)) return;
     const projectAtStart = state.projectId;
+    if (asking?.blocked) { showNotice(asking.blocked); return; }
+    // The Plan's text is made at Send, so the agent reads the Plan as it is now. Its id comes from its content, so a retry
+    // of the same message over the same Plan sends the same attachment.
+    if (asking) {
+      state.pending = "send"; renderControls();
+      let added = [];
+      try { added = await asking.attach(); }
+      catch (error) { showNotice(`${error.message} Select × beside the Plan above the message box to send without it.`); return; }
+      finally { state.pending = null; renderControls(); }
+      if (state.projectId !== projectAtStart || isRunning()) return;
+      attachments = [...new Set([...attachments, ...added])];
+    }
     // A local estimate, so a message nothing could take stops here. The server rates the task and makes the final choice.
     // With Orchestrate on, the server plans with the deepest work the routing mode allows, and the run is read-only.
-    const orchestrate = Boolean(again) || (!continuing && window.relayOrchestration?.armed() === true);
+    const orchestrate = Boolean(again) || drafting;
     const routed = continuing ? null : routeFor(text, attachments.length, null, { plan: orchestrate });
-    if (routed?.error) { showNotice(routed.error); return; }
+    if (routed?.error) { if (again?.onError) again.onError(routed.error); else showNotice(routed.error); return; }
     const provider = routed?.provider || state.provider, model = routed ? routed.model : state.model, effort = routed ? routed.effort : state.effort;
     const routing = routed ? { mode: routed.mode, reason: routed.reason, tier: routed.tier, escalation: routed.escalation || null } : undefined;
     const mode = state.mode;
@@ -2421,11 +2448,10 @@
     const localChoice = state.localSelections[state.projectId] || null;
     if ((state.taskId || state.taskDraft) && localChoice) { showNotice("A task runs on your connected agents for now. Choose one, or send this from Main to use a local model."); return; }
     let automaticReview;
-    try { automaticReview = again ? null : window.relayAutomaticReview?.submission({ text, attachments, provider, model, mode, approvalPolicy }, { continuing }) || null; }
+    try { automaticReview = again || drafting ? null : window.relayAutomaticReview?.submission({ text, attachments, provider, model, mode, approvalPolicy }, { continuing }) || null; }
     catch (error) { showNotice(error.message); return; }
     // An agent that works in one folder, in a workspace with several: the message waits for a choice of folder, then runs as a task there.
     if (!continuing && !orchestrate && !state.taskId && !state.taskDraft && !localChoice && !automaticReview && oneFolderOnly(provider) && foldersFor(currentProject()).length > 1) { askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId: crypto.randomUUID(), originalDraft }); return; }
-    if (orchestrate && automaticReview) { showNotice("Review after doesn’t apply to planning. The plan reviews the combined changes after its last step."); return; }
     // A new plan replaces the open one: with unsaved edits, the plan card asks first.
     if (orchestrate && window.relayOrchestration && !(await window.relayOrchestration.mayReplace())) return;
     if (orchestrate && (state.pending || isRunning() || state.projectId !== projectAtStart)) return;
@@ -2454,6 +2480,7 @@
         const task = await window.relayTaskThreads.start({ executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, model: model || null, effort: effort || null, mode, approvalPolicy, routing, requestId, billingConfirmed: window.relayBillingConfirmed === true });
         state.retrySubmission = null;
         window.relayFiles?.accepted(projectId, attachments);
+        asking?.sent();
         accepting = true; if (ui.input.value === "") storedWrite(draftKey(), "");
         await window.relayTaskThreads.started(task);
         announce(`The task in ${task.folderName} has started.`);
@@ -2474,8 +2501,8 @@
       } else accepted = await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), ...(orchestrate ? { orchestrate: true } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
       state.retrySubmission = null;
       window.relayAutomaticReview?.accepted(projectId, automaticReview);
-      if (orchestrate && !again) window.relayOrchestration?.accepted(projectId);
       if (!continuing && !again) window.relayFiles?.accepted(projectId, attachments);
+      asking?.sent();
       accepting = true;
       if (taken) draftAccepted();
       state.conversation.status = "running";
@@ -2486,6 +2513,7 @@
       announce(`${localChoice ? "Local · Ollama" : label(accepted?.provider || provider)} is working.`);
       await refresh();
       render(true);
+      return true;
     } catch (error) {
       if (taken && !accepting) { state.sending = null; returnDraft(originalDraft); window.relayFiles?.giveBack?.(projectId); }
       // A task limit can be raised for this task, by the person, right here.
@@ -2509,6 +2537,7 @@
         }
       }
       else if (budget) showNotice(error.message);
+      else if (again?.onError) again.onError(error.message);
       // The server knew the agent works in one folder before the page did: offer the folders rather than a retry that would fail again.
       else if (error.details?.folderChoice && !continuing && !orchestrate && !state.taskId && !state.taskDraft) askFolder({ text, attachments, provider, model, effort, mode, approvalPolicy, requestId, originalDraft });
       else showNotice(error.message, () => run(continuing, again));
@@ -2795,11 +2824,15 @@
 
   // The search bar at the top (⌘K) finds workspaces, files in every workspace and actions; ">" first shows actions
   // only. It never filters the sidebar. Enter runs the highlighted result, the first match at first, and Escape clears it.
+  // Flow and the Plan set the terminal, Run and the CLI tab aside until Normal.
+  const workbenchAway = () => ["flow", "plan"].includes(window.relayFlow?.view?.());
   const commandActions = [
     { label: "Review changes…", id: "open-review" }, { label: "Ask a friend…", id: "ask-friend" },
     { label: "Share live with a teammate…", id: "share-live" }, { label: "Watch a teammate’s conversation…", id: "watch-teammate" },
     { label: "Previous chats…", id: "open-import" }, { label: "Export conversation…", id: "open-export" }, { label: 'Compact context', id: 'compact-context' },
     { label: "Flow mode: just the chat, with plain-language cards", run: () => window.relayFlow?.toggle() },
+    { label: "Plan: plan, run and review this workspace’s cards", run: () => window.relayFlow?.plan() },
+    { label: "Normal view: every panel, and you choose the agent", run: () => window.relayFlow?.leave() },
     { label: "Agents: plan usage and handoff", run: () => window.relayAgents?.open() },
     { label: "Brief: memory and skills every agent gets", run: () => window.relayBrief?.open() },
     { label: "Tasks: what each task used, and its limits", run: () => window.relayTasks?.open() },
@@ -2841,7 +2874,7 @@
     const { actionsOnly, text } = commandQuery();
     const workspaces = actionsOnly ? [] : state.projects.filter(project => project.name.toLowerCase().includes(text)).slice(0, 6).map(project => ({ group: "Workspaces", label: project.name, detail: project.id === state.projectId ? "Open" : "", run: () => { selectProject(project.id); ui.input.focus(); } }));
     const files = actionsOnly || commandFiles.query !== text ? [] : commandFiles.files.slice(0, 10).map(file => ({ group: "Files", label: file.path.split("/").pop(), detail: [state.projects.length > 1 ? file.projectName : "", file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : file.folderName].filter(Boolean).join(" · "), run: () => openFound(file) }));
-    const actions = commandActions.filter(action => !action.workbench || !window.relayFlow?.isOn?.()).filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled && (action.id !== 'compact-context' || !$(action.id).hidden)))
+    const actions = commandActions.filter(action => !action.workbench || !workbenchAway()).filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled && (action.id !== 'compact-context' || !$(action.id).hidden)))
       .map(action => ({ group: "Actions", label: action.label, detail: "", run: action.run || (() => $(action.id).click()) }));
     return [...workspaces, ...files, ...actions];
   }
@@ -2886,6 +2919,73 @@
     if (event.key === "Enter") { const items = commandItems.length ? commandItems : commandResults(); if (items[commandActive] || items[0]) { event.preventDefault(); commandItems = items; runCommandResult(items[commandActive] ? commandActive : 0); } }
     if (event.key === "Escape") { if ($("workspace-search").value) { event.preventDefault(); $("workspace-search").value = ""; searchFiles(); renderCommandResults(true); } else { renderCommandResults(false); $("workspace-search").blur?.(); } }
   });
+  // Flow and the Plan don't show the sidebar, so the workspace name beside the view's name opens this menu to switch
+  // workspace. Work keeps running in the workspace you leave. A button inside a modal dialog gets the menu inside that
+  // dialog, as everything outside it can't be clicked while it's open.
+  const workspaceMenu = element("div", "workspace-switch-menu");
+  workspaceMenu.id = "workspace-switch-menu"; workspaceMenu.setAttribute("popover", "auto"); workspaceMenu.setAttribute("role", "menu"); workspaceMenu.setAttribute("aria-label", "Workspaces");
+  let workspaceMenuFrom = null, workspaceMenuLeave = null;
+  window.codeshiKeyboard?.menu(workspaceMenu);
+  workspaceMenu.addEventListener("toggle", (event) => { workspaceMenuFrom?.setAttribute("aria-expanded", String(event.newState === "open")); });
+  function workspaceDoing(project) {
+    const waiting = project.id === state.projectId ? state.conversation?.pendingApprovals?.length || 0 : project.pendingApprovals || 0;
+    if (project.available === false) return ["unavailable", "Folder not found"];
+    if (waiting) return ["waiting", `${waiting} waiting for approval`];
+    return project.runningConversationId ? ["running", "Working"] : ["", ""];
+  }
+  function chooseWorkspace(id) {
+    if (id !== state.projectId && workspaceMenuLeave && !workspaceMenuLeave()) return;
+    workspaceMenu.hidePopover?.();
+    if (id !== state.projectId) selectProject(id);
+  }
+  function fillWorkspaceMenu() {
+    const items = state.projects.map((project) => {
+      const current = project.id === state.projectId, [kind, doing] = workspaceDoing(project);
+      const item = element("button", "header-menu-item workspace-switch-item");
+      item.type = "button"; item.setAttribute("role", "menuitemradio"); item.setAttribute("aria-checked", String(current)); item.disabled = projectBusy(); item.dataset.projectId = project.id; item.title = project.name;
+      item.setAttribute("aria-label", [project.name, doing].filter(Boolean).join(", "));
+      const name = element("span", "workspace-switch-name", project.name), detail = element("span", `workspace-switch-state${kind ? " " + kind : ""}`, doing);
+      name.setAttribute("aria-hidden", "true"); detail.setAttribute("aria-hidden", "true");
+      item.append(name, detail);
+      item.addEventListener("click", () => chooseWorkspace(project.id));
+      return item;
+    });
+    const line = element("div", "workspace-switch-separator"); line.setAttribute("role", "separator");
+    const create = element("button", "header-menu-item workspace-switch-new", "New workspace…");
+    create.type = "button"; create.setAttribute("role", "menuitem"); create.disabled = projectBusy();
+    create.addEventListener("click", () => {
+      if (workspaceMenuLeave && !workspaceMenuLeave()) return;
+      // The form shows in the chat, which the Plan keeps on its right.
+      workspaceMenu.hidePopover?.(); window.relayBoard?.showChat?.(); toggleProjectForm(true);
+    });
+    workspaceMenu.replaceChildren(...items, line, create);
+  }
+  // leave() is asked before the workspace changes, and returns false to stay, such as for a card with unsaved edits.
+  // within is the dialog the button is in, if any.
+  function openWorkspaceMenu(button, { leave = null, within = null } = {}) {
+    if (!button || !state.projects.length) return false;
+    if (workspaceMenu.matches?.(":popover-open")) { const same = workspaceMenuFrom === button; workspaceMenu.hidePopover?.(); if (same) return true; }
+    workspaceMenuFrom = button; workspaceMenuLeave = leave;
+    const host = within || button.closest?.("dialog") || document.body;
+    if (workspaceMenu.parentNode !== host) host.append(workspaceMenu);
+    fillWorkspaceMenu();
+    const box = button.getBoundingClientRect?.();
+    if (box) { workspaceMenu.style.top = `${Math.round(box.bottom + 6)}px`; workspaceMenu.style.left = `${Math.round(Math.max(8, box.left))}px`; }
+    workspaceMenu.showPopover?.();
+    return true;
+  }
+  // A workspace name that opens the menu. Pressing it while the menu is open closes the menu as the press ends, so the
+  // click that follows leaves it closed instead of opening it again.
+  function wireWorkspaceButton(button, options = () => ({})) {
+    if (!button) return;
+    let wasOpen = false;
+    button.addEventListener("pointerdown", () => { wasOpen = workspaceMenuFrom === button && Boolean(workspaceMenu.matches?.(":popover-open")); });
+    button.addEventListener("click", () => {
+      const closing = wasOpen; wasOpen = false;
+      if (closing && !workspaceMenu.matches?.(":popover-open")) return;
+      openWorkspaceMenu(button, options());
+    });
+  }
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || ""), shortcut = (key, shift = false) => mac ? `${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${shift ? "Shift+" : ""}${key}`;
   $("workspace-search").placeholder = `${t("Search workspaces and actions")}   ${shortcut("K")}`;
   $("open-git").title = `Git activity (${shortcut("G", true)})`;
@@ -2908,7 +3008,7 @@
     "alert-settings": () => { if ([...document.querySelectorAll("dialog")].some(dialog => dialog.open && dialog.id !== "settings") || !window.relaySettings) return false; window.relaySettings.open("alerts"); return true; },
     "whats-new": () => { if (covered() || !window.relayUpdates) return false; window.relayUpdates.open(); return true; },
     "check-updates": () => { if (!window.relayUpdater) return false; window.relayUpdater.checkNow(); return true; },
-    terminal: () => { if (!state.projectId || !window.relayTerminal || window.relayFlow?.isOn?.()) return false; window.relayTerminal.toggle(); return true; },
+    terminal: () => { if (!state.projectId || !window.relayTerminal || workbenchAway()) return false; window.relayTerminal.toggle(); return true; },
     voice: () => Boolean(state.projectId && window.relayVoice?.toggle()),
     "local-models": () => window.relayLocal?.open(),
     "backup-export": () => { if (covered() || !window.relayBackup) return false; window.relayBackup.open("export"); return true; },
@@ -3049,7 +3149,7 @@
   });
   // Choosing an agent yourself, here or from the Agent menu, turns Auto off. In Flow the choice is routing's (#107).
   const chooseAgent = provider => {
-    if (window.relayFlow?.isOn?.()) { showNotice("Flow chooses the agent and model for each message. Leave Flow to pick one yourself."); return; }
+    if (window.relayFlow?.isRouted?.()) { showNotice(window.relayFlow.isOn?.() ? "Flow chooses the agent and model for each message. Leave Flow to pick one yourself." : "Routing from Flow chooses the agent and model for each message. Switch to Normal to pick one yourself."); return; }
     delete state.localSelections[state.projectId]; if (autoRouting()) setRouting({ mode: null }).catch(error => showNotice(error.message)); changeSettings(provider, state.mode, state.approvalPolicy);
   };
   ui.codex.addEventListener("click", () => chooseAgent("codex"));
@@ -3098,7 +3198,7 @@
   window.relayUI = {
     jumpToRun, jumpToMessage, loadEarlierMessages, loadToRun, loadToMessage,
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
-    commands, isRunning, filteredProjects, setRouting, takeManualControl, routeFor, planAgain: again => run(false, again), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
+    commands, isRunning, filteredProjects, openWorkspaceMenu, wireWorkspaceButton, setRouting, takeManualControl, routeFor, planAgain: again => run(false, again), stopRun: () => stop(), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,
     prepareQuestionAnswer(conversationId, text, projectId = state.projectId) {
       const current = state.projectId === projectId && state.conversation?.id === conversationId && !state.taskDraft;

@@ -1,7 +1,7 @@
-// Orchestrate (#12, #89, #97): a message can be planned as steps. Turned on for one message, one read-only run plans it
-// with the deepest work allowed. Since One Plan (#162) the steps arrive as draft cards on the Plan (board.js), which you
-// accept or discard, and queued messages wait until you have. This module keeps Orchestrate's switch in the message box,
-// and the card and chart (plan-view.js) for a plan made before then, which is still running or stopped.
+// Orchestrate (#12, #89, #97): one read-only run plans a request with the deepest work allowed. Since One Plan (#162) it is
+// started from the Plan's Draft with an agent (board.js), not the message box, and the steps arrive there as draft cards
+// you accept or discard; queued messages wait until you have. This module says who would draft, describes planning in the
+// thread, and keeps the card and chart (plan-view.js) for a plan made before then, which is still running or stopped.
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), api = window.relayUI;
@@ -19,15 +19,13 @@
 
   // failure: what the server last refused, shown until the plan is changed again. asking: the answer to "replace this
   // plan?", while the card asks it. opened: the rows open for editing, kept for the plan across refreshes and saves.
-  let armedFor = null, edit = null, drawn = null, busy = false, failure = null, asking = null, opened = { planId: null, ids: new Set() };
+  let edit = null, drawn = null, busy = false, failure = null, asking = null, opened = { planId: null, ids: new Set() };
 
   const state = () => api.getState();
   const conversation = () => state().conversation;
   const inFlow = () => window.relayFlow?.isOn?.() === true;
   // A plan belongs to the main conversation. A new task's draft starts from it, so it carries the plans too.
   const onMain = () => !state().taskId && !state().taskDraft;
-  const available = () => { const s = state(); return Boolean(s.ready && !s.localSelections?.[s.projectId] && onMain()); };
-  const armed = () => armedFor !== null && armedFor === state().projectId && available();
   const openPlan = () => { const plan = conversation()?.orchestrations?.[0]; return plan && OPEN.includes(plan.status) ? plan : null; };
   const modeName = () => (conversation()?.routing ? (window.relayRouting?.modeNames?.[conversation()?.routing?.mode] || 'the routing mode') : (names[state().provider] || 'your selected agent'));
   const copy = plan => ({ planId: plan.id, revision: plan.revision, review: plan.review !== false, steps: JSON.parse(JSON.stringify(plan.steps || [])), dirty: false, structure: 0 });
@@ -87,7 +85,7 @@
   function writeYourself(goal) {
     goal = (goal || '').trim();
     if (!goal) { api.showNotice('Describe what the plan is for first.'); return; }
-    armedFor = null; render(); api.renderControls(); window.relayPlanView?.close();
+    window.relayPlanView?.close();
     const first = goal.split('\n')[0].trim(), title = first.length > 200 ? `${first.slice(0, 199).trimEnd()}…` : first;
     window.relayBoard?.open({ title, notes: goal === first && first.length <= 200 ? '' : goal });
   }
@@ -374,26 +372,24 @@
     if (signature !== drawn) { drawn = signature; $('orchestration-steps').replaceChildren(...edit.steps.map(stepRow)); }
     refreshDerived(plan);
   }
+  // Who drafts a plan: the message box's agent, or the deepest work its routing mode allows.
+  const planner = () => conversation()?.routing ? `with the deepest work ${modeName()} allows` : `with ${names[state().provider] || state().provider}`;
+  // Why drafting can't start now, or '' when it can.
+  function cannotDraft() {
+    const s = state();
+    if (!s.ready) return 'Codeshi is still starting.';
+    if (s.localSelections?.[s.projectId]) return 'A local model is chosen in the message box. Choose a connected agent there to draft cards.';
+    if (!onMain()) return 'Open the Workspace chat to draft cards. Tasks don’t draft plans.';
+    if (s.pending || api.isRunning() || conversation()?.status === 'running') return 'The Workspace chat is busy. Drafting can start when its current run finishes.';
+    if (conversation()?.resume) return 'The Workspace chat has unfinished work. Continue or dismiss it first.';
+    return '';
+  }
   function render() {
-    const show = available() && !api.isRunning() && !conversation()?.resume;
-    $('orchestrate-toggle').hidden = !show;
-    $('orchestrate-toggle').setAttribute('aria-pressed', String(armed()));
-    $('orchestrate-armed').hidden = !(show && armed());
-    const agentOrMode = conversation()?.routing ? `with the deepest work ${modeName()} allows` : `with ${names[state().provider] || state().provider}`;
-    $('orchestrate-armed-text').textContent = `Orchestrate: one read-only run drafts cards on the Plan first, ${agentOrMode}. Attach a brief or spec to plan from it. Nothing from them runs until you accept them.`;
-    $('orchestrate-write').disabled = busy;
     renderCard();
     window.relayPlanView?.render();
   }
   // The Plan button belongs to the Plan (board.js) since #162.
 
-  $('orchestrate-toggle').addEventListener('click', () => {
-    armedFor = armed() ? null : state().projectId;
-    render(); api.renderControls();
-    api.announce(armed() ? 'Orchestrate is on for this message. One read-only run plans the steps first.' : 'Orchestrate is off.');
-  });
-  $('orchestrate-off').addEventListener('click', () => { armedFor = null; render(); api.renderControls(); });
-  $('orchestrate-write').addEventListener('click', () => writeYourself($('message-input').value));
   // With no plan, the Plan view asks what the plan is for, starting from the message being written.
   $('plan-panel-write')?.addEventListener('click', () => {
     const goal = $('plan-empty-goal');
@@ -427,7 +423,7 @@
   window.addEventListener('relay-flow', render);
 
   window.relayOrchestration = {
-    armed, render, mayReplace,
+    render, mayReplace, planner, cannotDraft,
     // The plan that holds the queue, for Flow's What's next: one being made or not ready, or one whose drafted cards still
     // wait on the Plan for you (#162).
     waiting: () => {
@@ -436,7 +432,6 @@
       if (plan?.status === 'moved') return drafts ? { ...plan, drafts } : null;
       return openPlan();
     },
-    accepted(projectId) { if (armedFor === projectId) armedFor = null; render(); },
     // How the planner's reply reads in the thread, and the label on the message it planned.
     describe(plan) {
       if (!plan) return '';

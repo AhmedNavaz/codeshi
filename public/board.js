@@ -12,13 +12,37 @@
 // before the cards that wait for it start, with Check again and Continue anyway when its tests fail.
 // Closed to agents (#97): the whole Plan, or one card, can be kept from agents: it can't run, be scheduled or attached, and
 // Export leaves it out unless you choose everything. Attach to message puts the Plan, or a card, in your next message.
+// Asking about the Plan (#162): in the Plan view the chat's message box sends the Plan and the open card with a message,
+// and its Draft cards switch has an agent draft cards from what you write and a brief or spec you attach. It replaced
+// Orchestrate's switch in the message box.
 // Subtasks (#155): a major card is split into subtasks when it starts. Its drawer lists them as they run, with the ones
 // not started yet to edit, remove or add to, and Pause after the subtask it is on.
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
+  // The Plan is a view of the window (#162), beside Normal and Flow. flow.js changes view and calls show() and hide();
+  // open() asks for the Plan view. The Workspace chat stays on the right, and the button at the end of the toolbar hides it.
+  // In the Plan view the chat's message box knows it (see "Asking the chat about the Plan" below).
   const dialog = $('board-view'), api = window.relayUI;
   if (!dialog || !api) return;
+  let showing = false;
+  const shell = $('app-shell'), CHAT_KEY = 'throughline:plan-chat';
+  const chatHidden = () => Boolean(shell?.classList.contains('plan-chat-hidden'));
+  function setChat(open, remember = true) {
+    shell?.classList.toggle('plan-chat-hidden', !open);
+    const toggle = $('board-chat');
+    if (toggle) { toggle.setAttribute('aria-pressed', String(open)); toggle.title = open ? 'Hide the chat' : 'Show the chat'; }
+    if (remember) { try { localStorage.setItem(CHAT_KEY, open ? 'shown' : 'hidden'); } catch { /* A convenience only. */ } }
+    chatAttention();
+  }
+  // While the chat is hidden, a dot on its button says an agent there waits for an approval or an answer.
+  function chatAttention() {
+    const dot = $('board-chat-attention'), waiting = api.getState().conversation?.pendingApprovals?.length || 0, toggle = $('board-chat');
+    if (dot) dot.hidden = !(chatHidden() && waiting);
+    if (toggle) toggle.setAttribute('aria-label', chatHidden() && waiting ? `Chat: ${plural(waiting, 'approval')} waiting` : 'Chat');
+  }
+  // Something that happens in the chat, such as an attached card or a card's task, shows the chat.
+  const showChat = () => { if (chatHidden()) setChat(true); };
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'secondary-button') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
   // The modifier that moves a card on the canvas, named as the keyboard labels it.
@@ -66,7 +90,8 @@
   let seen = null, board = null, selected = null, draft = null, sdraft = null, picked = new Set(), failure = '', busy = false, loading = 0, drawn = null, dragging = null;
   let filter = '', threads = new Map(), asked = new Map(), said = new Map(), moreOpen = false;
   // subEdit: a subtask being written or edited in a card's drawer, kept when the drawer is drawn again.
-  let subEdit = null;
+  // draftNotice: inline undo banner for the last draft accept/discard; suggestConfirm: card ID confirming Suggest next.
+  let subEdit = null, draftNotice = null, suggestConfirm = null;
   const cards = () => board?.cards || [];
   const shown = card => !filter || (card.labels || []).some(name => name.toLowerCase() === filter);
   // Every label on the board, in the case first used, with how many cards have it.
@@ -117,7 +142,8 @@
     return ok ? { billingConfirmed: true } : null;
   }
   // Canvas changes in flight: a load that answers meanwhile would draw cards back where they were, so it waits.
-  let writes = 0, written = 0;
+  // era goes up when the workspace changes, so a reply that comes back for the workspace you left is dropped.
+  let writes = 0, written = 0, era = 0;
 
   async function load() {
     if (!api.getState().projectId) return;
@@ -126,9 +152,10 @@
     catch (error) { if (request === loading) { seen = null; failure = error.message; render(); } }
   }
   async function act(path, input = {}, done) {
-    if (busy) return; busy = true; failure = ''; render();
-    try { const result = await api.post(path, input); board = result.board || board; done?.(result); }
-    catch (error) { failure = error.message; }
+    if (busy) return null; busy = true; failure = ''; render();
+    const from = era;
+    try { const result = await api.post(path, input); if (from !== era) return null; board = result.board || board; done?.(result); return result; }
+    catch (error) { if (from === era) failure = error.message; return null; }
     finally { busy = false; render(); }
   }
 
@@ -249,24 +276,24 @@
   const dirty = () => { if (!draft) return false; if (selected === 'new') return Boolean(draft.title.trim() || draft.notes.trim()); const card = cardBy(selected); return card ? fields(draft) !== fields(editable(card)) : false; };
   function select(id) {
     if (selected && selected !== id && dirty() && !window.confirm('Leave this card without saving your changes?')) return;
-    selected = selected === id ? null : id; failure = '';
+    selected = selected === id ? null : id; failure = ''; suggestConfirm = null;
     draft = selected && cardBy(selected) ? editable(cardBy(selected)) : null; drawn = null;
     render();
     if (selected) $('board-drawer-body').querySelector('input, textarea, button')?.focus();
   }
   function openNew(column = 'backlog', at = null, prefill = {}) {
     if (selected && dirty() && !window.confirm('Leave this card without saving your changes?')) return;
-    selected = 'new'; draft = blank(column, at, prefill); failure = ''; drawn = null; render();
+    selected = 'new'; draft = blank(column, at, prefill); failure = ''; suggestConfirm = null; drawn = null; render();
     $('board-drawer-body').querySelector('.board-field-title')?.focus();
   }
   // Run Ready, or one group's Ready cards when a group is given.
   function openRun(group = null) {
     if (selected && selected !== 'run' && dirty() && !window.confirm('Leave this card without saving your changes?')) return;
-    selected = 'run'; draft = null; failure = ''; drawn = null;
+    selected = 'run'; draft = null; failure = ''; suggestConfirm = null; drawn = null;
     picked = new Set(cards().filter(card => card.column === 'ready' && runnable(card) && (group === null || (card.group || NO_GROUP) === group)).map(card => card.id));
     render();
   }
-  function closeDrawer() { if (dirty() && !window.confirm('Leave this card without saving your changes?')) return; const was = selected; selected = null; draft = null; failure = ''; render(); if (was) $('board-columns').querySelector(`[data-card="${was}"]`)?.focus(); }
+  function closeDrawer() { if (dirty() && !window.confirm('Leave this card without saving your changes?')) return; const was = selected; selected = null; draft = null; failure = ''; suggestConfirm = null; render(); if (was) $('board-columns').querySelector(`[data-card="${was}"]`)?.focus(); }
 
   function segment(label, options, current, choose, disabled) {
     const group = node('div', 'board-segment'); group.setAttribute('role', 'group'); group.setAttribute('aria-label', label);
@@ -419,7 +446,98 @@
     if (selected === 'new') act('/api/board/cards', { ...input, column: draft.column, ...(draft.at ? { at: draft.at } : {}) }, result => { selected = result.card.id; draft = editable(result.card); drawn = null; api.announce(`Added “${result.card.title}” to ${COLUMNS.find(([id]) => id === result.card.column)[1]}.`); });
     else act(`/api/board/cards/${selected}/edit`, { ...input, revision: draft.revision }, result => { draft = editable(result.card); drawn = null; api.announce('Card saved.'); });
   }
-  const openTask = card => { dialog.close(); window.relayTaskThreads?.select(card.taskState.id); };
+  // A card's task opens in the chat beside the Plan.
+  const openTask = card => { showChat(); window.relayTaskThreads?.select(card.taskState.id); };
+  // Accept or discard drafted cards (#162), recording a server-backed Undo/Redo step when an undoId is returned.
+  async function draftAction(action, ids, announcement, onDone) {
+    return act('/api/board/drafts', { action, ids }, result => {
+      onDone?.(result);
+      if (result?.undoId) {
+        let currentUndoId = result.undoId;
+        const past = action === 'accept' ? 'Accepted' : 'Discarded';
+        const label = `${past} ${plural(ids.length, 'draft')}`;
+        const entry = {
+          label,
+          anyView: true,
+          async undo() {
+            const undoRes = await act('/api/board/drafts', { action: 'undo', undoId: currentUndoId }, () => { draftNotice = null; });
+            return Boolean(undoRes);
+          },
+          async redo() {
+            const redoRes = await act('/api/board/drafts', { action, ids }, nextRes => {
+              if (nextRes?.undoId) currentUndoId = nextRes.undoId;
+              if (action === 'discard' && ids.includes(selected)) { selected = null; draft = null; }
+              draftNotice = { text: `${label}.`, entry };
+            });
+            return Boolean(redoRes);
+          },
+        };
+        undos.push(entry);
+        if (undos.length > 100) undos.shift();
+        redos = [];
+        draftNotice = { text: `${label}.`, entry };
+        refreshTools();
+      }
+      api.announce(announcement);
+    });
+  }
+  // Exact agent, model and effort that Suggest next (#162) will use when confirmed.
+  function suggestPick(card) {
+    const state = api.getState();
+    const routed = api.routeFor?.(card?.notes || card?.title || 'Suggest follow-up cards', 0, null, { plan: true });
+    if (routed?.error) return { error: routed.error };
+    const provider = routed ? routed.provider : (state.provider || 'codex');
+    const model = routed ? (routed.model || null) : (state.model || null);
+    const effort = routed ? (routed.effort || null) : (state.effort || null);
+    const modelLabel = routed?.modelName || (model ? (window.relayModelPicker?.modelName?.(provider, model) || model) : 'default model');
+    const effortText = effort ? `${effort[0].toUpperCase()}${effort.slice(1)} effort` : '';
+    const who = [AGENT[provider] || provider, modelLabel, effortText].filter(Boolean).join(' · ');
+    const billed = bills(provider);
+    const account = provider ? state.accounts?.[provider] : null;
+    const usageNote = billed ? `${billsSentence(provider)} Suggesting may cost money.` : account?.billingSource === 'subscription' ? `Uses your ${AGENT[provider] || provider} subscription.` : '';
+    return { provider, model, effort, who, usageNote, billed };
+  }
+  function addNext(card) {
+    const nextAt = card.at ? { x: Math.min(100000, card.at.x + STEP_X), y: card.at.y } : null;
+    openNew('backlog', nextAt, { dependsOn: [card.id], group: card.group || '', folderId: card.folderId || null });
+  }
+  function addNextButton(card) {
+    const limit = board?.limits?.cards || 300, full = cards().length >= limit;
+    const value = button('Add next', () => addNext(card));
+    value.disabled = busy || full;
+    value.title = full ? `This Plan already has ${limit} cards. Remove some finished cards first.` : 'Write a new card that waits for this one, without an agent.';
+    return value;
+  }
+  function suggestNextButton(card) {
+    const limit = board?.limits?.cards || 300, full = cards().length >= limit, running = board?.suggest?.status === 'running';
+    const why = shut(card) ? 'Closed to agents. Open it to agents before suggesting next cards.' : full ? `This Plan already has ${limit} cards. Remove some finished cards first.` : running ? 'Wait for the current suggestion to finish, or stop it first.' : dirty() ? 'Save your changes first.' : '';
+    const value = button('Suggest next', () => { suggestConfirm = suggestConfirm === card.id ? null : card.id; drawn = null; renderDrawer(); });
+    value.disabled = busy || Boolean(why);
+    value.setAttribute('aria-expanded', String(suggestConfirm === card.id));
+    value.title = why || 'Have an agent suggest 1 to 3 follow-up cards as drafts, reading only.';
+    return value;
+  }
+  function suggestPanel(card) {
+    if (suggestConfirm !== card.id) return [];
+    const box = node('div', 'board-suggest-confirm'), pick = suggestPick(card), limit = board?.limits?.cards || 300;
+    const lead = node('p', 'board-suggest-lead', pick.error ? pick.error : `Suggest follow-up cards with ${pick.who}.`);
+    const note = node('p', 'board-suggest-note', pick.error ? 'Choose an agent or connect one in the message box before suggesting.' : `One read-only run. Counts toward your usage.${pick.usageNote ? ` ${pick.usageNote}` : ''} Suggested cards arrive as drafts for you to accept or discard.`);
+    const row = node('div', 'board-suggest-actions');
+    const cancel = button('Cancel', () => { suggestConfirm = null; drawn = null; renderDrawer(); }, 'secondary-button');
+    const go = button('Suggest cards', () => {
+      if (pick.error) { failure = pick.error; showError(); return; }
+      if (pick.billed && window.relayBillingConfirmed !== true && !window.confirm(`Run Suggest next with charges?\n\n${billsSentence(pick.provider)} This read-only run may cost money.\n\nTo stop this question for this session, turn on Allow API and unconfirmed billing in Settings.`)) return;
+      suggestConfirm = null;
+      act(`/api/board/cards/${card.id}/suggest`, { provider: pick.provider, model: pick.model, effort: pick.effort, billingConfirmed: pick.billed ? true : window.relayBillingConfirmed === true }, result => {
+        if (result?.suggest && board) board.suggest = result.suggest;
+        api.announce(`Suggesting next cards after “${card.title}”.`);
+      });
+    }, 'primary-button');
+    go.disabled = busy || Boolean(pick.error) || shut(card) || board?.suggest?.status === 'running' || cards().length >= limit;
+    row.append(cancel, go);
+    box.append(lead, note, row);
+    return [box];
+  }
   // What can be done with a card where it is now.
   function actions(card) {
     const row = node('div', 'board-actions'), state = stateOf(card);
@@ -427,8 +545,9 @@
     const remove = button('Remove', () => { if (window.confirm(`Remove “${card.title}” from the board?`)) act(`/api/board/cards/${card.id}/remove`, {}, () => { selected = null; draft = null; api.announce('Card removed.'); }); }, 'text-link board-remove');
     // A draft (#162) is accepted or discarded; nothing else runs it.
     if (card.draft) {
-      row.append(button(runnable({ ...card, draft: null }) ? 'Accept to Ready' : 'Accept', () => act('/api/board/drafts', { action: 'accept', ids: [card.id] }, () => api.announce(`“${card.title}” accepted.`)), 'primary-button'),
-        button('Discard', () => act('/api/board/drafts', { action: 'discard', ids: [card.id] }, () => { selected = null; draft = null; api.announce('Draft discarded.'); }), 'text-link board-remove'));
+      row.append(button(runnable({ ...card, draft: null }) ? 'Accept to Ready' : 'Accept', () => draftAction('accept', [card.id], `“${card.title}” accepted.`), 'primary-button'),
+        suggestNextButton(card), addNextButton(card),
+        button('Discard', () => draftAction('discard', [card.id], 'Draft discarded.', () => { selected = null; draft = null; }), 'text-link board-remove'));
       return row;
     }
     if (card.column === 'backlog') row.append(move('Move to Ready', 'ready'), remove);
@@ -451,7 +570,7 @@
       if (card.taskState) row.append(button('Open its task', () => openTask(card), 'text-link'));
     }
     if (card.column === 'done') row.append(move('Reopen', 'ready'), scheduleButton(card), remove);
-    row.append(attachButton(card));
+    row.append(suggestNextButton(card), addNextButton(card), attachButton(card));
     return row;
   }
   function sendBack(card) {
@@ -464,8 +583,23 @@
     const parts = [], state = stateOf(card);
     if (card.draft) {
       const by = card.draft.by?.kind === 'agent' ? [AGENT[card.draft.by.provider] || card.draft.by.provider, card.draft.by.model].filter(Boolean).join(' · ') : 'You';
-      parts.push(node('p', 'board-status', `${by} drafted this card${card.source?.goal ? ' from your message' : ''}. Edit it, then accept or discard it. Nothing runs until you accept it.`));
+      const origin = card.draft.batch?.kind === 'suggest' && card.draft.batch.cardTitle ? ` as a follow-up to “${card.draft.batch.cardTitle}”` : card.source?.goal ? ' from your message' : '';
+      parts.push(node('p', 'board-status', `${by} drafted this card${origin}. Edit it, then accept or discard it. Nothing runs until you accept it.`));
       if (card.draft.notes?.length) { const list = node('ul', 'board-draft-notes'); list.setAttribute('aria-label', 'What the plan checks found'); list.append(...card.draft.notes.map(text => node('li', '', text))); parts.push(list); }
+    }
+    const suggest = board?.suggest;
+    if (suggest?.cardId === card.id && ['running', 'failed', 'interrupted'].includes(suggest.status)) {
+      const box = node('div', `board-suggest-status${suggest.status === 'running' ? ' running' : ' trouble'}`), detail = [AGENT[suggest.provider] || suggest.provider, suggest.model, suggest.phase && suggest.phase !== 'starting' ? suggest.phase : 'reading the project', suggest.toolCount ? plural(suggest.toolCount, 'tool call') : ''].filter(Boolean).join(' · ');
+      if (suggest.status === 'running') {
+        box.append(node('p', 'board-suggest-lead', 'Suggesting next cards…'), node('p', 'board-suggest-note', detail));
+        const stop = button('Stop', () => act('/api/board/suggest/stop', {}, () => api.announce('Stopping suggestions.')), 'secondary-button');
+        stop.disabled = busy; box.append(stop);
+      } else {
+        box.append(node('p', 'board-suggest-lead', suggest.status === 'interrupted' ? 'Stopped suggesting next cards.' : 'Couldn’t suggest next cards.'), node('p', 'board-suggest-note', suggest.summary || 'Try again when ready.'));
+        const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button');
+        dismiss.disabled = busy; box.append(dismiss);
+      }
+      parts.push(box);
     }
     if (card.column === 'doing' && state) parts.push(node('p', 'board-status', state.detail ? `${state.text}: ${state.detail}` : state.text));
     if (card.column === 'ready' && card.reason) parts.push(node('p', 'board-status trouble', card.reason));
@@ -679,19 +813,17 @@
       const result = await api.post('/api/board/attach', cardId ? { cardId } : {}), added = window.relayFiles?.attachSaved(result.attachment);
       const what = cardId ? `“${cardBy(cardId)?.title || 'The card'}”` : `The Plan (${plural(result.cards, 'card')})`;
       const said = `${what} is attached to your next message: ${added || 'a few KB'} of text.${result.leftOut ? ` ${plural(result.leftOut, 'card')} closed to agents ${result.leftOut === 1 ? 'is' : 'are'} left out.` : ''}`;
-      busy = false; selected = null; draft = null; dialog.close();
+      busy = false; selected = null; draft = null; showChat(); render();
       api.showNotice(said); api.announce(said);
       document.getElementById('message-input')?.focus();
     } catch (error) { failure = error.message; }
-    finally { busy = false; if (dialog.open) render(); }
+    finally { busy = false; if (showing) render(); }
   }
   // ---- Closed to agents (#97), for the whole Plan
   function drawClosed() {
     const toggle = $('board-agents'), note = $('board-closed-note'), closed = board?.closed === true;
-    if (toggle) { toggle.setAttribute('aria-pressed', String(closed)); toggle.disabled = busy || !board; $('board-agents-label').textContent = closed ? 'Closed to agents' : 'Open to agents'; toggle.title = closed ? 'Agents can’t read this Plan. Select to open it to agents.' : 'Agents can read this Plan when its cards run or are attached. Select to close it to agents.'; }
+    if (toggle) { toggle.setAttribute('aria-pressed', String(closed)); toggle.disabled = busy || !board; $('board-agents-label').textContent = closed ? 'Closed to agents' : 'Open to agents'; toggle.title = closed ? 'Agents can’t read this Plan. Select to open it to agents.' : 'Agents can read this Plan when its cards run, when you ask about it in the chat, or when a card is attached. Select to close it to agents.'; }
     if (note) note.hidden = !closed;
-    const attach$ = $('board-attach');
-    if (attach$) { const open = cards().filter(card => !shut(card)).length; attach$.disabled = busy || !open; attach$.title = closed ? 'This Plan is closed to agents.' : !cards().length ? 'The Plan has no cards yet.' : !open ? 'Every card is closed to agents.' : 'Put the Plan in your next message, for the agent to read. Cards closed to agents are left out.'; }
   }
   function setClosed(closed) {
     if (closed && !window.confirm('Close this Plan to agents?\n\nIts cards then can’t run, be scheduled or attached, and Export leaves them out unless you choose everything. A Plan attachment you already sent is left out of later prompts and handoffs.\n\nAn agent allowed to read anywhere on this computer could still find Codeshi’s own files.')) return;
@@ -790,6 +922,75 @@
     act(plan.id ? `/api/board/schedules/${plan.id}/edit` : '/api/board/schedules', { target, when: time, runLate: plan.runLate, ...(target.type === 'prompt' ? { title: plan.title } : {}) }, result => { api.announce(`Scheduled: ${describe(result.schedule.when)}.`); leaveSchedule(); });
   }
 
+  // ---- Asking the chat about the Plan (#162)
+  // In the Plan view the chat's message box knows it. A line above what you write shows what goes with your message: the
+  // Plan, and the card open beside it, sent as the text Attach to message makes, read again at Send so the agent sees the
+  // Plan as it is then, with cards closed to agents left out. × leaves one out of the next message. Ask | Draft cards says
+  // what Send does: ask the agent, or have it draft new cards in one read-only run, from what you write and any brief or
+  // spec attached to the message. The drafted cards arrive on the Plan to accept or discard. app.js asks asking() at Send.
+  let drafting = false, leftOut = { plan: false, card: null };
+  const planningPlan = () => { const plan = api.getState().conversation?.orchestrations?.[0]; return plan?.status === 'planning' ? plan : null; };
+  const cannotDraft = () => planningPlan() ? 'An agent is drafting cards now. Wait for it, or stop it, before drafting more.' : window.relayOrchestration?.cannotDraft?.() || '';
+  // What the next message takes from the Plan: the Plan's open cards and the card open beside it.
+  function asked$() {
+    if (!showing || !board) return null;
+    const open = cards().filter(card => !shut(card)).length, card = selected ? cardBy(selected) : null;
+    return {
+      plan: { count: open, closed: board.closed === true, on: board.closed !== true && open > 0 && !leftOut.plan },
+      card: card && !shut(card) ? { id: card.id, title: card.title, on: leftOut.card !== card.id } : null,
+    };
+  }
+  const planIcon = (kind = 'plan') => { const icon = node('span', `plan-context-icon${kind === 'card' ? ' card' : ''}`); icon.setAttribute('aria-hidden', 'true'); return icon; };
+  function chip(text, title, on, toggle, what, kind = 'plan') {
+    const value = node('span', `plan-context-chip${on ? '' : ' off'}`); value.title = title;
+    const name = node('span', 'plan-context-name'); name.append(...(Array.isArray(text) ? text : [text])); value.append(planIcon(kind), name);
+    const flip = button(on ? '×' : '+', toggle, 'plan-context-flip'); flip.setAttribute('aria-label', on ? `Don’t send ${what} with this message` : `Send ${what} with this message`);
+    value.append(flip); return value;
+  }
+  let contextDrawn = null;
+  function drawContext() {
+    const box = $('plan-context'); if (!box) return;
+    const now = asked$(), blocked = drafting ? cannotDraft() : '', planner = drafting ? window.relayOrchestration?.planner?.() || 'with the message box’s agent' : '';
+    const key = JSON.stringify([now, drafting, blocked, planner]);
+    if (key === contextDrawn) return;
+    contextDrawn = key; box.hidden = !now;
+    $('composer')?.classList.toggle('plan-asking', Boolean(now));
+    $('composer')?.classList.toggle('plan-drafting', Boolean(now && drafting));
+    api.renderControls?.();
+    if (!now) { box.replaceChildren(); return; }
+    const parts = [];
+    if (now.plan.closed) { const shutChip = node('span', 'plan-context-chip off'); shutChip.append(planIcon(), node('span', 'plan-context-name', 'Plan closed to agents')); shutChip.title = 'Agents can’t read this Plan, so nothing from it goes with your message. Open it to agents from ⋯ at the top of the Plan.'; parts.push(shutChip); }
+    else if (now.plan.count) parts.push(chip([`Plan · ${now.plan.count}`, node('span', 'plan-context-unit', ` ${now.plan.count === 1 ? 'card' : 'cards'}`)], now.plan.on ? 'The Plan goes with your message, as it is when you send. Cards closed to agents are left out.' : 'The Plan won’t go with this message.', now.plan.on, () => { leftOut.plan = !leftOut.plan; drawContext(); }, 'the Plan'));
+    else parts.push(node('span', 'plan-context-empty', 'The Plan has no cards yet'));
+    if (now.card) parts.push(chip(now.card.title, now.card.on ? `${now.card.title} — goes with your message, so “this card” means it.` : `${now.card.title} — won’t go with this message.`, now.card.on, () => { leftOut.card = leftOut.card === now.card.id ? null : now.card.id; drawContext(); }, `“${now.card.title}”`, 'card'));
+    const chips = node('div', 'plan-context-chips'); chips.append(...parts);
+    const modes = node('div', 'plan-context-modes'); modes.setAttribute('role', 'group'); modes.setAttribute('aria-label', 'What Send does');
+    for (const [value, text, title] of [[false, 'Ask', 'Ask the agent about the Plan and the project.'], [true, 'Draft cards', 'An agent reads the project in one read-only run and drafts new cards for you to accept. Attach a brief or spec to plan from it.']]) {
+      const mode = button(text, () => { if (drafting === value) return; drafting = value; contextDrawn = null; drawContext(); $('message-input')?.focus(); }, 'plan-context-mode'); mode.setAttribute('aria-pressed', String(drafting === value)); mode.title = title; modes.append(mode);
+    }
+    const row = node('div', 'plan-context-row'); row.append(chips, modes);
+    box.replaceChildren(row);
+    // Drafting says who drafts, as the message box is set, or why it can't start now.
+    if (blocked) { const why = node('p', 'plan-context-note plan-context-blocked', blocked); why.setAttribute('role', 'status'); box.append(why); }
+    else if (drafting) box.append(node('p', 'plan-context-note', `It reads the project in one read-only run and drafts ${planner}. Nothing runs until you accept the cards.`));
+  }
+  // At Send: null outside the Plan view; otherwise whether Send drafts cards, why it can't, and attach() for the Plan's text.
+  function asking() {
+    const now = asked$(); if (!now) return null;
+    return {
+      draft: drafting, blocked: drafting ? cannotDraft() : '',
+      // The Plan and the card as attachments; the open card is named at the top of the Plan's text rather than sent twice.
+      async attach() {
+        const ids = [];
+        if (now.plan.on) ids.push((await api.post('/api/board/attach', now.card?.on ? { focus: now.card.id } : {})).attachment);
+        else if (now.card?.on) ids.push((await api.post('/api/board/attach', { cardId: now.card.id })).attachment);
+        return ids.map(meta => meta.id);
+      },
+      // Once sent, the next message takes the Plan and the card again, and a draft goes back to asking.
+      sent() { leftOut = { plan: false, card: null }; if (drafting) { drafting = false; api.announce('Drafting cards. They’ll appear on the Plan for you to accept or discard.'); } contextDrawn = null; drawContext(); },
+    };
+  }
+
   function renderDrawer() {
     const aside = $('board-drawer'), body = $('board-drawer-body');
     if (!selected || (!['new', 'run', 'schedules', 'schedule'].includes(selected) && !cardBy(selected))) { aside.hidden = true; body.replaceChildren(); drawn = null; if (selected && !cardBy(selected)) { selected = null; draft = null; } return; }
@@ -799,7 +1000,7 @@
     if (card && draft && !dirty() && draft.revision !== card.revision) draft = editable(card);
     // A schedule being written is drawn again only when its kind of time changes, so typing keeps its place.
     if (card) readComments(card.id);
-    const key = JSON.stringify([selected, card && [card.column, card.revision, card.reason, card.taskState, card.result, card.acceptedAt, card.attempts?.length, card.priority, card.labels, card.due, card.checks, card.commentCount, card.draft, card.auto, card.group, card.split, card.subtasks, card.splitting, card.subtasksPaused, subEdit?.cardId === card.id ? [subEdit.id, subEdit.tier, subEdit.agent] : null, threads.get(card.id)?.length ?? null, schedulesOf(card)], selected === 'run' ? [...picked] : null, selected === 'run' ? cards().map(item => [item.id, item.column, item.agent?.provider, item.dependsOn]) : null, selected === 'schedules' ? schedules() : null, selected === 'schedule' ? [sdraft?.id, sdraft?.when.repeat, sdraft?.target] : null, busy]);
+    const key = JSON.stringify([selected, card && [card.column, card.revision, card.reason, card.taskState, card.result, card.acceptedAt, card.attempts?.length, card.priority, card.labels, card.due, card.checks, card.commentCount, card.draft, card.auto, card.group, card.split, card.subtasks, card.splitting, card.subtasksPaused, card.closed, subEdit?.cardId === card.id ? [subEdit.id, subEdit.tier, subEdit.agent] : null, threads.get(card.id)?.length ?? null, schedulesOf(card)], suggestConfirm === card?.id, board?.suggest, board?.closed, cards().length >= (board?.limits?.cards || 300), selected === 'run' ? [...picked] : null, selected === 'run' ? cards().map(item => [item.id, item.column, item.agent?.provider, item.dependsOn]) : null, selected === 'schedules' ? schedules() : null, selected === 'schedule' ? [sdraft?.id, sdraft?.when.repeat, sdraft?.target] : null, busy]);
     if (key === drawn) { changed(); return; }
     drawn = key;
     if (selected === 'run') { $('board-drawer-title').textContent = 'Run Ready cards'; body.replaceChildren(...runPanel()); return; }
@@ -808,7 +1009,7 @@
     $('board-drawer-title').textContent = selected === 'new' ? `New card · ${COLUMNS.find(([id]) => id === draft.column)[1]}` : `${card.draft ? 'Draft' : COLUMNS.find(([id]) => id === card.column)[1]}${card.agent ? ` · ${AGENT[card.agent.provider]}` : card.auto ? ' · Auto' : ''}`;
     // Someone writing a comment keeps their place when the drawer is drawn again.
     const writing = ['board-comment-input', 'board-comment-send'].some(name => document.activeElement?.classList?.contains(name)) && body.contains(document.activeElement);
-    body.replaceChildren(...(card ? [...status(card), actions(card), ...subtasksPanel(card), ...cardSchedules(card)] : []), ...editor(card), ...(card ? [...commentsPanel(card), ...history(card)] : []));
+    body.replaceChildren(...(card ? [...status(card), actions(card), ...suggestPanel(card), ...subtasksPanel(card), ...cardSchedules(card)] : []), ...editor(card), ...(card ? [...commentsPanel(card), ...history(card)] : []));
     if (writing) { const box = body.querySelector('.board-comment-input'); box?.focus(); box?.setSelectionRange?.(box.value.length, box.value.length); }
     changed();
   }
@@ -817,26 +1018,71 @@
   // ---- Drafts (#162)
   // A banner for each plan an agent drafted: who drafted it, its summary, the questions it couldn't answer, and Accept all
   // or Discard all. Each card can also be opened, edited and accepted on its own.
+  function undoNoticeRow() {
+    if (!draftNotice) return null;
+    const { text: msg, entry } = draftNotice;
+    const row = node('section', 'board-draft-batch board-draft-undo'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
+    row.setAttribute('aria-label', 'Draft change');
+    text.append(node('p', 'board-draft-lead', msg), node('p', 'board-draft-note', 'Undo to restore it, or press ⌘Z.'));
+    const dismiss = button('Dismiss', () => { draftNotice = null; render(); }, 'text-link');
+    const undo = button('Undo', async () => {
+      if (undos.at(-1) === entry) { await step(undos, redos); return; }
+      if (await entry.undo()) { const idx = undos.lastIndexOf(entry); if (idx >= 0) undos.splice(idx, 1); redos.push(entry); api.announce(`Undone: ${entry.label}.`); refreshTools(); }
+    }, 'secondary-button');
+    dismiss.disabled = undo.disabled = busy;
+    actions$.append(dismiss, undo);
+    row.append(text, actions$);
+    return row;
+  }
   function drawDrafts() {
     const box = $('board-drafts'); if (!box) return;
     const batches = new Map();
     for (const card of cards().filter(item => item.draft)) { const id = card.draft.batch?.id || 'own'; if (!batches.has(id)) batches.set(id, []); batches.get(id).push(card); }
-    const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy]));
-    box.hidden = !batches.size;
+    const planning = planningPlan(), suggest = board?.suggest, suggestShown = suggest && ['running', 'failed', 'interrupted'].includes(suggest.status) ? suggest : null;
+    const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, suggestShown, draftNotice?.text || null]));
+    box.hidden = !batches.size && !planning && !suggestShown && !draftNotice;
     if (box.dataset.drawn === key) return;
     box.dataset.drawn = key;
-    box.replaceChildren(...[...batches].map(([, list]) => {
+    // While the planner or Suggest next works, a line says so, with Stop; failed/interrupted offers Dismiss.
+    const working = [];
+    if (planning) {
+      const row = node('section', 'board-draft-batch board-draft-planning'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
+      row.setAttribute('aria-label', 'Drafting cards');
+      text.append(node('p', 'board-draft-lead', `Drafting cards${planning.documents?.length ? ` from ${listNames(planning.documents)}` : ''}…`), node('p', 'board-draft-note', 'They’ll appear here to accept or discard. The planner’s progress shows in the Workspace chat.'));
+      const stop = button('Stop', () => api.stopRun?.(), 'secondary-button'); stop.setAttribute('aria-label', 'Stop drafting cards');
+      actions$.append(stop); row.append(text, actions$); working.push(row);
+    }
+    if (suggestShown) {
+      const isRun = suggestShown.status === 'running';
+      const row = node('section', `board-draft-batch ${isRun ? 'board-draft-planning board-suggest-running' : 'board-suggest-trouble'}`), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
+      row.setAttribute('aria-label', isRun ? 'Suggesting next cards' : 'Suggestions did not finish');
+      const who = [AGENT[suggestShown.provider] || suggestShown.provider, suggestShown.model, suggestShown.phase && suggestShown.phase !== 'starting' ? suggestShown.phase : 'reading the project', suggestShown.toolCount ? plural(suggestShown.toolCount, 'tool call') : ''].filter(Boolean).join(' · ');
+      if (isRun) {
+        text.append(node('p', 'board-draft-lead', `Suggesting next cards after “${suggestShown.cardTitle}”…`), node('p', 'board-draft-note', `${who}. Suggested cards will appear here as drafts.`));
+        const stop = button('Stop', () => act('/api/board/suggest/stop', {}, () => api.announce('Stopping suggestions.')), 'secondary-button'); stop.setAttribute('aria-label', 'Stop suggesting cards'); stop.disabled = busy;
+        actions$.append(stop);
+      } else {
+        text.append(node('p', 'board-draft-lead', suggestShown.status === 'interrupted' ? `Stopped suggesting after “${suggestShown.cardTitle}”.` : `Couldn’t suggest cards after “${suggestShown.cardTitle}”.`), node('p', 'board-draft-note', suggestShown.summary || 'Try again when ready.'));
+        const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); dismiss.disabled = busy;
+        actions$.append(dismiss);
+      }
+      row.append(text, actions$); working.push(row);
+    }
+    const noticeRow = undoNoticeRow();
+    if (noticeRow) working.push(noticeRow);
+    box.replaceChildren(...working, ...[...batches].map(([, list]) => {
       const first = list[0], batch = first.draft.batch || {}, by = first.draft.by?.kind === 'agent' ? AGENT[first.draft.by.provider] || first.draft.by.provider : 'You';
       const row = node('section', 'board-draft-batch'), text = node('div', 'board-draft-text');
       row.setAttribute('aria-label', `Drafted cards from ${by}`);
-      text.append(node('p', 'board-draft-lead', `${by} drafted ${plural(list.length, 'card')}${batch.summary ? `: ${batch.summary}` : '.'}`));
+      const verb = batch.kind === 'suggest' && batch.cardTitle ? `suggested ${plural(list.length, 'card')} after “${batch.cardTitle}”` : `drafted ${plural(list.length, 'card')}`;
+      text.append(node('p', 'board-draft-lead', `${by} ${verb}${batch.summary ? `: ${batch.summary}` : '.'}`));
       if (batch.documents?.length) text.append(node('p', 'board-draft-note board-draft-documents', `Planned from ${listNames(batch.documents)}.`));
       const noted = list.filter(card => card.draft.notes?.length).length;
       text.append(node('p', 'board-draft-note', `Nothing runs until you accept it. Open a card to edit it first.${noted ? ` The plan checks noted something on ${plural(noted, 'card')}.` : ''}`));
       if (batch.questions?.length) { const asks = node('ul', 'board-draft-questions'); asks.setAttribute('aria-label', 'Questions from the planner'); asks.append(...batch.questions.map(question => node('li', '', question))); text.append(node('p', 'board-draft-note', 'It asks:'), asks); }
       const ids = list.map(card => card.id), actions$ = node('div', 'board-draft-actions');
-      const accept = button(`Accept ${list.length === 1 ? '' : 'all '}${plural(list.length, 'card')}`, () => act('/api/board/drafts', { action: 'accept', ids }, () => api.announce(`${plural(list.length, 'card')} accepted.`)), 'primary-button');
-      const discard = button('Discard', () => { if (window.confirm(`Discard ${plural(list.length, 'drafted card')}?`)) act('/api/board/drafts', { action: 'discard', ids }, () => { if (ids.includes(selected)) { selected = null; draft = null; } api.announce('Drafts discarded.'); }); }, 'secondary-button');
+      const accept = button(`Accept ${list.length === 1 ? '' : 'all '}${plural(list.length, 'card')}`, () => draftAction('accept', ids, `${plural(list.length, 'card')} accepted.`), 'primary-button');
+      const discard = button('Discard', () => { if (window.confirm(`Discard ${plural(list.length, 'drafted card')}?`)) draftAction('discard', ids, 'Drafts discarded.', () => { if (ids.includes(selected)) { selected = null; draft = null; } }); }, 'secondary-button');
       accept.disabled = discard.disabled = busy;
       actions$.append(discard, accept);
       row.append(text, actions$);
@@ -868,7 +1114,7 @@
   }
   function drawOutline() {
     const list = $('board-outline'), all = cards();
-    if (!all.length) { list.replaceChildren(node('li', 'board-column-empty', 'No cards yet. Add one with New card, or turn on Orchestrate in the message box to have an agent draft a plan.')); return; }
+    if (!all.length) { list.replaceChildren(node('li', 'board-column-empty', 'No cards yet. Add one with New card, or use Draft with an agent to have an agent draft them.')); return; }
     list.replaceChildren(...[...groupsOf(all)].map(([name, own]) => {
       const item = node('li', 'board-outline-group'), head = node('div', 'board-outline-head'), rows = node('ol', 'board-outline-cards');
       const done = own.filter(card => card.column === 'done').length, doing = own.filter(card => card.column === 'doing'), ready = own.filter(card => card.column === 'ready' && runnable(card));
@@ -1079,7 +1325,7 @@
     for (const [id, { item }] of built) { const place = at.get(id); item.style.transform = `translate(${place.x}px, ${place.y}px)`; }
     drawGroups(at);
     space.querySelector('.board-canvas-empty')?.remove();
-    if (!cards().length) space.append(node('p', 'board-canvas-empty', 'No cards yet. Double-click anywhere to add one, or use New card.'));
+    if (!cards().length) space.append(node('p', 'board-canvas-empty', 'No cards yet. Double-click anywhere to add one, use New card, or use Draft with an agent.'));
     frame(() => {
       // Only cards just built can have changed height.
       let changed = false;
@@ -1161,9 +1407,9 @@
   // ---- Changes, and undoing them
   // Canvas changes show at once and are saved behind; one that fails reloads the board as it is.
   async function quietly(path, input) {
-    const request = ++written; writes++; failure = '';
-    try { const result = await api.post(path, input); writes--; if (request === written && result.board) { board = result.board; render(); } return true; }
-    catch (error) { writes--; failure = error.message; showError(); await load(); return false; }
+    const request = ++written, from = era; writes++; failure = '';
+    try { const result = await api.post(path, input); if (from !== era) return true; writes--; if (request === written && result.board) { board = result.board; render(); } return true; }
+    catch (error) { if (from !== era) return false; writes--; failure = error.message; showError(); await load(); return false; }
   }
   function place(positions) {
     for (const [id, at] of Object.entries(positions)) { const card = cardBy(id); if (card) card.at = at; }
@@ -1236,12 +1482,12 @@
   }
 
   function render() {
-    if (!dialog.open) { entry(); return; }
+    if (!showing) { entry(); return; }
     const onCanvas = view === 'canvas', outline = view === 'outline';
     $('board-canvas').classList.toggle('canvas-mode', onCanvas); $('board-columns').hidden = view !== 'columns'; space.hidden = !onCanvas; $('board-outline').hidden = !outline;
     for (const [id, mode] of [['board-columns-mode', 'columns'], ['board-canvas-mode', 'canvas'], ['board-outline-mode', 'outline']]) $(id)?.setAttribute('aria-pressed', String(view === mode));
     drawEarlier();
-    if (!board) { const message = node('p', 'plan-view-empty', failure ? `The Plan couldn’t be loaded. ${failure}` : 'Loading the Plan…'); (onCanvas ? space : outline ? $('board-outline') : $('board-columns')).replaceChildren(message); return; }
+    if (!board) { const message = node('p', 'plan-view-empty', failure ? `The Plan couldn’t be loaded. ${failure}` : 'Loading the Plan…'); (onCanvas ? space : outline ? $('board-outline') : $('board-columns')).replaceChildren(message); drawContext(); return; }
     drawFilter(); drawDrafts(); drawClosed();
     const ready = cards().filter(card => card.column === 'ready');
     $('board-run-ready').disabled = busy || !ready.some(runnable);
@@ -1252,7 +1498,7 @@
     const where = onCanvas ? space : outline ? $('board-outline') : $('board-columns'), focused = document.activeElement?.closest?.(onCanvas ? '#board-space' : outline ? '#board-outline' : '#board-columns') ? document.activeElement.dataset?.card : null;
     if (onCanvas) drawSpace(); else if (outline) drawOutline(); else drawColumns();
     if (focused) where.querySelector(`${outline ? '.board-outline-card' : '.board-card'}[data-card="${focused}"]`)?.focus();
-    renderDrawer(); showError(); entry();
+    renderDrawer(); drawContext(); showError(); entry();
   }
   // The label filter appears once a card has a label. A label no card has any more stops being the filter.
   function drawFilter() {
@@ -1279,32 +1525,55 @@
     button.disabled = !api.getState().projectId;
     const drafts = cards().filter(card => card.draft).length, waiting = cards().filter(card => card.column === 'review').length, working = cards().filter(card => card.column === 'doing').length;
     const planning = api.getState().conversation?.orchestrations?.[0]?.status === 'planning';
-    const [state, short, long] = planning ? ['planning', 'Planning…', 'Plan: an agent is drafting cards.'] : drafts ? ['ready', String(drafts), `Plan: ${plural(drafts, 'drafted card')} waiting for you to accept or discard.`] : waiting ? ['ready', String(waiting), `Plan: ${plural(waiting, 'card')} to review.`] : working ? ['running', String(working), `Plan: ${plural(working, 'card')} working.`] : ['none', '', 'Plan: plan, run and review this workspace’s cards.'];
+    const suggesting = board?.suggest?.status === 'running' || api.getState().conversation?.boardSuggest?.status === 'running';
+    const [state, short, long] = planning ? ['planning', 'Planning…', 'Plan: an agent is drafting cards.'] : suggesting ? ['planning', 'Suggesting…', 'Plan: an agent is suggesting next cards.'] : drafts ? ['ready', String(drafts), `Plan: ${plural(drafts, 'drafted card')} waiting for you to accept or discard.`] : waiting ? ['ready', String(waiting), `Plan: ${plural(waiting, 'card')} to review.`] : working ? ['running', String(working), `Plan: ${plural(working, 'card')} working.`] : ['none', '', 'Plan: plan, run and review this workspace’s cards.'];
     button.dataset.state = state; button.title = long; button.setAttribute('aria-label', long);
     const badge = $('open-plan-state');
     if (badge) { badge.textContent = short; badge.hidden = !short; }
   }
 
+  // What to do once the Plan shows: a new card written from a prefill.
+  let then = null;
   function open(prefill = null) {
-    if (dialog.open || !api.getState().projectId) return;
-    selected = null; draft = null; failure = ''; drawn = null;
-    dialog.showModal(); render();
-    load().then(() => { if (prefill) openNew('backlog', null, prefill); else (view === 'canvas' ? space : view === 'outline' ? $('board-outline') : $('board-columns')).querySelector('[data-card]')?.focus(); });
+    if (!api.getState().projectId) return false;
+    if (showing) { if (prefill) openNew('backlog', null, prefill); return true; }
+    then = prefill ? { prefill } : null;
+    return window.relayFlow?.plan?.() !== false;
   }
-  dialog.addEventListener('cancel', event => {
+  function show() {
+    if (showing) return;
+    showing = true; dialog.hidden = false;
+    selected = null; draft = null; failure = ''; drawn = null;
+    const next = then; then = null;
+    render(); chatAttention();
+    load().then(() => {
+      if (!showing) return;
+      if (next?.prefill) openNew('backlog', null, next.prefill);
+      else (view === 'canvas' ? space : view === 'outline' ? $('board-outline') : $('board-columns')).querySelector('[data-card]')?.focus();
+    });
+  }
+  function hide() {
+    if (!showing) return;
+    showing = false; dialog.hidden = true; then = null;
+    selected = null; draft = null; sdraft = null; drawn = null; picked$ = null; suggestConfirm = null;
+    const menu = $('board-export-menu'); if (menu) menu.hidden = true;
+    drafting = false; leftOut = { plan: false, card: null }; drawContext(); entry();
+  }
+  // Esc lets go of a chosen arrow, then closes the card beside the board. It never leaves the Plan: the view switch does.
+  dialog.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
     if (picked$) { event.preventDefault(); picked$ = null; drawLinks(); }
-    else if (selected) { event.preventDefault(); closeDrawer(); } else if (dirty()) event.preventDefault();
+    else if (selected) { event.preventDefault(); closeDrawer(); }
   });
   $('board-columns-mode')?.addEventListener('click', () => showView('columns'));
   $('board-canvas-mode')?.addEventListener('click', () => showView('canvas'));
   $('board-outline-mode')?.addEventListener('click', () => showView('outline'));
-  $('board-earlier-open')?.addEventListener('click', () => { dialog.close(); window.relayPlanView?.open(); });
+  $('board-earlier-open')?.addEventListener('click', () => window.relayPlanView?.open());
   $('board-export')?.addEventListener('click', exportChoice);
   $('board-export-open')?.addEventListener('click', () => exportBoard(false));
   $('board-export-closed')?.addEventListener('click', () => exportBoard(true));
   $('board-export-menu')?.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); $('board-export-menu').hidden = true; $('board-export').setAttribute('aria-expanded', 'false'); $('board-export').focus(); } });
   dialog.addEventListener('click', event => { const menu = $('board-export-menu'); if (menu && !menu.hidden && !event.target?.closest?.('#board-export-menu, #board-export')) { menu.hidden = true; $('board-export').setAttribute('aria-expanded', 'false'); } });
-  $('board-attach')?.addEventListener('click', () => attach());
   $('board-agents')?.addEventListener('click', () => setClosed(board?.closed !== true));
   // The canvas: drag empty space to pan, scroll to pan, pinch or ⌘-scroll to zoom, double-click for a new card there.
   const onCard = event => event.target?.closest?.('.board-node') || event.target?.closest?.('.board-canvas-tools') || event.target?.closest?.('.board-link-remove');
@@ -1320,33 +1589,52 @@
     const point = toWorld(event);
     openNew('backlog', { x: Math.round(point.x - WIDTH / 2), y: Math.round(point.y - 20) });
   });
-  // ⌘Z and ⇧⌘Z undo and redo canvas changes; Delete takes away the chosen arrow. Typing in a field keeps its own undo.
+  // ⌘Z and ⇧⌘Z undo and redo canvas changes (and draft accept/discard in any view); Delete takes away the chosen arrow. Typing in a field keeps its own undo.
   dialog.addEventListener('keydown', event => {
-    if (view !== 'canvas' || !board) return;
+    if (!board) return;
     const target = event.target, typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || target?.isContentEditable || target?.closest?.('#board-drawer');
     if (typing) return;
     const key = String(event.key || '').toLowerCase(), command = event.metaKey || event.ctrlKey;
-    if (command && key === 'z') { event.preventDefault(); if (event.shiftKey) step(redos, undos); else step(undos, redos); }
-    else if (command && key === 'y') { event.preventDefault(); step(redos, undos); }
-    else if ((key === 'delete' || key === 'backspace') && picked$) { event.preventDefault(); disconnect(...picked$); }
+    if (command && key === 'z') {
+      const stack = event.shiftKey ? redos : undos, top = stack.at(-1);
+      if (view === 'canvas' || top?.anyView) { event.preventDefault(); step(stack, event.shiftKey ? undos : redos); }
+    } else if (command && key === 'y') {
+      const top = redos.at(-1);
+      if (view === 'canvas' || top?.anyView) { event.preventDefault(); step(redos, undos); }
+    } else if (view === 'canvas' && (key === 'delete' || key === 'backspace') && picked$) { event.preventDefault(); disconnect(...picked$); }
   });
-  dialog.addEventListener('close', () => { selected = null; draft = null; sdraft = null; drawn = null; entry(); });
-  $('board-close').addEventListener('click', () => { if (!dirty() || window.confirm('Leave this card without saving your changes?')) { selected = null; draft = null; dialog.close(); } });
+  $('board-chat')?.addEventListener('click', () => setChat(chatHidden()));
+  // The More menu closes once a choice is made; Export stays open when it asks what to include.
+  $('board-more-menu')?.addEventListener('click', event => {
+    const item = event.target?.closest?.('button'), menu = $('board-more-menu');
+    if (!item || item.id === 'board-export' && !$('board-export-menu')?.hidden) return;
+    menu?.hidePopover?.();
+  });
+  $('board-more-menu')?.addEventListener('toggle', event => { if (event.newState === 'closed' && $('board-export-menu')) { $('board-export-menu').hidden = true; $('board-export')?.setAttribute('aria-expanded', 'false'); } });
   $('board-drawer-close').addEventListener('click', closeDrawer);
   $('board-new').addEventListener('click', () => openNew('backlog'));
   $('board-run-ready').addEventListener('click', () => openRun());
   $('board-schedules')?.addEventListener('click', () => { if (selected === 'schedules') { closeDrawer(); return; } if (selected && dirty() && !window.confirm('Leave this card without saving your changes?')) return; selected = 'schedules'; draft = null; sdraft = null; failure = ''; drawn = null; render(); });
-  $('open-plan')?.addEventListener('click', () => open());
+  // Leaving the Plan, or its workspace, asks first when a card has unsaved edits.
+  const canLeave = () => !dirty() || window.confirm('Leave this card without saving your changes?');
+  { let chat = null; try { chat = localStorage.getItem(CHAT_KEY); } catch { /* A convenience only. */ } setChat(chat !== 'hidden', false); }
   // The board is read again when its cards or their tasks change: the workspace chat says when, and so do the tasks.
   let project = null;
   window.addEventListener('relay-state', () => {
     const state = api.getState();
-    if (state.projectId !== project) { project = state.projectId; board = null; seen = null; camera = null; heights = new Map(); undos = []; redos = []; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); if (dialog.open) dialog.close(); }
-    const key = JSON.stringify([state.projectId, state.conversation?.boardRevision, (state.conversation?.parallelTasks || []).map(task => [task.id, task.status, task.approvals, task.hasWorktree])]);
-    if (key === seen) { entry(); if (dialog.open) drawEarlier(); return; }
+    // Another workspace: the Plan stays and shows that workspace's cards, as Flow stays on.
+    if (state.projectId !== project) {
+      project = state.projectId; era++; writes = 0; loading++; drafting = false; leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map();
+      selected = null; draft = null; sdraft = null; drawn = null; failure = ''; picked = new Set();
+      if (showing) { renderDrawer(); render(); }
+    }
+    chatAttention();
+    const key = JSON.stringify([state.projectId, state.conversation?.boardRevision, state.conversation?.boardSuggest ? [state.conversation.boardSuggest.id, state.conversation.boardSuggest.status, state.conversation.boardSuggest.phase, state.conversation.boardSuggest.toolCount] : null, (state.conversation?.parallelTasks || []).map(task => [task.id, task.status, task.approvals, task.hasWorktree])]);
+    if (key === seen) { entry(); if (showing) { drawEarlier(); if (board) drawDrafts(); drawContext(); } return; }
     seen = key;
     if (state.projectId) load(); else entry();
   });
   // open({ title, notes }) opens the Plan with a new card written from them, as Write it yourself does.
-  window.relayBoard = { open, close: () => { if (dialog.open) dialog.close(); }, isOpen: () => dialog.open, reload: load, drafts: () => cards().filter(card => card.draft) };
+  // close() goes back to Normal, or to Flow when routing was on. showChat() opens the chat beside the Plan.
+  window.relayBoard = { open, show, hide, canLeave, showChat, asking, close: () => showing ? window.relayFlow?.setView?.(window.relayFlow.isRouted?.() ? 'flow' : 'normal') !== false : true, isOpen: () => showing, reload: load, drafts: () => cards().filter(card => card.draft) };
 })();

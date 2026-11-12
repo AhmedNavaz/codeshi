@@ -74,8 +74,8 @@
   }
 
   function render() {
-    const state = api.getState(), current = routing(), flow = window.relayFlow?.isOn?.() === true;
-    // In Flow, handoff follows the routing mode, so its settings step aside with the normal view.
+    const state = api.getState(), current = routing(), flow = window.relayFlow?.isRouted?.() === true;
+    // With Flow's routing on, in Flow or in a Plan opened from it, handoff follows the routing mode, so its settings step aside.
     $('agents-routing').hidden = !flow; $('agents-routing-note').hidden = flow; $('agents-handoff').hidden = flow;
     if (panel.hidden) return;
     renderOptions($('routing-options'));
@@ -138,15 +138,17 @@
   window.addEventListener('relay-flow', render);
   // The overview in a new conversation links to the matching part of the panel.
   document.querySelectorAll('[data-agents]').forEach(link => link.addEventListener('click', () => setOpen(true, link.dataset.agents)));
-  // On a docked layout, a workspace opens with the side panel last chosen, Agents at first.
+  // On a docked layout, a workspace opens with the side panel last chosen, Agents at first. Flow and the Plan have no side
+  // panel, and an open one shows there as a sheet, so switching or creating a workspace in either opens nothing.
   let lastProject = null;
+  const flowing = () => ['flow', 'plan'].includes(window.relayFlow?.view?.()) || Boolean($('app-shell')?.classList.contains('flow'));
   window.addEventListener('relay-state', () => {
     const projectId = api.getState().projectId;
     if (projectId !== lastProject) {
       lastProject = projectId;
       if (!panel.hidden) loadTestCommand();
       if (!projectId) setOpen(false, null, false);
-      else if (panel.hidden && preferred() === 'agents' && window.matchMedia?.('(min-width: 1101px)').matches) setOpen(true, null, false);
+      else if (panel.hidden && !flowing() && preferred() === 'agents' && window.matchMedia?.('(min-width: 1101px)').matches) setOpen(true, null, false);
     }
     render();
   });

@@ -26,8 +26,10 @@ export function createBoardRoutes({ registry, body, json }) {
     if (url.pathname === '/api/board/cards') { json(res, 201, { card: board.create(c, input), board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/place') { const result = board.place(c, input); json(res, 200, { ...result, board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/run') { const result = board.run(c, input); json(res, 202, { tasks: result.tasks, board: board.view(c) }); return true; }
-    // One Plan (#162): accept or discard an agent's draft cards, and stop several running cards, such as a group, at once.
+    // One Plan (#162): accept, discard or undo an agent's draft cards, stop running cards, and suggest next cards.
     if (url.pathname === '/api/board/drafts') { json(res, 200, { ...board.drafts(c, input), board: board.view(c) }); return true; }
+    if (url.pathname === '/api/board/suggest/stop') { json(res, 200, { ...board.stopSuggest(c), board: board.view(c) }); return true; }
+    if (url.pathname === '/api/board/suggest/dismiss') { json(res, 200, { ...board.dismissSuggest(c), board: board.view(c) }); return true; }
     // Closed to agents (#97): the whole Plan; a single card is closed with its other fields. Attaching puts the Plan, or a
     // card, in your next message as a text attachment.
     if (url.pathname === '/api/board/access') { json(res, 200, { ...board.access(c, input), board: board.view(c) }); return true; }
@@ -43,6 +45,9 @@ export function createBoardRoutes({ registry, body, json }) {
       json(res, 200, { ...(result.id ? { schedule: result } : result), board: board.view(c) });
       return true;
     }
+    // Suggest 1 to 3 follow-up draft cards from an existing card (#162).
+    const suggest = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/suggest$/);
+    if (suggest) { json(res, 202, { suggest: board.suggest(c, suggest[1], input), board: board.view(c) }); return true; }
     // A major card's subtasks (#155): add, edit, remove, pause, resume, or clear to split again.
     const split = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/subtasks$/);
     if (split) { json(res, 200, { card: board.subtasks.act(c, split[1], input), board: board.view(c) }); return true; }

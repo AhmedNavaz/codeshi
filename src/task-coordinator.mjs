@@ -40,7 +40,7 @@ export class TaskCoordinator {
   // A card on the board (#132) follows the task it started, so the board hears about every change.
   update(c, task, changes) { this.main.record(c, { type: 'parallel_task_update', id: task.id, changes }); this.onTask?.(c, task); this.main.emit('update', { conversationId: c.id }); }
   get running() { return [...this.lanes.values()].filter(lane => lane.broker.running).length; }
-  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.preparing.size + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
+  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.preparing.size + (this.main.board?.suggestJobs?.size || 0) + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
   get busy() { return this.running > 0 || this.checking.size > 0; }
   get waitingResumes() { return [...this.lanes.values()].reduce((count, lane) => count + (lane.broker.waitingResumes || 0), 0); }
   openLanes() { return [...this.lanes.values()].map(lane => lane.broker); }

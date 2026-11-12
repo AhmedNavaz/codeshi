@@ -200,6 +200,14 @@ export class Broker extends EventEmitter {
         }
         this.record(conversation, { type: 'review_result', id: review.id, result: { status: 'interrupted', summary: 'Background review was interrupted. Start a new review when ready.', findings: [] } });
       }
+      if (conversation.boardSuggest?.status === 'running') {
+        const prev = conversation.boardSuggest;
+        if (prev.pid && process.platform !== 'win32') {
+          try { process.kill(-prev.pid, 0); if (!reused(prev.pid, prev.pidStart)) throw Object.assign(new Error(`A suggestion run from the previous session may still be active (process group ${prev.pid}). Stop that process group before restarting Codeshi.`), { status: 409 }); }
+          catch (error) { if (!groupGone(error)) throw error; }
+        }
+        this.record(conversation, { type: 'board_suggest_result', id: prev.id, status: 'interrupted', summary: 'Codeshi restarted while suggesting next cards. Try again when ready.', cards: [] });
+      }
       for (const run of conversation.runs.filter(item => ['building', 'reviewing'].includes(item.automaticReview?.status))) {
         this.record(conversation, { type: 'automatic_review_phase', runId: run.id, phase: { status: 'interrupted', summary: 'Codeshi restarted. Review stopped; start a new review when ready.' } });
       }
@@ -279,7 +287,7 @@ export class Broker extends EventEmitter {
 
   empty(id) {
     return { id, title: 'New conversation', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', status: 'idle', messages: [], messageById: new Map(),
-      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], orchestrations: [], snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
+      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], orchestrations: [], snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, boardSuggest: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
   }
 
   apply(c, record) {
@@ -351,6 +359,10 @@ export class Broker extends EventEmitter {
     // Closed to agents (#97): the whole Plan.
     if (record.type === 'plan_access') { c.planClosed = record.closed === true; c.boardRevision = record.seq; }
     if (record.type === 'board_card_remove') { c.board = (c.board || []).filter(item => item.id !== record.id); c.boardRevision = record.seq; }
+    if (record.type === 'board_suggest') { c.boardSuggest = { ...record.suggest, status: 'running', phase: 'starting', toolCount: 0, pid: null, pidStart: null, startedAt: record.at, endedAt: null }; c.boardRevision = record.seq; }
+    if (record.type === 'board_suggest_process') { if (c.boardSuggest?.id === record.id) Object.assign(c.boardSuggest, { pid: record.pid, pidStart: record.pidStart }); }
+    if (record.type === 'board_suggest_result') { if (c.boardSuggest?.id === record.id) Object.assign(c.boardSuggest, { status: record.status, summary: record.summary || null, cards: record.cards || [], endedAt: record.at }); c.boardRevision = record.seq; }
+    if (record.type === 'board_suggest_dismiss') { if (!record.id || c.boardSuggest?.id === record.id) { c.boardSuggest = null; c.boardRevision = record.seq; } }
     // Schedules (#132): beside the cards, and the board is read again when one changes.
     if (record.type === 'schedule') { c.schedules = [...(c.schedules || []), record.schedule]; c.boardRevision = record.seq; }
     if (record.type === 'schedule_update') { const schedule = c.schedules?.find(item => item.id === record.id); if (schedule) Object.assign(schedule, record.changes); c.boardRevision = record.seq; }
@@ -657,7 +669,7 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null, limit = null, before = null, toRun = null, toMessage = null } = {}) {
-    const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, board, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
+    const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, board, boardSuggest, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     if (c.routingPending) { visible.status = 'running'; visible.activeRun = c.routingPending; visible.canAddToRun = false; }
     const contextFor = provider => contextControlView(c, provider, rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() }));
@@ -711,7 +723,7 @@ export class Broker extends EventEmitter {
       }
     }
 
-    return { ...visible, execution: this.execution.view(c), contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(messageCount !== undefined ? { messageCount } : {}), ...(earlier !== undefined ? { earlier } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: messages.map(({ seq, ...m }) => m) };
+    return { ...visible, execution: this.execution.view(c), contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(messageCount !== undefined ? { messageCount } : {}), ...(earlier !== undefined ? { earlier } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), ...(c.boardSuggest ? { boardSuggest: { id: c.boardSuggest.id, cardId: c.boardSuggest.cardId, status: c.boardSuggest.status, phase: c.boardSuggest.phase, toolCount: c.boardSuggest.toolCount } } : {}), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: messages.map(({ seq, ...m }) => m) };
   }
 
   pendingApprovals(c) {
@@ -889,7 +901,7 @@ export class Broker extends EventEmitter {
   workspaceActivity() {
     const activity = { running: 0, checking: this.tasks?.checking?.size || 0, reviewing: 0, waiting: 0, queued: 0 };
     for (const broker of [this, ...(this.tasks?.openLanes() || [])]) for (const c of broker.conversations.values()) {
-      if (c.status === 'running' || broker.running?.c === c) activity.running++;
+      if (c.status === 'running' || broker.running?.c === c || c.boardSuggest?.status === 'running') activity.running++;
       activity.checking += (c.runs || []).filter(run => run.check?.status === 'running').length;
       activity.reviewing += (c.reviews || []).filter(review => review.status === 'running').length;
       if (c.resume || c.limitSwitching) activity.waiting++;
@@ -1479,6 +1491,7 @@ export class Broker extends EventEmitter {
     if (this.automaticReviews) this.automaticReviews.closed = true;
     this.resume.close(); this.schedules?.close(); this.queue.close(); this.handoff.close(); this.checks.close();
     await this.tasks?.close();
+    await this.board?.close?.();
     if (this.running) {
       const run = this.running;
       this.stop(run.c.id);

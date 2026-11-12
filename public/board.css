@@ -284,3 +284,98 @@
 .board-subtask-form { display: grid; gap: 6px; padding-top: 4px; }
 .board-subtask-form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .board-subtask-form-row select { flex: 1 1 140px; width: auto; }
+
+/* Draft with an agent (#162): what the plan should cover and the documents to plan from, in the drawer. */
+.board-compose-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.board-compose-file small { flex: none; margin-left: 4px; color: var(--faint); font-size: 10.5px; }
+.board-compose-attach { height: 26px; }
+.board-compose-error { margin: 0; padding: 6px 8px; border-radius: var(--radius); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); line-height: 1.45; }
+.board-draft-planning .board-draft-lead::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 0; border-radius: 50%; background: var(--accent); vertical-align: middle; animation: board-drafting 1.4s ease-in-out infinite; }
+@keyframes board-drafting { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .board-draft-planning .board-draft-lead::before { animation: none; } }
+
+/* The Plan names its workspace, and the name opens the workspace menu: the sidebar is behind the Plan while it's open. */
+.board-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.board-title-row .plan-view-title { flex: none; }
+.board-workspace { position: relative; display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 280px; height: 24px; margin-left: 8px; padding: 0 7px 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.board-workspace::before { content: ""; position: absolute; left: -7px; top: 5px; bottom: 5px; width: 1px; background: var(--border-strong); }
+.board-workspace span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.board-workspace::after { content: ""; flex: none; width: 11px; height: 11px; background: currentColor; -webkit-mask: var(--icon-chevron-down) center / contain no-repeat; mask: var(--icon-chevron-down) center / contain no-repeat; }
+.board-workspace:hover, .board-workspace[aria-expanded="true"] { background: var(--hover); color: var(--text-strong); }
+.board-workspace:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* The Plan as a view (#162): the header across the window, the board on the left and the Workspace chat on the right, with
+   the status bar under both. The button at the end of the Plan's toolbar hides the chat, and the board then fills the window. */
+#app-shell.plan, #app-shell.plan:has(.side-panel:not([hidden])), #app-shell.plan:has(#review-panel:not([hidden])) { --plan-chat-width: clamp(360px, 30vw, 460px); display: grid; grid-template-columns: minmax(0, 1fr) var(--plan-chat-width); grid-template-rows: 56px auto minmax(0, 1fr) var(--statusbar-height); overflow-x: hidden; }
+#app-shell.plan.plan-chat-hidden, #app-shell.plan.plan-chat-hidden:has(.side-panel:not([hidden])), #app-shell.plan.plan-chat-hidden:has(#review-panel:not([hidden])) { grid-template-columns: minmax(0, 1fr) 0; }
+#app-shell.plan > .board-view { grid-column: 1; grid-row: 2 / 4; display: flex; flex-direction: column; width: auto; height: auto; min-width: 0; min-height: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+#app-shell.plan > .main-panel { grid-column: 2; grid-row: 2 / 4; min-width: 0; border-left: 1px solid var(--border); }
+#app-shell.plan.plan-chat-hidden > .main-panel { display: none; }
+#app-shell.plan > .status-bar { grid-column: 1 / -1; grid-row: 4; }
+/* The message box in the Plan view: what goes with the message from the Plan, and whether Send asks or drafts cards. */
+.plan-context { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 10px 0; }
+.plan-context[hidden] { display: none; }
+.plan-context-row { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: nowrap; }
+.plan-context-chips { display: flex; align-items: center; gap: 4px; flex: 1 1 0; min-width: 0; }
+.plan-context-chip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; height: 22px; padding: 0 2px 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--chip-bg); color: var(--text); font-size: 11.5px; white-space: nowrap; }
+.plan-context-chip:first-child { flex: 0 0 auto; }
+.plan-context-chip:only-child, .plan-context-chip:nth-child(2) { flex: 0 1 auto; min-width: 0; }
+.plan-context-icon { flex: none; width: 12px; height: 12px; background: var(--accent); -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z'/%3E%3C/svg%3E") center / contain no-repeat; }
+.plan-context-icon.card { -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linejoin='round'%3E%3Crect x='4' y='5' width='16' height='14' rx='2'/%3E%3Cpath d='M8 10h8M8 14h5'/%3E%3C/svg%3E"); mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linejoin='round'%3E%3Crect x='4' y='5' width='16' height='14' rx='2'/%3E%3Cpath d='M8 10h8M8 14h5'/%3E%3C/svg%3E"); }
+.plan-context-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.plan-context-chip.off { border-style: dashed; background: transparent; color: var(--muted); }
+.plan-context-chip.off .plan-context-icon { background: var(--muted); }
+.plan-context-chip.off .plan-context-name { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
+.plan-context-flip { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: 13px/1 var(--font); cursor: pointer; }
+.plan-context-flip:hover { background: var(--hover); color: var(--text-strong); }
+.plan-context-flip:focus-visible, .plan-context-mode:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.plan-context-empty { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
+.plan-context-modes { display: inline-flex; flex: none; gap: 2px; margin-left: auto; padding: 2px; border-radius: 6px; background: var(--chip-bg); }
+.plan-context-mode { height: 20px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: 11.5px var(--font); white-space: nowrap; cursor: pointer; }
+.plan-context-mode:hover { color: var(--text); }
+.plan-context-mode[aria-pressed=true] { background: var(--surface-strong); color: var(--text-strong); box-shadow: var(--shadow-sm); }
+@container composer (max-width: 400px) {
+  .plan-context-row:has(.plan-context-chip:nth-child(2)) .plan-context-unit { display: none; }
+  .plan-context-row:has(.plan-context-chip:nth-child(2)) .plan-context-mode { padding: 0 6px; }
+}
+.plan-context-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+/* Drafting: the box takes the accent, so Send is plainly not an ordinary message. */
+.composer.plan-drafting { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.composer.plan-drafting .plan-context-mode[aria-pressed=true] { color: var(--accent); }
+#app-shell.plan .messages, #app-shell.plan .composer-region { width: calc(100% - 28px); }
+/* A turn reaches past the messages on both sides; here it may reach only as far as the 14px margin, or the chat scrolls sideways. */
+#app-shell.plan .turn { margin-inline: -14px; padding-inline: 14px; }
+#app-shell.plan .messages-scroll { overflow-x: hidden; }
+/* The terminal, Run and the CLI tab belong to Normal. */
+#app-shell.plan #main-tabs, #app-shell.plan #cli-view, #app-shell.plan #status-terminal, #app-shell.plan #status-run, #app-shell.plan #status-cli { display: none !important; }
+.board-view[hidden] { display: none; }
+.board-view .plan-view-head { flex-wrap: nowrap; min-width: 0; }
+/* The views on the left, the actions on the right, and the chat's button last, against the chat. */
+.board-view #board-schedules { margin-left: auto; }
+.board-more-wrap { flex: none; display: inline-flex; }
+.board-more { anchor-name: --board-more; }
+.board-more-menu { position-anchor: --board-more; min-width: 230px; }
+.board-more-menu .board-agents[aria-pressed=true] { color: var(--text-strong); }
+.board-more-menu .board-export-wrap { display: grid; }
+.board-more-menu .board-export-menu { position: static; min-width: 0; padding: 0 0 0 18px; border: 0; background: transparent; box-shadow: none; }
+.board-chat-toggle { margin-left: 2px; padding-left: 0; }
+.board-view .plan-view-head .board-chat-toggle::before { content: ""; position: absolute; left: -5px; top: 6px; bottom: 6px; width: 1px; background: var(--border-strong); }
+.board-chat-toggle { position: relative; flex: none; }
+.board-chat-attention { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg); }
+.board-chat-attention[hidden] { display: none; }
+/* In a narrow window the chat lies over the board's right edge instead of taking a column from it. */
+@media (max-width: 900px) {
+  #app-shell.plan, #app-shell.plan:has(.side-panel:not([hidden])), #app-shell.plan:has(#review-panel:not([hidden])) { grid-template-columns: minmax(0, 1fr) 0; }
+  #app-shell.plan > .main-panel { position: fixed; z-index: 30; top: 56px; right: 0; bottom: var(--statusbar-height); width: min(420px, 92vw); background: var(--bg); box-shadow: var(--shadow-lg); }
+}
+
+/* Suggest next & draft undo (#162) */
+.board-draft-undo { background: var(--surface-raised); }
+.board-suggest-trouble { background: color-mix(in srgb, var(--danger) 8%, var(--panel-bg)); }
+.board-suggest-confirm, .board-suggest-status { display: grid; gap: 6px; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
+.board-suggest-status.running { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.board-suggest-status.trouble { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 7%, var(--panel-bg)); }
+.board-suggest-lead { margin: 0; color: var(--text-strong); font-weight: 500; line-height: 1.45; }
+.board-suggest-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.board-suggest-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }

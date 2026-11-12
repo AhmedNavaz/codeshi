@@ -13,8 +13,7 @@ const OWN_LAYOUT = {
   'setup-dialog': 'the setup guide',
   'updates-dialog': 'What’s New keeps its logo heading; its foot is shared',
   settings: 'a page title beside the navigation',
-  'plan-view': 'a full-screen view with its own toolbar',
-  'board-view': 'a full-screen view with its own toolbar'
+  'plan-view': 'a full-screen view with its own toolbar'
 };
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const dialogs = [...html.matchAll(/<dialog id="([^"]+)"[^>]*>([\s\S]*?)<\/dialog>/g)].map(match => ({ id: match[1], body: match[2] }));

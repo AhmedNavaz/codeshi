@@ -428,8 +428,8 @@ else {
           const close=document.getElementById('flow-detail-close'),rect=close.getBoundingClientRect();
           const details=document.getElementById('flow-detail').open&&document.getElementById('agents-panel').parentElement.id==='flow-detail-body'&&close.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2));
           close.click();await new Promise(resolve=>setTimeout(resolve,20));
-          // The header spans the window: the seal beside the window controls, search in the middle, the way out at the far right.
-          const header=document.getElementById('conversation-header'),brand=document.getElementById('flow-brand').getBoundingClientRect(),search=document.querySelector('.command-bar').getBoundingClientRect(),out=document.getElementById('toggle-flow').getBoundingClientRect();
+          // The header spans the window: the seal beside the window controls, search in the middle, the view switch at the far right.
+          const header=document.getElementById('conversation-header'),brand=document.getElementById('flow-brand').getBoundingClientRect(),search=document.querySelector('.command-bar').getBoundingClientRect(),out=document.getElementById('view-switch').getBoundingClientRect();
           const headerPlaced=header.parentElement.id==='app-shell'&&brand.top>=0&&brand.bottom<=56&&brand.left>=(document.documentElement.classList.contains('mac-titlebar')?82:0)&&Math.abs((search.left+search.right)/2-innerWidth/2)<8&&out.right>innerWidth-40&&out.right<=innerWidth;
           // Remote access opens in Flow's own sheet, drawn by the same module as the Settings section.
           document.getElementById('connect-phone').click();
@@ -438,18 +438,18 @@ else {
           // If the sheet didn't load, say what it showed.
           const remoteDebug=remote?null:{open:document.getElementById('flow-detail').open,title:document.getElementById('flow-detail-title').textContent,settings:document.getElementById('settings').open,shown:document.querySelector('.flow-phone')?.textContent?.slice(0,160)??null,hidden:document.hidden};
           close.click();await new Promise(resolve=>setTimeout(resolve,20));
-          return {remoteDebug,entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:window.relayFlow.cards().length===7&&document.querySelectorAll('.flow-card:not(.flow-lounge-card)').length===7,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about'),routingOn:['smart','balanced'].includes(window.relayUI.getState().conversation.routing?.mode)&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
+          return {remoteDebug,entered:window.relayFlow.isOn(),footerHidden:getComputedStyle(document.querySelector('.status-bar')).display==='none',cards:window.relayFlow.cards().length===8&&document.querySelectorAll('.flow-card:not(.flow-lounge-card)').length===8,windowControlsClear:left.getBoundingClientRect().top>=56&&getComputedStyle(left).webkitAppRegion!=='drag',details:details&&!document.getElementById('flow-detail').open,headerPlaced,remote:remote&&!document.getElementById('flow-detail').open,noPreview:!document.querySelector('.flow-preview-badge')&&!document.getElementById('flow-about'),routingOn:['smart','balanced'].includes(window.relayUI.getState().conversation.routing?.mode)&&!document.querySelector('.routing-option[data-mode="manual"]')&&!document.getElementById('agents-routing').hidden};
         })()`);
         const screenshot=path.join(os.tmpdir(),`codeshi-flow-${process.pid}.png`);
         const captured=await Promise.race([win.webContents.capturePage(),new Promise(resolve=>setTimeout(()=>resolve(null),3000))]);
         if(captured&&!captured.isEmpty()){fs.writeFileSync(screenshot,captured.toPNG());result.flow.screenshot=screenshot;}else result.flow.screenshotUnavailable=true;
         win.setContentSize(900,800);
         await new Promise(resolve=>setTimeout(resolve,100));
-        result.flow.narrow=await win.webContents.executeJavaScript(`document.getElementById('flow-left').hidden&&!document.getElementById('flow-strip').hidden&&document.querySelectorAll('.flow-chip').length===8`);
+        result.flow.narrow=await win.webContents.executeJavaScript(`document.getElementById('flow-left').hidden&&!document.getElementById('flow-strip').hidden&&document.querySelectorAll('.flow-chip').length===9`);
         const broker=relay.registry.broker(project.id),conversation=[...broker.conversations.values()][0];
         conversation.status='running';conversation.activeRun={id:'flow-smoke-run',provider:'codex',mode:'read',startedAt:new Date().toISOString(),phase:'working'};
         await win.webContents.executeJavaScript(`window.relayUI.refresh()`);
-        result.flow.locked=await win.webContents.executeJavaScript(`document.getElementById('toggle-flow').disabled&&window.relayFlow.leave()===false&&window.relayFlow.isOn()`);
+        result.flow.locked=await win.webContents.executeJavaScript(`document.getElementById('view-normal').disabled&&window.relayFlow.leave()===false&&window.relayFlow.isOn()`);
         conversation.status='idle';conversation.activeRun=null;
         await win.webContents.executeJavaScript(`window.relayUI.refresh().then(()=>window.relayFlow.leave())`);
         for(let tries=0;tries<250;tries++){if(await win.webContents.executeJavaScript(`!window.relayFlow.isOn()&&!window.relayFlow.isLocked()`))break;await new Promise(resolve=>setTimeout(resolve,20));}

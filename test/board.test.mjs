@@ -486,6 +486,12 @@ test('a card or the Plan closed to agents can’t run, be scheduled or attached,
   const text = env.broker.attachments.forAgent(whole.attachment.id).text;
   assert.match(text, /^# Plan/); assert.match(text, /## Wire it up[\s\S]*Waits for: “Build the form”$/m); assert.doesNotMatch(text, /Salary bands|SECRET/);
   assert.match(env.broker.attachments.forAgent(single.attachment.id).text, /Cards that wait for it: “Wire it up”/);
+  // Asked from the Plan with a card open (#162): the whole Plan, naming that card at the top, and never a closed one.
+  const focused = env.board.attach(env.c, { focus: open.id });
+  assert.equal(focused.attachment.name, 'Plan.md'); assert.notEqual(focused.attachment.id, whole.attachment.id);
+  assert.match(env.broker.attachments.forAgent(focused.attachment.id).text, /^# Plan\n\n.+\n\nThe person has the card “Build the form” open beside the Plan, so “this card” in the message means it\.\n\n## /);
+  assert.equal(env.board.attach(env.c, { focus: open.id }).attachment.id, focused.attachment.id, 'The same Plan sends the same attachment.');
+  assert.throws(() => env.board.attach(env.c, { focus: shut.id }), /closed to agents/);
   // Closing a card that was attached keeps the attachment out of every prompt from then on, and says so with the message.
   env.board.edit(env.c, open.id, { closed: true });
   assert.equal(env.broker.attachments.forAgent(whole.attachment.id).text, '[Left out: a card in it was closed to agents after it was attached.]');
@@ -675,4 +681,134 @@ test('each subtask runs with the agent pinned on it, is routed at its size on Au
   assert.deepEqual(parseSplit('Sure: {"subtasks":[{"title":"A","tier":"huge"}]}').map(item => [item.title, item.tier, item.status]), [['A', 'standard', 'pending']]);
   assert.throws(() => parseSplit('{"subtasks":[]}'), /didn’t return any subtasks/);
   assert.throws(() => parseSplit('{"subtasks":[{"instructions":"x"}]}'), /Subtask 1 from the split has no title/);
+});
+
+test('drafts accept and discard can be undone and redone cleanly, and undo stops once a card runs (#162)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const a = env.add({ title: 'Step A', column: 'backlog', agent: null, auto: true });
+  const b = env.add({ title: 'Step B', column: 'backlog', agent: null, auto: true, dependsOn: [a.id] });
+  const d = env.add({ title: 'Downstream', column: 'backlog', dependsOn: [a.id] });
+  const batch = { id: 'plan-undo', summary: 'Two drafted cards.' };
+  env.board.update(env.c, env.card(a.id), { draft: { by: { kind: 'agent', provider: 'claude', model: 'opus' }, at: new Date().toISOString(), batch, notes: [] } });
+  env.board.update(env.c, env.card(b.id), { draft: { by: { kind: 'agent', provider: 'claude', model: 'opus' }, at: new Date().toISOString(), batch, notes: [] } });
+
+  // Accept both -> moves them to Ready, clears draft, returns undoId.
+  const accepted = env.board.drafts(env.c, { action: 'accept', ids: [a.id, b.id] });
+  assert.equal(accepted.accepted, 2);
+  assert.ok(accepted.undoId);
+  assert.deepEqual([env.card(a.id).draft, env.card(a.id).column, env.card(b.id).column], [null, 'ready', 'ready']);
+
+  // Undo accept -> restores drafts and Backlog column/order.
+  const undoneAccept = env.board.drafts(env.c, { action: 'undo', undoId: accepted.undoId });
+  assert.deepEqual(undoneAccept, { undone: 'accept', count: 2, ids: [a.id, b.id] });
+  assert.equal(env.card(a.id).draft.batch.id, 'plan-undo');
+  assert.deepEqual([env.card(a.id).column, env.card(a.id).acceptedDraftAt, env.card(b.id).column], ['backlog', null, 'backlog']);
+  assert.throws(() => env.board.drafts(env.c, { action: 'undo', undoId: accepted.undoId }), /Nothing left to undo/);
+
+  // Discard A -> removes A and drops A from B and Downstream dependsOn.
+  const discarded = env.board.drafts(env.c, { action: 'discard', ids: [a.id] });
+  assert.equal(discarded.discarded, 1);
+  assert.equal(env.card(a.id), undefined);
+  assert.deepEqual(env.card(b.id).dependsOn, []);
+  assert.deepEqual(env.card(d.id).dependsOn, []);
+
+  // Undo discard -> restores A and restores dependsOn on B and Downstream.
+  const undoneDiscard = env.board.drafts(env.c, { action: 'undo', undoId: discarded.undoId });
+  assert.deepEqual(undoneDiscard, { undone: 'discard', count: 1, ids: [a.id] });
+  assert.equal(env.card(a.id).title, 'Step A');
+  assert.equal(env.card(a.id).draft.batch.id, 'plan-undo');
+  assert.deepEqual(env.card(b.id).dependsOn, [a.id]);
+  assert.deepEqual(env.card(d.id).dependsOn, [a.id]);
+
+  // Accepting and running a card refuses undo once it starts.
+  const acceptAgain = env.board.drafts(env.c, { action: 'accept', ids: [a.id] });
+  env.script(env.card(a.id), 'hold');
+  env.board.run(env.c, { ids: [a.id], assignments: { [a.id]: { provider: 'codex', model: null, effort: null, auto: true } } });
+  await until(() => env.card(a.id).column === 'doing', 'card A to start');
+  assert.throws(() => env.board.drafts(env.c, { action: 'undo', undoId: acceptAgain.undoId }), /already run or moved/);
+  env.board.stop(env.c, a.id);
+  await until(() => column(env, a) === 'ready', 'card A to stop');
+});
+
+test('Suggest next reads the card and open neighbors in a read-only run, drafts 1-3 linked cards, and supports Stop and restart (#162)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const upstream = env.add({ title: 'Set up schema', column: 'ready', role: 'database', artifact: 'schema', group: 'Auth' });
+  env.board.update(env.c, env.card(upstream.id), { column: 'done' });
+  const target = env.add({ title: 'Add OAuth login', notes: 'Handle GitHub callback.', column: 'ready', role: 'builder', group: 'Auth', dependsOn: [upstream.id], at: { x: 100, y: 200 } });
+  env.board.update(env.c, env.card(target.id), { column: 'review', result: { status: 'complete', summary: 'Added OAuth routes.', files: 2, tests: 'passed' } });
+  const waiting = env.add({ title: 'Add logout', column: 'backlog', dependsOn: [target.id], group: 'Auth' });
+  const other = env.add({ title: 'Polish header', column: 'ready', group: 'UI' });
+  const secret = env.add({ title: 'Salary bands', notes: 'SECRET-SUGGEST', column: 'backlog', closed: true });
+
+  // Closed card or closed Plan is refused and never enters the prompt.
+  const promptText = env.board.suggestPrompt(env.c, env.card(target.id));
+  assert.match(promptText, /Target card: Add OAuth login/);
+  assert.match(promptText, /Added OAuth routes/);
+  assert.match(promptText, /Upstream cards that this card waits for[\s\S]*Set up schema/);
+  assert.match(promptText, /Cards already waiting for the target card[\s\S]*Add logout/);
+  assert.match(promptText, /Other open cards in this Plan[\s\S]*Polish header/);
+  assert.doesNotMatch(promptText, /Salary bands|SECRET-SUGGEST/);
+  assert.throws(() => env.board.suggest(env.c, secret.id, { provider: 'codex' }), /closed to agents/);
+  env.board.access(env.c, { closed: true });
+  assert.throws(() => env.board.suggest(env.c, target.id, { provider: 'codex' }), /This Plan is closed to agents/);
+  env.board.access(env.c, { closed: false });
+
+  // Real suggest run with mock-cli returning 2 linked cards (including a contract root card after builder to exercise plan check).
+  const reply = JSON.stringify({
+    summary: 'Verify login and document the session contract.',
+    questions: ['Keep GitHub only for now?'],
+    steps: [
+      { title: 'Document session contract', instructions: 'Write auth session schema.', done: ['Session fields listed'], tier: 'light', dependsOn: [], role: 'backend', artifact: 'contract' },
+      { title: 'Test OAuth flow', instructions: 'Run login integration tests.', done: ['All login tests pass'], tier: 'standard', dependsOn: [1], role: 'qa', check: 'npm test', phase: 'Verify' },
+    ],
+  });
+  scriptMatch(env, 'Suggest 1 to 3 follow-up cards', { text: reply });
+  const started = env.board.suggest(env.c, target.id, { provider: 'codex' });
+  assert.equal(started.status, 'running');
+  await until(() => env.c.boardSuggest?.status === 'complete', 'suggest next to finish');
+
+  // Worker ran read-only.
+  const cap = env.captured(fs.realpathSync(env.folder('a'))).at(-1);
+  assert.deepEqual(cap.args.slice(cap.args.indexOf('--sandbox'), cap.args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only']);
+  assert.equal(env.c.boardSuggest.cards.length, 2);
+
+  const [first, second] = env.c.boardSuggest.cards.map(id => env.card(id));
+  assert.equal(first.title, 'Document session contract');
+  assert.deepEqual(first.dependsOn, [target.id]);
+  assert.deepEqual([first.auto, first.agent, first.group, first.folderId], [true, null, 'Auth', 'a']);
+  assert.deepEqual(first.at, { x: 390, y: 200 });
+  assert.equal(first.draft.batch.kind, 'suggest');
+  assert.equal(first.draft.batch.cardId, target.id);
+  assert.equal(first.draft.batch.cardTitle, 'Add OAuth login');
+  assert.match(first.draft.notes.join(' '), /contract comes after building work/);
+
+  assert.equal(second.title, 'Test OAuth flow');
+  assert.deepEqual(second.dependsOn, [first.id]);
+  assert.equal(second.group, 'Verify');
+  assert.deepEqual(second.at, { x: 680, y: 200 });
+
+  // Hold -> activeWorkers includes it -> Stop -> interrupted -> Dismiss.
+  scriptMatch(env, 'Suggest 1 to 3 follow-up cards', { behavior: 'hold', text: reply });
+  env.board.suggest(env.c, target.id, { provider: 'codex' });
+  await until(() => env.board.suggestJobs.size === 1, 'suggest job to be tracked');
+  assert.equal(env.broker.tasks.activeWorkers >= 1, true);
+  env.board.stopSuggest(env.c);
+  await until(() => env.c.boardSuggest?.status === 'interrupted', 'suggest next to stop');
+  assert.equal(env.c.boardSuggest.summary, 'Stopped suggesting next cards.');
+  env.board.dismissSuggest(env.c);
+  assert.equal(env.c.boardSuggest, null);
+
+  // More than 3 suggested cards is rejected cleanly.
+  scriptMatch(env, 'Suggest 1 to 3 follow-up cards', { text: JSON.stringify({ summary: 'Too many', steps: [1, 2, 3, 4].map(n => ({ title: `Card ${n}`, instructions: `Do ${n}.`, tier: 'light' })) }) });
+  env.board.suggest(env.c, target.id, { provider: 'codex' });
+  await until(() => env.c.boardSuggest?.status === 'failed', 'over-limit suggestion to fail');
+  assert.match(env.c.boardSuggest.summary, /more than the 3/i);
+  env.board.dismissSuggest(env.c);
+
+  // Restart recovery marks an interrupted suggest run cleanly.
+  env.broker.record(env.c, { type: 'board_suggest', suggest: { id: 'sug-restart', cardId: target.id, cardTitle: target.title, provider: 'codex', model: null, effort: null } });
+  assert.equal(env.c.boardSuggest.status, 'running');
+  await env.reopen();
+  assert.equal(env.c.boardSuggest.status, 'interrupted');
+  assert.match(env.c.boardSuggest.summary, /restarted/i);
 });

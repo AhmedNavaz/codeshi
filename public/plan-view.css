@@ -101,14 +101,9 @@
 .plan-view-start-form .orchestration-field { flex: 1; min-width: 0; }
 .plan-view-status { margin: 0 0 14px; padding: 8px 10px; max-width: 90ch; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 12px; }
 
-/* The Plan button in the title bar, beside Flow. Its dot and short word say where the plan stands. */
-.plan-entry { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; margin-left: 6px; padding: 0 11px 0 9px; border: 1px solid var(--border-strong); border-radius: 14px; background: transparent; color: var(--text); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; -webkit-app-region: no-drag; }
-.plan-entry .icon { width: 14px; height: 14px; }
-.plan-entry:hover:enabled { background: var(--hover); color: var(--text-strong); }
-.plan-entry:disabled { opacity: .4; cursor: default; }
+/* The Plan button in the view switch. Its dot and short word say where the plan stands. */
 .plan-entry-state { display: inline-flex; align-items: center; gap: 5px; padding-left: 7px; border-left: 1px solid var(--border-strong); color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
 .plan-entry-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
-.plan-entry[data-state="ready"] { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 .plan-entry[data-state="ready"] .plan-entry-state { color: var(--link); }
 .plan-entry[data-state="ready"] .plan-entry-state::before { background: var(--accent); }
 .plan-entry[data-state="running"] .plan-entry-state::before, .plan-entry[data-state="planning"] .plan-entry-state::before { background: var(--accent); animation: plan-entry-pulse 1.4s ease-in-out infinite; }

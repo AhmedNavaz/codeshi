@@ -28,6 +28,7 @@
   // The cards, always present: each has a job, so none can be closed.
   const CARDS = [
     { id: 'next', title: 'What’s next', side: left },
+    { id: 'tasks', title: 'Tasks side by side', side: left },
     { id: 'plans', title: 'What’s left on your plans', side: left },
     { id: 'results', title: 'Smart results', side: left },
     { id: 'working', title: 'How it’s working now', side: right },
@@ -35,8 +36,12 @@
     { id: 'files', title: 'Files changed', side: right },
     { id: 'preview', title: 'Run and review your project', side: right },
   ];
-  let on = false, saved = null, testingPending = false, peeking = null, scheduled = false, ticker = null;
+  // The window shows one of three views: Normal, Flow or the Plan (#162). on is true in Flow alone. Routing is its own
+  // setting: Flow turns it on, Normal turns it off, and the Plan keeps it as it was, so the Plan never waits for work.
+  const VIEW_KEY = 'throughline:view';
+  let view = 'normal', on = false, routed = false, saved = null, testingPending = false, peeking = null, scheduled = false, ticker = null;
   let checkingMode = false, transitioning = false, restored = false;
+  const normalButton = $('view-normal'), planButton = $('open-plan');
   const LOCK_MESSAGE = 'Finish or stop workspace work, cancel its reset wait, or pause its queue before changing views.';
   function activityBusy(activity) { return activity?.busy === true || ['running', 'checking', 'reviewing', 'waiting', 'queued'].some(key => activity?.[key] > 0); }
   function lockReason() {
@@ -49,7 +54,7 @@
       c?.queue?.length && !c.queuePaused) return LOCK_MESSAGE;
     return null;
   }
-  const modeChanged = () => window.dispatchEvent(new CustomEvent('relay-flow', { detail: { on } }));
+  const modeChanged = () => window.dispatchEvent(new CustomEvent('relay-flow', { detail: { on, view, routed } }));
   const narrowQuery = window.matchMedia?.('(max-width: 1180px)') || null, narrow = () => Boolean(narrowQuery?.matches);
   const reducedMotion = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
   const routing = () => api.getState().conversation?.routing || null;
@@ -61,7 +66,7 @@
   function savedRouting(id) { try { const saved = JSON.parse(read(ROUTING_KEY(id)) || 'null'), mode = canonicalMode(saved?.mode); return saved && modes.some(option => option.mode === mode) ? { ...saved, mode } : null; } catch { return null; } }
   // Flow has no manual mode: entering turns routing on with the mode this workspace last used in Flow, or Smart.
   async function ensureRouting() {
-    if (!on || routing() || routingPending || !api.getState().projectId) return;
+    if (!routed || routing() || routingPending || !api.getState().projectId) return;
     const choice = savedRouting(api.getState().projectId) || { mode: 'smart', allowApi: false, check: false };
     routingPending = true; schedule();
     try { await api.setRouting({ mode: choice.mode, allowApi: choice.allowApi === true, check: choice.check === true }); }
@@ -116,6 +121,8 @@
       },
     };
   }
+  // Flow and the Plan have no side panels: a panel opened there, such as Agents from ⌘K, shows in this sheet instead.
+  const sheeted = () => view !== 'normal';
   function releaseDetail() {
     if (!detailPanel) return;
     if (detailPanel === 'phone') { phoneHost.replaceChildren(); phoneHost.remove(); }
@@ -146,6 +153,8 @@
   }
   function closeDetail() {
     const name = detailPanel;
+    // With no sheet open there's nothing to close, and focus stays where it is.
+    if (!name && !detail?.open) return;
     releaseDetail();
     if (name === 'review') panelAPI(name)?.closePanel?.(); else if (name) panelAPI(name)?.close?.();
     if (detail?.open) detail.close();
@@ -160,7 +169,7 @@
   // refreshes, previews and existing permission checks remain attached to their original elements.
   function syncDetail() {
     detailScheduled = false;
-    if (!on || !detail) return;
+    if (!sheeted() || !detail) return;
     const shown = [...sidePanels, 'review'].filter(name => $(`${name}-panel`)?.hidden === false);
     const name = shown.find(name => name !== detailPanel) || shown[0];
     // The remote-access sheet is not a side panel, so a panel closing elsewhere leaves it alone.
@@ -519,14 +528,13 @@
   }
   function renderNext(card) {
     const state = api.getState(), c = state.conversation, { steps, held, running, run } = planFor(), queue = c?.queue || [], tasks = c?.parallelTasks || [];
-    const folders = state.projects?.find(project => project.id === state.projectId)?.folders || [], plan = waitingPlan();
+    const plan = waitingPlan();
     const lastUserMsg = c?.messages?.filter(m => m.role === 'user').at(-1);
-    const signature = JSON.stringify([plan, steps, held, running, run?.provider, run?.phase, lastUserMsg?.id, lastUserMsg?.text, queue, c?.queuePaused, state.projectId, state.taskId, state.taskDraft, folders, tasks.map(task => [task.id, task.title, task.status, task.conversationId, task.folderName, task.runningStep, task.runningPhase])]);
+    const activeTitle = state.taskId ? (tasks.find(t => t.id === state.taskId)?.title || 'Task thread') : null;
+    const signature = JSON.stringify([plan, steps, held, running, run?.provider, run?.phase, lastUserMsg?.id, lastUserMsg?.text, queue, c?.queuePaused, state.projectId, state.taskId, state.taskDraft, activeTitle]);
     if (signature === card.signature) return;
     card.signature = signature;
     const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
-    const selectTask = id => window.relayTaskThreads.select(id).catch(error => api.showNotice?.(error.message));
-    const others = tasks.filter(task => task.purpose !== 'project-review' && task.id !== state.taskId && !['integrated', 'kept', 'discarded', 'cancelled', 'lost', 'detached'].includes(task.status) && (task.conversationId || task.status === 'waiting'));
     if (plan) body.append(node('p', 'flow-lead flow-plan-waiting', plan.text));
     // The plan opens full window from here, while it's being made, waits or runs as tasks.
     if (window.relayOrchestration?.snapshot?.()) {
@@ -545,9 +553,8 @@
       const titleWrapper = node('div', 'flow-current-work-title-wrap');
       const icon = node('i', `agent-icon ${run?.provider || state.provider}`);
       icon.setAttribute('aria-hidden', 'true');
-      const agent = agentName(run?.provider, run?.connection === 'local');
       const prompt = lastUserMsg?.text;
-      const title = state.taskId ? (tasks.find(t => t.id === state.taskId)?.title || 'Task thread') : (prompt ? clip(prompt, 95) : 'Current task');
+      const title = state.taskId ? activeTitle : (prompt ? clip(prompt, 95) : 'Current task');
       const titleEl = node('strong', 'flow-task-title', title);
       titleEl.title = prompt || title;
       titleWrapper.append(icon, titleEl);
@@ -558,7 +565,7 @@
       activeItem.append(head, hint);
       body.append(activeItem);
     } else if (!steps.length && !queue.length) {
-      body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
+      body.append(node('p', 'flow-empty', state.taskDraft ? 'Describe the new task in the message box. Nothing starts until you send it.' : state.taskId ? 'This task runs beside the workspace chat. Ask a follow-up below, or switch back in Tasks side by side.' : 'Describe what you want in the chat to get started. This card tracks the agent’s steps and your queued follow-ups.'));
     }
     if (steps.length) {
       const done = steps.filter(step => step.status === 'done').length, current = currentStep(steps);
@@ -580,56 +587,192 @@
       if (queue.length > 5) list.append(node('li', 'flow-queue-more', `and ${queue.length - 5} more`));
       body.append(list);
     }
-    // Tasks running beside this chat, started from the normal view or a folder choice, stay reachable here with their
-    // own Stop and Cancel; a task thread can come back to the whole workspace.
-    if (others.length || state.taskId) {
-      body.append(node('h3', 'flow-subhead', state.taskId ? 'This task runs beside the workspace chat' : 'Running beside this chat'));
-      const list = node('ul', 'flow-tasks'), taskWords = task => task.status === 'waiting' ? 'waiting to start' : task.status === 'running' ? 'Working as extra task' : task.status === 'complete' ? 'finished' : task.status;
-      for (const task of others) {
+  }
+
+  // Tasks side by side (#88, #107): the workspace chat and every folder task running alongside it, with approvals,
+  // copy/merge state and direct switching without leaving Flow.
+  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => task.purpose !== 'project-review' || task.id === state.taskId || task.approvals);
+  const taskMergeable = task => Boolean(task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status));
+  const taskEnded = task => !['running', 'waiting'].includes(task.status) && !taskMergeable(task);
+  const TASK_STATUS_WORDS = { complete: 'finished', stopped: 'stopped', failed: 'didn’t finish', discarded: 'discarded', cancelled: 'cancelled', blocked: 'blocked', lost: 'copy gone', detached: 'folder removed' };
+  let pickingTaskFolder = false, tasksProjectId = null;
+  function taskStatusText(task) {
+    if (task.testing) return 'Checking combined result…';
+    if (task.status === 'waiting') return task.held ? 'paused — ready to start' : 'waiting to start';
+    if (task.status === 'integrated') return task.integration?.files ? `${plural(task.integration.files, 'file')} merged` : 'merged';
+    if (task.status === 'kept') return task.integration?.branch ? `kept on ${task.integration.branch}` : 'kept as branch';
+    return TASK_STATUS_WORDS[task.status] || task.status;
+  }
+  function renderTasks(card) {
+    const state = api.getState(), c = state.conversation, tasks = visibleTasks(state);
+    const folders = state.projects?.find(project => project.id === state.projectId)?.folders || [];
+    if (state.projectId !== tasksProjectId || state.taskDraft) { tasksProjectId = state.projectId; pickingTaskFolder = false; }
+    const mainRunning = Boolean(state.taskId || state.taskDraft ? state.status?.runningConversationId : api.isRunning());
+    const mainApprovals = !state.taskId && !state.taskDraft ? (c?.pendingApprovals?.length || 0) : 0;
+    const hasThreads = Boolean(window.relayTaskThreads);
+    const signature = JSON.stringify([
+      state.projectId, state.taskId, state.taskDraft, pickingTaskFolder, hasThreads, mainRunning, mainApprovals,
+      folders.map(folder => [folder.id, folder.displayName || folder.name]),
+      tasks.map(task => [task.id, task.title, task.status, task.folderName, task.mode, task.provider, task.runningProvider, task.runningPhase, task.runningStep, task.approvals, task.testing, task.hasWorktree, task.held, task.reason, task.conversationId, task.integration?.files, task.integration?.branch]),
+    ]);
+    if (signature === card.signature) return;
+    card.signature = signature;
+    const body = card.body; body.replaceChildren(); card.foot.replaceChildren();
+    const selectTask = id => { if (peeking) closePeek(); return window.relayTaskThreads?.select?.(id)?.catch?.(error => api.showNotice?.(error.message)); };
+    const startDraft = folderId => { pickingTaskFolder = false; if (peeking) closePeek(); return window.relayTaskThreads?.open?.(folderId); };
+
+    if (tasks.length) {
+      const runningCount = tasks.filter(task => task.status === 'running').length;
+      const approvalCount = tasks.filter(task => task.approvals > 0).length;
+      const mergeCount = tasks.filter(taskMergeable).length;
+      const waitingCount = tasks.filter(task => task.status === 'waiting').length;
+      const parts = [plural(tasks.length, 'task')];
+      if (runningCount) parts.push(`${runningCount} working`);
+      if (approvalCount) parts.push(`${approvalCount} needing you`);
+      if (mergeCount) parts.push(`${mergeCount} ready to merge`);
+      if (waitingCount) parts.push(`${waitingCount} waiting`);
+      body.append(node('p', 'flow-lead', parts.slice(0, 4).join(' · ')));
+    } else if (!state.taskDraft) {
+      body.append(node('p', 'flow-empty', 'No tasks beside the chat yet. Start one in a folder to work in parallel, with its own output, approvals and review.'));
+    }
+
+    if (state.taskDraft) {
+      const draftFolder = folders.find(folder => folder.id === state.taskDraft.folderId);
+      const draftName = draftFolder?.displayName || draftFolder?.name || 'folder';
+      const draftItem = node('div', 'flow-task flow-task-selected');
+      const head = node('div', 'flow-task-head');
+      head.append(node('strong', 'flow-task-title', `New task in ${draftName}`));
+      const meta = node('div', 'flow-task-meta');
+      meta.append(node('span', 'flow-task-status', 'Drafting in the message box'));
+      const actions = node('div', 'flow-task-actions');
+      actions.append(button('flow-button flow-task-action', 'Cancel', () => selectTask(null)));
+      draftItem.append(head, meta, actions);
+      body.append(draftItem);
+    }
+
+    if (tasks.length || state.taskId) {
+      const list = node('ul', 'flow-tasks');
+      const mainItem = node('li', 'flow-task');
+      mainItem.dataset.role = 'main';
+      const mainSelected = !state.taskId && !state.taskDraft;
+      if (mainSelected) { mainItem.classList.add('flow-task-selected'); mainItem.setAttribute('aria-current', 'true'); }
+      if (mainRunning) mainItem.classList.add('flow-task-running');
+      const mainHead = node('div', 'flow-task-head');
+      mainHead.append(node('strong', 'flow-task-title', 'Workspace chat'));
+      if (mainApprovals > 0) {
+        const badge = node('span', 'flow-task-badge', plural(mainApprovals, 'approval'));
+        badge.setAttribute('aria-label', `${plural(mainApprovals, 'approval')} waiting`);
+        mainHead.append(badge);
+      }
+      const mainMeta = node('div', 'flow-task-meta');
+      mainMeta.append(node('span', 'flow-task-folder', mainRunning ? 'the whole workspace · ' : 'the whole workspace'));
+      if (mainRunning) {
+        const badge = node('span', 'flow-task-status flow-task-status-running');
+        const dot = node('span', 'flow-pulse-dot'); dot.setAttribute('aria-hidden', 'true');
+        badge.append(dot, node('span', 'flow-task-status-text', 'Working'));
+        mainMeta.append(badge);
+      }
+      const mainActions = node('div', 'flow-task-actions');
+      if (mainSelected) {
+        mainActions.append(node('span', 'flow-task-viewing', 'Viewing'));
+      } else {
+        const mainBtn = button('flow-button flow-task-button flow-task-action', 'Workspace chat', () => selectTask(null));
+        mainBtn.title = 'Switch to workspace chat';
+        mainBtn.setAttribute('aria-label', 'Open workspace chat');
+        mainActions.append(mainBtn);
+      }
+      mainItem.append(mainHead, mainMeta, mainActions);
+      list.append(mainItem);
+
+      for (const task of tasks) {
         const item = node('li', 'flow-task');
+        item.dataset.taskId = task.id;
+        const selected = !state.taskDraft && state.taskId === task.id;
         if (task.status === 'running') item.classList.add('flow-task-running');
+        if (selected) { item.classList.add('flow-task-selected'); item.setAttribute('aria-current', 'true'); }
 
         const titleRow = node('div', 'flow-task-head');
         const titleEl = node('strong', 'flow-task-title', task.title);
         titleEl.title = task.title;
         titleRow.append(titleEl);
+        if (task.approvals > 0) {
+          const badge = node('span', 'flow-task-badge', plural(task.approvals, 'approval'));
+          badge.setAttribute('aria-label', `${plural(task.approvals, 'approval')} waiting`);
+          titleRow.append(badge);
+        } else if (taskMergeable(task)) {
+          titleRow.append(node('span', 'flow-task-pill', 'Review'));
+        }
 
         const meta = node('div', 'flow-task-meta');
-        if (task.folderName) meta.append(node('span', 'flow-task-folder', `${task.folderName} · `));
+        const modeLabel = task.mode === 'worktree' ? 'own copy' : task.mode === 'direct' ? 'direct' : '';
+        const placeParts = [task.folderName, modeLabel].filter(Boolean);
+        if (placeParts.length) {
+          meta.append(node('span', 'flow-task-folder', `${placeParts.join(' · ')} · `));
+        }
 
         const taskProvider = task.runningProvider || task.provider;
         if (task.status === 'running') {
           const badge = node('span', 'flow-task-status flow-task-status-running');
-          const dot = node('span', 'flow-pulse-dot');
-          dot.setAttribute('aria-hidden', 'true');
+          const dot = node('span', 'flow-pulse-dot'); dot.setAttribute('aria-hidden', 'true');
           const activityText = taskProvider ? `${agentNames[taskProvider] || taskProvider}${task.runningStep ? ` · on “${clip(task.runningStep, 35)}”` : task.runningPhase ? ` · ${phaseWords[task.runningPhase] || task.runningPhase}` : ' · Working as extra task'}` : 'Working as extra task';
           badge.append(dot, node('span', 'flow-task-status-text', activityText));
           meta.append(badge);
         } else {
-          meta.append(node('span', 'flow-task-status', taskWords(task)));
+          meta.append(node('span', 'flow-task-status', taskStatusText(task)));
         }
 
-        const actionBtn = button('flow-button flow-task-button flow-task-action', 'Open task', () => selectTask(task.id));
-        actionBtn.title = `Switch to “${task.title}”`;
-        actionBtn.setAttribute('aria-label', `Open task: ${task.title}`);
+        item.append(titleRow, meta);
+        if (task.reason && ['waiting', 'failed', 'stopped', 'blocked'].includes(task.status)) {
+          const note = node('p', 'flow-task-note', clip(task.reason, 110));
+          note.title = task.reason;
+          item.append(note);
+        }
 
-        item.append(titleRow, meta, actionBtn);
-        list.append(item);
-      }
-      if (state.taskId) {
-        const item = node('li', 'flow-task');
-        const titleRow = node('div', 'flow-task-head');
-        titleRow.append(node('strong', 'flow-task-title', 'Workspace chat'));
-        const meta = node('div', 'flow-task-meta');
-        meta.append(node('span', 'flow-task-status', 'the whole workspace'));
-        const actionBtn = button('flow-button flow-task-button flow-task-action', 'Workspace chat', () => selectTask(null));
-        actionBtn.title = 'Switch to workspace chat';
-        actionBtn.setAttribute('aria-label', 'Open workspace chat');
-        item.append(titleRow, meta, actionBtn);
+        const actions = node('div', 'flow-task-actions');
+        if (selected) {
+          actions.append(node('span', 'flow-task-viewing', 'Viewing'));
+        } else {
+          const openBtn = button('flow-button flow-task-button flow-task-action', 'Open task', () => selectTask(task.id));
+          openBtn.title = `Switch to “${task.title}”`;
+          openBtn.setAttribute('aria-label', `Open task: ${task.title}`);
+          actions.append(openBtn);
+        }
+        if (task.status === 'waiting' && task.held && window.relayTaskThreads?.resume) {
+          actions.append(button('flow-button flow-task-action', 'Start', () => window.relayTaskThreads.resume(task.id)));
+        }
+        if (taskMergeable(task) && window.relayTaskThreads?.review) {
+          actions.append(button('flow-button flow-task-action', 'Review & merge', () => window.relayTaskThreads.review(task.id)));
+        } else if (taskEnded(task) && window.relayTaskThreads?.close) {
+          actions.append(button('flow-button flow-task-action', 'Close', () => window.relayTaskThreads.close(task.id)));
+        }
+        item.append(actions);
         list.append(item);
       }
       body.append(list);
     }
+
+    if (pickingTaskFolder && folders.length > 1 && !state.taskDraft) {
+      const picker = node('div', 'flow-task-folders');
+      picker.append(node('span', 'flow-subhead', 'Start in folder'));
+      const row = node('div', 'flow-task-actions');
+      for (const folder of folders) {
+        const name = folder.displayName || folder.name;
+        row.append(button('flow-button flow-task-action', name, () => startDraft(folder.id)));
+      }
+      row.append(button('flow-button flow-task-action', 'Cancel', () => { pickingTaskFolder = false; render(); }));
+      picker.append(row);
+      body.append(picker);
+    }
+
+    const newTaskBtn = button('flow-button flow-task-new', 'New task', () => {
+      if (folders.length > 1) { pickingTaskFolder = !pickingTaskFolder; render(); }
+      else startDraft(folders[0]?.id);
+    });
+    newTaskBtn.disabled = !state.projectId || !folders.length || !hasThreads || Boolean(state.taskDraft);
+    newTaskBtn.title = 'Start a task in a folder beside the workspace chat';
+    const tasksSheetBtn = button('flow-button', 'Tasks & limits', () => window.relayTasks?.open?.());
+    tasksSheetBtn.title = 'Review progress, usage, and limits across tasks';
+    card.foot.append(newTaskBtn, tasksSheetBtn);
   }
 
   // Files changed: each run that changed files, newest first, with the same Undo as the run's line in the chat.
@@ -712,7 +855,7 @@
     }
     body.append(list);
   }
-  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, files: renderFiles, happened: renderHappened, preview: card => window.relayProjectReview?.render(card), results: card => window.relaySmartResults?.renderCard(card) };
+  const renderers = { working: renderWorking, plans: renderPlans, next: renderNext, tasks: renderTasks, files: renderFiles, happened: renderHappened, preview: card => window.relayProjectReview?.render(card), results: card => window.relaySmartResults?.renderCard(card) };
 
   // ---- Live status in the working card. Remote access and Settings sit below it; no footer is needed.
   const phaseWords = { starting: 'starting', probing: 'checking usage', reasoning: 'thinking', responding: 'writing', tool: 'running tools', compacting: 'organizing its context', approval: 'waiting for you' };
@@ -773,6 +916,7 @@
     if (id === 'working') return modes.find(item => item.mode === canonicalMode(routing()?.mode))?.name || 'Routing';
     if (id === 'plans') { const rows = planRows(), row = rows.find(item => item.provider === state.provider) || rows[0]; return row?.primary ? `${agentNames[row.provider]} · ${row.primary.label} · ${remaining(row.primary)}% left${row.warning ? ` · ${row.warning.label} · ${remaining(row.warning)}% left` : ''}` : 'Plans'; }
     if (id === 'next') { const { steps } = planFor(), queue = state.conversation?.queue || [], plan = waitingPlan(); if (plan) return plan.chip; return steps.length ? `${steps.filter(step => step.status === 'done').length} of ${steps.length} steps` : queue.length ? plural(queue.length, 'queued message') : 'What’s next'; }
+    if (id === 'tasks') { const list = visibleTasks(state), working = list.filter(t => t.status === 'running').length, attention = list.filter(t => t.approvals > 0).length; if (attention) return `${plural(attention, 'task')} need${attention === 1 ? 's' : ''} you`; if (working) return `${working} working`; return list.length ? plural(list.length, 'task') : 'Tasks'; }
     const total = changedRuns().filter(row => !row.undone).reduce((sum, row) => sum + row.files, 0);
     return total ? `${plural(total, 'file')} changed` : 'Files';
   }
@@ -823,35 +967,52 @@
   }
   // The status line's elapsed time moves while a run works.
   function tick() { clearTimeout(ticker); if (!on) return; if (api.isRunning()) renderStatus(); ticker = setTimeout(tick, 1000); }
-  function applyMode(wanted, remember, projectId, force = false) {
+  // Changing view. Normal keeps every panel; Flow and the Plan lift the header across the window and set the panels
+  // aside, to come back as they were in Normal. Only a change of routing waits for the workspace to be idle.
+  const routedIn = target => target === 'flow' ? true : target === 'normal' ? false : routed;
+  const VIEW_NOTES = { normal: 'Normal view. You choose the agent and model.', flow: 'Flow on. Codeshi chooses the agent and model.', plan: 'Plan view. The chat is on the right.' };
+  function applyView(target, remember, projectId, force = false) {
     transitioning = true; render(); modeChanged();
     stage(() => {
-      const reason = !force && (api.getState().projectId !== projectId ? 'The workspace changed. Choose the view again.' : lockReason());
+      const from = view, nextRouted = routedIn(target);
+      const reason = !force && (api.getState().projectId !== projectId ? 'The workspace changed. Choose the view again.' : nextRouted !== routed ? lockReason() : null);
       if (reason) { api.showNotice?.(reason); return false; }
-      if (wanted) {
+      if (from === target) return false;
+      if (from === 'normal') {
         saved = { panel: openSidePanel(), bottom: window.relayPanel?.isOpen?.() ? window.relayPanel.active() : null };
         window.relayAgents?.close?.(); window.relayGit?.close?.(); window.relayBrief?.close?.(); window.relayTasks?.close?.(); window.relayTimeline?.close?.(); window.relayReviews?.closePanel?.();
         if (saved.bottom) window.relayPanel?.hide?.();
-        on = true; shell.classList.add('flow'); keepFocus(() => { liftHeader(); moveControls(); }); place(); tick(); ensureRouting();
-      } else {
-        on = false; closeDetail(); closePeek(); window.relayPanel?.hide?.(); releaseRouting();
-        clearTimeout(ticker); ticker = null;
+      } else closeDetail();
+      if (from === 'flow') { on = false; closePeek(); clearTimeout(ticker); ticker = null; shell.classList.remove('flow'); keepFocus(restoreControls); }
+      if (from === 'plan') { shell.classList.remove('plan'); window.relayBoard?.hide?.(); }
+      view = target; routed = nextRouted;
+      if (target === 'normal') {
+        window.relayPanel?.hide?.();
         const previous = saved; saved = null;
-        shell.classList.remove('flow'); keepFocus(() => { restoreControls(); dropHeader(); });
+        keepFocus(dropHeader);
         if (previous?.panel) api.showSidePanel?.(previous.panel);
         if (previous?.bottom) window.relayPanel?.show?.(previous.bottom);
-      }
-      if (remember) write(KEY, on ? 'on' : 'off');
+      } else keepFocus(liftHeader);
+      if (target === 'flow') { on = true; shell.classList.add('flow'); keepFocus(moveControls); place(); tick(); }
+      if (target === 'plan') { shell.classList.add('plan'); window.relayBoard?.show?.(); }
+      if (routed) ensureRouting(); else releaseRouting();
+      if (remember) { write(KEY, routed ? 'on' : 'off'); write(VIEW_KEY, view === 'plan' ? 'plan' : 'chat'); }
       render(); modeChanged();
-      api.announce?.(on ? 'Flow on. Codeshi chooses the agent and model.' : 'Flow off. Manual control restored.');
+      api.announce?.(VIEW_NOTES[view]);
       return true;
-    }, wanted, () => { transitioning = false; render(); modeChanged(); });
+    }, target === 'flow', () => { transitioning = false; render(); modeChanged(); });
   }
-  function changeMode(wanted, remember = true) {
-    if (wanted === on) return true;
-    const reason = lockReason();
-    if (reason || checkingMode || transitioning) { api.showNotice?.(reason || 'The view is changing. Try again in a moment.'); return false; }
+  function changeView(target, remember = true) {
+    if (!['normal', 'flow', 'plan'].includes(target)) return false;
+    if (target === view) return true;
+    if (!api.getState().projectId) { api.showNotice?.(target === 'plan' ? 'Open a workspace to use the Plan.' : 'Open a workspace to use Flow.'); return false; }
+    if (checkingMode || transitioning) { api.showNotice?.('The view is changing. Try again in a moment.'); return false; }
+    // A card with unsaved edits asks before the Plan goes.
+    if (view === 'plan' && window.relayBoard?.canLeave?.() === false) return false;
     const state = api.getState(), projectId = state.projectId, taskId = state.taskId;
+    if (routedIn(target) === routed) { applyView(target, remember, projectId); return true; }
+    const reason = lockReason();
+    if (reason) { api.showNotice?.(reason); return false; }
     checkingMode = true; render(); modeChanged();
     // Refresh the workspace-wide status, rather than trusting only the task currently visible in this browser.
     api.api('/api/status', {}, projectId).then(status => {
@@ -860,26 +1021,41 @@
       if (status.runningConversationId || activityBusy(status.workspaceActivity)) { api.showNotice?.(LOCK_MESSAGE); return; }
       const currentReason = lockReason();
       if (currentReason) { api.showNotice?.(currentReason); return; }
-      applyMode(wanted, remember, projectId);
+      applyView(target, remember, projectId);
     }).catch(error => api.showNotice?.(`Could not check workspace activity. ${error.message}`)).finally(() => { checkingMode = false; render(); modeChanged(); });
     return true;
   }
-  function toggleFlow() { return changeMode(!on); }
+  function toggleFlow() { return changeView(on ? 'normal' : 'flow'); }
+  // Whether changing to a view would have to wait: only a change of routing waits for the workspace to be idle.
+  const blocked = target => checkingMode || transitioning || target !== view && routedIn(target) !== routed && Boolean(lockReason());
   // Flow has its own voice: the seal and the word in the header, and a message box that asks what to build.
   const shortcutNote = (toggle.title.match(/\s\([^)]*\)\s*$/) || [''])[0], DEFAULT_PLACEHOLDER = 'Describe the task or ask a question…', FLOW_PLACEHOLDER = 'What should we build next?';
   function brand() {
     const state = api.getState(), label = $('toggle-flow-label'), mark = $('flow-brand'), input = $('message-input');
-    if (label) label.textContent = on ? 'Leave Flow' : 'Flow';
-    toggle.title = (lockReason() || (checkingMode ? 'Checking workspace activity…' : transitioning ? 'Changing view…' : on ? 'Leave Flow: the panels come back as they were' : 'Flow: just the chat, with plain-language cards either side')) + shortcutNote;
-    if (mark) { mark.hidden = !on; const name = state.projects?.find(project => project.id === state.projectId)?.name || ''; if ($('flow-brand-workspace')) $('flow-brand-workspace').textContent = name; }
+    if (label) label.textContent = 'Flow';
+    const wait = checkingMode ? 'Checking workspace activity…' : transitioning ? 'Changing view…' : '';
+    toggle.title = (wait || (blocked('flow') ? lockReason() : on ? 'Flow: the view you are in' : 'Flow: just the chat, with plain-language cards either side, and Codeshi chooses the agent and model')) + shortcutNote;
+    if (normalButton) normalButton.title = wait || (blocked('normal') ? lockReason() : 'Normal: every panel, and you choose the agent and model');
+    if (mark) {
+      mark.hidden = view === 'normal';
+      const word = mark.querySelector('.flow-brand-name'); if (word) word.textContent = view === 'plan' ? 'Plan' : 'Flow';
+      // The workspace name opens the workspace menu, as Flow and the Plan have no sidebar to switch from.
+      const name = state.projects?.find(project => project.id === state.projectId)?.name || '', button = $('flow-brand-workspace');
+      if (button) { button.hidden = !name; if (button.textContent !== name) button.replaceChildren(node('span', '', name)); button.title = `${name}: switch workspace`; button.setAttribute('aria-label', `Workspace: ${name}. Switch workspace`); }
+    }
     if (input) { if (on && input.placeholder === DEFAULT_PLACEHOLDER) input.placeholder = FLOW_PLACEHOLDER; else if (!on && input.placeholder === FLOW_PLACEHOLDER) input.placeholder = DEFAULT_PLACEHOLDER; }
   }
   function render() {
     const state = api.getState(), tight = narrow();
-    toggle.setAttribute('aria-pressed', String(on)); toggle.disabled = Boolean(lockReason());
-    // While the view is checked and changes, the button stays focusable, so pressing it from the keyboard keeps focus
+    // Each view's button is pressed while it shows, and disabled while changing to it would have to wait for work.
+    // While the view is checked and changes, the buttons stay focusable, so pressing one from the keyboard keeps focus
     // on it instead of dropping to the page (#26). Another press meanwhile only explains the wait.
-    toggle.setAttribute('aria-disabled', String(Boolean(checkingMode || transitioning)));
+    const changing = String(Boolean(checkingMode || transitioning)), noWorkspace = !state.projectId;
+    for (const [button, name] of [[normalButton, 'normal'], [toggle, 'flow'], [planButton, 'plan']]) {
+      if (!button) continue;
+      button.setAttribute('aria-pressed', String(view === name)); button.setAttribute('aria-disabled', changing);
+      button.disabled = noWorkspace || view !== name && Boolean(routedIn(name) !== routed && lockReason());
+    }
     brand(); renderStatus();
     const loungeToggle = $('toggle-flow-lounge');
     if (loungeToggle) loungeToggle.hidden = !on;
@@ -893,7 +1069,10 @@
   }
   function schedule() { if (scheduled) return; scheduled = true; Promise.resolve().then(() => { scheduled = false; render(); }); }
 
-  toggle.addEventListener('click', toggleFlow);
+  toggle.addEventListener('click', () => changeView('flow'));
+  normalButton?.addEventListener('click', () => changeView('normal'));
+  planButton?.addEventListener('click', () => changeView('plan'));
+  api.wireWorkspaceButton?.($('flow-brand-workspace'));
   $('flow-detail-close')?.addEventListener('click', closeDetail);
   detail?.addEventListener('cancel', event => { event.preventDefault(); closeDetail(); });
   // The close event comes after the dialog has closed, so a sheet opened straight after another may already be showing.
@@ -916,18 +1095,27 @@
   window.addEventListener('relay-state', () => {
     if (detailPanel && detailScope !== scope()) closeDetail();
     const has = Boolean(api.getState().projectId);
-    if (has && api.getState().ready && !restored) { restored = true; if (!on && read(KEY) === 'on' && !lockReason()) changeMode(true, false); }
-    if (!has && on && !transitioning) applyMode(false, false, null, true);
-    // Routing follows the view: on in Flow, off outside it, put right at the next idle moment if something else changed it.
+    // The view comes back after a restart. The Plan keeps the routing it had, unless turning it on would have to wait.
+    if (has && api.getState().ready && !restored) {
+      restored = true;
+      const flowWanted = read(KEY) === 'on' && !lockReason();
+      if (read(VIEW_KEY) === 'plan' && view === 'normal') { routed = flowWanted; applyView('plan', false, api.getState().projectId); }
+      else if (flowWanted && view === 'normal') changeView('flow', false);
+    }
+    if (!has && view !== 'normal' && !transitioning) applyView('normal', false, null, true);
+    // Routing follows the view: on in Flow, off in Normal, as it was in the Plan, put right at the next idle moment if
+    // something else changed it.
     const idle = has && api.getState().ready && !transitioning && !checkingMode && !api.isRunning();
-    if (idle && on) { if (routing()) rememberRouting(); else ensureRouting(); }
-    else if (idle && !on && needsManualControl()) releaseRouting();
+    if (idle && routed) { if (routing()) rememberRouting(); else ensureRouting(); }
+    else if (idle && !routed && needsManualControl()) releaseRouting();
     schedule();
   });
   for (const type of ['relay-account', 'relay-billing']) window.addEventListener(type, schedule);
   // The next-message line follows the draft as it is typed.
   $('message-input')?.addEventListener('input', () => { if (on) schedule(); });
   // remoteAccess: the phone entry asks Flow first; true means the sheet opened, so Settings need not.
-  window.relayFlow = { toggle: toggleFlow, enter: () => changeMode(true), leave: () => changeMode(false), isOn: () => on, isLocked: () => Boolean(lockReason() || checkingMode || transitioning), peek: peekCard, cards: () => CARDS.map(card => ({ id: card.id, title: card.title })), remoteAccess: showPhone, lounge: () => window.relayFlowLounge };
+  // view() is normal, flow or plan; isOn() is true in Flow alone; isRouted() says whether Codeshi chooses the agent and model.
+  // isLocked() says whether the Flow toggle, ⇧⌘F, would have to wait for work.
+  window.relayFlow = { toggle: toggleFlow, enter: () => changeView('flow'), leave: () => changeView('normal'), plan: () => changeView('plan'), setView: changeView, view: () => view, isPlan: () => view === 'plan', isRouted: () => routed, isOn: () => on, isLocked: () => blocked(on ? 'normal' : 'flow'), peek: peekCard, cards: () => CARDS.map(card => ({ id: card.id, title: card.title })), remoteAccess: showPhone, lounge: () => window.relayFlowLounge };
   render();
 })();

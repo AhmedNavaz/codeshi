@@ -129,7 +129,7 @@ export function validateWorkflowOrder(steps) {
 
 function checkSteps(steps, options) {
   if (!Array.isArray(steps)) fail('Send the plan\'s steps as a list.');
-  const most = options.fromPlanner ? planLimits.drafted : planLimits.steps;
+  const most = options.max ?? (options.fromPlanner ? planLimits.drafted : planLimits.steps);
   if (steps.length > most) fail(`A plan has at most ${most} steps.`);
   const ids = [];
   const checkedSteps = steps.map((raw, index) => {
@@ -362,6 +362,21 @@ export function parsePlan(reply) {
     const questions = Array.isArray(plan.questions) ? plan.questions.map(item => text(item, planLimits.question)).filter(Boolean).slice(0, planLimits.questions) : [];
     return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true }), ...(questions.length ? { questions } : {}) };
   } catch { return { status: 'unstructured', summary: 'The planner\'s reply could not be read as a plan. Open its response, plan again, or write the steps yourself.', steps: [] }; }
+}
+
+// Suggest next (#162): one read-only run proposes 1 to 3 follow-up cards after an existing card, read with the same strict rules.
+export function parseSuggest(reply) {
+  try {
+    if (typeof reply !== 'string' || Buffer.byteLength(reply) > planLimits.reply) throw Error();
+    const plan = JSON.parse(reply.trim().replace(/^\`\`\`(?:json)?\s*\n([\s\S]*?)\n\`\`\`$/, '$1'));
+    const summary = text(plan?.summary, planLimits.summary);
+    if (!summary || !Array.isArray(plan.steps) || !plan.steps.length) throw Error();
+    if (plan.steps.length > 3) return { status: 'unstructured', summary: `The agent suggested ${plan.steps.length} cards, more than the 3 “Suggest next” allows. Suggest again, or use Add next to write one yourself.`, steps: [] };
+    const questions = Array.isArray(plan.questions) ? plan.questions.map(item => text(item, planLimits.question)).filter(Boolean).slice(0, planLimits.questions) : [];
+    return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true, max: 3 }), ...(questions.length ? { questions } : {}) };
+  } catch {
+    return { status: 'unstructured', summary: 'The agent’s reply could not be read as suggested cards. Suggest again, or use Add next to write one yourself.', steps: [] };
+  }
 }
 
 // The conversation's plans, newest first, from the journal. A new plan replaces an open one that was never run. A plan

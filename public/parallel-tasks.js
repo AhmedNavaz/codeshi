@@ -333,6 +333,6 @@
   });
   $('task-merge-close').addEventListener('click', () => $('task-merge-dialog').close());
   window.addEventListener('relay-state', () => render());
-  window.relayTaskThreads = { open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => selectThread(tasks().find(task => task.id === id) || null) };
+  window.relayTaskThreads = { open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => selectThread(tasks().find(task => task.id === id) || null), review: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => openReview(task)); }, resume: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'start')); }, discard: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'discard')); }, close: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(async () => { await act(task, 'close'); if ((focused || api.getState().taskId) === task.id) await selectThread(null); }); } };
   render(true);
 })();

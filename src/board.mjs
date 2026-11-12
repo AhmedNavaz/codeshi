@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ARTIFACT_KINDS, SPECIALIST_ROLES, reviewDraft, upstreamLines } from './orchestration.mjs';
+import { ARTIFACT_KINDS, SPECIALIST_ROLES, parseSuggest, planningMethod, reviewDraft, upstreamLines } from './orchestration.mjs';
 import { attachmentLimits } from './attachments.mjs';
 import { runSteps } from './recap.mjs';
 import { Subtasks } from './subtasks.mjs';
@@ -69,6 +72,10 @@ const clip = (value, limit) => { const line = String(value || '').trim(); return
 export class Board {
   constructor(main) {
     this.main = main;
+    this.draftUndos = new Map();
+    this.suggestJobs = new Map();
+    this.suggestCleanups = new Set();
+    this.closing = false;
     this.subtasks = new Subtasks(this);
     // The coordinator tells the board each time a task's record changes; the card follows its task from there.
     main.tasks.onTask = (c, task) => this.follow(c, task);
@@ -277,11 +284,14 @@ export class Board {
   // The Plan, or some of its cards, as text for an agent: what each card says, where it stands and what it waits for, with
   // only your own comments. Closed cards aren't in it or named by the cards that wait for them. Task ids, places on the
   // canvas and run history are left out.
-  agentText(c, chosen, { whole = false } = {}) {
+  agentText(c, chosen, { whole = false, focus = null } = {}) {
     const open = new Set(this.open(c).map(card => card.id)), all = this.list(c);
     const shown = all.filter(card => open.has(card.id) && (whole || chosen.includes(card.id)));
     const name = id => all.find(item => item.id === id)?.title.replace(/\s+/g, ' ');
     const lines = whole ? ['# Plan', '', `This workspace’s Plan in Codeshi: ${shown.length} ${shown.length === 1 ? 'card' : 'cards'}. It is the person’s plan of the work, for reference. Do only what the message asks.`, ''] : [];
+    // Asked from the Plan with a card open (#162): "this card" in the message means that one.
+    const focused = whole && focus ? shown.find(card => card.id === focus) : null;
+    if (focused) lines.push(`The person has the card “${focused.title.replace(/\s+/g, ' ')}” open beside the Plan, so “this card” in the message means it.`, '');
     for (const card of shown) {
       lines.push(`${whole ? '## ' : '# Card: '}${card.title.replace(/\s+/g, ' ')}`, '');
       const facts = [`Status: ${card.draft ? 'Draft, not accepted yet' : COLUMN_NAME[card.column]}`];
@@ -312,7 +322,8 @@ export class Board {
   // Attaching the Plan, or one card, to your next message: its text is saved as an attachment, so the message box shows
   // its size and you can open exactly what will be sent. The attachment remembers its cards, so closing any of them, or
   // the Plan, later keeps it out of every prompt from then on.
-  attach(c, { cardId = null } = {}) {
+  // From the chat in the Plan view (#162), focus names the card open beside the Plan at the top of the whole Plan's text.
+  attach(c, { cardId = null, focus = null } = {}) {
     if (c.planClosed) throw fail('This Plan is closed to agents. Open it to agents to attach it.');
     let made;
     if (cardId) {
@@ -321,7 +332,8 @@ export class Board {
       made = this.agentText(c, [card.id]);
     } else {
       if (!this.cards(c).length) throw fail('The Plan has no cards to attach yet.');
-      made = this.agentText(c, [], { whole: true });
+      if (focus) { const card = this.find(c, focus); if (card.closed) throw fail(`“${card.title}” is closed to agents.`); }
+      made = this.agentText(c, [], { whole: true, focus });
       if (!made.cards.length) throw fail('Every card on the Plan is closed to agents, so there is nothing to attach.');
     }
     const bytes = Buffer.byteLength(made.text), most = attachmentLimits.textBytes;
@@ -374,21 +386,323 @@ export class Board {
       }
     }
   }
+  saveDraftUndo(c, entry) {
+    let map = this.draftUndos.get(c.id);
+    if (!map) { map = new Map(); this.draftUndos.set(c.id, map); }
+    const id = randomUUID();
+    map.set(id, entry);
+    if (map.size > 50) map.delete(map.keys().next().value);
+    return id;
+  }
   // Accepting keeps the card as you left it and takes away the draft mark: one with an agent, or on Auto, goes to Ready.
   // Accepting several keeps their order. Discarding removes them, and the cards that waited for one stop waiting.
-  drafts(c, { action, ids } = {}) {
-    if (!['accept', 'discard'].includes(action)) throw fail('Accept or discard the drafts.', 400);
+  // Both record an undo snapshot so an accidental accept or discard can be reversed before the cards start running.
+  drafts(c, { action, ids, undoId } = {}) {
+    if (!['accept', 'discard', 'undo'].includes(action)) throw fail('Accept or discard the drafts.', 400);
+    if (action === 'undo') {
+      if (typeof undoId !== 'string' || !undoId) throw fail('Nothing left to undo.', 400);
+      const map = this.draftUndos.get(c.id), entry = map?.get(undoId);
+      if (!entry) throw fail('Nothing left to undo.', 404);
+      if (entry.kind === 'accept') {
+        for (const item of entry.cards) {
+          const card = this.find(c, item.id);
+          if (card.draft) throw fail(`“${card.title}” is already a draft.`);
+          if (!['backlog', 'ready'].includes(card.column) || card.task || card.attempts?.length) {
+            throw fail(`“${card.title}” has already run or moved, so accepting it can’t be undone.`);
+          }
+        }
+        map.delete(undoId);
+        for (const item of entry.cards) {
+          this.update(c, this.find(c, item.id), { draft: structuredClone(item.draft), column: item.column, order: item.order, acceptedDraftAt: item.acceptedDraftAt });
+        }
+        setTimeout(() => this.main.queue?.tick(c), 0);
+        return { undone: 'accept', count: entry.cards.length, ids: entry.cards.map(item => item.id) };
+      }
+      const toRestore = entry.cards.filter(item => !this.cards(c).some(existing => existing.id === item.id));
+      const room = LIMITS.cards - this.cards(c).length;
+      if (toRestore.length > room) throw fail(`Not enough room on the Plan to bring ${toRestore.length} discarded ${toRestore.length === 1 ? 'card' : 'cards'} back.`);
+      map.delete(undoId);
+      const known = new Set([...this.cards(c).map(item => item.id), ...toRestore.map(item => item.id)]);
+      const restoredIds = new Set(toRestore.map(item => item.id));
+      for (const snapshot of toRestore) {
+        const card = structuredClone(snapshot);
+        card.dependsOn = (card.dependsOn || []).filter(dep => known.has(dep));
+        this.main.record(c, { type: 'board_card', card });
+      }
+      for (const link of entry.links || []) {
+        const other = this.cards(c).find(item => item.id === link.cardId);
+        if (!other) continue;
+        const current = other.dependsOn || [];
+        const restored = link.dependsOn.filter(dep => known.has(dep) && (current.includes(dep) || restoredIds.has(dep)));
+        const merged = [...new Set([...restored, ...current])].slice(0, LIMITS.dependsOn);
+        if (merged.length !== current.length || merged.some((id, index) => id !== current[index])) {
+          if (!this.reaches(c, merged, other.id)) this.update(c, other, { dependsOn: merged });
+        }
+      }
+      setTimeout(() => this.main.queue?.tick(c), 0);
+      return { undone: 'discard', count: toRestore.length, ids: toRestore.map(item => item.id) };
+    }
     if (!Array.isArray(ids) || !ids.length) throw fail('Choose the drafts.', 400);
     const chosen = [...new Set(ids)].map(id => this.find(c, id));
     for (const card of chosen) if (!card.draft) throw fail(`“${card.title}” isn’t a draft.`);
     // Queued messages wait while a drafted plan's cards are undecided, so they look again once they are.
     setTimeout(() => this.main.queue?.tick(c), 0);
-    if (action === 'discard') { for (const card of chosen) this.remove(c, card.id); return { discarded: chosen.length }; }
-    for (const card of [...chosen].sort((a, b) => a.order - b.order)) {
+    if (action === 'discard') {
+      const chosenIds = new Set(chosen.map(card => card.id));
+      const links = this.cards(c)
+        .filter(other => !chosenIds.has(other.id) && (other.dependsOn || []).some(dep => chosenIds.has(dep)))
+        .map(other => ({ cardId: other.id, dependsOn: [...other.dependsOn] }));
+      const undoId$ = this.saveDraftUndo(c, { kind: 'discard', cards: chosen.map(card => structuredClone(card)), links });
+      for (const card of chosen) this.remove(c, card.id);
+      return { discarded: chosen.length, ids: chosen.map(card => card.id), undoId: undoId$ };
+    }
+    const ordered = [...chosen].sort((a, b) => a.order - b.order);
+    const undoId$ = this.saveDraftUndo(c, {
+      kind: 'accept',
+      cards: ordered.map(card => ({ id: card.id, draft: structuredClone(card.draft), column: card.column, order: card.order, acceptedDraftAt: card.acceptedDraftAt ?? null })),
+    });
+    for (const card of ordered) {
       const ready = Boolean(card.agent || card.auto);
       this.update(c, card, { draft: null, ...(ready ? { column: 'ready', order: this.lastOrder(c, 'ready') + 1 } : {}), acceptedDraftAt: new Date().toISOString() });
     }
-    return { accepted: chosen.length };
+    return { accepted: chosen.length, ids: ordered.map(card => card.id), undoId: undoId$ };
+  }
+
+  // ---- Suggest next (#162)
+  // One read-only run from any open card: reads that card, its result if finished, its open upstream and downstream
+  // cards, and the open Plan titles/groups (never closed cards), then proposes 1 to 3 follow-up draft cards.
+  suggestPrompt(c, card) {
+    if (this.closed(c, card)) throw fail(c.planClosed ? 'This Plan is closed to agents. Open it to agents before suggesting next cards.' : `“${card.title}” is closed to agents. Open it to agents before suggesting next cards.`);
+    const open = new Set(this.open(c).map(item => item.id)), all = this.list(c), openCards = all.filter(item => open.has(item.id));
+    const folder = id => this.folders().find(item => item.id === id)?.name || '';
+    const cardBlock = (item, heading) => {
+      const lines = [heading, ''];
+      const facts = [`Status: ${item.draft ? 'Draft, not accepted yet' : COLUMN_NAME[item.column]}`];
+      if (item.group) facts.push(`Group: ${item.group}`);
+      if (item.role && item.role !== 'builder') facts.push(`Role: ${item.role}`);
+      if (item.priority !== 'normal') facts.push(`Priority: ${item.priority}`);
+      if (item.artifact) facts.push(`Produces: ${ARTIFACT_NAME[item.artifact]}`);
+      if (item.files?.length) facts.push(`Files: ${item.files.join(', ')}`);
+      if (item.check) facts.push(`Acceptance check: ${item.check}`);
+      if (item.folderId && this.folders().length > 1 && folder(item.folderId)) facts.push(`Works in: ${folder(item.folderId)}`);
+      lines.push(...facts.map(f => `- ${f}`), '');
+      if (item.notes) lines.push(item.notes, '');
+      if (item.checks?.length) lines.push('Done means:', '', ...item.checks.map(chk => `- [${chk.done ? 'x' : ' '}] ${chk.text}`), '');
+      if (item.subtasks?.length) lines.push('Subtasks:', '', ...item.subtasks.map((sub, i) => `${i + 1}. [${sub.status === 'done' ? 'x' : ' '}] ${sub.title}`), '');
+      const said = this.comments(c, item.id).filter(comment => comment.by?.kind === 'you');
+      if (said.length) lines.push('The person’s comments:', '', ...said.map(comment => `- ${comment.at.slice(0, 10)}: ${comment.text.replace(/\n/g, '\n  ')}`), '');
+      const earlier = (c.parallelTasks || []).filter(task => task.board?.cardId === item.id && ['complete', 'integrated', 'kept'].includes(task.status)).at(-1);
+      if (earlier || item.result) {
+        const result = {
+          status: earlier?.status || item.result?.status,
+          branch: earlier?.integration?.branch || null,
+          files: earlier?.stepResult?.files || [],
+          summary: earlier?.stepResult?.summary || item.result?.summary || '',
+          check: earlier?.stepCheck && earlier.stepCheck.status !== 'running' ? earlier.stepCheck : item.result?.tests ? { outcome: item.result.tests, ...(item.result.testCommand ? { command: item.result.testCommand } : {}), ...(item.result.testsReason ? { reason: item.result.testsReason } : {}) } : null,
+        };
+        const outLines = upstreamLines(item, result);
+        if (!result.files.length && item.result?.files != null) outLines.unshift(`  Changed ${item.result.files} ${item.result.files === 1 ? 'file' : 'files'}.`);
+        if (outLines.length) lines.push('Result from running this card:', ...outLines.map(line => line.replace(/^  /, '- ')), '');
+      }
+      return lines.join('\n');
+    };
+    const upstream = (card.dependsOn || []).filter(id => open.has(id)).map(id => openCards.find(item => item.id === id)).filter(Boolean);
+    const downstream = openCards.filter(other => other.id !== card.id && (other.dependsOn || []).includes(card.id));
+    const shownIds = new Set([card.id, ...upstream.map(i => i.id), ...downstream.map(i => i.id)]);
+    const otherOpen = openCards.filter(other => !shownIds.has(other.id));
+    const parts = [
+      `Suggest 1 to 3 follow-up cards to come next after the card “${card.title.replace(/\s+/g, ' ')}”. This is a read-only planning run: inspect the project as needed, but do not edit files or run commands that change anything.`,
+      '',
+      planningMethod,
+      '',
+      cardBlock(card, `# Target card: ${card.title.replace(/\s+/g, ' ')}`),
+    ];
+    if (upstream.length) {
+      parts.push('# Upstream cards that this card waits for', '', ...upstream.map(item => cardBlock(item, `## ${item.title.replace(/\s+/g, ' ')}`)));
+    }
+    if (downstream.length) {
+      parts.push('# Cards already waiting for the target card (do not duplicate these)', '', ...downstream.map(item => `- “${item.title.replace(/\s+/g, ' ')}” (${item.draft ? 'Draft' : COLUMN_NAME[item.column]}${item.group ? `, group: ${item.group}` : ''})${item.notes ? `: ${clip(item.notes.replace(/\s+/g, ' '), 180)}` : ''}`), '');
+    }
+    if (otherOpen.length) {
+      parts.push('# Other open cards in this Plan', '', ...otherOpen.map(item => `- “${item.title.replace(/\s+/g, ' ')}” (${item.draft ? 'Draft' : COLUMN_NAME[item.column]}${item.group ? `, group: ${item.group}` : ''})`), '');
+    }
+    parts.push(
+      'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 short questions for the person, usually empty) and steps (an array of 1 to 3 follow-up cards, in order, to come after the target card). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (the folders or files it expects to change, as paths relative to the project), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards within this steps array that it needs, starting at 1; leave [] if it directly follows the target card), phase (a short group/phase name, or leave null to keep the target card’s group), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.'
+    );
+    return parts.join('\n');
+  }
+  draftSuggested(c, card, parsed, { suggestId, by = null } = {}) {
+    const steps = parsed.steps || [], room = LIMITS.cards - this.cards(c).length;
+    if (steps.length > room) throw fail(`This suggestion has ${steps.length} cards, and the Plan has room for ${Math.max(0, room)} more. Remove some finished cards, then suggest again.`);
+    const ids = new Map(steps.map(step => [step.id, randomUUID()])), notes = reviewDraft(steps), now = new Date().toISOString();
+    // Plan checks against the target card and its open ancestors for root suggested cards.
+    const openSet = new Set(this.open(c).map(item => item.id)), ancestors = [], seen = new Set(), queue = [card.id];
+    while (queue.length) {
+      const atId = queue.shift();
+      if (seen.has(atId) || !openSet.has(atId)) continue;
+      seen.add(atId);
+      const found = this.cards(c).find(item => item.id === atId);
+      if (!found) continue;
+      ancestors.push(found);
+      for (const dep of found.dependsOn || []) queue.push(dep);
+    }
+    const BUILDS = ['builder', 'frontend', 'backend', 'database'], CHECKS = ['qa', 'reviewer'], CONTRACTS = ['contract', 'schema'];
+    for (const step of steps) {
+      if (step.dependsOn?.length) continue;
+      const list = (notes[step.id] ||= []);
+      if (BUILDS.includes(step.role || 'builder') && CHECKS.includes(card.role || 'builder')) {
+        list.push(`It builds on “${card.title}”, a ${card.role === 'qa' ? 'QA' : 'review'} card. Checks should come after the work they check.`);
+      }
+      if (CONTRACTS.includes(step.artifact)) {
+        const built = ancestors.filter(other => BUILDS.includes(other.role || 'builder') && !CONTRACTS.includes(other.artifact));
+        if (built.length) {
+          list.push(`This ${step.artifact} comes after building work (${built.map(other => `“${other.title}”`).join(', ')}). Contracts should come before the cards that use them.`);
+        }
+      }
+    }
+    // Canvas placement: if the target card has a saved place, lay suggested cards out neatly to its right.
+    const stepById = new Map(steps.map(step => [step.id, step])), depthOf = new Map(), rowAtDepth = new Map();
+    const deep = (stepId, trail = new Set()) => {
+      if (depthOf.has(stepId)) return depthOf.get(stepId);
+      if (trail.has(stepId)) return 0;
+      trail.add(stepId);
+      const d = Math.max(-1, ...(stepById.get(stepId)?.dependsOn || []).map(dep => deep(dep, trail))) + 1;
+      depthOf.set(stepId, d);
+      return d;
+    };
+    const clampPos = value => Math.max(-REACH, Math.min(REACH, Math.round(value)));
+    const batch = { id: suggestId, kind: 'suggest', cardId: card.id, cardTitle: card.title, summary: parsed.summary || '', ...(parsed.questions?.length ? { questions: parsed.questions } : {}) };
+    const source = { kind: 'suggest', cardId: card.id, summary: parsed.summary || '' };
+    const made = steps.map((step, index) => {
+      let atProp = {};
+      if (card.at) {
+        const d = deep(step.id), row = rowAtDepth.get(d) || 0;
+        rowAtDepth.set(d, row + 1);
+        atProp = { at: { x: clampPos(card.at.x + (d + 1) * 290), y: clampPos(card.at.y + row * 130) } };
+      }
+      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : (card.group || null), priority: 'normal', labels: [], due: null, folderId: card.folderId || null, dependsOn: [], ...atProp };
+      const fields = this.clean(c, input);
+      const stepDeps = step.dependsOn.map(id => ids.get(id)).filter(Boolean);
+      return { id: ids.get(step.id), ...fields, agent: null, auto: true, dependsOn: stepDeps.length ? stepDeps : [card.id], column: 'backlog', order: this.lastOrder(c, 'backlog') + 1 + index, revision: 1, createdBy: 'agent', createdAt: now, updatedAt: now, attempts: [], source, draft: { by, at: now, batch, notes: notes[step.id] || [] } };
+    });
+    for (const madeCard of made) this.main.record(c, { type: 'board_card', card: madeCard });
+    return made.map(madeCard => madeCard.id);
+  }
+  suggest(c, id, input = {}) {
+    if (this.closing) throw fail('Codeshi is shutting down.');
+    const card = this.find(c, id);
+    if (this.closed(c, card)) throw fail(c.planClosed ? 'This Plan is closed to agents. Open it to agents before suggesting next cards.' : `“${card.title}” is closed to agents. Open it to agents before suggesting next cards.`);
+    if (this.cards(c).length >= LIMITS.cards) throw fail(`This Plan already has ${LIMITS.cards} cards. Remove some finished cards first.`);
+    if (this.suggestJobs.has(c.id) || c.boardSuggest?.status === 'running') throw fail('Wait for the current suggestion to finish, or stop it first.');
+    const provider = input.provider ?? c.provider;
+    if (!PROVIDERS.includes(provider)) throw fail('Choose Codex, Claude or Gemini.', 400);
+    const model = input.model ? text(input.model, 200, 'model') : null;
+    const effort = input.effort || null;
+    if ('billingConfirmed' in input && typeof input.billingConfirmed !== 'boolean') throw fail('Confirm billing explicitly.', 400);
+    const billingConfirmed = input.billingConfirmed === true;
+    this.main.checkRunSettings(provider, 'read', 'ask');
+    this.main.validateSelection(model, 'auto', effort);
+    this.main.admit?.(c);
+    this.main.budget.assertCanStart(c, { task: null, provider, model });
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-suggest-'));
+    fs.chmodSync(directory, 0o700);
+    let worker, savedId = null, job = null, watchedRun = null;
+    try {
+      const Worker = this.main.BrokerClass || this.main.constructor;
+      worker = new Worker({ workspace: this.main.workspace, workspaces: this.main.workspaces, workspaceFolders: this.main.workspaceFolders, bins: this.main.configuredBins, googleRoot: this.main.googleRoot, dataDir: path.join(directory, 'journal'), lane: true });
+      const conversation = worker.get(worker.create().id), suggestId = randomUUID(), requestId = `suggest-${suggestId}`;
+      worker.budget.remainingSpend = () => this.main.budget.remainingSpend(c, suggestId);
+      worker.updateContext(conversation, c.context);
+      const promptText = this.suggestPrompt(c, card);
+      this.main.record(c, { type: 'board_suggest', suggest: { id: suggestId, cardId: card.id, cardTitle: card.title, provider, model, effort } });
+      savedId = suggestId;
+      const progress = () => {
+        const current = c.boardSuggest?.id === suggestId ? c.boardSuggest : null, run = conversation.activeRun;
+        if (current && run?.pid && current.pid !== run.pid) this.main.record(c, { type: 'board_suggest_process', id: suggestId, pid: run.pid, pidStart: run.pidStart });
+        if (current && run && worker.running) {
+          watchedRun = worker.running;
+          if (!this.main.budget.watches.has(watchedRun.id)) this.main.budget.watch(watchedRun, { owner: worker, c, taskId: suggestId, recordRunId: suggestId });
+          this.main.budget.check(watchedRun);
+          if (current.phase !== run.phase || current.toolCount !== (run.toolCount || 0)) {
+            current.phase = run.phase; current.toolCount = run.toolCount || 0;
+            this.main.emit('update', { conversationId: c.id });
+          }
+        }
+      };
+      worker.on('update', progress);
+      worker.start(conversation, { text: promptText, provider, model, effort, mode: 'read', approvalPolicy: 'ask', billingConfirmed, requestId });
+      job = { id: suggestId, cardId: card.id, worker, conversation, directory, stopping: false, done: null };
+      this.suggestJobs.set(c.id, job);
+      progress();
+      job.done = worker.running.done.then(() => {
+        const currentCard = this.cards(c).find(item => item.id === card.id);
+        if (job.stopping || conversation.lastRun?.status === 'interrupted') {
+          this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'interrupted', summary: 'Stopped suggesting next cards.', cards: [] });
+          return;
+        }
+        if (conversation.lastRun?.status !== 'complete') {
+          const err = conversation.messages.filter(m => m.role === 'error').at(-1)?.text?.split('\n')[0];
+          this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'failed', summary: clip(err || 'Suggest next did not finish.', 500), cards: [] });
+          return;
+        }
+        if (!currentCard) {
+          this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'failed', summary: 'The card was removed before the suggestions finished.', cards: [] });
+          return;
+        }
+        if (this.closed(c, currentCard)) {
+          this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'failed', summary: 'The card or Plan was closed to agents before the suggestions finished.', cards: [] });
+          return;
+        }
+        const reply = conversation.messages.filter(m => m.role === 'assistant' && m.text?.trim()).at(-1)?.text || '';
+        const parsed = parseSuggest(reply);
+        if (parsed.status !== 'draft') {
+          this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'failed', summary: parsed.summary, cards: [] });
+          return;
+        }
+        const created = this.draftSuggested(c, currentCard, parsed, { suggestId, by: { kind: 'agent', provider, model } });
+        this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'complete', summary: parsed.summary, cards: created });
+      }).catch(error => {
+        this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'failed', summary: clip(error.message, 500), cards: [] });
+      }).finally(async () => {
+        if (this.suggestJobs.get(c.id) === job) this.suggestJobs.delete(c.id);
+        if (watchedRun) this.main.budget.unwatch(watchedRun);
+        const cleanup = (async () => {
+          await worker.close();
+          fs.rmSync(directory, { recursive: true, force: true });
+        })();
+        this.suggestCleanups.add(cleanup);
+        this.main.tasks?.tick(c);
+        this.main.emit('update', { conversationId: c.id });
+        try { await cleanup; } finally { this.suggestCleanups.delete(cleanup); }
+      });
+      job.done.catch(() => {});
+      return this.view(c).suggest;
+    } catch (error) {
+      if (savedId) this.main.record(c, { type: 'board_suggest_result', id: savedId, status: 'failed', summary: clip(error.message, 500), cards: [] });
+      if (job && this.suggestJobs.get(c.id) === job) this.suggestJobs.delete(c.id);
+      if (worker) worker.close().finally(() => fs.rmSync(directory, { recursive: true, force: true })).catch(() => {});
+      else fs.rmSync(directory, { recursive: true, force: true });
+      throw error;
+    }
+  }
+  stopSuggest(c) {
+    const job = this.suggestJobs.get(c.id);
+    if (!job) throw fail('Nothing is suggesting cards right now.');
+    job.stopping = true;
+    const res = job.worker.stop(job.conversation.id);
+    return { stopped: res.stopped };
+  }
+  dismissSuggest(c) {
+    if (c.boardSuggest?.status === 'running') throw fail('Stop suggesting before dismissing it.');
+    if (c.boardSuggest) this.main.record(c, { type: 'board_suggest_dismiss', id: c.boardSuggest.id });
+    return { dismissed: true };
+  }
+  async close() {
+    this.closing = true;
+    const jobs = [...this.suggestJobs.values()];
+    for (const job of jobs) job.stopping = true;
+    await Promise.all(jobs.map(job => job.worker.close()));
+    await Promise.all([...jobs.map(job => job.done), ...this.suggestCleanups]);
   }
 
   // ---- Export (#97)
@@ -687,6 +1001,7 @@ export class Board {
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   view(c) {
-    return { cards: this.list(c), closed: c.planClosed === true, schedules: this.main.schedules?.view(c) || [], revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
+    const suggest = c.boardSuggest ? (({ pid, pidStart, ...rest }) => rest)(c.boardSuggest) : null;
+    return { cards: this.list(c), closed: c.planClosed === true, schedules: this.main.schedules?.view(c) || [], suggest, revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
   }
 }

@@ -15,7 +15,8 @@
   const tabs = new Map();
   let available = false, busy = false, notice = '';
   const projectId = () => api.getState().projectId;
-  const flowOn = () => Boolean(window.relayFlow?.isOn?.());
+  // Flow and the Plan set the CLI tab aside until Normal.
+  const flowOn = () => ['flow', 'plan'].includes(window.relayFlow?.view?.());
   const token = () => window.relayDesktop?.token;
   const live = session => ['running', 'stopping'].includes(session?.status);
   const tab = (id = projectId()) => { if (!tabs.has(id)) tabs.set(id, { session: null, front: false, term: null }); return tabs.get(id); };

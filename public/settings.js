@@ -81,14 +81,14 @@
 
   // General: which view you work in, and what the computer does while agents work.
   function general(host) {
-    const view = kit.group(host, t('View')), flow = window.relayFlow, current = flow?.isOn?.() ? 'flow' : 'normal';
-    const choices = kit.segmented([['normal', t('Normal')], ['flow', t('Flow')]], current, value => {
-      if ((value === 'flow') === Boolean(flow?.isOn?.())) return;
-      const changed = value === 'flow' ? flow?.enter?.() : flow?.leave?.();
+    const view = kit.group(host, t('View')), flow = window.relayFlow, current = flow?.view?.() || (flow?.isOn?.() ? 'flow' : 'normal');
+    const choices = kit.segmented([['normal', t('Normal')], ['flow', t('Flow')], ['plan', t('Plan')]], current, value => {
+      if (value === current) return;
+      const changed = flow?.setView?.(value);
       if (changed !== false) { modal.close(); return; }
       render('general');
     }, t('View'));
-    kit.row(view, { label: t('View'), description: t('Normal gives you every panel and lets you choose the agent, model and effort for each message. Flow is just the chat with plain-language cards either side, and Codeshi chooses for you. You can also switch with the Flow button in the header.'), keywords: 'flow normal mode view layout routing default start', control: choices });
+    kit.row(view, { label: t('View'), description: t('Normal gives you every panel and lets you choose the agent, model and effort for each message. Flow is just the chat with plain-language cards either side, and Codeshi chooses for you. Plan shows the workspace’s cards with the chat beside them, and keeps the choice of agent you had. You can also switch at the right of the header.'), keywords: 'flow normal plan board cards mode view layout routing default start', control: choices });
     // Suggestions (#106) and usage notices: one switch for both, saved for every workspace.
     const tips = window.relaySuggestions;
     if (tips) {
@@ -157,7 +157,7 @@
   // Routing & handoffs: what happens near a usage limit, and when an agent's memory is refreshed.
   function routing(host) {
     const work = kit.group(host, t('Handoffs and context'));
-    if (window.relayFlow?.isOn?.()) {
+    if (window.relayFlow?.isRouted?.()) {
       const routing = window.relayRouting, mode = routing.normalizeMode?.(api().getState().conversation?.routing?.mode) || api().getState().conversation?.routing?.mode || 'smart';
       kit.row(work, { label: t('Flow handoff'), description: t('Follows {mode} routing: at {percent}% used, continue with another eligible subscription agent with confirmed room. Change the mode in Flow’s routing card.', { mode: routing.modeNames[mode], percent: routing.handoffThresholds[mode] }), keywords: 'handoff hand off automatic routing limit quota switch agent' });
     } else {
@@ -165,7 +165,7 @@
     const automatic = kit.toggle(work, { label: t('Hand off automatically'), description: t('Near a limit, or when a run reaches one, switch to an agent on a subscription without asking, and say so in the conversation. If every agent is out, the task waits for the first reset.'), keywords: 'handoff hand off automatic', checked: handoff?.automatic === true, disabled: !handoff || handoff.threshold === 0, onChange: value => saveHandoff({ automatic: value }) });
     if (!handoff) api().api('/api/handoff-preferences').then(value => { handoff = value; offer.value = String(value.threshold); offer.disabled = false; automatic.checked = value.automatic === true; automatic.disabled = value.threshold === 0; }).catch(() => {});
     }
-    if (window.relayFlow?.isOn?.()) {
+    if (window.relayFlow?.isRouted?.()) {
       kit.row(work, { label: t('Context refresh'), description: t('Flow adapts the refresh target to the routing mode, recent provider activity and reported model window. Recent sessions keep more context to avoid unnecessary restarts. Refresh happens between turns and chat history stays complete.'), keywords: 'context compact compaction token memory limit' });
     } else {
       let savedLimit = 'auto';
