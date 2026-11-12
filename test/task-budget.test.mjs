@@ -469,8 +469,8 @@ if(process.argv.includes('--version')){console.log('claude fixture 1');process.e
 let prompt='';for await(const part of process.stdin)prompt+=part;
 fs.appendFileSync(${JSON.stringify(argsLog)},JSON.stringify(process.argv.slice(2))+'\\n');
 const emit=value=>console.log(JSON.stringify(value)),capped=prompt.includes('CAP-HIT'),cost=capped?0.31:0.02;
-const usage={usage:{input_tokens:100,output_tokens:10},modelUsage:{'claude-sonnet':{inputTokens:700,outputTokens:70,cacheReadInputTokens:0,cacheCreationInputTokens:0,costUSD:cost}},total_cost_usd:cost};
-emit({type:'system',subtype:'init',session_id:'claude-switch',model:'claude-sonnet'});
+const usage={usage:{input_tokens:100,output_tokens:10},modelUsage:{'sonnet':{inputTokens:700,outputTokens:70,cacheReadInputTokens:0,cacheCreationInputTokens:0,costUSD:cost}},total_cost_usd:cost};
+emit({type:'system',subtype:'init',session_id:'claude-switch',model:'sonnet'});
 if(prompt.includes('CAP-QUIET')){emit({type:'result',subtype:'error_max_budget_usd',session_id:'claude-switch',is_error:true});}
 else if(capped){emit({type:'result',subtype:'error_max_budget_usd',session_id:'claude-switch',is_error:true,...usage});}
 else{emit({type:'assistant',message:{id:'answer',content:[{type:'text',text:'Done'}]}});emit({type:'result',subtype:'success',session_id:'claude-switch',result:'Done',is_error:false,...usage});}
@@ -480,7 +480,7 @@ else{emit({type:'assistant',message:{id:'answer',content:[{type:'text',text:'Don
     const broker = new Broker({ workspace, dataDir, bins: { codex, claude, gemini: path.join(root, 'none') }, handoffPreferences: () => ({ threshold: 0, automatic: false }) });
     broker.availableProviders = () => ['codex', 'claude'];
     broker.handoff.account = async provider => ({ installed: true, authenticated: true, billingSource: provider === 'claude' ? claudeBilling : 'subscription' });
-    broker.handoff.modelRows = async provider => provider === 'codex' ? [{ id: 'gpt-codex', displayName: 'Codex' }] : [{ id: 'claude-sonnet', displayName: 'Sonnet' }];
+    broker.handoff.modelRows = async provider => provider === 'codex' ? [{ id: 'gpt-6.1-sol', displayName: 'Codex' }] : [{ id: 'sonnet', displayName: 'Sonnet' }];
     const fresh = () => new Date().toISOString(), resets = hours => new Date(Date.now() + hours * 3600000).toISOString();
     // Mid-week, so the rest is kept rather than spent before a reset (#153).
     broker.checks.usage = async provider => ({ available: true, checkedAt: fresh(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: resets(2) }, { label: 'Weekly', usedPercent: provider === 'codex' ? 98 : 20, resetsAt: resets(72) }] });
@@ -490,7 +490,7 @@ else{emit({type:'assistant',message:{id:'answer',content:[{type:'text',text:'Don
   const broker = open(), c = broker.get(broker.create().id);
   broker.setRouting(c, { mode: 'smart' });
   if (policy) broker.budget.setPolicy(c, policy);
-  const start = (text, extra = {}) => { broker.start(c, { text, provider: 'codex', model: 'gpt-codex', mode: 'edit', approvalPolicy: 'auto', requestId: `switch-${text.length}-${Date.now()}`, routing: { mode: 'smart', tier: 'standard', reason: 'Estimate' }, ...extra }); return broker.running; };
+  const start = (text, extra = {}) => { broker.start(c, { text, provider: 'codex', model: 'gpt-6.1-sol', mode: 'edit', approvalPolicy: 'auto', requestId: `switch-${text.length}-${Date.now()}`, routing: { mode: 'smart', tier: 'standard', reason: 'Estimate' }, ...extra }); return broker.running; };
   const claudeArgs = () => fs.existsSync(argsLog) ? fs.readFileSync(argsLog, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
   return { broker, c, open, start, claudeArgs };
 }
@@ -500,12 +500,12 @@ test('routing can switch agents near a limit while the task has a measured limit
   await env.start('Fix the parser').done;
   assert.equal(env.c.lastRun.provider, 'claude', 'The run\'s own reservation is not another worker, so the switch goes ahead.');
   assert.equal(env.c.lastRun.status, 'complete');
-  assert.equal(env.c.lastRun.model, 'claude-sonnet');
+  assert.equal(env.c.lastRun.model, 'sonnet');
   const taskId = env.c.lastRun.taskId;
   assert.deepEqual(state(env.c, taskId).tokens, { input: 700, output: 70, cacheWrite: 0, cacheRead: 0 }, 'Claude\'s session total, read by Claude\'s rules.');
   assert.deepEqual([state(env.c, taskId).runs, state(env.c, taskId).handoffs], [1, 0], 'Choosing another agent before starting hands nothing off.');
   const ledger = (await env.broker.ledger(env.c)).runs.at(-1);
-  assert.deepEqual([ledger.provider, ledger.model, ledger.usage.input], ['claude', 'claude-sonnet', 700]);
+  assert.deepEqual([ledger.provider, ledger.model, ledger.usage.input], ['claude', 'sonnet', 700]);
   await env.broker.close();
   const reopened = env.open(), c = reopened.get(env.c.id);
   assert.equal(c.lastRun.provider, 'claude', 'A restart finds the same agent.');

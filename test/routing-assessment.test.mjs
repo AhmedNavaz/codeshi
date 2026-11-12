@@ -12,7 +12,7 @@ import { scriptCLIs } from './platform.mjs';
 
 const assessment = { tier: 'deep', effort: 'high', reason: 'Continue the cross-module repair and verify its correctness.' };
 const usage = (used = 10) => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: used, resetsAt: new Date(Date.now() + 3600000).toISOString() }] });
-const models = [{ id: 'gpt-codex', displayName: 'Codex', isDefault: true, supportedReasoningEfforts: ['low', 'medium', 'high'].map(reasoningEffort => ({ reasoningEffort })) }, { id: 'gpt-codex-mini', displayName: 'Mini', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }];
+const models = [{ id: 'gpt-6.1-sol', displayName: 'Codex', isDefault: true, supportedReasoningEfforts: ['low', 'medium', 'high'].map(reasoningEffort => ({ reasoningEffort })) }, { id: 'gpt-6-luna', displayName: 'Mini', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }];
 function setup(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-assessment-test-')), workspace = path.join(root, 'project');
   fs.mkdirSync(workspace); fs.writeFileSync(path.join(workspace, '.mock-scenarios.json'), '{}');
@@ -24,7 +24,7 @@ function setup(t) {
   broker.checks.usage = async () => usage();
   const c = broker.get(broker.create().id);
   broker.setRouting(c, { mode: 'smart' });
-  const input = { text: 'Yes, do it', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', mode: 'edit', approvalPolicy: 'ask', requestId: 'send-one', routing: { mode: 'smart', tier: 'light', reason: 'Draft estimate' } };
+  const input = { text: 'Yes, do it', provider: 'codex', model: 'gpt-6-luna', effort: 'low', mode: 'edit', approvalPolicy: 'ask', requestId: 'send-one', routing: { mode: 'smart', tier: 'light', reason: 'Draft estimate' } };
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { broker, c, input, root, workspace };
 }
@@ -51,7 +51,7 @@ test('a semantic assessment replaces the draft estimate before dispatch and shar
   const starting = broker.dispatch(c, input);
   assert.equal(broker.dispatch(c, input), starting, 'Concurrent retries share the same assessment and submission.');
   const accepted = await starting; await broker.running.done;
-  assert.equal(accepted.model, 'gpt-codex'); assert.equal(accepted.effort, 'high');
+  assert.equal(accepted.model, 'gpt-6.1-sol'); assert.equal(accepted.effort, 'high');
   const sent = c.messages.filter(message => message.role === 'user').at(-1);
   assert.equal(sent.text, input.text); assert.equal(sent.routing.tier, 'deep');
   assert.equal(c.lastRun.routing.assessment.source, 'agent');
@@ -88,7 +88,7 @@ test('Saver uses local rules only on Send, making no agent assessment call and k
   const accepted = await broker.dispatch(c, { ...input, requestId: 'saver-send', text: 'Refactor the payment module', routing: { mode: 'saver', tier: 'deep', reason: 'Draft' } });
   await broker.running.done;
   assert.equal(calls, 0, 'Saver never calls an assessment agent on Send.');
-  assert.equal(accepted.model, 'gpt-codex');
+  assert.equal(accepted.model, 'gpt-6.1-sol');
   assert.equal(accepted.effort, 'low');
   assert.equal(c.lastRun.routing.mode, 'saver');
   assert.equal(c.lastRun.routing.assessment.source, 'local');
@@ -101,7 +101,7 @@ test('a plan step routed when it starts keeps the size it was planned with and c
   const accepted = await broker.dispatch(c, { ...input, requestId: 'plan-step', text: 'Fix a typo in the README', routing: { mode: 'smart', planned: 'deep' } });
   await broker.running.done;
   assert.equal(calls, 0, 'The plan already sized the step.');
-  assert.deepEqual([accepted.model, accepted.effort], ['gpt-codex', 'high'], 'A deep step, though its words read as light.');
+  assert.deepEqual([accepted.model, accepted.effort], ['gpt-6.1-sol', 'high'], 'A deep step, though its words read as light.');
   assert.deepEqual([c.lastRun.routing.assessment.source, c.lastRun.routing.assessment.tier], ['plan', 'deep']);
   assert.match(c.messages.findLast(message => message.role === 'user').routing.reason, /complex step, as planned/i);
 });
@@ -122,7 +122,7 @@ test('a slow agent check holds up neither Send nor the next reading, but Send wa
   const { broker, c, input, root } = setup(t); let release;
   const bin = path.join(root, 'claude.mjs'); fs.writeFileSync(bin, `#!${process.execPath}\nimport ${JSON.stringify(new URL('./mock-cli.mjs', import.meta.url).href)};\n`, { mode: 0o700 }); broker.configuredBins.claude = bin;
   broker.availableProviders = () => ['codex', 'claude']; broker.router.settleMs = 10;
-  broker.handoff.models = async provider => ({ data: provider === 'codex' ? models : [{ id: 'claude-opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high'] }] });
+  broker.handoff.models = async provider => ({ data: provider === 'codex' ? models : [{ id: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high'] }] });
   const slow = new Promise(resolve => { release = resolve; }), account = { installed: true, authenticated: true, billingSource: 'subscription' };
   broker.handoff.account = provider => provider === 'claude' ? slow.then(() => account) : Promise.resolve(account);
   broker.router.worker = async (_broker, run) => { assert.equal(run.provider, 'codex', 'An agent still being checked does not assess.'); return JSON.stringify(assessment); };
@@ -143,17 +143,17 @@ test('the execution agent is chosen on quota rather than the provisional provide
   const { broker, c, input, root } = setup(t); const assessors = [];
   const bin = path.join(root, 'claude.mjs'); fs.writeFileSync(bin, `#!${process.execPath}\nimport ${JSON.stringify(new URL('./mock-cli.mjs', import.meta.url).href)};\n`, { mode: 0o700 }); broker.configuredBins.claude = bin;
   broker.availableProviders = () => ['codex', 'claude'];
-  broker.handoff.models = async provider => ({ data: provider === 'codex' ? models : [{ id: 'claude-opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high'] }, { id: 'haiku', displayName: 'Haiku', supportedEffortLevels: ['low'] }] });
+  broker.handoff.models = async provider => ({ data: provider === 'codex' ? models : [{ id: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high'] }, { id: 'haiku', displayName: 'Haiku', supportedEffortLevels: ['low'] }] });
   broker.checks.usage = async provider => usage(provider === 'claude' ? 20 : 90);
   broker.router.worker = async (_broker, run, config) => { assessors.push([run.provider, config.model]); return JSON.stringify(assessment); };
   const accepted = await broker.dispatch(c, input); await broker.running.done;
-  assert.equal(accepted.provider, 'claude'); assert.equal(accepted.model, 'claude-opus'); assert.equal(accepted.effort, 'high');
+  assert.equal(accepted.provider, 'claude'); assert.equal(accepted.model, 'opus'); assert.equal(accepted.effort, 'high');
   assert.equal(c.lastRun.provider, 'claude'); assert.equal(c.taskBudgets[c.lastRun.taskId].handoffs, 0, 'Choosing a different executor than assessor is not a coding handoff.');
   assert.deepEqual(assessors, [['claude', 'haiku']], 'The smallest model of the quickest assessor.');
   // A last run on Codex gives no reason to spend Codex: an assessor keeps no session. Without room on Claude, Codex rates.
   broker.checks.usage = async provider => provider === 'claude' ? { ...usage(), windows: [{ label: 'Weekly', usedPercent: 100 }] } : usage(30);
   await broker.dispatch(c, { ...input, requestId: 'send-two', text: 'Another request' }); await broker.running.done;
-  assert.deepEqual(assessors[1], ['codex', 'gpt-codex-mini']);
+  assert.deepEqual(assessors[1], ['codex', 'gpt-6-luna']);
 });
 
 test('unknown quota never starts a paid assessment, and API consent applies to assessment as well as execution', async t => {
@@ -187,7 +187,7 @@ test('an assessment that fails or runs out of time never blocks the work, and th
   for (const [name, worker] of Object.entries(failures)) {
     broker.router.worker = worker;
     const accepted = await broker.dispatch(c, { ...input, requestId: name, text: `Fix a typo ${name}` }); await broker.running.done;
-    assert.equal(accepted.model, 'gpt-codex', `${name}: a typo looks light, but nobody rated it.`);
+    assert.equal(accepted.model, 'gpt-6.1-sol', `${name}: a typo looks light, but nobody rated it.`);
     assert.equal(c.lastRun.routing.assessment.source, 'fallback');
     const sent = c.messages.findLast(message => message.role === 'user');
     assert.equal(sent.routing.ratedBy, 'fallback');
@@ -204,7 +204,7 @@ test('a bare go-ahead carries on the last rating with no agent call, and a retry
   assert.equal(calls, 1);
   const goAhead = { ...input, requestId: 'go', text: 'Yes, do it' }, accepted = await broker.dispatch(c, goAhead); await broker.running.done;
   assert.equal(calls, 1, 'Nothing to judge, so no allowance spent judging.');
-  assert.equal(accepted.model, 'gpt-codex'); assert.equal(accepted.effort, 'high');
+  assert.equal(accepted.model, 'gpt-6.1-sol'); assert.equal(accepted.effort, 'high');
   assert.equal(c.lastRun.routing.assessment.source, 'local'); assert.equal(c.lastRun.routing.tier, 'deep');
   assert.equal(c.messages.findLast(message => message.role === 'user').routing.ratedBy, 'local');
   assert.equal((await broker.dispatch(c, goAhead)).runId, accepted.runId); assert.equal(c.messages.filter(message => message.text === 'Yes, do it').length, 1);
@@ -296,7 +296,7 @@ else {
   readline.createInterface({input:process.stdin}).on('line', line => {
     const message = JSON.parse(line); fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({cwd:process.cwd(),args:process.argv,message})+'\\n');
     if(message.method==='initialize')send({id:message.id,result:{}});
-    if(message.method==='thread/start')send({id:message.id,result:{thread:{id:'assessment-only'},model:'gpt-codex-mini'}});
+    if(message.method==='thread/start')send({id:message.id,result:{thread:{id:'assessment-only'},model:'gpt-6-luna'}});
     if(message.method==='turn/start'){
       send({id:message.id,result:{turn:{id:'assess-turn'}}});
       if (JSON.stringify(message.params.input).includes('WAIT-IN-ASSESSMENT')) return;

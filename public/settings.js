@@ -113,6 +113,18 @@
       }) });
       box.id = 'settings-keep-awake';
       if (!keepAwake) bridge.getKeepAwake().then(state => { keepAwake = state; box.checked = state.enabled === true; box.disabled = false; }).catch(() => { if (box.isConnected) { error.textContent = t('Keep awake could not be loaded. Close Settings and try again.'); error.hidden = false; } });
+      // Open at login (#132): only the installed app can add itself, so the switch shows once the app says it can.
+      if (bridge.getOpenAtLogin && bridge.setOpenAtLogin) {
+        bridge.getOpenAtLogin().then(state => {
+          if (!state?.supported || !work.isConnected) return;
+          const note = () => state.approval ? t(' macOS is waiting for you to allow it in System Settings › General › Login Items.') : '';
+          const login = kit.toggle(work, { label: t('Open at login'), description: t('Start Codeshi in the menu bar when you log in, so scheduled runs on the board happen after a restart. If nothing is scheduled, it quits again after two minutes.') + note(), keywords: 'login startup start boot launch schedule background menu bar', checked: state.enabled === true, onChange: value => perform(async () => {
+            login.disabled = true;
+            try { state = await bridge.setOpenAtLogin(value); } finally { login.checked = state.enabled === true; login.disabled = false; }
+          }) });
+          login.id = 'settings-open-at-login';
+        }).catch(() => {});
+      }
     }
     // The interface language (#27), once a catalog gives a language besides English. Each language is listed by its
     // own name. Choosing one reloads the window; the desktop menus follow.

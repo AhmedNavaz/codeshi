@@ -33,7 +33,7 @@ function setup(t, { preferences = { threshold: 90, automatic: false }, scenarios
   // Gemini is not installed in these tests, as its missing binary says.
   broker.handoff.account = async provider => ({ installed: provider !== 'gemini' || Boolean(gemini), authenticated: true, billingSource: billing[provider] || 'subscription' });
   const fixtureModels = {
-    codex: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }, { reasoningEffort: 'high' }, { reasoningEffort: 'xhigh' }] }],
+    codex: [{ id: 'gpt-6.1-sol', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }, { reasoningEffort: 'high' }, { reasoningEffort: 'xhigh' }] }],
     claude: [{ id: 'haiku', value: 'haiku', displayName: 'Haiku' }, { id: 'sonnet', value: 'sonnet', displayName: 'Sonnet', isDefault: true, supportedEffortLevels: ['low', 'medium', 'high'] }, { id: 'opus', value: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] }],
   };
   broker.handoff.models = async provider => ({ models: fixtureModels[provider] || [] });
@@ -81,7 +81,7 @@ test('handoff checks Antigravity additional-folder support in Normal and Flow an
   const broker = { execution: { allows: () => true, current: () => null }, workspace: '/first', workspaces: ['/first', '/second'], availableProviders: () => ['codex', 'gemini'], usageOptions: () => ({}), observeQuota() {}, budget: { refusal: () => null } };
   const handoff = new HandoffMonitor(broker, {
     account: async () => account,
-    models: async () => ({ models: [{ id: 'gemini-3.8-flash', displayName: 'Gemini Flash', isDefault: true }] }),
+    models: async () => ({ models: [{ id: 'gemini-3.8-flash-medium', displayName: 'Gemini Flash', isDefault: true }] }),
     usage: async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'all', scopes: null, usedPercent: 10 }] }),
   });
   const c = { models: {}, messages: [{ role: 'user', runId: 'run', text: 'Update the files in both folders' }] };
@@ -171,7 +171,7 @@ test('a stale offer is refused before anything starts on the destination, and a 
   await assert.rejects(env.broker.acceptHandoff(env.c, { offerId: old.id }), /no longer current/);
   // Progress within the same task does not invalidate the fresh offer.
   env.broker.message(env.c, 'activity', '$ npm test\nok', 'codex');
-  env.c.models.claude = 'claude-sonnet';
+  env.c.models.claude = 'sonnet';
   await assert.rejects(env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id }), /no longer available with the same settings/, 'A changed destination model needs a new offer.');
   await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
   assert.equal(env.broker.running.provider, 'claude'); await env.broker.running.done;
@@ -498,7 +498,7 @@ const named = (env, text) => env.c.queue.find(item => item.text === text);
 
 test('the offer says how many prompts would move and only those for the limited agent do, with their access and the new agent’s model', { skip: scriptCLIs }, async t => {
   const env = setup(t), run = await env.start();
-  env.c.models.claude = 'claude-sonnet'; env.c.efforts.claude = { 'claude-sonnet': 'high' };
+  env.c.models.claude = 'sonnet'; env.c.efforts.claude = { 'sonnet': 'high' };
   queue(env, 'For Codex', { model: 'gpt-old', effort: 'low' }); queue(env, 'Read only', { mode: 'read' }); queue(env, 'For Gemini', { provider: 'gemini', model: 'gemini-one' });
   await env.broker.handoff.check(run);
   assert.equal(env.c.handoffOffer.queue.count, 2, 'Only the prompts for the limited agent.');
@@ -507,7 +507,7 @@ test('the offer says how many prompts would move and only those for the limited 
   env.broker.queueAction(env.c, { action: 'pause' });
   await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id, queueDigest: env.c.handoffOffer.queue.digest });
   const moved = named(env, 'For Codex');
-  assert.deepEqual([moved.provider, moved.model, moved.effort, moved.mode, moved.approvalPolicy, moved.movedFrom], ['claude', 'claude-sonnet', 'high', 'edit', 'ask', 'codex']);
+  assert.deepEqual([moved.provider, moved.model, moved.effort, moved.mode, moved.approvalPolicy, moved.movedFrom], ['claude', 'sonnet', 'high', 'edit', 'ask', 'codex']);
   assert.deepEqual([named(env, 'Read only').provider, named(env, 'Read only').mode], ['claude', 'read'], 'Read-only stays read-only.');
   assert.deepEqual([named(env, 'For Gemini').provider, named(env, 'For Gemini').model, named(env, 'For Gemini').movedFrom], ['gemini', 'gemini-one', undefined], 'A prompt for another agent is left alone.');
   assert.match(notes(env.c).at(-1), /3 queued prompts moved to Claude\.$/);
@@ -586,7 +586,7 @@ test('a prompt that changed after the offer was accepted is not covered by it, a
 
 test('routed prompts are routed again for the new agent, and a list that can’t be read falls back to its model', { skip: scriptCLIs }, async t => {
   const env = setup(t), run = await env.start();
-  env.broker.handoff.models = async () => ({ models: [{ id: 'claude-haiku', supportedEffortLevels: ['low', 'medium'] }, { id: 'claude-opus', supportedEffortLevels: ['low', 'high'] }] });
+  env.broker.handoff.models = async () => ({ models: [{ id: 'haiku', supportedEffortLevels: ['low', 'medium'] }, { id: 'opus', supportedEffortLevels: ['low', 'high'] }] });
   queue(env, 'Fix a typo in the readme', { model: 'gpt-mini', effort: 'low', routing: { mode: 'balanced', reason: 'Light', tier: 'light' } });
   queue(env, 'Refactor the payment module', { model: 'gpt-max', effort: 'high', routing: { mode: 'balanced', reason: 'Deep', tier: 'deep', escalation: { provider: 'codex', model: 'gpt-max', modelName: 'Max', effort: 'xhigh' } } });
   // Its words read as light, but it was queued as deep work, and it moves as what it was rated (#12).
@@ -595,11 +595,11 @@ test('routed prompts are routed again for the new agent, and a list that can’t
   await env.broker.handoff.check(run);
   await env.broker.acceptHandoff(env.c, { offerId: env.c.handoffOffer.id });
   const rated = named(env, 'Fix the typo bug in the cache');
-  assert.deepEqual([rated.model, rated.routing.tier], ['claude-opus', 'deep']);
+  assert.deepEqual([rated.model, rated.routing.tier], ['opus', 'deep']);
   assert.equal(rated.routing.reason, 'Moved at a handoff · A complex task (debugging)', 'The old agent’s allowance note doesn’t move with it.');
   const light = named(env, 'Fix a typo in the readme'), deep = named(env, 'Refactor the payment module');
-  assert.deepEqual([light.provider, light.model, light.effort, light.routing.mode], ['claude', 'claude-haiku', 'low', 'smart']);
-  assert.deepEqual([deep.provider, deep.model, deep.effort, deep.routing.tier], ['claude', 'claude-opus', 'high', 'deep']);
+  assert.deepEqual([light.provider, light.model, light.effort, light.routing.mode], ['claude', 'haiku', 'low', 'smart']);
+  assert.deepEqual([deep.provider, deep.model, deep.effort, deep.routing.tier], ['claude', 'opus', 'high', 'deep']);
   assert.notEqual(deep.routing.escalation?.provider, 'codex', 'Its step up belongs to the new agent too.');
   assert.match(light.routing.reason, /^Moved at a handoff/);
   await env.broker.running.done;

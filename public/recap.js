@@ -67,6 +67,8 @@
     if (workspace.handoff) rows.push({ kind: 'approval', text: `A handoff to ${agents[workspace.handoff.to] || 'another agent'} is offered` });
     if (workspace.waiting) rows.push({ kind: 'waiting', text: `Waiting for a usage limit to reset${workspace.waiting.resetsAt ? `, about ${time(workspace.waiting.resetsAt)}` : ''}; it continues with ${join(workspace.waiting.providers.map(name => agents[name] || name)) || 'the next agent with room'}` });
     if (workspace.queue) rows.push({ kind: 'waiting', text: `${plural(workspace.queue.count, 'queued prompt')}${workspace.queue.paused ? ', paused' : ''}` });
+    // A scheduled run that didn't start waits for Run now on the board (#132).
+    for (const item of workspace.missed || []) rows.push({ kind: 'approval', text: `The run of “${item.title}” scheduled for ${time(item.dueAt)} didn’t start`, detail: `${item.reason} Run it now from the board` });
     if (workspace.uncommitted) rows.push({ kind: 'git', text: `${plural(workspace.uncommitted, 'uncommitted change')} in Git` });
     return rows;
   }

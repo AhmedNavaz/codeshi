@@ -94,7 +94,8 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
     broker.availableProviders = () => [policy.builder.provider];
     if (!live) {
       broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
-      broker.handoff.models = async () => ({ data: [{ id: 'recorded-trace', displayName: 'Recorded model', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }, { reasoningEffort: 'high' }] }] });
+      // Routing only chooses models on its rated list (#12), so the recorded agent lists one of its provider's rated ids.
+      broker.handoff.models = async () => ({ data: [{ id: policy.builder.provider === 'claude' ? 'sonnet' : 'gpt-6.1-sol', displayName: 'Recorded model', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }, { reasoningEffort: 'high' }] }] });
       broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(Date.now() + 3600000).toISOString() }] });
     }
   }

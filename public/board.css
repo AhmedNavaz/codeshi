@@ -34,12 +34,24 @@
 .board-card-state[data-tone=done] { color: var(--success); }
 .board-card-state[data-tone=trouble] { color: var(--danger); }
 .board-card-title { color: var(--text-strong); font-weight: 500; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.board-card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 11px; }
+.board-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; min-width: 0; color: var(--muted); font-size: 11px; }
 .board-card-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-card-meta > .board-card-agent { flex: none; overflow: visible; }
 .board-card-missing { color: var(--faint); font-style: italic; }
 .board-card-checks { flex: none; padding-left: 6px; border-left: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 .board-card-after { padding-left: 6px; border-left: 1px solid var(--border); }
+.board-card-due, .board-card-comments { flex: none; padding-left: 6px; border-left: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.board-card-meta > .board-card-due, .board-card-meta > .board-card-comments { flex: none; overflow: visible; }
+.board-card-due.soon { color: var(--warning); }
+.board-card-due.late { color: var(--danger); font-weight: 500; }
+.board-card-comments { display: inline-flex; align-items: center; gap: 3px; }
+.board-card-comments .icon { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+/* Labels (#97): small neutral chips; the one the board is filtered by is marked. */
+.board-card-labels { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.board-label { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; height: 18px; padding: 0 6px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-strong); color: var(--muted); font-size: 10.5px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.board-label.current { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text-strong); }
+.board-label.more { color: var(--faint); }
 .board-card-reason { color: var(--danger); font-size: 11px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .board-view .agent-icon.codex { color: var(--codex); }
 .board-view .agent-icon.claude { color: var(--claude); }
@@ -70,6 +82,36 @@
 .board-check input[type=checkbox] { flex: none; margin: 0; accent-color: var(--accent); }
 .board-check-remove { flex: none; width: 24px; height: 24px; color: var(--muted); font-size: 15px; }
 .board-add-check { justify-self: start; font-size: 12px; }
+.board-labels-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 30px; padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input-bg, var(--bg)); cursor: text; }
+.board-labels-edit:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.board-label.editable { height: 22px; padding: 0 2px 0 8px; font-size: 11.5px; color: var(--text); }
+.board-label-remove { flex: none; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; }
+.board-label-remove:hover { background: var(--hover); color: var(--text-strong); }
+.board-label-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.board-label-input { flex: 1 1 90px; min-width: 90px; height: 22px; padding: 0 2px; border: 0; background: transparent; color: var(--text); font: 12px var(--font); }
+.board-label-input:focus { outline: none; }
+.board-due { display: flex; align-items: center; gap: 10px; }
+.board-due-input { width: auto; color-scheme: light dark; }
+.board-due-clear { font-size: 12px; }
+/* Comments (#97): who wrote each and when, oldest first, then a box to write one. */
+.board-comments { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.board-comments h4 { margin: 0; }
+.board-comment-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.board-comment { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
+.board-comment-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 11.5px; }
+.board-comment-author { color: var(--text-strong); font-weight: 600; }
+.board-comment-when { color: var(--faint); }
+.board-comment-remove { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.board-comment-remove:hover { color: var(--danger); }
+.board-comment-text { margin: 0; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.board-comment-empty { color: var(--faint); font-size: 11.5px; }
+.board-comment-input { resize: vertical; line-height: 1.5; min-height: 52px; }
+.board-comment-foot { display: flex; align-items: center; gap: 10px; }
+.board-comment-foot .board-field-note { flex: 1 1 auto; min-width: 0; }
+.board-comment-send { flex: none; height: 26px; }
+.board-filter { flex: none; height: 28px; max-width: 180px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input-bg, var(--bg)); color: var(--text); font: 12px var(--font); }
+.board-filter.active { border-color: var(--accent); color: var(--text-strong); }
+.board-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .board-save-row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding-top: 4px; }
 .board-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 .board-actions .board-remove { margin-left: auto; color: var(--danger); }
@@ -117,6 +159,9 @@
 .board-node { position: absolute; left: 0; top: 0; width: 220px; }
 .board-node .board-card { cursor: grab; }
 .board-node.moving { z-index: 3; }
+.board-node.faded { opacity: .32; }
+.board-node.faded:hover, .board-node.faded:focus-within { opacity: .7; }
+.board-link.faded { opacity: .25; }
 .board-node.moving .board-card { cursor: grabbing; box-shadow: 0 8px 24px rgb(0 0 0 / .28); border-color: var(--border-strong); }
 .board-node.link-target .board-card { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
 .board-card-column { flex: none; color: var(--faint); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
@@ -135,3 +180,24 @@
 .board-canvas-empty { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); margin: 0; color: var(--muted); pointer-events: none; }
 @media (max-width: 900px) { .board-canvas-hint { display: none; } }
 @media (prefers-reduced-motion: reduce) { .board-port { transition: none; } }
+
+/* Schedules (#132): the toolbar count, a card's next time, and each schedule in the drawer. */
+.board-schedules-button { display: inline-flex; align-items: center; gap: 6px; }
+.board-schedules-count { min-width: 16px; padding: 0 5px; border-radius: 8px; background: var(--surface-strong); color: var(--muted); font-size: 10.5px; font-weight: 600; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
+.board-schedules-button[data-state=missed] .board-schedules-count { background: var(--danger); color: var(--on-accent, #fff); }
+.board-card-schedule { padding-left: 6px; border-left: 1px solid var(--border); }
+.board-card-schedule.missed { color: var(--danger); }
+.board-schedules { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.board-schedule { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
+.board-schedule[data-state=paused] { opacity: .75; }
+.board-schedule[data-state=missed] { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.board-schedule-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.board-schedule-title { flex: 1 1 auto; min-width: 0; color: var(--text-strong); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-schedule-kind { flex: none; color: var(--faint); font-size: 11px; }
+.board-schedule-when, .board-schedule-last { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.board-schedule-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.board-schedule-actions .board-remove { margin-left: auto; color: var(--danger); }
+.board-schedule-at { display: flex; gap: 6px; }
+.board-schedule-at .board-input { width: auto; flex: 1 1 0; }
+.board-schedule-late { display: flex; align-items: flex-start; gap: 8px; color: var(--text); line-height: 1.5; cursor: pointer; }
+.board-schedule-late input { flex: none; margin: 3px 0 0; accent-color: var(--accent); }

@@ -165,7 +165,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
       const membership=request.path.match(/^\/api\/projects\/([^/]+)\/folders(?:\/([^/]+)\/remove)?$/);
       if(membership){const selected=projects.find(project=>project.id===membership[1]);assert(selected);if(membership[2]){if(selected.folders.length<=1)return response({error:'A workspace needs a folder.'},400);selected.folders=selected.folders.filter(folder=>folder.id!==membership[2]);}else{for(const folderPath of request.body.folders||[request.body.path])selected.folders.push(folder(randomUUID(),folderPath.split('/').pop(),folderPath));}selected.path=selected.folders[0].path;return response(clone(selected));}
       if (request.path==='/api/providers/gemini/models') return response({models:[],source:'native-cli',manualSelection:true});
-      if (/^\/api\/providers\/(codex|claude)\/models$/.test(request.path)) return response({models:[{id:'model-one',value:'model-one',displayName:'Model One',isDefault:true,defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}]},{id:'model-two',value:'model-two',displayName:'Model Two',supportedEffortLevels:['low','medium']}]});
+      if (/^\/api\/providers\/(codex|claude)\/models$/.test(request.path)) return response({models:[{id:'gpt-6.1-sol',value:'gpt-6.1-sol',displayName:'Model One',isDefault:true,defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}]},{id:'gpt-6-sol',value:'gpt-6-sol',displayName:'Model Two',supportedEffortLevels:['low','medium']}]});
       const selected=projects.find(project=>project.id===request.projectId);assert(selected,'Project-owned requests need an explicit valid project ID.');
 
       if (request.path==='/api/git') return response({totalChanges:1,checkedAt:new Date().toISOString(),repositories:[{folderId:'frontend',name:'Frontend',available:true,branch:'feature/design',totalChanges:1,changes:[{path:'app.js',code:' M',staged:false}],commits:[{hash:'abc',shortHash:'abc123',author:'Fixture author',date:new Date().toISOString(),subject:'Improve workspace navigation'}]}]});
@@ -655,23 +655,23 @@ test('shipped markup has one conversation header and retains distinct primary co
 
 test('composer model and effort choices use provider metadata and save without sending a prompt',async()=>{
   const ui=await browser({insights:true});assert.equal(ui.$('model-select').disabled,false);assert.equal(ui.$('effort-select').disabled,false);
-  ui.$('model-select').value='model-one';ui.fire('model-select','change');await flush();ui.$('effort-select').value='high';ui.fire('effort-select','change');await flush();
-  assert.equal(ui.state().model,'model-one');assert.equal(ui.state().effort,'high');assert.match(ui.$('model-description').textContent,/Model One.*High/);
-  const saved=ui.requests.filter(request=>request.path.endsWith('/provider')).at(-1);assert.equal(saved.body.effort,'high');assert.equal(saved.body.model,'model-one');assert.equal(ui.requests.filter(request=>/\/(?:messages|continue)$/.test(request.path)).length,0);
-  ui.$('model-select').value='model-two';ui.fire('model-select','change');await flush();assert.equal(ui.state().effort,null);assert.deepEqual(ui.$('effort-select').children.map(option=>option.value),['','low','medium']);
-  ui.$('model-select').value='model-one';ui.fire('model-select','change');await flush();assert.equal(ui.state().effort,'high');
+  ui.$('model-select').value='gpt-6.1-sol';ui.fire('model-select','change');await flush();ui.$('effort-select').value='high';ui.fire('effort-select','change');await flush();
+  assert.equal(ui.state().model,'gpt-6.1-sol');assert.equal(ui.state().effort,'high');assert.match(ui.$('model-description').textContent,/Model One.*High/);
+  const saved=ui.requests.filter(request=>request.path.endsWith('/provider')).at(-1);assert.equal(saved.body.effort,'high');assert.equal(saved.body.model,'gpt-6.1-sol');assert.equal(ui.requests.filter(request=>/\/(?:messages|continue)$/.test(request.path)).length,0);
+  ui.$('model-select').value='gpt-6-sol';ui.fire('model-select','change');await flush();assert.equal(ui.state().effort,null);assert.deepEqual(ui.$('effort-select').children.map(option=>option.value),['','low','medium']);
+  ui.$('model-select').value='gpt-6.1-sol';ui.fire('model-select','change');await flush();assert.equal(ui.state().effort,'high');
 });
 
 test('a model or effort that could not be saved does not stay selected in the composer',async()=>{
   const ui=await browser({insights:true});
-  ui.$('model-select').value='model-one';ui.fire('model-select','change');await flush();assert.equal(ui.state().model,'model-one');
+  ui.$('model-select').value='gpt-6.1-sol';ui.fire('model-select','change');await flush();assert.equal(ui.state().model,'gpt-6.1-sol');
   ui.setIntercept((request,next)=>request.path.endsWith('/provider')?response({error:'The selection could not be saved.'},500):next());
-  ui.$('model-select').value='model-two';ui.fire('model-select','change');await flush();
+  ui.$('model-select').value='gpt-6-sol';ui.fire('model-select','change');await flush();
   assert.match(ui.$('notice-text').textContent,/could not be saved/);
-  assert.equal(ui.$('model-select').value,'model-one','The picker shows the model the next run uses.');
+  assert.equal(ui.$('model-select').value,'gpt-6.1-sol','The picker shows the model the next run uses.');
   ui.$('effort-select').value='high';ui.fire('effort-select','change');await flush();
   assert.equal(ui.$('effort-select').value,'','The effort picker shows the saved default.');
-  await ui.window.relayUI.refresh();assert.deepEqual([ui.$('model-select').value,ui.$('effort-select').value],['model-one','']);
+  await ui.window.relayUI.refresh();assert.deepEqual([ui.$('model-select').value,ui.$('effort-select').value],['gpt-6.1-sol','']);
   ui.setIntercept(null);ui.$('effort-select').value='high';ui.fire('effort-select','change');await flush();
   assert.deepEqual([ui.state().effort,ui.$('effort-select').value],['high','high'],'A choice that is saved stays selected.');
 });
@@ -1040,7 +1040,7 @@ test('import dialog filters conversations by agent using dropdown selector',asyn
 });
 
 test('run indicators distinguish reasoning, quiet providers, approvals, and real token counts',async()=>{
-  const ui=await browser({insights:true}),c=ui.canonical.get('project-one');c.status='running';c.activeRun={provider:'codex',phase:'reasoning',startedAt:new Date(Date.now()-50000).toISOString(),lastEventAt:new Date().toISOString(),effectiveModel:'model-one',effort:'high',usage:{total:{inputTokens:100,outputTokens:20}}};await ui.window.relayUI.refresh();
+  const ui=await browser({insights:true}),c=ui.canonical.get('project-one');c.status='running';c.activeRun={provider:'codex',phase:'reasoning',startedAt:new Date(Date.now()-50000).toISOString(),lastEventAt:new Date().toISOString(),effectiveModel:'gpt-6.1-sol',effort:'high',usage:{total:{inputTokens:100,outputTokens:20}}};await ui.window.relayUI.refresh();
   assert.equal(ui.$('run-phase').textContent,'Reasoning');assert.equal(ui.$('run-action').textContent,'Thinking');assert.equal(ui.$('run-detail').textContent,'');assert.match(ui.$('run-metrics').textContent,/100 input tokens/);assert.equal(ui.$('model-select').disabled,false);
   c.activeRun.lastEventAt=new Date(Date.now()-40000).toISOString();await ui.window.relayUI.refresh();assert.equal(ui.$('run-phase').textContent,'Waiting for provider');assert.equal(ui.$('run-action').textContent,'Waiting for Codex');assert.match(ui.$('run-detail').textContent,/No activity from Codex for 40s/);assert.doesNotMatch(ui.$('run-detail').textContent,/stuck/i);
   c.pendingApprovals=[{id:'approval'}];await ui.window.relayUI.refresh();assert.equal(ui.$('run-phase').textContent,'Waiting for approval');assert.equal(ui.$('run-action').textContent,'Waiting for your approval');
@@ -1137,7 +1137,7 @@ test('first run welcomes, walks through the workspace, the working style, the ag
   assert.match(ui.$('setup-content').textContent,/Connect your agents/);assert.match(ui.$('setup-content').textContent,/your subscription/);assert.match(ui.$('setup-content').textContent,/In Flow, Codeshi chooses the agent/);
   ui.document.querySelectorAll('.setup-agent-select').find(button=>button.textContent.startsWith('Claude')).click();await flush();ui.$('setup-next').click();await flush();
   assert.match(ui.$('setup-content').textContent,/Make it yours/);
-  const model=ui.labelledInput('Default model');model.value='model-one';model.dispatchEvent(new UIEvent('change'));
+  const model=ui.labelledInput('Default model');model.value='gpt-6.1-sol';model.dispatchEvent(new UIEvent('change'));
   const effort=ui.labelledInput('Reasoning effort');effort.value='high';effort.dispatchEvent(new UIEvent('change'));
   ui.document.querySelectorAll('.setup-access-option').find(button=>button.dataset.mode==='read').click();await flush();
   assert.deepEqual(pressedCards(ui),['System'],'A new profile starts on System.');
@@ -1145,7 +1145,7 @@ test('first run welcomes, walks through the workspace, the working style, the ag
   ui.document.querySelectorAll('.setup-theme').find(button=>button.dataset.appearance==='light').click();await flush();
   ui.$('close-setup').click();await flush();assert.equal(dialog.open,false);
   const saved=ui.requests.filter(request=>request.path==='/api/preferences'&&request.method==='POST').at(-1).body;
-  assert.deepEqual(saved.defaults,{provider:'claude',model:'model-one',effort:'high',mode:'read',billing:'subscription',view:'flow'});assert.equal(saved.theme,undefined);
+  assert.deepEqual(saved.defaults,{provider:'claude',model:'gpt-6.1-sol',effort:'high',mode:'read',billing:'subscription',view:'flow'});assert.equal(saved.theme,undefined);
   assert.deepEqual(ui.requests.filter(request=>request.path==='/api/appearance'&&request.method==='POST').map(request=>request.body.theme),['light'],'The theme is saved once, the same way as from the status bar.');
   assert.equal(saved.onboarding.step,3);assert.equal(saved.onboarding.dismissed,true);
   ui.$('open-setup').click();await flush();assert.equal(dialog.dataset.screen,'flow');assert.match(ui.$('setup-step-status').textContent,/4 of 5/,'Setup resumes where it was left.');
@@ -3379,7 +3379,7 @@ test('after a usage limit any agent and model can continue the task, including t
   const choice = children.slice(start + 1, next < 0 ? undefined : next).find(child => child.textContent.includes('Model One'));
   assert(choice, 'Codex lists its models in its own section.'); choice.click(); await flush(); await flush();
   const continued = ui.requests.filter(request => request.path.endsWith('/continue'));
-  assert.equal(continued.length, 1); assert.equal(continued[0].body.provider, 'codex'); assert.equal(continued[0].body.model, 'model-one');
+  assert.equal(continued.length, 1); assert.equal(continued[0].body.provider, 'codex'); assert.equal(continued[0].body.model, 'gpt-6.1-sol');
 });
 
 test('an approval with an exact scope can be allowed for the run or remembered for the workspace, and remembered approvals can be revoked',async()=>{
@@ -3459,11 +3459,11 @@ test('while work runs, a message joins the queue with the current settings, and 
   const otherAgentModel = pickerModels.find(item => item.disabled);
   assert(otherAgentModel, 'Other agent models are disabled while a run is active');
   runningModel.click(); await flush();
-  assert.equal(ui.state().model, 'model-one');
-  await ui.window.relayUI.setConfiguration({model:'model-one',effort:'high'});
+  assert.equal(ui.state().model, 'gpt-6.1-sol');
+  await ui.window.relayUI.setConfiguration({model:'gpt-6.1-sol',effort:'high'});
   ui.$('message-input').value='Then update the changelog';ui.fire('message-input','input');
   ui.$('message-input').dispatchEvent(new UIEvent('keydown',{key:'Enter'}));await flush();await flush();
-  assert.equal(actions[0].action,'add');assert.equal(actions[0].text,'Then update the changelog');assert.equal(actions[0].provider,'codex');assert.equal(actions[0].model,'model-one');assert.equal(actions[0].effort,'high');assert.equal(actions[0].mode,ui.state().mode);
+  assert.equal(actions[0].action,'add');assert.equal(actions[0].text,'Then update the changelog');assert.equal(actions[0].provider,'codex');assert.equal(actions[0].model,'gpt-6.1-sol');assert.equal(actions[0].effort,'high');assert.equal(actions[0].mode,ui.state().mode);
   assert.equal(ui.$('message-input').value,'','The message box clears once the prompt is queued.');
   assert.equal(ui.requests.filter(request=>request.path.endsWith('/messages')).length,0,'Nothing is sent while the run works.');
   conversation.queue.push({id:'q1',text:'And run the tests',provider:'claude',mode:'read',approvalPolicy:'ask',attachments:[]});await ui.window.relayUI.refresh();
@@ -3477,14 +3477,14 @@ test('while work runs, a message joins the queue with the current settings, and 
   const editor=ui.$('prompt-queue-list').querySelector('textarea');editor.value='Then update the changelog for 0.14';
   const modelSelect=ui.$('prompt-queue-list').querySelector('.prompt-queue-model');
   const effortSelect=ui.$('prompt-queue-list').querySelector('.prompt-queue-effort');
-  assert.equal(modelSelect.value,'model-one');
+  assert.equal(modelSelect.value,'gpt-6.1-sol');
   assert.equal(effortSelect.value,'high');
-  modelSelect.value='model-two';
+  modelSelect.value='gpt-6-sol';
   modelSelect.dispatchEvent(new UIEvent('change'));
   assert.equal(effortSelect.disabled,false);
   effortSelect.value='low';
   ui.$('prompt-queue-list').querySelectorAll('button').find(button=>button.textContent==='Save').click();await flush();
-  assert.deepEqual(actions.at(-1),{action:'update',id:'q0',text:'Then update the changelog for 0.14',model:'model-two',effort:'low'});
+  assert.deepEqual(actions.at(-1),{action:'update',id:'q0',text:'Then update the changelog for 0.14',model:'gpt-6-sol',effort:'low'});
   ui.$('prompt-queue-list').querySelectorAll('li')[1].querySelector('.queue-remove').click();await flush();assert.equal(actions.at(-1).action,'remove');
   conversation.queuePaused={reason:'You stopped the run.'};await ui.window.relayUI.refresh();
   assert.equal(ui.$('prompt-queue-paused').hidden,false);assert.match(ui.$('prompt-queue-paused').textContent,/You stopped the run/);assert.equal(ui.$('prompt-queue-toggle').textContent,'Resume queue');
@@ -3554,7 +3554,7 @@ test('a check with the tests shows on its run’s timeline, a retry reads as Cod
   assert.equal(row.querySelector('.activity-entry-title').textContent,'Running the tests');assert.equal(row.querySelector('.activity-entry-detail').textContent,'npm test');
   assert(row.querySelector('.icon-tests-running'),'A running check shows as working.');
   conversation.messages[2]={...conversation.messages[2],text:'Tests failed: npm test\nExit code 1 after 4s.\n\nExpected 90, received 100',status:'complete'};
-  conversation.messages.push({id:'p2',role:'user',text:'The project\'s tests failed after your changes.\n\nEnd of the output:\n```\nExpected 90, received 100\n```',provider:'codex',runId:'r2',retry:{of:'r1'},routing:{mode:'balanced',reason:'The tests failed, so one step up',model:'model-two',effort:'high'},createdAt:at});
+  conversation.messages.push({id:'p2',role:'user',text:'The project\'s tests failed after your changes.\n\nEnd of the output:\n```\nExpected 90, received 100\n```',provider:'codex',runId:'r2',retry:{of:'r1'},routing:{mode:'balanced',reason:'The tests failed, so one step up',model:'gpt-6-sol',effort:'high'},createdAt:at});
   await ui.window.relayUI.refresh();
   row=ui.$('messages').querySelector('.activity-entry-check');
   assert.equal(row.querySelector('.activity-entry-title').textContent,'Tests failed');assert(row.classList.contains('activity-entry-error'));
@@ -3563,7 +3563,7 @@ test('a check with the tests shows on its run’s timeline, a retry reads as Cod
   assert.equal(retry.querySelector('.message-retry-label').textContent,'Sent by Codeshi after the tests failed');
   assert(retry.classList.contains('long')&&!retry.classList.contains('expanded'),'The retry prompt stays short until opened.');
 
-  conversation.retryOffer={id:'offer-one',runId:'r1',provider:'codex',model:'model-two',modelName:'Model Two',effort:'high',command:'npm test',blocked:'Codex is at 85% of its limit'};await ui.window.relayUI.refresh();
+  conversation.retryOffer={id:'offer-one',runId:'r1',provider:'codex',model:'gpt-6-sol',modelName:'Model Two',effort:'high',command:'npm test',blocked:'Codex is at 85% of its limit'};await ui.window.relayUI.refresh();
   assert.equal(ui.$('retry-offer').hidden,false);
   assert.match(ui.$('retry-title').textContent,/^The tests failed\. Retry with Codex · .* · High effort\?$/);
   assert.match(ui.$('retry-detail').textContent,/^Codex is at 85% of its limit, so routing asked first\. Codex gets the end of the test output and tries once more, one step up\. npm test runs again afterwards\.$/);
@@ -3685,8 +3685,8 @@ test('routing is chosen in the Agents panel’s Routing section, which Flow show
   assert.equal(ui.$('route-preview'),null,'The agent is chosen on Send, so nothing above the box guesses at it.');
   ui.$('message-input').dispatchEvent(new UIEvent('keydown',{key:'Enter'}));await flush();await flush();
   const sent=ui.requests.filter(request=>request.path.endsWith('/messages')).at(-1).body;
-  assert.deepEqual([sent.provider,sent.model,sent.effort,sent.routing],['codex','model-one','high',{mode:'smart',reason:'A complex task (refactoring)',tier:'deep',escalation:null}],'Model One at high effort is already its strongest, so there is no step up.');
-  conversation.status='complete';conversation.messages.push({id:'routed',role:'user',text:'Refactor the payment module into services',provider:'codex',runId:'routed-run',routing:{mode:'smart',reason:'A complex task (refactoring)',tier:'deep',model:'model-one',effort:'high'},createdAt:new Date().toISOString()});
+  assert.deepEqual([sent.provider,sent.model,sent.effort,sent.routing],['codex','gpt-6.1-sol','high',{mode:'smart',reason:'A complex task (refactoring)',tier:'deep',escalation:null}],'Model One at high effort is already its strongest, so there is no step up.');
+  conversation.status='complete';conversation.messages.push({id:'routed',role:'user',text:'Refactor the payment module into services',provider:'codex',runId:'routed-run',routing:{mode:'smart',reason:'A complex task (refactoring)',tier:'deep',model:'gpt-6.1-sol',effort:'high'},createdAt:new Date().toISOString()});
   await ui.window.relayUI.refresh();
   const note=ui.$('messages').querySelector('.message-routing');
   assert.equal(note.textContent,'Auto · Codex · Model One · high effort');assert.match(note.title,/Smart: A complex task/);
@@ -5143,7 +5143,7 @@ test('automatic review needs renewed approval after a changed task or model and 
   assert.match(ui.$('notice-text').textContent, /Confirm Review after again/);
   assert.equal(ui.$('automatic-review-armed').dataset.stale, 'true');
   ui.$('automatic-review-toggle').click(); await flush(); ui.$('automatic-review-enable').click(); await flush();
-  await ui.window.relayUI.setConfiguration({ model: 'model-two' });
+  await ui.window.relayUI.setConfiguration({ model: 'gpt-6-sol' });
   ui.fire('composer', 'submit'); await flush();
   assert(!ui.requests.some(request => request.path.endsWith('/messages')));
   await ui.switchProject('project-two'); assert.equal(ui.$('automatic-review-armed').hidden, true);
@@ -5519,7 +5519,7 @@ test('a limit that has its own line keeps it, instead of adding a column that sq
 });
 
 test('a sent message says how its agent was chosen, so slow or wrong ratings can be spotted', async () => {
-  const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), base = { mode: 'smart', reason: 'A focused change', tier: 'standard', model: 'model-one', effort: 'medium' };
+  const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), base = { mode: 'smart', reason: 'A focused change', tier: 'standard', model: 'gpt-6.1-sol', effort: 'medium' };
   const message = (id, routing) => ({ id, role: 'user', text: id, provider: 'codex', runId: id, routing: { ...base, ...routing }, createdAt: new Date().toISOString() });
   chat.status = 'complete'; chat.messages.push(message('rated', { ratedBy: 'agent', ratedMs: 3140 }), message('continued', { ratedBy: 'local' }), message('estimated', { ratedBy: 'fallback' }), message('older', {}));
   await ui.window.relayUI.refresh(); await flush();
@@ -5588,6 +5588,30 @@ test('Flow plan usage follows the selected model and keeps weekly exhaustion vis
   const claude = ui.$('flow-card-plans').querySelectorAll('.flow-plan').find(row => row.dataset.provider === 'claude');
   assert.equal(claude.querySelector('.flow-plan-secondary').dataset.level, 'critical');
   assert.match(ui.$('flow-strip').textContent, /Claude · 5-hour · 80% left · Weekly · Opus · 0% left/, 'The narrow layout also names both periods.');
+});
+
+test('Flow offers Take manual control on its working card while a delegated task still has work, since the view cannot change then', async () => {
+  const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), taken = [];
+  const policy = (mode, revision) => ({ version: 1, mode, routingMode: 'smart', taskId: 'task-1', revision, automation: {} });
+  ui.setIntercept((request, next) => {
+    if (request.path === `/api/conversations/${chat.id}/execution-policy`) {
+      taken.push(request.body);
+      Object.assign(chat, { routing: null, execution: { defaults: policy('normal', 3), active: policy('normal', 2), policies: [] } });
+      return response(JSON.parse(JSON.stringify(chat)));
+    }
+    return next();
+  });
+  assert.equal(ui.window.relayFlow.enter(), true); await flush();
+  const takeover = () => ui.$('flow-card-working').querySelectorAll('button').find(button => button.textContent === 'Take manual control');
+  assert.equal(takeover().hidden, true, 'An idle Flow task has nothing to take back.');
+  Object.assign(chat, { routing: { mode: 'smart', allowApi: false, check: true }, execution: { defaults: policy('flow', 2), active: policy('flow', 1), policies: [] },
+    status: 'running', activeRun: { id: 'run-1', provider: 'claude', taskId: 'task-1', startedAt: new Date().toISOString() } });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(takeover().hidden, false, 'A running Flow task can be taken back without leaving Flow.');
+  assert.match(takeover().title, /current reply may finish; Stop ends it now/);
+  takeover().dispatchEvent(new UIEvent('click')); await flush(); await flush();
+  assert.deepEqual(taken, [{ taskId: 'task-1', revision: 1, action: 'takeover' }]);
+  assert.equal(takeover().hidden, true, 'Once the task is Normal, nothing is left to take back.');
 });
 
 test('Flow cards say in plain words how routing and handoff work, what is left, what is next and what changed', async () => {
@@ -7038,7 +7062,7 @@ const planSteps = () => [
   { id: 's1', title: 'Add the API route', instructions: 'Add GET /api/items.', files: ['src/server.mjs'], tier: 'standard', dependsOn: [], agent: null },
   { id: 's2', title: 'Show the items', instructions: 'List the items on the page.', files: ['public/app.js'], tier: 'light', dependsOn: ['s1'], agent: null },
 ];
-const draftPlan = (fields = {}) => ({ id: 'plan-1', goal: 'Add a list of saved items', source: 'agent', status: 'draft', summary: 'Route, then page.', steps: planSteps(), review: true, revision: 1, planner: { provider: 'codex', model: 'model-one', effort: 'high' }, createdAt: planAt, updatedAt: planAt, ...fields });
+const draftPlan = (fields = {}) => ({ id: 'plan-1', goal: 'Add a list of saved items', source: 'agent', status: 'draft', summary: 'Route, then page.', steps: planSteps(), review: true, revision: 1, planner: { provider: 'codex', model: 'gpt-6.1-sol', effort: 'high' }, createdAt: planAt, updatedAt: planAt, ...fields });
 // The server's plan actions, and messages it accepts, on the fixture conversation.
 function planRoutes(ui, conversation, { lost = 0 } = {}) {
   const actions = [], sends = [];
@@ -7124,7 +7148,7 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   conversation.routing.mode = 'smart'; await ui.window.relayUI.refresh(); await flush();
   await sendMessage(ui);
   assert.equal(sends.length, 1);
-  assert.deepEqual([sends[0].orchestrate, sends[0].text, sends[0].provider, sends[0].model, sends[0].effort, sends[0].routing], [true, 'Add a list of saved items', 'codex', 'model-one', 'high', { mode: 'smart', reason: 'Plans the steps', tier: 'deep', escalation: null }]);
+  assert.deepEqual([sends[0].orchestrate, sends[0].text, sends[0].provider, sends[0].model, sends[0].effort, sends[0].routing], [true, 'Add a list of saved items', 'codex', 'gpt-6.1-sol', 'high', { mode: 'smart', reason: 'Plans the steps', tier: 'deep', escalation: null }]);
   assert.equal(sends[0].mode, 'edit', 'The server makes the planning run read-only; your own access setting is sent unchanged.');
   assert.equal(ui.$('orchestrate-toggle').getAttribute('aria-pressed'), 'false', 'Orchestrate is for one message at a time.');
 
@@ -7138,7 +7162,7 @@ test('In Flow, one read-only run plans the message with the deepest work the mod
   assert.equal(label(), 'Orchestrate · planning the steps');
   assert.match(ui.$('messages').querySelector('#message-plan-reply').querySelector('.message-text').textContent, /^Planning the steps…/);
   assert.equal(ui.$('orchestration-title').textContent, 'Plan · Planning…');
-  assert.equal(ui.$('orchestration-status').textContent, 'Codex · model-one is planning the steps, read-only. Nothing from this plan runs until you approve it.');
+  assert.equal(ui.$('orchestration-status').textContent, 'Codex · gpt-6.1-sol is planning the steps, read-only. Nothing from this plan runs until you approve it.');
   assert.equal(ui.$('orchestration-queue').textContent, '1 queued message waits until you approve or discard this plan.');
   assert.deepEqual(['orchestration-discard', 'orchestration-again', 'orchestration-write'].map(id => ui.$(id).hidden), [true, true, true], 'A plan being made is stopped with Stop, like any run.');
   assert.match(flowText(ui, 'next'), /Codex is planning the steps\. The Plan button shows the plan when it’s ready\./);
@@ -7556,7 +7580,7 @@ test('Run as tasks sends the agents the plan shows, then the card follows each s
   const sent = actions.at(-1);
   assert.equal(sent.action, 'run'); assert.equal(sent.id, 'plan-1'); assert.equal(sent.revision, 1);
   assert.deepEqual(Object.keys(sent.assignments), ids);
-  assert.ok(Object.values(sent.assignments).every(pick => pick.provider === 'codex' && pick.model === 'model-one'), JSON.stringify(sent.assignments));
+  assert.ok(Object.values(sent.assignments).every(pick => pick.provider === 'codex' && pick.model === 'gpt-6.1-sol'), JSON.stringify(sent.assignments));
   assert.ok(sent.folderId);
 
   // Running: one row per step with its task's state; Stop for the plan, no editing.
@@ -7899,6 +7923,99 @@ test('the board’s canvas places cards by dragging, draws arrows for waits, and
   assert.equal(posted.at(-1).path, '/api/board/export');
   ui.$('board-columns-mode').click(); await flush();
   assert.equal(space.hidden, true); assert.equal(ui.$('board-columns').hidden, false);
+});
+
+test('board cards show labels, a due date and comments; a label filters the board, and comments say who wrote them (#97)', async () => {
+  const ui = await browser({ boardUI: true, wide: true }), posted = [];
+  const ids = { api: 'c0000000-0000-4000-8000-000000000001', form: 'c0000000-0000-4000-8000-000000000002', docs: 'c0000000-0000-4000-8000-000000000003' };
+  const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: { labels: 8, label: 32, comment: 4000 }, cards: [
+    card(ids.api, 'Agree the API', 'ready', { labels: ['backend', 'API', 'contract', 'v2'], due: '2020-01-02', commentCount: 1, at: { x: 0, y: 0 } }),
+    card(ids.form, 'Build the form', 'ready', { labels: ['Frontend'], due: '2999-03-04', at: { x: 400, y: 0 } }),
+    card(ids.docs, 'Write the docs', 'done', { due: '2020-01-02', at: { x: 0, y: 300 } }),
+  ] };
+  let thread = [{ id: 'k1', text: 'Keep the old route\nworking.', by: { kind: 'you' }, at: '2026-11-12T10:00:00.000Z' }];
+  const find = id => board.cards.find(item => item.id === id);
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response(board);
+    const route = request.path.match(/^\/api\/board\/cards\/([\w-]+)\/(\w+)$/);
+    if (!route) return next();
+    const [, id, action] = route, target = find(id);
+    posted.push({ path: request.path, body: request.body });
+    if (action === 'comments') return response({ comments: thread });
+    if (action === 'comment') { thread = [...thread, { id: `k${thread.length + 1}`, text: request.body.text, by: { kind: 'you' }, at: '2026-11-12T11:00:00.000Z' }]; target.revision++; target.commentCount = thread.length; return response({ comment: thread.at(-1), comments: thread, card: target, board }, 201); }
+    if (action === 'uncomment') { thread = thread.filter(item => item.id !== request.body.commentId); target.revision++; target.commentCount = thread.length; return response({ removed: true, comments: thread, card: target, board }); }
+    if (action === 'edit') { assert.equal(request.body.revision, target.revision, 'A save says which version of the card it changes.'); Object.assign(target, { labels: request.body.labels, due: request.body.due }); return response({ card: target, board }); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-board').click(); await flush();
+  const faces = () => ui.$('board-columns').querySelectorAll('.board-card'), face = id => faces().find(item => item.dataset.card === id);
+  // The card says its labels (three at most, then how many more), when it's due and how many comments it has.
+  assert.deepEqual(face(ids.api).querySelectorAll('.board-label').map(item => item.textContent), ['backend', 'API', '+2']);
+  assert.match(face(ids.api).querySelector('.board-card-due').textContent, /^Overdue · /); assert.equal(face(ids.api).querySelector('.board-card-due').classList.contains('late'), true);
+  assert.match(face(ids.form).querySelector('.board-card-due').textContent, /^Due /); assert.equal(face(ids.form).querySelector('.board-card-due').classList.contains('late'), false);
+  assert.match(face(ids.docs).querySelector('.board-card-due').textContent, /^Due /, 'A card you accepted isn’t overdue.');
+  assert.equal(face(ids.api).querySelector('.board-card-comments').textContent, '1');
+  assert.match(face(ids.api).getAttribute('aria-label'), /labels backend, API, contract and v2\. Codex\. Overdue · .+\. 1 comment/, 'A screen reader hears all of it.');
+  assert.equal(face(ids.form).querySelector('.board-card-column'), null, 'A card in Columns doesn’t name its column, whatever its place in it.');
+  assert.equal(face(ids.form).draggable, true, 'Every Ready card can be dragged, not only the first.');
+  // The label filter lists every label once, and shows only that label's cards.
+  const pick = ui.$('board-label-filter');
+  assert.equal(pick.hidden, false);
+  assert.deepEqual(pick.querySelectorAll('option').map(item => item.textContent), ['All labels', 'API (1)', 'backend (1)', 'contract (1)', 'Frontend (1)', 'v2 (1)']);
+  pick.value = 'frontend'; pick.dispatchEvent(new UIEvent('change')); await flush();
+  assert.deepEqual(faces().map(item => item.dataset.card), [ids.form]);
+  assert.equal(ui.$('board-columns').children[1].querySelector('.board-column-count').textContent, '1 of 2');
+  assert.match(ui.$('board-columns').children[4].textContent, /No cards here with this label/);
+  assert.equal(face(ids.form).querySelector('.board-label').classList.contains('current'), true);
+  // On the canvas the other cards stay in place, faded, so the arrows still make sense.
+  const space = ui.$('board-space'); space.bounds = { left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 };
+  ui.$('board-canvas-mode').click(); await flush();
+  assert.deepEqual(space.querySelectorAll('.board-node').map(item => item.classList.contains('faded')), [true, false, true]);
+  ui.$('board-columns-mode').click(); await flush();
+  pick.value = ''; pick.dispatchEvent(new UIEvent('change')); await flush();
+  assert.equal(faces().length, 3);
+  // The drawer: labels are added with Enter and taken off with their ×; the due date has its own field.
+  face(ids.form).click(); await flush();
+  const drawer = () => ui.$('board-drawer-body'), entry = () => drawer().querySelector('.board-label-input');
+  assert.equal(posted.some(item => item.path.endsWith('/comments')), false, 'A card with no comments asks for none.');
+  entry().value = 'urgent'; entry().dispatchEvent(new UIEvent('keydown', { key: 'Enter' })); await flush();
+  entry().value = 'BACKEND'; entry().dispatchEvent(new UIEvent('keydown', { key: 'Enter' })); await flush();
+  assert.deepEqual(drawer().querySelector('.board-labels-edit').querySelectorAll('.board-label').map(item => item.children[0].textContent), ['Frontend', 'urgent', 'backend'], 'A label already on the board keeps the case it was first written in.');
+  drawer().querySelectorAll('.board-label-remove')[1].click(); await flush();
+  const day = drawer().querySelector('.board-due-input'); assert.equal(day.value, '2999-03-04');
+  day.value = '2026-12-24'; day.dispatchEvent(new UIEvent('change')); await flush();
+  drawer().querySelectorAll('button').find(item => item.textContent === 'Save').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.form}/edit`, body: { title: 'Build the form', notes: '', priority: 'normal', labels: ['Frontend', 'backend'], due: '2026-12-24', agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1 } });
+  // Comments are read when a card that has some opens, and say who wrote them and when.
+  face(ids.api).click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.api}/comments`, body: null });
+  const comments = () => drawer().querySelectorAll('.board-comment');
+  assert.equal(comments().length, 1);
+  assert.equal(comments()[0].querySelector('.board-comment-author').textContent, 'You');
+  assert.equal(comments()[0].querySelector('.board-comment-when').getAttribute('datetime'), '2026-11-12T10:00:00.000Z');
+  assert.equal(comments()[0].querySelector('.board-comment-text').textContent, 'Keep the old route\nworking.');
+  assert.match(drawer().textContent, /The agent is told your comments when this card runs/);
+  // ⌘Enter sends one; an untouched card's draft follows it to its new revision.
+  const write = drawer().querySelector('.board-comment-input'), send = () => drawer().querySelector('.board-comment-send');
+  assert.equal(send().disabled, true);
+  write.value = 'Version it under /v2.'; write.dispatchEvent(new UIEvent('input')); assert.equal(send().disabled, false);
+  write.dispatchEvent(new UIEvent('keydown', { key: 'Enter', metaKey: true })); await flush();
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.api}/comment`, body: { text: 'Version it under /v2.' } });
+  assert.deepEqual(comments().map(item => item.querySelector('.board-comment-text').textContent), ['Keep the old route\nworking.', 'Version it under /v2.']);
+  assert.equal(drawer().querySelector('.board-comment-input').value, '', 'The box empties once it’s sent.');
+  assert.equal(face(ids.api).querySelector('.board-card-comments').textContent, '2');
+  const reads = posted.filter(item => item.path.endsWith('/comments')).length;
+  ui.window.confirm = () => true;
+  comments()[0].querySelectorAll('button').find(item => item.textContent === 'Remove').click(); await flush();
+  assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.api}/uncomment`, body: { commentId: 'k1' } });
+  assert.equal(comments().length, 1);
+  assert.equal(posted.filter(item => item.path.endsWith('/comments')).length, reads, 'Its own changes don’t make the drawer read the comments again.');
+  // Saving the card afterwards uses the revision the comments moved it to.
+  drawer().querySelectorAll('.board-label-remove')[0].click(); await flush();
+  drawer().querySelectorAll('button').find(item => item.textContent === 'Save').click(); await flush();
+  assert.deepEqual([posted.at(-1).path, posted.at(-1).body.revision, posted.at(-1).body.labels], [`/api/board/cards/${ids.api}/edit`, 3, ['API', 'contract', 'v2']]);
 });
 
 test('What’s New thanks a release’s contributors, and a name opens their GitHub profile',async()=>{

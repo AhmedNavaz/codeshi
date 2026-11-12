@@ -11,7 +11,8 @@
   // raise it whenever route(), classify() or the mode plans change what gets chosen.
   // 2: new work and handoffs share each mode's handoff line (#12).
   // 3: retries, reviewers, reset resumption and plan steps use that line too, and plan steps are chosen when they start.
-  const POLICY_VERSION = 3;
+  // 4: only models on the rated list are chosen, so Fable and Astra stay manual and unknown models aren't guessed.
+  const POLICY_VERSION = 4;
   const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
   const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
   const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
@@ -193,15 +194,36 @@
     return { tier: previous.tier, effort: ['low', 'medium', 'high'].includes(previous.effort) ? previous.effort : previous.tier === 'deep' ? 'high' : 'medium', reason: 'Continuing the same task', source: 'local' };
   }
 
-  // A model's tier from its name: mini, haiku, flash and lite models are light; opus, pro, max and ultra are deep. A name
-  // that says neither may still say what it is for in its catalog description, as "Fast and affordable" does.
-  function modelTier(row) {
-    const name = `${row.id || row.model || row.value || ''} ${row.displayName || row.name || ''}`.toLowerCase();
-    if (/\b(mini|nano|haiku|lite|flash|fast|small|spark)\b/.test(name)) return 'light';
-    if (/\b(opus|pro|max|ultra|heavy)\b/.test(name)) return 'deep';
-    return /\b(fast|fastest|affordable|cheap|cheapest)\b/.test(String(row.description || '').toLowerCase()) ? 'light' : 'standard';
-  }
-  const modelId = row => row.id || row.model || row.value || '';
+  // The models routing may choose on its own (#12), by exact catalog id. A tier guessed from a name put Fable, Claude's
+  // most capable model, in the middle of the ladder, so Saver and Smart sent everyday work to it. A model not listed
+  // here is "not rated": routing never picks it, and you can still choose it yourself. Unknown models do not inherit a
+  // rating from a similar name. Each rating comes from the vendor's own catalog description on the date below, not
+  // from measured quality; review the list when an agent's catalog changes. manual: rated, but only ever chosen by
+  // you (Astra and Fable, decided Nov 7, 2026). Raise POLICY_VERSION when a change here changes what gets chosen.
+  const MODEL_LIST_DATE = '2026-11-12';
+  const rate = (tier, ids, extra = {}) => ids.map(id => [id, { tier, ...extra }]);
+  const MODEL_LIST = new Map([
+    // Codex
+    ...rate('light', ['gpt-6-luna', 'gpt-5.6-luna']),
+    ...rate('standard', ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-6.1-terra', 'gpt-5.6-terra']),
+    ...rate('deep', ['gpt-6-astra'], { manual: true }),
+    // Claude
+    ...rate('light', ['haiku', 'claude-haiku-4-5-20251001']),
+    ...rate('standard', ['sonnet', 'claude-sonnet-5', 'claude-sonnet-4-6']),
+    ...rate('deep', ['opus', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6']),
+    ...rate('deep', ['fable', 'claude-fable-5', 'claude-fable-5-2'], { manual: true }),
+    // Gemini, through Antigravity: its catalog has no descriptions, so Flash is light and Argon keeps the standard
+    // place it had before. Each id carries a thinking level; all three levels share one rating.
+    ...rate('light', ['gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high']),
+    ...rate('standard', ['gemini-4-argon-low', 'gemini-4-argon-medium', 'gemini-4-argon-high']),
+  ]);
+  const modelId = row => row?.id || row?.model || row?.value || '';
+  // A model's rating from the list, or null when it isn't rated.
+  const modelRating = row => MODEL_LIST.get(String(modelId(row)).toLowerCase()) || null;
+  // A rated model's tier, or null. Nothing is worked out from the name.
+  const modelTier = row => modelRating(row)?.tier || null;
+  // Whether routing may choose a model on its own: rated, not kept for manual choice, listed and not hidden.
+  const routable = row => Boolean(modelId(row)) && modelId(row) !== 'default' && !row.hidden && Boolean(modelRating(row)) && !modelRating(row).manual;
   const effortsOf = row => (row?.supportedEffortLevels || row?.supportedReasoningEfforts?.map(level => level.reasoningEffort) || []).filter(level => EFFORTS.includes(level)).sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
 
   // The model tier and effort each mode uses for each kind of task (#128):
@@ -214,9 +236,9 @@
     ultra: { light: ['deep', 'high'], standard: ['deep', 'high'], deep: ['deep', 'highest'] },
   };
 
-  // The agent's model closest to the wanted tier, preferring its default within a tier.
+  // The agent's rated model closest to the wanted tier, preferring its default within a tier.
   function pickModel(rows, tier) {
-    const usable = (rows || []).filter(row => modelId(row) && modelId(row) !== 'default' && !row.hidden);
+    const usable = (rows || []).filter(routable);
     if (!usable.length) return null;
     const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
     return usable.reduce((best, row) => {
@@ -237,8 +259,9 @@
   // session, with a stronger model or more effort. Null when the choice is already the agent's strongest.
   const LADDER = [['light', 'low'], ['standard', 'medium'], ['deep', 'high'], ['deep', 'highest']];
   function escalate(provider, rows, choice) {
+    // A model routing may not choose has no place on the ladder, so there is nothing to step up from.
     const current = (rows || []).find(row => modelId(row) === choice.model);
-    if (!current) return null;
+    if (!current || !routable(current)) return null;
     const tier = TIERS.indexOf(modelTier(current)), effort = choice.effort ? EFFORTS.indexOf(choice.effort) : -1;
     for (const [wantedTier, wantedEffort] of LADDER) {
       const model = pickModel(rows, wantedTier);
@@ -305,9 +328,12 @@
       if (!allowApi && candidate.billingSource !== 'subscription') { skipped.push(`${agentNames[candidate.provider]} isn’t billed to a subscription`); return []; }
       const rows = (candidate.models || []).filter(row => !candidate.allowedModels || candidate.allowedModels.includes(modelId(row)));
       const preferred = pickModel(rows, tier);
+      // An agent that lists models but none routing may choose is left out, rather than run on a default nobody rated.
+      // Only an agent whose list couldn't be read runs its own default.
+      if (!preferred && rows.some(row => modelId(row) && modelId(row) !== 'default' && !row.hidden)) { skipped.push(`${agentNames[candidate.provider]} has no ${candidate.allowedModels ? 'model allowed by task limits that is ' : 'model '}on Codeshi’s rated list`); return []; }
       if (candidate.allowedModels && !preferred) { skipped.push(`${agentNames[candidate.provider]} has no model allowed by task limits`); return []; }
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
-      const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && modelId(row) !== 'default' && !row.hidden && distance(row) === distance(preferred))] : [null];
+      const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && routable(row) && distance(row) === distance(preferred))] : [null];
       const decorate = (model, steppedDown = false, steppedDownFrom = null, steppedDownQuota = null) => {
         const quota = assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now, tier: task.tier, workload: row => usualForWindow(candidate, row, task.tier) });
         const binding = bindingWindow(quota, now);
@@ -325,7 +351,7 @@
         const preferredTierIndex = TIERS.indexOf(modelTier(preferred));
         const nextTier = preferredTierIndex > 0 ? TIERS[preferredTierIndex - 1] : null;
         if (nextTier && !(task.tier === 'deep' && nextTier === 'light')) {
-          const fallbackRows = rows.filter(row => modelId(row) && modelId(row) !== 'default' && !row.hidden && modelTier(row) === nextTier);
+          const fallbackRows = rows.filter(row => routable(row) && modelTier(row) === nextTier);
           const fallbackPreferred = pickModel(fallbackRows, nextTier);
           if (fallbackPreferred) {
             const fallbackOptions = [fallbackPreferred, ...fallbackRows.filter(row => row !== fallbackPreferred)];
@@ -512,7 +538,7 @@
         if (!choice.error) {
           const target = state.find(row => row.provider === choice.provider);
           const selectedRow = (target?.models || []).find(row => modelId(row) === choice.model);
-          const actualTier = selectedRow ? modelTier(selectedRow) : choice.tier || 'standard';
+          const actualTier = (selectedRow && modelTier(selectedRow)) || choice.tier || 'standard';
           const effortBoost = ['max', 'xhigh', 'ultra'].includes(choice.effort) ? 1.25 : choice.effort === 'high' ? 1.1 : choice.effort === 'low' ? 0.8 : 1;
           const defaults = DEFAULT_STEP_MOVE[actualTier] || DEFAULT_STEP_MOVE.standard;
           const customSpend = item.spend?.[choice.provider] ?? item.spend;
@@ -538,5 +564,5 @@
     return results;
   }
 
-  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, modelTier, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
+  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, modelTier, modelRating, MODEL_LIST_DATE, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);

@@ -77,11 +77,13 @@ export function buildRecap({ registry, since, now = new Date(), git = workspaceG
     const queue = c.queue?.length ? { count: c.queue.length, paused: Boolean(c.queuePaused) } : null;
     const handoff = c.handoffOffer ? { from: c.handoffOffer.from?.provider || null, to: c.handoffOffer.to?.provider || null } : null;
     const { tasks, plans } = taskRecap(broker, c, from, new Set([...(broker.tasks?.lanes?.values() || [])].filter(lane => lane.broker?.running).map(lane => lane.task?.id)));
-    if (!runs.length && !approvals && !waiting && !handoff && !tasks.length && !plans.length) continue;
+    // Scheduled runs that didn't start (#132) wait for you until you run or dismiss them.
+    const missed = broker.schedules?.missed(c) || [];
+    if (!runs.length && !approvals && !waiting && !handoff && !tasks.length && !plans.length && !missed.length) continue;
     // Uncommitted files, for workspaces where something ran; reads only, with Git hooks and filters off.
     let uncommitted = null;
     if (runs.length || tasks.length || plans.length) { try { uncommitted = git(project.folders).repositories.reduce((sum, repo) => sum + (repo.available ? repo.totalChanges || 0 : 0), 0); } catch { uncommitted = null; } }
-    workspaces.push({ projectId: project.id, name: project.name, runs, tasks, plans, approvals, waiting, queue, handoff, uncommitted });
+    workspaces.push({ projectId: project.id, name: project.name, runs, tasks, plans, approvals, waiting, queue, handoff, missed, uncommitted });
   }
   return { since: new Date(from).toISOString(), until: now.toISOString(), workspaces };
 }

@@ -371,17 +371,35 @@
     if (value !== detail) value.append(detail);
     row.append(node('dt', undefined, term), value); workingFacts.append(row);
   }
+  // A Flow task with more to do: a run, its queue, a reset wait or an offer. Only then can automatic steps still start.
+  function flowWorkPending(c) {
+    if (c?.execution?.active?.mode !== 'flow') return false;
+    return Boolean(api.isRunning() || c.queue?.length || c.resume || c.limitSwitching || c.handoffOffer || c.retryOffer);
+  }
+  let takeoverPending = false;
+  const takeoverButton = button('flow-button', 'Take manual control', async () => {
+    if (takeoverPending) return;
+    takeoverPending = true; render();
+    try { await api.takeManualControl?.(); } finally { takeoverPending = false; render(); }
+  });
+  takeoverButton.title = 'Nothing more starts on its own for this task: no new agent, retry, review or handoff. The current reply may finish; Stop ends it now.';
+  takeoverButton.hidden = true;
   function renderWorking(card) {
     const state = api.getState(), c = state.conversation, current = routing(), currentMode = canonicalMode(current?.mode);
     const running = api.isRunning() ? (c?.activeRun?.connection === "local" ? "local" : c?.activeRun?.provider) : null;
     const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running").map(t => [t.id, t.runningProvider, t.status]);
-    const signature = JSON.stringify([current, routingPending, state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence, running, c?.activeRun?.phase, c?.activeRun?.purpose, c?.resume, c?.handoffOffer, runningLanes]);
+    const policy = c?.execution?.active, delegated = flowWorkPending(c);
+    const signature = JSON.stringify([current, routingPending, state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence, running, c?.activeRun?.phase, c?.activeRun?.purpose, c?.resume, c?.handoffOffer, runningLanes, policy?.mode, policy?.revision, delegated, takeoverPending]);
     if (signature === card.signature) return;
     card.signature = signature;
     if (!card.body.childNodes.length) {
       card.body.append(workingMode, workingFacts);
-      card.foot.append(button("flow-button", "Agent settings", () => window.relayAgents?.open?.()));
+      card.foot.append(takeoverButton, button("flow-button", "Agent settings", () => window.relayAgents?.open?.()));
     }
+    // Leaving Flow waits until the workspace is idle, so taking the task back must be possible from here (#107).
+    takeoverButton.hidden = !delegated;
+    takeoverButton.disabled = takeoverPending;
+    takeoverButton.setAttribute('aria-busy', String(takeoverPending));
     updateWorkingFacts(state, c, current);
     const option = modes.find(item => item.mode === currentMode);
     workingMode.dataset.mode = option ? option.mode : routingPending ? "pending" : "off";

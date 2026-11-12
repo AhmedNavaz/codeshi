@@ -10,7 +10,7 @@ import { Broker } from '../src/broker.mjs';
 const { classify, modelTier, route, escalate, triage, replay, plannedStep, planner } = globalThis.relayRouting;
 const levels = (...values) => values.map(reasoningEffort => ({ reasoningEffort }));
 const models = {
-  codex: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high', 'xhigh') }, { id: 'gpt-codex-mini', displayName: 'GPT Codex Mini', supportedReasoningEfforts: levels('low', 'medium') }],
+  codex: [{ id: 'gpt-6.1-sol', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high', 'xhigh') }, { id: 'gpt-6-luna', displayName: 'GPT Codex Mini', supportedReasoningEfforts: levels('low', 'medium') }],
   claude: [{ value: 'default', id: 'default', displayName: 'Default' }, { id: 'haiku', displayName: 'Haiku' }, { id: 'sonnet', displayName: 'Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] }, { id: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] }],
 };
 const agents = (overrides = {}) => ['codex', 'claude'].map(provider => ({ provider, eligible: true, billingSource: 'subscription', usedPercent: 20, models: models[provider], ...overrides[provider], usage: overrides[provider]?.usage || { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: overrides[provider]?.usedPercent ?? 20 }] } }));
@@ -24,7 +24,6 @@ test('requests are classified by simple local rules: small edits and quick quest
   assert.equal(classify('Track down the race condition in the job queue').tier, 'deep');
   assert.equal(classify('Update src/a.js, src/b.js, src/c.js, src/d.js and src/e.js to use the new logger').tier, 'deep', 'Many files make a large task.');
   assert.equal(classify('Rename the variable', { attachments: 1 }).tier, 'standard', 'Attachments mean there is more to read.');
-  assert.deepEqual(['GPT Codex Mini', 'Haiku', 'Gemini Flash', 'Sonnet', 'GPT Codex', 'Opus', 'Gemini Pro'].map(displayName => modelTier({ displayName })), ['light', 'light', 'light', 'standard', 'standard', 'deep', 'deep']);
 });
 
 test('Send settles only a bare go-ahead on its own: anything that needs judging goes to an agent', () => {
@@ -38,18 +37,65 @@ test('Send settles only a bare go-ahead on its own: anything that needs judging 
   assert.equal(triage('do it', { previous: deep, attachments: 1 }), null, 'An attachment may change the task.');
 });
 
-test('a model named for neither end is placed by its catalog description, and this reaches the light choice', () => {
-  const catalog = [
-    { id: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol', description: 'Latest workhorse model for coding and everyday work.', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high') },
-    { id: 'gpt-6-astra', displayName: 'GPT-6-Astra', description: 'Frontier intelligence for the most demanding work.', supportedReasoningEfforts: levels('low', 'medium', 'high') },
-    { id: 'gpt-6-luna', displayName: 'GPT-6-Luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: levels('low', 'medium') },
-    { id: 'gpt-5.6-luna', displayName: 'GPT-5.6-Luna', description: 'Older fast and efficient model.', supportedReasoningEfforts: levels('low') },
-  ];
-  assert.deepEqual(catalog.map(modelTier), ['standard', 'standard', 'light', 'light']);
-  assert.equal(modelTier({ id: 'sonnet', displayName: 'Sonnet 5.5', description: 'Most efficient for simpler tasks' }), 'standard', 'Efficient is not the same as small.');
-  assert.equal(modelTier({ id: 'opus', displayName: 'Opus 5.5', description: 'Fast for its size' }), 'deep', 'A name that says what it is wins.');
-  const pick = tier => route({ text: 'x', assessment: { tier, effort: 'low', reason: 'rated' }, mode: 'smart', candidates: [{ provider: 'codex', eligible: true, billingSource: 'subscription', models: catalog, usage: { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] } }] }).model;
-  assert.equal(pick('light'), 'gpt-6-luna'); assert.equal(pick('standard'), 'gpt-6.1-sol'); assert.equal(pick('deep'), 'gpt-6.1-sol', 'Stronger models stay as they were.');
+// The catalogs Codex, Claude and Antigravity reported on Nov 12, 2026, in their own order (#12).
+const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+const catalogs = {
+  codex: [
+    { id: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol', description: 'Latest workhorse model for coding and everyday work.', isDefault: true, supportedReasoningEfforts: levels(...efforts, 'ultra') },
+    { id: 'gpt-6-astra', displayName: 'GPT-6-Astra', description: 'Frontier intelligence for the most demanding work.', supportedReasoningEfforts: levels(...efforts, 'ultra') },
+    { id: 'gpt-6.1-terra', displayName: 'GPT-6.1 Terra', description: 'GPT-6.1 Terra Codex model.', supportedReasoningEfforts: levels(...efforts, 'ultra') },
+    { id: 'gpt-6-luna', displayName: 'GPT-6-Luna', description: 'Fast and affordable model for easier tasks.', supportedReasoningEfforts: levels(...efforts) },
+  ],
+  claude: [
+    { id: 'default', value: 'default', displayName: 'Default (recommended)', description: 'Opus 5.5 · Best for everyday, complex tasks', supportedEffortLevels: efforts },
+    { id: 'opus', displayName: 'Opus 5.5', description: 'For complex work and everyday tasks', supportedEffortLevels: efforts },
+    { id: 'claude-fable-5-2', displayName: 'Fable 5.2', description: 'For your toughest challenges', supportedEffortLevels: efforts },
+    { id: 'sonnet', displayName: 'Sonnet 5.5', description: 'Most efficient for simpler tasks', supportedEffortLevels: efforts },
+    { id: 'haiku', displayName: 'Haiku 5.5', description: 'Fastest for quick answers', supportedEffortLevels: efforts },
+    { id: 'fable', displayName: 'Fable 5.1', description: 'Most capable for your hardest and longest-running tasks', supportedEffortLevels: efforts },
+  ],
+  gemini: [
+    { id: 'gemini-4-argon-medium', displayName: 'Gemini 4 Argon (Medium)', supportedReasoningEfforts: levels('low', 'medium', 'high') },
+    { id: 'gemini-3.8-flash-medium', displayName: 'Gemini 3.8 Flash (Medium)', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high') },
+  ],
+};
+const fresh = () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] });
+const one = (provider, models = catalogs[provider]) => ({ provider, eligible: true, billingSource: 'subscription', models, usage: fresh() });
+
+test('routing picks only models on the rated list, by exact id: nothing is worked out from a name (#12)', () => {
+  assert.deepEqual(catalogs.codex.map(modelTier), ['standard', 'deep', 'standard', 'light']);
+  assert.deepEqual(catalogs.claude.map(modelTier), [null, 'deep', 'deep', 'standard', 'light', 'deep']);
+  assert.deepEqual(catalogs.gemini.map(modelTier), ['standard', 'light']);
+  for (const row of [{ id: 'claude-opus-6', displayName: 'Opus 6' }, { id: 'gpt-7-mini', displayName: 'GPT-7 Mini', description: 'Fast and affordable' }, { displayName: 'Gemini Pro' }, { id: 'qwen3-coder:30b' }]) {
+    assert.equal(modelTier(row), null, `${row.displayName || row.id} isn't rated, whatever its name says.`);
+  }
+  assert.equal(globalThis.relayRouting.modelRating({ id: 'fable' }).manual, true, 'Fable is rated, and kept for you to choose.');
+  assert.equal(globalThis.relayRouting.modelRating({ id: 'GPT-6-Astra' }).manual, true, 'Ids are matched without regard to case.');
+
+  const pick = (provider, mode, tier) => route({ text: 'x', assessment: { tier, effort: 'medium', reason: 'rated' }, mode, current: provider, candidates: [one(provider)] }).model;
+  const table = provider => Object.fromEntries(['saver', 'smart', 'ultra'].map(mode => [mode, ['light', 'standard', 'deep'].map(tier => pick(provider, mode, tier))]));
+  assert.deepEqual(table('claude'), { saver: ['haiku', 'sonnet', 'sonnet'], smart: ['haiku', 'sonnet', 'opus'], ultra: ['opus', 'opus', 'opus'] }, 'Fable 5.2 is listed before Sonnet, and a name guess sent everyday work to it.');
+  assert.deepEqual(table('codex'), { saver: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol'], smart: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol'], ultra: ['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol'] }, 'Astra stays a manual pick.');
+  assert.deepEqual(table('gemini'), { saver: ['gemini-3.8-flash-medium', 'gemini-4-argon-medium', 'gemini-4-argon-medium'], smart: ['gemini-3.8-flash-medium', 'gemini-4-argon-medium', 'gemini-4-argon-medium'], ultra: ['gemini-4-argon-medium', 'gemini-4-argon-medium', 'gemini-4-argon-medium'] });
+
+  // With Opus's own weekly window used up, Ultra steps down to Sonnet, never across to Fable.
+  const opusOut = { ...one('claude'), usage: { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }, { id: 'opus', label: 'Weekly · Opus', scope: 'opus', usedPercent: 100 }] } };
+  const stepped = route({ text: 'x', assessment: { tier: 'standard', effort: 'high', reason: 'rated' }, mode: 'ultra', current: 'claude', candidates: [opusOut] });
+  assert.equal(stepped.model, 'sonnet'); assert.equal(stepped.steppedDown, true);
+});
+
+test('an agent with no rated model is left out with its reason, and a model you chose yourself is never stepped up from (#12)', () => {
+  const unknown = one('codex', [{ id: 'gpt-7-sol', displayName: 'GPT-7-Sol', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high') }]);
+  const routed = route({ text: 'x', assessment: { tier: 'standard', effort: 'medium', reason: 'rated' }, mode: 'smart', current: 'codex', candidates: [unknown, one('claude')] });
+  assert.deepEqual([routed.provider, routed.model], ['claude', 'sonnet']);
+  const alone = route({ text: 'x', assessment: { tier: 'standard', effort: 'medium', reason: 'rated' }, mode: 'smart', current: 'codex', candidates: [unknown] });
+  assert.match(alone.error, /Codex has no model on Codeshi’s rated list/);
+  const limited = route({ text: 'x', assessment: { tier: 'deep', effort: 'high', reason: 'rated' }, mode: 'ultra', current: 'claude', candidates: [{ ...one('claude'), allowedModels: ['fable', 'claude-fable-5-2'] }] });
+  assert.match(limited.error, /Claude has no model allowed by task limits that is on Codeshi’s rated list/, 'Task limits that allow only Fable leave routing nothing to choose.');
+  assert.equal(route({ text: 'x', mode: 'smart', current: 'codex', candidates: [one('codex', [])] }).model, null, 'A list that could not be read still leaves the choice to the agent.');
+  assert.equal(escalate('claude', catalogs.claude, { model: 'claude-fable-5-2', effort: 'high' }), null);
+  assert.equal(escalate('codex', unknown.models, { model: 'gpt-7-sol', effort: 'low' }), null);
+  assert.deepEqual([escalate('claude', catalogs.claude, { model: 'sonnet', effort: 'medium' }).model], ['opus'], 'A rated model still steps up its own ladder.');
 });
 
 test('Smart, Saver and Ultra match the model and effort to the task, within the levels each model supports', () => {
@@ -62,8 +108,8 @@ test('Smart, Saver and Ultra match the model and effort to the task, within the 
   assert.deepEqual(pick('Refactor the payment module', 'ultra'), ['claude', 'opus', 'max'], 'Ultra takes the highest level for complex work.');
   assert.deepEqual(pick('Refactor the payment module', 'saver'), ['claude', 'sonnet', 'low'], 'Saver uses light and standard models at low effort.');
   assert.deepEqual(pick('Add a loading spinner to the checkout button', 'saver'), ['claude', 'sonnet', 'low']);
-  assert.deepEqual(pick('Add a loading spinner to the checkout button', 'ultra', 'codex'), ['codex', 'gpt-codex', 'high'], 'Without a deeper Codex model, the default with more effort.');
-  assert.deepEqual(pick('Fix the typo in the README', 'saver', 'codex'), ['codex', 'gpt-codex-mini', 'low']);
+  assert.deepEqual(pick('Add a loading spinner to the checkout button', 'ultra', 'codex'), ['codex', 'gpt-6.1-sol', 'high'], 'Without a deeper Codex model, the default with more effort.');
+  assert.deepEqual(pick('Fix the typo in the README', 'saver', 'codex'), ['codex', 'gpt-6-luna', 'low']);
   // Saved conversations with legacy mode IDs map cleanly to Saver, Smart and Ultra.
   assert.equal(route({ text: 'Refactor the payment module', mode: 'saving', candidates: agents(), current: 'claude' }).mode, 'saver');
   assert.equal(route({ text: 'Refactor the payment module', mode: 'balanced', candidates: agents(), current: 'claude' }).mode, 'smart');
@@ -151,9 +197,9 @@ test('new work and handoffs share each mode’s line: a task never starts on an 
   for (const [mode, line] of [['saver', 80], ['smart', 90], ['ultra', 95]]) {
     const name = `${mode} at ${line}%`;
     // The boundary is the line itself, for the agent on the task and in the choice alike.
-    assert.equal(handoffFit(reading(line - 0.5), 'gpt-codex', { mode, current: true }).fits, true, name);
-    assert.equal(handoffFit(reading(line), 'gpt-codex', { mode, current: true }).fits, false, name);
-    assert.equal(handoffFit(reading(line + 1), 'gpt-codex', { mode, current: true }).fits, false, name);
+    assert.equal(handoffFit(reading(line - 0.5), 'gpt-6.1-sol', { mode, current: true }).fits, true, name);
+    assert.equal(handoffFit(reading(line), 'gpt-6.1-sol', { mode, current: true }).fits, false, name);
+    assert.equal(handoffFit(reading(line + 1), 'gpt-6.1-sol', { mode, current: true }).fits, false, name);
 
     // Past the line with another agent under it: the other agent gets the work, rather than a start and a move.
     const past = route({ text, mode, candidates: agents({ claude: { usedPercent: line + 1 }, codex: { usedPercent: line - 10 } }), current: 'claude', allowNear: true });
@@ -172,10 +218,10 @@ test('new work and handoffs share each mode’s line: a task never starts on an 
     // rather than moving now and again at the next check.
     const close = route({ text, mode, candidates: agents({ claude: { usedPercent: line - 1 }, codex: { usedPercent: line - 2 } }), current: 'claude' });
     assert.equal(close.provider, 'claude', name);
-    assert.equal(handoffFit(reading(line - 2), 'gpt-codex', { mode, tier: 'standard' }).reason, 'room', name);
-    assert.equal(handoffFit(reading(line - 6), 'gpt-codex', { mode, tier: 'standard' }).fits, true, `${name}: room for a usual run.`);
+    assert.equal(handoffFit(reading(line - 2), 'gpt-6.1-sol', { mode, tier: 'standard' }).reason, 'room', name);
+    assert.equal(handoffFit(reading(line - 6), 'gpt-6.1-sol', { mode, tier: 'standard' }).fits, true, `${name}: room for a usual run.`);
     // Measured spend counts: an agent that usually spends a point a run fits two points under the line.
-    assert.equal(handoffFit(reading(line - 2), 'gpt-codex', { mode, tier: 'standard', usual: 1 }).fits, true, name);
+    assert.equal(handoffFit(reading(line - 2), 'gpt-6.1-sol', { mode, tier: 'standard', usual: 1 }).fits, true, name);
   }
   // The reported case: Claude at 91% of a week that resets tomorrow has the most allowance to spend, but a Smart run there
   // would hand off at its first check. Codex has a week to go and room under the line, so it takes the task.
@@ -186,7 +232,7 @@ test('new work and handoffs share each mode’s line: a task never starts on an 
   assert.equal(handoffFit(week(91, 1), 'opus', { mode: 'smart', current: true, tier: 'standard', usual: { weekly: 8 } }).fits, false, 'The check that would move it agrees.');
   // The line rises near a reset, as the safety margin does, so a weekly window about to reset still fits.
   const weekly = { available: true, checkedAt: new Date().toISOString(), windows: [{ label: 'Weekly', usedPercent: 92, resetsAt: new Date(Date.now() + 3600000).toISOString() }] };
-  assert.equal(handoffFit(weekly, 'gpt-codex', { mode: 'smart', current: true }).fits, true);
+  assert.equal(handoffFit(weekly, 'gpt-6.1-sol', { mode: 'smart', current: true }).fits, true);
 });
 
 test('before a standard or deep task starts, usual run spend is compared with the binding window', () => {
@@ -228,8 +274,8 @@ test('a retry after failed tests goes one step up with the same agent: a stronge
   assert.deepEqual(step('claude', 'haiku', null), ['claude', 'sonnet', 'medium', 'standard'], 'A light model steps up to the standard one.');
   assert.deepEqual(step('claude', 'opus', 'high'), ['claude', 'opus', 'max', 'deep'], 'The strongest model gets more effort.');
   assert.equal(step('claude', 'opus', 'max'), null, 'Nothing is stronger than the strongest model at its highest effort.');
-  assert.deepEqual(step('codex', 'gpt-codex-mini', 'low'), ['codex', 'gpt-codex', 'medium', 'standard']);
-  assert.deepEqual(step('codex', 'gpt-codex', 'high'), ['codex', 'gpt-codex', 'xhigh', 'standard'], 'Without a deeper Codex model, more effort.');
+  assert.deepEqual(step('codex', 'gpt-6-luna', 'low'), ['codex', 'gpt-6.1-sol', 'medium', 'standard']);
+  assert.deepEqual(step('codex', 'gpt-6.1-sol', 'high'), ['codex', 'gpt-6.1-sol', 'xhigh', 'standard'], 'Without a deeper Codex model, more effort.');
   assert.equal(escalate('claude', [], { model: null, effort: null }), null, 'Without a model list there is nothing to step up to.');
   assert.deepEqual(route({ text: 'Add a loading spinner to the checkout button', mode: 'smart', candidates: agents(), current: 'claude' }).escalation, { provider: 'claude', model: 'opus', modelName: 'Opus', effort: 'high', tier: 'deep' }, 'Each choice carries its step up.');
 });
@@ -339,9 +385,9 @@ test('a fresh backend reading can stop a routed dispatch before any agent starts
   const broker = new Broker({ workspace, dataDir, bins: { codex: bin } });
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const c = broker.get(broker.create().id); let reads = 0;
-  broker.checks.usage = async (_provider, options) => { reads++; assert.equal(options.refresh, true); return { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 5 }, { label: 'Weekly', scopes: ['gpt-codex'], usedPercent: 100 }] }; };
+  broker.checks.usage = async (_provider, options) => { reads++; assert.equal(options.refresh, true); return { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 5 }, { label: 'Weekly', scopes: ['gpt-6.1-sol'], usedPercent: 100 }] }; };
   broker.execution.setDefault(c, { mode: 'flow' });
-  broker.start(c, { text: 'Add a test', provider: 'codex', model: 'gpt-codex', routing: { mode: 'smart', reason: 'A focused change' } });
+  broker.start(c, { text: 'Add a test', provider: 'codex', model: 'gpt-6.1-sol', routing: { mode: 'smart', reason: 'A focused change' } });
   await broker.running.done;
   assert.equal(reads, 1);
   assert.equal(fs.existsSync(path.join(workspace, '.mock-captures.jsonl')), false);
@@ -384,10 +430,10 @@ test('the broker saves the Auto mode with the workspace and records what Auto ch
   broker.setRouting(c, { mode: 'saving', allowApi: true });
   assert.equal(c.routing.mode, 'saver', 'Legacy mode IDs normalize to Saver, Smart and Ultra.');
   await assert.rejects(async () => broker.start(c, { text: 'Hello', provider: 'codex', routing: { mode: 'cheap' } }), /Invalid automatic agent choice/);
-  broker.start(c, { text: 'Fix the typo in the README', provider: 'codex', model: 'gpt-codex-mini', effort: 'low', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light', extra: 'ignored' } });
+  broker.start(c, { text: 'Fix the typo in the README', provider: 'codex', model: 'gpt-6-luna', effort: 'low', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light', extra: 'ignored' } });
   await broker.running.done;
   const prompt = c.messages.find(message => message.role === 'user');
-  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', policy: globalThis.relayRouting.POLICY_VERSION, tier: 'light', model: 'gpt-codex-mini', effort: 'low' });
+  assert.deepEqual(prompt.routing, { mode: 'saver', reason: 'A small, well-defined change', policy: globalThis.relayRouting.POLICY_VERSION, tier: 'light', model: 'gpt-6-luna', effort: 'low' });
   assert.deepEqual(c.lastRun.routing, { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' });
   broker.queueAction(c, { action: 'pause' });
   broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', routing: { mode: 'saver', reason: 'A small, well-defined change', tier: 'light' } });
@@ -439,14 +485,14 @@ test("pre-flight quota check falls back to alternative provider when selected pr
 
   broker.checks.usage = async provider => provider === "codex" ? codexUsage : claudeUsage;
   broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: "subscription" });
-  broker.handoff.modelRows = async provider => provider === "codex" ? [{ id: "o3-mini", displayName: "o3-mini" }] : [{ id: "claude-3-5-sonnet", displayName: "Sonnet" }];
+  broker.handoff.modelRows = async provider => provider === "codex" ? [{ id: "gpt-6-luna", displayName: "gpt-6-luna" }] : [{ id: "sonnet", displayName: "Sonnet" }];
 
   const c = broker.get(broker.create().id);
   const run = { id: "test-run", taskId: "test-task", routing: { mode: "smart", reason: "A focused change", tier: "standard" }, message: { text: "Fix a bug" }, billingConfirmed: false };
 
-  const fallback = await broker.findRoutingFallback(c, run, { failedProvider: "codex", failedModel: "o3-mini", failedQuota: { state: "near" }, usage: codexUsage });
+  const fallback = await broker.findRoutingFallback(c, run, { failedProvider: "codex", failedModel: "gpt-6-luna", failedQuota: { state: "near" }, usage: codexUsage });
   assert(fallback, "Fallback candidate was found");
   assert.equal(fallback.provider, "claude");
-  assert.equal(fallback.model, "claude-3-5-sonnet");
+  assert.equal(fallback.model, "sonnet");
   assert.equal(fallback.quota.state, "ok");
 });

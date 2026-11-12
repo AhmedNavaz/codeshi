@@ -31,7 +31,11 @@ const smoke=process.argv.includes('--smoke-test');
 // Started by the codeshi command (#90) with no window: the engine and the menu bar status only. A window opens when asked
 // for (the command's /open, the status menu, or opening Codeshi again), and an untouched background start quits by itself
 // once no terminal is attached and nothing is working.
-const background=!smoke&&process.argv.includes('--background');
+// Open at login (#132) starts Codeshi the same way: on Windows with --background, and on macOS where the system says it
+// opened Codeshi at login. With nothing scheduled it quits again after two quiet minutes.
+const loginArgs=['--background'];
+const openedAtLogin=!smoke&&process.platform==='darwin'&&(()=>{try{return app.getLoginItemSettings().wasOpenedAtLogin===true;}catch{return false;}})();
+const background=!smoke&&(process.argv.includes('--background')||openedAtLogin);
 let windowWanted=!background,pageLoaded=false,openMain=null;
 // A copy run from source is a separate app from the installed one: its own name, data folder and single-instance
 // lock. Both run side by side in their own windows, and testing from source never opens or changes the installed
@@ -181,6 +185,8 @@ else {
     await start();
     // Codeshi restarts to update only when no agent is working and no queued prompt is about to start.
     const busy=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.running||broker.backgroundReview||broker.tasks?.busy||[...broker.conversations.values()].some(c=>c.queue?.length&&!c.queuePaused));
+    // A schedule with a time still to come (#132) keeps Codeshi in the menu bar after its window closes.
+    const scheduled=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.schedules?.waiting>0);
     const build=updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation}),demo=updateDemo?(await import('./update-demo.mjs')).updateDemo({version:app.getVersion(),build,relaunch:()=>{app.relaunch();app.quit();}}):null;
     updater=createUpdater({version:app.getVersion(),build,location:demo?.location||bundleLocation(process.execPath),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
     if(demo)updater.check();
@@ -204,20 +210,37 @@ else {
     // The window list and the app switcher tell the two copies apart.
     if(development)win.on('page-title-updated',(event,title)=>{event.preventDefault();win.setTitle(`${title} (Development)`);});
     if(!smoke) win.once('ready-to-show',()=>{if(windowWanted)win.show();});
-    if(background&&!windowWanted){
-      app.dock?.hide();
-      // Two quiet minutes in a row: no window wanted, no terminal following, nothing working or queued.
+    // With no window, Codeshi quits by itself after two quiet minutes in a row: no window wanted, no terminal following,
+    // nothing working or queued, and no schedule still to come.
+    let idleQuit=null;
+    function quitWhenQuiet(){
+      if(idleQuit)return;
       let quiet=0;
-      const idleQuit=setInterval(()=>{
-        if(windowWanted){clearInterval(idleQuit);return;}
-        quiet=busy()||relay.eventClients()>0?0:quiet+1;
-        if(quiet>=2){clearInterval(idleQuit);app.quit();}
+      idleQuit=setInterval(()=>{
+        if(windowWanted){clearInterval(idleQuit);idleQuit=null;return;}
+        quiet=busy()||scheduled()||relay.eventClients()>0?0:quiet+1;
+        if(quiet>=2){clearInterval(idleQuit);idleQuit=null;app.quit();}
       },60000);
       idleQuit.unref?.();
-      // Opening Codeshi from the Finder or Spotlight while it runs in the background shows the window.
-      app.on('activate',()=>{if(!windowWanted)openTarget(null);});
     }
+    if(background&&!windowWanted){app.dock?.hide();quitWhenQuiet();}
+    // Opening Codeshi from the Finder or Spotlight while it runs without a window shows the window.
+    app.on('activate',()=>{if(!windowWanted)openTarget(null);});
+    // Closing the window while a schedule waits keeps Codeshi in the menu bar, with the page unloaded so nothing draws.
+    // The menu bar item, the Dock or opening Codeshi again brings it back. Quitting still quits.
+    win.on('close',event=>{
+      if(quitting||smoke||!scheduled())return;
+      event.preventDefault();
+      windowWanted=false;win.hide();app.dock?.hide();
+      if(pageLoaded){pageLoaded=false;win.loadURL('about:blank').catch(()=>{});}
+      quitWhenQuiet();
+    });
     const trusted=event=>event.sender===win.webContents && event.senderFrame===win.webContents.mainFrame && event.senderFrame.url.startsWith(origin+'/');
+    // Open at login (#132), for the installed app on macOS and Windows: a copy run from source would register Electron itself.
+    const loginSupported=app.isPackaged&&!smoke&&['darwin','win32'].includes(process.platform);
+    const loginState=()=>{if(!loginSupported)return {supported:false,enabled:false};const settings=app.getLoginItemSettings(process.platform==='win32'?{args:loginArgs}:undefined);return {supported:true,enabled:settings.openAtLogin===true,approval:settings.status==='requires-approval'};};
+    ipcMain.handle('relay:login:get',event=>{if(!trusted(event))throw Error('Untrusted renderer');return loginState();});
+    ipcMain.handle('relay:login:set',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');if(!loginSupported)throw Error('Open at login is available in the installed app.');app.setLoginItemSettings({openAtLogin:enabled===true,...(process.platform==='win32'?{args:loginArgs}:{})});return loginState();});
     ipcMain.handle('relay:keep-awake:get',event=>{if(!trusted(event))throw Error('Untrusted renderer');return keepAwake.getState();});
     ipcMain.handle('relay:keep-awake:set',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');return keepAwake.setEnabled(enabled);});
     ipcMain.handle('relay:launch',event=>{if(!trusted(event))throw Error('Untrusted renderer');return releases.get();});

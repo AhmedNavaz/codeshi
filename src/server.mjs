@@ -170,9 +170,10 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     const sound = alertSound(notice, notificationPreferences());
     if (sound) for (const res of listeners) res.write(`event: alert\ndata: ${JSON.stringify(sound)}\n\n`);
   });
-  // Workspaces waiting for a usage limit to reset reopen at startup, so the wait continues after a restart.
+  // Workspaces waiting for a usage limit to reset, or with a schedule to come (#132), reopen at startup, so the wait and
+  // the schedule continue after a restart.
   for (const project of registry.list()) {
-    if (!fs.existsSync(path.join(registry.dataRoot, project.id, 'resume-pending'))) continue;
+    if (!['resume-pending', 'schedules-pending'].some(name => fs.existsSync(path.join(registry.dataRoot, project.id, name)))) continue;
     try { registry.broker(project.id); } catch (error) { console.error(`Codeshi could not resume waiting work in ${project.name}:`, error.message); }
   }
   function selectedProjectId(url) {

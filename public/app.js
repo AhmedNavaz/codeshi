@@ -1951,14 +1951,16 @@
   const executionStrip = document.createElement('div'); executionStrip.className = 'execution-policy-strip';
   const executionLabel = document.createElement('span'), executionTakeover = document.createElement('button');
   executionTakeover.type = 'button'; executionTakeover.textContent = 'Take manual control';
-  executionTakeover.addEventListener('click', async () => {
+  // Revokes the active task's automatic decisions at a safe point. Flow offers it on its working card (#107).
+  async function takeManualControl() {
     const policy = state.conversation?.execution?.active;
-    if (!policy) return;
+    if (!policy || policy.mode !== 'flow') return false;
     executionTakeover.disabled = true;
-    try { await post(endpoint(state.conversation.id, 'execution-policy'), { taskId: policy.taskId, revision: policy.revision, action: 'takeover' }, state.projectId); await refresh(); }
-    catch (error) { showNotice(error.message); }
+    try { await post(endpoint(state.conversation.id, 'execution-policy'), { taskId: policy.taskId, revision: policy.revision, action: 'takeover' }, state.projectId); await refresh(); announce('Manual control. Nothing more starts on its own for this task.'); return true; }
+    catch (error) { showNotice(error.message); return false; }
     finally { executionTakeover.disabled = false; }
-  });
+  }
+  executionTakeover.addEventListener('click', takeManualControl);
   executionStrip.append(executionLabel, executionTakeover); ui.form.parentNode?.insertBefore(executionStrip, ui.form);
   function renderExecutionPolicy() {
     if (document.getElementById('app-shell')?.classList.contains('flow')) {
@@ -3092,7 +3094,7 @@
   window.relayUI = {
     jumpToRun, jumpToMessage, loadEarlierMessages, loadToRun, loadToMessage,
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
-    commands, isRunning, filteredProjects, setRouting, routeFor, planAgain: again => run(false, again), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
+    commands, isRunning, filteredProjects, setRouting, takeManualControl, routeFor, planAgain: again => run(false, again), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,
     prepareQuestionAnswer(conversationId, text, projectId = state.projectId) {
       const current = state.projectId === projectId && state.conversation?.id === conversationId && !state.taskDraft;

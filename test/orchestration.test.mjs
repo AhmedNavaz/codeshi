@@ -75,7 +75,7 @@ function client(app) {
     const b = broker();
     b.availableProviders = () => providers;
     b.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
-    b.handoff.models = async () => ({ data: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: ['low', 'medium', 'high'].map(reasoningEffort => ({ reasoningEffort })) }] });
+    b.handoff.models = async () => ({ data: [{ id: 'gpt-6.1-sol', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: ['low', 'medium', 'high'].map(reasoningEffort => ({ reasoningEffort })) }] });
     b.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 5 }] });
     b.router.worker = async () => { rated.push(true); return JSON.stringify({ tier: 'light', effort: 'low', reason: 'A small change.' }); };
     const set = await post('routing', { mode, check, executionRevision: revision() });
@@ -138,8 +138,8 @@ test('a reply that is not a valid plan is reported, never guessed at', () => {
 });
 
 test('edited steps are checked before they are saved', () => {
-  assert.deepEqual(validateSteps([step('s1'), step('s4', { dependsOn: ['s1'], agent: { provider: 'claude', model: 'claude-sonnet', effort: 'high' } })]),
-    [step('s1'), step('s4', { dependsOn: ['s1'], agent: { provider: 'claude', model: 'claude-sonnet', effort: 'high' } })]);
+  assert.deepEqual(validateSteps([step('s1'), step('s4', { dependsOn: ['s1'], agent: { provider: 'claude', model: 'sonnet', effort: 'high' } })]),
+    [step('s1'), step('s4', { dependsOn: ['s1'], agent: { provider: 'claude', model: 'sonnet', effort: 'high' } })]);
   // An empty plan is a draft you write yourself.
   assert.deepEqual(validateSteps([]), []);
   // An agent can be chosen without a model or effort.
@@ -190,7 +190,7 @@ test('a planning run is read-only, leaves the conversation settings alone and sa
   await api.route();
   api.broker().on('notify', notice => notices.push(notice));
   assert.deepEqual(api.broker().view(api.c()).orchestrations, []);
-  const sent = await api.send({ text: 'Add a list of saved items.', model: 'gpt-codex', effort: 'low', mode: 'edit', approvalPolicy: 'auto', orchestrate: true });
+  const sent = await api.send({ text: 'Add a list of saved items.', model: 'gpt-6.1-sol', effort: 'low', mode: 'edit', approvalPolicy: 'auto', orchestrate: true });
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
   await api.broker().running?.done;
   const [capture] = f.captures();
@@ -208,7 +208,7 @@ test('a planning run is read-only, leaves the conversation settings alone and sa
   // Routing plans with the deepest work its mode allows, without rating the request first: the page's guess of the
   // model and effort doesn't count.
   assert.equal(api.rated.length, 0, 'Planning is never rated.');
-  assert.deepEqual(plan.planner, { provider: 'codex', model: 'gpt-codex', effort: 'high' });
+  assert.deepEqual(plan.planner, { provider: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
   const prompt = c.messages.find(message => message.runId === sent.body.runId && message.role === 'user');
   assert.equal(prompt.text, 'Add a list of saved items.'); assert.equal(prompt.orchestrationId, plan.id);
   assert.deepEqual([prompt.routing.reason, prompt.routing.tier, prompt.routing.ratedBy], ['Plans the steps', 'deep', 'plan']);
@@ -579,10 +579,10 @@ test('specialist team workflows coordinate roles, validate workflow order, and a
 
 test('specialist roles are recorded and attributed in task ledger usageByRole (#89)', () => {
   const records = [
-    { type: 'submission', id: 'run-1', provider: 'codex', model: 'gpt-codex', at: '2026-11-09T10:00:00Z', role: 'backend' },
+    { type: 'submission', id: 'run-1', provider: 'codex', model: 'gpt-6.1-sol', at: '2026-11-09T10:00:00Z', role: 'backend' },
     { type: 'message', message: { runId: 'run-1', role: 'activity', text: '$ npm test' } },
     { type: 'run_end', id: 'run-1', status: 'complete', at: '2026-11-09T10:00:10Z' },
-    { type: 'submission', id: 'run-2', provider: 'claude', model: 'claude-sonnet', at: '2026-11-09T10:00:15Z', role: 'frontend' },
+    { type: 'submission', id: 'run-2', provider: 'claude', model: 'sonnet', at: '2026-11-09T10:00:15Z', role: 'frontend' },
     { type: 'message', message: { runId: 'run-2', role: 'activity', text: 'Edit public/app.js' } },
     { type: 'run_end', id: 'run-2', status: 'complete', at: '2026-11-09T10:00:25Z' },
     { type: 'submission', id: 'run-3', provider: 'gemini', model: 'gemini-pro', at: '2026-11-09T10:00:30Z', role: 'qa' },

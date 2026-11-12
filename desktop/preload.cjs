@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('relayDesktop', Object.freeze({
     ipcRenderer.on('relay:update-state', listener);
     return () => ipcRenderer.removeListener('relay:update-state', listener);
   },
+  // Open at login (#132): { supported, enabled, approval } where approval means macOS is waiting for the person to allow it.
+  getOpenAtLogin: () => ipcRenderer.invoke('relay:login:get'),
+  setOpenAtLogin: enabled => ipcRenderer.invoke('relay:login:set', enabled),
   getKeepAwake: () => ipcRenderer.invoke('relay:keep-awake:get'),
   setKeepAwake: enabled => ipcRenderer.invoke('relay:keep-awake:set', enabled),
   onKeepAwakeChanged: callback => {

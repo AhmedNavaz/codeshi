@@ -31,6 +31,7 @@ import { processStart, reused } from './mutation-lock.mjs';
 import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mjs';
 import { validateAutomaticReview } from './automatic-review.mjs';
 import { ResumeScheduler } from './resume.mjs';
+import { Schedules } from './schedules.mjs';
 import { readOnlyRequest, approvalScope, requestSummary, blockedBySandbox } from './approval-rules.mjs';
 import { cleanQuestions, checkAnswers, answerSummary, codexAsyncQuestions } from './agent-questions.mjs';
 import { PermissionRules } from './permission-rules.mjs';
@@ -213,7 +214,7 @@ export class Broker extends EventEmitter {
     this.checks = new RunChecks(this, { tests });
     this.checkpoints = new RunCheckpoints(this);
     // A lane runs one task, so only the workspace's own broker coordinates others.
-    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); this.board = new Board(this); }
+    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); this.board = new Board(this); this.schedules = new Schedules(this); }
     this.checks.restore();
     // The first check of a wait saved before a restart runs once startup has finished.
     if (this.resume.waiting) setTimeout(() => this.resume.tick(), 0);
@@ -339,7 +340,19 @@ export class Broker extends EventEmitter {
     // The task board (#132): cards live in the workspace chat's journal, beside the tasks they start.
     if (record.type === 'board_card') { c.board = [...(c.board || []), record.card]; c.boardRevision = record.seq; }
     if (record.type === 'board_card_update') { const card = c.board?.find(item => item.id === record.id); if (card) Object.assign(card, record.changes); c.boardRevision = record.seq; }
+    if (record.type === 'board_comment' || record.type === 'board_comment_remove') {
+      const card = c.board?.find(item => item.id === record.cardId);
+      if (card) {
+        card.comments = record.type === 'board_comment' ? [...(card.comments || []), record.comment] : (card.comments || []).filter(item => item.id !== record.commentId);
+        card.revision = record.revision; card.updatedAt = record.comment?.at || record.at;
+      }
+      c.boardRevision = record.seq;
+    }
     if (record.type === 'board_card_remove') { c.board = (c.board || []).filter(item => item.id !== record.id); c.boardRevision = record.seq; }
+    // Schedules (#132): beside the cards, and the board is read again when one changes.
+    if (record.type === 'schedule') { c.schedules = [...(c.schedules || []), record.schedule]; c.boardRevision = record.seq; }
+    if (record.type === 'schedule_update') { const schedule = c.schedules?.find(item => item.id === record.id); if (schedule) Object.assign(schedule, record.changes); c.boardRevision = record.seq; }
+    if (record.type === 'schedule_remove') { c.schedules = (c.schedules || []).filter(item => item.id !== record.id); c.boardRevision = record.seq; }
     if (record.type === 'queue_add') c.queue = [...c.queue, record.item?.routing?.mode ? { ...record.item, routing: { ...record.item.routing, mode: normalizeRoutingMode(record.item.routing.mode) } } : record.item];
     if (record.type === 'queue_update') c.queue = c.queue.map(item => { if (item.id !== record.id) return item; const updated = { ...item }; if (record.text !== undefined) updated.text = record.text; if ('provider' in record) updated.provider = record.provider; if ('model' in record) updated.model = record.model; if ('effort' in record) updated.effort = record.effort; if (record.clearRouting) delete updated.routing; return updated; });
     if (record.type === 'queue_move') { const item = c.queue.find(entry => entry.id === record.id); if (item) { const rest = c.queue.filter(entry => entry !== item); rest.splice(record.index, 0, item); c.queue = rest; } }
@@ -1457,7 +1470,7 @@ export class Broker extends EventEmitter {
 
   async close() {
     if (this.automaticReviews) this.automaticReviews.closed = true;
-    this.resume.close(); this.queue.close(); this.handoff.close(); this.checks.close();
+    this.resume.close(); this.schedules?.close(); this.queue.close(); this.handoff.close(); this.checks.close();
     await this.tasks?.close();
     if (this.running) {
       const run = this.running;

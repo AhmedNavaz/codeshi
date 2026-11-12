@@ -12,13 +12,13 @@ import { createRelayServer } from '../src/server.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
 const changes = [{ path: 'src/checkout.js', kind: 'modify' }];
-const step = { provider: 'codex', model: 'gpt-codex', modelName: 'GPT Codex', effort: 'high', tier: 'deep' };
+const step = { provider: 'codex', model: 'gpt-6.1-sol', modelName: 'GPT Codex', effort: 'high', tier: 'deep' };
 
 // A routed Send rates its request before it starts. Here only the mock Codex is connected, and the rating is a stand-in.
 function connectMock(broker) {
   broker.availableProviders = () => ['codex'];
   broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
-  broker.handoff.models = async () => ({ data: [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
+  broker.handoff.models = async () => ({ data: [{ id: 'gpt-6.1-sol', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
   broker.router.worker = async () => JSON.stringify({ tier: 'light', effort: 'low', reason: 'A small change.' });
 }
 
@@ -56,7 +56,7 @@ function setup(t, results = []) {
     },
   };
 }
-const routed = (mode, extra = {}) => ({ provider: 'codex', mode: 'edit', model: 'gpt-codex-mini', effort: 'low', routing: { mode, reason: 'A focused change', tier: 'standard', escalation: step, ...extra } });
+const routed = (mode, extra = {}) => ({ provider: 'codex', mode: 'edit', model: 'gpt-6-luna', effort: 'low', routing: { mode, reason: 'A focused change', tier: 'standard', escalation: step, ...extra } });
 async function until(check, ms = 15000) { const end = Date.now() + ms; while (!check()) { if (Date.now() > end) throw new Error('Timed out waiting'); await new Promise(resolve => setTimeout(resolve, 10)); } }
 const checks = c => c.messages.filter(message => message.role === 'activity' && message.text.startsWith('Tests ')).map(message => message.text.split('\n')[0]);
 const settled = (broker, c, count) => until(() => !broker.running && c.runs.filter(run => run.check && run.check.status !== 'running').length >= count);
@@ -136,7 +136,7 @@ function ultraBuild(t, claudePercent = 10) {
   broker.configuredBins.claude = claudeBin;
   broker.availableProviders = () => ['codex', 'claude'];
   broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
-  broker.handoff.models = async provider => ({ data: provider === 'claude' ? [{ id: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] }] : [{ id: 'gpt-codex', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
+  broker.handoff.models = async provider => ({ data: provider === 'claude' ? [{ id: 'opus', displayName: 'Opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] }] : [{ id: 'gpt-6.1-sol', displayName: 'GPT Codex', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }] });
 
   broker.checks.usage = async provider => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent: provider === 'claude' ? claudePercent : 10 }] });
   broker.setRouting(c, { mode: 'ultra', check: true });
@@ -179,7 +179,7 @@ test('failing tests are retried once, one step up and told what failed; a retry 
   assert.equal(retry.retryOf, first.id);
   const prompt = c.messages.find(message => message.runId === retry.id && message.role === 'user');
   assert.deepEqual(prompt.retry, { of: first.id });
-  assert.deepEqual([prompt.provider, prompt.routing.model, prompt.routing.effort], ['codex', 'gpt-codex', 'high'], 'The retry goes one step up with the same agent.');
+  assert.deepEqual([prompt.provider, prompt.routing.model, prompt.routing.effort], ['codex', 'gpt-6.1-sol', 'high'], 'The retry goes one step up with the same agent.');
   assert.match(prompt.text, /tests failed after your changes[\s\S]*Test command: npm test[\s\S]*Exit code: 1[\s\S]*Expected 90, received 100/);
   assert.deepEqual(checks(c), ['Tests failed: npm test', 'Tests failed: npm test']);
   assert.equal(c.runs.length, 2, 'A retry is never retried.');
@@ -196,7 +196,7 @@ test('Saver, or an agent near its limit, offers the retry; accepting starts it, 
   broker.queueAction(c, { action: 'add', text: 'Then update the changelog', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
   env.release();
   await until(() => c.retryOffer);
-  assert.deepEqual([c.retryOffer.provider, c.retryOffer.model, c.retryOffer.effort, c.retryOffer.blocked], ['codex', 'gpt-codex', 'high', undefined]);
+  assert.deepEqual([c.retryOffer.provider, c.retryOffer.model, c.retryOffer.effort, c.retryOffer.blocked], ['codex', 'gpt-6.1-sol', 'high', undefined]);
   assert.equal(c.runs.length, 1, 'Saver asks before retrying.');
   assert.equal(c.queuePaused?.reason, CHECK_PAUSE);
   assert(env.notices.some(notice => notice.title === 'Tests failed' && /Retry with Codex · GPT Codex · High effort/.test(notice.body)));

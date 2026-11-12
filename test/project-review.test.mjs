@@ -46,7 +46,7 @@ test('background preparation uses Flow assessment across all folders while the m
       super(options);
       this.availableProviders = () => ['codex'];
       this.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
-      this.handoff.models = async () => ({ data: [{ id: 'gpt-codex', supportedEffortLevels: ['low', 'medium', 'high'] }] });
+      this.handoff.models = async () => ({ data: [{ id: 'gpt-6.1-sol', supportedEffortLevels: ['low', 'medium', 'high'] }] });
       this.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ usedPercent: 10 }] });
       this.router.worker = async () => { assessments++; return JSON.stringify({ tier: 'standard', effort: 'medium', reason: 'Inspect app launch requirements' }); };
     }
@@ -54,8 +54,8 @@ test('background preparation uses Flow assessment across all folders while the m
   const map = f.plan([f.task()]), prompt = preparationPrompt(f.project, '', null);
   // Agents frequently format responses with introductory conversational text and markdown fences.
   fs.writeFileSync(path.join(f.web, '.mock-scenarios.json'), JSON.stringify({ 'Keep coding': { behavior: 'hold' }, [prompt]: { text: "The launch map for Bizbay is ready:\n\n```json\n" + JSON.stringify(map, null, 2) + "\n```\nLet me know if you need any adjustments.", behavior: 'hold' } }));
-  broker.budget.setPolicy(c, { ...broker.budget.policy(c), allowedModels: { codex: ['gpt-codex'] } });
-  broker.start(c, { text: 'Keep coding', provider: 'codex', model: 'gpt-codex', mode: 'edit', approvalPolicy: 'auto' });
+  broker.budget.setPolicy(c, { ...broker.budget.policy(c), allowedModels: { codex: ['gpt-6.1-sol'] } });
+  broker.start(c, { text: 'Keep coding', provider: 'codex', model: 'gpt-6.1-sol', mode: 'edit', approvalPolicy: 'auto' });
   const mainRun = broker.running;
   const input = { executionRevision: broker.execution.defaults(c).revision, requestId: 'prepare-test', change: '' };
   const value = f.review.prepare(f.project.id, input), task = broker.tasks.find(c, value.preparation.id);
@@ -66,7 +66,7 @@ test('background preparation uses Flow assessment across all folders while the m
   assert.equal(task.approvalPolicy, 'ask', 'Read-only preparation does not inherit full auto-approval.');
   assert.equal(lane.c.activeRun.approvalPolicy, 'ask');
   assert.equal(c.approvalPolicy, 'auto', 'The main conversation keeps its approval setting.');
-  assert.equal(lane.c.activeRun?.model, 'gpt-codex', 'The dispatcher selects an allowed model rather than requiring a manual one.');
+  assert.equal(lane.c.activeRun?.model, 'gpt-6.1-sol', 'The dispatcher selects an allowed model rather than requiring a manual one.');
   assert.equal(task.mode, 'direct'); assert.equal(task.worktree, undefined);
   assert.throws(() => lane.broker.checkRunSettings('codex', 'edit', 'ask'), /only inspects files/, 'Preparation cannot turn into a concurrent writer.');
   assert.equal(broker.running, mainRun, 'Preparation does not replace or stop the main run.');

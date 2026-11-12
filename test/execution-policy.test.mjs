@@ -157,6 +157,17 @@ test('provider restrictions and one-step overrides are enforced before provider 
   assert.equal(env.captures().length, 2); assert.equal(broker.execution.active(c).overrideUsed, true);
 });
 
+test('a Flow task limited to some models can still queue routed follow-ups, while manual ones stay limited', async t => {
+  const { broker, c } = setup(t);
+  broker.queue.pause(c, 'Preparing a queue');
+  broker.execution.setDefault(c, { mode: 'flow', routingMode: 'smart', allowedProviders: ['claude'], allowedModels: { claude: ['haiku'] } });
+  broker.queueAction(c, { action: 'add', text: 'Then document it', provider: 'codex', routing: { mode: 'smart' } });
+  assert.equal(c.queue.length, 1, 'Routing chooses the agent and model later, inside the limits.');
+  assert.throws(() => broker.queueAction(c, { action: 'add', text: 'Fixed', provider: 'claude', model: 'sonnet' }), /outside/);
+  assert.throws(() => broker.queueAction(c, { action: 'add', text: 'Fixed', provider: 'codex' }), /outside/);
+  assert.equal(c.queue.length, 1);
+});
+
 test('simultaneous Normal and Flow conversations keep independent task authority', { skip: scriptCLIs }, async t => {
   const { broker, c } = setup(t); flow(broker, c);
   broker.start(c, routed('Hello')); const flowId = broker.running.taskId; await broker.running.done;

@@ -60,7 +60,8 @@ export class PromptQueue {
       broker.execution.expect(broker.execution.defaults(c).revision, input.executionRevision);
       const taskId = randomUUID(); broker.execution.ensure(c, taskId, { requestId: input.requestId });
       const execution = broker.execution.token(c, taskId);
-      broker.execution.assert(c, execution, { action: routing ? 'routing' : 'manual', provider, model, effort });
+      // A routed item has no agent or model yet; they are checked against the task's limits once routing chooses them.
+      broker.execution.assert(c, execution, routing ? { action: 'routing' } : { action: 'manual', provider, model, effort });
       broker.record(c, { type: 'queue_add', item: { id: randomUUID(), execution, text, provider, model, effort, mode, approvalPolicy, attachments, billingConfirmed: input.billingConfirmed === true, ...(routing ? { routing } : {}), createdAt: new Date().toISOString() } });
     } else if (action === 'update') {
       const item = this.item(c, input.id);

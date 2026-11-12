@@ -226,6 +226,64 @@ test('a card’s place on the canvas is saved without changing what an agent rea
   assert.deepEqual(env.card(second.id).at, { x: 5, y: 5 }, 'Places are kept in the workspace’s journal.');
 });
 
+test('labels and a due date sort and plan cards without changing what an agent reads (#97)', async t => {
+  const env = setup(t);
+  const card = env.add({ title: 'Agree the API', labels: [' backend ', 'API', 'Backend', '', 'api  contract'], due: '2026-11-20' });
+  assert.deepEqual(env.card(card.id).labels, ['backend', 'API', 'api contract'], 'Labels are trimmed and kept once whatever their case, in the order given.');
+  assert.equal(env.card(card.id).due, '2026-11-20');
+  assert.deepEqual([env.add().labels, env.add().due], [[], null], 'A card starts with no labels and no due date.');
+  for (const [input, message] of [[{ labels: 'backend' }, /must be a list/], [{ labels: [3] }, /must be text/], [{ labels: ['x'.repeat(33)] }, /up to 32 characters/], [{ labels: Array.from({ length: 9 }, (_, i) => `l${i}`) }, /up to 8 labels/], [{ due: '2026-02-30' }, /isn’t a day on the calendar/], [{ due: '2026-2-3' }, /YYYY-MM-DD/], [{ due: 20261120 }, /YYYY-MM-DD/]]) {
+    assert.throws(() => env.board.edit(env.c, card.id, input), error => error.status === 400 && message.test(error.message), JSON.stringify(input));
+  }
+  assert.equal(env.board.edit(env.c, card.id, { labels: ['frontend'], due: '' }).revision, 1, 'The agent isn’t told labels or the due date, so they are no new revision.');
+  assert.deepEqual([env.card(card.id).labels, env.card(card.id).due], [['frontend'], null], 'An empty due date clears it.');
+  assert.doesNotMatch(env.board.prompt(env.c, env.card(card.id)), /frontend/);
+  // Like the priority, they can change while an agent works on the card; what it reads can't.
+  env.c.board.find(item => item.id === card.id).column = 'doing';
+  assert.deepEqual(env.board.edit(env.c, card.id, { labels: ['frontend', 'urgent'], due: '2026-12-01' }).labels, ['frontend', 'urgent']);
+  assert.throws(() => env.board.edit(env.c, card.id, { title: 'Something else' }), /An agent is working on this card/);
+  env.c.board.find(item => item.id === card.id).column = 'backlog';
+  const markdown = env.board.markdown(env.c, { now: new Date('2026-11-12T12:00:00Z') });
+  assert.match(markdown, /### Agree the API\n\n- Labels: frontend, urgent\n- Due: 2026-12-01\n- Agent: Codex\n/);
+  await env.reopen();
+  assert.deepEqual([env.card(card.id).labels, env.card(card.id).due], [['frontend', 'urgent'], '2026-12-01'], 'They are kept in the workspace’s journal.');
+});
+
+test('a card’s comments say who wrote them and when, reach the agent on its next run and are read on their own (#97)', async t => {
+  const env = setup(t);
+  const card = env.add({ title: 'Build the form', notes: 'Email only.' });
+  const first = env.board.comment(env.c, card.id, { text: '  The design is changing:\r\nwait for the new mockups.  ' });
+  assert.deepEqual([first.text, first.by], ['The design is changing:\nwait for the new mockups.', { kind: 'you' }], 'A comment keeps its lines and says you wrote it.');
+  assert.match(first.at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(env.card(card.id).revision, 2, 'The agent is told your comments, so a comment is a new revision: a scheduled run waits for you.');
+  for (const [input, message] of [[{}, /Write the comment first/], [{ text: '   ' }, /Write the comment first/], [{ text: 'x'.repeat(4001) }, /up to 4,000 characters/]]) assert.throws(() => env.board.comment(env.c, card.id, input), error => error.status === 400 && message.test(error.message));
+  assert.throws(() => env.board.comment(env.c, 'not-a-card', { text: 'Hi' }), error => error.status === 404);
+  const second = env.board.comment(env.c, card.id, { text: 'Keep the old route working.' });
+  const prompt = env.board.prompt(env.c, env.card(card.id));
+  assert.match(prompt, /The person’s comments on this card, oldest first:\n- \d{4}-\d{2}-\d{2}: The design is changing:\n {2}wait for the new mockups\.\n- \d{4}-\d{2}-\d{2}: Keep the old route working\.\n/, 'The next run is told your comments, oldest first.');
+  // The board carries a count, not the text; the drawer reads them on their own.
+  const shown = env.board.view(env.c).cards.find(item => item.id === card.id);
+  assert.equal(shown.comments, undefined); assert.equal(shown.commentCount, 2);
+  assert.deepEqual(env.board.comments(env.c, card.id).map(item => item.id), [first.id, second.id]);
+  // Anyone else's comment reaches an agent only once you accept it, so it isn't in the prompt.
+  env.c.board.find(item => item.id === card.id).comments.push({ id: 'g1', text: 'Ship it today!', by: { kind: 'guest', name: 'Sam' }, at: '2026-11-12T10:00:00.000Z' });
+  assert.doesNotMatch(env.board.prompt(env.c, env.card(card.id)), /Ship it today/);
+  assert.match(env.board.markdown(env.c), /Comments:\n\n- You, \d{4}-\d{2}-\d{2}: The design is changing:\n {2}wait for the new mockups\.\n- You, [\d-]+: Keep the old route working\.\n- Sam \(guest\), 2026-11-12: Ship it today!\n/, 'The export names who wrote each comment.');
+  env.c.board.find(item => item.id === card.id).comments.pop();
+  assert.deepEqual(env.board.uncomment(env.c, card.id, { commentId: first.id }), { removed: true });
+  assert.equal(env.card(card.id).revision, 4);
+  assert.throws(() => env.board.uncomment(env.c, card.id, { commentId: first.id }), error => error.status === 404);
+  assert.doesNotMatch(env.board.prompt(env.c, env.card(card.id)), /design is changing/, 'A removed comment isn’t told to the agent.');
+  // A long thread sends its newest comments, up to a limit, and says how many it left out.
+  for (let i = 0; i < 6; i++) env.board.comment(env.c, card.id, { text: `${i} ${'y'.repeat(3000)}` });
+  const long = env.board.prompt(env.c, env.card(card.id));
+  assert.match(long, /\(5 earlier comments left out\.\)\n- [\d-]+: 4 y+\n- [\d-]+: 5 y+/);
+  // Comments are kept with the card and survive a restart.
+  await env.reopen();
+  assert.deepEqual(env.board.comments(env.c, card.id).map(item => item.text.slice(0, 1)), ['K', '0', '1', '2', '3', '4', '5']);
+  assert.equal(env.card(card.id).revision, 10);
+});
+
 test('through the real server: the board is read and changed for the workspace chat', { skip: scriptCLIs }, async t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-board-server-'))), a = repository(path.join(root, 'a')), cli = path.join(root, 'codex-mock.mjs');
   fs.writeFileSync(cli, `#!${process.execPath}\nimport ${JSON.stringify(pathToFileURL(fixture).href)};\n`, { mode: 0o700 });
@@ -240,6 +298,13 @@ test('through the real server: the board is read and changed for the workspace c
   assert.equal(made.status, 201); assert.equal(made.body.board.cards[0].title, 'From the page');
   const id = made.body.card.id;
   assert.equal((await call(`/api/board/cards/${id}/edit`, { priority: 'high' })).body.card.priority, 'high');
+  assert.deepEqual((await call(`/api/board/cards/${id}/edit`, { labels: ['web'], due: '2026-12-01' })).body.card.labels, ['web']);
+  const commented = await call(`/api/board/cards/${id}/comment`, { text: 'Use the new logo.' });
+  assert.equal(commented.status, 201); assert.equal(commented.body.comment.text, 'Use the new logo.'); assert.equal(commented.body.card.commentCount, 1); assert.equal(commented.body.card.comments, undefined);
+  assert.deepEqual((await call(`/api/board/cards/${id}/comments`)).body.comments.map(item => item.text), ['Use the new logo.']);
+  assert.equal((await call(`/api/board/cards/${id}/comment`, { text: '' })).status, 400);
+  assert.deepEqual((await call(`/api/board/cards/${id}/uncomment`, { commentId: commented.body.comment.id })).body.comments, []);
+  assert.equal((await call(`/api/board/cards/${id}/comments`, {})).status, 405);
   const placed = await call('/api/board/place', { positions: { [id]: { x: 120, y: 40 } } });
   assert.equal(placed.status, 200); assert.deepEqual(placed.body.board.cards[0].at, { x: 120, y: 40 });
   assert.equal((await call('/api/board/place', { positions: {} })).status, 400);

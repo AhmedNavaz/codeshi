@@ -256,7 +256,7 @@ test('a queued prompt can start as a task beside the main run, keeping its setti
       super(options);
       this.availableProviders = () => ['claude'];
       this.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
-      this.handoff.models = async () => ({ models: [{ id: 'claude-haiku', displayName: 'Haiku' }] });
+      this.handoff.models = async () => ({ models: [{ id: 'haiku', displayName: 'Haiku' }] });
       this.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] });
       this.router.worker = async () => JSON.stringify({ tier: 'light', effort: 'low', reason: 'A scoped read-only task.' });
     }

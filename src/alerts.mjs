@@ -9,8 +9,8 @@ export const MOMENTS = ['attention', 'finished', 'stopped'];
 export const CHANNELS = ['banner', 'sound', 'bounce', 'badge', 'phone'];
 // Which moment each kind of alert belongs to. Progress reports, such as continuing after a usage limit resets or
 // waiting for another reset, show and count like their moment but play no sound.
-const MOMENT_OF = { approval: 'attention', handoff: 'attention', finished: 'finished', started: 'finished', stopped: 'stopped', failed: 'stopped', expired: 'stopped', waiting: 'stopped' };
-const QUIET = new Set(['started', 'waiting']);
+const MOMENT_OF = { approval: 'attention', handoff: 'attention', finished: 'finished', started: 'finished', scheduled: 'finished', stopped: 'stopped', failed: 'stopped', expired: 'stopped', waiting: 'stopped', missed: 'stopped' };
+const QUIET = new Set(['started', 'waiting', 'scheduled']);
 export const momentOf = kind => MOMENT_OF[kind] || null;
 
 const every = value => Object.fromEntries(MOMENTS.map(moment => [moment, value]));
@@ -105,7 +105,7 @@ export const progressPillOn = preferences => preferences?.progressPill === true;
 
 // What a phone's lock screen shows for one alert, or null for none. Anyone holding the phone can read it, so it says
 // only what kind of thing happened and in which workspace: never a command, a file, a question or the agent's reply.
-const PHONE_TITLE = { approval: 'Waiting for you', handoff: 'Handoff offered', finished: 'Finished', started: 'Continuing', stopped: 'Stopped', failed: 'Stopped', expired: 'Request expired', waiting: 'Waiting for a usage reset' };
+const PHONE_TITLE = { approval: 'Waiting for you', handoff: 'Handoff offered', finished: 'Finished', started: 'Continuing', stopped: 'Stopped', failed: 'Stopped', expired: 'Request expired', waiting: 'Waiting for a usage reset', scheduled: 'Scheduled run started', missed: 'A scheduled run didn’t start' };
 export function alertPush(notice, preferences) {
   const moment = momentOf(notice?.kind);
   if (!moment || !preferences?.phone?.on || !preferences.phone[moment]) return null;

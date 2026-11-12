@@ -4,12 +4,12 @@ import { randomUUID } from 'node:crypto';
 // journal, beside the tasks they start, so they live in Codeshi's data and a crash finds them as they were. Running a card
 // starts an ordinary task (#88) with the card's own agent under a Normal policy. From then on the task decides where the card
 // is: working puts it in Doing, finishing in Review, and stopping, failing or being discarded back in Ready with the reason.
-// Only you move a card to Done. Schedules and Flow choosing cards from the backlog come later.
+// Only you move a card to Done. Schedules live in src/schedules.mjs; Flow choosing cards from the backlog comes later.
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 export const COLUMNS = ['backlog', 'ready', 'doing', 'review', 'done'];
 export const PRIORITIES = ['high', 'normal', 'low'];
 const PROVIDERS = ['codex', 'claude', 'gemini'];
-export const LIMITS = { cards: 300, title: 200, notes: 20000, checks: 20, check: 300, dependsOn: 20, reason: 500, summary: 600 };
+export const LIMITS = { cards: 300, title: 200, notes: 20000, checks: 20, check: 300, dependsOn: 20, reason: 500, summary: 600, labels: 8, label: 32, comments: 100, comment: 4000, promptComments: 8000 };
 // Tasks that can't change any more, and the ones whose changes are already in the folder.
 const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
 const LIVE = new Set(['waiting', 'running']);
@@ -29,8 +29,32 @@ const position = at => {
   const keep = value => Math.max(-REACH, Math.min(REACH, Math.round(value)));
   return { x: keep(at.x), y: keep(at.y) };
 };
+// Labels (#97): short names to sort cards by, each once whatever its case, in the order given.
+const labelList = value => {
+  if (!Array.isArray(value)) throw fail('A card’s labels must be a list.', 400);
+  const out = [], seen = new Set();
+  for (const item of value) {
+    if (typeof item !== 'string') throw fail('Each label must be text.', 400);
+    const name = item.replace(/\s+/g, ' ').trim();
+    if (!name || seen.has(name.toLowerCase())) continue;
+    if (name.length > LIMITS.label) throw fail(`A label can be up to ${LIMITS.label} characters.`, 400);
+    seen.add(name.toLowerCase()); out.push(name);
+  }
+  if (out.length > LIMITS.labels) throw fail(`A card can have up to ${LIMITS.labels} labels.`, 400);
+  return out;
+};
+// A due date is a day on the calendar, with no time or zone: the person's own day.
+const dueDay = value => {
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw fail('A due date is a day, written as YYYY-MM-DD.', 400);
+  const [y, m, d] = value.split('-').map(Number), day = new Date(Date.UTC(y, m - 1, d));
+  if (y < 2000 || y > 2200 || day.getUTCMonth() !== m - 1 || day.getUTCDate() !== d) throw fail('That due date isn’t a day on the calendar.', 400);
+  return value;
+};
 // Mermaid reads quotes and angle brackets in a label as its own syntax; these are its entity codes.
 const label = value => String(value).replace(/\s+/g, ' ').replace(/[#"<>]/g, char => ({ '#': '#35;', '"': '#quot;', '<': '#lt;', '>': '#gt;' })[char]);
+// Who wrote a comment, as the export names them.
+const author = by => by?.kind === 'agent' ? [by.provider, by.model].filter(Boolean).join(' ') || 'An agent' : by?.kind === 'guest' ? `${by.name || 'A guest'} (guest)` : 'You';
 const clip = (value, limit) => { const line = String(value || '').trim(); return line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line; };
 
 export class Board {
@@ -56,6 +80,10 @@ export class Board {
       if (!PRIORITIES.includes(priority)) throw fail('Choose high, normal or low priority.', 400);
       changes.priority = priority;
     }
+    // Labels and the due date are for you to sort and plan by. The agent isn't told them, so like the priority they can
+    // change at any time without a new revision.
+    if (!card || 'labels' in input) changes.labels = labelList(input.labels ?? []);
+    if (!card || 'due' in input) changes.due = dueDay(input.due ?? null);
     if (!card || 'checks' in input) {
       const checks = input.checks ?? [];
       if (!Array.isArray(checks) || checks.length > LIMITS.checks) throw fail(`A card can have up to ${LIMITS.checks} checks.`, 400);
@@ -144,6 +172,7 @@ export class Board {
     if (card.column === 'doing') throw fail('An agent is working on this card. Stop it before removing it.');
     for (const other of this.cards(c).filter(item => item.dependsOn?.includes(id))) this.update(c, other, { dependsOn: other.dependsOn.filter(item => item !== id) });
     this.main.record(c, { type: 'board_card_remove', id });
+    this.main.schedules?.forgetCard(c, id);
     return { removed: true };
   }
   // Where cards sit on the canvas (#97), several at once so Arrange and its undo are one step. null hands a card back to
@@ -156,6 +185,29 @@ export class Board {
     const changes = entries.map(([id, at]) => [this.find(c, id), at === null ? null : position(at)]);
     for (const [card, at] of changes) if (JSON.stringify(card.at ?? null) !== JSON.stringify(at)) this.update(c, card, { at });
     return { placed: changes.length };
+  }
+
+  // ---- Comments (#97)
+  // Each says who wrote it and when. Today that's always you; by is an object so an agent and its model, or a guest's
+  // name, can say the same later. The agent is told your comments the next time the card runs, so adding or removing
+  // one is a new revision: a scheduled run waits for you, as for any edit. One already working doesn't see it. Comments
+  // have records of their own rather than rewriting the card's whole list each time.
+  comments(c, id) { return this.find(c, id).comments || []; }
+  comment(c, id, { text: value } = {}) {
+    const card = this.find(c, id);
+    if (typeof value !== 'string' || !value.trim()) throw fail('Write the comment first.', 400);
+    const body = value.replace(/\r\n?/g, '\n').trim();
+    if (body.length > LIMITS.comment) throw fail(`A comment can be up to ${LIMITS.comment.toLocaleString('en-US')} characters.`, 400);
+    if ((card.comments || []).length >= LIMITS.comments) throw fail(`A card holds up to ${LIMITS.comments} comments. Remove some old ones first.`);
+    const comment = { id: randomUUID(), text: body, by: { kind: 'you' }, at: new Date().toISOString() };
+    this.main.record(c, { type: 'board_comment', cardId: card.id, comment, revision: card.revision + 1 });
+    return comment;
+  }
+  uncomment(c, id, { commentId } = {}) {
+    const card = this.find(c, id);
+    if (!(card.comments || []).some(item => item.id === commentId)) throw fail('That comment is no longer on the card.', 404);
+    this.main.record(c, { type: 'board_comment_remove', cardId: card.id, commentId, revision: card.revision + 1, at: new Date().toISOString() });
+    return { removed: true };
   }
 
   // ---- Export (#97)
@@ -179,6 +231,8 @@ export class Board {
         lines.push(`### ${card.title.replace(/\s+/g, ' ')}`, '');
         const facts = [];
         if (card.priority !== 'normal') facts.push(`Priority: ${card.priority}`);
+        if (card.labels?.length) facts.push(`Labels: ${card.labels.join(', ')}`);
+        if (card.due) facts.push(`Due: ${card.due}`);
         facts.push(`Agent: ${card.agent ? `${card.agent.provider[0].toUpperCase()}${card.agent.provider.slice(1)}${card.agent.model ? ` (${card.agent.model}${card.agent.effort ? `, ${card.agent.effort}` : ''})` : ''}` : 'not chosen'}`);
         if (card.folderId && this.folders().length > 1 && folderName(card.folderId)) facts.push(`Works in: ${folderName(card.folderId)}`);
         const after = (card.dependsOn || []).map(id => all.find(item => item.id === id)?.title).filter(Boolean);
@@ -189,6 +243,8 @@ export class Board {
         lines.push(...facts.map(fact => `- ${fact}`), '');
         if (card.notes) lines.push(card.notes, '');
         if (card.checks?.length) lines.push('Done means:', '', ...card.checks.map(item => `- [${item.done ? 'x' : ' '}] ${item.text}`), '');
+        const said = this.comments(c, card.id);
+        if (said.length) lines.push('Comments:', '', ...said.map(item => `- ${author(item.by)}, ${item.at.slice(0, 10)}: ${item.text.replace(/\n/g, '\n  ')}`), '');
       }
     }
     return `${lines.join('\n').trimEnd()}\n`;
@@ -199,13 +255,15 @@ export class Board {
   // or chosen too; then a chosen card's task waits for those tasks. Every card is checked before any task is recorded, and
   // the tasks are recorded held, so a run that can't start starts nothing. Tasks at once and the task limits decide when
   // each starts, as for any task.
-  run(c, { ids, executionRevision } = {}) {
+  // A schedule (src/schedules.mjs) runs its card with the access saved with it, an ID made from its time, and a note for
+  // the agent; a repeating one can run a card again from Done.
+  run(c, { ids, executionRevision } = {}, { access = null, requestId = null, from = ['ready'], note = '', source = 'board' } = {}) {
     if (!Array.isArray(ids) || !ids.length) throw fail('Choose the cards to run.', 400);
     const chosen = [...new Set(ids)].map(id => this.find(c, id)), picked = new Set(chosen.map(card => card.id));
-    const folders = this.folders(), mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask';
+    const folders = this.folders(), mode = access?.mode || c.mode, approvalPolicy = access?.approvalPolicy || c.approvalPolicy || 'ask';
     for (const card of chosen) {
       const name = `“${card.title}”`;
-      if (card.column !== 'ready') throw fail(`${name} isn’t in Ready. Move it there to run it.`);
+      if (!from.includes(card.column)) throw fail(card.column === 'doing' ? `${name} is still running.` : card.column === 'review' ? `${name} is waiting in Review.` : `${name} isn’t in Ready. Move it there to run it.`);
       if (!card.agent) throw fail(`Choose an agent for ${name}.`, 400);
       const folderId = card.folderId || (folders.length === 1 ? folders[0].id : null);
       if (!folderId || !folders.some(folder => folder.id === folderId)) throw fail(`Choose the folder ${name} works in.`, 400);
@@ -223,10 +281,10 @@ export class Board {
     const tasks = {}, made = [], attempt = randomUUID().slice(0, 8);
     try {
       for (const card of order) {
-        const folderId = card.folderId || folders[0].id, policyId = randomUUID();
+        const folderId = card.folderId || folders[0].id, policyId = randomUUID(), id = requestId && chosen.length === 1 ? requestId : `board-${card.id}-${attempt}`;
         // Normal: the card's own agent, model and effort, whatever the workspace's default is.
-        this.main.execution.ensure(c, policyId, { config: { mode: 'normal' }, source: 'board', requestId: `board-${card.id}-${attempt}` });
-        const task = this.main.tasks.start(c, { text: this.prompt(c, card), title: card.title, provider: card.agent.provider, model: card.agent.model, effort: card.agent.effort, mode, approvalPolicy, folderId, requestId: `board-${card.id}-${attempt}`, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision }, { held: true, queueExecution: this.main.execution.token(c, policyId), board: { cardId: card.id, revision: card.revision } });
+        this.main.execution.ensure(c, policyId, { config: { mode: 'normal' }, source, requestId: id });
+        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: card.agent.provider, model: card.agent.model, effort: card.agent.effort, mode, approvalPolicy, folderId, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision }, { held: true, queueExecution: this.main.execution.token(c, policyId), board: { cardId: card.id, revision: card.revision } });
         tasks[card.id] = task.id; made.push(task.id);
       }
     } catch (error) {
@@ -249,6 +307,15 @@ export class Board {
     if (card.checks?.length) parts.push('', 'Done means:', ...card.checks.map(item => `- ${item.text}`));
     const after = (card.dependsOn || []).map(id => this.cards(c).find(item => item.id === id)?.title).filter(Boolean);
     if (after.length) parts.push('', `This builds on earlier cards: ${after.map(title => `“${title}”`).join(', ')}.`);
+    // Only your own comments, newest kept when there are many: anyone else's reach an agent only once you accept them.
+    const said = (card.comments || []).filter(item => item.by?.kind === 'you'), kept = [];
+    let size = 0;
+    for (const item of [...said].reverse()) {
+      const line = `- ${item.at.slice(0, 10)}: ${item.text.replace(/\n/g, '\n  ')}`;
+      if (kept.length && size + line.length > LIMITS.promptComments) break;
+      kept.unshift(line); size += line.length;
+    }
+    if (kept.length) parts.push('', 'The person’s comments on this card, oldest first:', ...(kept.length < said.length ? [`(${said.length - kept.length} earlier ${said.length - kept.length === 1 ? 'comment' : 'comments'} left out.)`] : []), ...kept);
     parts.push('', 'This is a card from the project’s task board. When you finish, say in a few sentences what you changed and how you checked it. You review nothing yourself: the person accepts the card.');
     return parts.join('\n');
   }
@@ -327,12 +394,14 @@ export class Board {
   }
 
   // ---- Showing the board
+  // The board carries how many comments each card has, not their text: a full board's worth would be sent on every change.
+  // The card's drawer reads them on their own.
   public(c, card) {
-    const task = this.task(c, card), lane = task && this.main.tasks.lanes.get(task.id);
-    return { ...card, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, approvals: lane?.broker.pendingCount() || 0 } } : {}) };
+    const task = this.task(c, card), lane = task && this.main.tasks.lanes.get(task.id), { comments, ...rest } = card;
+    return { ...rest, labels: card.labels || [], due: card.due || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, approvals: lane?.broker.pendingCount() || 0 } } : {}) };
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   view(c) {
-    return { cards: this.list(c), revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
+    return { cards: this.list(c), schedules: this.main.schedules?.view(c) || [], revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
   }
 }
