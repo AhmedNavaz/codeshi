@@ -62,9 +62,8 @@
   // the weather up nor draws it more often.
   const WEATHER_FRAME_MS = 1000 / 30, WEATHER_STEP_MS = 1000 / 60;
   let lastWeatherFrame = null, weatherLag = 0;
-  // Asked once: the weather checks it on every frame, and a new query each time cost more than the drawing it decided.
-  const motionQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)") || null;
-  const reducedMotion = () => Boolean(motionQuery?.matches);
+  // Rain and Snow are chosen on purpose, so they fall whatever the system's reduced motion setting says. Windows turns
+  // that setting on when Animation effects is off, and the weather then showed an empty sky.
 
   function updateObstacleRects() {
     const rects = [];
@@ -378,8 +377,8 @@
   function drawWeather(time) {
     weatherAnimId = null;
     if (!weatherShown() || document.hidden || !weatherCtx || !weatherCanvas) return;
-    // Clear, and any weather while the system asks for reduced motion, is drawn once as an empty sky and then stops.
-    const still = weatherMode === "clear" || reducedMotion();
+    // Clear is drawn once as an empty sky and then stops.
+    const still = weatherMode === "clear";
     let steps = 1;
     if (!still && lastWeatherFrame !== null) {
       const since = time - lastWeatherFrame;

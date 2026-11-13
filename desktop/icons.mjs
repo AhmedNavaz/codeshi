@@ -113,7 +113,7 @@ app.whenReady().then(async () => {
   fs.rmSync(path.dirname(iconset), { recursive: true, force: true });
   write(path.join(assets, 'icon.png'), await tilePng('paper', 512));
   write(path.join(assets, 'icon-dark.png'), await tilePng('ink', 512));
-  write(path.join(assets, 'icon.ico'), ico(await Promise.all([16, 24, 32, 48, 64, 128, 256].map(async size => ({ size, png: await render(brand.mark({ pixels: size }), size) })))));
+  write(path.join(assets, 'icon.ico'), ico(await Promise.all([16, 24, 32, 48, 64, 128, 256].map(async size => ({ size, png: await render(brand.mark({ pixels: size, detail: size < 128 ? 'medium' : 'full' }), size) })))));
 
   for (const [name, attention] of [['StatusTemplate', false], ['StatusAttentionTemplate', true]]) {
     const { svg, width, height } = brand.template({ attention });

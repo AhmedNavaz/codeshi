@@ -283,14 +283,14 @@ test('Lounge snow and its settling run on elapsed time too', () => {
   fast.forEach((call, i) => call.slice(1).forEach((value, j) => assert.ok(Math.abs(value - slow[i][j + 1]) < 1e-6, `${call[0]} ${i} is drawn at the same place`)));
 });
 
-test('Lounge weather stays still when the system asks for reduced motion', () => {
+test('Lounge weather still falls when the system asks for reduced motion, because it was chosen on purpose', () => {
   const ui = lounge({ reducedMotion: true });
   ui.api.enter(); ui.api.setWeatherMode('rain');
   second(ui, 60);
-  assert.deepEqual(ui.weather().filter(([name]) => ['stroke', 'fill'].includes(name)), []);
-  assert.equal(ui.loops().drawWeather, undefined, 'no weather loop waits for a frame');
+  assert.ok(drawnFrames(ui.weather()) > 30, 'the rain was drawn');
+  assert.deepEqual(ui.loops(), { drawWeather: 1 }, 'the weather loop waits for a frame');
   ui.api.setWeatherMode('snow'); second(ui, 60, 2000);
-  assert.deepEqual(ui.weather().filter(([name]) => ['stroke', 'fill'].includes(name)), []);
+  assert.ok(ui.weather().some(([name]) => ['stroke', 'fill'].includes(name)), 'the snow was drawn');
 });
 
 test('weather keeps one loop at most through hide, approvals, Flow on and off, weather changes and Lounge visits', () => {
@@ -339,12 +339,12 @@ test('Clear keeps no full-window canvas, and leaving the Lounge keeps the weathe
   assert.deepEqual(ui.loops(), { drawWeather: 1 });
 });
 
-test('the weather asks about reduced motion once, not on every frame', () => {
+test('the weather does not ask about reduced motion', () => {
   let queries = 0;
   const ui = lounge({ onMatchMedia: () => queries++ });
   ui.api.enter(); ui.api.setWeatherMode('rain'); second(ui, 60, 0, 2);
   assert.ok(drawnFrames(ui.weather()) > 30, 'the rain was drawn');
-  assert.equal(queries, 1, 'one query when the script starts');
+  assert.equal(queries, 0, 'no query, so no per-frame cost either');
 });
 
 test('the setup screen glow drifts once rather than for as long as setup is open', () => {
