@@ -145,8 +145,9 @@ function editedFiles(message, folders) {
   const take = target => {
     if (typeof target !== 'string' || !target) return;
     const folder = path.isAbsolute(target) ? folders.find(item => target === item.path || target.startsWith(item.path + path.sep)) : folders[0];
-    const relative = folder && (path.isAbsolute(target) ? path.relative(folder.path, target) : target);
-    if (relative && !relative.startsWith('..') && !privatePath(relative)) found.push({ folderId: folder.id, path: relative });
+    // Written with / on every system, so a memory reads the same on Windows and moves between computers unchanged.
+    const relative = folder && (path.isAbsolute(target) ? path.relative(folder.path, target) : target).split(path.sep).join('/');
+    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative) && !privatePath(relative)) found.push({ folderId: folder.id, path: relative });
   };
   if (text.startsWith('File changes: ')) { try { for (const change of JSON.parse(text.slice(14))) take(change.path); } catch { /* Not the usual shape. */ } }
   else if (/^(?:Edit|Write|MultiEdit|NotebookEdit)\n/.test(text)) { try { take(JSON.parse(text.split('\n')[1]).file_path); } catch { /* Cut short in the journal. */ } }
