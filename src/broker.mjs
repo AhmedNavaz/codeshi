@@ -24,7 +24,7 @@ import { TaskCoordinator } from './task-coordinator.mjs';
 import { cleanEntryInput, editedEntry, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
 import { planCopy, writeCopy } from './memory-instructions.mjs';
 import { applyBudgetRecord, isExplicitRetry, TaskBudgets } from './task-budget.mjs';
-import { SkillCatalog } from './skills.mjs';
+import { SkillCatalog, CLAUDE_PLUGIN } from './skills.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
 import { processStart, reused } from './mutation-lock.mjs';
@@ -425,6 +425,10 @@ export class Broker extends EventEmitter {
       }
       if (record.metadata?.routingQuota && c.activeRun) { const run = c.runs?.find(item => item.id === c.activeRun.id); if (run) run.routingQuota = record.metadata.routingQuota; }
     }
+    if (record.type === 'skill_loaded' && c.activeRun?.id === record.runId && record.skill?.name) {
+      const context = c.activeRun.context || {}, others = (context.skills || []).filter(item => item.name !== record.skill.name);
+      c.activeRun.context = { ...context, skills: [...others, record.skill] };
+    }
     if (record.type === 'native_compaction' && c.activeRun?.id === record.runId) {
       const run = c.activeRun, events = run.compactionEvents || [], prior = events.find(item => item.id === record.event.id);
       run.compactions = (run.compactions || 0) + (prior ? 0 : 1);
@@ -636,7 +640,7 @@ export class Broker extends EventEmitter {
     const provider = c.provider, text = c.messages.some(message => message.role === 'user') ? continuationRequest : 'Preview';
     const decision = rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() });
     const rollover = decision.rollover ? { ...decision, memory: milestoneMemory(c, { folders: this.workspaceFolders, text }) } : null;
-    const prepared = prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider }), readAttachment: () => ({ text: '' }), includeImages: false });
+    const prepared = prepareContext(c, text, { verification: verificationForRun(this.verificationCadence()), rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode: c.mode, policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: this.skills.forTask(c, { text, relation: text === continuationRequest ? 'continuation' : null, fresh: true, provider, native: provider === 'claude' && transportFor(provider, c.transport || 'auto', this.configuredBins[provider]) === 'sdk' }), readAttachment: () => ({ text: '' }), includeImages: false });
     const envelope = JSON.parse(prepared.prompt.slice(prepared.prompt.indexOf('\n') + 1));
     return { brief: envelope.brief || null, ...(envelope.milestone ? { milestone: envelope.milestone } : {}), metadata: prepared.metadata };
   }
@@ -989,6 +993,8 @@ export class Broker extends EventEmitter {
     // A planning run plans from the text files attached to its message: a brief, a spec or requirements (#155). A Plan
     // attachment is the person's own plan of the work, not requirements, so it isn't named as one.
     const documents = orchestrate ? attachments.filter(file => file.kind === 'text' && !file.plan).map(file => file.name) : [];
+    // With the whole Plan attached, the planner changes that Plan rather than drafting a second one beside it (#162).
+    const revising = orchestrate && attachments.some(file => file.plan?.whole && file.plan?.ids && !file.withheld);
     if (local && attachments.some(file => file.kind !== 'text')) throw Object.assign(new Error('This local connection supports text and code attachments. Remove image attachments or choose a cloud agent; your draft stays saved.'), { status: 400 });
     text = text.trim(); model = model || null;
     const fingerprint = createHash('sha256').update(JSON.stringify({ text, ...(orchestrate ? { orchestrate } : {}), ...(automaticReview !== null ? { automaticReview } : {}), ...(local ? { local } : {}), ...(review ? { review: review.snapshot.digest } : {}), ...(attachments.length ? { attachments: attachmentIds } : {}), provider, mode, approvalPolicy, fresh, model, ...(effort ? { effort } : {}), transport: transportFor(provider, transport, this.configuredBins[provider]) })).digest('hex');
@@ -1044,7 +1050,7 @@ export class Broker extends EventEmitter {
     const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     let sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
     const verification = verificationForRun(this.verificationCadence(), { retryOf, automaticReview });
-    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text, { documents }) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text, { documents, revising }) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider, native: !review && provider === 'claude' && actualTransport === 'sdk' }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -1065,7 +1071,7 @@ export class Broker extends EventEmitter {
         ...(automaticReview ? { automaticReview } : {}),
         message: { id: randomUUID(), role: 'user', text, ...(text === continuationRequest ? { continuation: true } : {}), ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(orchestrate ? { orchestrationId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, policy: globalThis.relayRouting.POLICY_VERSION, ...(routing.selectedBy === 'you' ? { selectedBy: 'you' } : {}), ...(routing.tier ? { tier: routing.tier } : {}), ...(routing.steppedDown ? { steppedDown: true } : {}), ...(routing.plannedHandoff ? { plannedHandoff: true } : {}), ...(routing.assessment ? { ratedBy: routing.assessment.source, ...(routing.assessment.ms ? { ratedMs: routing.assessment.ms } : {}) } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });
     } catch (error) { lease.release(); throw error; }
-    for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', `Using skill ${skill.name}: ${skill.reason}`, provider);
+    for (const skill of prepared.metadata?.skills || []) this.message(c, 'activity', skill.route === 'native' && !skill.delivered ? `Asked Claude to use skill ${skill.name}: ${skill.reason}` : `Using skill ${skill.name}: ${skill.reason}`, provider);
     // A message sent by hand takes the place of a wait for a reset.
     if (c.resume && !resume && !review) this.resume.end(c, 'superseded');
     // So does any new run for an offered retry.
@@ -1118,7 +1124,7 @@ export class Broker extends EventEmitter {
           // A planning run says whether a plan is ready.
           const planned = orchestrate ? c.orchestrations.find(item => item.id === runId) : null;
           if (!review && !waiting && !run.stopped) this.emit('notify', planned
-            ? planned.status === 'draft' || planned.status === 'moved' ? { conversationId: c.id, kind: 'finished', title: 'Plan drafted', body: `${agent} drafted ${planned.cards?.length || planned.steps?.length || 0} cards on the Plan. Nothing runs until you accept them.` }
+            ? planned.status === 'draft' || planned.status === 'moved' ? { conversationId: c.id, kind: 'finished', title: 'Plan drafted', body: (() => { const added = (planned.cards || []).filter(id => c.board?.find(card => card.id === id)?.createdBy === 'codeshi').length, count = (planned.cards?.length || planned.steps?.length || 0) - added; return `${agent} drafted ${count} ${count === 1 ? 'card' : 'cards'} on the Plan${added ? ', and Codeshi added a review of the whole result' : ''}. Nothing runs until you accept them.`; })() }
             : { conversationId: c.id, kind: 'stopped', title: 'No plan yet', body: run.errorCategory === 'quota' ? `${agent} reached a usage limit while planning. Open the workspace to plan again.` : `${agent} didn’t return a plan. Open the workspace to plan again or write the steps yourself.` }
             : success
             ? { conversationId: c.id, kind: 'finished', title: 'Task finished', body: `${agent} finished${run.resume ? ' the work it continued while you were away' : ''}.` }
@@ -1198,7 +1204,7 @@ export class Broker extends EventEmitter {
                 if (account.authenticated === false) throw Object.assign(new Error('Sign in through the provider’s supported authentication flow before running.'), { category: 'authentication' });
                 if (account.billingSource !== 'subscription' && !billingConfirmed) throw Object.assign(new Error(`Billing source is ${account.billingSource}. Explicitly confirm this provider run before it may consume usage.`), { category: 'permission' });
                 run.billingSource = account.billingSource;
-                prepared = prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode, session: { sessionReason: 'cross-agent-handoff', previousProvider }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: true, provider }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+                prepared = prepareContext(c, text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: true, provider, mode, session: { sessionReason: 'cross-agent-handoff', previousProvider }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: true, provider, native: provider === 'claude' && actualTransport === 'sdk' }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
                 this.record(c, { type: 'run_metadata', metadata: { routingFallback: { from: previousProvider, fromModel: previousModel, to: provider, toModel: model, toEffort: effort ?? null, toTransport: actualTransport, freshSession: !sessionId, reason: `${previousProvider} quota is ${quota.state} (${globalThis.relayRouting.quotaText(quota)})` } } });
                 this.message(c, 'activity', `${previousProvider === 'codex' ? 'Codex' : previousProvider === 'claude' ? 'Claude' : 'Gemini'} is near its quota limit (${globalThis.relayRouting.quotaText(quota)}). Smart routing switched to ${provider === 'claude' ? 'Claude' : provider === 'gemini' ? 'Gemini' : 'Codex'}${model ? ` (${model})` : ''}.`, provider);
                 if (fallback.usage) this.observeQuota(c, provider, fallback.usage);
@@ -1235,6 +1241,11 @@ export class Broker extends EventEmitter {
         if (remainingSpend !== null) this.record(c, { type: 'run_metadata', metadata: { budgetEnforcement: { spend: maxBudgetUsd !== null ? 'native' : 'reported-usage', maxSpendUSD: remainingSpend } } });
         // The worker cannot launch a provider until its PID and mutation lease are durable.
         if (this.execution.current(c, task.id)?.override?.scope === 'step') this.record(c, { type: 'execution_override_used', taskId: task.id });
+        // Claude through its SDK gets the enabled skills through its own skill system (#86), from Codeshi's private plugin.
+        if (provider === 'claude' && actualTransport === 'sdk' && !review && !local && prepared.metadata?.skillCatalog) {
+          try { run.nativeSkills = this.skills.claudePlugin(c, { chosen: (prepared.metadata.skills || []).map(skill => skill.name) }); }
+          catch (error) { this.message(c, 'activity', clip(`Couldn't give Claude the enabled skills: ${error.message}`), provider); }
+        }
         run.child = fork(fileURLToPath(new URL('./provider-worker.mjs', import.meta.url)), [], { cwd: this.workspace, silent: true, detached: process.platform !== 'win32', execArgv: [], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
         run.child.on('error', error => { run.spawnError = error; });
         // The run ends on 'close', which waits for the IPC channel. Keep that channel referenced so a host with nothing
@@ -1301,7 +1312,7 @@ export class Broker extends EventEmitter {
         this.record(c, { type: 'run_process', pid: run.child.pid, pidStart });
         lease.setProcess(run.child.pid, pidStart);
         this.execution.assert(c, execution, executionOptions); verifyExecution?.();
-        run.child.send({ type: 'start', config: { ...(maxBudgetUsd !== null && actualTransport === 'sdk' ? { maxBudgetUsd } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
+        run.child.send({ type: 'start', config: { ...(maxBudgetUsd !== null && actualTransport === 'sdk' ? { maxBudgetUsd } : {}), bin, googleRoot: this.googleRoot, args: command.args, workspace: this.workspace, workspaces: this.workspaces, workspaceFolders: this.workspaceFolders, prompt: prepared.prompt, images, transport: actualTransport, provider, mode, approvalPolicy, model, effort, sessionId, ...(run.nativeSkills ? { skills: { plugin: run.nativeSkills.plugin, names: run.nativeSkills.names } } : {}), ...(local ? { local } : {}), ...(review ? { reviewSnapshot: true } : {}) } });
       } catch (error) { run.errorCategory = error.category || classifyError(error); complete(null, null, error); }
     };
     launch();
@@ -1425,6 +1436,7 @@ export class Broker extends EventEmitter {
       if (text) this.message(c, 'assistant', text, provider, id, 'complete');
       for (const tool of content.filter(block => block.type === 'tool_use')) {
         run.tools.set(tool.id, tool.name);
+        if (tool.name === 'Skill' && run.nativeSkills && !event.parent_tool_use_id) (run.skillCalls ||= new Map()).set(tool.id, String(tool.input?.skill || ''));
         this.message(c, 'activity', clip(`${tool.name}\n${toolInput(tool.name, tool.input)}`), provider, `${run.id}:tool:${tool.id}`, undefined, { status: 'running' });
       }
     }
@@ -1435,6 +1447,7 @@ export class Broker extends EventEmitter {
         // A picture a tool returned is named by its type only: its bytes are unreadable as text and would fill the journal.
         const content = typeof tool.content === 'string' ? tool.content : JSON.stringify((Array.isArray(tool.content) ? tool.content : []).map(block => block?.type === 'image' ? { type: 'image', media_type: block.source?.media_type || 'image' } : block));
         this.message(c, 'activity', clip(`${existing?.text || run.tools.get(tool.tool_use_id) || 'Tool result'}\n${content}`), provider, id, undefined, { status: 'completed', isError: tool.is_error === true });
+        if (run.skillCalls?.has(tool.tool_use_id) && tool.is_error !== true) this.skillLoaded(run, run.skillCalls.get(tool.tool_use_id));
       }
     }
     if (event.type === 'system' && event.subtype === 'init' && event.model) this.record(c, { type: 'run_metadata', metadata: { effectiveModel: event.model } });
@@ -1462,6 +1475,18 @@ export class Broker extends EventEmitter {
         run.failureDetail = `Claude couldn't get permission to use ${tools}, so that step didn't run. Some work may be incomplete.`;
       }
     }
+  }
+
+  // Claude loaded one of the enabled skills with its own Skill tool (#86). Saved with the run, at the version it loaded, so
+  // a later message of this task, or the agent it's handed to, carries on with the same skill.
+  skillLoaded(run, called) {
+    const { c, provider } = run, prefix = `${CLAUDE_PLUGIN}:`, name = called.replace(/^\//, '').startsWith(prefix) ? called.replace(/^\//, '').slice(prefix.length) : null;
+    const version = name && run.nativeSkills?.versions?.[name], skill = version && (c.skills || []).find(item => item.name === name && item.version === version);
+    if (!skill || run.skillsLoaded?.has(name)) return;
+    (run.skillsLoaded ||= new Set()).add(name);
+    const asked = (c.activeRun?.context?.skills || []).find(item => item.name === name);
+    this.record(c, { type: 'skill_loaded', runId: run.id, skill: { name, version, reason: asked?.reason || 'Claude chose it from its skill list', source: skill.sourceLabel, ...(skill.revision ? { revision: skill.revision } : {}), route: 'native', delivered: true } });
+    this.message(c, 'activity', `Claude loaded skill ${name}${asked ? '' : ' on its own'}.`, provider);
   }
 
   signal(run, signal) {

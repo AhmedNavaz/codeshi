@@ -91,7 +91,7 @@ export class AttachmentStore {
     if (files.filter(f => f.kind === 'text').reduce((n,f) => n + f.bytes, 0) > attachmentLimits.totalTextBytes) fail('Text attachments must total 128 KB or less.', 413);
     // A Plan attachment closed to agents since it was attached is still listed with the message, marked as left out, and
     // the agent gets only that note (forAgent), so a retry or a run after a usage reset doesn't fail over it.
-    return files.map(({ data, text, plan, ...meta }) => { const why = plan && this.planGate ? this.planGate(plan) : null; return { ...meta, ...(plan ? { plan: { cards: plan.cards?.length || 0, whole: plan.whole === true } } : {}), ...(why ? { withheld: why } : {}) }; });
+    return files.map(({ data, text, plan, ...meta }) => { const why = plan && this.planGate ? this.planGate(plan) : null; return { ...meta, ...(plan ? { plan: { cards: plan.cards?.length || 0, whole: plan.whole === true, ...(plan.ids === true ? { ids: true } : {}) } } : {}), ...(why ? { withheld: why } : {}) }; });
   }
   imageInput(id) {
     const file = this.read(id);

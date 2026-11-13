@@ -27,6 +27,8 @@ export function createBoardRoutes({ registry, body, json }) {
     if (url.pathname === '/api/board/place') { const result = board.place(c, input); json(res, 200, { ...result, board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/run') { const result = board.run(c, input); json(res, 202, { tasks: result.tasks, board: board.view(c) }); return true; }
     // One Plan (#162): accept, discard or undo an agent's draft cards, stop running cards, and suggest next cards.
+    // A draft plan that came back as an ordinary chat reply: its cards go on the Plan as drafts.
+    if (url.pathname === '/api/board/from-reply') { json(res, 201, { ...board.fromReply(c, input), board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/drafts') { json(res, 200, { ...board.drafts(c, input), board: board.view(c) }); return true; }
     // Split with an agent (#162): one read-only run splits the chosen cards into subtasks for you to review.
     if (url.pathname === '/api/board/split') { json(res, 202, { suggest: board.split(c, input), board: board.view(c) }); return true; }

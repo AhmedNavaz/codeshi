@@ -158,6 +158,23 @@ test('the session sends, follows a run, answers an approval, stops a run with es
   await until(seen(/Worked for/), 'the run to end');
   assert.equal(broker.get(app.registry.mainConversation(project.id).id).messages.find(message => message.role === 'user').text, 'Say hi', 'The message is the workspace chat’s.');
 
+  // Flow (#12): /flow saver hands the choice of agent to the engine; the line under the prompt says Flow, not one agent.
+  broker.availableProviders = () => ['codex'];
+  broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource: 'subscription' });
+  broker.handoff.models = async () => ({ data: [{ id: 'gpt-6.1-sol', displayName: 'Sol', isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }, { id: 'gpt-6-luna', displayName: 'Luna', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }] });
+  broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(Date.now() + 3600000).toISOString() }] });
+  await type('/flow saver'); term.write('\r');
+  await until(seen(/Flow · Saver: Codeshi picks/), 'Flow to turn on');
+  await until(seen(/main {2}· {2}Flow · Saver {2}· {2}asks before changes/), 'Flow under the prompt');
+  const conversation = () => broker.get(app.registry.mainConversation(project.id).id);
+  assert.equal(conversation().routing.mode, 'saver');
+  await type('Say hi'); term.write('\r');
+  await until(seen(/Flow chose Codex/), 'what Flow chose');
+  await until(() => (strip(screen).match(/Worked for/g) || []).length >= 2, 'the routed run to end');
+  assert.equal(conversation().lastRun.routing.mode, 'saver');
+  await type('/flow off'); term.write('\r');
+  await until(() => conversation().routing === null, 'Flow to turn off');
+
   // An approval asks in its own box; y answers it.
   await type('Hold on'); term.write('\r');
   await until(() => broker.running, 'the held run');

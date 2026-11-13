@@ -22,7 +22,7 @@ A Linux install comes later.
 
 Run `codeshi` in a workspace's folder. A folder that isn't in a workspace yet is added if you answer yes; `--workspace` picks one by name. `--agent`, `--model` and `--effort` set the conversation's agent, model and effort first, as the picker in the window does.
 
-The finished parts of the conversation go into the terminal's own scrollback, so you scroll and search them as you would any output, and only the run that's working and the prompt are redrawn. The session starts with a few lines from earlier in the conversation. The line under the prompt shows the workspace, branch, agent, model, effort, access and how much context the conversation uses.
+The finished parts of the conversation go into the terminal's own scrollback, so you scroll and search them as you would any output, and only the run that's working and the prompt are redrawn. The session starts with a few lines from earlier in the conversation. The line under the prompt shows the workspace, branch, agent, model, effort, access and how much context the conversation uses. In Flow it shows **Flow** and its mode in place of the agent, model and effort.
 
 - **Steps** show as `● Update(math.js)`, `● Bash(npm test)` and so on, with a short result under each: lines read, matches found, the first lines of a command's output, or an edit's diff.
 - **Approvals** open a box with what the agent wants to do (the command, or the edit as a diff) and **Yes**, **Yes, and don't ask again for this in this run** (when Codeshi offers it) and **No**. Choose with the arrow keys and Enter, a number, or `y` and `n`; Esc is No. An approval answered in the window closes here.
@@ -53,6 +53,7 @@ Leaving never stops a run: it carries on in Codeshi, and `codeshi` brings you ba
 |---|---|
 | `/agent [codex\|claude\|gemini]` | Switch agent. Without a name, choose from a list. |
 | `/model [id]`, `/effort [level]` | Choose the model, or how hard it thinks, from the agent's own list. |
+| `/flow [smart\|saver\|ultra\|off]` | Turn Flow on in that mode, or off. Without a mode, choose from a list. See [Flow](#flow). |
 | `/access` | Read only, ask before changes, or edit without asking. |
 | `/stop`, `/continue` | Stop the run; continue the last one. |
 | `/handoff [agent]` | Hand the task to another agent: accepts Codeshi's offer while a run works, or continues the last task with the agent you choose. |
@@ -62,6 +63,23 @@ Leaving never stops a run: it carries on in Codeshi, and `codeshi` brings you ba
 | `/clear`, `/help`, `/exit` | Clear the screen, list commands and keys, leave. |
 
 `@` followed by part of a file name lists matching files in the workspace; Tab or Enter adds the path to your message. To send a message that starts with `/`, start it with `//`.
+
+## Flow
+
+Flow is a workspace setting, shared with the window and the phone. With Flow on, Codeshi picks the agent, model and effort for each message by its mode, as it does for a message sent from the window:
+
+- **Smart** matches the model and effort to each message. A small, read-only agent run rates the message first.
+- **Saver** uses local rules only, with no agent call, and keeps to light and standard models at low effort.
+- **Ultra** starts with the strongest models and deepest effort.
+
+`/flow` in the session, or `--flow` on `codeshi` and `codeshi run`, turns Flow on in a mode, or off. Flow can't be changed while an agent is working. Flow's other settings, such as **Include API-billed agents** and **Check with tests**, are kept as the window set them.
+
+While Flow rates a message, the session shows *Flow is choosing an agent…*, and Esc stops it. When the run starts, a line under your message says which agent, model and effort Flow chose and why. `codeshi run` says the same on standard error. In the session, `/agent`, `/model` and `/effort` still choose the agent that `/continue` and `/handoff` use, but each new message is Flow's to place. `--agent`, `--model` or `--effort` on `codeshi run` sends that one message to your choice instead, and Flow stays on.
+
+Two things work differently from the window:
+
+- **Charges.** The terminal never agrees to charges. If Flow's choice is an agent that bills by use, the message is refused, nothing starts, and the command says to send it from the window or name an agent on a subscription with `--agent`. Flow only considers such agents when **Include API-billed agents** is on.
+- **Splitting.** A message from the terminal is never split into tasks. Flow runs it as one.
 
 ## Commands
 
@@ -79,9 +97,10 @@ Leaving never stops a run: it carries on in Codeshi, and `codeshi` brings you ba
 | Option | Applies to | Meaning |
 |---|---|---|
 | `-w`, `--workspace <name\|path>` | all but `status` | The workspace to use. By default it's the one whose folder holds the current directory (the deepest, if folders are nested), or the only one. |
-| `-a`, `--agent <codex\|claude\|gemini>` | `run`, `continue` | The agent. By default, the one picked in the app's message box. |
+| `-a`, `--agent <codex\|claude\|gemini>` | `run`, `continue` | The agent. By default, the one picked in the app's message box, or in Flow the one Flow picks. |
 | `-m`, `--model <id>` | `run`, `continue` | The model. By default, that agent's choice in the app. |
 | `-e`, `--effort <level>` | `run`, `continue` | The effort. By default, that agent's choice in the app. |
+| `--flow <smart\|saver\|ultra\|off>` | `run`, the session | Turns [Flow](#flow) on in that mode, or off, for the workspace before sending. Can't be combined with `--agent`, `--model` or `--effort`, except `--flow off`. |
 | `--detach` | `run`, `continue` | Returns as soon as the run starts. `codeshi wait` follows it later. |
 | `--no-input` | `run`, `continue`, `wait` | Never asks in the terminal. When the run needs you, the command ends with code 3. |
 | `--json` | all | Prints one JSON result on standard output when the command ends. |
@@ -100,8 +119,10 @@ With `--json` or `--jsonl`, standard output holds only JSON. Every object has `"
 ```json
 { "v": 1, "result": "complete", "workspace": { "id": "df57262110c988ff", "name": "app" },
   "conversationId": "871f7d05-…", "runId": "b0ef4aa6-…", "taskId": "b0ef4aa6-…",
-  "agent": "claude", "model": null, "reply": "Done.", "error": null, "errorCategory": null }
+  "agent": "claude", "model": null, "routing": null, "reply": "Done.", "error": null, "errorCategory": null }
 ```
+
+`routing` is `null` unless Flow chose the agent. Then it's `{ "mode": "smart", "tier": "standard", "reason": "…" }`: the Flow mode, the size Flow rated the task (`light`, `standard` or `deep`) and its reason.
 
 | `result` | Meaning | Exit code |
 |---|---|---|
@@ -109,11 +130,11 @@ With `--json` or `--jsonl`, standard output holds only JSON. Every object has `"
 | `started` | `--detach`: the run started. | 0 |
 | `idle` | `wait` or `stop` found nothing working, and no earlier run. | 0 |
 | `status`, `tasks` | The listing, in `workspaces` or `tasks`. | 0 |
-| `incomplete` | The run ended without finishing. `errorCategory` says why when known, such as `quota` for a usage limit, and `error` holds the message. | 1 |
+| `incomplete` | The run ended without finishing. `errorCategory` says why when known, such as `quota` for a usage limit, and `error` holds the message. Also when `wait` followed Flow choosing an agent and no run started. | 1 |
 | `stopped` | The run was stopped, here, in the app or by Codeshi. | 1 |
 | `needs_input` | The run waits for an approval or a question. `pending` lists them, each with `id`, `kind` (`approval` or `question`), `summary` and `detail`. | 3 |
 | `detached` | You pressed Ctrl+C. The run carries on. | 130 |
-| `error` | The command couldn't do what was asked; `error` says why. | 2, 4 or 5 |
+| `error` | The command couldn't do what was asked; `error` says why. Code 1 when Codeshi refused the message, such as one Flow would send to an agent that bills by use. | 1, 2, 4 or 5 |
 
 `runId` identifies one run of an agent. `taskId` identifies the piece of work, and stays the same when a handoff or retry continues it in a new run. `conversationId` is the workspace chat. They're the IDs Codeshi uses in its own history.
 
@@ -121,7 +142,7 @@ With `--json` or `--jsonl`, standard output holds only JSON. Every object has `"
 
 | `type` | When | Fields |
 |---|---|---|
-| `started` | The run is seen working. | `workspace`, `conversationId`, `runId`, `taskId`, `agent`, `model` |
+| `started` | The run is seen working. | `workspace`, `conversationId`, `runId`, `taskId`, `agent`, `model`, `routing` |
 | `activity` | A step of the run, such as a command it ran or a file it changed. | `runId`, `id`, `role`, `text` |
 | `message` | The agent's reply, once complete. | `runId`, `id`, `role`, `text` |
 | `needs_input` | An approval or question appears. | `runId`, `id`, `kind`, `summary`, `detail` |
@@ -166,6 +187,6 @@ The command never runs an engine of its own, so the app and the terminal can't b
 
 - Running without the desktop app at all, such as over SSH, in CI or on Linux servers.
 - Attaching images or files to a message from the session (paste a path instead).
-- Flow routing from the command line: a run uses the agent you name or the one picked in the app.
+- Answering a split Flow suggests, or agreeing to charges, from the terminal. Both stay in the window.
 - Starting tasks in their own copy, workflows (`codeshi workflow run`), `codeshi skills` and `codeshi doctor`.
 - Installing on Linux.

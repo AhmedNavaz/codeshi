@@ -17,6 +17,30 @@ export const CLI_SCHEMA = 1;
 export const EXIT = { ok: 0, failed: 1, usage: 2, needsInput: 3, busy: 4, unavailable: 5, detached: 130 };
 const AGENTS = ['codex', 'claude', 'gemini'], NAMES = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini' };
 const COMMANDS = ['status', 'run', 'continue', 'wait', 'stop', 'tasks', 'help'];
+export const FLOW_MODES = ['smart', 'saver', 'ultra'];
+export const FLOW_NAMES = { smart: 'Smart', saver: 'Saver', ultra: 'Ultra' };
+const LEGACY_FLOW = { balanced: 'smart', saving: 'saver', quality: 'ultra' };
+
+// Flow (#12): the engine picks the agent, model and effort for each message, as it does for the window and the phone.
+// The workspace's Flow mode, or null when you choose the agent yourself.
+export const flowMode = view => { const mode = view?.routing?.mode; return FLOW_MODES.includes(mode) ? mode : LEGACY_FLOW[mode] || null; };
+// What a send asks of the engine in Flow. A terminal message is never split into tasks (no allowSplit): the suggestion
+// needs the window to answer. It never confirms charges either, so Flow can't start an agent that bills by use from here.
+export const flowRequest = view => { const mode = flowMode(view); return mode ? { routing: { mode }, executionRevision: view.execution?.defaults?.revision ?? 0 } : {}; };
+// Turns Flow on in a mode, or off, as Flow's switch in the window does. It keeps the window's other routing choices.
+export async function setFlow(api, target, view, mode) {
+  if ((flowMode(view) || 'off') === mode) return view;
+  return api.post(target, mode === 'off' ? { mode: null, executionRevision: view.execution?.defaults?.revision ?? 0 }
+    : { mode, allowApi: view.routing?.allowApi === true, check: view.routing?.check === true, executionRevision: view.execution?.defaults?.revision ?? 0 });
+}
+// What Flow chose for a run, in the result and events.
+export const runRouting = run => run?.routing?.mode ? { mode: LEGACY_FLOW[run.routing.mode] || run.routing.mode, tier: run.routing.tier || null, reason: run.routing.reason || null } : null;
+// The engine's refusal of an agent that bills by use names a confirmation the terminal doesn't have.
+// Stop (here, in the window or by Codeshi) while Flow rated the message: nothing started.
+export const flowStopped = error => /Routing assessment stopped/.test(error?.message || '');
+export const flowError = error => /bills by use/.test(error?.message || '')
+  ? new CliError("Flow chose an agent that bills by use, and the terminal never agrees to charges. Send this from the Codeshi window, or name an agent on a subscription with --agent.", EXIT.failed)
+  : error;
 
 export const HELP = `Usage: codeshi [options]          Start an interactive session in this terminal
        codeshi <command> [options]
@@ -39,7 +63,11 @@ Options
   -a, --agent <codex|claude|gemini>
   -m, --model <id>             Model for run and continue (default: the agent's choice in the app)
   -e, --effort <level>         Effort for run and continue
-      --detach                 Return as soon as the run starts
+      --flow <smart|saver|ultra|off>
+                               Turn Flow on in that mode, or off, for the workspace
+                               first. In Flow, Codeshi picks the agent for each
+                               message unless you name one with --agent
+      --detach                Return as soon as the run starts
       --no-input               Never ask here; exit with code 3 when the run needs you
       --json                   Print one JSON result on standard output
       --jsonl                  Print JSON events on standard output as they happen
@@ -54,7 +82,7 @@ Full reference: https://github.com/AhmedNavaz/codeshi/blob/main/docs/cli.md`;
 export class CliError extends Error { constructor(message, code = EXIT.failed, extra = {}) { super(message); this.code = code; Object.assign(this, extra); } }
 
 export function parseArgs(argv) {
-  const options = { command: null, words: [], workspace: null, agent: null, model: null, effort: null, detach: false, noInput: false, json: false, jsonl: false };
+  const options = { command: null, words: [], workspace: null, agent: null, model: null, effort: null, flow: null, detach: false, noInput: false, json: false, jsonl: false };
   const value = (name, index) => { const next = argv[index + 1]; if (next === undefined || (next.startsWith('-') && next !== '-')) throw new CliError(`${name} needs a value.`, EXIT.usage); return next; };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -67,6 +95,7 @@ export function parseArgs(argv) {
     else if (flag === '-a' || flag === '--agent') options.agent = take(flag).toLowerCase();
     else if (flag === '-m' || flag === '--model') options.model = take(flag);
     else if (flag === '-e' || flag === '--effort') options.effort = take(flag);
+    else if (flag === '--flow') options.flow = take(flag).toLowerCase();
     else if (flag === '--detach') options.detach = true;
     else if (flag === '--no-input') options.noInput = true;
     else if (flag === '--json') options.json = true;
@@ -80,6 +109,11 @@ export function parseArgs(argv) {
   if (options.json && options.jsonl) throw new CliError('Choose --json or --jsonl, not both.', EXIT.usage);
   if (options.agent && !AGENTS.includes(options.agent)) throw new CliError('Choose codex, claude or gemini for --agent.', EXIT.usage);
   if ((options.agent || options.model || options.effort) && !['run', 'continue', 'session'].includes(options.command)) throw new CliError('--agent, --model and --effort apply to run, continue and the session.', EXIT.usage);
+  if (options.flow !== null) {
+    if (![...FLOW_MODES, 'off'].includes(options.flow)) throw new CliError('Choose smart, saver, ultra or off for --flow.', EXIT.usage);
+    if (!['run', 'session'].includes(options.command)) throw new CliError('--flow applies to run and the session.', EXIT.usage);
+    if (options.flow !== 'off' && (options.agent || options.model || options.effort)) throw new CliError('In Flow, Codeshi picks the agent, model and effort. Choose --flow or --agent, --model and --effort, not both.', EXIT.usage);
+  }
   if (options.command === 'session' && (options.json || options.jsonl || options.noInput)) throw new CliError('The session is interactive. For scripts, use codeshi run.', EXIT.usage);
   if (options.detach && !['run', 'continue'].includes(options.command)) throw new CliError('--detach applies to run and continue.', EXIT.usage);
   if (options.words.length && options.command !== 'run') throw new CliError(`codeshi ${options.command} takes no message.`, EXIT.usage);
@@ -299,7 +333,17 @@ export async function main(argv, { stdin: givenStdin, stdout = process.stdout, s
       const text = fromInput ? await readAll(stdin) : options.words.join(' ');
       if (!text.trim()) throw new CliError('The message is empty.', EXIT.usage);
       options.fromInput = fromInput;
-      started = await api.post(route('messages'), { text, ...choice });
+      const view = options.flow ? await setFlow(api, route('routing'), conversation, options.flow) : conversation;
+      // In Flow the engine rates the message and picks who does it before answering. Naming an agent, model or effort
+      // sends this one message to your choice instead, as choosing by hand does in the window.
+      const flow = options.agent || options.model || options.effort ? {} : flowRequest(view);
+      if (flow.routing && !options.json && !options.jsonl) say(`Flow (${FLOW_NAMES[flow.routing.mode]}) is choosing an agent…`);
+      try { started = await api.post(route('messages'), { text, ...choice, ...flow }); }
+      catch (error) {
+        if (!flowStopped(error)) throw flowError(error);
+        if (!options.json && !options.jsonl) say('Stopped before Flow chose an agent. Nothing ran.');
+        return finish({ result: 'stopped', workspace, conversationId: conversation.id, runId: null, taskId: null, agent: null, model: null, routing: null, reply: '', error: null, errorCategory: null }, EXIT.failed);
+      }
     } else started = await api.post(route('continue'), choice);
     if (options.detach) {
       if (!options.json && !options.jsonl) say(`Started in ${project.name}. Follow it with codeshi wait.`);
@@ -310,7 +354,7 @@ export async function main(argv, { stdin: givenStdin, stdout = process.stdout, s
     async function follow(firstRun) {
       const interactive = !options.noInput && !options.fromInput && stdin.isTTY && stderr.isTTY;
       const seen = new Map(), announced = new Set(), controller = new AbortController();
-      let runId = firstRun, taskId = null, view = null, wake = null, asking = null, startedSaid = false;
+      let runId = firstRun, taskId = null, view = null, wake = null, asking = null, startedSaid = false, choosing = false;
       const sleep = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); wake = () => { clearTimeout(timer); resolve(); }; });
       api.events(update => { if (update?.projectId === project.id) wake?.(); }, controller.signal);
       onInterrupt = () => { asking?.abort(); wake?.(); };
@@ -319,10 +363,18 @@ export async function main(argv, { stdin: givenStdin, stdout = process.stdout, s
           view = await api.get(`/api/conversation?${q}&toRun=${encodeURIComponent(runId)}`);
           const active = view.activeRun?.id === runId ? view.activeRun : null, run = active || (view.lastRun?.id === runId ? view.lastRun : null);
           taskId ||= run?.execution?.taskId || run?.taskId || null;
-          if (!startedSaid && run) {
+          // codeshi wait while Flow is still choosing: that isn't the agent's run yet, so it follows to the run Flow starts.
+          if (active?.purpose === 'routing') {
+            if (!choosing && !options.json && !options.jsonl) say('Flow is choosing an agent…');
+            choosing = true;
+          } else if (!startedSaid && run) {
             startedSaid = true;
-            if (options.jsonl) emit({ type: 'started', workspace, conversationId: view.id, runId, taskId, agent: run.provider, model: run.model || null });
-            else if (!options.json) say(`${NAMES[run.provider] || run.provider} is working in ${project.name}…`);
+            const routing = runRouting(run);
+            if (options.jsonl) emit({ type: 'started', workspace, conversationId: view.id, runId, taskId, agent: run.provider, model: run.model || null, routing });
+            else if (!options.json) {
+              if (routing) say(`Flow (${FLOW_NAMES[routing.mode] || routing.mode}) chose ${[NAMES[run.provider] || run.provider, run.model, run.effort].filter(Boolean).join(' · ')}${routing.reason ? `: ${firstLine(routing.reason, 200)}` : ''}.`);
+              say(`${NAMES[run.provider] || run.provider} is working in ${project.name}…`);
+            }
           }
           for (const message of view.messages || []) {
             if (message.runId !== runId || message.role === 'user') continue;
@@ -343,6 +395,12 @@ export async function main(argv, { stdin: givenStdin, stdout = process.stdout, s
             const next = view.activeRun && taskId && (view.activeRun.execution?.taskId || view.activeRun.taskId) === taskId ? view.activeRun.id : null;
             if (next && next !== runId) { runId = next; startedSaid = false; continue; }
             if (run) return report(view, runId, { workspace, followed: true });
+            // Flow ended without starting a run: it was stopped, or no agent could take the message.
+            if (choosing) {
+              const problem = 'Flow stopped before an agent started. If it was not stopped, the Codeshi window says why no agent could take the message.';
+              if (!options.json && !options.jsonl) say(problem);
+              return finish({ result: 'incomplete', workspace, conversationId: view.id, runId: null, taskId, agent: null, model: null, routing: null, reply: '', error: problem, errorCategory: null }, EXIT.failed);
+            }
           }
           if (pending.length) {
             if (!interactive) {
@@ -413,7 +471,7 @@ export async function main(argv, { stdin: givenStdin, stdout = process.stdout, s
       if (result === 'stopped') say('The run was stopped.');
       else if (result === 'incomplete') say(`The run didn't finish${run.errorCategory === 'quota' ? ': the agent reached its usage limit. codeshi continue --agent <another> hands it on.' : problem ? `: ${firstLine(problem, 300)}` : '.'}`);
     }
-    return finish({ result, workspace, conversationId: view.id, runId, taskId: run.execution?.taskId || run.taskId || null, agent: run.provider, model: run.model || null, reply, error: result === 'complete' ? null : problem, errorCategory: run.errorCategory || null }, result === 'complete' ? EXIT.ok : EXIT.failed);
+    return finish({ result, workspace, conversationId: view.id, runId, taskId: run.execution?.taskId || run.taskId || null, agent: run.provider, model: run.model || null, routing: runRouting(run), reply, error: result === 'complete' ? null : problem, errorCategory: run.errorCategory || null }, result === 'complete' ? EXIT.ok : EXIT.failed);
   }
 
   function status(projects) {

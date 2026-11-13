@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { Broker } from '../src/broker.mjs';
 import { continuationRequest, prepareContext } from '../src/context.mjs';
+import { runClaude } from '../src/providers.mjs';
 import { compatibilityOf, parseSkill, STARTER_ROOT, validateSkill } from '../src/skills.mjs';
 import { noSymlinks, scriptCLIs } from './platform.mjs';
 
@@ -139,7 +140,7 @@ test('instructions stay within a budget, and say where the rest is', t => {
 test('what can not work here fails clearly or needs an explicit choice', t => {
   const env = setup(t);
   const placeholders = env.add('fills-in', skill('fills-in', 'Uses arguments.', 'Run on $ARGUMENTS now.'));
-  assert.throws(() => enable(env, placeholders), error => /Its placeholders stay as written/.test(error.message) && error.details.skill.needsAcceptance);
+  assert.throws(() => enable(env, placeholders), error => /Codex and Gemini get them as written/.test(error.message) && error.details.skill.needsAcceptance);
   assert.equal(enable(env, placeholders, { acceptPartial: true }).enabled[0].name, 'fills-in');
   const hooks = env.add('with-hooks', skill('with-hooks', 'Has hooks.', 'Steps.', 'hooks:\n  PreToolUse: x\n'));
   assert.throws(() => enable(env, hooks), /hooks/);
@@ -150,7 +151,7 @@ test('what can not work here fails clearly or needs an explicit choice', t => {
   const soft = env.add('soft-limits', skill('soft-limits', 'Declares tools.', 'Steps.', `allowed-tools: Bash(${path.basename(process.execPath)}:*) Read\n`));
   const saved = enable(env, soft).enabled.find(item => item.name === 'soft-limits');
   assert(saved.compatibility.unavailable.some(item => item.feature === 'allowed-tools' && /your access setting and approvals still decide/.test(item.detail)));
-  assert.deepEqual(saved.compatibility.adapters, { claude: 'instructions', codex: 'instructions', gemini: 'instructions' }, 'Nothing claims native support.');
+  assert.deepEqual(saved.compatibility.adapters, { claude: 'native', codex: 'instructions', gemini: 'instructions' }, 'Only Claude uses its own skill system.');
   const broken = env.add('Bad-Name', skill('Bad-Name'));
   const listed = env.broker.skills.view(env.c).available.find(item => item.path === broken);
   assert.match(listed.problems[0], /lowercase/);
@@ -266,4 +267,98 @@ test('skills stay in their workspace, survive a restart, and a skill folder insi
   assert.equal(reopened.skills.view(reopened.get(env.c.id)).enabled[0].name, 'repo-rules');
   assert.equal('skills' in env.broker.view(env.c), false, 'They are not sent with every conversation update.');
   for (const bad of [{ action: 'add-folder', path: 'relative' }, { action: 'add-folder', path: path.join(env.root, 'missing') }, { action: 'enable', path: path.join(env.root, 'nope') }, { action: 'remove', name: 'nope' }, { action: 'other' }]) assert.throws(() => env.broker.skills.change(env.c, bad));
+});
+
+test('Claude gets the enabled skills as its own plugin, with only what can not change how it runs', t => {
+  const env = setup(t);
+  const directory = env.add('release-notes', skill('release-notes', 'Write release notes.', 'Notes for $ARGUMENTS from ${CLAUDE_SKILL_DIR}/template.md. Status: !`git status`', 'allowed-tools: Bash(touch:*)\nmodel: opus\ncontext: fork\nhooks:\n  PreToolUse: x\nargument-hint: "<version>"\nlicense: MIT\n'), { 'template.md': 'TEMPLATE', 'scripts/run.sh': 'echo hi' });
+  enable(env, directory, { acceptPartial: true });
+  enable(env, env.add('only-asked', skill('only-asked', 'Only when asked.', 'ASKED-STEPS', 'disable-model-invocation: true\n')));
+  const native = env.broker.skills.claudePlugin(env.c);
+  assert.deepEqual(native.names, ['codeshi:release-notes'], 'A skill only for when you ask is not offered on its own.');
+  assert.deepEqual(env.broker.skills.claudePlugin(env.c, { chosen: ['only-asked'] }).names, ['codeshi:release-notes', 'codeshi:only-asked']);
+  assert(native.plugin.startsWith(env.broker.skills.root + path.sep), 'Inside Codeshi\'s skills folder, where reading needs no approval.');
+  assert.deepEqual(fs.readdirSync(native.plugin).sort(), ['.claude-plugin', 'skills'], 'No hooks, agents, commands or servers at the top of the plugin.');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(native.plugin, '.claude-plugin', 'plugin.json'), 'utf8')).name, 'codeshi');
+  const copy = fs.readFileSync(path.join(native.plugin, 'skills', 'release-notes', 'SKILL.md'), 'utf8'), { frontmatter, body } = parseSkill(copy);
+  assert.deepEqual(Object.keys(frontmatter).sort(), ['argument-hint', 'description', 'license', 'name'], 'Allowed tools, model, context and hooks are left out.');
+  assert.match(body, /\$ARGUMENTS/, 'Claude fills in its placeholders itself.');
+  assert.equal(fs.readFileSync(path.join(native.plugin, 'skills', 'release-notes', 'template.md'), 'utf8'), 'TEMPLATE');
+  assert.equal(fs.statSync(path.join(native.plugin, 'skills', 'release-notes', 'scripts', 'run.sh')).mode & 0o111, 0);
+  assert.equal(env.broker.skills.claudePlugin(env.c).plugin, native.plugin, 'The same skills reuse one copy.');
+  const compatibility = enabled(env).find(item => item.name === 'release-notes').compatibility;
+  assert.deepEqual(compatibility.unavailable.find(item => item.feature === 'substitutions').agents, ['codex', 'gemini']);
+  assert.equal(enabled(env).find(item => item.name === 'only-asked').compatibility.personOnly, true);
+  env.broker.skills.change(env.c, { action: 'pin', name: 'only-asked' });
+  assert.equal(env.broker.skills.claudePlugin(env.c).plugin, native.plugin, 'Pinning changes no version.');
+  env.broker.skills.change(env.c, { action: 'disable', name: 'release-notes' });
+  assert.equal(env.broker.skills.claudePlugin(env.c), null, 'Nothing to offer: no plugin.');
+  assert.notEqual(env.broker.skills.claudePlugin(env.c, { chosen: ['only-asked'] }).plugin, native.plugin, 'A turned-off skill is not in the copy.');
+});
+
+test('with its own skill system, Claude decides when a skill fits; one you ask for is named for it to load', t => {
+  const env = setup(t);
+  enable(env, env.add('db-migrations', skill('db-migrations', 'Plan schema changes and backfills against stored data safely.', 'MIGRATION-STEPS')));
+  enable(env, env.add('only-asked', skill('only-asked', 'Only when asked.', 'ASKED-STEPS', 'disable-model-invocation: true\n')));
+  const matched = env.broker.skills.forTask(env.c, { text: 'We need to plan schema changes and a backfill on stored data', provider: 'claude', native: true });
+  assert.deepEqual([matched.catalog, matched.active, matched.records], [[], [], []], 'No catalog and no word matching: Claude has its own list.');
+  assert.equal(matched.announce, true);
+  assert.match(matched.note, /codeshi:name/);
+  const prepared = prepareContext(env.c, 'Hello', { workspace: env.workspace, workspaceFolders: env.broker.workspaceFolders, fresh: true, provider: 'claude', policy: env.broker.contextPolicy, skills: matched, readAttachment: () => ({}) });
+  const brief = JSON.parse(prepared.prompt.slice(prepared.prompt.indexOf('\n') + 1)).brief;
+  assert.deepEqual(Object.keys(brief.skills), ['note'], 'Only the note on what a skill may not do.');
+  assert.equal(JSON.stringify(brief).includes('MIGRATION-STEPS'), false);
+  const asked = env.broker.skills.forTask(env.c, { text: 'Please /only-asked now', provider: 'claude', native: true });
+  assert.deepEqual(asked.active.map(item => [item.name, item.reason, item.loadWithSkillTool, item.instructions]), [['only-asked', 'asked for', 'codeshi:only-asked', undefined]]);
+  assert.deepEqual(asked.records.map(item => [item.name, item.route, item.delivered]), [['only-asked', 'native', false]], 'Delivered only once Claude has loaded it.');
+  const instructions = env.broker.skills.forTask(env.c, { text: 'hello', provider: 'codex' });
+  assert.deepEqual(instructions.catalog.map(item => item.name), ['db-migrations'], 'A skill only for when you ask is not in the catalog either.');
+  assert.deepEqual(env.broker.skills.forTask(env.c, { text: 'Fix the only asked thing when asked', provider: 'codex' }).active, [], 'Nor matched by its words.');
+});
+
+test('a skill Claude loads is recorded at its version and goes with the task to the next agent', t => {
+  const env = setup(t);
+  enable(env, env.add('tone-guide', skill('tone-guide', 'Copy rules.', 'TONE-STEPS')));
+  const { broker, c } = env, nativeSkills = broker.skills.claudePlugin(c);
+  c.activeRun = { id: 'native-run', provider: 'claude', context: { skills: [] } };
+  const run = { id: 'native-run', c, provider: 'claude', tools: new Map(), nativeSkills };
+  const call = (id, name, isError = false) => {
+    broker.event(run, { type: 'assistant', message: { id: `m-${id}`, content: [{ type: 'tool_use', id, name: 'Skill', input: { skill: name } }] } });
+    broker.event(run, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'Launching skill', ...(isError ? { is_error: true } : {}) }] } });
+  };
+  call('t1', 'codeshi:not-enabled'); call('t2', 'design'); call('t3', 'codeshi:tone-guide', true);
+  assert.deepEqual(c.activeRun.context.skills, [], 'Only an enabled skill that loaded counts.');
+  call('t4', 'codeshi:tone-guide'); call('t5', 'codeshi:tone-guide');
+  assert.deepEqual(c.activeRun.context.skills.map(item => [item.name, item.version, item.route, item.delivered, item.reason]), [['tone-guide', enabled(env)[0].version, 'native', true, 'Claude chose it from its skill list']]);
+  assert.equal(c.messages.filter(message => message.text === 'Claude loaded skill tone-guide on its own.').length, 1);
+  c.lastRun = c.activeRun; c.activeRun = null;
+  const next = broker.skills.forTask(c, { text: continuationRequest, relation: 'continuation', fresh: true, provider: 'codex' });
+  assert.deepEqual(next.active.map(item => [item.name, item.reason, item.instructions]), [['tone-guide', 'continuing this task', 'TONE-STEPS']]);
+  c.lastRun = { ...c.lastRun, provider: 'claude' };
+  assert.deepEqual(broker.skills.forTask(c, { text: 'more', relation: 'continuation', fresh: false, provider: 'claude', native: true }).active, [], 'The Claude session that loaded it is not told again.');
+});
+
+test('the Claude adapter loads the plugin, turns its skills on and shell lines off, and refuses any other skill', async () => {
+  let options;
+  const config = { bin: '/claude', workspace: '/project', mode: 'edit', prompt: 'Go', skills: { plugin: '/data/skills/claude-plugin/abc', names: ['codeshi:tone-guide'] } };
+  const callbacks = { queryImpl: input => { options = input.options; return (async function* () { yield { type: 'result', subtype: 'success' }; })(); }, event() {}, metadata() {}, approval: async () => { throw new Error('No approval is asked for a skill.'); } };
+  await runClaude(config, callbacks);
+  assert.deepEqual(options.plugins, [{ type: 'local', path: '/data/skills/claude-plugin/abc', skipMcpDiscovery: true }]);
+  assert.deepEqual(options.skills, ['codeshi:tone-guide']);
+  assert(options.tools.includes('Skill'));
+  assert.deepEqual(options.settingSources, []);
+  assert.deepEqual(options.settings, { disableAllHooks: true, disableSkillShellExecution: true, disableBundledSkills: true, syncClaudeAiSkills: false });
+  assert.equal((await options.canUseTool('Skill', { skill: 'codeshi:tone-guide' }, { toolUseID: 'a' })).behavior, 'allow');
+  const refused = await options.canUseTool('Skill', { skill: 'design' }, { toolUseID: 'b' });
+  assert.equal(refused.behavior, 'deny');
+  assert.match(refused.message, /Only the skills enabled in Codeshi/);
+  await runClaude({ ...config, mode: 'read' }, callbacks);
+  assert(options.tools.includes('Skill'), 'Loading a skill reads only, so read-only runs have it too.');
+  assert.equal((await options.canUseTool('Skill', { skill: 'codeshi:tone-guide' }, { toolUseID: 'c' })).behavior, 'allow');
+  await runClaude({ ...config, skills: undefined }, callbacks);
+  assert.equal(options.tools.includes('Skill'), false);
+  assert.equal(options.plugins, undefined);
+  assert.deepEqual(options.settings, { disableAllHooks: true });
+  await runClaude({ ...config, routingAssessment: true, mode: 'read' }, callbacks);
+  assert.equal(options.plugins, undefined, 'A routing assessment loads nothing.');
 });

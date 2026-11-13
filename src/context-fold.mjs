@@ -1,4 +1,5 @@
 import { observationsFor } from './context-rollover.mjs';
+import { draftReplyNote } from './orchestration.mjs';
 
 // The rolling brief (#85): when the earlier conversation no longer fits a fresh envelope's history allowance, the older
 // part is folded into short excerpts instead of being cut off by age. Worked out locally from the journal each time, with
@@ -36,7 +37,7 @@ export function earlierConversation(c, messages, { trigger, inContext = new Set(
       if (!message.steer) turn = entry;
     } else if (turn && (message.role === 'error' || message.role === 'assistant' && message.text?.trim())) {
       // The last reply in a turn is its outcome.
-      turn.outcome = { agent: message.provider || null, messageId: message.id, ...(message.role === 'error' ? { status: 'error' } : message.status && message.status !== 'complete' ? { status: message.status } : {}), text: clip(firstParagraph(message.text)) };
+      turn.outcome = { agent: message.provider || null, messageId: message.id, ...(message.role === 'error' ? { status: 'error' } : message.status && message.status !== 'complete' ? { status: message.status } : {}), text: clip(draftReplyNote(c, message) ?? firstParagraph(message.text)) };
     }
   }
   // A request context already carries keeps only enough words to match it there, and its outcome, which context may not have.

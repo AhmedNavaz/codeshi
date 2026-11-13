@@ -4,6 +4,9 @@
   const el = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
   const button = (text, cls, fn) => { const node = el('button', cls, text); node.type = 'button'; node.addEventListener('click', fn); return node; };
   const size = bytes => bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.ceil(bytes / 1024)) + ' KB';
+  // A sent Plan or card reads as what it is, like the message box's chip, rather than as a file name and a size.
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const attachmentLabel = file => file.plan ? (file.plan.whole ? `Plan · ${plural(file.plan.cards, 'card')}` : `Card · ${file.name.replace(/^Card – /, '').replace(/\.md$/i, '')}`) : file.name + ' · ' + size(file.bytes);
   const drafts = new Map(), uploads = new Map(), thumbnails = new Map();
   const browser = $('files-dialog'), opener = $('toggle-explorer');
   let project = '', signature = '', treeVersion = 0, previewVersion = 0, selected = null, dragDepth = 0;
@@ -87,8 +90,17 @@
     });
     return addSnapshots(snapshots);
   }
-  function closePreview() { previewVersion++; selected = null; $('file-preview').hidden = true; document.body.classList.remove('file-preview-open'); }
+  let nav = null, pendingNav = null;
+  function paintNav() {
+    const on = !!nav && !$('file-preview').hidden;
+    for (const id of ['preview-prev', 'preview-next']) $(id).hidden = !on;
+    if (on) { $('preview-prev').disabled = nav.index <= 0; $('preview-next').disabled = nav.index >= nav.count - 1; $('preview-count').textContent = (nav.index + 1) + ' of ' + nav.count; }
+    $('preview-count').hidden = !on;
+  }
+  function stepImage(by) { if (!nav) return; const next = nav.index + by; if (next < 0 || next >= nav.count) return; const target = nav; pendingNav = { ...target, index: next }; target.go(next); }
+  function closePreview() { nav = pendingNav = null; paintNav(); previewVersion++; selected = null; $('file-preview').hidden = true; document.body.classList.remove('file-preview-open'); }
   function showPreview(file, label, id, saved = false) {
+    nav = null;
     selected = { file, projectId: id, saved };
     $('file-preview-name').textContent = file.name;
     $('file-preview-path').textContent = label;
@@ -218,6 +230,14 @@
     ($('file-preview').hidden ? opener : $('close-file-preview')).focus();
   });
   window.addEventListener('keydown',event => { if (event.key === 'Escape' && !event.isComposing && !document.querySelector('dialog[open]') && !$('file-preview').hidden) closePreview(); });
+  window.addEventListener('keydown', event => {
+    if (!nav || $('file-preview').hidden || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || document.querySelector('dialog[open]')) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const target = event.target; if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+    event.preventDefault(); stepImage(event.key === 'ArrowLeft' ? -1 : 1);
+  });
+  $('preview-prev').addEventListener('click', () => stepImage(-1));
+  $('preview-next').addEventListener('click', () => stepImage(1));
   window.addEventListener('relay-state',sync);
   function focusLine(line, endLine = line, id = api.getState().projectId) {
     if (id !== api.getState().projectId || !Number.isSafeInteger(line) || line < 1) return;
@@ -236,10 +256,12 @@
       const id = api.getState().projectId;
       previewVersion++;
       showPreview(file, (folder.displayName || folder.name) + ' / ' + relative, id);
+      nav = pendingNav; pendingNav = null; paintNav();
       if (browser.open) browser.close();
       $('close-file-preview').focus();
       focusLine(line, endLine, id);
     },
+    setImageNav(next) { pendingNav = next; },
     ids: () => files().map(file => file.id), uploading: () => uploads.has(api.getState().projectId), addFiles, addSnapshots,
     // The Plan, or a card, attached from the Plan (#97): already saved as a text snapshot, so it only joins the message's
     // attachments, under the same limits as a file. Says what it added, or throws why it can't.
@@ -256,7 +278,7 @@
     take(id, ids) { held.set(id, new Set(ids)); const taken = files(id).filter(file => ids.includes(file.id)); if (id === api.getState().projectId) { status(); update(); } return taken; },
     giveBack(id) { if (!held.delete(id)) return; if (id === api.getState().projectId) { status(attachedLine(id), true); update(); } },
     accepted(id, ids) { held.delete(id); drafts.set(id, files(id).filter(file => !ids.includes(file.id))); save(id); pruneThumbnails(); if (id === api.getState().projectId) { status(); closePreview(); update(); } },
-    renderMessageAttachments(row, attachments = []) { if (!attachments.length) return; const host = el('div','message-attachments'), id = api.getState().projectId; for (const file of attachments) { const chip = button((file.kind === 'image' ? '▧ ' : '≡ ') + file.name + ' · ' + size(file.bytes) + (file.withheld ? ' · left out' : ''),'saved-attachment',() => openSaved(file,id)); if (file.withheld) { chip.classList.add('withheld'); chip.title = `Not sent to the agent: ${file.withheld}.`; } host.append(chip); } row.append(host); },
+    renderMessageAttachments(row, attachments = []) { if (!attachments.length) return; const host = el('div','message-attachments'), id = api.getState().projectId; for (const file of attachments) { const chip = button((file.kind === 'image' ? '▧ ' : '≡ ') + attachmentLabel(file) + (file.withheld ? ' · left out' : ''),'saved-attachment',() => openSaved(file,id)); if (file.plan) chip.title = 'What went with this message from the Plan. Select to read it.'; if (file.withheld) { chip.classList.add('withheld'); chip.title = `Not sent to the agent: ${file.withheld}.`; } host.append(chip); } row.append(host); },
   };
   sync();
 })();

@@ -75,6 +75,26 @@ test('images cannot displace protected instructions, and attachments and manual 
   assert.throws(() => prepareContext(c, 'x'.repeat(9000), { maxBytes: 2000 }), /context budget/);
 });
 
+test('the whole Plan reaches the agent once: with the current request, or else with the latest message that carried it', () => {
+  const c = conversation(), plan = (n, cards) => ({ id: n.repeat(64), kind: 'text', name: 'Plan.md', bytes: 100, plan: { cards, whole: true } });
+  const card = { id: 'c'.repeat(64), kind: 'text', name: 'Card – Tests.md', bytes: 40, plan: { cards: 1, whole: false } };
+  const texts = { ['a'.repeat(64)]: 'OLD PLAN TEXT', ['b'.repeat(64)]: 'NEWER PLAN TEXT', ['c'.repeat(64)]: 'CARD TEXT', ['d'.repeat(64)]: 'CURRENT PLAN TEXT' };
+  const readAttachment = id => ({ text: texts[id] });
+  message(c, 'user', 'What is missing?', 'codex', { id: 'm1', attachments: [plan('a', 20)] });
+  message(c, 'assistant', 'Tests.', 'codex', { id: 'm2' });
+  message(c, 'user', 'And now?', 'codex', { id: 'm3', attachments: [plan('b', 22), card] });
+  message(c, 'user', 'Same Plan again', 'codex', { id: 'm4', attachments: [plan('b', 22)] });
+  // No Plan with the current request: only the latest message keeps the Plan's text, even when it's the same snapshot.
+  let context = envelope(prepareContext(c, 'Carry on', { fresh: true, policy: 'task', readAttachment })).context.map(item => item.text).join('\n');
+  assert.doesNotMatch(context, /OLD PLAN TEXT/); assert.equal(context.match(/NEWER PLAN TEXT/g).length, 1);
+  assert.match(context, /The Plan was attached here \(20 cards\) as it was then\. Left out because a later message carries a newer copy/);
+  assert.match(context, /CARD TEXT/);
+  // With the Plan on the current request, every earlier copy is a note.
+  const value = envelope(prepareContext(c, 'Draft more', { fresh: true, policy: 'task', readAttachment, attachments: [plan('d', 23)] }));
+  context = value.context.map(item => item.text).join('\n');
+  assert.doesNotMatch(context, /PLAN TEXT/); assert.match(context, /the current request carries the Plan as it is now/);
+  assert.match(value.currentRequest, /CURRENT PLAN TEXT/);
+});
 
 test('a long original request keeps its middle requirements in full when intent fits the budget', () => {
   const c=conversation(), original='Start '+ 'a'.repeat(25000) + ' NEVER OVERWRITE USER DATA ' + 'z'.repeat(30000) + ' end';

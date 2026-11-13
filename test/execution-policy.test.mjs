@@ -249,6 +249,27 @@ test('a pinned Flow override uses exactly the authorized provider, model and eff
   assert.equal(env.captures().length, 1);
 });
 
+test('a Plan review routed on Auto prefers an agent that didn’t build what it checks, and falls back when none can take it (#89)', { skip: scriptCLIs }, async t => {
+  const env = setup(t), { broker, c } = env; flow(broker, c);
+  const row = provider => ({ provider, models: [], usage, readAt: Date.now(), account: { authenticated: true, billingSource: 'subscription' }, billingSource: 'subscription' });
+  let rows = [row('codex'), row('claude')];
+  broker.router.candidates = async () => rows; broker.router.rows = () => rows;
+  // Ranking is routing's own business: here it simply takes the first agent offered, so only the avoiding is tested.
+  const route = globalThis.relayRouting.route;
+  globalThis.relayRouting.route = ({ candidates, mode, assessment }) => candidates.length ? { provider: candidates[0].provider, model: null, effort: null, mode, tier: assessment.tier, reason: 'First offered', quota: { state: 'ok' } } : { error: 'Nothing to route to.' };
+  t.after(() => { globalThis.relayRouting.route = route; });
+  const review = (avoid, requestId) => ({ text: 'Review the changes', provider: 'codex', routing: { mode: 'smart', planned: 'standard', ...(avoid ? { avoid } : {}) }, mode: 'edit', requestId });
+  const free = await broker.dispatch(c, review(null, 'free')); await broker.running.done;
+  assert.equal(free.provider, 'codex');
+  // A review of work Codex built goes to Claude.
+  const avoided = await broker.dispatch(c, review(['codex'], 'avoid')); await broker.running.done;
+  assert.equal(avoided.provider, 'claude');
+  // With only the builder's agent connected, the review still runs on it.
+  rows = [row('codex')];
+  const only = await broker.dispatch(c, review(['codex'], 'only')); await broker.running.done;
+  assert.equal(only.provider, 'codex');
+});
+
 test('takeover while queue routing awaits a model lookup leaves the queued ownership unchanged', { skip: scriptCLIs }, async t => {
   const env = setup(t), { broker, c } = env; flow(broker, c);
   broker.start(c, routed('Hold')); const run = broker.running; await until(() => env.captures().length === 1);

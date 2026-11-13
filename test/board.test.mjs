@@ -13,7 +13,7 @@ import { createRelayServer } from '../src/server.mjs';
 import { LIMITS } from '../src/board.mjs';
 import { TaskBudgets } from '../src/task-budget.mjs';
 import { TaskCoordinator } from '../src/task-coordinator.mjs';
-import { openPlan, parsePlan } from '../src/orchestration.mjs';
+import { openPlan, parsePlan, parseSuggest, planningRequest } from '../src/orchestration.mjs';
 import { prepareContext } from '../src/context.mjs';
 
 // The task board (#132, first stage): cards you write and run by hand, each run an ordinary task (#88).
@@ -326,13 +326,54 @@ test('through the real server: the board is read and changed for the workspace c
 });
 
 // One Plan (#162): an agent's plan arrives as draft cards on the Plan, and cards run the way plan steps did.
-const drafted = (env, { steps, summary = 'Contract first, then the page and its tests.', questions = [] }) => {
-  const id = `plan-${Math.random().toString(16).slice(2, 10)}`, plan = parsePlan(JSON.stringify({ summary, questions, steps }));
+const drafted = (env, { steps, summary = 'Contract first, then the page and its tests.', questions = [], remove, replaces }) => {
+  const id = `plan-${Math.random().toString(16).slice(2, 10)}`, plan = parsePlan(JSON.stringify({ summary, questions, steps, ...(remove ? { remove } : {}) }));
   assert.equal(plan.status, 'draft', 'The fixture is a valid plan.');
-  env.broker.record(env.c, { type: 'orchestration_plan', id, plan: { id, goal: 'Add saved items, with an API and a page.', source: 'agent', status: 'draft', summary: plan.summary, steps: plan.steps, ...(plan.questions ? { questions: plan.questions } : {}), review: true, revision: 1, planner: { provider: 'claude', model: 'opus', effort: 'high' } } });
+  env.broker.record(env.c, { type: 'orchestration_plan', id, plan: { id, goal: 'Add saved items, with an API and a page.', source: 'agent', status: 'draft', summary: plan.summary, steps: plan.steps, ...(plan.remove ? { remove: plan.remove } : {}), ...(replaces ? { replaces } : {}), ...(plan.questions ? { questions: plan.questions } : {}), review: true, revision: 1, planner: { provider: 'claude', model: 'opus', effort: 'high' } } });
   env.board.adopt(env.c, id);
   return env.c.orchestrations.find(item => item.id === id);
 };
+
+test('Ask tells the agent to reply in prose, draft replies reach later agents as notes, and a stray draft reply can become draft cards (#162)', t => {
+  const env = setup(t);
+  const steps = [{ title: 'Add a sitemap', instructions: 'Generate sitemap.xml.', tier: 'light', dependsOn: [] }, { title: 'Check it', instructions: 'Validate the sitemap.', tier: 'light', dependsOn: [1], role: 'qa' }];
+  const json = JSON.stringify({ summary: 'A sitemap, then a check.', questions: [], steps });
+  // A Draft cards run: its reply is JSON, and it became cards on the Plan.
+  const plan = drafted(env, { steps, summary: 'A sitemap, then a check.' });
+  env.broker.message(env.c, 'user', 'add SEO cards', 'claude');
+  env.broker.message(env.c, 'assistant', json, 'claude', 'drafted-reply', 'complete');
+  env.c.messages.at(-1).orchestrationId = plan.id;
+  // Ask: the Plan's text says to answer in prose and that a reply can't add cards; attaching it otherwise doesn't.
+  const asked = env.board.attach(env.c, { ask: true }), plain = env.board.attach(env.c, {});
+  assert.notEqual(asked.attachment.id, plain.attachment.id);
+  const askText = env.broker.attachments.forAgent(asked.attachment.id).text;
+  assert.match(askText, /^# Plan\n\n.+\n\nSent from the Plan’s Ask mode[^\n]*plain prose[^\n]*can’t add, change or remove cards[^\n]*Draft cards/);
+  assert.doesNotMatch(env.broker.attachments.forAgent(plain.attachment.id).text, /Ask mode/);
+  assert.match(env.broker.attachments.forAgent(env.board.attach(env.c, { cardId: plan.cards[0], ask: true }).attachment.id).text, /^Sent from the Plan’s Ask mode.+\n\n# Card: Add a sitemap/);
+  // An Ask answered with a draft anyway, as a plain reply.
+  env.broker.message(env.c, 'user', 'also add a robots.txt card', 'claude');
+  env.broker.message(env.c, 'assistant', '```json\n' + JSON.stringify({ summary: 'Robots rules.', steps: [{ title: 'Write robots.txt', instructions: 'Allow search, block training.', tier: 'light', dependsOn: [] }] }) + '\n```', 'claude', 'stray-reply', 'complete');
+  // Later agents read both as one-line notes, never as the JSON to copy.
+  const context = JSON.parse(prepareContext(env.c, 'What is left?', { workspace: env.list[0].path, workspaceFolders: env.list, provider: 'codex', fresh: true, attachments: [], readAttachment: id => env.broker.attachments.forAgent(id) }).prompt.replace(/^[^\n]*\n/, '')).context;
+  const replies = context.filter(item => item.role === 'assistant').map(item => item.text);
+  assert.equal(replies.length, 2);
+  assert.match(replies[0], /^\[Draft cards reply, shown here as a note\. .*became 2 draft cards on the Plan\. Other replies are plain prose\.\] A sitemap, then a check\.$/);
+  assert.match(replies[1], /^\[A reply written as a draft plan of 1 card, shown here as a note\. Replies outside Draft cards are plain prose\.\] Robots rules\.$/);
+  assert.ok(replies.every(text => !text.includes('"steps"')));
+  // The stray reply's cards go on the Plan as drafts once you ask, once only. Other replies and Draft cards replies can't.
+  const before = env.c.board.length;
+  assert.deepEqual(env.board.fromReply(env.c, { messageId: 'stray-reply' }), { cards: 1 });
+  const added = env.c.board.slice(before);
+  assert.deepEqual(added.map(card => [card.title, Boolean(card.draft), card.column, card.auto, card.agent]), [['Write robots.txt', true, 'backlog', true, null]]);
+  assert.equal(env.c.orchestrations[0].fromMessage, 'stray-reply');
+  assert.throws(() => env.board.fromReply(env.c, { messageId: 'stray-reply' }), /already on the Plan/);
+  assert.throws(() => env.board.fromReply(env.c, { messageId: 'drafted-reply' }), /Choose a reply/);
+  env.broker.message(env.c, 'assistant', 'Plain prose.', 'claude', 'prose-reply', 'complete');
+  assert.throws(() => env.board.fromReply(env.c, { messageId: 'prose-reply' }), error => error.status === 422 && /This reply could not be read as a plan/.test(error.message));
+  // Discarding them lets the same reply add them again.
+  env.board.drafts(env.c, { action: 'discard', ids: added.map(card => card.id) });
+  assert.deepEqual(env.board.fromReply(env.c, { messageId: 'stray-reply' }), { cards: 1 });
+});
 
 test('an agent’s plan becomes draft cards you edit, accept or discard, with what the plan checks found (#162)', async t => {
   const env = setup(t);
@@ -342,17 +383,20 @@ test('an agent’s plan becomes draft cards you edit, accept or discard, with wh
     { title: 'Check it all', instructions: 'Run the whole suite.', done: ['Suite passes'], tier: 'standard', dependsOn: [2], role: 'qa', check: 'npm test', phase: 'Verify' },
     { title: 'Polish after QA', instructions: 'Tidy the page.', done: ['Looks right'], tier: 'light', dependsOn: [3], role: 'frontend', phase: 'Verify' },
   ] });
-  assert.equal(plan.status, 'moved'); assert.equal(plan.cards.length, 4);
-  const cards = plan.cards.map(id => env.card(id)), [page, api, qa, polish] = cards;
+  assert.equal(plan.status, 'moved'); assert.equal(plan.cards.length, 5);
+  const cards = plan.cards.map(id => env.card(id)), [page, api, qa, polish, review] = cards;
   // Each card keeps what its step said and waits for what its step waited for. It's a major card on Smart routing, with no
-  // agent of its own, and runs only through its subtasks.
+  // agent of its own, and runs only through its subtasks. A QA or review card is one pass that ends with a verdict (#89), and
+  // a plan that changes code in more than one card ends with a review of the whole result, added by Codeshi.
   assert.deepEqual(cards.map(card => [card.title, card.column, card.auto, card.agent, card.split, card.tier, card.role, card.group]), [
     ['Build the list page', 'backlog', true, null, true, 'light', 'frontend', null],
     ['Agree the API', 'backlog', true, null, true, 'deep', 'backend', 'Contracts'],
-    ['Check it all', 'backlog', true, null, true, 'standard', 'qa', 'Verify'],
+    ['Check it all', 'backlog', true, null, false, 'standard', 'qa', 'Verify'],
     ['Polish after QA', 'backlog', true, null, true, 'light', 'frontend', 'Verify'],
+    ['Review the whole result', 'backlog', true, null, false, 'standard', 'reviewer', 'Verify'],
   ]);
-  assert.deepEqual([api.dependsOn, qa.dependsOn, polish.dependsOn], [[page.id], [api.id], [qa.id]]);
+  assert.deepEqual([api.dependsOn, qa.dependsOn, polish.dependsOn, review.dependsOn], [[page.id], [api.id], [qa.id], [polish.id]]);
+  assert.match(review.draft.notes[0], /Codeshi added this review of the whole result/);
   assert.deepEqual([api.artifact, api.files, api.checks, qa.check], ['contract', ['docs/items.md'], [{ text: 'The contract lists every field', done: false }], 'npm test']);
   assert.deepEqual(api.draft.by, { kind: 'agent', provider: 'claude', model: 'opus' });
   assert.deepEqual(api.draft.batch, { id: plan.id, summary: 'Contract first, then the page and its tests.', questions: [{ question: 'Should saved items sync across devices?', options: [] }, { question: 'Which store?', options: ['SQLite', 'Files'] }] });
@@ -378,8 +422,8 @@ test('an agent’s plan becomes draft cards you edit, accept or discard, with wh
   assert.throws(() => env.board.run(env.c, { ids: [page.id] }), /needs subtasks before it can run\. Split it with an agent, or add them yourself/);
   assert.throws(() => env.board.drafts(env.c, { action: 'accept', ids: [page.id] }), /isn’t a draft/);
   // Discarding removes the rest.
-  env.board.drafts(env.c, { action: 'discard', ids: [qa.id, polish.id] });
-  assert.deepEqual([env.card(qa.id), env.card(polish.id)], [undefined, undefined]);
+  env.board.drafts(env.c, { action: 'discard', ids: [qa.id, polish.id, review.id] });
+  assert.deepEqual([env.card(qa.id), env.card(polish.id), env.card(review.id)], [undefined, undefined, undefined]);
   // A plan that doesn't fit on the Plan adds nothing, and says why.
   const most = LIMITS.cards; LIMITS.cards = 3; t.after(() => { LIMITS.cards = most; });
   // A redraft from your answers replaces the draft it answered, and keeps the cards you already accepted from it.
@@ -391,7 +435,72 @@ test('an agent’s plan becomes draft cards you edit, accept or discard, with wh
   env.board.drafts(env.c, { action: 'discard', ids: [env.c.board.at(-1).id] });
   const big = drafted(env, { steps: [{ title: 'One', instructions: 'One.', tier: 'light' }, { title: 'Two', instructions: 'Two.', tier: 'light' }] });
   assert.deepEqual([big.status, env.c.board.length], ['failed', 2]);
-  assert.match(big.summary, /2 cards, and the Plan has room for 1 more/);
+  // Two cards that change code gain a review of the whole result, so the plan needs room for three.
+  assert.match(big.summary, /3 new cards, and the Plan has room for 1 more/);
+});
+
+test('a draft from the attached Plan changes, merges, regroups and removes its cards instead of adding a copy (#162)', t => {
+  const env = setup(t);
+  const a = env.add({ title: 'Write the README', column: 'ready', auto: true, group: 'Docs', notes: 'Old notes.' });
+  const b = env.add({ title: 'Add SEO tags', group: 'Website', dependsOn: [a.id] });
+  const m = env.add({ title: 'Add GEO tags', group: 'Website' });
+  const w = env.add({ title: 'Check SEO', dependsOn: [m.id] });
+  const gone = env.add({ title: 'Old idea' });
+  const shipped = env.add({ title: 'Shipped' });
+  env.board.update(env.c, env.card(shipped.id), { column: 'done' });
+  const ref = id => env.board.refOf(env.c, id);
+  // Draft cards attaches the Plan with each card's Id, and the planner is told to change that Plan, not draft a copy.
+  const sent = env.board.attach(env.c, { draft: true });
+  assert.match(env.broker.attachments.forAgent(sent.attachment.id).text, new RegExp(`## Write the README\\n\\n- Id: ${ref(a.id)}\\n- Status: Ready\\n- Group: Docs`));
+  assert.equal(env.broker.attachments.select([sent.attachment.id])[0].plan.ids, true);
+  assert.doesNotMatch(env.broker.attachments.forAgent(env.board.attach(env.c, {}).attachment.id).text, /- Id: /);
+  assert.match(planningRequest('Merge the SEO cards', { revising: true }), /treat it as a change to that Plan[^\n]*Never draft a copy/);
+  assert.doesNotMatch(planningRequest('Build it'), /attached Plan/);
+  // Suggest next still takes only new cards.
+  assert.equal(parseSuggest(JSON.stringify({ summary: 'S.', steps: [{ title: 'T', instructions: 'I.', tier: 'light', dependsOn: [ref(a.id)] }] })).status, 'unstructured');
+  const count = env.c.board.length;
+  const plan = drafted(env, { summary: 'One SEO and GEO card; the README moves to Launch.', steps: [
+    { card: ref(a.id), title: 'Rewrite the README', phase: 'Launch' },
+    { card: ref(b.id), title: 'Add SEO and GEO tags', instructions: 'Both kinds of tag.', merges: [ref(m.id)] },
+    { title: 'Submit the sitemap', instructions: 'In Search Console.', tier: 'light', dependsOn: [2, ref(a.id)], phase: 'Website' },
+    { card: ref(shipped.id), title: 'Shipped again' },
+  ], remove: [ref(gone.id), 'nope1234'] });
+  assert.equal(plan.status, 'moved');
+  assert.equal(env.c.board.length, count + 1, 'Only the new card is added; the changed ones aren’t copied.');
+  const added = env.c.board.at(-1);
+  // A changed card shows its new version as a draft in Backlog, keeping what it was.
+  assert.deepEqual([env.card(a.id).title, env.card(a.id).group, env.card(a.id).notes, env.card(a.id).column], ['Rewrite the README', 'Launch', 'Old notes.', 'backlog']);
+  assert.deepEqual(env.card(a.id).draft.changed, ['title', 'group']);
+  assert.deepEqual([env.card(a.id).draft.was.fields, env.card(a.id).draft.was.column, env.card(a.id).draft.was.draft], [{ title: 'Write the README', group: 'Docs' }, 'ready', null]);
+  assert.deepEqual([env.card(b.id).title, env.card(b.id).notes, env.card(b.id).dependsOn], ['Add SEO and GEO tags', 'Both kinds of tag.', [a.id]]);
+  assert.deepEqual([env.card(m.id).draft.remove, env.card(m.id).draft.into, env.card(gone.id).draft.remove, env.card(gone.id).draft.into], [true, b.id, true, undefined]);
+  assert.deepEqual([added.title, added.group, added.dependsOn, Boolean(added.draft.was)], ['Submit the sitemap', 'Website', [b.id, a.id], false]);
+  // What it couldn't change is left alone and said so.
+  assert.deepEqual([env.card(shipped.id).title, env.card(shipped.id).draft ?? null], ['Shipped', null]);
+  assert.match(added.draft.batch.left.join(' '), /“Shipped” is done, so it wasn’t changed\..*isn’t on the Plan \(nope1234\), so it wasn’t removed/);
+  // Accepting keeps the changes: the changed card goes back to Ready, the merged card's waiters wait for the card it
+  // merged into, and the removed card goes.
+  const drafts = () => env.c.board.filter(card => card.draft).map(card => card.id);
+  const accepted = env.board.drafts(env.c, { action: 'accept', ids: drafts() });
+  assert.deepEqual([env.card(a.id).column, env.card(a.id).draft, env.card(m.id), env.card(gone.id), env.card(w.id).dependsOn], ['ready', null, undefined, undefined, [b.id]]);
+  // Undo brings it all back as drafts.
+  env.board.drafts(env.c, { action: 'undo', undoId: accepted.undoId });
+  assert.deepEqual([env.card(a.id).column, Boolean(env.card(a.id).draft?.was), env.card(m.id).draft.into, Boolean(env.card(gone.id).draft.remove), env.card(w.id).dependsOn], ['backlog', true, b.id, true, [m.id]]);
+  // Discarding puts the changed cards back as they were, keeps the cards marked to remove, and removes the new card.
+  env.board.drafts(env.c, { action: 'discard', ids: drafts() });
+  assert.deepEqual([env.card(a.id).title, env.card(a.id).group, env.card(a.id).column, env.card(a.id).draft], ['Write the README', 'Docs', 'ready', null]);
+  assert.deepEqual([env.card(b.id).title, env.card(b.id).notes, env.card(m.id).draft, env.card(gone.id).column, env.card(added.id)], ['Add SEO tags', '', null, 'backlog', undefined]);
+  // A redraft replaces the draft it answered: a change it keeps stays, one it drops goes back.
+  const first = drafted(env, { steps: [{ card: ref(a.id), title: 'Draft one' }, { card: ref(b.id), title: 'Draft one too' }] });
+  drafted(env, { replaces: first.id, steps: [{ card: ref(b.id), phase: 'Launch' }] });
+  assert.deepEqual([env.card(a.id).title, env.card(a.id).draft, env.card(b.id).title, env.card(b.id).group, env.card(b.id).draft.was.fields], ['Write the README', null, 'Draft one too', 'Launch', { title: 'Add SEO tags', group: 'Website' }]);
+  env.board.drafts(env.c, { action: 'discard', ids: drafts() });
+  assert.deepEqual([env.card(b.id).title, env.card(b.id).group], ['Add SEO tags', 'Website']);
+  // A plan that would make cards wait in a circle changes nothing.
+  const before = JSON.stringify(env.c.board);
+  const circle = drafted(env, { steps: [{ title: 'After README', instructions: 'X.', tier: 'light', dependsOn: [ref(a.id)] }, { card: ref(a.id), dependsOn: [1] }] });
+  assert.equal(circle.status, 'failed'); assert.match(circle.summary, /in a circle/);
+  assert.equal(JSON.stringify(env.c.board), before);
 });
 
 test('a card on Auto runs with the agent the Plan shows, and a schedule needs an agent it can name (#162)', { skip: scriptCLIs }, async t => {
@@ -410,6 +519,58 @@ test('a card on Auto runs with the agent the Plan shows, and a schedule needs an
   env.board.stopMany(env.c, { ids: [card.id] });
   await until(() => column(env, card) === 'ready', 'it to stop');
   assert.throws(() => env.board.stopMany(env.c, { ids: [card.id] }), /None of these cards is running/);
+});
+
+// Flow's Run Ready (#132): you choose the cards and one limit; Flow picks agents for the cards without one.
+const flowOn = env => env.broker.setRouting(env.c, { mode: 'smart', executionRevision: env.broker.execution.defaults(env.c).revision });
+test('Flow’s Run Ready runs only the cards ticked, gives a card with no agent Auto for that run, and keeps a chosen agent', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const pinned = env.add({ title: 'Pinned', column: 'ready', agent: { provider: 'codex' } });
+  const loose = env.add({ title: 'No agent', column: 'ready', agent: null, tier: 'light', dependsOn: [pinned.id] });
+  const left = env.add({ title: 'Left in Ready', column: 'ready', agent: null });
+  env.script(pinned, 'hold');
+  const shared = { maxWorkingMinutes: 30, maxTokens: 200000, maxSpendUSD: null };
+  assert.throws(() => env.board.run(env.c, { ids: [pinned.id], shared }), /for Flow’s Run Ready/, 'Normal keeps each card’s own task limits.');
+  assert.throws(() => env.board.run(env.c, { ids: [loose.id, pinned.id] }), /Choose an agent for “No agent”/, 'In Normal a card with no agent can’t run.');
+  flowOn(env);
+  const revision = env.broker.execution.defaults(env.c).revision;
+  assert.throws(() => env.board.run(env.c, { ids: [pinned.id], shared: { maxTokens: -5 }, executionRevision: revision }), /positive numbers/);
+  assert.throws(() => env.board.run(env.c, { ids: [loose.id, pinned.id], shared, executionRevision: revision }), /is on Auto\. Run it from the Plan/, 'Flow’s pick comes from the Plan, which shows it first.');
+  assert.equal(env.c.parallelTasks?.length || 0, 0, 'A refused run starts nothing.');
+  const { tasks } = env.board.run(env.c, { ids: [loose.id, pinned.id], shared, executionRevision: revision, assignments: { [loose.id]: { provider: 'claude', model: null, effort: null, auto: true } } });
+  const a = env.task(tasks[pinned.id]), b = env.task(tasks[loose.id]);
+  assert.deepEqual([a.provider, a.routing, b.provider, b.routing], ['codex', undefined, 'claude', { mode: 'smart', planned: 'light' }], 'The pinned card keeps its agent; the card with none is routed at its size.');
+  assert.deepEqual(b.dependsOn, [a.id], 'It still waits for the card it depends on.');
+  assert.equal(a.batch.id, b.batch.id); assert.deepEqual(a.batch.limits, shared); assert.equal(a.batch.cards, 2);
+  assert.deepEqual([env.card(loose.id).agent, env.card(loose.id).auto, env.card(loose.id).attempts[0].auto, env.card(loose.id).attempts[0].run], [null, false, true, a.batch.id], 'The card itself stays without an agent; the run records Auto.');
+  assert.equal(column(env, left), 'ready', 'A Ready card you didn’t tick isn’t added.');
+  const [run] = env.board.view(env.c).runs;
+  assert.deepEqual([run.cards.sort(), run.limits, run.used.tokens], [[pinned.id, loose.id].sort(), shared, 0]);
+  await until(() => env.task(a.id).status === 'running', 'the pinned card to start');
+  assert.deepEqual(env.lane(a.id).broker.budget.policy(env.lane(a.id).c).maxTokens, 200000, 'Its task works under the run’s limit, not the workspace’s.');
+  env.board.stopMany(env.c, { ids: [pinned.id, loose.id] });
+  await until(() => column(env, pinned) === 'ready' && column(env, loose) === 'ready', 'the run to stop');
+  assert.deepEqual(env.board.view(env.c).runs, [], 'A stopped run leaves the bar.');
+});
+
+test('a card in Flow’s Run Ready doesn’t start once the run has used up its shared limit', { skip: scriptCLIs }, async t => {
+  const env = setup(t, ['a', 'b']);
+  flowOn(env);
+  const first = env.add({ title: 'First', column: 'ready', folderId: 'a' }), second = env.add({ title: 'Second', column: 'ready', folderId: 'b', dependsOn: [first.id] });
+  env.script(first, 'hold'); env.script(second, 'hold');
+  const { tasks } = env.board.run(env.c, { ids: [first.id, second.id], shared: { maxTokens: 1000 }, executionRevision: env.broker.execution.defaults(env.c).revision });
+  await until(() => env.task(tasks[first.id]).status === 'running', 'the first card to start');
+  // What the first card's agent reported using, counted for every card in the run.
+  const lane = env.lane(tasks[first.id]), state = lane.c.taskBudgets[tasks[first.id]];
+  state.tokens.input = 4000;
+  assert.equal(env.broker.tasks.sharedUsage(env.c, env.task(tasks[second.id])).tokens, 4000, 'The second card counts what the first used.');
+  assert.match(env.broker.tasks.runSpent(env.c, env.task(tasks[second.id]).batch), /used 4,000 tokens, its limit of 1,000/);
+  env.release(fs.realpathSync(env.folder('a')));
+  await until(() => column(env, second) === 'ready', 'the second card to be held back');
+  assert.equal(env.task(tasks[second.id]).status, 'cancelled');
+  assert.match(env.card(second.id).reason, /^Not started: This run has used 4,000 tokens/);
+  assert.equal(env.captured(fs.realpathSync(env.folder('b'))).length, 0, 'Its agent was never started.');
+  assert.equal(env.task(tasks[first.id]).budgetUsed.tokens, 4000, 'What the first card used is kept with its task.');
 });
 
 test('a card on Auto can choose Saver, Smart or Ultra, and runs its task in that mode', { skip: scriptCLIs }, async t => {
@@ -487,6 +648,92 @@ test('a finished card is tested before the cards after it start, and each card i
   // The cards' tasks count toward their groups' totals.
   const ledgers = await env.broker.tasks.ledgers();
   assert.deepEqual([...new Set(ledgers.map(item => item.plan?.id))].sort(), ['group:Build', 'group:Contracts']);
+});
+
+// Review and one repair round (#89): a Reviewer card's findings go back to the card they name for one repair run in its own
+// task, then the review checks once more. The cards after the review wait throughout.
+function reviewRound(t, { second }) {
+  const env = setup(t);
+  env.broker.tasks.tests = { saved: () => null };
+  const verdict = value => `I read the changes.\n\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
+  const found = { verdict: 'changes', findings: [{ card: 'Build the API', problem: 'The items route has no auth check.', fix: 'Require a session.', file: 'src/items.js' }] };
+  // The mock agent answers by what its request contains, most specific first.
+  const folder = env.folder('a'), file = path.join(folder, '.mock-scenarios.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  Object.assign(saved, {
+    '~The cards you reviewed had one repair run': { text: verdict(second) },
+    '~asked for changes. Fix these': { behavior: 'hold', text: 'Added the session check to the items route.' },
+    '~Write the docs': { text: 'Wrote the docs.' },
+    '~Review the API': { text: verdict(found) },
+    '~Build the API': { text: 'Built the items route.' },
+  });
+  fs.writeFileSync(file, JSON.stringify(saved)); git(folder, 'commit', '-qam', 'script');
+  const api = env.add({ title: 'Build the API', column: 'ready', role: 'backend' });
+  const review = env.add({ title: 'Review the API', column: 'ready', role: 'reviewer', agent: { provider: 'claude' }, dependsOn: [api.id] });
+  const docs = env.add({ title: 'Write the docs', column: 'ready', dependsOn: [review.id] });
+  env.board.run(env.c, { ids: [api.id, review.id, docs.id] });
+  const taskOf = card => env.task(env.card(card.id).task), requests = () => env.captured(fs.realpathSync(folder)).map(capture => capture.context.currentRequest);
+  return { env, api, review, docs, taskOf, requests, folder };
+}
+
+test('a review’s findings go back to the card they name for one repair run, and the review checks again before anything builds on it (#89)', { skip: scriptCLIs }, async t => {
+  const { env, api, review, docs, taskOf, requests, folder } = reviewRound(t, { second: { verdict: 'pass' } });
+  // The review card is told to end with a verdict, and it ran on another agent than the one that built the API.
+  await until(() => taskOf(review)?.review?.status === 'repairing', 'the review to find a problem');
+  assert.match(requests().find(text => text.startsWith('Review the API')), /End your report with your verdict as a JSON block/);
+  // The API card repairs in its own task, with its own agent, while the cards after the review wait.
+  await until(() => requests().some(text => /asked for changes\. Fix these/.test(text)), 'the repair to start');
+  const repair = requests().find(text => /asked for changes\. Fix these/.test(text));
+  assert.match(repair, /^A review card, “Review the API”, checked this card’s work/);
+  assert.match(repair, /1\. The items route has no auth check\. Fix: Require a session\. \(src\/items\.js\)/);
+  await until(() => env.card(api.id).column === 'doing', 'the API card to be working again');
+  const shown = env.board.list(env.c);
+  assert.equal(shown.find(item => item.id === api.id).taskState.repairOf.title, 'Review the API');
+  assert.deepEqual(shown.find(item => item.id === review.id).taskState.review.findings.map(item => item.cardTitle), ['Build the API']);
+  assert.equal(shown.find(item => item.id === review.id).taskState.holds, true);
+  assert.equal(taskOf(docs).status, 'waiting');
+  await until(() => /to repair what it found and review again/.test(taskOf(docs).reason || ''), 'the docs card to say why it waits');
+  env.release(fs.realpathSync(folder));
+  // The review checks the repair, with what the repair reported, and passes: only then do the docs start.
+  await until(() => taskOf(review)?.review?.status === 'passed', 'the second review to pass');
+  const again = requests().find(text => text.startsWith('The cards you reviewed had one repair run'));
+  assert.match(again, /- “Build the API”: Added the session check to the items route\./);
+  assert.match(again, /This is the last review round/);
+  await until(() => env.card(docs.id).column === 'review', 'the docs card to finish');
+  const order = requests();
+  assert.ok(order.findIndex(text => text.startsWith('Write the docs')) > order.findIndex(text => text.startsWith('The cards you reviewed')), 'Nothing built on the review before it passed.');
+  assert.equal(order.filter(text => /Fix these/.test(text)).length, 1);
+  const after = env.board.list(env.c).find(item => item.id === review.id).taskState;
+  assert.deepEqual([after.review.status, after.review.round, after.review.earlier, after.holds, Boolean(after.notIndependent)], ['passed', 1, 1, false, false]);
+});
+
+test('findings left after the repair round wait for you, never repair twice, and Continue anyway lets the cards after it start (#89)', { skip: scriptCLIs }, async t => {
+  const { env, review, docs, taskOf, requests, folder } = reviewRound(t, { second: { verdict: 'changes', findings: [{ card: 'Build the API', problem: 'Sessions are still not checked on delete.' }] } });
+  await until(() => requests().some(text => /Fix these/.test(text)), 'the repair to start');
+  env.release(fs.realpathSync(folder));
+  await until(() => taskOf(review)?.review?.status === 'held', 'the second review to hold');
+  assert.match(taskOf(review).review.reason, /still found 1 problem after the repair round/);
+  await until(() => /couldn’t settle/.test(taskOf(docs).reason || ''), 'the docs card to wait for you');
+  assert.equal(taskOf(docs).status, 'waiting');
+  assert.equal(requests().filter(text => /Fix these/.test(text)).length, 1, 'There is one repair round, never a second.');
+  assert.match(env.c.messages.filter(message => message.role === 'system').at(-1).text, /“Review the API”: The review still found 1 problem/);
+  // Building on it anyway is your call.
+  env.board.proceed(env.c, review.id);
+  assert.equal(taskOf(review).review.accepted, true);
+  await until(() => env.card(docs.id).column === 'review', 'the docs card to run');
+});
+
+test('a review that ends without a verdict holds the cards after it, and a plan’s final review is added only for new plans (#89)', async () => {
+  const { parseVerdict, withFinalReview } = await import('../src/plan-review.mjs');
+  assert.equal(parseVerdict('Looks fine to me.'), null);
+  assert.equal(parseVerdict('```json\n{"verdict": "changes", "findings": []}\n```'), null, 'Changes with nothing named isn’t a verdict.');
+  assert.deepEqual(parseVerdict('Earlier: {"verdict": "pass"}\n\nThen:\n```json\n{"verdict": "changes", "findings": [{"card": "A", "problem": "Broken"}]}\n```'), { verdict: 'changes', findings: [{ card: 'A', problem: 'Broken', fix: '', file: '' }] });
+  assert.equal(parseVerdict(`\`\`\`json\n${JSON.stringify({ verdict: 'changes', findings: Array.from({ length: 9 }, (_, i) => ({ problem: `P${i}` })) })}\n\`\`\``).findings.length, 5);
+  const steps = [{ id: 's1', role: 'backend', dependsOn: [] }, { id: 's2', role: 'frontend', dependsOn: ['s1'] }, { id: 's3', dependsOn: [] }];
+  assert.deepEqual(withFinalReview(steps).steps.at(-1).dependsOn, ['s2', 's3']);
+  assert.equal(withFinalReview(steps).added, 's4');
+  assert.equal(withFinalReview([steps[0], { id: 's2', role: 'qa', dependsOn: ['s1'] }]).added, null, 'One card that changes code needs no review of the whole.');
+  assert.equal(withFinalReview([...steps, { id: 's4', role: 'reviewer', dependsOn: ['s2', 's3'] }]).added, null, 'The planner already ended it with a review.');
+  assert.equal(withFinalReview([{ ...steps[0], card: 'abc' }, steps[1]]).added, null, 'A plan that edits the Plan you have is left as it is.');
 });
 
 // Closed to agents (#97): a card or the whole Plan that Codeshi never puts in a prompt, and the Plan attached to a message.

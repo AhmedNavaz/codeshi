@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { validateRelativePath } from './collaboration-format.mjs';
-import { workspaceGit, workspaceGitDiff, workspaceGitIdentity } from './workspace-git.mjs';
+import { spawnSync } from 'node:child_process';
+import { filterOverrides, runner, workspaceGit, workspaceGitDiff, workspaceGitIdentity } from './workspace-git.mjs';
 
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -54,13 +55,53 @@ export function copyReviewFiles(snapshot, folders, target) {
 function repository(folder) {
   const identity = workspaceGitIdentity(folder);
   if (fs.realpathSync(identity.root) !== fs.realpathSync(folder.path)) fail('Attach the Git repository root to review this folder.');
-  return identity;
+  // A task's copy is compared with the commit it started from, which stays put however often the copy is committed.
+  return folder.base ? { ...identity, head: folder.base } : identity;
+}
+
+// A task in its own copy (#88) carries the commit it started from as `base`. Its changes are everything since that commit,
+// committed or not: opening Review & merge commits the copy, and its agent may have committed there too, so comparing with
+// HEAD would find nothing.
+function baseGit(folder) {
+  if (!/^[a-f0-9]{40,64}$/.test(folder.base)) fail('This task’s starting commit is unknown, so its changes can’t be listed.', 409);
+  const run = runner(folder, spawnSync, { timeout: 10000, maxBuffer: 8 * 1024 * 1024 }), filters = filterOverrides(run);
+  if (filters.error) fail(filters.error, 409);
+  return { run, overrides: filters.overrides };
+}
+function baseChanges(folder) {
+  const { run, overrides } = baseGit(folder);
+  const tracked = run(['diff', '--name-status', '-z', '-M', '--no-ext-diff', '--no-textconv', folder.base, '--', '.'], overrides);
+  const untracked = run(['ls-files', '--others', '--exclude-standard', '-z', '--', '.'], overrides);
+  if (tracked.status !== 0 || untracked.status !== 0) return { ok: false, changes: [] };
+  const changes = [], entries = String(tracked.stdout || '').split('\0');
+  for (let i = 0; i < entries.length; i++) {
+    const letter = entries[i]?.[0]; if (!letter) continue;
+    if (letter === 'R' || letter === 'C') { const originalPath = entries[++i]; changes.push({ path: entries[++i], code: 'R ', staged: false, originalPath }); }
+    else changes.push({ path: entries[++i], code: letter === 'A' ? 'A ' : letter === 'D' ? ' D' : ' M', staged: false });
+  }
+  for (const name of String(untracked.stdout || '').split('\0').filter(Boolean)) changes.push({ path: name, code: '??', staged: false });
+  return { ok: true, changes };
+}
+function baseDiff(folder, filePath) {
+  const file = baseChanges(folder).changes.find(entry => entry.path === filePath);
+  if (!file) fail('This file has no changes in the task. Refresh the review.', 404);
+  const { run, overrides } = baseGit(folder), options = ['--no-color', '--no-ext-diff', '--no-textconv', '-M'];
+  const result = file.code === '??' ? run(['diff', '--no-index', ...options, '--', '/dev/null', file.path], overrides) : run(['diff', folder.base, ...options, '--', ...(file.originalPath ? [file.originalPath] : []), file.path], overrides);
+  const overflow = result.error?.code === 'ENOBUFS';
+  if ((result.error && !overflow) || (!overflow && ![0, 1].includes(result.status))) fail('Could not read this file’s changes.', 500);
+  const diff = String(result.stdout || '');
+  return { folderId: folder.id, path: file.path, code: file.code, ...(file.originalPath ? { originalPath: file.originalPath } : {}), diff: diff.slice(0, reviewLimits.diffBytes + 1), truncated: overflow || diff.length > reviewLimits.diffBytes };
 }
 
 export function listReviewChanges(folders) {
   return workspaceGit(folders, { untracked: 'all' }).repositories.map(repo => {
+    const folder = folders.find(item => item.id === repo.folderId);
     let error = repo.error;
-    try { repository(folders.find(folder => folder.id === repo.folderId)); } catch (e) { error = e.message; }
+    try { repository(folder); } catch (e) { error = e.message; }
+    if (folder.base && repo.available && !error) {
+      try { const own = baseChanges(folder); if (!own.ok) error = 'Could not read this task’s changes.'; repo = { ...repo, changes: own.changes.slice(0, 100), totalChanges: own.changes.length, changesClipped: own.changes.length > 100 }; }
+      catch (e) { error = e.message; }
+    }
     return { ...repo, available: repo.available && !error, error, changes: repo.changes?.map(file => {
       let reason = null;
       try { validateRelativePath(file.path); if (file.originalPath) validateRelativePath(file.originalPath); }
@@ -83,7 +124,7 @@ export function captureReview(folders, selections) {
     if (!identities.has(folder.id)) identities.set(folder.id, repository(folder));
     validateRelativePath(selection.path);
     const before = fileVersion(folder, selection.path, true);
-    const diff = workspaceGitDiff(folder, selection.path, { limit: reviewLimits.diffBytes });
+    const diff = folder.base ? baseDiff(folder, selection.path) : workspaceGitDiff(folder, selection.path, { limit: reviewLimits.diffBytes });
     if (diff.originalPath) validateRelativePath(diff.originalPath);
     if (diff.directory || diff.truncated || Buffer.byteLength(diff.diff) > reviewLimits.diffBytes) fail('This change is too large to review in full. Choose a smaller change.', 413);
     if (!diff.diff || /^Binary files |^GIT binary patch|^Submodule |^(?:old|new|deleted file|new file) mode 1[26]0000/m.test(diff.diff)) fail('Choose a changed text file; binary files, submodules and symbolic links are not supported.');

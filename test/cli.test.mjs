@@ -54,7 +54,9 @@ test('arguments are checked before anything is sent', () => {
   assert.equal(parseArgs([]).command, 'session');
   assert.equal(parseArgs(['-a', 'claude']).agent, 'claude');
   assert.equal(parseArgs(['--version']).command, 'version');
-  for (const [args, message] of [[['launch'], /Unknown command launch/], [['run', '--agent', 'gpt'], /codex, claude or gemini/], [['status', '--agent', 'codex'], /apply to run, continue and the session/], [['--json'], /The session is interactive/], [['run', 'x', '--json', '--jsonl'], /--json or --jsonl/], [['wait', 'now'], /takes no message/], [['run', '--model'], /needs a value/], [['tasks', '--detach'], /applies to run and continue/], [['run', '--force', 'x'], /Unknown option --force/]]) {
+  assert.equal(parseArgs(['run', 'x', '--flow', 'Saver']).flow, 'saver');
+  assert.equal(parseArgs(['--flow=off', '-a', 'claude']).flow, 'off', 'Turning Flow off and naming the agent go together.');
+  for (const [args, message] of [[['run', 'x', '--flow', 'fast'], /smart, saver, ultra or off/], [['continue', '--flow', 'smart'], /--flow applies to run and the session/], [['run', 'x', '--flow', 'smart', '--agent', 'codex'], /not both/], [['launch'], /Unknown command launch/], [['run', '--agent', 'gpt'], /codex, claude or gemini/], [['status', '--agent', 'codex'], /apply to run, continue and the session/], [['--json'], /The session is interactive/], [['run', 'x', '--json', '--jsonl'], /--json or --jsonl/], [['wait', 'now'], /takes no message/], [['run', '--model'], /needs a value/], [['tasks', '--detach'], /applies to run and continue/], [['run', '--force', 'x'], /Unknown option --force/]]) {
     assert.throws(() => parseArgs(args), error => message.test(error.message) && error.code === EXIT.usage, args.join(' '));
   }
 });
@@ -111,7 +113,7 @@ test('a run started from the terminal is the workspace chat’s run: the app see
 
   const json = await env.cli(['wait', '--json']);
   assert.equal(json.code, EXIT.ok);
-  assert.deepEqual({ ...json.json(), conversationId: null, runId: null, taskId: null }, { v: 1, result: 'complete', workspace: { id: env.project.id, name: 'app' }, conversationId: null, runId: null, taskId: null, agent: 'codex', model: null, reply: 'It builds with esbuild.', error: null, errorCategory: null });
+  assert.deepEqual({ ...json.json(), conversationId: null, runId: null, taskId: null }, { v: 1, result: 'complete', workspace: { id: env.project.id, name: 'app' }, conversationId: null, runId: null, taskId: null, agent: 'codex', model: null, routing: null, reply: 'It builds with esbuild.', error: null, errorCategory: null });
   assert.equal(json.json().runId, c.lastRun.id, 'wait with nothing working reports the last run.');
 
   const piped = await env.cli(['run', '--jsonl'], { input: 'Explain the build\n' });
@@ -120,6 +122,90 @@ test('a run started from the terminal is the workspace chat’s run: the app see
   assert.deepEqual(events.map(event => event.type).sort(), ['activity', 'message', 'result', 'started']); assert.equal(events[0].type, 'started'); assert.equal(events.at(-1).type, 'result');
   assert(events.every(event => event.v === 1 && (event.type === 'result' || event.runId === events[0].runId)));
   assert.equal(events.at(-1).reply, 'It builds with esbuild.');
+});
+
+// Flow's routing reads each agent's account, models and usage; these stand in for a connected Codex on a subscription.
+const flowModels = [{ id: 'gpt-6.1-sol', displayName: 'Codex', isDefault: true, supportedReasoningEfforts: ['low', 'medium', 'high'].map(reasoningEffort => ({ reasoningEffort })) }, { id: 'gpt-6-luna', displayName: 'Mini', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }];
+function connectFlow(broker, { billingSource = 'subscription' } = {}) {
+  broker.availableProviders = () => ['codex'];
+  broker.handoff.account = async () => ({ installed: true, authenticated: true, billingSource });
+  broker.handoff.models = async () => ({ data: flowModels });
+  broker.checks.usage = async () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10, resetsAt: new Date(Date.now() + 3600000).toISOString() }] });
+}
+
+test('in Flow, a message from the terminal is placed by the engine, as one from the window is (#90, #12)', { skip: scriptCLIs }, async t => {
+  const env = await engine(t, { 'Fix the typo in the README': { text: 'Fixed.' }, 'Explain the build': { text: 'It builds with esbuild.' } });
+  connectFlow(env.broker);
+
+  // --flow turns Flow on for the workspace, as Flow's switch in the window does, and Saver places the message by local rules.
+  const routed = await env.cli(['run', 'Fix', 'the', 'typo', 'in', 'the', 'README', '--flow', 'saver']);
+  assert.equal(routed.code, EXIT.ok, routed.err);
+  assert.equal(routed.out, 'Fixed.\n');
+  assert.equal(env.c.routing.mode, 'saver', 'The workspace is in Flow, so the window shows it too.');
+  assert.equal(env.c.lastRun.routing.mode, 'saver'); assert.equal(env.c.lastRun.provider, 'codex'); assert.equal(env.c.lastRun.effort, 'low', 'Saver keeps effort low.');
+  assert.equal(env.c.messages.findLast(message => message.role === 'user').routing.ratedBy, 'local', 'The engine rated it, not the command.');
+  assert.match(routed.err, /Flow \(Saver\) is choosing an agent…/); assert.match(routed.err, /Flow \(Saver\) chose Codex · gpt-6-luna · low: .+\.\nCodex is working in app…/, 'A typo goes to the light model.');
+
+  // Without --flow, the next message follows the workspace's setting, and the result and events say what Flow chose.
+  const events = await env.cli(['run', 'Explain the build', '--jsonl']);
+  assert.equal(events.code, EXIT.ok, events.err);
+  const lines = events.out.trim().split('\n').map(line => JSON.parse(line)), started = lines.find(event => event.type === 'started'), result = lines.at(-1);
+  assert.equal(started.routing.mode, 'saver'); assert.equal(typeof started.routing.reason, 'string');
+  assert.deepEqual(result.routing, started.routing); assert.equal(result.agent, 'codex');
+
+  // Naming the agent sends this one message to it, unrouted; Flow stays on for the next.
+  const named = await env.cli(['run', 'Explain the build', '--agent', 'codex', '--json']);
+  assert.equal(named.code, EXIT.ok, named.err);
+  assert.equal(named.json().routing, null); assert.equal(env.c.lastRun.routing, undefined);
+  assert.equal(env.c.routing.mode, 'saver');
+
+  // --flow off leaves Flow; messages go to the agent picked in the app again.
+  const off = await env.cli(['run', 'Explain the build', '--flow', 'off', '--json']);
+  assert.equal(off.code, EXIT.ok, off.err);
+  assert.equal(env.c.routing, null); assert.equal(off.json().routing, null);
+});
+
+test('codeshi wait while Flow is still rating a message follows on to the run it starts', { skip: scriptCLIs }, async t => {
+  const env = await engine(t, { 'Explain the build': { text: 'It builds with esbuild.' } });
+  connectFlow(env.broker);
+  env.broker.setRouting(env.c, { mode: 'smart' });
+  let rate; const rated = new Promise(resolve => { rate = resolve; });
+  env.broker.router.worker = async () => { await rated; return JSON.stringify({ tier: 'standard', effort: 'medium', reason: 'Explains the build setup' }); };
+  const sending = env.broker.dispatch(env.c, { text: 'Explain the build', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'window-send', routing: { mode: 'smart' } });
+  await until(() => env.broker.view(env.c).activeRun?.purpose === 'routing' && env.broker.running?.assessorStarted, 'Flow to start rating');
+  const waiting = env.cli(['wait']);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  rate(); await sending;
+  const result = await waiting;
+  assert.equal(result.code, EXIT.ok, result.err);
+  assert.equal(result.out, 'It builds with esbuild.\n');
+  assert.match(result.err, /Flow is choosing an agent…\nFlow \(Smart\) chose Codex · gpt-6\.1-sol · medium: Explains the build setup\.\nCodex is working/);
+});
+
+test('codeshi stop while Flow rates a message from codeshi run ends it as stopped, with nothing run', { skip: scriptCLIs }, async t => {
+  const env = await engine(t, { 'Explain the build': { text: 'It builds with esbuild.' } });
+  connectFlow(env.broker);
+  env.broker.setRouting(env.c, { mode: 'smart' });
+  env.broker.router.worker = (_broker, run) => new Promise((resolve, reject) => { const check = setInterval(() => { if (run.stopped) { clearInterval(check); reject(new Error('stopped')); } }, 10); });
+  const running = env.cli(['run', 'Explain the build', '--json']);
+  await until(() => env.broker.running?.assessorStarted, 'Flow to start rating');
+  const stop = await env.cli(['stop', '--json']);
+  assert.equal(stop.json().result, 'stopped');
+  const result = await running;
+  assert.equal(result.code, EXIT.failed, result.err);
+  assert.equal(result.json().result, 'stopped'); assert.equal(result.json().runId, null);
+  assert.equal(env.c.lastRun, null, 'No agent started.');
+});
+
+test('in Flow, the terminal never agrees to charges: an agent that bills by use is refused, and says how to send it', { skip: scriptCLIs }, async t => {
+  const env = await engine(t, { 'Fix the typo in the README': { text: 'Fixed.' } });
+  connectFlow(env.broker, { billingSource: 'api' });
+  env.broker.setRouting(env.c, { mode: 'saver', allowApi: true });
+  const refused = await env.cli(['run', 'Fix the typo in the README', '--json']);
+  assert.equal(refused.code, EXIT.failed);
+  assert.equal(refused.json().result, 'error');
+  assert.match(refused.json().error, /bills by use, and the terminal never agrees to charges.*--agent/);
+  assert.equal(env.c.lastRun, null, 'No agent started.');
 });
 
 test('a run started in the app is followed, refused a second start, and stopped from the terminal', { skip: scriptCLIs }, async t => {

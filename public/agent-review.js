@@ -10,8 +10,15 @@
   function showPanel() { panelOpen = true; window.relayTimeline?.close(); window.relayAgents?.close(); window.relayBrief?.close(); window.relayTasks?.close(); $('review-panel').hidden = false; $('git-panel').hidden = true; $('open-git').setAttribute('aria-expanded', 'false'); $('review-panel-body').append($('review-result')); $('review-result').hidden = false; if (dialog.open) dialog.close(); }
   $('close-review-panel')?.addEventListener('click', closePanel);
   const selected = new Map(), findings = new Set(), freshness = new Map();
-  let scope = null, generation = 0, busy = false, data = null, snapshot = null, report = null, mode = 'new', requestId = null, checking = false;
-  const current = () => scope === api.getState().projectId;
+  let scope = null, taskScope = null, generation = 0, busy = false, data = null, snapshot = null, report = null, mode = 'new', requestId = null, checking = false;
+  // Opened in a task (#88), a review covers only that task's folder or copy, and is saved with the task.
+  const current = () => scope === api.getState().projectId && taskScope === (api.getState().taskId || null);
+  const scoped = (path, task = taskScope) => task ? `${path}${path.includes('?') ? '&' : '?'}task=${encodeURIComponent(task)}` : path;
+  // A task that has started and still has its folder or copy can be reviewed; a blank task or one that ended can't.
+  const ENDED = ['integrated', 'kept', 'discarded', 'cancelled', 'lost', 'detached'];
+  const reviewableTask = state => !state.taskDraft && (!state.taskId || Boolean(state.conversation?.id && state.conversation.task && state.conversation.task.purpose !== 'project-review' && !ENDED.includes(state.conversation.task.status)));
+  // A task in its own copy: its files aren't the ones the editor opens, so a finding names its place without a link.
+  const inCopy = () => data?.task?.mode === 'worktree';
   const active = () => api.isRunning() || Boolean(api.getState().pending || api.getState().projectSaving);
   const reviewer = () => (current() && data?.reviewer) || ((api.getState().conversation?.lastBuilder || api.getState().provider) === 'claude' ? 'codex' : 'claude');
   const account = () => api.getState().accounts?.[reviewer()];
@@ -85,7 +92,7 @@
     $('review-panel-hint').textContent = report.status === 'running' ? 'Reviewing a saved snapshot. You can send your next prompt.' : report.stale ? 'The working files changed after this snapshot. Start a fresh review before preparing fixes.' : report.status === 'complete' ? 'Review complete. Select findings to draft the next fix.' : 'Review needs attention. Your project conversation is unchanged.';
     const titles = { running: 'Review in progress', complete: report.findings.length ? `${report.findings.length} finding${report.findings.length === 1 ? '' : 's'} to consider` : 'No actionable findings reported', unstructured: 'Review response needs attention', failed: 'Review did not finish', interrupted: 'Review interrupted' };
     const heading = node('div', undefined, 'review-result-heading'); heading.append(node('h3', titles[report.status] || 'Code review'));
-    if (report.status === 'running') heading.append(button('Stop review', () => perform(async () => { await api.post(report.background ? `/api/reviews/${report.id}/stop` : `/api/conversations/${api.getState().conversation.id}/stop`, {}, scope); if (current()) await api.refresh(); })));
+    if (report.status === 'running') heading.append(button('Stop review', () => perform(async () => { await api.post(report.background ? scoped(`/api/reviews/${report.id}/stop`) : `/api/conversations/${api.getState().conversation.id}/stop`, {}, scope); if (current()) await api.refresh(); })));
     host.append(heading, node('p', `${report.builderConnection === 'local' ? 'Local · ' + (report.builderModel || 'Ollama') : name(report.builder)} → ${name(report.provider)} · Read only · ${new Date(report.startedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}`, 'review-result-meta'));
     host.append(node('p', `Goal: ${report.goal}`, 'review-result-summary'));
     if (report.stale) host.append(node('p', `Outdated review. ${report.staleReason} Run a new review before preparing fixes.`, 'review-stale'));
@@ -99,7 +106,7 @@
       const severity = node('span', finding.severity, 'review-severity'); severity.dataset.severity = finding.severity;
       body.append(severity, title, node('p', finding.detail));
       const file = report.snapshot?.files?.find(file => file.folderId === finding.folderId && file.path === finding.path), location = `${file?.folderName || ''} / ${finding.path}${finding.line ? ':' + finding.line : ' (deleted)'}`;
-      body.append(finding.line && window.relayFiles?.openAt ? button(location, () => { dialog.close(); window.relayFiles.openAt(finding.folderId, finding.path, finding.line); }, 'text-link') : node('span', location, 'review-result-meta'));
+      body.append(finding.line && window.relayFiles?.openAt && !inCopy() ? button(location, () => { dialog.close(); window.relayFiles.openAt(finding.folderId, finding.path, finding.line); }, 'text-link') : node('span', location, 'review-result-meta'));
       article.append(check, body); host.append(article);
     }
     if (report.findings.length) {
@@ -112,14 +119,14 @@
     controls();
   }
   async function loadReport(id, token = generation) {
-    const value = await api.api('/api/reviews/' + encodeURIComponent(id), {}, scope);
+    const value = await api.api(scoped('/api/reviews/' + encodeURIComponent(id)), {}, scope);
     if (token !== generation || !current()) return;
     if (report?.id !== value.id) findings.clear();
     report = value; rememberFreshness(value); renderReport(); renderStrip();
   }
   async function prepareFix(token) {
     const state = api.getState(), projectId = scope, conversationId = state.conversation.id, input = $('message-input');
-    const result = await api.post('/api/reviews/' + report.id + '/prepare-fix', { findingIds: [...findings] }, projectId);
+    const result = await api.post(scoped('/api/reviews/' + report.id + '/prepare-fix'), { findingIds: [...findings] }, projectId);
     if (token !== generation || !current()) return;
     await api.post(`/api/conversations/${conversationId}/provider`, { provider: result.provider, mode: state.mode }, projectId);
     if (token !== generation || !current()) return;
@@ -136,24 +143,25 @@
     if (!state.projectId || (document.querySelector('dialog[open]') && !dialog.open)) return;
     const running = state.conversation?.reviews?.find(item => item.background && item.status === 'running');
     if (!id && running) { id = running.id; suggested = false; }
+    if (!reviewableTask(state)) return;
     closePanel();
-    scope = state.projectId; generation++; busy = false; data = snapshot = report = null; selected.clear(); findings.clear(); requestId = null;
+    scope = state.projectId; taskScope = state.taskId || null; generation++; busy = false; data = snapshot = report = null; selected.clear(); findings.clear(); requestId = null;
     $('review-goal').value = ''; $('review-billing').checked = false; $('review-preview').hidden = true; $('review-files').replaceChildren(node('p', 'Reading local changes…', 'review-empty')); $('review-pair').textContent = ''; $('review-result').replaceChildren(node('p', 'Loading review…', 'review-empty'));
     tab(id ? 'result' : 'new'); if (!dialog.open) dialog.showModal();
     await perform(async token => {
-      const result = await api.api('/api/reviews', {}, scope); if (token !== generation || !current()) return;
-      data = result; $('review-goal').value = result.goal; $('review-pair').textContent = `${result.builderConnection === 'local' ? 'Local · ' + (result.builderModel || 'Ollama') : name(result.builder)} builds  →  ${name(result.reviewer)} reviews`;
+      const result = await api.api(scoped('/api/reviews'), {}, scope); if (token !== generation || !current()) return;
+      data = result; $('review-goal').value = result.goal; $('review-pair').textContent = `${result.builderConnection === 'local' ? 'Local · ' + (result.builderModel || 'Ollama') : name(result.builder)} builds  →  ${name(result.reviewer)} reviews${result.task ? `  ·  “${result.task.title}”, ${result.task.mode === 'worktree' ? 'its own copy' : result.task.folderName}` : ''}`;
       if (suggested) for (const repo of result.repositories || []) for (const file of repo.changes || []) if (repo.available && !file.reason && selected.size < (result.limits?.files || 12)) selected.set(repo.folderId + ':' + file.path, { folderId: repo.folderId, path: file.path });
       renderFiles();
-      if (suggested && selected.size) { const preview = await api.post('/api/reviews/preview', { files: [...selected.values()] }, scope); if (token !== generation || !current()) return; snapshot = preview.snapshot; showSnapshot(snapshot, $('review-preview')); controls(); }
+      if (suggested && selected.size) { const preview = await api.post(scoped('/api/reviews/preview'), { files: [...selected.values()] }, scope); if (token !== generation || !current()) return; snapshot = preview.snapshot; showSnapshot(snapshot, $('review-preview')); controls(); }
       if (id || result.reviews.length && active()) { tab('result'); await loadReport(id || result.reviews[0].id, token); } else renderReport();
     });
     if (id && report?.background && current()) showPanel();
   }
   function renderStrip() {
     const state = api.getState(), latest = state.conversation?.reviews?.[0], known = latest && freshness.get(latest.id);
-    $('open-review').disabled = !state.ready || active() || Boolean(state.taskId); $('open-review').title = `Review changes with ${name(reviewer())}`;
-    $('review-summary').hidden = !latest;
+    $('open-review').disabled = !state.ready || active() || !reviewableTask(state); $('open-review').title = state.taskId ? `Review this task’s changes with ${name(reviewer())}` : `Review changes with ${name(reviewer())}`;
+    $('review-summary').hidden = !latest || !reviewableTask(state);
     if (latest) { $('review-summary').dataset.stale = String(Boolean(known?.stale)); $('review-summary-text').textContent = `${name(latest.provider)} review · ${known?.stale ? 'Outdated' : latest.status === 'running' ? 'In progress' : latest.status === 'complete' ? `${latest.findings.length} finding${latest.findings.length === 1 ? '' : 's'}` : 'Needs attention'}`; }
   }
   $('open-review').addEventListener('click', () => open());
@@ -164,12 +172,12 @@
   $('review-result-tab').addEventListener('click', () => { tab('result'); perform(token => loadReport(report?.id || data.reviews[0].id, token)); });
   $('review-goal').addEventListener('input', () => { requestId = null; controls(); }); $('review-billing').addEventListener('change', controls);
   $('preview-review').addEventListener('click', () => perform(async token => {
-    const result = await api.post('/api/reviews/preview', { files: [...selected.values()] }, scope); if (token !== generation || !current()) return;
+    const result = await api.post(scoped('/api/reviews/preview'), { files: [...selected.values()] }, scope); if (token !== generation || !current()) return;
     snapshot = result.snapshot; requestId = crypto.randomUUID(); showSnapshot(snapshot, $('review-preview'));
   }));
   $('start-review').addEventListener('click', () => perform(async token => {
     if (!snapshot || !$('review-goal').value.trim() || unavailable() || (needsBilling() && !$('review-billing').checked)) return;
-    const result = await api.post('/api/reviews/start', { files: [...selected.values()], goal: $('review-goal').value.trim(), approvedDigest: snapshot.digest, requestId: requestId ||= crypto.randomUUID(), billingConfirmed: needsBilling() && $('review-billing').checked, background: true }, scope);
+    const result = await api.post(scoped('/api/reviews/start'), { files: [...selected.values()], goal: $('review-goal').value.trim(), approvedDigest: snapshot.digest, requestId: requestId ||= crypto.randomUUID(), billingConfirmed: needsBilling() && $('review-billing').checked, background: true }, scope);
     if (token !== generation || !current()) return;
     tab('result'); await api.refresh(); if (current()) await loadReport(result.reviewId, token);
     if (current() && result.background) showPanel();
@@ -184,8 +192,8 @@
   });
   async function checkFreshness() {
     const state = api.getState(), latest = state.conversation?.reviews?.[0]; if (document.hidden || !latest || checking || latest.status === 'running') return;
-    const projectId = state.projectId; checking = true;
-    try { const value = await api.api('/api/reviews/' + latest.id, {}, projectId); if (projectId !== api.getState().projectId) return; rememberFreshness(value); if ((dialog.open || panelOpen) && mode === 'result' && report?.id === value.id && !busy && report.stale !== value.stale) { report = value; renderReport(); } renderStrip(); }
+    const projectId = state.projectId, task = state.taskId || null; checking = true;
+    try { const value = await api.api(scoped('/api/reviews/' + latest.id, task), {}, projectId); if (projectId !== api.getState().projectId || task !== (api.getState().taskId || null)) return; rememberFreshness(value); if ((dialog.open || panelOpen) && mode === 'result' && report?.id === value.id && !busy && report.stale !== value.stale) { report = value; renderReport(); } renderStrip(); }
     catch { /* Actions recheck scope on the server; unavailable files never authorize a fix. */ }
     finally { checking = false; }
   }

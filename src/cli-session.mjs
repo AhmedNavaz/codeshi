@@ -7,7 +7,7 @@ import { render, Box, Text, Static, useInput, usePaste, useApp, useWindowSize } 
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import readline from 'node:readline/promises';
-import { client, connect, chooseWorkspace, CliError, EXIT } from './cli.mjs';
+import { client, connect, chooseWorkspace, CliError, EXIT, FLOW_MODES, FLOW_NAMES, flowError, flowMode, flowStopped, flowRequest, runRouting, setFlow } from './cli.mjs';
 import {
   ACCENT, ACCESS_STEPS, accessLabel, agentName, approvalChoices, describeRequest, formatActivity, formatElapsed, formatMarkdown,
   formatNotice, formatTokens, formatUser, modelName, defaultModelId, nextAccess, settledMessages, shortPath,
@@ -32,6 +32,7 @@ const ALL_COMMANDS = [
   ['/agent', 'Switch agent: codex, claude or gemini'],
   ['/model', 'Choose the model'],
   ['/effort', 'Choose how hard the model thinks'],
+  ['/flow', 'Let Codeshi pick the agent for each message: smart, saver, ultra or off'],
   ['/access', 'Read only, ask before changes, or edit without asking'],
   ['/stop', 'Stop the run (or press esc)'],
   ['/continue', 'Continue the last run'],
@@ -122,7 +123,7 @@ function Session({ engine, start, onClear, onLeave }) {
   const printed = useRef(start.printed), runClock = useRef(start.view.activeRun ? { id: start.view.activeRun.id, at: Date.parse(start.view.activeRun.startedAt) || Date.now() } : null);
   const history = useRef(start.history), browsing = useRef(null), exitArmed = useRef(0), answered = useRef(new Set()), answeredHere = useRef(new Map()), dismissed = useRef(new Set());
   const projectRef = useRef(start.project), viewRef = useRef(start.view), overlayRef = useRef(null), noticeTimer = useRef(null);
-  const syncing = useRef(false), again = useRef(false), scheduled = useRef(null), fileSearch = useRef(0);
+  const syncing = useRef(false), again = useRef(false), scheduled = useRef(null), fileSearch = useRef(0), flowSaid = useRef(new Set());
   viewRef.current = view; projectRef.current = project;
 
   const roots = (project.folders || []).map(folder => folder.path);
@@ -165,6 +166,13 @@ function Session({ engine, start, onClear, onLeave }) {
       refreshBranch();
     }
     if (activeRunId && !runClock.current) runClock.current = { id: activeRunId, at: Date.parse(next.activeRun.startedAt) || Date.now() };
+    // A run Flow chose says who it went to and why, once, under the message.
+    const routed = next.activeRun?.purpose !== 'routing' && runRouting(next.activeRun);
+    if (routed && !flowSaid.current.has(activeRunId)) {
+      flowSaid.current.add(activeRunId);
+      const run = next.activeRun;
+      print([[{ text: '  ⎿ ', dim: true }, { text: `Flow chose ${agentName(run.provider)}`, color: ACCENT }, { text: ` · ${modelName(catalogues[run.provider], run.model)}${run.effort ? ` · ${run.effort}` : ''}${routed.reason ? `: ${routed.reason}` : ''}`, dim: true }]], 0);
+    }
     // An approval, question or handoff offer asks in its own box; one answered in the app closes it here.
     const pending = (next.pendingApprovals || []).filter(item => !answered.current.has(item.id));
     const open = overlayRef.current;
@@ -231,6 +239,11 @@ function Session({ engine, start, onClear, onLeave }) {
   };
   const settle = async (method, target, body) => { try { const result = await call(method, target, body); schedule(); return result; } catch (error) { problem(error); return null; } };
 
+  // In Flow the agent picked here is used for /continue and /handoff; each new message is still Flow's to place.
+  function flowNote(next) {
+    const mode = flowMode(next);
+    if (mode) print(one(`  ⎿ Flow (${FLOW_NAMES[mode]}) still picks the agent for each message. /flow off to send to this one.`, { color: 'yellow' }), 0);
+  }
   async function changeSettings(patch) {
     const current = viewRef.current;
     const body = { provider: current.provider, mode: current.mode, approvalPolicy: current.approvalPolicy || 'ask', ...patch };
@@ -260,7 +273,7 @@ function Session({ engine, start, onClear, onLeave }) {
       case '/continue': if (await settle('post', route('continue'), { requestId: `cli-${randomUUID()}` })) print(one('  ⎿ Continuing the last run', { dim: true }), 0); return;
       case '/open': if (await settle('post', '/api/window', { projectId: projectRef.current.id })) print(one(EMBEDDED ? '  ⎿ Showing the chat. This tab keeps running.' : '  ⎿ Opened in the Codeshi window', { dim: true }), 0); return;
       case '/agent': {
-        const pick = async provider => { const next = await changeSettings({ provider }); if (next) print(one(`  ⎿ ${agentName(provider)} · ${modelName(await catalogue(provider), next.model)}`, { dim: true }), 0); };
+        const pick = async provider => { const next = await changeSettings({ provider }); if (next) { print(one(`  ⎿ ${agentName(provider)} · ${modelName(await catalogue(provider), next.model)}`, { dim: true }), 0); flowNote(next); } };
         if (AGENTS.includes(argument.toLowerCase())) return pick(argument.toLowerCase());
         if (argument) { print(one('  ⎿ Choose codex, claude or gemini.', { color: 'yellow' }), 0); return; }
         setOverlay({ type: 'picker', title: 'Agent', index: Math.max(0, AGENTS.indexOf(current.provider)), choices: AGENTS.map(provider => ({ label: agentName(provider), value: provider, picked: provider === current.provider, description: engine.providers?.[provider]?.available === false ? 'not installed' : '' })), onPick: pick });
@@ -268,7 +281,7 @@ function Session({ engine, start, onClear, onLeave }) {
       }
       case '/model': {
         const models = (await catalogue(current.provider)).filter(model => !model.hidden);
-        const pick = async model => { const next = await changeSettings({ model }); if (next) print(one(`  ⎿ ${agentName(next.provider)} · ${modelName(models, next.model)}`, { dim: true }), 0); };
+        const pick = async model => { const next = await changeSettings({ model }); if (next) { print(one(`  ⎿ ${agentName(next.provider)} · ${modelName(models, next.model)}`, { dim: true }), 0); flowNote(next); } };
         if (argument) return pick(argument);
         if (!models.length) { print(one(`  ⎿ ${agentName(current.provider)} didn't list its models. Name one: /model <id>`, { color: 'yellow' }), 0); return; }
         const id = model => model.value || model.id || model.model, chosen = current.model || defaultModelId(models);
@@ -278,11 +291,34 @@ function Session({ engine, start, onClear, onLeave }) {
       case '/effort': {
         const models = await catalogue(current.provider), entry = models.find(model => [model.value, model.id, model.model].includes(current.model || defaultModelId(models))) || models[0];
         const levels = entry?.supportedEffortLevels || entry?.supportedReasoningEfforts?.map(level => level.reasoningEffort) || [];
-        const pick = async effort => { const next = await changeSettings({ model: current.model, effort: effort === 'default' ? null : effort }); if (next) print(one(`  ⎿ Effort: ${next.effort || 'default'}`, { dim: true }), 0); };
+        const pick = async effort => { const next = await changeSettings({ model: current.model, effort: effort === 'default' ? null : effort }); if (next) { print(one(`  ⎿ Effort: ${next.effort || 'default'}`, { dim: true }), 0); flowNote(next); } };
         if (argument) return pick(argument);
         if (!levels.length) { print(one('  ⎿ This model has no effort settings.', { dim: true }), 0); return; }
         const choices = ['default', ...levels];
         setOverlay({ type: 'picker', title: 'Effort', index: Math.max(0, choices.indexOf(current.effort || 'default')), choices: choices.map(level => ({ label: level, value: level, picked: level === (current.effort || 'default') })), onPick: pick });
+        return;
+      }
+      case '/flow': {
+        const now = flowMode(current) || 'off';
+        const pick = async mode => {
+          if (running) { print(one('  ⎿ Stop the run first (esc), then change Flow.', { color: 'yellow' }), 0); return; }
+          let next;
+          try { next = await setFlow({ post: (target, body) => call('post', target, body) }, route('routing'), current, mode); }
+          catch (error) { problem(error); return; }
+          schedule();
+          if (next?.id) setView(next);
+          print(one(mode === 'off' ? `  ⎿ Flow is off. Messages go to ${agentName(next?.provider || current.provider)}; /agent changes it.` : `  ⎿ Flow · ${FLOW_NAMES[mode]}: Codeshi picks the agent, model and effort for each message.`, { dim: true }), 0);
+        };
+        const choices = [
+          { label: 'Smart', value: 'smart', description: 'Matches the model and effort to each message' },
+          { label: 'Saver', value: 'saver', description: 'Local rules only: light and standard models at low effort' },
+          { label: 'Ultra', value: 'ultra', description: 'Strongest models and deepest effort first' },
+          { label: 'Off', value: 'off', description: `You choose the agent: ${agentName(current.provider)}` },
+        ];
+        const named = argument.toLowerCase();
+        if ([...FLOW_MODES, 'off'].includes(named)) return pick(named);
+        if (argument) { print(one('  ⎿ Choose smart, saver, ultra or off.', { color: 'yellow' }), 0); return; }
+        setOverlay({ type: 'picker', title: 'Flow', index: Math.max(0, choices.findIndex(choice => choice.value === now)), choices: choices.map(choice => ({ ...choice, picked: choice.value === now })), onPick: pick });
         return;
       }
       case '/access': {
@@ -353,11 +389,17 @@ function Session({ engine, start, onClear, onLeave }) {
         const result = await settle('post', route('steer'), { text });
         if (result) { print(formatUser({ text })); print(one('  ⎿ Added to the run', { dim: true }), 0); return; }
       }
-      const queued = await settle('post', route('queue'), { executionRevision: current.execution?.defaults?.revision ?? 0, action: 'add', text, provider: current.provider, model: current.model || null, effort: current.effort || null, mode: current.mode, approvalPolicy: current.approvalPolicy || 'ask' });
+      // In Flow, a queued message is placed when its turn comes, as one queued in the window is.
+      const queued = await settle('post', route('queue'), { executionRevision: current.execution?.defaults?.revision ?? 0, action: 'add', text, provider: current.provider, model: current.model || null, effort: current.effort || null, mode: current.mode, approvalPolicy: current.approvalPolicy || 'ask', ...(flowMode(current) ? { routing: { mode: flowMode(current) } } : {}) });
       if (queued) { print(formatUser({ text })); print(one('  ⎿ Queued for after this run', { dim: true }), 0); }
       return;
     }
-    await settle('post', route('messages'), { text, requestId: `cli-${randomUUID()}` });
+    // In Flow the engine rates the message and picks the agent; the line under the prompt says Flow is choosing meanwhile.
+    try { await call('post', route('messages'), { text, requestId: `cli-${randomUUID()}`, ...flowRequest(current) }); schedule(); }
+    catch (error) {
+      if (flowStopped(error)) print(one('  ⎿ Stopped before Flow chose an agent', { dim: true }), 0);
+      else problem(flowError(error));
+    }
   }
 
   // Leaving takes the prompt away first, so the terminal is left with the conversation only.
@@ -558,14 +600,16 @@ function Session({ engine, start, onClear, onLeave }) {
     return [];
   });
   const agent = agentName(view.activeRun?.provider || view.provider);
-  const waiting = (view.pendingApprovals || []).length > 0;
+  const waiting = (view.pendingApprovals || []).length > 0, choosing = view.activeRun?.purpose === 'routing', flow = flowMode(view);
   const elapsed = runClock.current ? formatElapsed(Date.now() - runClock.current.at) : '';
   const models = catalogues[view.provider];
   const used = view.contextControl?.used;
   const status = [
     { text: project.name, bold: true },
     branch ? { text: ` ⎇ ${branch}`, dim: true } : null,
-    { text: '  ·  ', dim: true }, { text: agentName(view.provider) }, { text: ` · ${modelName(models, view.model)}${view.effort ? ` · ${view.effort}` : ''}`, dim: true },
+    // In Flow there's no one agent to show: Codeshi picks for each message.
+    ...(flow ? [{ text: '  ·  ', dim: true }, { text: 'Flow', color: ACCENT }, { text: ` · ${FLOW_NAMES[flow]}`, dim: true }]
+      : [{ text: '  ·  ', dim: true }, { text: agentName(view.provider) }, { text: ` · ${modelName(models, view.model)}${view.effort ? ` · ${view.effort}` : ''}`, dim: true }]),
     { text: '  ·  ', dim: true }, { text: accessLabel(view.mode, view.approvalPolicy), color: view.mode === 'edit' && view.approvalPolicy === 'auto' ? 'yellow' : undefined, dim: !(view.mode === 'edit' && view.approvalPolicy === 'auto') },
     used ? { text: `  ·  ${formatTokens(used)} context`, dim: true } : null,
   ].filter(Boolean);
@@ -598,11 +642,11 @@ function Session({ engine, start, onClear, onLeave }) {
     liveLines.length ? h(Lines, { lines: liveLines, marginTop: 1 }) : null,
     running ? h(Box, { marginTop: 1 }, h(Text, null,
       h(Text, { color: ACCENT }, `${SPINNER[tick % SPINNER.length]} `),
-      h(Text, { color: ACCENT }, waiting ? `${agent} is waiting for you…` : `${agent} is working…`),
+      h(Text, { color: ACCENT }, choosing ? 'Flow is choosing an agent…' : waiting ? `${agent} is waiting for you…` : `${agent} is working…`),
       h(Text, { dimColor: true }, ` (${elapsed}${waiting ? '' : ' · esc to stop'})`))) : null,
     box,
     box ? null : h(Box, { flexDirection: 'column', borderStyle: 'round', borderColor: 'gray', paddingX: 1, marginTop: 1 },
-      h(Editor, { value: input.value, cursor: input.cursor, prefixColor: ACCENT, placeholder: running ? 'Add to the run, or queue a message' : `Ask ${agentName(view.provider)}, or type / for commands` })),
+      h(Editor, { value: input.value, cursor: input.cursor, prefixColor: ACCENT, placeholder: running ? 'Add to the run, or queue a message' : flow ? 'Ask anything; Flow picks the agent. / for commands' : `Ask ${agentName(view.provider)}, or type / for commands` })),
     !box && suggest.list.length ? h(Box, { flexDirection: 'column', paddingX: 2 }, ...suggest.list.map((choice, index) => h(Text, { key: choice.label, wrap: 'truncate-end' },
       h(Text, { color: index === suggest.index ? ACCENT : undefined, bold: index === suggest.index }, (suggest.kind === 'command' ? choice.label.padEnd(12) : choice.label)),
       choice.about ? h(Text, { dimColor: true }, `  ${choice.about}`) : null))) : null,
@@ -649,6 +693,11 @@ export async function session({ options, env, cwd, version, fetchImpl, stdin, st
   if (options.agent || options.model || options.effort) {
     if (view.status === 'running') say('An agent is working, so --agent, --model and --effort wait until you change them with /agent, /model or /effort.');
     else view = await engine.api.post(`/api/conversations/${view.id}/provider?${q}&limit=80`, { provider: options.agent || view.provider, mode: view.mode, approvalPolicy: view.approvalPolicy || 'ask', ...(options.model ? { model: options.model } : {}), ...(options.effort ? { effort: options.effort } : {}) });
+  }
+  // --flow turns Flow on in a mode, or off, as /flow does.
+  if (options.flow) {
+    if (view.status === 'running') say('An agent is working, so --flow waits until you change it with /flow.');
+    else view = await setFlow(engine.api, `/api/conversations/${view.id}/routing?${q}&limit=80`, view, options.flow);
   }
   try { engine.providers = (await engine.api.get(`/api/status?${q}`)).providers; } catch { engine.providers = null; }
   const branch = await gitBranch(project.folders?.[0]?.path || project.path);

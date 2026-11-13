@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readLedger } from './task-ledger.mjs';
 import { evaluateIntegration, stepPrompt } from './orchestration.mjs';
+import { reviewHolds } from './plan-review.mjs';
 import { runSteps } from './recap.mjs';
 import { applyPlan, checkCombined, createWorktree, folderIdentity, integrationPlan, keepBranch, planIsolation, prepareWorktree, removeWorktree, snapshotWorktree, uncommittedCount, unrestricted } from './task-isolation.mjs';
 
@@ -23,7 +24,14 @@ const clip = (text, limit) => { const value = String(text || '').trim(); return 
 // after it until you check it again or choose to continue anyway. A step in its own copy waits for your merge instead.
 // A card from the Plan (#162) is held the same way.
 const tested = task => Boolean(task.plan || task.board);
-const gated = task => Boolean(tested(task) && task.status === 'complete' && task.stepCheck && (task.stepCheck.status === 'running' || ((task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted)));
+// Usage rows added up, for limits shared by several tasks.
+const sum = rows => {
+  const total = { workingMs: 0, tokens: 0, spendUSD: 0, retries: 0, reviews: 0, handoffs: 0, runsWithoutUsage: 0, runsWithPartialUsage: 0, runsWithoutCost: 0, running: 0 };
+  for (const row of rows.filter(Boolean)) for (const key of Object.keys(total)) total[key] += Number(row[key]) || 0;
+  return total;
+};
+// A review card's findings hold the cards after it too (#89), while it repairs and once it needs you (src/plan-review.mjs).
+const gated = task => Boolean(tested(task) && task.status === 'complete' && ((task.stepCheck && (task.stepCheck.status === 'running' || ((task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted))) || reviewHolds(task)));
 
 export class TaskCoordinator {
   constructor(main, { BrokerClass, acquireFolders = () => ({ release() {}, setProcess() {} }), withFolders = async (paths, operation, work) => work(), tests = null }) {
@@ -40,7 +48,7 @@ export class TaskCoordinator {
   // A card on the board (#132) follows the task it started, so the board hears about every change.
   update(c, task, changes) { this.main.record(c, { type: 'parallel_task_update', id: task.id, changes }); this.onTask?.(c, task); this.main.emit('update', { conversationId: c.id }); }
   get running() { return [...this.lanes.values()].filter(lane => lane.broker.running).length; }
-  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.holding() + this.preparing.size + (this.main.board?.suggestJobs?.size || 0) + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
+  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.holding() + this.preparing.size + (this.main.board?.suggestJobs?.size || 0) + [...this.main.conversations.values(), ...[...this.lanes.values()].map(lane => lane.c).filter(Boolean)].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
   // Cards between two subtasks have no run for a moment but keep their slot (src/subtasks.mjs).
   holding() { let count = 0; for (const [id, lane] of this.lanes) if (!lane.broker.running && lane.task && this.main.board?.subtasks.holding(lane.task)) count++; return count; }
   get busy() { return this.running > 0 || this.checking.size > 0; }
@@ -63,7 +71,7 @@ export class TaskCoordinator {
   available(task) { return task.purpose === 'project-review' ? JSON.stringify(task.workspaceFolders.map(({ id, path }) => ({ id, path }))) === JSON.stringify(this.main.workspaceFolders.map(({ id, path }) => ({ id, path }))) : this.main.workspaceFolders.some(folder => folder.id === task.folderId); }
   syncPolicy(c, task) {
     const lane = this.lanes.get(task.id); if (!lane) return;
-    const policy = this.main.budget.policy(c);
+    const policy = this.policyFor(c, task);
     if (JSON.stringify(lane.broker.budget.policy(lane.c)) !== JSON.stringify(policy)) lane.broker.budget.setPolicy(lane.c, policy);
   }
 
@@ -96,7 +104,7 @@ export class TaskCoordinator {
     return { ...plan, running, limit, full: running >= limit };
   }
 
-  start(c, input = {}, { queueExecution = null, prepareReview = false, held = false, plan = null, board = null } = {}) {
+  start(c, input = {}, { queueExecution = null, prepareReview = false, held = false, plan = null, board = null, batch = null } = {}) {
     input = { ...input, purpose: prepareReview ? 'project-review' : null, ...(prepareReview ? { mode: 'read', approvalPolicy: 'ask' } : {}) };
     if (this.closed) throw fail('Codeshi is stopping.', 503);
     const text = typeof input.text === 'string' ? input.text.trim() : '';
@@ -129,7 +137,7 @@ export class TaskCoordinator {
     for (const id of waitsFor({ dependsOn })) { const before = this.find(c, id); if (['discarded', 'cancelled'].includes(before.status)) throw fail(`“${before.title}” was ${before.status}, so nothing can wait for it.`); }
     const folder = this.plan(c, { ...input, provider, accessMode: mode, approvalPolicy }).folder;
     // Ownership is saved before anything can start, so a crash at any point finds a task it can recover.
-    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(plan ? { plan } : {}), ...(board ? { board } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), ...(parent ? { parentTaskId: parent.taskId, splitId: typeof parent.splitId === 'string' ? parent.splitId : null } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
+    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(plan ? { plan } : {}), ...(board ? { board } : {}), ...(batch ? { batch } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), ...(parent ? { parentTaskId: parent.taskId, splitId: typeof parent.splitId === 'string' ? parent.splitId : null } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
     this.main.record(c, { type: 'parallel_task', task });
     const saved = this.find(c, task.id);
     this.tick(c);
@@ -214,6 +222,9 @@ export class TaskCoordinator {
       for (const task of (c.parallelTasks || []).filter(item => item.status === 'waiting' && !item.held && !this.preparing.has(item.id))) {
         const wait = reason => { if (task.reason !== reason) this.update(c, task, { reason }); };
         if (!this.available(task)) { this.update(c, task, { status: 'detached', reason: `${task.folderName} is no longer in this workspace.` }); continue; }
+        // A card whose run has used up its shared limit doesn't start, and nothing waits on it quietly.
+        const spent = task.batch && this.runSpent(c, task.batch);
+        if (spent) { this.update(c, task, { status: 'cancelled', batchHeld: true, reason: `Not started: ${spent}`, endedAt: new Date().toISOString() }); continue; }
         const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !(before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete')) || gated(before));
         if (pending) {
           // A step that ended without finishing can't be built on, so this one says what it needs instead of waiting quietly.
@@ -223,6 +234,8 @@ export class TaskCoordinator {
             : check?.status === 'running' ? `Waiting for the tests on “${pending.title}”.`
             : check?.outcome === 'failed' && !check.accepted ? `The tests failed on “${pending.title}”. Fix it in its task, or ${copy ? 'merge it anyway' : 'continue anyway from the plan'}.`
             : check?.status === 'interrupted' && !check.accepted ? `The tests on “${pending.title}” were interrupted. Check it again or continue anyway from the plan.`
+            : pending.review?.status === 'repairing' ? `Waiting for “${pending.title}” to repair what it found and review again.`
+            : reviewHolds(pending) ? `“${pending.title}” found problems it couldn’t settle. Read it, then continue anyway or send cards back.`
             : copy && pending.status === 'complete' ? `Waiting for “${pending.title}” to be merged.` : `Waiting for “${pending.title}”.`);
           continue;
         }
@@ -279,7 +292,7 @@ export class TaskCoordinator {
       this.update(c, task, { conversationId: conversation.id });
       for (const entry of (c.memory || []).filter(item => item.status === 'active' && (task.purpose === 'project-review' || !item.folderId || item.folderId === task.folderId))) lane.broker.record(conversation, { type: 'memory_add', entry });
       if (c.skills?.length) lane.broker.record(conversation, { type: 'skills', skills: c.skills, dirs: c.skillDirs || [] });
-      lane.broker.budget.setPolicy(conversation, this.main.budget.policy(c));
+      lane.broker.budget.setPolicy(conversation, this.policyFor(c, task));
       if (task.includeHistory) for (const message of c.messages.filter(item => ['user', 'assistant'].includes(item.role) && item.text?.trim() && !item.reviewId && !item.rewound).slice(-20)) lane.broker.record(conversation, { type: 'message', message: { id: randomUUID(), role: message.role, text: message.text, provider: message.provider, status: 'complete', createdAt: message.createdAt } });
     }
     if (first) lane.broker.record(lane.c, { type: 'execution_policy', policy: this.main.execution.current(c, task.execution.taskId) });
@@ -288,7 +301,9 @@ export class TaskCoordinator {
     else if (first && task.board) { const brief = this.main.board?.brief(c, task); if (brief) this.update(c, task, brief); }
     // A major card (#155) is split into subtasks first, or carries on from its first unfinished one (src/subtasks.mjs).
     if (task.board && this.main.board?.subtasks.begin(c, task, lane)) { this.sync(c, task); return; }
-    const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: task.routing } : {}), requestId: `task-${task.id}` };
+    // A Reviewer or QA card on Auto prefers an agent other than the ones that built what it checks (#89).
+    const avoid = task.routing && task.board ? this.main.board?.reviews.avoid(c, task) || [] : [];
+    const input = { text: task.text, provider: task.provider, model: task.model, effort: task.effort, mode: task.accessMode, approvalPolicy: task.approvalPolicy, attachments: task.attachments, billingConfirmed: task.billingConfirmed, ...(task.routing ? { routing: { ...task.routing, ...(avoid.length ? { avoid } : {}) } } : {}), requestId: `task-${task.id}` };
     if (task.routing) lane.broker.dispatch(lane.c, input, { execution: task.execution }).catch(error => { this.update(c, task, { status: task.preparationCancelled ? 'stopped' : 'failed', reason: String(error.message).slice(0, 500), endedAt: new Date().toISOString() }); });
     else lane.broker.start(lane.c, input, { execution: task.execution });
     this.sync(c, task);
@@ -310,7 +325,8 @@ export class TaskCoordinator {
     broker.attachments = this.main.attachments; broker.skills.root = this.main.skills.root;
     broker.admit = () => this.admit(c, task);
     // A part of a split message counts what the message and its other parts used against the same limits (#87).
-    if (task.parentTaskId) broker.budget.shared = (laneC, taskId) => taskId === task.id ? this.sharedUsage(c, task) : null;
+    // So does a card in Flow's Run Ready (#132) with the other cards of its run.
+    if (task.parentTaskId || task.batch) broker.budget.shared = (laneC, taskId) => taskId === task.id ? this.sharedUsage(c, task) : null;
     const lane = { broker, task, c: task.conversationId ? broker.conversations.get(task.conversationId) : null };
     broker.on('update', () => { if (lane.c) this.main.emit('update', { conversationId: lane.c.id }); this.sync(c, task); });
     broker.on('notify', notice => this.main.emit('notify', { ...notice, conversationId: c.id, taskId: task.id, title: `${task.folderName}: ${notice.title}` }));
@@ -336,7 +352,7 @@ export class TaskCoordinator {
     // A plan step that finishes is checked before anything builds on it, so the hold is saved with the status (#89). Working
     // on it again drops the old result; the next finish checks it afresh.
     const finished = tested(task) && status === 'complete' && task.status !== 'complete', check = finished ? { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() } : null;
-    const spent = task.parentTaskId && status !== 'running' ? this.budgetUsage(lane.c.taskBudgets?.[task.id], lane.broker.budget) : null;
+    const spent = (task.parentTaskId || task.batch) && status !== 'running' ? this.budgetUsage(lane.c.taskBudgets?.[task.id], lane.broker.budget) : null;
     this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), ...(spent ? { budgetUsed: { ...spent, running: 0 } } : {}), provider, model, effort, ...(selected?.routing ? { routing: selected.routing } : {}), ...(check ? { stepCheck: check } : tested(task) && status === 'running' && task.stepCheck ? { stepCheck: null } : {}) });
     if (check) this.stepEnded(c, task, check.id).catch(error => console.error('Codeshi could not check a plan step:', error.message));
     if (status !== 'running') setImmediate(() => this.tick(c));
@@ -363,14 +379,44 @@ export class TaskCoordinator {
     return { workedMs: state.workingMs || 0, activeSince: since, tokens: used.tokens, spendUSD: used.spendUSD, retries: state.retries || 0, reviews: state.reviews || 0, handoffs: state.handoffs || 0 };
   }
   sharedUsage(c, task) {
-    const rows = [this.budgetUsage(c.taskBudgets?.[task.parentTaskId], this.main.budget)];
-    for (const other of (c.parallelTasks || []).filter(item => item.parentTaskId === task.parentTaskId && item.id !== task.id)) {
-      const lane = this.lanes.get(other.id), state = lane?.c?.taskBudgets?.[other.id];
-      rows.push(state ? this.budgetUsage(state, lane.broker.budget) : other.budgetUsed || null);
-    }
-    const total = { workingMs: 0, tokens: 0, spendUSD: 0, retries: 0, reviews: 0, handoffs: 0, runsWithoutUsage: 0, runsWithPartialUsage: 0, runsWithoutCost: 0, running: 0 };
-    for (const row of rows.filter(Boolean)) for (const key of Object.keys(total)) total[key] += Number(row[key]) || 0;
-    return total;
+    const rows = task.batch ? [] : [this.budgetUsage(c.taskBudgets?.[task.parentTaskId], this.main.budget)];
+    const kin = task.batch ? item => item.batch?.id === task.batch.id : item => item.parentTaskId === task.parentTaskId;
+    for (const other of (c.parallelTasks || []).filter(item => kin(item) && item.id !== task.id)) rows.push(this.spentBy(other));
+    return sum(rows);
+  }
+  spentBy(task) {
+    const lane = this.lanes.get(task.id), state = lane?.c?.taskBudgets?.[task.id];
+    return state ? this.budgetUsage(state, lane.broker.budget) : task.budgetUsed || null;
+  }
+
+  // ---- Flow's Run Ready (#132)
+  // A card in a run with one shared limit works under the workspace's task limits with the run's minutes, tokens and spend
+  // in place of the per-task ones; its lane counts the other cards' usage against them.
+  policyFor(c, task) {
+    const policy = this.main.budget.policy(c);
+    return task.batch ? { ...policy, ...task.batch.limits } : policy;
+  }
+  // Every card of a run together, and the first of its limits they have used up, if any.
+  runUsage(c, batchId) {
+    const tasks = (c.parallelTasks || []).filter(item => item.batch?.id === batchId);
+    return { tasks, used: sum(tasks.map(item => this.spentBy(item))) };
+  }
+  // The runs still going, for the Plan to show what each has used of its limit.
+  runs(c) {
+    const ids = [...new Set((c.parallelTasks || []).filter(item => item.batch && ['waiting', 'running'].includes(item.status)).map(item => item.batch.id))];
+    return ids.map(id => {
+      const { tasks, used } = this.runUsage(c, id), batch = tasks[0].batch;
+      return { id, limits: batch.limits, startedAt: batch.startedAt, cards: tasks.map(item => item.board?.cardId).filter(Boolean), running: tasks.filter(item => item.status === 'running').length, waiting: tasks.filter(item => item.status === 'waiting').length, used: { workingMs: used.workingMs, tokens: used.tokens, spendUSD: used.spendUSD } };
+    });
+  }
+  runSpent(c, batch) {
+    const { used } = this.runUsage(c, batch.id), limits = batch.limits;
+    if (limits.maxWorkingMinutes !== null && used.workingMs >= limits.maxWorkingMinutes * 60000) return `This run has used its ${limits.maxWorkingMinutes} working minutes.`;
+    if (limits.maxTokens !== null && used.tokens >= limits.maxTokens) return `This run has used ${used.tokens.toLocaleString('en-US')} tokens, its limit of ${limits.maxTokens.toLocaleString('en-US')}.`;
+    if (limits.maxSpendUSD !== null && used.spendUSD >= limits.maxSpendUSD) return `This run has reached its API spending limit of $${limits.maxSpendUSD}.`;
+    if (limits.maxTokens !== null && (used.runsWithoutUsage || used.runsWithPartialUsage)) return 'Earlier cards in this run did not report all their token usage, so what is left of its limit is unknown.';
+    if (limits.maxSpendUSD !== null && used.runsWithoutCost) return 'Earlier cards in this run did not report their cost, so what is left of its spending limit is unknown.';
+    return null;
   }
 
   // ---- Plan steps (#89): briefs written from what earlier steps did, and each finished step checked before it is built on.
@@ -406,9 +452,10 @@ export class TaskCoordinator {
     const { plan, step, dependents } = this.stepOf(c, task), current = () => !this.closed && task.stepCheck?.id === id;
     if (!step) { if (current()) this.update(c, task, { stepCheck: null }); return; }
     const conversation = this.lanes.get(task.id)?.c, run = conversation?.lastRun;
+    let reply = '';
     if (!recheck) {
       const messages = conversation?.messages || [];
-      const reply = messages.findLast(message => message.role === 'assistant' && message.text?.trim() && (!run || message.runId === run.id))?.text || '';
+      reply = messages.findLast(message => message.role === 'assistant' && message.text?.trim() && (!run || message.runId === run.id))?.text || '';
       const result = { summary: clip(reply, 3000), files: runSteps(messages).files.slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
       this.update(c, task, { stepResult: result });
       if (plan && step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
@@ -418,6 +465,10 @@ export class TaskCoordinator {
     const evaluated = evaluateIntegration({ step, checkResult: ran.result ? { status: ran.result.status, exitCode: ran.result.exitCode } : null, filesChanged: task.stepResult?.files?.length ?? null });
     const reason = ran.reason && evaluated.outcome === 'unverified' ? ran.reason : ran.result?.status === 'timed-out' ? 'The tests were still running after 10 minutes, so they were stopped.' : evaluated.outcome === 'failed' ? `Exit code ${ran.result.exitCode ?? 'none'}.` : evaluated.reason;
     const outcome = { id, status: 'done', outcome: evaluated.outcome, reason, ...(ran.command ? { command: ran.command } : {}), ...(ran.result ? { exitCode: ran.result.exitCode ?? null, output: String(ran.result.output || '').slice(-4000) } : {}), at: new Date().toISOString() };
+    // A Reviewer or QA card's verdict decides the rest (#89): pass, one repair round, or the cards after it wait for you.
+    // Failed tests come first: nothing is repaired on top of them. It is settled before the tests' result is saved, as saving
+    // it can wake the queue, and the cards after the review mustn't start in between.
+    if (task.board && !recheck && evaluated.outcome !== 'failed') this.main.board?.reviews.ended(c, task, reply);
     this.update(c, task, { stepCheck: outcome });
     if (plan) this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId: step.id, outcome: evaluated.outcome, status: evaluated.status, reason, ...(ran.command ? { command: ran.command } : {}) });
     if (evaluated.outcome === 'failed' && dependents) this.main.message(c, 'system', plan ? `The tests failed on step ${task.plan.number}, “${step.title}”, so the steps after it wait. Fix it in its task, or ${task.mode === 'worktree' ? 'merge it anyway' : 'continue anyway from the plan'}.` : `The tests failed on “${step.title}”, so the cards after it wait. Fix it in its task, or ${task.mode === 'worktree' ? 'merge it anyway' : 'continue anyway from the Plan'}.`);
@@ -466,6 +517,8 @@ export class TaskCoordinator {
     this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId, outcome: check.outcome || 'unverified', status: 'accepted', reason: check.status === 'interrupted' ? 'You chose to continue without the tests.' : 'You chose to continue past the failed tests.', accepted: true, ...(check.command ? { command: check.command } : {}) });
   }
   continueTask(c, task) {
+    // A review's findings you've read, and decided to build on anyway (#89).
+    if (task.board && task.status === 'complete' && reviewHolds(task) && !(task.stepCheck && (task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted)) { this.main.board.reviews.accept(c, task); this.tick(c); return; }
     const check = task.stepCheck;
     if (task.status !== 'complete' || !check || !(check.outcome === 'failed' || check.status === 'interrupted') || check.accepted) throw fail(task.board ? 'Nothing is holding the cards after this one.' : 'Nothing is holding the steps after this one.');
     this.update(c, task, { stepCheck: { ...check, accepted: true, acceptedAt: new Date().toISOString() } });
@@ -510,6 +563,22 @@ export class TaskCoordinator {
     const task = this.find(c, id), lane = this.lane(c, task);
     if (!lane?.c) return { execution: { defaults: this.main.execution.defaults(c), active: this.main.execution.current(c, task.execution?.taskId), policies: [] }, id: null, messages: [], status: task.status, queue: [], runs: [], task: this.public(task), parallelTasks: this.list(c), checkpoints: {} };
     return { ...lane.broker.view(lane.c, options), task: this.public(task), parallelTasks: this.list(c), checkpoints: {} };
+  }
+
+  // A task's own changes, reviewed by another agent from inside the task (#88). The reviewer reads a copy of the files the
+  // person chose from the task's folder, or from its own copy, never the rest of the workspace. The review is saved in the
+  // task's conversation and counts against the task's limits and the workspace's tasks at once.
+  reviewScope(c, id) {
+    const task = this.find(c, id);
+    if (task.purpose === 'project-review') throw fail('This task only prepares the app review, so it has no changes to review.');
+    if (ENDED.has(task.status)) throw fail(task.status === 'cancelled' ? 'This task never started, so it has no changes to review.' : 'This task has ended and its copy is gone. Review its changes from the workspace chat.');
+    if (!this.available(task) || task.status === 'detached') throw fail(`${task.folderName} is no longer in this workspace, so this task’s changes can’t be reviewed.`);
+    if (task.mode === 'worktree' && (!task.worktree || !fs.existsSync(task.worktree))) throw fail('This task’s working copy is gone, so there is nothing to review.');
+    const lane = this.lane(c, task);
+    if (!lane?.c) throw fail('This task hasn’t started yet, so it has no changes to review.');
+    // A copy is compared with the commit it started from (src/agent-review.mjs).
+    const folders = lane.broker.workspaceFolders.map(folder => task.mode === 'worktree' ? { ...folder, base: task.base } : folder);
+    return { task, lane, project: { id: `task:${task.id}`, folders } };
   }
 
   executionPolicy(c, id, input) {

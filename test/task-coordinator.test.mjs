@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { noSymlinks, scriptCLIs } from './platform.mjs';
+import { captureReview, listReviewChanges, reviewFreshness } from '../src/agent-review.mjs';
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
@@ -195,6 +196,19 @@ test('a task beside a running main conversation takes its own copy, and is merge
   const review = env.broker.tasks.review(env.c, task.id);
   assert.deepEqual(review.files.map(file => [file.path, file.change, file.status]), [['app.js', 'update', 'clean'], ['gone.js', 'delete', 'clean'], ['new/file.js', 'add', 'clean']]);
   assert.equal(review.conflicts, 0); assert.match(review.files[0].diff, /\+TWO/); assert.deepEqual([review.files[0].added, review.files[0].removed], [1, 1]);
+  // Another agent's review of the task reads its copy: the task's changes, not the person's work in the folder.
+  const scope = env.broker.tasks.reviewScope(env.c, task.id);
+  assert.deepEqual(scope.project.folders.map(folder => [folder.id, folder.path]), [['a', env.task(task.id).scopePath]]);
+  assert.deepEqual(listReviewChanges(scope.project.folders)[0].changes.map(file => file.path).sort(), ['app.js', 'gone.js', 'new/file.js']);
+  // Opening Review & merge above committed the copy; the review still sees the task's changes since it started.
+  const snapshot = captureReview(scope.project.folders, [{ folderId: 'a', path: 'app.js' }, { folderId: 'a', path: 'gone.js' }]);
+  assert.match(snapshot.files[0].diff, /-two\n\+TWO/); assert.equal(snapshot.files[1].contentHash, null); assert.equal(snapshot.files[0].head, env.task(task.id).base);
+  assert.equal(reviewFreshness({ snapshot }, env.broker.tasks.reviewScope(env.c, task.id).project.folders).stale, false);
+  env.broker.tasks.review(env.c, task.id);
+  assert.equal(reviewFreshness({ snapshot }, env.broker.tasks.reviewScope(env.c, task.id).project.folders).stale, false, 'Committing the copy again doesn’t make the review outdated.');
+  edit(env, task, 'app.js', 'one\nTWO!\nthree\n');
+  assert.equal(reviewFreshness({ snapshot }, env.broker.tasks.reviewScope(env.c, task.id).project.folders).stale, true);
+  edit(env, task, 'app.js', 'one\nTWO\nthree\n');
   // The main run still holds the folder, so merging must wait for it.
   await assert.rejects(env.broker.tasks.integrate(env.c, task.id, { digest: review.digest }), /busy/);
   assert.equal(fs.readFileSync(path.join(env.folders.a, 'app.js'), 'utf8'), 'one\ntwo\nthree\n');
@@ -207,6 +221,7 @@ test('a task beside a running main conversation takes its own copy, and is merge
   assert.equal(fs.readFileSync(path.join(env.folders.a, 'kept.js'), 'utf8'), 'mine, edited\n', 'Unrelated work is preserved.');
   assert.equal(fs.readFileSync(path.join(env.folders.a, 'draft.txt'), 'utf8'), 'unrelated\n');
   assert.equal(env.task(task.id).status, 'integrated'); assert.equal(fs.existsSync(worktree), false, 'Its copy is gone.');
+  assert.throws(() => env.broker.tasks.reviewScope(env.c, task.id), /has ended/, 'Merged changes are reviewed from the workspace chat.');
   assert.doesNotMatch(git(env.folders.a, 'worktree', 'list'), /worktree$/m); assert.equal(git(env.folders.a, 'for-each-ref', 'refs/codeshi').trim(), '');
   assert.match(env.c.messages.at(-1).text, /Merged “Hold A” into a: 3 files/);
   assert.throws(() => env.broker.tasks.integrate(env.c, task.id, { digest: review.digest }), /nothing to merge/);

@@ -637,7 +637,14 @@
     open.type = "button"; open.title = `Open ${name}`; open.setAttribute("aria-label", `Open ${alt || name}`);
     picture.alt = alt || name;
     open.append(picture); figure.append(open);
-    open.addEventListener("click", () => openReference(raw));
+    images.list.push({ raw, name: alt || name, figure });
+    // Opening one image lets the preview step through the reply's other images (arrow buttons and the arrow keys).
+    const openAt = target => {
+      const shown = images.list.filter(item => !item.figure.hidden), index = shown.findIndex(item => item.figure === target);
+      window.relayFiles?.setImageNav?.(shown.length > 1 ? { count: shown.length, index, go: next => openAt(shown[next].figure) } : null);
+      openReference(shown[index >= 0 ? index : 0].raw);
+    };
+    open.addEventListener("click", () => openAt(figure));
     const show = src => { if (!src) return; picture.src = src; figure.hidden = false; if (fallback) fallback.hidden = true; };
     const entry = cachedReplyImage(`${state.projectId}\n${images.scope}\n${path}`, path);
     figure.hidden = true;
@@ -1049,6 +1056,20 @@
   }
 
   const isContinuationPrompt = message => message?.role === "user" && (message.continuation || /^\s*Continue the unfinished task from this shared conversation/i.test(message.text || ""));
+  // Whether a finished reply is a draft plan written as text: the JSON a Draft cards run returns, with a summary and cards.
+  // Read once per reply; the server reads it again, strictly, before adding anything.
+  const replyPlans = new Map();
+  function replyPlan(message) {
+    const text = message.text || "";
+    if (!/^\s*(?:\{|```(?:json)?\s*\n\s*\{)/.test(text)) return null;
+    const key = `${message.id}:${text.length}`;
+    if (!replyPlans.has(key)) {
+      let found = null;
+      try { const value = JSON.parse(text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, "$1")); if (value && typeof value.summary === "string" && value.summary.trim() && Array.isArray(value.steps) && value.steps.length) found = { count: value.steps.length }; } catch {}
+      replyPlans.set(key, found);
+    }
+    return replyPlans.get(key);
+  }
   function renderMessage(message) {
     if (message.rewoundMarker) {
       const { id, count, shown } = message.rewoundMarker, line = element("div", "messages-rewound");
@@ -1170,9 +1191,32 @@
       const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the planner…')); body.append(raw);
       row.append(heading, body, actions); return row;
     }
+    // A reply written as a draft plan outside Draft cards (#162): said in a line, with the JSON folded away, and a button
+    // that puts its cards on the Plan as drafts. Only the workspace chat holds the Plan.
+    const drafted = !user && !streaming && message.id && !state.taskId ? replyPlan(message) : null;
+    if (drafted) {
+      const moved = state.conversation?.orchestrations?.find(item => item.fromMessage === message.id && item.status === 'moved');
+      const count = moved?.cards?.length || drafted.count, cards = `${count} ${count === 1 ? 'card' : 'cards'}`;
+      body.append(element('p', '', moved ? `This reply’s ${cards} are on the Plan as drafts.` : `This reply is a draft plan of ${cards}, written as text instead of added to the Plan.`));
+      const add = element('button', 'secondary-button', moved ? 'Open the Plan' : 'Add as draft cards'); add.type = 'button';
+      if (!moved) add.title = 'Puts its cards on the Plan as drafts. Nothing runs until you accept them.';
+      add.addEventListener('click', async () => {
+        if (moved) { window.relayBoard?.open(); return; }
+        add.disabled = true;
+        try {
+          const result = await post('/api/board/from-reply', { messageId: message.id });
+          await refresh(); render(); window.relayBoard?.reload?.();
+          if (!window.relayBoard?.isOpen?.()) window.relayBoard?.open?.();
+          announce(`${result.cards} draft ${result.cards === 1 ? 'card' : 'cards'} added to the Plan. Nothing runs until you accept them.`);
+        } catch (error) { showNotice(error.message); add.disabled = false; }
+      });
+      body.append(add);
+      const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text)); body.append(raw);
+      row.append(heading, body, actions); return row;
+    }
     const text=message.text || (streaming ? '' : 'No text response.');
     const parts=text.split(/```([^\n`]*)\n([\s\S]*?)```/g);
-    replyImages = user || !message.id ? null : { scope: message.id, seen: new Set() };
+    replyImages = user || !message.id ? null : { scope: message.id, seen: new Set(), list: [] };
     try {
     for(let i=0;i<parts.length;i+=3){if(parts[i]){if(user)body.append(document.createTextNode(parts[i]));else renderProse(body,parts[i]);}if(parts[i+2]!==undefined){const block=element('div','code-block'),head=element('div','code-head'),pre=element('pre');head.append(element('span','code-language',parts[i+1].trim()||'code'),copyButton('code-copy','Copy code',parts[i+2]));pre.append(highlightedCode(parts[i+2],parts[i+1].trim()));block.append(head,pre);body.append(block);}}
     } finally { replyImages = null; }
@@ -1275,6 +1319,8 @@
       let extra = "";
       if (message.reviewId) { const review = c?.reviews?.find(item => item.id === message.reviewId); extra += JSON.stringify([Boolean(review), review?.summary]); }
       if (message.orchestrationId) { const plan = c?.orchestrations?.find(item => item.id === message.orchestrationId); extra += (message.role === "user" ? window.relayOrchestration?.label(plan) : window.relayOrchestration?.describe(plan)) || ""; }
+      // A reply written as a draft plan redraws once its cards are on the Plan, and when the chat moves into a task.
+      else if (message.role === "assistant" && replyPlan(message)) extra += `|reply-plan:${Boolean(c?.orchestrations?.some(item => item.fromMessage === message.id && item.status === "moved"))}:${Boolean(state.taskId)}`;
       if (message.routing) extra += (window.relayModelPicker?.modelName?.(message.provider, message.routing.model) || "") + (window.relayRouting?.modeNames?.[message.routing.mode] || "");
       if (message.attachments?.length && window.relayFiles) extra += "attachments";
       if (!message.provider) extra += c?.provider || "";
@@ -2017,7 +2063,7 @@
     const queueing = Boolean(state.conversation) && (running || Boolean(state.conversation?.resume));
     const planAsking = window.relayBoard?.asking?.() || null;
     const canAdd = running && state.conversation?.canAddToRun === true, modKey = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘" : "Ctrl+";
-    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : planAsking ? (planAsking.draft ? t("Describe what you want to plan…") : t("Ask about the Plan or a card…")) : t("Describe the task or ask a question…");
+    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : planAsking ? (planAsking.draft ? t("Describe a Plan change or new work…") : t("Ask about the Plan (read-only)…")) : t("Describe the task or ask a question…");
     $("steer-button").hidden = !canAdd;
     $("steer-button").disabled = !state.ready || busy || !ui.input.value.trim() || Boolean(window.relayFiles?.ids().length);
     $("steer-button").title = window.relayFiles?.ids().length ? t("Attachments go with a queued message") : t("Add this to the current run ({shortcut})", { shortcut: `${modKey}↵` });

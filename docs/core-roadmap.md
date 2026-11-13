@@ -283,7 +283,7 @@ Context snapshots, last-request input and consumption totals remain separate. Co
 
 **Issue title:** Load reusable skills across providers with explicit compatibility and scope
 
-**Tracking:** [#86](https://github.com/AhmedNavaz/codeshi/issues/86) — the first milestone is built in `src/skills.mjs` and `starter-skills/`. Every agent gets skills as instructions in the prompt; using each agent's own skill system is still to do.
+**Tracking:** [#86](https://github.com/AhmedNavaz/codeshi/issues/86) — the first milestone is built in `src/skills.mjs` and `starter-skills/`. Claude, through its SDK, uses its own skill system with a private plugin built from the enabled versions; Codex and Gemini still get skills as instructions in the prompt.
 
 #### Problem
 

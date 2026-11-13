@@ -243,6 +243,10 @@ export function ledgerFromRecords(records, { prompts = false } = {}) {
       if (typeof metadata.elapsedMs === 'number') active.elapsedMs = metadata.elapsedMs;
       if (metadata.costUSD !== undefined || active.usage?.source === 'claude-model-usage-total') finishCost(active, active.usage?.source === 'claude-model-usage-total' ? active.usage.costEstimateUSD : metadata.costUSD);
       if (typeof metadata.compactions === 'number') active.compactions = metadata.compactions;
+    } else if (record.type === 'skill_loaded') {
+      // A skill Claude loaded with its own Skill tool (#86), listed with the ones Codeshi chose when the run started.
+      const entry = runs.get(record.runId);
+      if (entry?.context && record.skill?.name) entry.context.skills = [...entry.context.skills.filter(item => item.name !== record.skill.name), { name: record.skill.name, version: record.skill.version, reason: record.skill.reason }];
     } else if (record.type === 'native_compaction') {
       const entry = runs.get(record.runId);
       if (entry) {

@@ -1,6 +1,7 @@
 import { memoryForTask } from './project-memory.mjs';
 import { restoreAfterCompaction } from './context-state.mjs';
 import { BRIEF_NOTE, looksFailed, outOfScope, runFolders, selectFolders, taskBrief } from './task-context.mjs';
+import { draftReplyNote } from './orchestration.mjs';
 import { EARLIER_BYTES, earlierConversation, isRequest, STOPPED_WAITING_NOTE, stoppedWhileWaiting, UNANSWERED_NOTE, unansweredQuestions } from './context-fold.mjs';
 
 const fail = message => Object.assign(new Error(message), { status: 400 });
@@ -55,7 +56,14 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   const cursor = reconstruct ? 0 : c.sessions[provider]?.cursor || 0;
   // Messages folded away by a conversation rewind (#20) are history no agent reads again.
   const source = c.messages.filter(message => message.seq > cursor && !message.rewound);
-  const attachmentText = files => (files || []).filter(f => f.kind === 'text').map(file => {
+  // The whole Plan goes to the agent once (#162): with the current request when it carries one, otherwise with the latest
+  // message that did. Every older copy is a one-line note, so a chat about the Plan doesn't repeat its cards each turn
+  // and the agent never works from a Plan that has since changed.
+  const wholePlan = file => file.kind === 'text' && file.plan?.whole === true;
+  const currentPlan = attachments.some(wholePlan);
+  const latestPlan = currentPlan ? null : source.findLast(message => (message.attachments || []).some(wholePlan))?.id ?? null;
+  const attachmentText = (files, from = null) => (files || []).filter(f => f.kind === 'text').map(file => {
+    if (from && wholePlan(file) && from.id !== latestPlan) return `\n\n[The Plan was attached here (${file.plan.cards} ${file.plan.cards === 1 ? 'card' : 'cards'}) as it was then. Left out because ${currentPlan ? 'the current request carries the Plan as it is now' : 'a later message carries a newer copy'}.]`;
     try { return '\n\nAttached file ' + JSON.stringify(file.name) + ':\n' + readAttachment(file.id).text; }
     catch { return '\n[Saved attachment unavailable: ' + file.name + ']'; }
   }).join('');
@@ -75,7 +83,7 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   const hidden = message => Boolean(scope) && outOfScope(message, scope.folders, runs, taskFolders);
   const compiled = scope ? taskBrief(c, { source, scope, folders: taskFolders, primary: workspace, text: continuing ? text : null, taskMessages, words, fresh: reconstruct, provider, journal }) : null;
   const remembered = scope ? memoryForTask(c, { words: words + '\n' + (c.context?.goal || ''), scope: scope.folders, folders: taskFolders, fresh: reconstruct, provider }) : null;
-  const hasSkills = task && Boolean(skills?.catalog.length || skills?.active.length);
+  const hasSkills = task && Boolean(skills?.catalog.length || skills?.active.length || skills?.native && skills.announce);
   // The person's requests to keep in full: the task's opening and the eight latest. Under the task policy a request sent
   // again, as after an error, is kept once, where it was last sent.
   const allUsers = source.map((message, index) => ({message,index})).filter(({message}) => message.role === 'user' && message.text?.trim() && message.text.trim() !== continuationRequest && !message.reviewId && !hidden(message)).map(({index}) => index);
@@ -115,7 +123,7 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   // otherwise never learn they were asked. A resumed session saw them itself.
   const waiting = task && reconstruct ? stoppedWhileWaiting(c.lastRun) : null;
   const added = { ...(earlier ? { earlier } : {}), ...(unanswered.length ? { unansweredQuestions: unanswered, unansweredNote: UNANSWERED_NOTE } : {}), ...(waiting ? { stoppedWhileWaiting: waiting, stoppedWhileWaitingNote: STOPPED_WAITING_NOTE } : {}) };
-  const baseBrief = remembered?.entries.length || hasSkills ? { ...(compiled?.brief || { note: BRIEF_NOTE }), ...(remembered?.entries.length ? { memory: remembered.entries, ...(remembered.left ? { memoryLeftOut: remembered.left } : {}) } : {}), ...(hasSkills ? { skills: { note: SKILLS_NOTE, ...(skills.active.length ? { active: skills.active } : {}), ...(skills.catalog.length ? { available: skills.catalog } : {}) } } : {}) } : compiled?.brief;
+  const baseBrief = remembered?.entries.length || hasSkills ? { ...(compiled?.brief || { note: BRIEF_NOTE }), ...(remembered?.entries.length ? { memory: remembered.entries, ...(remembered.left ? { memoryLeftOut: remembered.left } : {}) } : {}), ...(hasSkills ? { skills: { note: skills.note || SKILLS_NOTE, ...(skills.active.length ? { active: skills.active } : {}), ...(skills.catalog.length ? { available: skills.catalog } : {}) } } : {}) } : compiled?.brief;
   const brief = Object.keys(added).length ? { ...(baseBrief || { note: BRIEF_NOTE }), ...added } : baseBrief;
   const envelope = { workspace, workspaceFolders: folders, mode, ...structured, ...(c.routing ? { projectReview: FLOW_REVIEW_NOTE } : {}), ...(verification ? { verification } : {}), ...(brief ? { brief } : {}), ...(rollover ? { milestone: rollover.memory } : {}), context: [], omittedMessages: 0, shortenedMessages: 0, compactedActivityMessages: 0, historyPreserved: true,
     continuation: { sessionMode: fresh ? 'fresh' : 'resumed', ...session, ...(restoredAfterCompaction ? { restoredAfterCompaction: true, restorationNote: 'A native compaction was reported in the previous run. Codeshi rebuilt this bounded task context from the unchanged journal and current files. Continue the same native session; no provider reset or additional model call was requested.' } : {}), previousProvider: c.lastRun?.provider || null, previousStatus: c.lastRun?.status || null, previousErrorCategory: c.lastRun?.errorCategory || null, note: 'The shared journal is authoritative. User requests and saved context take priority over tool logs. Previous status is recorded evidence, not a verified statement about current files. Inspect the workspace before repeating unfinished work.' },
@@ -136,7 +144,7 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
   // allocating any bytes to assistant progress or raw execution output.
   function candidate(index, protectedIntent = false) {
     const message = source[index];
-    return { role: message.role, provider: message.provider, text: String(message.text || '') + attachmentText(message.attachments),
+    return { role: message.role, provider: message.provider, text: (draftReplyNote(c, message) ?? String(message.text || '')) + attachmentText(message.attachments, message),
       ...(protectedIntent ? { contextRole: index === primaryUser ? 'primary-user-request' : 'recent-user-instruction' } : {}),
       ...(message.status ? { status: message.status } : {}), ...(message.attachments?.length ? { attachments: message.attachments } : {}),
       ...(message.connection === 'local' ? { connection: 'local', model: message.model || null } : {}) };

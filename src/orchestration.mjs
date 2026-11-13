@@ -33,7 +33,19 @@ export const planningMethod = [
 // or a Word document, are the requirements to plan from. They follow the request, as any attachment does. A plan from
 // documents is drafted as major cards in phases, each split into subtasks when it starts (src/subtasks.mjs).
 export const listNames = names => names.length < 3 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-export function planningRequest(goal, { documents = [] } = {}) {
+// Drafting with the Plan attached: the request is usually about the cards already on it, so the planner changes that
+// Plan rather than drafting a second one beside it. Each card in the attached Plan has an Id to refer to it by. The
+// changes arrive as drafts like any other: nothing on the Plan changes until the person accepts.
+export const revisionMethod = [
+  'The person’s Plan is attached (Plan.md), and each of its cards has an Id. Unless the request asks for a separate or new plan, or is about work unrelated to those cards, treat it as a change to that Plan: add cards to it, and change, merge, regroup, reorder or remove its cards as the request needs. Never draft a copy of a card that is already there; change the card instead.',
+  '- To change a card, add a step with card set to its Id and only the fields that change. Fields you leave out keep their current values. dependsOn, when given, replaces the card’s whole list.',
+  '- To merge cards, change the card that stays (or add a new one) and list the Ids of the cards folded into it in merges. They are removed, and the cards that waited for them wait for that card instead.',
+  '- To remove a card for good, list its Id in remove.',
+  '- dependsOn can name earlier cards in this reply by number and cards on the Plan by Id (as a string).',
+  '- Cards you don’t mention stay as they are, so return only what is new or changed. Cards that are Doing, in Review or Done can be waited for, but not changed, merged or removed.',
+  '- Use the Plan’s existing phase names where they fit. When regrouping, give every card you move its new phase.',
+].join('\n');
+export function planningRequest(goal, { documents = [], revising = false } = {}) {
   return [
     'Plan this request as cards for coding agents. This is a read-only planning run: inspect the project as needed, but do not edit files or run commands that change anything.',
     '',
@@ -44,7 +56,9 @@ export function planningRequest(goal, { documents = [] } = {}) {
       'Plan major cards: each a milestone of the project, grouped in phases. Each major card is split into small subtasks when it starts, against the code the earlier cards produced, so don\'t plan those subtasks now. The agents doing the cards won\'t see the documents, so put what each card needs from them in its instructions: names, fields, rules, wording and limits.',
       '',
     ] : []),
+    ...(revising ? [revisionMethod, ''] : []),
     'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions for the person, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of cards, in order). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.',
+    ...(revising ? ['When changing the attached Plan, a step may also have card (the Id of the card it changes; then only the fields that change are needed) and merges (Ids of cards folded into it), dependsOn may include Ids, and the object may have remove (Ids of cards to remove). steps may be empty when the request only removes cards.'] : []),
     '',
     'Request:',
     goal,
@@ -68,8 +82,66 @@ export function checkPlanning(broker, { routing = null, automaticReview = null }
 
 // One step, from the planner (dependencies are step numbers) or from the page (dependencies are step ids). Throws a
 // message that says what to fix.
-function checkStep(raw, index, earlier, { fromPlanner }) {
+// A card on the Plan, named by the Id the attached Plan gave it (#162). Inside a parsed plan it is written '@' and the Id,
+// so it can't be taken for one of the plan's own step ids.
+const CARD_REF = /^[A-Za-z0-9][\w-]{3,39}$/;
+const cardRef = value => typeof value === 'string' && CARD_REF.test(value.trim()) ? value.trim() : null;
+const refList = (value, what, number) => {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 20 || value.some(item => !cardRef(item))) fail(`${number ? `Step ${number}` : 'The plan'} lists ${what} that aren’t card Ids from the Plan.`);
+  return [...new Set(value.map(item => item.trim()))];
+};
+// What a step waits for: earlier steps by number, and, when the plan changes the attached Plan, its cards by Id.
+function stepNeeds(dependsOn, index, earlier, { fromPlanner, revise }) {
+  if (!Array.isArray(dependsOn)) fail(`Step ${index + 1} can only depend on an earlier step.`);
+  const needs = dependsOn.map(value => {
+    if (!fromPlanner) return value;
+    if (Number.isSafeInteger(value)) return `s${value}`;
+    return revise && cardRef(value) ? `@${value.trim()}` : null;
+  });
+  if (needs.some(value => !(earlier.includes(value) || (revise && typeof value === 'string' && value.startsWith('@')))) || new Set(needs).size !== needs.length) fail(`Step ${index + 1} can only depend on an earlier step${revise ? ' or a card on the Plan' : ''}.`);
+  return needs;
+}
+// A step that changes a card already on the Plan carries only what changes; what it leaves out stays as it is.
+function checkRevision(raw, index, earlier, options) {
+  const number = index + 1, id = `s${number}`, card = cardRef(raw.card);
+  if (!card) fail(`Step ${number} names a card by something that isn’t its Id.`);
+  const out = { id, card, merges: refList(raw.merges, 'cards to merge', number) };
+  const given = key => raw[key] !== undefined;
+  if (given('title')) { out.title = text(raw.title, planLimits.title); if (!out.title) fail(`Give step ${number} a title of at most ${planLimits.title} characters.`); }
+  if (given('instructions')) { out.instructions = text(raw.instructions, planLimits.instructions); if (!out.instructions) fail(`Give step ${number} instructions of at most ${planLimits.instructions.toLocaleString('en-US')} characters.`); }
+  if (given('tier')) { if (!TIERS.includes(raw.tier)) fail(`Choose light, standard or deep as step ${number}'s tier.`); out.tier = raw.tier; }
+  if (given('files')) {
+    let files = raw.files;
+    if (Array.isArray(files) && files.length > planLimits.files) { out.moreFiles = files.length - planLimits.files; files = files.slice(0, planLimits.files); }
+    if (!Array.isArray(files) || files.some(file => !text(file, planLimits.path))) fail(`List at most ${planLimits.files} files or folders for step ${number}, each as a path.`);
+    out.files = files.map(file => file.trim());
+  }
+  if (given('done')) {
+    if (!Array.isArray(raw.done) || raw.done.length > planLimits.done || raw.done.some(item => !text(item, planLimits.question))) fail(`List at most ${planLimits.done} short statements of what done means for step ${number}.`);
+    out.done = raw.done.map(item => item.trim());
+  }
+  if (given('phase')) {
+    out.phase = raw.phase === null || raw.phase === '' ? null : text(raw.phase, planLimits.phase);
+    if (out.phase === null && raw.phase !== null && raw.phase !== '') fail(`Give step ${number} a phase of at most ${planLimits.phase} characters.`);
+  }
+  if (given('role')) { out.role = raw.role ? String(raw.role).trim().toLowerCase() : 'builder'; if (!SPECIALIST_ROLES.includes(out.role)) fail(`Choose builder, reviewer, frontend, backend, database, design or qa as step ${number}'s role.`); }
+  if (given('artifact')) {
+    out.artifact = raw.artifact === null || raw.artifact === '' ? null : String(raw.artifact).trim().toLowerCase();
+    if (out.artifact !== null && !ARTIFACT_KINDS.includes(out.artifact)) fail(`Choose contract, schema, diff, test_evidence or findings as step ${number}'s artifact.`);
+  }
+  if (given('check')) {
+    out.check = raw.check === null || raw.check === '' ? null : text(raw.check, 300);
+    if (out.check === null && raw.check !== null && raw.check !== '') fail(`Give step ${number} an acceptance check of at most 300 characters.`);
+  }
+  if (given('dependsOn')) out.dependsOn = stepNeeds(raw.dependsOn, index, earlier, options);
+  return out;
+}
+
+function checkStep(raw, index, earlier, options) {
+  const { fromPlanner, revise = false } = options;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('Each of the steps needs a title, instructions and a tier.');
+  if (fromPlanner && revise && raw.card !== undefined && raw.card !== null && raw.card !== '') return checkRevision(raw, index, earlier, options);
   const id = fromPlanner ? `s${index + 1}` : raw.id;
   if (typeof id !== 'string' || !/^s\d{1,3}$/.test(id)) fail('Each of the steps needs its own id.');
   const title = text(raw.title, planLimits.title), instructions = text(raw.instructions, planLimits.instructions);
@@ -82,10 +154,7 @@ function checkStep(raw, index, earlier, { fromPlanner }) {
   let moreFiles = 0;
   if (fromPlanner && Array.isArray(files) && files.length > planLimits.files) { moreFiles = files.length - planLimits.files; files = files.slice(0, planLimits.files); }
   if (!Array.isArray(files) || files.length > planLimits.files || files.some(file => !text(file, planLimits.path))) fail(`List at most ${planLimits.files} files or folders for step ${index + 1}, each as a path.`);
-  const dependsOn = raw.dependsOn ?? [];
-  if (!Array.isArray(dependsOn)) fail(`Step ${index + 1} can only depend on an earlier step.`);
-  const needs = dependsOn.map(value => fromPlanner ? (Number.isSafeInteger(value) ? `s${value}` : null) : value);
-  if (needs.some(value => !earlier.includes(value)) || new Set(needs).size !== needs.length) fail(`Step ${index + 1} can only depend on an earlier step.`);
+  const needs = stepNeeds(raw.dependsOn ?? [], index, earlier, options);
   let agent = null;
   if (!fromPlanner && raw.agent !== null && raw.agent !== undefined) {
     if (typeof raw.agent !== 'object' || !PROVIDERS.includes(raw.agent.provider)) fail(`Choose Codex, Claude or Gemini as step ${index + 1}'s agent, or leave it to Auto.`);
@@ -114,7 +183,8 @@ function checkStep(raw, index, earlier, { fromPlanner }) {
   if (phase === null && raw.phase !== undefined && raw.phase !== null && raw.phase !== '') fail(`Give step ${index + 1} a phase of at most ${planLimits.phase} characters.`);
   const done = raw.done ?? [];
   if (!Array.isArray(done) || done.length > planLimits.done || done.some(item => !text(item, planLimits.question))) fail(`List at most ${planLimits.done} short statements of what done means for step ${index + 1}.`);
-  return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills, phase, done: done.map(item => item.trim()), ...(moreFiles ? { moreFiles } : {}) };
+  const merges = revise ? refList(raw.merges, 'cards to merge', index + 1) : [];
+  return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills, phase, done: done.map(item => item.trim()), ...(moreFiles ? { moreFiles } : {}), ...(merges.length ? { merges } : {}) };
 }
 
 // Verify specialist workflow dependency rules:
@@ -375,12 +445,38 @@ export function parsePlan(reply) {
     if (typeof reply !== 'string' || Buffer.byteLength(reply) > planLimits.reply) throw Error();
     const plan = JSON.parse(reply.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'));
     const summary = text(plan?.summary, planLimits.summary);
-    if (!summary || !Array.isArray(plan.steps) || !plan.steps.length) throw Error();
+    // A plan can also change the cards already on the Plan (#162): a step with card changes one, and remove takes cards
+    // away. One that only removes cards has no steps.
+    const remove = plan && typeof plan === 'object' ? refList(plan.remove, 'cards to remove') : [];
+    if (!summary || !Array.isArray(plan.steps) || !(plan.steps.length || remove.length)) throw Error();
     // Questions the planner couldn't answer from the request (#162): kept for you, never answered for you.
     const questions = planQuestions(plan.questions);
-    return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true }), ...(questions.length ? { questions } : {}) };
+    return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true, revise: true }), ...(remove.length ? { remove } : {}), ...(questions.length ? { questions } : {}) };
   } catch (error) { return { status: 'unstructured', summary: unreadable(error), steps: [] }; }
 }
+// A planner's reply as later agents read it in the conversation's history (#162): one line saying what it drafted, not
+// the JSON Draft cards asked for. Otherwise an ordinary message after a few drafts, such as a question in Ask, tends to be
+// answered in that format by example. null for any other message.
+export function draftReplyNote(c, message) {
+  if (message?.role !== 'assistant') return null;
+  // An ordinary reply written as a draft plan anyway, as an Ask answer once was: the same note, so it isn't copied either.
+  if (!message.orchestrationId) {
+    if (!/^\s*(?:\{|```(?:json)?\s*\n\s*\{)/.test(message.text || '')) return null;
+    const read = parsePlan(message.text);
+    if (read.status !== 'draft') return null;
+    const moved = c?.orchestrations?.some(item => item.fromMessage === message.id && item.status === 'moved');
+    return `[A reply written as a draft plan of ${read.steps.length} ${read.steps.length === 1 ? 'card' : 'cards'}, shown here as a note${moved ? '. The person put its cards on the Plan as drafts' : ''}. Replies outside Draft cards are plain prose.] ${read.summary.replace(/\s+/g, ' ').trim()}`;
+  }
+  const plan = c?.orchestrations?.find(item => item.id === message.orchestrationId);
+  let count = plan?.cards?.length || plan?.steps?.length || 0, summary = plan?.summary || '';
+  // A plan older than the ten the conversation keeps is read from the reply itself.
+  if (!plan) { const read = parsePlan(message.text); if (read.status === 'draft') ({ summary } = read, count = read.steps.length); }
+  const said = summary ? ` ${summary.replace(/\s+/g, ' ').trim()}` : '';
+  return count
+    ? `[Draft cards reply, shown here as a note. Codeshi’s Draft cards mode asked for JSON, which became ${count} draft ${count === 1 ? 'card' : 'cards'} on the Plan. Other replies are plain prose.]${said}`
+    : `[Draft cards reply that didn’t become cards, shown here as a note.]${said}`;
+}
+
 // Why a reply wasn't taken: the rule a card broke, in the planner's own numbering, or that it wasn't a plan at all.
 const unreadable = error => error?.status ? `The planner's plan broke a rule, so none of it was added: ${error.message.replace(/\bstep(s?)\b/g, 'card$1')} Try again, or write the cards yourself.` : 'The planner\'s reply could not be read as a plan. Try again, or write the cards yourself.';
 

@@ -113,6 +113,18 @@
 .board-result { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
 .board-result-facts { margin: 0; color: var(--muted); font-size: 11.5px; }
 .board-result-summary { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+/* A review card's verdict, findings and repair round (#89). */
+.board-review { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
+.board-review-lead { margin: 0; color: var(--text-strong); font-weight: 500; line-height: 1.45; }
+.board-review-findings { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.board-review-findings li { line-height: 1.45; overflow-wrap: anywhere; }
+.board-review-problem { display: block; }
+.board-review-meta { display: block; color: var(--muted); font-size: 11.5px; }
+.board-review-repairs { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; color: var(--muted); font-size: 11.5px; }
+.board-review-repair.running { color: var(--link); }
+.board-review-repair.done { color: var(--success); }
+.board-review-repair.failed, .board-review-repair.skipped { color: var(--danger); }
+.board-card-top > .orchestration-step-role[data-shared=true] { border-style: dashed; }
 .board-history-box summary { color: var(--muted); cursor: pointer; font-size: 11.5px; }
 .board-history { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 11.5px; line-height: 1.7; }
 
@@ -125,6 +137,32 @@
 .board-run-title { flex: 1 1 auto; min-width: 0; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-run-agent { flex: none; color: var(--muted); font-size: 11.5px; }
 .board-run-why { padding-left: 22px; color: var(--warning); font-size: 11px; }
+.board-run-agent[title] { cursor: help; }
+.board-run-who { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 22px; }
+.board-run-who .agent-icon { flex: none; }
+.board-run-who .board-run-agent { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Flow's Run Ready (#132): one limit the cards share, three boxes in a row, and the runs still going above the cards. */
+.board-run-limit { display: grid; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.board-run-limit-title { padding: 0 4px; margin-left: -4px; color: var(--text-strong); font-size: 12px; font-weight: 600; }
+.board-run-limit-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.board-run-limit-field { display: grid; gap: 4px; min-width: 0; }
+.board-run-limit-label { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-run-limit-input { width: 100%; min-width: 0; box-sizing: border-box; padding: 5px 7px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input-bg, var(--bg)); color: var(--text); font: 12px var(--font); font-variant-numeric: tabular-nums; }
+.board-run-limit-input::placeholder { color: var(--muted); opacity: .8; }
+.board-run-limit-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.board-run-limit-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.board-run-limit-note[data-wrong=true] { color: var(--warning); }
+@media (max-width: 520px) { .board-run-limit-fields { grid-template-columns: 1fr; } }
+.board-runs { flex: none; display: grid; border-bottom: 1px solid var(--border); }
+.board-run-strip { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 16px; font-size: 12px; background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.board-run-strip + .board-run-strip { border-top: 1px solid var(--border); }
+.board-run-strip-title { flex: none; color: var(--text-strong); font-weight: 600; }
+.board-run-strip-state { flex: none; color: var(--muted); }
+.board-run-strip-bar { flex: none; width: 72px; height: 4px; border-radius: 2px; background: var(--surface-strong); overflow: hidden; }
+.board-run-strip-fill { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+.board-run-strip[data-state=near] .board-run-strip-fill { background: var(--warning); }
+.board-run-strip-used { flex: 1 1 auto; min-width: 0; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-run-strip-stop { flex: none; }
 
 @media (max-width: 1100px) { .board-columns { grid-template-columns: repeat(5, 220px); } }
 
@@ -204,14 +242,20 @@
 .board-draft-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 .board-draft-questions, .board-draft-notes { margin: 2px 0 0; padding-left: 18px; color: var(--text); font-size: 11.5px; line-height: 1.5; }
 .board-draft-notes { margin: 0; color: var(--warning); }
+/* A draft that changes the Plan (#162): what it left out, and a changed card's fields as they were. */
+.board-draft-left { margin: 0; color: var(--warning); font-size: 11.5px; line-height: 1.45; }
+.board-draft-was { margin: 0; padding-left: 18px; color: var(--muted); font-size: 11.5px; line-height: 1.5; overflow-wrap: anywhere; }
+/* A card a draft would remove or merge away reads as on its way out until you decide. */
+.board-card[data-draft=remove] { opacity: 0.62; }
+.board-card[data-draft=remove] .board-card-title { text-decoration: line-through; text-decoration-color: var(--muted); }
 .board-draft-actions { flex: none; display: flex; gap: 8px; }
 .board-draft-actions button { height: 28px; }
 .board-earlier { flex: none; margin: 0; padding: 7px 16px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 .board-outline { margin: 0 auto; padding: 0; max-width: 880px; list-style: none; display: grid; gap: 18px; }
 .board-outline-group { display: grid; gap: 6px; }
-.board-outline-head { display: flex; align-items: center; gap: 10px; min-height: 28px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.board-outline-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 28px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
 .board-outline-head button { height: 26px; }
-.board-outline-name { margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.board-outline-name { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
 .board-outline-progress { margin-right: auto; color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .board-outline-cards { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
 .board-outline-card { display: grid; gap: 2px; width: 100%; padding: 6px 10px 6px 12px; border: 1px solid transparent; border-left: 3px solid var(--border-strong); border-radius: var(--radius); background: transparent; color: var(--text); font: 12px var(--font); text-align: left; cursor: pointer; }
@@ -327,6 +371,8 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
   .plan-context-row:has(.plan-context-chip:nth-child(2)) .plan-context-mode { padding: 0 6px; }
 }
 .plan-context-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.plan-context-offer-action { font: inherit; cursor: pointer; }
+.plan-context-offer-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: 2px; }
 /* Drafting: the box takes the accent, so Send is plainly not an ordinary message. */
 .composer.plan-drafting { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 .composer.plan-drafting .plan-context-mode[aria-pressed=true] { color: var(--accent); }
@@ -475,8 +521,11 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 .board-card-progress-text { color: var(--text); font-weight: 600; }
 .board-card-bar { flex: none; width: 100%; height: 5px; }
 /* Who does it: the right of the top row. */
-.board-card-top > .board-card-agent { display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; margin-left: auto; font-size: 11px; color: var(--muted); }
-.board-card-top > .board-card-agent > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Its name shows whole or not at all, never cut to "S…": when the row is too narrow, the name wraps onto a second line
+   the chip's fixed height hides, leaving the icon. The tooltip and screen readers still have the name. */
+.board-card-top > .board-card-agent { display: inline-flex; flex-wrap: wrap; align-items: center; align-content: flex-start; column-gap: 4px; flex: 0 1 auto; min-width: 12px; height: 18px; overflow: hidden; margin-left: auto; font-size: 11px; line-height: 18px; color: var(--muted); }
+.board-card-top > .board-card-agent > :first-child { flex: none; width: 12px; height: 12px; margin-block: 3px; }
+.board-card-top > .board-card-agent > span:last-child { white-space: nowrap; }
 /* Status, role and agent share one row: the role is a quiet chip the height of the status pill, and the agent gives way first. */
 .board-card-top { flex-wrap: nowrap; }
 .board-card-top > .orchestration-step-role { height: 18px; padding: 0 6px; font-size: 10.5px; text-transform: none; letter-spacing: 0; border-radius: 9px; }

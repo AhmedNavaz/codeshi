@@ -147,6 +147,50 @@ test('background and foreground reviews share workspace concurrency slots with b
   f.scenario({}); api.broker.start(api.c, { text: 'New independent task', provider: 'codex', requestId: 'new' }); await api.broker.running.done;
 });
 
+test('a task reviews only its own folder, saves the review with the task and counts as one more agent at once', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), app = await f.launch(), project = app.registry.list()[0];
+  // A second repository in the workspace, with a change of its own that the task's review must not reach.
+  const other = path.join(f.root, 'other'); fs.mkdirSync(other);
+  const run = (...args) => assert.equal(spawnSync(gitExecutable(), args, { cwd: other, encoding: 'utf8' }).status, 0);
+  run('init', '-q'); run('config', 'user.name', 'Fixture'); run('config', 'user.email', 'fixture@example.invalid');
+  fs.writeFileSync(path.join(other, 'b.js'), 'export const b = 1;\n'); run('add', '.'); run('commit', '-qm', 'Initial'); fs.writeFileSync(path.join(other, 'b.js'), 'export const b = 2;\n');
+  app.registry.addFolder(project.id, other);
+  const folders = app.registry.get(project.id).folders, mine = folders.find(item => item.path === fs.realpathSync(f.workspace)) || folders[0], theirs = folders.find(item => item !== mine);
+  const broker = app.registry.broker(project.id), home = broker.get(app.registry.mainConversation(project.id).id);
+  const call = async (route, input, task) => { const response = await fetch(`http://127.0.0.1:${app.server.address().port}/api/reviews${route}?projectId=${project.id}${task ? `&task=${task}` : ''}`, { method: input === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', 'X-AI-Relay': '1' }, ...(input === undefined ? {} : { body: JSON.stringify(input) }) }); return { status: response.status, body: await response.json() }; };
+  f.scenario({ output: 'Changed the value.' });
+  const task = broker.tasks.start(home, { text: 'Change the value in the task', folderId: mine.id, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'task-build' });
+  for (let i = 0; i < 1500 && broker.tasks.find(home, task.id).status !== 'complete'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(broker.tasks.find(home, task.id).status, 'complete');
+  const lane = broker.tasks.lanes.get(task.id);
+  // The task's review lists only its folder and starts from what the task was asked to do.
+  const listed = await call('', undefined, task.id);
+  assert.equal(listed.status, 200); assert.deepEqual(listed.body.repositories.map(repo => repo.folderId), [mine.id]);
+  assert.equal(listed.body.goal, 'Change the value in the task'); assert.equal(listed.body.task.id, task.id); assert.equal(listed.body.task.mode, 'direct');
+  assert.equal((await call('/preview', { files: [{ folderId: theirs.id, path: 'b.js' }] }, task.id)).status, 409, 'Another folder is out of the task’s reach.');
+  assert.equal((await call('/automatic/preview', {}, task.id)).status, 409);
+  assert.equal((await call('', undefined, '00000000-0000-4000-8000-000000000000')).status, 404);
+  f.scenario({ hang: true });
+  const files = [{ folderId: mine.id, path: 'app.js' }], snapshot = (await call('/preview', { files }, task.id)).body.snapshot;
+  const input = { files, goal: 'Review the task', approvedDigest: snapshot.digest, requestId: 'task-review', background: true };
+  assert.equal((await call('/start', { ...input, requestId: 'task-foreground', background: false }, task.id)).status, 400, 'A task’s review always reads a copy.');
+  // With one agent allowed at once, a task's review waits its turn like any other.
+  broker.budget.setPolicy(home, { maxConcurrent: 1 });
+  broker.start(home, { text: 'Hold the workspace', provider: 'codex', requestId: 'main-hold' });
+  assert.equal((await call('/start', input, task.id)).status, 409);
+  await broker.running.done;
+  const started = await call('/start', input, task.id);
+  assert.equal(started.status, 202);
+  assert.equal(lane.c.reviews[0].id, started.body.reviewId); assert.equal(lane.c.reviews[0].status, 'running');
+  assert(!home.reviews.some(review => review.id === started.body.reviewId), 'The review is saved with the task, not the workspace chat.');
+  assert.equal(broker.tasks.activeWorkers, 1);
+  assert.throws(() => broker.start(home, { text: 'Another', provider: 'codex', requestId: 'blocked' }), /already running/);
+  assert.equal((await call(`/${started.body.reviewId}`)).status, 404, 'The workspace chat doesn’t answer for the task’s review.');
+  const job = lane.broker.backgroundReview;
+  assert.equal((await call(`/${started.body.reviewId}/stop`, {}, task.id)).status, 200); await job.done;
+  assert.equal(lane.c.reviews[0].status, 'interrupted'); assert.equal(broker.tasks.activeWorkers, 0);
+});
+
 for (const authMethod of ['api_key', 'unknown']) test(`a background review requires separate ${authMethod} billing consent`, { skip: scriptCLIs }, async t => {
   const f = fixture(t), app = await f.launch(), api = client(app);
   api.broker.start(api.c, { text: 'Build', provider: 'codex', requestId: 'build' }); await api.broker.running.done;

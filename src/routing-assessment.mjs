@@ -366,7 +366,15 @@ export class RoutingDispatcher {
       // assessing effort, rather than silently invalidating the review consent by switching to another builder.
       if (input.automaticReview) candidates = candidates.filter(row => row.provider === input.provider).map(row => ({ ...row, models: input.model ? row.models.filter(model => (model.id || model.model || model.value) === input.model) : [], ...(input.model ? { allowedModels: [input.model] } : {}) }));
       const evaluate = list => override && list.length ? { provider: override.provider, model: override.model, effort: override.effort, mode: routingMode, tier: assessment.tier, reason: 'Your explicit task selection', selectedBy: 'you', quota: globalThis.relayRouting.assessQuota(list[0].usage, override.model, { threshold: 95 }) } : globalThis.relayRouting.route({ text: input.text, attachments, needs: this.needs(input), assessment, mode: routingMode, candidates: list, current: c.lastRun?.provider || c.provider, allowApi, allowNear });
-      let choice = evaluate(candidates);
+      // A Plan review card (#89) first tries the agents that didn't build what it checks; when none of them can take it,
+      // it runs on the best agent anyway, and the card says it wasn't independent.
+      const avoid = Array.isArray(input.routing.avoid) ? input.routing.avoid.filter(provider => typeof provider === 'string') : [];
+      let choice = null;
+      if (avoid.length && !override && !input.automaticReview) {
+        const others = candidates.filter(row => !avoid.includes(row.provider)), tried = others.length ? evaluate(others) : null;
+        if (tried && !tried.error && confirmed(tried)) choice = tried;
+      }
+      choice ||= evaluate(candidates);
 
       // Recheck or join remaining in-flight probes before rejecting stale plan usage
       if ((choice.error || choice.quota?.state === 'stale') && this.probes.size > 0) {

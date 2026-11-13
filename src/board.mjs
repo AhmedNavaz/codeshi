@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { ARTIFACT_KINDS, SPECIALIST_ROLES, parseSuggest, planningMethod, reviewDraft, upstreamLines } from './orchestration.mjs';
+import { createHash, randomUUID } from 'node:crypto';
+import { ARTIFACT_KINDS, SPECIALIST_ROLES, parsePlan, parseSuggest, planLimits, planningMethod, reviewDraft, upstreamLines } from './orchestration.mjs';
 import { attachmentLimits } from './attachments.mjs';
 import { runSteps } from './recap.mjs';
 import { Subtasks, splitCardsRequest, parseSplitCards } from './subtasks.mjs';
+import { FINAL_REVIEW_NOTE, PlanReviews, REVIEW_ROLES, reviewHolds, verdictRequest, withFinalReview } from './plan-review.mjs';
 
 // The task board (#132, first stage): cards you write, sort and run by hand. Cards are records in the workspace chat's
 // journal, beside the tasks they start, so they live in Codeshi's data and a crash finds them as they were. Running a card
@@ -25,6 +26,20 @@ const ARTIFACT_NAME = { contract: 'Contract', schema: 'Schema', diff: 'Changes',
 const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
 const LIVE = new Set(['waiting', 'running']);
 const COLUMN_NAME = { backlog: 'Backlog', ready: 'Ready', doing: 'Doing', review: 'Review', done: 'Done' };
+export const ASK_NOTE = 'Sent from the Plan’s Ask mode, which answers questions about the Plan and its cards. Reply in plain prose, whatever earlier replies in this conversation looked like: not a draft plan, card list or JSON. A reply here can’t add, change or remove cards. If the message asks for that, say so in a sentence and suggest switching the message box to Draft cards, which drafts cards for the person to accept.';
+// One limit for Flow's Run Ready (#132): working minutes, new tokens and API spend for the whole run, each a positive
+// number or null for none. All three empty is allowed and said plainly on the Plan: the run is then bounded by its cards.
+const SHARED = ['maxWorkingMinutes', 'maxTokens', 'maxSpendUSD'];
+function sharedLimits(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('Give the run’s limit as minutes, tokens and spend.', 400);
+  const out = {};
+  for (const key of SHARED) {
+    const value = input[key] ?? null;
+    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1e9)) throw fail('The run’s limits must be positive numbers, or empty for no limit.', 400);
+    out[key] = value;
+  }
+  return out;
+}
 const text = (value, limit, name, required = false) => {
   if (value === undefined || value === null) { if (required) throw fail(`Give the card a ${name}.`, 400); return ''; }
   if (typeof value !== 'string') throw fail(`The card’s ${name} must be text.`, 400);
@@ -68,9 +83,10 @@ export class Board {
     this.suggestCleanups = new Set();
     this.closing = false;
     this.subtasks = new Subtasks(this);
+    this.reviews = new PlanReviews(this);
     // The coordinator tells the board each time a task's record changes; the card follows its task from there.
     main.tasks.onTask = (c, task) => this.follow(c, task);
-    for (const c of main.conversations.values()) { this.reconcile(c); this.adopt(c); }
+    for (const c of main.conversations.values()) { this.reconcile(c); this.adopt(c); this.reviews.restore(c); }
   }
   cards(c) { return c.board || []; }
   find(c, id) { const card = this.cards(c).find(item => item.id === id); if (!card) throw fail('That card is no longer on the board.', 404); return card; }
@@ -276,17 +292,22 @@ export class Board {
   // The Plan, or some of its cards, as text for an agent: what each card says, where it stands and what it waits for, with
   // only your own comments. Closed cards aren't in it or named by the cards that wait for them. Task ids, places on the
   // canvas and run history are left out.
-  agentText(c, chosen, { whole = false, focus = null } = {}) {
+  agentText(c, chosen, { whole = false, focus = null, ask = false, ids = false } = {}) {
     const open = new Set(this.open(c).map(card => card.id)), all = this.list(c);
     const shown = all.filter(card => open.has(card.id) && (whole || chosen.includes(card.id)));
     const name = id => all.find(item => item.id === id)?.title.replace(/\s+/g, ' ');
-    const lines = whole ? ['# Plan', '', `This workspace’s Plan in Codeshi: ${shown.length} ${shown.length === 1 ? 'card' : 'cards'}. It is the person’s plan of the work, for reference. Do only what the message asks.`, ''] : [];
+    const lines = whole ? ['# Plan', '', `This workspace’s Plan in Codeshi: ${shown.length} ${shown.length === 1 ? 'card' : 'cards'}. It is the person’s plan of the work, for reference. Do only what the message asks.${ids ? ' Each card’s Id is how a plan refers to it.' : ''}`, ''] : [];
+    // Sent from the Plan's Ask mode (#162), which answers questions and adds nothing. Draft cards is the mode that adds
+    // cards, so a request for them is pointed there rather than answered with a draft the Plan can't take from a reply.
+    if (ask) lines.splice(whole ? lines.length : 0, 0, ASK_NOTE, '');
     // Asked from the Plan with a card open (#162): "this card" in the message means that one.
     const focused = whole && focus ? shown.find(card => card.id === focus) : null;
     if (focused) lines.push(`The person has the card “${focused.title.replace(/\s+/g, ' ')}” open beside the Plan, so “this card” in the message means it.`, '');
     for (const card of shown) {
       lines.push(`${whole ? '## ' : '# Card: '}${card.title.replace(/\s+/g, ' ')}`, '');
-      const facts = [`Status: ${card.draft ? 'Draft, not accepted yet' : COLUMN_NAME[card.column]}`];
+      const facts = [`Status: ${card.draft?.remove ? 'Draft: proposed for removal, not accepted yet' : card.draft?.was ? 'Draft: changes proposed, not accepted yet' : card.draft ? 'Draft, not accepted yet' : COLUMN_NAME[card.column]}`];
+      // Drafting (#162): the Id a plan uses to change, merge or remove this card, or to wait for it.
+      if (ids) facts.unshift(`Id: ${this.refOf(c, card.id)}`);
       if (card.group) facts.push(`Group: ${card.group}`);
       if (card.role && card.role !== 'builder') facts.push(`Role: ${card.role}`);
       if (card.labels?.length) facts.push(`Labels: ${card.labels.join(', ')}`);
@@ -313,24 +334,26 @@ export class Board {
   // its size and you can open exactly what will be sent. The attachment remembers its cards, so closing any of them, or
   // the Plan, later keeps it out of every prompt from then on.
   // From the chat in the Plan view (#162), focus names the card open beside the Plan at the top of the whole Plan's text.
-  attach(c, { cardId = null, focus = null } = {}) {
+  // Drafting (draft) gives each card the Id the planner refers to it by.
+  attach(c, { cardId = null, focus = null, ask = false, draft = false } = {}) {
+    ask = ask === true; draft = draft === true && !ask && !cardId;
     if (c.planClosed) throw fail('This Plan is closed to agents. Open it to agents to attach it.');
     let made;
     if (cardId) {
       const card = this.find(c, cardId);
       if (card.closed) throw fail(`“${card.title}” is closed to agents. Open it to agents to attach it.`);
-      made = this.agentText(c, [card.id]);
+      made = this.agentText(c, [card.id], { ask });
     } else {
       if (!this.cards(c).length) throw fail('The Plan has no cards to attach yet.');
       if (focus) { const card = this.find(c, focus); if (card.closed) throw fail(`“${card.title}” is closed to agents.`); }
-      made = this.agentText(c, [], { whole: true, focus });
+      made = this.agentText(c, [], { whole: true, focus, ask, ids: draft });
       if (!made.cards.length) throw fail('Every card on the Plan is closed to agents, so there is nothing to attach.');
     }
     const bytes = Buffer.byteLength(made.text), most = attachmentLimits.textBytes;
     if (bytes > most) throw fail(`${cardId ? 'This card’s' : 'The Plan’s'} text is ${Math.ceil(bytes / 1024)} KB, more than the ${most / 1024} KB an attachment can hold.${cardId ? ' Shorten its description or comments.' : ' Attach single cards instead.'}`, 413);
     const card = cardId ? this.find(c, cardId) : null;
     const name = card ? `Card – ${card.title.replace(/[\x00-\x1f\x7f/\\]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)}.md` : 'Plan.md';
-    const meta = this.main.attachments.put({ name, data: Buffer.from(made.text).toString('base64') }, { plan: { conversationId: c.id, cards: made.cards, whole: !card } });
+    const meta = this.main.attachments.put({ name, data: Buffer.from(made.text).toString('base64') }, { plan: { conversationId: c.id, cards: made.cards, whole: !card, ...(draft ? { ids: true } : {}) } });
     return { attachment: meta, cards: made.cards.length, leftOut: made.leftOut };
   }
   // Why a Plan attachment must stay out of a prompt now, or null when it can go. Asked each time a prompt is put together,
@@ -348,32 +371,153 @@ export class Board {
   // A draft can be edited like any card but can't run, be scheduled or move to Ready until you accept it. The plan checks
   // (reviewDraft) are written on the cards they're about. Every card is checked before any is recorded, so a plan that
   // doesn't fit adds nothing.
+  // Drafted with the Plan attached, a plan can also change the cards already on it: a step with card changes that card,
+  // merges folds others into a card, and remove takes cards away. Those are drafts too, on the cards themselves: a changed
+  // card shows its new version and keeps the old one (draft.was), and a card to remove or merge is marked so. Accepting
+  // keeps the change; discarding puts the card back as it was. Only cards in Backlog or Ready change; any other change the
+  // plan asks for is left out and said so on the draft.
   draft(c, plan, { by = null } = {}) {
-    const replaced = plan.replaces ? this.cards(c).filter(card => card.draft?.batch?.id === plan.replaces).length : 0;
-    const steps = plan.steps || [], room = LIMITS.cards - this.cards(c).length + replaced;
-    if (steps.length > room) throw fail(`This plan has ${steps.length} cards, and the Plan has room for ${Math.max(0, room)} more. Remove some finished cards, then plan again.`);
-    const ids = new Map(steps.map(step => [step.id, randomUUID()])), notes = reviewDraft(steps), now = new Date().toISOString();
+    const all = this.cards(c), now = new Date().toISOString();
+    // A new plan that changes code in several cards ends with a review of the whole result (#89).
+    const { steps, added: finalReview } = withFinalReview(plan.steps || [], { editing: Boolean(plan.remove?.length) });
+    // A redraft from your answers to the planner's questions replaces the draft it answered. Its cards the new plan
+    // changes stay; the rest are discarded, so a new card goes and a changed one goes back to how it was.
+    const replaced = new Set(plan.replaces ? all.filter(card => card.draft?.batch?.id === plan.replaces).map(card => card.id) : []);
+    const named = new Set(steps.map(step => step.card).filter(Boolean).map(ref => this.resolveRef(c, ref)?.id).filter(Boolean));
+    const gone = new Set([...replaced].filter(id => !named.has(id) && !this.find(c, id).draft.was));
+    const resolve = ref => { const card = this.resolveRef(c, ref); return card && !gone.has(card.id) ? card : null; };
+    const changeable = card => ['backlog', 'ready'].includes(card.column) && !this.closed(c, card);
+    const where = card => this.closed(c, card) ? 'is closed to agents' : { doing: 'is running', review: 'is waiting for your review', done: 'is done' }[card.column] || `is in ${COLUMN_NAME[card.column]}`;
+    const left = [], skip = (card, ref, what) => left.push(card ? `“${card.title}” ${where(card)}, so it wasn’t ${what}.` : `The plan named a card that isn’t on the Plan (${ref}), so it wasn’t ${what}.`);
+    // Which card each step is: a card it changes, or a new one.
+    const stepCard = new Map(), fresh = [], changes = [], taken = new Set();
+    for (const step of steps) {
+      if (!step.card) { const id = randomUUID(); stepCard.set(step.id, id); fresh.push({ id, step }); continue; }
+      const card = resolve(step.card);
+      if (card) stepCard.set(step.id, card.id);
+      if (!card || !changeable(card) || taken.has(card.id)) { if (!taken.has(card?.id)) skip(card, step.card, 'changed'); continue; }
+      taken.add(card.id); changes.push({ card, step });
+    }
+    const into = new Map(), removals = [];
+    for (const step of steps) for (const ref of step.merges || []) {
+      const target = stepCard.get(step.id), card = resolve(ref);
+      if (!target || card?.id === target || (card && taken.has(card.id))) continue;
+      if (!card || !changeable(card)) { skip(card, ref, 'merged'); continue; }
+      taken.add(card.id); into.set(card.id, target); removals.push(card);
+    }
+    for (const ref of plan.remove || []) {
+      const card = resolve(ref);
+      if (card && taken.has(card.id)) continue;
+      if (!card || !changeable(card)) { skip(card, ref, 'removed'); continue; }
+      taken.add(card.id); removals.push(card);
+    }
+    if (!fresh.length && !changes.length && !removals.length) throw fail(left.length ? `None of this plan could be applied. ${left.join(' ')}` : 'This plan has no cards.');
+    const room = LIMITS.cards - all.length + gone.size;
+    if (fresh.length > room) throw fail(`This plan has ${fresh.length} new ${fresh.length === 1 ? 'card' : 'cards'}, and the Plan has room for ${Math.max(0, room)} more. Remove some finished cards, then plan again.`);
+    // What each card waits for: earlier steps by number, cards on the Plan by Id. A card merged away is waited for through
+    // the card it merges into, as it will be once accepted.
+    const needs = step => [...new Set((step.dependsOn || []).map(value => value.startsWith('@') ? resolve(value.slice(1))?.id : stepCard.get(value)).filter(Boolean).map(id => into.get(id) || id))].filter(id => id !== stepCard.get(step.id)).slice(0, LIMITS.dependsOn);
+    // The Plan as it would be with every part accepted, which mustn't make cards wait for each other in a circle.
+    const graph = new Map(all.filter(card => !gone.has(card.id)).map(card => [card.id, card.dependsOn || []]));
+    for (const { id, step } of fresh) graph.set(id, needs(step));
+    for (const { card, step } of changes) if (step.dependsOn) graph.set(card.id, needs(step));
+    for (const [id, list] of graph) graph.set(id, [...new Set(list.map(other => into.get(other) || other))].filter(other => other !== id && graph.has(other)));
+    for (const id of into.keys()) graph.delete(id);
+    const state = new Map(), circle = id => { if (state.get(id) === 1) return true; if (state.get(id) === 2) return false; state.set(id, 1); const found = (graph.get(id) || []).some(circle); state.set(id, 2); return found; };
+    if ([...graph.keys()].some(circle)) throw fail('This plan makes cards wait for each other in a circle, so none of it was added. Try again, or change the cards yourself.');
+    // The plan checks, on each card as it would be.
+    const merged = (card, step) => ({ ...step, title: step.title ?? card.title, instructions: step.instructions ?? card.notes ?? '', done: step.done ?? (card.checks || []).map(item => item.text), files: step.files ?? card.files ?? [], role: step.role ?? card.role, artifact: 'artifact' in step ? step.artifact : card.artifact, check: 'check' in step ? step.check : card.check, dependsOn: step.dependsOn || [] });
+    const changed = new Map(changes.map(({ card, step }) => [step.id, merged(card, step)]));
+    const notes = reviewDraft(steps.filter(step => !step.card || changed.has(step.id)).map(step => changed.get(step.id) || step));
+    if (finalReview) notes[finalReview] = [FINAL_REVIEW_NOTE, ...(notes[finalReview] || [])];
     const documents = (plan.documents || []).slice(0, 20).map(name => String(name).slice(0, 200));
-    const batch = { id: plan.id, summary: plan.summary || '', ...(plan.questions?.length ? { questions: plan.questions } : {}), ...(documents.length ? { documents } : {}) };
+    const batch = { id: plan.id, summary: plan.summary || '', ...(plan.questions?.length ? { questions: plan.questions } : {}), ...(documents.length ? { documents } : {}), ...(left.length ? { left: left.slice(0, 20) } : {}) };
     const source = { kind: 'orchestrate', planId: plan.id, goal: String(plan.goal || '').slice(0, LIMITS.goal), summary: plan.summary || '', ...(documents.length ? { documents } : {}) };
-    const made = steps.map((step, index) => {
-      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : null, labels: [], folderId: null, dependsOn: [], split: true };
+    // What a card goes back to if you discard this: as it is now, or, for a card the replaced draft had changed, as it was
+    // before that draft. A new card from the replaced draft has nothing to go back to and is removed instead.
+    const before = (card, keys) => {
+      const values = Object.fromEntries(keys.map(key => [key, structuredClone(card[key] ?? null)]));
+      if (!replaced.has(card.id)) return { fields: values, draft: card.draft || null, column: card.column, order: card.order };
+      const was = card.draft?.was;
+      return was ? { ...structuredClone(was), fields: { ...values, ...structuredClone(was.fields || {}) } } : null;
+    };
+    // 1. The replaced draft's other cards are discarded first.
+    for (const id of replaced) {
+      if (named.has(id) || taken.has(id)) continue;
+      const card = this.find(c, id), was = card.draft.was;
+      if (!was) this.remove(c, id);
+      else this.update(c, card, this.restored(c, card, was));
+    }
+    // 2. New cards.
+    let order = this.lastOrder(c, 'backlog');
+    const made = fresh.map(({ id, step }) => {
+      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : null, labels: [], folderId: null, dependsOn: [], split: !REVIEW_ROLES.includes(step.role) };
       const fields = this.clean(c, input);
-      // A drafted card is a major card (#162): a high-level piece of the plan that runs only through its subtasks. It has
+      // A drafted card is a major card (#162): a high-level piece of the plan that runs only through its subtasks. A review
+      // or QA card isn't: it is one pass that ends with a verdict (#89). Either has
       // no agent of its own, only Smart routing, which picks who splits it and is what its subtasks use unless you change
       // one of them to an agent and model of your choice.
-      return { id: ids.get(step.id), ...fields, agent: null, auto: true, dependsOn: step.dependsOn.map(id => ids.get(id)).filter(Boolean), column: 'backlog', order: this.lastOrder(c, 'backlog') + 1 + index, revision: 1, createdBy: 'agent', createdAt: now, updatedAt: now, attempts: [], source, draft: { by, at: now, batch, notes: notes[step.id] || [] } };
+      return { id, ...fields, agent: null, auto: true, dependsOn: needs(step), column: 'backlog', order: ++order, revision: 1, createdBy: step.id === finalReview ? 'codeshi' : 'agent', createdAt: now, updatedAt: now, attempts: [], source, draft: { by, at: now, batch, notes: notes[step.id] || [] } };
     });
     for (const card of made) this.main.record(c, { type: 'board_card', card });
-    // A redraft from your answers to the planner's questions replaces the draft it answered, once it has arrived. Cards of
-    // that draft you already accepted stay.
-    if (plan.replaces) for (const old of this.cards(c).filter(card => card.draft?.batch?.id === plan.replaces)) this.remove(c, old.id);
-    return made.map(card => card.id);
+    // 3. Changed cards show their new version as a draft, in Backlog, until you accept or discard it.
+    const touched = [];
+    for (const { card, step } of changes) {
+      const input = {};
+      if ('title' in step) input.title = step.title;
+      if ('instructions' in step) input.notes = step.instructions;
+      if ('done' in step) input.checks = step.done.map(item => ({ text: item.slice(0, LIMITS.check), done: (card.checks || []).some(old => old.text === item && old.done) }));
+      if ('files' in step) input.files = step.files.slice(0, LIMITS.files);
+      if ('tier' in step) input.tier = step.tier;
+      if ('phase' in step) input.group = step.phase ? step.phase.slice(0, LIMITS.group) : null;
+      if ('role' in step) input.role = step.role;
+      if ('artifact' in step) input.artifact = step.artifact;
+      if ('check' in step) input.check = step.check;
+      const fields = this.clean(c, input, card);
+      if (step.dependsOn) fields.dependsOn = needs(step);
+      const keys = Object.keys(fields).filter(key => JSON.stringify(fields[key] ?? null) !== JSON.stringify(card[key] ?? null));
+      const was = before(card, keys);
+      // A card from the replaced draft that this plan keeps as it is still moves to this draft.
+      if (!keys.length && !replaced.has(card.id)) continue;
+      const write = Object.fromEntries(keys.map(key => [key, fields[key]]));
+      // A card in another phase is laid out again on the canvas, among its new phase's cards.
+      if (keys.includes('group') && card.at) { write.at = null; if (was) was.at = card.at; }
+      this.update(c, card, { ...write, column: 'backlog', order: card.column === 'backlog' ? card.order : ++order, revision: card.revision + 1, draft: { by, at: now, batch, notes: notes[step.id] || [], changed: [...new Set([...(replaced.has(card.id) ? card.draft.changed || [] : []), ...keys])], was } });
+      touched.push(card.id);
+    }
+    // 4. Cards to remove, or to merge into another.
+    for (const card of removals) {
+      const was = before(card, []), restore = replaced.has(card.id) && was ? was.fields : {};
+      this.update(c, card, { ...restore, column: 'backlog', order: card.column === 'backlog' ? card.order : ++order, draft: { by, at: now, batch, notes: [], remove: true, ...(into.has(card.id) ? { into: into.get(card.id) } : {}), was } });
+      touched.push(card.id);
+    }
+    return [...made.map(card => card.id), ...touched];
+  }
+  // A card's short Id in the Plan an agent drafts from: the start of its id, long enough to name only it.
+  refOf(c, id) {
+    const ids = this.cards(c).map(card => card.id);
+    for (let length = 8; length < id.length; length++) { const ref = id.slice(0, length); if (/^[A-Za-z0-9][\w-]{3,39}$/.test(ref) && ids.filter(other => other.startsWith(ref)).length === 1) return ref; }
+    return id;
+  }
+  resolveRef(c, ref) {
+    if (typeof ref !== 'string' || !ref) return null;
+    const exact = this.cards(c).find(card => card.id === ref);
+    if (exact) return exact;
+    const matches = this.cards(c).filter(card => card.id.startsWith(ref));
+    return matches.length === 1 ? matches[0] : null;
+  }
+  // What a discarded change writes back: the card's earlier fields, column and place, and the draft it was before, if any.
+  restored(c, card, was) {
+    const fields = { ...structuredClone(was.fields || {}) };
+    if (Array.isArray(fields.dependsOn)) fields.dependsOn = fields.dependsOn.filter(id => id !== card.id && this.cards(c).some(other => other.id === id));
+    if (fields.dependsOn && this.reaches(c, fields.dependsOn, card.id)) delete fields.dependsOn;
+    const column = ['backlog', 'ready'].includes(was.column) ? was.column : 'backlog';
+    return { ...fields, ...('at' in was ? { at: was.at } : {}), draft: was.draft || null, column, order: column === card.column ? card.order : was.order ?? this.lastOrder(c, column) + 1, revision: card.revision + 1 };
   }
   // A plan the planner just returned, or a draft plan saved before the Plan held them, moves onto the Plan as draft cards.
   // One that doesn't fit stays a plan that says why, so nothing is lost.
   adopt(c, id = null) {
-    for (const plan of (c.orchestrations || []).filter(item => (id ? item.id === id : true) && item.status === 'draft' && item.steps?.length)) {
+    for (const plan of (c.orchestrations || []).filter(item => (id ? item.id === id : true) && item.status === 'draft' && (item.steps?.length || item.remove?.length))) {
       try {
         const cards = this.draft(c, plan, { by: plan.planner ? { kind: 'agent', provider: plan.planner.provider, model: plan.planner.model || null } : { kind: 'you' } });
         this.main.record(c, { type: 'orchestration_moved', id: plan.id, cards });
@@ -381,6 +525,28 @@ export class Board {
         this.main.record(c, { type: 'orchestration_result', id: plan.id, result: { status: 'failed', summary: error.message, steps: [] } });
       }
     }
+  }
+  // A draft that came back as an ordinary chat reply (#162), such as an Ask message answered with the JSON a Draft cards
+  // run returns. Nothing reads a reply as a plan by itself. Asked from the reply, this reads it with the planner's strict
+  // rules and puts its cards on the Plan as drafts, to accept or discard like any draft. The plan's id comes from the
+  // reply, so the same reply can't add its cards twice while they're on the Plan.
+  fromReply(c, { messageId } = {}) {
+    const message = typeof messageId === 'string' ? c.messages.find(item => item.id === messageId) : null;
+    if (!message || message.role !== 'assistant' || message.orchestrationId || message.rewound) throw fail('Choose a reply from this chat.', 404);
+    if (c.activeRun?.id && message.runId === c.activeRun.id) throw fail('Wait for the reply to finish.');
+    if ((c.orchestrations || []).some(item => item.status === 'planning')) throw fail('An agent is drafting cards now. Wait for it, or stop it, first.');
+    const hex = createHash('sha256').update(`reply:${message.id}`).digest('hex');
+    const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+    if (this.cards(c).some(card => card.source?.planId === id)) throw fail('This reply’s cards are already on the Plan.');
+    const read = parsePlan(message.text);
+    if (read.status !== 'draft') throw fail(read.summary.replace(/^The planner's reply/, 'This reply').replace(/The planner's plan/, 'This reply’s plan'), 422);
+    const asked = c.messages.find(item => item.role === 'user' && item.runId && item.runId === message.runId);
+    const goal = String(asked?.text || 'A draft plan from a reply in the chat').slice(0, planLimits.goal);
+    this.main.record(c, { type: 'orchestration_plan', id, plan: { id, goal, source: 'reply', fromMessage: message.id, status: 'draft', summary: read.summary, steps: read.steps, ...(read.remove ? { remove: read.remove } : {}), ...(read.questions ? { questions: read.questions } : {}), review: true, revision: 0, artifacts: {}, stepOutcomes: {}, planner: { provider: message.provider || null, model: message.model || null, effort: null } } });
+    this.adopt(c, id);
+    const plan = (c.orchestrations || []).find(item => item.id === id);
+    if (plan?.status !== 'moved') throw fail(plan?.summary || 'The cards couldn’t be added to the Plan.');
+    return { cards: plan.cards.length };
   }
   saveDraftUndo(c, entry) {
     let map = this.draftUndos.get(c.id);
@@ -393,79 +559,92 @@ export class Board {
   // Whether a card has what it needs to run: an agent or Smart routing, and, for a major card, a subtask still to do.
   needsSubtasks(card) { return Boolean(card.split || card.subtasks?.length) && !(card.subtasks || []).some(item => item.status !== 'done'); }
   runnable(card) { return Boolean(card.agent || card.auto) && !this.needsSubtasks(card); }
-  // Accepting keeps the card as you left it and takes away the draft mark: one that can run goes to Ready, and a major card
-  // waits in Backlog until it has subtasks.
-  // Accepting several keeps their order. Discarding removes them, and the cards that waited for one stop waiting.
+  // Accepting keeps the card as you left it and takes away the draft mark: a new card that can run goes to Ready, a major
+  // card waits in Backlog until it has subtasks, and a changed card goes back to its column. A card marked to remove is
+  // removed, and one merged into another hands the cards that waited for it to that card.
+  // Accepting several keeps their order. Discarding removes new cards, and the cards that waited for one stop waiting; a
+  // changed card goes back to how it was, and a card marked to remove stays.
   // Both record an undo snapshot so an accidental accept or discard can be reversed before the cards start running.
   drafts(c, { action, ids, undoId } = {}) {
     if (!['accept', 'discard', 'undo'].includes(action)) throw fail('Accept or discard the drafts.', 400);
-    if (action === 'undo') {
-      if (typeof undoId !== 'string' || !undoId) throw fail('Nothing left to undo.', 400);
-      const map = this.draftUndos.get(c.id), entry = map?.get(undoId);
-      if (!entry) throw fail('Nothing left to undo.', 404);
-      if (entry.kind === 'accept') {
-        for (const item of entry.cards) {
-          const card = this.find(c, item.id);
-          if (card.draft) throw fail(`“${card.title}” is already a draft.`);
-          if (!['backlog', 'ready'].includes(card.column) || card.task || card.attempts?.length) {
-            throw fail(`“${card.title}” has already run or moved, so accepting it can’t be undone.`);
-          }
-        }
-        map.delete(undoId);
-        for (const item of entry.cards) {
-          this.update(c, this.find(c, item.id), { draft: structuredClone(item.draft), column: item.column, order: item.order, acceptedDraftAt: item.acceptedDraftAt });
-        }
-        setTimeout(() => this.main.queue?.tick(c), 0);
-        return { undone: 'accept', count: entry.cards.length, ids: entry.cards.map(item => item.id) };
-      }
-      const toRestore = entry.cards.filter(item => !this.cards(c).some(existing => existing.id === item.id));
-      const room = LIMITS.cards - this.cards(c).length;
-      if (toRestore.length > room) throw fail(`Not enough room on the Plan to bring ${toRestore.length} discarded ${toRestore.length === 1 ? 'card' : 'cards'} back.`);
-      map.delete(undoId);
-      const known = new Set([...this.cards(c).map(item => item.id), ...toRestore.map(item => item.id)]);
-      const restoredIds = new Set(toRestore.map(item => item.id));
-      for (const snapshot of toRestore) {
-        const card = structuredClone(snapshot);
-        card.dependsOn = (card.dependsOn || []).filter(dep => known.has(dep));
-        this.main.record(c, { type: 'board_card', card });
-      }
-      for (const link of entry.links || []) {
-        const other = this.cards(c).find(item => item.id === link.cardId);
-        if (!other) continue;
-        const current = other.dependsOn || [];
-        const restored = link.dependsOn.filter(dep => known.has(dep) && (current.includes(dep) || restoredIds.has(dep)));
-        const merged = [...new Set([...restored, ...current])].slice(0, LIMITS.dependsOn);
-        if (merged.length !== current.length || merged.some((id, index) => id !== current[index])) {
-          if (!this.reaches(c, merged, other.id)) this.update(c, other, { dependsOn: merged });
-        }
-      }
-      setTimeout(() => this.main.queue?.tick(c), 0);
-      return { undone: 'discard', count: toRestore.length, ids: toRestore.map(item => item.id) };
-    }
+    if (action === 'undo') return this.undoDrafts(c, undoId);
     if (!Array.isArray(ids) || !ids.length) throw fail('Choose the drafts.', 400);
     const chosen = [...new Set(ids)].map(id => this.find(c, id));
     for (const card of chosen) if (!card.draft) throw fail(`“${card.title}” isn’t a draft.`);
     // Queued messages wait while a drafted plan's cards are undecided, so they look again once they are.
     setTimeout(() => this.main.queue?.tick(c), 0);
+    const chosenIds = new Set(chosen.map(card => card.id)), ordered = [...chosen].sort((a, b) => a.order - b.order);
+    // The undo snapshot: the cards as they are, and what every other card waiting for one of them waits for.
+    const links = this.cards(c).filter(other => !chosenIds.has(other.id) && (other.dependsOn || []).some(dep => chosenIds.has(dep))).map(other => ({ cardId: other.id, dependsOn: [...other.dependsOn] }));
+    const undoId$ = this.saveDraftUndo(c, { kind: action, cards: ordered.map(card => structuredClone(card)), links });
     if (action === 'discard') {
-      const chosenIds = new Set(chosen.map(card => card.id));
-      const links = this.cards(c)
-        .filter(other => !chosenIds.has(other.id) && (other.dependsOn || []).some(dep => chosenIds.has(dep)))
-        .map(other => ({ cardId: other.id, dependsOn: [...other.dependsOn] }));
-      const undoId$ = this.saveDraftUndo(c, { kind: 'discard', cards: chosen.map(card => structuredClone(card)), links });
-      for (const card of chosen) this.remove(c, card.id);
-      return { discarded: chosen.length, ids: chosen.map(card => card.id), undoId: undoId$ };
+      for (const card of ordered) {
+        if (!this.cards(c).some(item => item.id === card.id)) continue;
+        if (card.draft.was) this.update(c, card, this.restored(c, card, card.draft.was));
+        else this.remove(c, card.id);
+      }
+      return { discarded: chosen.length, ids: ordered.map(card => card.id), undoId: undoId$ };
     }
-    const ordered = [...chosen].sort((a, b) => a.order - b.order);
-    const undoId$ = this.saveDraftUndo(c, {
-      kind: 'accept',
-      cards: ordered.map(card => ({ id: card.id, draft: structuredClone(card.draft), column: card.column, order: card.order, acceptedDraftAt: card.acceptedDraftAt ?? null })),
-    });
-    for (const card of ordered) {
-      const ready = this.runnable(card);
-      this.update(c, card, { draft: null, ...(ready ? { column: 'ready', order: this.lastOrder(c, 'ready') + 1 } : {}), acceptedDraftAt: new Date().toISOString() });
+    const at = new Date().toISOString(), removing = ordered.filter(item => item.draft.remove);
+    for (const card of ordered.filter(item => !item.draft.remove)) {
+      const was = card.draft.was, back = was && !was.draft ? was.column : null;
+      const column = back === 'backlog' || !this.runnable(card) ? 'backlog' : 'ready';
+      this.update(c, card, { draft: null, column, order: column === card.column ? card.order : back === column && was.order != null ? was.order : this.lastOrder(c, column) + 1, acceptedDraftAt: at });
+    }
+    for (const card of removing) {
+      const target = card.draft.into ? this.cards(c).find(item => item.id === card.draft.into) : null;
+      if (target) for (const other of this.cards(c).filter(item => item.id !== target.id && item.dependsOn?.includes(card.id))) {
+        const next = [...new Set(other.dependsOn.map(id => id === card.id ? target.id : id))];
+        if (!other.dependsOn.includes(target.id) && this.reaches(c, [target.id], other.id)) continue;
+        this.update(c, other, { dependsOn: next });
+      }
+      this.remove(c, card.id);
     }
     return { accepted: chosen.length, ids: ordered.map(card => card.id), undoId: undoId$ };
+  }
+  // Undo puts the chosen cards back as they were before the accept or discard, cards it removed included, and what the
+  // cards around them waited for. It stops once a card has started.
+  undoDrafts(c, undoId) {
+    if (typeof undoId !== 'string' || !undoId) throw fail('Nothing left to undo.', 400);
+    const map = this.draftUndos.get(c.id), entry = map?.get(undoId);
+    if (!entry) throw fail('Nothing left to undo.', 404);
+    const present = id => this.cards(c).find(item => item.id === id);
+    for (const item of entry.cards) {
+      const card = present(item.id);
+      if (!card) continue;
+      if (card.draft) throw fail(`“${card.title}” is already a draft.`);
+      if (!['backlog', 'ready'].includes(card.column) || (card.task && card.task !== item.task) || (card.attempts?.length || 0) > (item.attempts?.length || 0)) throw fail(`“${card.title}” has already run or moved, so ${entry.kind === 'accept' ? 'accepting' : 'discarding'} it can’t be undone.`);
+    }
+    const missing = entry.cards.filter(item => !present(item.id)), room = LIMITS.cards - this.cards(c).length;
+    if (missing.length > room) throw fail(`Not enough room on the Plan to bring ${missing.length} ${missing.length === 1 ? 'card' : 'cards'} back.`);
+    map.delete(undoId);
+    const known = new Set([...this.cards(c).map(item => item.id), ...missing.map(item => item.id)]), back = new Set(missing.map(item => item.id));
+    for (const snapshot of missing) {
+      const card = structuredClone(snapshot);
+      card.dependsOn = (card.dependsOn || []).filter(dep => known.has(dep));
+      this.main.record(c, { type: 'board_card', card });
+    }
+    // A card still on the Plan gets back its draft and place; one a discard put back as it was gets its drafted version.
+    const keys = entry.kind === 'accept' ? ['draft', 'column', 'order', 'acceptedDraftAt'] : ['title', 'notes', 'checks', 'group', 'role', 'artifact', 'check', 'files', 'tier', 'dependsOn', 'draft', 'column', 'order', 'at', 'revision'];
+    for (const snapshot of entry.cards) {
+      const card = present(snapshot.id);
+      if (!card || back.has(snapshot.id)) continue;
+      const changes = Object.fromEntries(keys.filter(key => JSON.stringify(card[key] ?? null) !== JSON.stringify(snapshot[key] ?? null)).map(key => [key, structuredClone(snapshot[key] ?? null)]));
+      if (changes.dependsOn) { changes.dependsOn = changes.dependsOn.filter(dep => known.has(dep)); if (this.reaches(c, changes.dependsOn, card.id)) delete changes.dependsOn; }
+      if (Object.keys(changes).length) this.update(c, card, changes);
+    }
+    for (const link of entry.links || []) {
+      const other = present(link.cardId);
+      if (!other) continue;
+      const current = other.dependsOn || [];
+      const restored = link.dependsOn.filter(dep => known.has(dep) && (current.includes(dep) || back.has(dep) || entry.cards.some(item => item.id === dep)));
+      const merged = [...new Set([...restored, ...current.filter(dep => !entry.cards.some(item => item.draft?.into === dep) || link.dependsOn.includes(dep))])].slice(0, LIMITS.dependsOn);
+      if (merged.length !== current.length || merged.some((id, index) => id !== current[index])) {
+        if (!this.reaches(c, merged, other.id)) this.update(c, other, { dependsOn: merged });
+      }
+    }
+    setTimeout(() => this.main.queue?.tick(c), 0);
+    return { undone: entry.kind, count: entry.cards.length, ids: entry.cards.map(item => item.id) };
   }
 
   // ---- Suggest next (#162)
@@ -731,6 +910,7 @@ export class Board {
   }
   async close() {
     this.closing = true;
+    this.reviews.close();
     const jobs = [...this.suggestJobs.values()];
     for (const job of jobs) job.stopping = true;
     await Promise.all(jobs.map(job => job.worker.close()));
@@ -799,24 +979,34 @@ export class Board {
   // billingConfirmed (#108) is your yes, asked on the Plan before any card whose agent bills by use, or whose billing can't be
   // confirmed. Without it such a card's task stops when it starts, as any run does, so nothing is charged unasked. A schedule
   // never sends it, as no one is there to ask.
-  run(c, { ids, executionRevision, assignments = null, billingConfirmed = false } = {}, { access = null, requestId = null, from = ['ready'], note = '', source = 'board', parent = null } = {}) {
+  // Flow's Run Ready (#132): with routing on, a card you ticked that has no agent of its own runs on Auto for this run, chosen
+  // when it starts as an Auto card's is; the card itself stays as you left it. A card with an agent you chose keeps it.
+  // shared, when given, is one limit on working minutes, new tokens and API spend for every card in the run together,
+  // in place of the workspace's per-task ones: a card's task stops when the run has used it up, and a card that hasn't
+  // started by then doesn't start. Only Flow takes it, and never with a parent, whose limits a split's parts already share.
+  run(c, { ids, executionRevision, assignments = null, billingConfirmed = false, shared = undefined } = {}, { access = null, requestId = null, from = ['ready'], note = '', source = 'board', parent = null } = {}) {
     if (!Array.isArray(ids) || !ids.length) throw fail('Choose the cards to run.', 400);
     if (typeof billingConfirmed !== 'boolean') throw fail('Confirm billing explicitly.', 400);
-    const chosen = [...new Set(ids)].map(id => this.find(c, id)), picked = new Set(chosen.map(card => card.id));
+    // In the order they sit in Ready, which is their priority, then cards they wait for first.
+    const chosen = [...new Set(ids)].map(id => this.find(c, id)).sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order), picked = new Set(chosen.map(card => card.id));
     const folders = this.folders(), mode = access?.mode || c.mode, approvalPolicy = access?.approvalPolicy || c.approvalPolicy || 'ask';
     const defaults = this.main.execution.defaults(c), routed = Boolean(c.routing) && defaults.automation?.routing === true, who = new Map();
+    const flowRun = routed && source === 'board' && !parent, limits = shared === undefined ? null : sharedLimits(shared);
+    if (limits && !flowRun) throw fail('One limit for the whole run is for Flow’s Run Ready. Turn Flow on to use it.', 400);
     for (const card of chosen) {
       const name = `“${card.title}”`;
       if (card.draft) throw fail(`An agent drafted ${name}. Accept it before running it.`);
       if (this.closed(c, card)) throw fail(c.planClosed ? 'This Plan is closed to agents. Open it to agents to run its cards.' : `${name} is closed to agents. Open it to agents to run it.`);
       if (!from.includes(card.column)) throw fail(card.column === 'doing' ? `${name} is still running.` : card.column === 'review' ? `${name} is waiting in Review.` : `${name} isn’t in Ready. Move it there to run it.`);
       if (this.needsSubtasks(card)) throw fail(card.subtasks?.length ? `Every subtask of ${name} is done. Add a subtask for what should change, or split it again.` : `${name} needs subtasks before it can run. Split it with an agent, or add them yourself.`);
+      // A card with no agent runs on Auto in Flow's Run Ready, for this run only.
+      const auto = card.auto === true || (flowRun && !card.agent);
       // Smart routing (#162) is chosen on the card, or on one of its subtasks, so it routes as Flow does even in Normal.
-      const smart = card.auto === true || (card.subtasks || []).some(item => item.auto === true && item.status !== 'done');
+      const smart = auto || (card.subtasks || []).some(item => item.auto === true && item.status !== 'done');
       // Its mode is the card's own when you chose one there, otherwise the workspace's.
       const routing = smart ? { mode: card.routingMode || defaults.routingMode || 'smart', planned: card.tier || null, ...(c.routing?.allowApi === true ? { allowApi: true } : {}) } : null;
       let pick = card.agent ? { provider: card.agent.provider, model: card.agent.model, effort: card.agent.effort, routing } : null;
-      if (!pick && card.auto) {
+      if (!pick && auto) {
         const given = assignments && typeof assignments === 'object' ? assignments[card.id] : null;
         if (!given || typeof given !== 'object' || !PROVIDERS.includes(given.provider)) throw fail(`${name} is on Auto. Run it from the Plan, which shows the agent Auto picks, or choose an agent for it.`, 400);
         const model = given.model ? text(given.model, 200, 'model') : null, effort = given.effort || null;
@@ -839,6 +1029,7 @@ export class Board {
     const order = [], placed = new Set(), visit = card => { if (placed.has(card.id)) return; placed.add(card.id); for (const id of card.dependsOn || []) if (picked.has(id)) visit(this.find(c, id)); order.push(card); };
     for (const card of chosen) visit(card);
     const tasks = {}, made = [], attempt = randomUUID().slice(0, 8);
+    const batch = limits ? { id: `run-${attempt}`, limits, cards: order.length, startedAt: new Date().toISOString() } : null;
     try {
       for (const card of order) {
         const folderId = card.folderId || folders[0].id, policyId = randomUUID(), id = requestId && chosen.length === 1 ? requestId : `board-${card.id}-${attempt}`, pick = who.get(card.id);
@@ -849,7 +1040,7 @@ export class Board {
         const own = pick.routing && !(routed && pick.routing.mode === (defaults.routingMode || 'smart'));
         this.main.execution.ensure(c, policyId, pick.routing ? (own ? { config: { mode: 'flow', routingMode: pick.routing.mode }, source, requestId: id } : { source, requestId: id }) : { config: { mode: 'normal' }, source, requestId: id });
         // The text here is the card as it is now; the task is briefed again when it starts, with what earlier cards did.
-        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision, ...(parent ? { parent } : {}) }, { held: true, queueExecution: this.main.execution.token(c, policyId), board: { cardId: card.id, revision: card.revision, ...(card.group ? { group: card.group } : {}), ...(note ? { note } : {}) } });
+        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision, ...(parent ? { parent } : {}) }, { held: true, batch, queueExecution: this.main.execution.token(c, policyId), board:{ cardId: card.id, revision: card.revision, ...(card.group ? { group: card.group } : {}), ...(note ? { note } : {}) } });
         tasks[card.id] = task.id; made.push(task.id);
       }
     } catch (error) {
@@ -858,12 +1049,12 @@ export class Board {
     }
     const now = new Date().toISOString();
     for (const card of order) {
-      const pick = who.get(card.id), attemptRecord = { taskId: tasks[card.id], revision: card.revision, provider: pick.provider, model: pick.model, effort: pick.effort, ...(card.auto ? { auto: true } : {}), startedAt: now };
+      const pick = who.get(card.id), attemptRecord = { taskId: tasks[card.id], revision: card.revision, provider: pick.provider, model: pick.model, effort: pick.effort, ...(card.auto || (!card.agent && pick.routing) ? { auto: true } : {}), ...(batch ? { run: batch.id } : {}), startedAt: now };
       this.update(c, card, { column: 'doing', task: tasks[card.id], reason: null, result: null, attempts: [...(card.attempts || []), attemptRecord].slice(-20) });
     }
     for (const id of made) this.main.tasks.update(c, this.main.tasks.find(c, id), { held: false, reason: 'Starting' });
     this.main.tasks.tick(c);
-    return { tasks, cards: this.list(c) };
+    return { tasks, cards: this.list(c), ...(batch ? { run: batch.id } : {}) };
   }
   // What the agent is told: the card as you wrote it, with what done means, its role, files, result and check, the plan it
   // came from, and, once results is given (when it starts), what each card it builds on did: its report, files and tests.
@@ -893,7 +1084,9 @@ export class Board {
       kept.unshift(line); size += line.length;
     }
     if (kept.length) parts.push('', 'The person’s comments on this card, oldest first:', ...(kept.length < said.length ? [`(${said.length - kept.length} earlier ${said.length - kept.length === 1 ? 'comment' : 'comments'} left out.)`] : []), ...kept);
-    parts.push('', 'This is a card from the project’s task board. When you finish, say in a few sentences what you changed and how you checked it. You review nothing yourself: the person accepts the card.');
+    // A Reviewer or QA card ends with a verdict the Plan reads (#89): pass, or what should change on which card.
+    if (REVIEW_ROLES.includes(card.role)) parts.push('', 'This is a card from the project’s task board. Say what you checked and how, then give your verdict.', '', verdictRequest(card.role));
+    else parts.push('', 'This is a card from the project’s task board. When you finish, say in a few sentences what you changed and how you checked it. You review nothing yourself: the person accepts the card.');
     return parts.join('\n');
   }
   // ---- One way to run (#162)
@@ -930,7 +1123,7 @@ export class Board {
   }
   proceed(c, id) {
     const card = this.find(c, id), task = this.task(c, card);
-    if (!task || card.column !== 'review') throw fail('Nothing is holding the cards after this one.');
+    if (!task || !['review', 'done'].includes(card.column)) throw fail('Nothing is holding the cards after this one.');
     this.main.tasks.continueTask(c, task);
     return this.public(c, this.find(c, id));
   }
@@ -975,6 +1168,8 @@ export class Board {
   // ---- Following tasks
   follow(c, task) {
     if (!task.board) return;
+    // A repair round moves on as its cards' tasks change (src/plan-review.mjs).
+    if ((c.parallelTasks || []).some(item => item.review?.status === 'repairing')) this.reviews.later(c);
     const card = this.cards(c).find(item => item.id === task.board.cardId);
     if (!card || card.task !== task.id || !['doing', 'review'].includes(card.column)) return;
     const next = this.placement(c, card, task);
@@ -993,7 +1188,7 @@ export class Board {
       stopped: task.subtasksEnded && task.reason ? task.reason : 'Stopped before it finished.',
       failed: task.subtasksEnded && task.reason ? clip(task.reason, 400) : `Didn’t finish${task.reason ? `: ${clip(task.reason, 300)}` : '.'}`,
       blocked: `Blocked${task.reason ? `: ${clip(task.reason, 300)}` : '.'}`,
-      cancelled: 'Cancelled before it started.',
+      cancelled: task.batchHeld && task.reason ? clip(task.reason, 400) : 'Cancelled before it started.',
       discarded: 'Its changes were discarded.',
       lost: 'Its working copy is gone.',
       detached: 'Its folder was removed from the workspace.',
@@ -1036,12 +1231,15 @@ export class Board {
   // The card's drawer reads them on their own.
   public(c, card) {
     const task = this.task(c, card), lane = task && this.main.tasks.lanes.get(task.id), { comments, ...rest } = card;
-    const check = task?.stepCheck, held = Boolean(task && task.status === 'complete' && check && (check.status === 'running' || ((check.outcome === 'failed' || check.status === 'interrupted') && !check.accepted)));
-    return { ...rest, labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null, holds: held } : {}) } } : {}) };
+    const check = task?.stepCheck, held = Boolean(task && task.status === 'complete' && ((check && (check.status === 'running' || ((check.outcome === 'failed' || check.status === 'interrupted') && !check.accepted))) || reviewHolds(task)));
+    // A review's verdict, findings and repair round (#89), and whether it ran on an agent that built what it checks.
+    const review = task?.review ? { status: task.review.status, verdict: task.review.verdict ?? null, round: task.review.round || 0, reason: task.review.reason || null, waiting: task.review.waiting || null, accepted: task.review.accepted === true, findings: (task.review.findings || []).map(item => ({ ...item, cardTitle: item.cardId ? this.cards(c).find(other => other.id === item.cardId)?.title || null : null })), repairs: task.review.repairs || [], earlier: task.review.earlier?.length || 0 } : null;
+    const reviewer = REVIEW_ROLES.includes(card.role) && task ? (lane?.c?.activeRun?.provider || task.provider) : null;
+    return { ...rest, labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review ? { holds: held } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   view(c) {
     const suggest = c.boardSuggest ? (({ pid, pidStart, ...rest }) => rest)(c.boardSuggest) : null;
-    return { cards: this.list(c), closed: c.planClosed === true, schedules: this.main.schedules?.view(c) || [], suggest, revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
+    return { cards: this.list(c), closed: c.planClosed === true, schedules: this.main.schedules?.view(c) || [], runs: this.main.tasks.runs?.(c) || [], taskLimits: (({ maxConcurrent, maxWorkingMinutes, maxTokens, maxSpendUSD }) => ({ maxConcurrent, maxWorkingMinutes, maxTokens, maxSpendUSD }))(this.main.budget.policy(c)), suggest, revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
   }
 }

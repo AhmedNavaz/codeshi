@@ -229,6 +229,8 @@ export const claudeWaits = { settleMs: 5000, backgroundMs: 125 * 60_000 };
 export async function runClaude(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, queryImpl, waits = claudeWaits } = {}) {
   if (config.routingAssessment) { if (config.mode !== 'read' || config.sessionId) throw new Error('Routing assessments require read-only access and a fresh session.'); config = { ...config, reviewSnapshot: true }; question = null; }
   const query = queryImpl || (await import('@anthropic-ai/claude-agent-sdk')).query;
+  // Not for a routing assessment or a background review, which load nothing.
+  const skills = !config.routingAssessment && !config.reviewSnapshot && config.skills?.plugin && Array.isArray(config.skills.names) && config.skills.names.length ? config.skills : null;
   const controller = new AbortController();
   const timer = setInterval(() => { if (cancelled()) controller.abort(); }, 100);
   // The prompt is streamed, so a note the person adds while Claude works joins the turn at its next step. Permission
@@ -284,13 +286,16 @@ export async function runClaude(config, { event, approval, question = null, meta
       // Current versions of Claude Code replace TodoWrite with task tools unless told otherwise, and Claude's plan comes from TodoWrite.
       env: { ...process.env, CLAUDE_CODE_ENABLE_TASKS: 'false', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' },
       additionalDirectories: [...new Set(config.workspaces || [])].filter(directory => directory !== config.workspace),
-      settingSources: [], settings: { disableAllHooks: true }, mcpServers: {}, strictMcpConfig: true, disallowedTools: ['mcp__*'],
+      settingSources: [], settings: { disableAllHooks: true, ...(skills ? { disableSkillShellExecution: true, disableBundledSkills: true, syncClaudeAiSkills: false } : {}) }, mcpServers: {}, strictMcpConfig: true, disallowedTools: ['mcp__*'],
+      // Skills you enabled, through Claude's own skill system (#86): Codeshi's private plugin, and only its skills. Shell
+      // lines in a skill are replaced rather than run, and Claude's built-in and synced skills stay off.
+      ...(skills ? { plugins: [{ type: 'local', path: skills.plugin, skipMcpDiscovery: true }], skills: skills.names } : {}),
       // Claude enforces a spending limit itself when it is billed per use; on a subscription this isn't set (#87).
       ...(typeof config.maxBudgetUsd === 'number' ? { maxBudgetUsd: config.maxBudgetUsd } : {}),
       // TodoWrite only keeps Claude's own to-do list, shown as the run's plan; it reads and changes nothing. With
       // AskUserQuestion Claude can ask you to choose between options; asking changes nothing either, so read-only runs
       // keep it, and only a background review, which nobody answers, goes without.
-      tools: config.routingAssessment ? [] : [...(config.mode === 'read' ? ['Read', 'Glob', 'Grep', 'TodoWrite'] : ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'TodoWrite']), ...(question && !config.reviewSnapshot ? ['AskUserQuestion'] : [])],
+      tools: config.routingAssessment ? [] : [...(config.mode === 'read' ? ['Read', 'Glob', 'Grep', 'TodoWrite'] : ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'TodoWrite']), ...(question && !config.reviewSnapshot ? ['AskUserQuestion'] : []), ...(skills ? ['Skill'] : [])],
       ...(config.routingAssessment ? { maxTurns: 1, persistSession: false } : {}),
       includePartialMessages: true, ...(config.effort ? { effort: config.effort } : {}), abortController: controller, ...(config.sessionId ? { resume: config.sessionId } : {}), model: config.model || 'default',
       canUseTool: async (toolName, input, options) => {
@@ -302,6 +307,9 @@ export async function runClaude(config, { event, approval, question = null, meta
     async function decide(toolName, input, options) {
       if (config.routingAssessment) return { behavior: 'deny', message: 'Routing assessment does not use tools.' };
       if (toolName === 'TodoWrite') return { behavior: 'allow', updatedInput: input };
+      // Loading a skill reads its instructions and changes nothing, so an enabled one needs no approval. Any other skill
+      // Claude knows of is refused, as are the arguments of a skill that isn't in Codeshi's list.
+      if (toolName === 'Skill') return skills?.names.includes(String(input?.skill || '').replace(/^\//, '')) ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: `Only the skills enabled in Codeshi can be used here: ${skills?.names.join(', ') || 'none'}.` };
       // The questions wait in Codeshi like an approval; the answers go back with them, and skipping tells Claude to decide.
       if (toolName === 'AskUserQuestion') {
         const questions = question && !config.reviewSnapshot ? claudeQuestions(input) : [];

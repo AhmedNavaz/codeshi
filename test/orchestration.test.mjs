@@ -232,7 +232,7 @@ test('an Orchestrate message with an attached brief is planned from it, and its 
   const cards = plan.cards.map(id => c.board.find(card => card.id === id));
   assert.deepEqual(cards[0].draft.batch.documents, ['brief.md']);
   assert.deepEqual(cards[0].source.documents, ['brief.md']);
-  assert.ok(cards.every(card => card.split === true), 'Cards planned from documents are major cards, run through their subtasks.');
+  assert.ok(cards.filter(card => card.role !== 'reviewer').every(card => card.split === true), 'Cards planned from documents are major cards, run through their subtasks.');
   // A plan from a message alone records no documents.
   f.scenario({ output: JSON.stringify(reply) });
   broker.board.drafts(api.c(), { action: 'discard', ids: plan.cards });
@@ -268,7 +268,8 @@ test('a planning run is read-only, leaves the conversation settings alone and sa
   // The plan moves onto the Plan as draft cards (#162), in its order, each waiting for what its step waited for, on Auto.
   assert.equal(plan.status, 'moved'); assert.equal(plan.source, 'agent');
   const cards = plan.cards.map(id => c.board.find(card => card.id === id));
-  assert.deepEqual(cards.map(card => [card.title, card.column, card.auto, card.agent, card.tier, Boolean(card.draft)]), [['Add the API route', 'backlog', true, null, 'standard', true], ['Show the items', 'backlog', true, null, 'light', true]]);
+  // Two cards that change code end with a review of the whole result, which Codeshi adds (#89).
+  assert.deepEqual(cards.map(card => [card.title, card.column, card.auto, card.agent, card.tier, Boolean(card.draft), card.createdBy]), [['Add the API route', 'backlog', true, null, 'standard', true, 'agent'], ['Show the items', 'backlog', true, null, 'light', true, 'agent'], ['Review the whole result', 'backlog', true, null, 'standard', true, 'codeshi']]);
   assert.deepEqual(cards[1].dependsOn, [cards[0].id]);
   assert.deepEqual(cards[0].draft.by, { kind: 'agent', provider: 'codex', model: 'gpt-6.1-sol' });
   assert.equal(cards[0].source.goal, 'Add a list of saved items.'); assert.equal(plan.goal, 'Add a list of saved items.');
@@ -286,7 +287,7 @@ test('a planning run is read-only, leaves the conversation settings alone and sa
   assert.equal(c.messages.find(message => message.runId === sent.body.runId && message.role === 'assistant').orchestrationId, plan.id);
   assert.deepEqual(api.broker().view(c).orchestrations.map(item => item.id), [plan.id]);
   await until(() => notices.length);
-  assert.deepEqual(notices.map(notice => [notice.kind, notice.title, notice.body]), [['finished', 'Plan drafted', 'Codex drafted 2 cards on the Plan. Nothing runs until you accept them.']]);
+  assert.deepEqual(notices.map(notice => [notice.kind, notice.title, notice.body]), [['finished', 'Plan drafted', 'Codex drafted 2 cards on the Plan, and Codeshi added a review of the whole result. Nothing runs until you accept them.']]);
 });
 
 test('Orchestrate plans without routing in normal mode, from the main conversation', { skip: scriptCLIs }, async t => {
