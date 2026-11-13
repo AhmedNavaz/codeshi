@@ -2,15 +2,18 @@
   'use strict';
   // From GitHub in New workspace (#159): your repositories through your gh login, then one click clones one (or opens
   // the copy already on this computer) and opens it as a workspace. The list is read when the tab opens, never in the
-  // background, and nothing is pushed.
+  // background, and nothing is pushed. When gh is signed in to more than one host (github.com and GitHub Enterprise
+  // servers), a Host picker chooses which one is listed.
   const $ = id => document.getElementById(id), api = window.relayUI, panel = $('project-panel');
   if (!api || !panel || !$('github-repos')) return;
   const el = (tag, text, cls) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (cls) node.className = cls; return node; };
   const tabs = { folders: $('project-source-folders'), github: $('project-source-github') };
   const list = $('github-repos-list'), search = $('github-repos-search'), folder = $('github-clone-folder'), status = $('github-repos-status'), error = $('github-repos-error');
+  const hostSelect = $('github-repos-host'), hostRow = $('github-repos-host-row');
   const FOLDERS_TEXT = 'Add one or more project folders. Their files stay in their current locations.';
   const GITHUB_TEXT = 'Clone one of your repositories, or open the copy already on this computer, as a new workspace.';
-  let loaded = null, loadedAt = 0, loading = null, busy = null, generation = 0;
+  let loaded = null, loadedAt = 0, loading = null, busy = null, generation = 0, host = null;
+  const onDefault = () => !loaded || loaded.host === 'github.com';
 
   function ago(value) {
     const time = Date.parse(value || '');
@@ -55,26 +58,34 @@
     if (!repos.length) list.append(el('p', query ? `No repositories match “${search.value.trim()}”.` : 'Your gh login can’t see any repositories yet.', 'github-repos-empty'));
     else list.append(...repos.slice(0, 200).map(row));
     const total = loaded.repos.length, shown = Math.min(repos.length, 200);
-    status.textContent = `${query ? `${shown} of ${total}` : total} ${total === 1 ? 'repository' : 'repositories'} · signed in to gh as ${loaded.account.login}${loaded.more ? ' · showing the 500 most recently pushed' : ''}`;
+    status.textContent = `${query ? `${shown} of ${total}` : total} ${total === 1 ? 'repository' : 'repositories'} · signed in to gh as ${loaded.account.login}${onDefault() ? '' : ` on ${loaded.host}`}${loaded.more ? ' · showing the 500 most recently pushed' : ''}`;
   }
   async function load(force = false) {
     if (loading || busy) return loading;
-    if (loaded && !force && Date.now() - loadedAt < 5 * 60 * 1000) { render(); return; }
+    if (loaded && !force && (!host || loaded.host === host) && Date.now() - loadedAt < 5 * 60 * 1000) { render(); return; }
     const run = ++generation;
-    showError(''); status.textContent = 'Reading your repositories through gh…'; list.setAttribute('aria-busy', 'true'); search.disabled = true;
-    loading = api.api('/api/github/repos').then(data => {
+    showError(''); status.textContent = `Reading your repositories${host && host !== 'github.com' ? ` on ${host}` : ''} through gh…`; list.setAttribute('aria-busy', 'true'); search.disabled = true; hostSelect.disabled = true;
+    loading = api.api(`/api/github/repos${host ? `?host=${encodeURIComponent(host)}` : ''}`).then(data => {
       if (run !== generation) return;
-      loaded = data; loadedAt = Date.now();
+      loaded = data; loadedAt = Date.now(); host = data.host || 'github.com';
+      hosts(data.hosts || []);
       if (!folder.value.trim()) folder.value = data.cloneFolder || data.suggestedFolder || '';
       search.disabled = false; render();
     }).catch(failure => {
       if (run !== generation) return;
       loaded = null; list.replaceChildren(); status.textContent = ''; showError(failure.message);
-    }).finally(() => { loading = null; list.setAttribute('aria-busy', 'false'); });
+    }).finally(() => { loading = null; list.setAttribute('aria-busy', 'false'); hostSelect.disabled = false; });
     return loading;
   }
+  // The picker shows only when gh is signed in to more than one host; github.com is listed first.
+  function hosts(rows) {
+    hostSelect.replaceChildren(...rows.map(row => { const option = el('option', row.login ? `${row.host} · ${row.login}` : row.host); option.value = row.host; return option; }));
+    hostSelect.value = host;
+    hostRow.hidden = rows.length < 2;
+    search.placeholder = onDefault() ? 'Search your repositories' : `Search your repositories on ${host}`;
+  }
   function controls(disabled) {
-    for (const node of [search, folder, $('github-clone-pick'), tabs.folders, tabs.github, ...list.querySelectorAll('button')]) node.disabled = disabled;
+    for (const node of [search, folder, hostSelect, $('github-clone-pick'), tabs.folders, tabs.github, ...list.querySelectorAll('button')]) node.disabled = disabled;
     $('github-repos').setAttribute('aria-busy', String(disabled));
   }
   async function open(repo, button) {
@@ -85,7 +96,7 @@
     const meta = button.querySelector('.github-repo-open, .github-repo-time'); if (meta) meta.textContent = repo.local ? 'Opening…' : 'Cloning…';
     status.textContent = repo.local ? `Opening ${repo.fullName}…` : `Cloning ${repo.fullName}… A large repository can take a few minutes.`;
     try {
-      const result = await api.post('/api/github/clone', { repository: repo.fullName, ...(repo.local ? {} : { cloneFolder: target }) }, null);
+      const result = await api.post('/api/github/clone', { repository: repo.fullName, ...(onDefault() ? {} : { host: loaded.host }), ...(repo.local ? {} : { cloneFolder: target }) }, null);
       loaded = null; busy = null; controls(false);
       if (result.cloneFolder) folder.value = result.cloneFolder;
       await api.refreshProjects().catch(() => {});
@@ -111,6 +122,7 @@
     });
   }
   search.addEventListener('input', render);
+  hostSelect.addEventListener('change', () => { if (hostSelect.value === host) return; host = hostSelect.value; search.value = ''; list.replaceChildren(); load(true); });
   search.addEventListener('keydown', event => { if (event.key === 'ArrowDown') { event.preventDefault(); list.querySelector('button')?.focus(); } });
   list.addEventListener('keydown', event => {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;

@@ -194,7 +194,7 @@ jobs:
             echo "irm https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.ps1 | iex"
             echo '```'
             echo
-            echo "Or download \`Codeshi-$version-windows-x64.zip\`, unzip it and open **Codeshi.exe** in the **Codeshi** folder. The app is not signed yet, so the first time you open a browser download Windows may say it protected your PC: click **More info**, then **Run anyway**. Use your own configured Claude Code or Codex CLI connection, or connect Gemini through Google Antigravity in Settings (Install Google connection, then Connect account). Updates install from inside the app on macOS; on Windows, run the installer again."
+            echo "Or download \`Codeshi-$version-windows-x64.zip\`, unzip it and open **Codeshi.exe** in the **Codeshi** folder. The app is not signed yet, so the first time you open a browser download Windows may say it protected your PC: click **More info**, then **Run anyway**. Use your own configured Claude Code or Codex CLI connection, or connect Gemini through Google Antigravity in Settings (Install Google connection, then Connect account). Updates install from inside the app on macOS and Windows; on Windows, Codeshi can replace itself when it was installed with the PowerShell command above or unzipped to a folder you can write to."
             echo
             echo "The private-link service for Ask a Friend is published as a container image: \`docker pull ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/codeshi-sharing:$version\`"
             echo

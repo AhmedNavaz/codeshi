@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { HELPER, bundleLocation, checksumFor, createUpdater, releaseFrom, updateBuild } from '../desktop/updater.mjs';
+import { HELPER, WINDOWS_HELPER, bundleLocation, checksumFor, createUpdater, releaseFrom, updateBuild, windowsLocation } from '../desktop/updater.mjs';
 
 const download = 'https://github.com/AhmedNavaz/throughline/releases/download/v0.15.0/';
 const zipBytes = Buffer.from('the Apple Silicon build of Codeshi 0.15.0');
@@ -251,4 +251,118 @@ test('the helper replaces the app once Codeshi has quit, and puts the previous v
   assert.equal(fs.readFileSync(path.join(target, 'Contents', 'version'), 'utf8'), '0.15.0', 'The installed version is put back.');
   assert.equal(fs.readFileSync(opened, 'utf8'), target);
   assert.match(failed.stdout, /previous version was restored/);
+});
+
+// Windows: the same GitHub release, the system's tar stood in for, and the install folder in a temporary root.
+const winBytes = Buffer.from('the Windows build of Codeshi 0.15.0');
+const winRelease = () => release({ assets: [{ name: 'Codeshi-0.15.0-windows-x64.zip', size: winBytes.length, browser_download_url: download + 'Codeshi-0.15.0-windows-x64.zip' }, { name: 'SHA256SUMS.txt', browser_download_url: download + 'SHA256SUMS.txt' }] });
+function setupWindows(t, { sums = `${sha(winBytes)}  Codeshi-0.15.0-windows-x64.zip\n`, manifest = { name: 'codeshi', version: '0.15.0' }, exe = true, tar = true, busy = () => false } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-updater-win-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bundle = path.join(root, 'Programs', 'Codeshi');
+  fs.mkdirSync(bundle, { recursive: true }); fs.writeFileSync(path.join(bundle, 'Codeshi.exe'), '0.14.0');
+  const calls = { fetch: [], exec: [], launch: [], quit: 0 };
+  const fetchImpl = async url => {
+    calls.fetch.push(url);
+    if (url.endsWith('/releases/latest')) return new Response(JSON.stringify(winRelease()));
+    if (url.endsWith('SHA256SUMS.txt')) return new Response(sums);
+    if (url.endsWith('.zip')) return new Response(winBytes, { headers: { 'content-length': String(winBytes.length) } });
+    return new Response('', { status: 404 });
+  };
+  const exec = async (file, args) => {
+    calls.exec.push([path.win32.basename(file), ...args]);
+    if (!tar) throw new Error('tar failed');
+    const app = path.join(args[3], 'Codeshi'), resources = path.join(app, 'resources', 'app');
+    fs.mkdirSync(resources, { recursive: true });
+    if (exe) fs.writeFileSync(path.join(app, 'Codeshi.exe'), '0.15.0');
+    if (manifest) fs.writeFileSync(path.join(resources, 'package.json'), JSON.stringify(manifest));
+    return '';
+  };
+  const options = {
+    version: '0.14.0', build: 'windows-x64', platform: 'win32', location: { bundle, blocked: null }, directory: path.join(root, 'AppData', 'updates'),
+    fetchImpl, exec, busy, pid: 4242, launch: (script, args, log) => calls.launch.push({ script, args, log }), quit: () => { calls.quit++; },
+    timers: { setTimeout: () => null, clearTimeout: () => {} },
+  };
+  return { root, bundle, calls, options, updater: createUpdater(options) };
+}
+
+test('Windows gets the Windows build from this repository’s releases', () => {
+  assert.equal(updateBuild({ arch: 'x64', platform: 'win32' }), 'windows-x64');
+  assert.equal(updateBuild({ arch: 'arm64', platform: 'win32' }), 'windows-x64', 'Windows on Arm runs the x64 build.');
+  const found = releaseFrom(winRelease(), 'windows-x64');
+  assert.deepEqual([found.file, found.url], ['Codeshi-0.15.0-windows-x64.zip', download + 'Codeshi-0.15.0-windows-x64.zip']);
+  assert.equal(releaseFrom(release(), 'windows-x64').url, null, 'A release without a Windows zip offers nothing to download.');
+});
+
+test('the Windows install folder must be Codeshi.exe’s own, writable and not a temporary copy', () => {
+  const writable = () => true;
+  assert.deepEqual(windowsLocation('C:\\Users\\a\\AppData\\Local\\Programs\\Codeshi\\Codeshi.exe', { temporary: 'C:\\Users\\a\\AppData\\Local\\Temp', probe: writable }), { bundle: 'C:\\Users\\a\\AppData\\Local\\Programs\\Codeshi', blocked: null });
+  assert.equal(windowsLocation('C:\\Users\\a\\AppData\\Local\\Temp\\Temp1_Codeshi-0.14.0-windows-x64.zip\\Codeshi\\Codeshi.exe', { temporary: 'C:\\Users\\a\\AppData\\Local\\Temp', probe: writable }).blocked, 'temporary', 'A zip opened in Explorer without extracting runs from a temporary copy.');
+  assert.equal(windowsLocation('C:\\Program Files\\Codeshi\\Codeshi.exe', { temporary: 'C:\\Temp', probe: folder => folder !== 'C:\\Program Files' }).blocked, 'read-only');
+  assert.equal(windowsLocation('C:\\dev\\node_modules\\electron\\dist\\electron.exe', { temporary: 'C:\\Temp', probe: writable }).blocked, 'not-bundle', 'A copy run from source is not replaced.');
+});
+
+test('on Windows, Update unpacks beside the install folder and checks it; Restart hands the swap to the PowerShell helper', async t => {
+  const { updater, calls, options, bundle } = setupWindows(t);
+  assert.equal(updater.state().supported, true);
+  assert.equal((await updater.check()).status, 'available');
+  assert.equal((await updater.install()).status, 'ready');
+  const unpacked = `${bundle}.update`;
+  assert.deepEqual(calls.exec, [['tar.exe', '-xf', path.join(options.directory, 'download-0.15.0', 'Codeshi-0.15.0-windows-x64.zip'), '-C', unpacked]]);
+  assert(fs.existsSync(path.join(unpacked, 'Codeshi', 'Codeshi.exe')));
+  assert(!fs.existsSync(path.join(options.directory, 'download-0.15.0')), 'The zip is removed once unpacked.');
+  assert.equal(fs.readFileSync(path.join(bundle, 'Codeshi.exe'), 'utf8'), '0.14.0', 'Nothing is replaced while Codeshi runs.');
+  assert.deepEqual([calls.launch.length, calls.quit], [0, 0]);
+  assert.equal(updater.restart().status, 'installing');
+  const [{ script, args, log }] = calls.launch;
+  assert.equal(path.basename(script), 'install-update.ps1');
+  assert.equal(fs.readFileSync(script, 'utf8'), WINDOWS_HELPER);
+  assert.deepEqual(args, ['4242', bundle, path.join(unpacked, 'Codeshi'), `${bundle}.previous`, path.join(bundle, 'Codeshi.exe')]);
+  assert.equal(log, path.join(options.directory, 'install.log'));
+  assert.equal(calls.quit, 1);
+});
+
+test('on Windows, quitting with an update ready installs it without opening Codeshi again', async t => {
+  const { updater, calls } = setupWindows(t);
+  await updater.check(); await updater.install();
+  updater.finishOnQuit();
+  assert.equal(calls.launch[0].args.at(-1), '-');
+  assert.equal(calls.quit, 0);
+});
+
+test('on Windows, a wrong checksum, a failed unpack or the wrong app installs nothing and leaves nothing beside Codeshi', async t => {
+  for (const [options, message] of [
+    [{ sums: `${'0'.repeat(64)}  Codeshi-0.15.0-windows-x64.zip\n` }, /does not match its published checksum/],
+    [{ tar: false }, /could not be unpacked/],
+    [{ exe: false }, /does not contain Codeshi\.exe/],
+    [{ manifest: null }, /does not contain Codeshi\.exe/],
+    [{ manifest: { name: 'codeshi', version: '0.14.9' } }, /not the expected version/],
+    [{ manifest: { name: 'something-else', version: '0.15.0' } }, /not the expected version/],
+  ]) {
+    const { updater, calls, bundle, options: config } = setupWindows(t, options);
+    await updater.check();
+    const state = await updater.install();
+    assert.equal(state.status, 'error'); assert.match(state.error, message);
+    assert.deepEqual([calls.launch.length, calls.quit], [0, 0]);
+    assert(!fs.existsSync(`${bundle}.update`), 'The rejected update is removed.');
+    assert(!fs.existsSync(path.join(config.directory, 'download-0.15.0')));
+  }
+});
+
+test('on Windows, leftovers from an interrupted update are removed at launch, and a blocked folder says why', async t => {
+  const { options, bundle } = setupWindows(t);
+  fs.mkdirSync(`${bundle}.update`); fs.mkdirSync(`${bundle}.previous`);
+  fs.mkdirSync(options.directory, { recursive: true }); fs.writeFileSync(path.join(options.directory, 'install-update.ps1'), '');
+  createUpdater(options);
+  assert(!fs.existsSync(`${bundle}.update`) && !fs.existsSync(`${bundle}.previous`) && !fs.existsSync(path.join(options.directory, 'install-update.ps1')));
+  assert(fs.existsSync(path.join(bundle, 'Codeshi.exe')), 'The installed folder stays.');
+  const blocked = createUpdater({ ...options, location: { bundle, blocked: 'temporary' } });
+  await blocked.check();
+  await assert.rejects(blocked.install(), /temporary folder/);
+});
+
+test('the Windows helper is plain ASCII and logs what the next launch looks for', () => {
+  assert(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(WINDOWS_HELPER), 'Windows PowerShell reads a script without a byte order mark in the system code page.');
+  for (const line of ['did not quit', 'could not be moved aside', 'could not be moved into place']) assert(WINDOWS_HELPER.includes(line), line);
+  assert.match(WINDOWS_HELPER, /param\(\[int\]\$ProcessId, \[string\]\$Target, \[string\]\$Staged, \[string\]\$Previous, \[string\]\$Open\)/);
 });

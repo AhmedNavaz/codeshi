@@ -16,6 +16,7 @@ import { buildRecap } from './recap.mjs';
 import { createWorkspaceRoutes } from './workspace-routes.mjs';
 import { createGitHubRepoRoutes } from './github-repos.mjs';
 import { createBackupRoutes } from './backup.mjs';
+import { createMoveRoutes } from './move.mjs';
 import { randomBytes } from 'node:crypto';
 import { createConversationRoutes } from './conversation-routes.mjs';
 import { createReviewRoutes } from './agent-review-routes.mjs';
@@ -129,6 +130,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     return applied;
   };
   const backupRoutes = createBackupRoutes({ registry, body, json, settings: () => config, applySettings: incoming => applyBackupSettings(incoming) });
+  const moveRoutes = createMoveRoutes({ registry, body, json, settings: () => config });
   const conversationRoutes = createConversationRoutes({ registry, body, json, importer });
   const reviewRoutes = createReviewRoutes({ registry, body, json });
   const checkpointRoutes = createCheckpointRoutes({ registry, body, json });
@@ -361,6 +363,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
       if (await workspaceRoutes({ req, res, url })) return;
       if (await githubRepoRoutes({ req, res, url })) return;
       if (await backupRoutes({ req, res, url })) return;
+      if (await moveRoutes({ req, res, url })) return;
       if (await conversationRoutes({ req, res, url })) return;
       if (await reviewRoutes({ req, res, url })) return;
       if (await checkpointRoutes({ req, res, url })) return;
@@ -481,6 +484,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     };
     closeAccountConnections();
     await step('remote access', () => phoneAccess.close());
+    await step('move', () => moveRoutes.close());
     await step('watch-along', () => watchAlong.close());
     await step('reviews', () => reviewRoutes.close());
     await step('project review', () => projectReviewRoutes.close());

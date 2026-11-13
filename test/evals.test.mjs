@@ -59,7 +59,7 @@ test('recorded Claude routing uses the SDK assessor and CLI builder without losi
 });
 
 test('every kind of task the issue asks for has a fixture with a check the agent cannot see', () => {
-  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'long-chat', 'long-chat-short', 'review', 'view-states', 'api-endpoint', 'data-migration', 'accessible-toolbar', 'review-intent', 'test-writing', 'routing-assessment']);
+  assert.deepEqual(fixtures.map(fixture => fixture.id), ['small-edit', 'cross-folder', 'bug-repair', 'quota-handoff', 'context-heavy', 'memory-reuse', 'skill-procedure', 'skill-handoff', 'long-thread', 'long-chat', 'long-chat-short', 'long-task', 'review', 'view-states', 'api-endpoint', 'data-migration', 'accessible-toolbar', 'review-intent', 'test-writing', 'routing-assessment']);
   for (const fixture of fixtures) {
     assert(fixture.check || fixture.checkReply, fixture.id);
     assert(fixture.rubric, fixture.id);
@@ -78,6 +78,19 @@ const answer = (t, fixture, files = {}, reply = '') => {
   }
   return runCheck(fixture, folders, [reply]);
 };
+
+test("long-task's hidden check passes the recorded answer and refuses each forgotten decision by name", t => {
+  const fixture = fixtureById('long-task'), right = {};
+  for (const step of fixture.trace.flatMap(turn => turn.steps)) if (step.type === 'write') (right[step.folder] ||= {})[step.file] = step.content;
+  assert.equal(answer(t, fixture, right).passed, true);
+  const failed = (folder, file, edit) => answer(t, fixture, { ...right, [folder]: { ...right[folder], [file]: edit(right[folder][file]) } }).results.flatMap(result => result.failed || []);
+  // The first instruction on tags, before the correction. The extra tag also shows in the formatted line.
+  assert.ok(failed('notes', 'store.mjs', text => text.replace('key = tag.toLowerCase()', 'key = tag')).includes('tags keep their case and drop case-only duplicates'));
+  assert.deepEqual(failed('notes', 'format.mjs', text => text.replace(' · ', ' - ')), ['the agreed one-line format']);
+  assert.deepEqual(failed('notes', 'search.mjs', text => text.replace('.reverse()', '')), ['search ignores case, matches tags and is newest first']);
+  assert.ok(failed('notes', 'store.mjs', text => text.replace('counter += 1;', 'counter = notes.size + 1;')).includes('remove, and ids are never reused'));
+  assert.deepEqual(failed('site', 'changelog.md', () => '# Changelog\n\n## Unreleased\n\n## 0.1.0\n\n- First page.\n'), ['the changelog line']);
+});
 
 test('each starter skill has a task, and its hidden check refuses the slip that starter is about while allowing other sound answers', t => {
   const starters = fs.readdirSync(new URL('../starter-skills/', import.meta.url), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
@@ -120,11 +133,12 @@ test('recorded evaluations run every fixture through the real broker, verified b
   }
 });
 
-test('the long-chat fixtures tell the rolling brief from the old cut-off, each way round', { skip: scriptCLIs }, async () => {
+test('the long-chat fixtures tell the rolling brief from the old cut-off', { skip: scriptCLIs }, async () => {
   const kept = async (id, context) => (await runFixture(fixtureById(id), parsePolicy({ agent: 'codex', context }))).context.factsKept;
   assert.equal(await kept('long-chat', 'task'), 3);
   assert.equal(await kept('long-chat', 'task-unfolded'), 0);
-  assert.equal(await kept('long-chat-short', 'task'), 0);
+  // Short exchanges: the fold fills its size, so it reaches as far back as the cut-off did.
+  assert.equal(await kept('long-chat-short', 'task'), 3);
   assert.equal(await kept('long-chat-short', 'task-unfolded'), 3);
 });
 
@@ -145,6 +159,24 @@ test('a handoff is one task across two runs, with both runs in its total', { ski
   assert.equal(result.runs[0].status, 'interrupted');
   assert.deepEqual([result.usage.input, result.usage.output], [1500 + 2400, 80 + 170], 'The second run counts only what it added to the running total.');
   assert.equal(result.outcome.firstAttemptSuccess, null, 'A run stopped on purpose says nothing about its first attempt.');
+});
+
+test('fresh sessions rebuild every turn of one conversation from the journal, under each context setting', { skip: scriptCLIs }, async () => {
+  const fixture = fixtureById('long-task');
+  const bytes = {};
+  for (const context of ['task', 'recency']) {
+    const result = await runFixture(fixture, parsePolicy({ agent: 'codex', context, threads: 'fresh' }));
+    assert.equal(result.failure, undefined);
+    assert.equal(result.check.passed, true, JSON.stringify(result.check));
+    assert.match(result.policy.id, /fresh-sessions/);
+    assert.deepEqual(result.runs.map(run => run.context.sessionMode), Array(6).fill('fresh'));
+    assert(result.turns.every(turn => turn.reconstruction.factsKept === turn.reconstruction.factsTotal));
+    assert.equal(result.turns.at(-1).repeatedFileReadsSoFar, result.outcome.repeatedFileReads);
+    bytes[context] = result.turns.map(turn => turn.context.bytes);
+  }
+  // The task selection is the smaller envelope on every turn; that is size, not a measured saving.
+  assert(bytes.task.every((value, index) => value < bytes.recency[index]));
+  assert.throws(() => parsePolicy({ agent: 'codex', threads: 'other' }), /continuous, separate or fresh/);
 });
 
 test('long workloads compare resumed sessions, separate threads and switching back on the same snapshots and checks', { skip: scriptCLIs }, async () => {

@@ -672,9 +672,9 @@
     });
   }
   // Exact agent, model and effort that Suggest next (#162) will use when confirmed.
-  function suggestPick(card) {
+  function suggestPick(card, mode = smartMode()) {
     const state = api.getState();
-    const routed = api.routeFor?.(card?.notes || card?.title || 'Suggest follow-up cards', 0, smartMode(), { plan: true });
+    const routed = api.routeFor?.(card?.notes || card?.title || 'Suggest follow-up cards', 0, mode, { plan: true });
     if (routed?.error) return { error: routed.error };
     const provider = routed ? routed.provider : (state.provider || 'codex');
     const model = routed ? (routed.model || null) : (state.model || null);
@@ -685,7 +685,7 @@
     const billed = bills(provider);
     const account = provider ? state.accounts?.[provider] : null;
     const usageNote = billed ? `${billsSentence(provider)} Suggesting may cost money.` : account?.billingSource === 'subscription' ? `Uses your ${AGENT[provider] || provider} subscription.` : '';
-    return { provider, model, effort, who, usageNote, billed };
+    return { provider, model, effort, who, usageNote, billed, mode };
   }
   function addNext(card) {
     const nextAt = card.at ? { x: Math.min(100000, card.at.x + STEP_X), y: card.at.y } : null;
@@ -1644,14 +1644,14 @@
   const needingSplit = () => cards().filter(card => !card.draft && needsSubtasks(card) && !shut(card) && ['backlog', 'ready'].includes(card.column));
   function splitRows() {
     const list = needingSplit(), job = board?.suggest;
-    if (!list.length || (job?.kind === 'split' && job.status === 'running')) return [];
+    if (!list.length || splitQueue.length || (job?.kind === 'split' && job.status === 'running')) return [];
     const row = node('section', 'board-draft-batch board-split-row'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
     row.setAttribute('aria-label', 'Cards that need subtasks');
     const lead = node('p', 'board-draft-lead'); lead.append(glyph(ICONS.subtasks), node('span', '', `${plural(list.length, 'card needs', 'cards need')} subtasks before ${list.length === 1 ? 'it' : 'they'} can run`));
     text.append(lead, node('p', 'board-draft-note', 'An agent splits them in one read-only run, and you review the subtasks and who does each before anything runs. Or open a card to write its subtasks yourself.'));
     const head = node('div', 'board-draft-head'); head.append(text, actions$); row.append(head);
     if (!splitAsk) {
-      const go = button(list.length === 1 ? 'Split it…' : `Split all ${list.length}…`, () => { splitAsk = { ids: list.map(card => card.id), who: 'smart' }; box$().dataset.drawn = ''; drawDrafts(); }, 'primary-button');
+      const go = button(list.length === 1 ? 'Split it…' : `Split all ${list.length}…`, () => { splitAsk = { ids: list.map(card => card.id) }; box$().dataset.drawn = ''; drawDrafts(); }, 'primary-button');
       go.disabled = busy || Boolean(board?.suggest?.status === 'running');
       if (board?.suggest?.status === 'running') go.title = 'Wait for the agent working on the Plan to finish.';
       actions$.append(go);
@@ -1659,27 +1659,55 @@
     return [row];
   }
   const box$ = () => $('board-drafts');
-  // Who splits: Smart routing picks the agent, model and effort, or you choose an agent at its default model.
-  function splitPick(ids, who) {
-    const list = ids.map(cardBy).filter(Boolean), text = list.map(card => `${card.title}\n${card.notes || ''}`).join('\n\n').slice(0, 4000);
-    if (who !== 'smart') { const billed = bills(who), account = api.getState().accounts?.[who]; return { provider: who, model: null, effort: null, who: `${AGENT[who]} · default model`, billed, usageNote: billed ? `${billsSentence(who)} Splitting may cost money.` : account?.billingSource === 'subscription' ? `Uses your ${AGENT[who]} subscription.` : '' }; }
-    return suggestPick({ title: list[0]?.title || 'Split cards', notes: text });
+  // Every card splits with its own choice: its agent, model and effort, or Auto in its own mode (the workspace's when the
+  // card follows it). Cards that land on the same choice are split in one read-only run; the runs go one after another.
+  function cardSplitPick(card) {
+    if (card.agent?.provider) {
+      const provider = card.agent.provider, model = card.agent.model || null, effort = card.agent.effort || null, billed = bills(provider), account = api.getState().accounts?.[provider];
+      return { provider, model, effort, mode: null, billed, who: [AGENT[provider] || provider, model ? modelLabel(provider, model) : 'default model', effortWord(effort)].filter(Boolean).join(' · '), usageNote: billed ? `${billsSentence(provider)} Splitting may cost money.` : account?.billingSource === 'subscription' ? `Uses your ${AGENT[provider] || provider} subscription.` : '' };
+    }
+    return suggestPick({ title: card.title, notes: `${card.title}\n${card.notes || ''}`.slice(0, 4000) }, modeOf(card));
+  }
+  function splitPlan(ids) {
+    const groups = new Map();
+    for (const card of ids.map(cardBy).filter(Boolean)) {
+      const pick = cardSplitPick(card);
+      if (pick.error) return { error: `“${card.title}”: ${pick.error}`, groups: [] };
+      const key = [pick.provider, pick.model, pick.effort].join('|');
+      if (!groups.has(key)) groups.set(key, { pick, ids: [], modes: new Set() });
+      const group = groups.get(key); group.ids.push(card.id); if (pick.mode) group.modes.add(pick.mode);
+    }
+    return { groups: [...groups.values()] };
+  }
+  let splitQueue = [];
+  const splitGroup = group => act('/api/board/split', { ids: group.ids, provider: group.pick.provider, model: group.pick.model, effort: group.pick.effort, billingConfirmed: group.pick.billed ? true : window.relayBillingConfirmed === true }, result => { if (result?.suggest && board) board.suggest = result.suggest; api.announce(`Splitting ${plural(group.ids.length, 'card')} into subtasks.`); });
+  // The next run starts when the one before it has finished. If one fails or is stopped, the rest wait for you.
+  async function pumpSplits() {
+    if (!splitQueue.length || busy) return;
+    const job = board?.suggest; if (!job || job.kind !== 'split' || job.status === 'running') return;
+    if (job.status !== 'complete') { splitQueue = []; return; }
+    const next = splitQueue.shift();
+    if (!await splitGroup(next)) splitQueue = [];
   }
   function splitPanel(ids, cancel) {
-    const box = node('div', 'board-split-confirm'), state = splitAsk && splitAsk.ids === ids ? splitAsk : { ids, who: 'smart' };
-    const pick = splitPick(ids, state.who);
-    const whoRow = node('div', 'board-split-who'); whoRow.append(node('span', 'board-field-label', 'Who splits'));
-    whoRow.append(segment('Who splits', [['smart', 'Auto', 'agent-icon auto'], ...AGENTS.map(([value, name]) => [value, name, `agent-icon ${value}`])], state.who, value => { state.who = value; if (splitAsk) splitAsk.who = value; const next = splitPanel(ids, cancel); box.replaceWith(next); }, busy));
-    box.append(whoRow);
-    box.append(node('p', 'board-suggest-note', pick.error ? pick.error : `${state.who === 'smart' ? `Auto picks ${pick.who}` : pick.who}. One read-only run for ${plural(ids.length, 'card')}, counted toward your usage.${pick.usageNote ? ` ${pick.usageNote}` : ''} The subtasks follow each card’s choice, Auto in its mode unless you change it, and you can change any of them before it runs.`));
+    const box = node('div', 'board-split-confirm'), plan = splitPlan(ids), many = plan.groups.length > 1;
+    const cardsText = plural(ids.length, 'card');
+    if (plan.error) box.append(node('p', 'board-suggest-note', plan.error));
+    else {
+      box.append(node('p', 'board-suggest-note', `Each card is split with its own agent, model or Auto mode. ${many ? `${plural(plan.groups.length, 'read-only run')}, one after another` : 'One read-only run'}, counted toward your usage. You can change any subtask before it runs.`));
+      const lines = node('ul', 'board-split-runs');
+      for (const group of plan.groups) { const mode = group.modes.size === 1 ? `Auto (${MODE[[...group.modes][0]] || 'Smart'}) · ` : group.modes.size > 1 ? 'Auto · ' : ''; lines.append(node('li', '', `${mode}${group.pick.who}: ${plural(group.ids.length, 'card')}${group.pick.usageNote ? `. ${group.pick.usageNote}` : ''}`)); }
+      box.append(lines);
+    }
     const row = node('div', 'board-suggest-actions');
-    const go = button(ids.length === 1 ? 'Split the card' : `Split ${plural(ids.length, 'card')}`, () => {
-      if (pick.error) { failure = pick.error; showError(); return; }
-      if (pick.billed && window.relayBillingConfirmed !== true && !window.confirm(`Split with charges?\n\n${billsSentence(pick.provider)} This read-only run may cost money.\n\nTo stop this question for this session, turn on Allow API and unconfirmed billing in Settings.`)) return;
-      splitAsk = null;
-      act('/api/board/split', { ids, provider: pick.provider, model: pick.model, effort: pick.effort, billingConfirmed: pick.billed ? true : window.relayBillingConfirmed === true }, result => { if (result?.suggest && board) board.suggest = result.suggest; api.announce(`Splitting ${plural(ids.length, 'card')} into subtasks.`); });
+    const go = button(ids.length === 1 ? 'Split the card' : `Split ${cardsText}`, async () => {
+      if (plan.error) { failure = plan.error; showError(); return; }
+      const billed = plan.groups.find(group => group.pick.billed);
+      if (billed && window.relayBillingConfirmed !== true && !window.confirm(`Split with charges?\n\n${billsSentence(billed.pick.provider)} This read-only run may cost money.\n\nTo stop this question for this session, turn on Allow API and unconfirmed billing in Settings.`)) return;
+      splitAsk = null; splitQueue = plan.groups.slice(1);
+      if (!await splitGroup(plan.groups[0])) splitQueue = [];
     }, 'primary-button');
-    go.disabled = busy || Boolean(pick.error) || board?.suggest?.status === 'running';
+    go.disabled = busy || Boolean(plan.error) || board?.suggest?.status === 'running';
     row.append(button('Cancel', cancel, 'secondary-button'), go);
     box.append(row);
     return box;
@@ -2209,7 +2237,7 @@
     for (const [id, mode] of [['board-columns-mode', 'columns'], ['board-canvas-mode', 'canvas'], ['board-outline-mode', 'outline']]) $(id)?.setAttribute('aria-pressed', String(view === mode));
     drawEarlier();
     if (!board) { const message = node('p', 'plan-view-empty', failure ? `The Plan couldn’t be loaded. ${failure}` : 'Loading the Plan…'); (onCanvas ? space : outline ? $('board-outline') : $('board-columns')).replaceChildren(message); drawContext(); return; }
-    drawFilter(); drawDrafts(); drawClosed(); drawProgress(); drawRuns();
+    drawFilter(); drawDrafts(); drawClosed(); drawProgress(); drawRuns(); Promise.resolve().then(pumpSplits);
     // With no cards and nothing being drafted, the Plan starts here: an agent drafts it, or you write the first card.
     const starting = !cards().length && !planningPlan();
     $('board-start').hidden = !starting;
@@ -2389,7 +2417,7 @@
     const state = api.getState();
     // Another workspace: the Plan stays and shows that workspace's cards, as Flow stays on.
     if (state.projectId !== project) {
-      project = state.projectId; era++; writes = 0; loading++; drafting = false; replaces = null; answers = new Map(); leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; fitted = false; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); heard = new Map();
+      project = state.projectId; era++; splitQueue = []; writes = 0; loading++; drafting = false; replaces = null; answers = new Map(); leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; fitted = false; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); heard = new Map();
       selected = null; draft = null; sdraft = null; drawn = null; failure = ''; picked = new Set();
       if (showing) { renderDrawer(); render(); }
     }

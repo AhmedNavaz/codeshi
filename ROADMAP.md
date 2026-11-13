@@ -34,10 +34,10 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 
 | Feature | Status | Issue |
 | --- | --- | --- |
-| Connect GitHub: a read-only sign-in without `gh`, and GitHub Enterprise | **From GitHub** in New workspace, using your `gh` login, shipped in 0.47.0 | [#159](https://github.com/AhmedNavaz/codeshi/issues/159) |
-| Move to another computer directly, by pairing the two with a QR code and a six-digit code, without a file. Ongoing sync comes after that. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | A backup file locked with a passphrase shipped in 0.47.0 | [#160](https://github.com/AhmedNavaz/codeshi/issues/160) |
-| Task-scoped context: a before/after run on a long real task. Live runs on long built conversations found that in a chat of many short messages, the rolling brief can leave out requests the older cut-off kept | First version shipped in 0.26.0, the rolling brief in 0.38.0 | [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
-| Project memory: suggested memories you review before they're saved | First version shipped in 0.26.0, Copy to AGENTS.md in 0.40.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
+| Connect GitHub: a read-only sign-in without `gh` | **From GitHub** in New workspace, using your `gh` login, shipped in 0.47.0, and GitHub Enterprise hosts through `gh` in 0.52.0 | [#159](https://github.com/AhmedNavaz/codeshi/issues/159) |
+| Move to another computer: ongoing sync between your computers, building on the same pairing and encryption. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | A backup file locked with a passphrase shipped in 0.47.0, and moving directly over the same network, with a move code and six matching digits, in 0.52.0 | [#160](https://github.com/AhmedNavaz/codeshi/issues/160) |
+| Task-scoped context: a before/after run on a person's real long conversation. A six-turn built task, every turn fresh, measured the same correctness with about half the new tokens and no repeated reads (see [evals](evals/README.md)) | First version shipped in 0.26.0, the rolling brief in 0.38.0, and a brief that reaches further back in chats of short messages in 0.52.0 | [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
+| Project memory: a live test with real agents of stale memories, a memory that contradicts your request, and planted tool text | First version shipped in 0.26.0, Copy to AGENTS.md in 0.40.0, and suggested working fixes and editing a suggestion before you keep it in 0.52.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
 | Interface translations: the first languages, and the remaining panels, phone page and server messages | Base and main surfaces shipped in 0.42.0, help wanted | [#27](https://github.com/AhmedNavaz/codeshi/issues/27) |
 | iPhone Live Activities, which need a native app | Remote access shipped in 0.27.0, lock-screen notifications in 0.41.0 and replies read aloud in 0.47.0 | [#23](https://github.com/AhmedNavaz/codeshi/issues/23) |
 
@@ -49,6 +49,7 @@ Built and covered by automated tests. Each issue closes after one try on the rea
 | --- | --- | --- |
 | **Open pull request** | Opening a pull request on GitHub itself. Shipped in 0.46.0, tested against local repositories and a stand-in for `gh` | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
 | **Task limits on a paid API account** | A time, token or spend limit on a real pay-per-use account. Everything shipped by 0.38.0 and was tested with simulated providers | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
+| **Updates from inside the app on Windows** | Restarting into an update, quitting with one ready and putting the old version back after a failed swap, on a real Windows PC. Shipped in 0.52.0, tested on macOS with stand-ins for the PowerShell helper. Help wanted | [#163](https://github.com/AhmedNavaz/codeshi/issues/163) |
 | **Status in the Windows notification area** | The icon, tooltip, click and menu on a real Windows PC. Shipped in 0.42.0. Help wanted | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
 
 ## Ongoing checks
@@ -74,6 +75,7 @@ Larger ideas that need design work first, so join the issue before building. The
 
 ## Recently shipped
 
+- **0.52.0:** Codeshi updating itself on Windows, moving to another computer over your network with no file, GitHub Enterprise hosts in From GitHub, each Plan card split with its own agent, suggested working fixes in Memory with a review before you keep one, and a rolling brief that reaches further back in chats of short messages.
 - **0.51.0:** one repair round after a Plan review and a review of the whole result, Flow's Run Ready under one shared limit, Review changes inside a task, Flow routing in the `codeshi` command, Claude loading your skills through its own skill system, and Plan chat and List keyboard fixes.
 - **0.50.0:** Flow suggesting a split of a message into tasks, watching a Plan run on its cards (live agent, model, effort, step and usage), a card face that reads at a glance, an image-aware Auto, a Canvas that opens left to right, and fixes for subtasks sent back to Ready.
 - **0.49.0:** One Plan (Columns, Canvas and Outline, cards drafted from messages or documents, subtasks, Suggest next, Add next and draft undo, test gates and briefs, and Plan-aware chat), Tasks side by side in Flow, scheduled cards and prompts with usage checks and Open at login, labels, due dates, comments and closing cards to agents, rated-model routing, Flow handoff and takeover fixes, smooth 300-card canvas dragging, and lower CPU use during runs.

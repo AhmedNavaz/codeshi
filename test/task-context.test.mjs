@@ -258,6 +258,27 @@ test('a long conversation folds its older part into the brief, with sources, ins
   assert.ok(website);
 });
 
+test('a fold is bounded by size, so a chat of short exchanges reaches further back than one of long replies', t => {
+  const { folders } = workspace(t);
+  const messages = [{ role: 'user', runId: 'f', text: 'Formats: invoice numbers look like INV-2026-0007' }, { role: 'assistant', runId: 'f', text: 'Noted.' }];
+  for (let turn = 1; turn <= 30; turn++) messages.push({ role: 'user', runId: `s${turn}`, text: `Chore ${turn}` }, { role: 'assistant', runId: `s${turn}`, text: `Done: chore ${turn}.\n\n` + 'More detail. '.repeat(60) });
+  for (let turn = 1; turn <= 100; turn++) messages.unshift({ role: 'assistant', runId: `o${turn}`, text: 'Old padding. '.repeat(400) });
+  const earlier = envelope(build(conversation(messages), 'Now add invoiceLine using the formats', folders)).brief.earlier;
+  assert.ok(earlier.requests.length > 16, `kept ${earlier.requests.length}`);
+  assert.ok(Buffer.byteLength(JSON.stringify(earlier)) <= 12000, 'The fold stays within its size.');
+  assert.ok(earlier.requests.some(item => item.text.includes('INV-2026-0007')), 'A request 30 short exchanges back is still there.');
+  // A long chat leaves the oldest out, newest kept, in order.
+  const many = [];
+  for (let turn = 1; turn <= 200; turn++) many.push({ role: 'user', runId: `m${turn}`, text: `Chore ${turn} ` + 'words '.repeat(40) }, { role: 'assistant', runId: `m${turn}`, text: `Done ${turn}. ` + 'detail '.repeat(40) + '\n\n' + 'x'.repeat(400) });
+  const capped = envelope(build(conversation(many), 'Next chore', folders)).brief.earlier;
+  assert.ok(Buffer.byteLength(JSON.stringify(capped)) <= 12000);
+  assert.ok(capped.requestsLeftOut > 0);
+  assert.equal(capped.requests.length + capped.requestsLeftOut, 198, 'Every folded request is either kept or counted.');
+  const numbers = capped.requests.map(item => Number(item.text.match(/Chore (\d+)/)[1]));
+  assert.deepEqual(numbers, [...numbers].sort((a, b) => a - b));
+  assert.equal(numbers.at(-1), 198, 'The newest folded request is kept.');
+});
+
 test('a request sent again is kept once, and a fold does not repeat what context carries', t => {
   const { folders, desktop } = workspace(t);
   const c = longConversation(desktop);

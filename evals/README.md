@@ -15,7 +15,8 @@ Small repeatable tasks for finding out whether a change to Codeshi helps, before
 | `skill-handoff` | The same, with a second agent finishing what the first one started |
 | `long-thread` | Shop decisions carried through unrelated folder work and a return to the shop, across three real broker turns |
 | `long-chat` | Formats agreed 17 exchanges back in a chat of long replies: past the old cut-off, within the rolling brief |
-| `long-chat-short` | The same formats 31 exchanges back in a chat of short replies: within the old cut-off, past the rolling brief |
+| `long-chat-short` | The same formats 31 exchanges back in a chat of short replies: within the old cut-off, and within the rolling brief since it is bounded by size |
+| `long-task` | Six turns building a notes library after a long chat: two formats agreed early, a correction, a detour into another folder, then work that needs all of it |
 | `review` | A read-only review that has to find a seeded bug |
 
 One task per starter skill, for running with and without it. Each is an ordinary request that leaves out the point its starter covers. They were written knowing the starters, so they show whether a procedure is followed where it matters, not how often real work needs it.
@@ -61,6 +62,14 @@ npm run eval -- run --fixture long-thread --agent codex --to claude --repeat 3
 npm run eval -- run --live --fixture long-thread --agent codex::low --threads continuous,separate --repeat 3 --max-runs 18 --max-tokens 2000000
 ```
 
+`--threads fresh` keeps one conversation but starts every turn after the first in a new session, as after a handoff or a context refresh. Each turn is then built from the journal by the `--context` setting, so this is the mode that compares context settings across a whole task, with repeated reads counted per turn (`repeatedFileReadsSoFar`). `long-task` is written for it:
+
+```sh
+npm run eval -- run --fixture long-task --agent codex --context task,recency --threads fresh --repeat 3
+```
+
+Its early formats sit within reach of every setting, so a difference shows up in usage, repeated reads and correctness rather than in a fact one setting can't see. It is still a built task, not a person's real conversation.
+
 For multi-turn workloads, `--to` alternates the builder and second agent on successive turns. With `--threads separate`, each task gets a new conversation and a fixture-authored standalone brief containing the prior decisions it needs; the working files and final checks remain the same. Skills and task limits carry into every new conversation. This is an explicit manual-brief baseline, not a free model-generated summary. Report its wall time as evaluation execution time; the human time spent authoring baseline briefs is not measured.
 
 Saved `turns` record session mode/reason, text-envelope bytes and estimates, omissions, and a fresh-envelope fact reconstruction probe. That probe does **not** inspect a provider's resumed context or prove retention through a native compaction. Final correctness comes from hidden checks; the saved human rubric covers remaining qualitative judgments. A provider switch, including a return to the first provider, rebuilds a fresh session through the broker's normal path.
@@ -73,7 +82,7 @@ The shared run budget covers every turn. Evaluation `--max-tokens` counts measur
 
 `--context-limit off|auto|<tokens>` pins Normal-mode rollover policy as part of the experiment (custom limits start at 8,000 tokens). Evaluation runs default to Off for an explicit baseline; the product defaults to Auto. For example, `npm run eval -- run --fixture long-thread --agent codex --context-limit 8000` exercises the policy with recorded providers; the dedicated regression trace raises its first reported request above the target and checks that the next thread starts fresh, keeps the task facts and does not inherit old token counters. The stock trace may remain below the target. A live comparison still requires `--live` and a new stated budget. Context limits are checked before turns; they do not constrain provider-internal tool loops, and these recorded counts are not live efficiency evidence.
 
-An agent is written `provider:model:effort`, and any part after the provider can be left out. `--context` compares `task`, the current selection, with `recency`, the older one. `task-unfolded` is `task` without the rolling brief from 0.38.0: history past the 48 KB allowance is cut off by age, as before. Only evaluations use it, as a baseline for `long-chat` and `long-chat-short`. `long-chat-short` is a known gap: a recorded run under `task` fails, and the tests expect that, so a fix shows up as a pass. A run on another billing basis than a subscription fails rather than spending money.
+An agent is written `provider:model:effort`, and any part after the provider can be left out. `--context` compares `task`, the current selection, with `recency`, the older one. `task-unfolded` is `task` without the rolling brief from 0.38.0: history past the 48 KB allowance is cut off by age, as before. Only evaluations use it, as a baseline for `long-chat` and `long-chat-short`. `long-chat-short` was a known gap while the brief kept a fixed 16 requests. It now fills its size instead, and a recorded run under `task` passes. A run on another billing basis than a subscription fails rather than spending money.
 
 ```sh
 npm run eval -- report    # compares everything saved
@@ -202,12 +211,28 @@ The task selection kept every decision, the same as the old one, with about 37% 
 
 - **Every run passed, even without the formats in the prompt.** Claude's own transcripts show both runs that lacked them searching the conversation file the brief points to (`brief.originals`) and finding them there. Codeshi gives that path so the original can be looked up, and it worked as a safety net here. A weaker or less careful agent might guess instead.
 - **The rolling brief used less than half the new tokens in both.** Its first message was a third to a fifth of the size, and the search cost less than sending 52 KB of history.
-- **The rolling brief reaches less far back in a chat of short replies.** It keeps the 16 latest folded requests, so a conversation past 48 KB of mostly short exchanges keeps about 18 of them. The old cut-off kept around 60. Searching cost `long-chat-short` about 5 seconds of extra working time. With long replies the reach is about the same: 18 exchanges against about 16.
+- **The rolling brief reaches less far back in a chat of short replies.** It keeps the 16 latest folded requests, so a conversation past 48 KB of mostly short exchanges keeps about 18 of them. The old cut-off kept around 60. Searching cost `long-chat-short` about 5 seconds of extra working time. With long replies the reach is about the same: 18 exchanges against about 16. *Since then:* the brief keeps the newest requests that fit its 12 KB instead of a fixed 16, so in a recorded run `long-chat-short` keeps all three formats, with a first message of 17 KB, and `long-chat` grows from 15 KB to 16 KB. Not yet rerun live.
 - **`Decision:` lines are kept from any age** (up to 12), so a decision written that way survives either way. These fixtures state the formats in prose, as people usually do.
 
 That's one run each and two built fixtures, so it shows what each setting keeps, not how often real conversations need it. A real long conversation, other agents and repeated runs are not measured.
 
 Not measured yet: long real tasks, whether smaller prompts lead to more re-reading on them, and other agents on this comparison. The fixtures are small enough that **Repeat reads** barely moves.
+
+### A six-turn task, every turn fresh
+
+`long-task` with `--threads fresh`, `claude:haiku`, November 14, 2026, three rounds of `task` and `recency`, within a stated budget of 38 runs and 3.5M tokens. Each round had its own share of the budget, and `recency`'s sixth turn didn't fit in any of them, so the comparison below covers the first five turns, which both settings ran. New tokens are input, cache writes and output.
+
+| Context | Turns 1–5 correct | New tokens, turns 1–5 | Cache reads, turns 1–5 | Work, turns 1–5 | Repeat reads | First message per turn |
+| --- | --- | --- | --- | --- | --- | --- |
+| `task` | 3 of 3 | 129,966–132,647 | 230,675–270,431 | 43–49 s | 0, 0, 0 | 18–25 KB |
+| `recency` | 3 of 3 | 273,826–281,654 | 421,393–424,413 | 51–53 s | 0, 0, 2 | 69–83 KB |
+
+- **Same results, about half the new tokens.** Both settings got ids, tag case after the correction, search and the one-line format right on every run. `task` used about 52% fewer new tokens and 41% fewer cache reads over the same five turns, and slightly less working time.
+- **No more re-reading with the smaller brief.** `task` never read a file twice. `recency` did twice in one run.
+- **`task` finished all six turns in every round**, and passed every hidden check, including `remove` (29–30k new tokens for that turn). `recency`'s sixth turn was left out by the budget, so its final check failed on `remove` for that reason, not because of a wrong answer.
+- **The size fix, live.** After the rolling brief became bounded by size, one run each: `long-chat` and `long-chat-short` both had all three formats in the prompt and passed, with 19,046 and 22,905 new tokens. `long-chat-short` took 13 s, against 20 s before the fix, when the agent had to search the conversation file for the formats.
+
+This is one agent and one built task of six turns, three runs each. It shows what each setting costs when every turn starts fresh, as after a handoff or a context refresh. It is not a person's real conversation, and a resumed session sends only what changed, so these differences apply to fresh starts.
 
 ### Manual against routed, live
 

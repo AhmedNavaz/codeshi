@@ -2,7 +2,7 @@
   'use strict';
   const { t } = window.codeshiText;
   // Updates (#2): when a newer release is out, the status bar shows Update to <version>. One click downloads the update
-  // for this Mac and checks it, with a ring for the download, and the button becomes Restart to update. Restarting
+  // for this Mac or PC and checks it, with a ring for the download, and the button becomes Restart to update. Restarting
   // never stops an agent: it waits for the run to finish. Quitting instead installs the update as Codeshi closes.
   // The chevron beside the button has the release notes and Skip this version, and Settings turns automatic checks
   // off.
@@ -15,6 +15,7 @@
   // Agents working in any workspace; a restart waits for them.
   const working = () => (api.getState().projects || []).some(project => project.runningConversationId);
   let state = null, attempted = false, settingsHost = null, settingsKit = null, anchor = button;
+  const computer = bridge.platform === 'win32' ? 'this PC' : 'this Mac';
 
   const offered = () => state?.status === 'available' && state.latest && state.latest.version !== state.skipped;
   const visible = () => Boolean(state?.supported && (offered() || ['downloading', 'ready', 'waiting', 'installing'].includes(state.status) || state.status === 'error' && attempted));
@@ -43,7 +44,7 @@
       const value = percent(), bar = node('div', undefined, 'update-progress'), fill = node('span');
       if (value === null) bar.classList.add('indeterminate'); else fill.style.width = `${value}%`;
       bar.append(fill); host.append(bar);
-      text('Downloading the update for this Mac and checking it. You can keep working.');
+      text(`Downloading the update for ${computer} and checking it. You can keep working.`);
       row(action('Cancel', () => call(() => bridge.cancelUpdate())));
       return host;
     }
@@ -61,11 +62,14 @@
     if (state.status === 'installing') { text('Restarting into the new version…'); return host; }
     if (state.status === 'error') text(state.error, 'update-text update-error');
     if (state.blocked) {
-      text(state.blocked === 'translocated' ? 'Codeshi is running from a temporary copy, so it can’t replace itself. Move it to your Applications folder, or download the update.' : 'Codeshi can’t replace itself in this folder. Download the update to install it yourself.');
+      text({
+        translocated: 'Codeshi is running from a temporary copy, so it can’t replace itself. Move it to your Applications folder, or download the update.',
+        temporary: 'Codeshi is running from a temporary folder, such as a zip opened without extracting it, so it can’t replace itself. Install it with the PowerShell installer, or download the update.',
+      }[state.blocked] || 'Codeshi can’t replace itself in this folder. Download the update to install it yourself.');
       row(action('Download ↗', openNotes, 'primary-button'));
       return host;
     }
-    text('Codeshi downloads the update for this Mac and checks it. You restart when you’re ready, never in the middle of a run.');
+    text(`Codeshi downloads the update for ${computer} and checks it. You restart when you’re ready, never in the middle of a run.`);
     const skip = action('Skip this version', () => call(() => bridge.skipUpdate(latest.version)), 'text-link');
     row(skip, action(state.status === 'error' ? 'Try again' : 'Update', install, 'primary-button'));
     return host;
@@ -116,7 +120,7 @@
     if (!kit) return;
     host.replaceChildren();
     const rows = kit.group(host, t('Updates'));
-    if (!state?.supported) { kit.row(rows, { label: t('Updates'), description: window.relayDesktop?.platform === 'win32' ? t('Updates install in the Codeshi app for macOS. On Windows, run the installer again or download the latest release.') : t('Updates install in the Codeshi app for macOS. This copy is updated from its source instead.'), keywords: 'version' }); return; }
+    if (!state?.supported) { kit.row(rows, { label: t('Updates'), description: t('Updates install in the Codeshi app for macOS and Windows. This copy is updated from its source instead.'), keywords: 'version' }); return; }
     const checked = state.checkedAt ? new Date(state.checkedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }) : null;
     const summary = state.status === 'checking' ? t('Checking for updates…')
       : ['ready', 'waiting'].includes(state.status) ? t('Codeshi {version} is downloaded and checked. Restart to use it.', { version: state.latest.version })

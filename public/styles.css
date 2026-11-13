@@ -240,8 +240,14 @@ summary::-webkit-details-marker { display: none; }
 .github-repo-open { color: var(--link); }
 .github-repo-description { grid-column: 1 / -1; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .github-repos-empty { margin: 0; padding: 12px 10px; color: var(--muted); font-size: 12px; }
-.github-clone-folder { display: flex; align-items: center; gap: 8px; }
-.github-clone-folder label { flex: none; color: var(--text); font-size: 12px; font-weight: 500; }
+.github-clone-folder, .github-repos-host { display: flex; align-items: center; gap: 8px; }
+.github-repos-host[hidden] { display: none; }
+.github-clone-folder label, .github-repos-host label { flex: none; color: var(--text); font-size: 12px; font-weight: 500; }
+.github-repos-host select {
+  flex: 1; min-width: 0; height: var(--control-md); padding: 0 6px; border: 1px solid var(--input-border); border-radius: 5px;
+  background: var(--surface-input); color: var(--text); font: 13px var(--font);
+}
+.github-repos-host select:focus { outline: none; border-color: var(--focus); }
 .github-clone-folder input { flex: 1; min-width: 0; font: 12px var(--mono); }
 
 /* Notice bar */
@@ -1508,6 +1514,12 @@ button.commit-hash:hover { text-decoration: underline; }
 .backup-results strong { color: var(--text-strong); font-weight: 600; }
 .backup-status { margin-right: auto; color: var(--muted); font-size: 12px; }
 .backup-status:empty { display: none; }
+/* Move over the network (#160): the code to type, the six digits to compare, and a request to allow. */
+.move-code { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-input); color: var(--text-strong); font: 600 15px var(--mono); letter-spacing: .02em; overflow-wrap: anywhere; user-select: all; }
+.move-check { margin: 0; color: var(--text-strong); font: 600 26px var(--mono); letter-spacing: .12em; }
+.move-request { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg, 8px); }
+.move-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.backup-field input.move-code-input { height: 32px; font: 13px var(--mono); }
 #brief-memory .panel-section-foot { display: flex; gap: 12px; }
 .memory-copy-choices { margin: 10px 0 0; padding: 0; border: 0; min-width: 0; }
 .memory-copy-list { display: grid; gap: 2px; max-height: 168px; margin: 4px 0 0; padding: 0; overflow: auto; list-style: none; }

@@ -585,7 +585,7 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 .board-split-row { background: color-mix(in srgb, var(--warning) 6%, var(--panel-bg)); }
 .board-split-row .board-draft-lead .icon { color: var(--warning); }
 .board-split-confirm { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
-.board-split-who { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.board-split-runs { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; display: grid; gap: 2px; }
 
 /* A card's subtasks in its drawer: what each does, how far it has got, and who does it. */
 .board-subtasks { gap: 10px; }

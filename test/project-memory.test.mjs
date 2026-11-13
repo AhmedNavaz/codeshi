@@ -207,6 +207,44 @@ test('suggestions come from what the person wrote and what tests verified, and a
   assert.equal(memorySuggestions({ ...c, memory: [{ kind: found[0].kind, text: found[0].text }] }, folders).some(item => item.key === found[0].key), false, 'A kept one is not suggested again.');
 });
 
+test('a check that failed, then passed after edits, is suggested as a working fix instead of a failed approach', t => {
+  const env = workspace(t), { folders, desktop, website } = env;
+  const edit = (id, file) => ({ id, role: 'activity', runId: 'run', text: `Edit\n${JSON.stringify({ file_path: path.join(desktop.path, file) })}` });
+  const c = conversation({ messages: [
+    { id: 'a', role: 'activity', runId: 'run', text: '$ npm run build\nCompiling…\nError: Cannot find module ./dates' },
+    edit('b', 'src/dates.mjs'),
+    { id: 'c', role: 'activity', runId: 'run', text: `File changes: ${JSON.stringify([{ path: path.join(desktop.path, 'src/index.mjs') }, { path: path.join(desktop.path, '.env') }, { path: '/elsewhere/x.js' }])}` },
+    { id: 'd', role: 'activity', runId: 'run', text: '$ npm run build\nBuilt in 1.2s' },
+    { id: 'e', role: 'activity', runId: 'run', text: '$ npm run lint\nError: 2 problems' },
+    { id: 'f', role: 'activity', runId: 'run', text: '$ npm run lint\nAll clean' },
+    { id: 'g', role: 'activity', runId: 'run', text: '$ cat missing.txt\nError: no such file' },
+    edit('h', 'missing.txt'),
+    { id: 'i', role: 'activity', runId: 'run', text: '$ cat missing.txt\nhello' },
+  ], runs: [{ id: 'run', taskId: 'run', check: { status: 'passed', command: 'npm test' } }] });
+  const found = memorySuggestions(c, folders), fixes = found.filter(item => item.kind === 'solution');
+  assert.equal(fixes.length, 1, 'Lint passed with nothing edited, which is not a fix; cat is not a check.');
+  assert.equal(fixes[0].text, '`npm run build` failed with “Error: Cannot find module ./dates”; it passed after changes to src/dates.mjs, src/index.mjs.');
+  assert.deepEqual([fixes[0].folderId, fixes[0].messageId], ['desktop', 'a']);
+  assert.equal(found.some(item => item.kind === 'failed-approach' && item.text.startsWith('npm run build')), false, 'A fixed command is not also a failed approach.');
+  assert.equal(found.some(item => item.text.includes('.env') || item.text.includes('elsewhere')), false, 'Private files and paths outside the workspace stay out.');
+  assert.equal(memorySuggestions({ ...c, runs: [{ id: 'run', taskId: 'run' }] }, folders).length, 0, 'Nothing is suggested from a task whose tests never passed.');
+  assert.equal(memorySuggestions({ ...c, messages: c.messages.map(message => message.id === 'b' || message.id === 'c' ? { ...message, text: `Edit\n${JSON.stringify({ file_path: path.join(website.path, 'page.js') })}` } : message) }, folders).find(item => item.kind === 'solution').folderId, 'website');
+});
+
+test('Keep saves an edited suggestion as the person changed it, and the suggestion does not come back', t => {
+  const env = workspace(t), broker = open(t, env), c = broker.get(broker.create().id);
+  c.messages.push({ id: 'said', role: 'user', text: 'Remember that the API rounds prices down.' });
+  const [suggestion] = broker.memory(c).suggestions;
+  assert.equal(suggestion.text, 'the API rounds prices down.');
+  const kept = broker.changeMemory(c, { action: 'add', kind: 'decision', text: 'The pricing API rounds down to whole cents.', folderId: 'website', messageId: suggestion.messageId, suggested: true, suggestion: suggestion.key });
+  assert.deepEqual(kept.suggestions, [], 'Kept under different words, it is still the same suggestion.');
+  const [saved] = kept.entries;
+  assert.deepEqual([saved.kind, saved.text, saved.folderId, saved.source.messageId, saved.source.suggested, saved.source.suggestion], ['decision', 'The pricing API rounds down to whole cents.', 'website', 'said', true, suggestion.key]);
+  const plain = broker.changeMemory(c, { action: 'add', kind: 'convention', text: 'Something typed by hand', suggestion: 'f'.repeat(16) }).entries.at(-1);
+  assert.equal('suggestion' in plain.source, false, 'Only a kept suggestion records one.');
+  assert.equal('suggestion' in newEntry({ kind: 'convention', text: 'Odd key', suggested: true, suggestion: 'not-a-key' }, env.folders).source, false);
+});
+
 test('memory stays in its own workspace, and out of conversation exports', t => {
   const env = workspace(t), broker = open(t, env), c = broker.get(broker.create().id);
   broker.changeMemory(c, { action: 'add', kind: 'decision', text: 'PRIVATE-MEMORY' });

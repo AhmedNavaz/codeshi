@@ -3,7 +3,9 @@
   // Move to another computer (#160): Export Codeshi Backup writes workspaces, their conversations and settings to one
   // file locked with a passphrase; Import Codeshi Backup opens one, asks which folder each workspace folder is on this
   // computer (one already here, a fresh clone, or none), and asks before replacing a conversation that changed here too.
-  // Nothing goes through a server; the file is moved however you like.
+  // Nothing goes through a server; the file is moved however you like. Move to Another Computer sends the same backup
+  // directly over this network instead: the old computer shows a move code, the new one types it, both show the same six
+  // digits, and nothing is sent until you choose Allow on the old one. The new computer then imports it as a file.
   const $ = id => document.getElementById(id), api = () => window.relayUI, bridge = window.relayDesktop;
   const dialog = $('backup-dialog');
   if (!dialog) return;
@@ -15,6 +17,7 @@
   const SETTING_NAMES = () => ({ appearance: t('theme'), language: t('language'), defaults: t('default agent and access'), notifications: t('alerts'), handoff: t('handoffs'), contextLimit: t('context limit'), verificationCadence: t('testing cadence'), suggestions: t('suggestions') });
   let screen = 'export', busy = false, summary = null, opened = null, file = '', picked = '', passphrase = '', choices = {}, includeSettings = false, decisions = {}, conflicts = [], result = null, exported = null;
   let exportChoice = { workspaces: new Set(), checkpoints: false, settings: true }, reload = false;
+  let sendState = null, receiveState = null, polling = null, drawn = '', received = false;
 
   function showError(message) { error.textContent = message || ''; error.hidden = !message; }
   function heading(title, description) { $('backup-title').textContent = title; $('backup-description').textContent = description || ''; }
@@ -50,6 +53,18 @@
     heading(t('Export Codeshi backup'), t('One file with your workspaces, their conversations, memory, skills, board cards and tasks, and your settings, locked with a passphrase. On the other computer, open it with Import Codeshi Backup.'));
     submit.textContent = t('Export'); content.replaceChildren();
     if (!summary) { content.append(node('p', t('Reading your workspaces…'), 'backup-note')); return; }
+    const [list, extras, size] = choiceFields();
+    const first = password('backup-passphrase', t('Passphrase'), 'new-password'), second = password('backup-passphrase-again', t('Passphrase again'), 'new-password');
+    const fields = node('div', undefined, 'backup-fields'); fields.append(first.wrap, second.wrap);
+    const warning = node('p', t('At least 8 characters. Codeshi can’t recover a forgotten passphrase, and anyone with the file and the passphrase can read everything in it.'), 'backup-note');
+    const name = `Codeshi Backup ${new Date().toISOString().slice(0, 10)}.codeshibackup`;
+    const target = pathField({ id: 'backup-file', label: t('Save as'), value: file || `${summary.suggestedFolder}/${name}`, choose: bridge?.pickBackup ? async () => { const chosen = await bridge.pickBackup({ mode: 'save', name }); if (chosen) picked = chosen; return chosen; } : null });
+    content.append(list, extras, size, fields, warning, target.wrap, staysHere());
+    total();
+  }
+  const staysHere = () => { const stays = node('details', undefined, 'backup-details'); stays.append(node('summary', t('What stays on this computer')), node('p', t('Agent sign-ins, your GitHub login, phone pairings, anything in the keychain, approvals you chose to always allow, and the working copies parallel tasks use. The code itself isn’t included: it stays in its folders and in Git.'), 'backup-note')); return stays; };
+  // Which workspaces go, and whether checkpoints and settings go too: shared by Export and Move.
+  function choiceFields() {
     const list = node('fieldset', undefined, 'backup-list'); list.append(node('legend', t('Workspaces'), 'brief-label'));
     if (!summary.workspaces.length) list.append(node('p', t('There are no workspaces yet. Settings can still be exported.'), 'backup-note'));
     for (const workspace of summary.workspaces) {
@@ -61,14 +76,7 @@
     if (checkpointBytes) extras.append(check(t('Checkpoints'), t('Undo and Timeline restore keep working on the other computer. Adds up to {size}.', { size: bytes(checkpointBytes) }), exportChoice.checkpoints, on => { exportChoice.checkpoints = on; total(); }));
     extras.append(check(t('Settings'), t('Theme, language, alerts, handoffs, testing and the default agent.'), exportChoice.settings, on => { exportChoice.settings = on; }));
     const size = node('p', '', 'backup-note'); size.id = 'backup-size';
-    const first = password('backup-passphrase', t('Passphrase'), 'new-password'), second = password('backup-passphrase-again', t('Passphrase again'), 'new-password');
-    const fields = node('div', undefined, 'backup-fields'); fields.append(first.wrap, second.wrap);
-    const warning = node('p', t('At least 8 characters. Codeshi can’t recover a forgotten passphrase, and anyone with the file and the passphrase can read everything in it.'), 'backup-note');
-    const name = `Codeshi Backup ${new Date().toISOString().slice(0, 10)}.codeshibackup`;
-    const target = pathField({ id: 'backup-file', label: t('Save as'), value: file || `${summary.suggestedFolder}/${name}`, choose: bridge?.pickBackup ? async () => { const chosen = await bridge.pickBackup({ mode: 'save', name }); if (chosen) picked = chosen; return chosen; } : null });
-    const stays = node('details', undefined, 'backup-details'); stays.append(node('summary', t('What stays on this computer')), node('p', t('Agent sign-ins, your GitHub login, phone pairings, anything in the keychain, approvals you chose to always allow, and the working copies parallel tasks use. The code itself isn’t included: it stays in its folders and in Git.'), 'backup-note'));
-    content.append(list, extras, size, fields, warning, target.wrap, stays);
-    total();
+    return [list, extras, size];
   }
   function total() {
     const line = $('backup-size'); if (!line || !summary) return;
@@ -101,7 +109,10 @@
     submit.textContent = t('Open'); content.replaceChildren();
     const source = pathField({ id: 'backup-file', label: t('Backup file'), value: file, placeholder: '~/Downloads/Codeshi Backup.codeshibackup', choose: bridge?.pickBackup ? () => bridge.pickBackup({ mode: 'open' }) : null });
     const secret = password('backup-passphrase', t('Passphrase'), 'current-password'); secret.input.value = passphrase;
-    content.append(source.wrap, secret.wrap);
+    const other = node('p', undefined, 'backup-note'), link = node('button', t('Receive from a computer on this network'), 'text-link');
+    link.type = 'button'; link.addEventListener('click', () => { screen = 'receive'; render(); focusFirst(); });
+    other.append(t('No file? '), link, '.');
+    content.append(source.wrap, secret.wrap, other);
   }
   async function runOpen() {
     const source = $('backup-file').value.trim(), secret = $('backup-passphrase').value;
@@ -181,6 +192,7 @@
       setBusy(false); if (screen === 'map') render(); throw failure;
     }
     setBusy(false); passphrase = '';
+    if (received) { received = false; api().post('/api/move/receive/stop', {}).catch(() => {}); }
     try { await api().refreshProjects?.(); } catch { /* The list refreshes on its own. */ }
     // Imported settings show at once: the theme now, the language when the dialog closes, as choosing one does.
     if (result.settings?.includes('appearance')) { try { window.relayTheme?.follow?.((await api().api('/api/appearance')).theme); } catch { /* Shown after the next reload. */ } }
@@ -230,28 +242,171 @@
     submit.textContent = result.workspaces.length === 1 && !$('setup-dialog')?.open ? t('Open {name}', { name: first.name }) : t('Done');
   }
 
-  const RENDER = { export: renderExport, exported: renderExported, open: renderOpen, map: renderMap, conflicts: renderConflicts, done: renderDone };
-  function render() { showError(''); cancel.textContent = ['done', 'exported'].includes(screen) ? t('Close') : t('Cancel'); RENDER[screen](); }
+  // Move, on the old computer: what goes, then the code to type on the new one and its request to allow.
+  function renderSend() {
+    heading(t('Move to another computer'), t('Sends your workspaces, their conversations, memory, skills, board cards and tasks, and your settings straight to another computer on this network. Nothing goes through a server, and nothing here is deleted.'));
+    submit.textContent = t('Start'); content.replaceChildren();
+    if (!summary) { content.append(node('p', t('Reading your workspaces…'), 'backup-note')); return; }
+    const [list, extras, size] = choiceFields();
+    content.append(list, extras, size, node('p', t('Both computers need to be on the same Wi-Fi or network. Otherwise, use Export Codeshi Backup and copy the file.'), 'backup-note'), staysHere());
+    total();
+  }
+  async function runSend() {
+    if (!exportChoice.workspaces.size && !exportChoice.settings) throw new Error(t('Choose at least one workspace, or settings.'));
+    setBusy(true, t('Encrypting…'));
+    try { sendState = await api().post('/api/move/send', { workspaces: [...exportChoice.workspaces].map(id => ({ id, checkpoints: exportChoice.checkpoints })), settings: exportChoice.settings }); }
+    finally { setBusy(false); }
+    screen = 'sending'; drawn = ''; render(); poll();
+  }
+  const codeBlock = code => { const value = node('p', code, 'move-code'); value.setAttribute('aria-label', t('Move code: {code}', { code: code.split('').join(' ') })); return value; };
+  function renderSending() {
+    const state = sendState?.state || 'idle', requests = sendState?.requests || [];
+    // Redrawn only when something you can act on changes, so a focused Allow button keeps its focus.
+    const key = JSON.stringify([state, requests.map(item => [item.id, item.state]), sendState?.error]);
+    const progress = $('move-progress');
+    if (progress && state === 'sending') progress.textContent = t('Sending: {sent} of {size}', { sent: bytes(sendState.sent || 0), size: bytes(sendState.bytes || 0) });
+    if (key === drawn && content.childElementCount) return;
+    drawn = key; content.replaceChildren(); submit.hidden = false;
+    const allowed = requests.find(item => item.state === 'allowed');
+    if (state === 'waiting' || state === 'sending') {
+      heading(t('Move to another computer'), t('Ready to send {size}. Open until {time}.', { size: bytes(sendState.bytes), time: new Date(sendState.expiresAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) }));
+      submit.hidden = true; cancel.textContent = t('Stop');
+      if (state === 'sending') {
+        content.append(node('p', t('Sending to {computer}. Keep both computers awake and Codeshi open until it finishes.', { computer: allowed?.computer || t('the other computer') }), 'backup-lead'));
+        const line = node('p', t('Sending: {sent} of {size}', { sent: bytes(sendState.sent || 0), size: bytes(sendState.bytes || 0) }), 'backup-note'); line.id = 'move-progress'; content.append(line);
+        return;
+      }
+      content.append(node('p', t('On the other computer, choose File › Receive from Another Computer… and type this code:'), 'backup-lead'), codeBlock(sendState.codes[0]));
+      if (sendState.codes.length > 1) { const more = node('details', undefined, 'backup-details'); more.append(node('summary', t('Other addresses of this computer')), node('p', t('If the code above doesn’t connect, try one of these.'), 'backup-note'), ...sendState.codes.slice(1).map(codeBlock)); content.append(more); }
+      const pending = requests.filter(item => item.state === 'pending');
+      if (allowed) content.append(node('p', t('Allowed {computer}. Waiting for it to start receiving…', { computer: allowed.computer }), 'backup-note'));
+      else if (!pending.length) content.append(node('p', t('Waiting for the other computer… If this computer asks whether Codeshi may accept incoming connections, choose Allow.'), 'backup-note'));
+      for (const item of pending) {
+        const row = node('section', undefined, 'move-request');
+        row.append(node('p', t('{computer} wants to receive this move. Allow it only if that computer shows these digits:', { computer: item.computer }), 'backup-lead'), node('p', item.check.replace(/(\d{3})(\d{3})/, '$1 $2'), 'move-check'));
+        const actions = node('div', undefined, 'move-actions'), deny = node('button', t('Deny'), 'secondary-button'), allow = node('button', t('Allow'), 'primary-button');
+        deny.type = allow.type = 'button';
+        deny.addEventListener('click', () => answer('deny', item.id)); allow.addEventListener('click', () => answer('allow', item.id));
+        actions.append(deny, allow); row.append(actions); content.append(row);
+      }
+      if (pending.length) content.querySelector('.move-request .primary-button')?.focus();
+      return;
+    }
+    cancel.textContent = t('Close');
+    if (state === 'sent') {
+      heading(t('Moved'), '');
+      submit.textContent = t('Done');
+      content.append(node('p', t('Sent {size} to {computer}. Finish there: choose where each workspace’s folders are.', { size: bytes(sendState.bytes), computer: allowed?.computer || t('the other computer') }), 'backup-lead'), node('p', t('Nothing on this computer was changed or deleted.'), 'backup-note'));
+      return;
+    }
+    heading(t('Move to another computer'), '');
+    submit.textContent = t('Start again');
+    content.append(node('p', state === 'expired' ? t('The move was open for 15 minutes and has closed. Nothing was sent.') : sendState?.error || t('The move was stopped. Nothing was sent.'), 'backup-lead'));
+  }
+  async function answer(kind, id) {
+    try { sendState = await api().post(`/api/move/send/${kind}`, { id }); renderSending(); }
+    catch (failure) { showError(failure.message); }
+  }
+
+  // Move, on the new computer: type the code, compare the digits, then import what arrives as a backup file.
+  function renderReceive() {
+    heading(t('Receive from another computer'), t('Brings workspaces, conversations and settings from Codeshi on another computer on this network. Nothing here is deleted, and a conversation that also changed here is replaced only if you choose.'));
+    submit.textContent = t('Connect'); content.replaceChildren();
+    const wrap = node('div', undefined, 'backup-field'), label = node('label', t('Move code'), 'brief-label'), input = node('input');
+    label.htmlFor = input.id = 'move-code-input'; input.type = 'text'; input.autocomplete = 'off'; input.spellcheck = false; input.placeholder = '192.168.1.20:52143/7KQM-2XHD-9PTA-W3CZ'; input.className = 'move-code-input';
+    wrap.append(label, input);
+    content.append(node('p', t('On the old computer, choose File › Move to Another Computer… It shows a move code to type here.'), 'backup-note'), wrap);
+  }
+  async function runReceive() {
+    const code = $('move-code-input').value.trim();
+    if (!code) throw new Error(t('Type the move code shown on the other computer.'));
+    setBusy(true, t('Connecting…'));
+    try { receiveState = await api().post('/api/move/receive', { code }); }
+    finally { setBusy(false); }
+    screen = 'receiving'; drawn = ''; render(); poll();
+  }
+  function renderReceiving() {
+    const state = receiveState?.state || 'idle', progress = $('move-progress');
+    if (progress && state === 'receiving') progress.textContent = t('Receiving: {received} of {size}', { received: bytes(receiveState.received || 0), size: bytes(receiveState.bytes || 0) });
+    const key = JSON.stringify([state, receiveState?.error]);
+    if (key === drawn && content.childElementCount) return;
+    drawn = key; content.replaceChildren(); submit.hidden = false;
+    heading(t('Receive from another computer'), receiveState?.computer ? t('From {computer}, {size}.', { computer: receiveState.computer, size: bytes(receiveState.bytes) }) : '');
+    if (state === 'asking' || state === 'connecting') {
+      submit.hidden = true; cancel.textContent = t('Stop');
+      content.append(node('p', t('Check that {computer} shows these digits, then choose Allow there:', { computer: receiveState.computer || t('the other computer') }), 'backup-lead'), node('p', receiveState.check.replace(/(\d{3})(\d{3})/, '$1 $2'), 'move-check'));
+      content.append(node('p', t('If the digits are different, choose Deny there: another computer is asking.'), 'backup-note'));
+      return;
+    }
+    if (state === 'receiving' || state === 'ready') {
+      submit.hidden = true; cancel.textContent = t('Stop');
+      const line = node('p', t('Receiving: {received} of {size}', { received: bytes(receiveState.received || 0), size: bytes(receiveState.bytes || 0) }), 'backup-lead'); line.id = 'move-progress';
+      content.append(line, node('p', t('Keep both computers awake and Codeshi open until it finishes.'), 'backup-note'));
+      return;
+    }
+    cancel.textContent = t('Close'); submit.textContent = t('Try again');
+    content.append(node('p', state === 'denied' ? t('The other computer chose Deny. Nothing was received.') : receiveState?.error || t('The move stopped. Nothing was imported.'), 'backup-lead'));
+  }
+  // Once the backup has arrived, it opens as a file would, and the usual import screens follow.
+  async function openReceived() {
+    const arrived = receiveState; stopPolling();
+    setBusy(true, t('Opening…'));
+    try { opened = await api().post('/api/backup/read', { path: arrived.path, passphrase: arrived.passphrase }); }
+    catch (failure) { setBusy(false); receiveState = { ...arrived, state: 'failed', error: failure.message }; drawn = ''; render(); return; }
+    setBusy(false);
+    received = true; file = arrived.path; passphrase = arrived.passphrase; decisions = {}; conflicts = [];
+    choices = Object.fromEntries(opened.workspaces.map(workspace => [workspace.key, { include: true, folders: Object.fromEntries(workspace.folders.map(folder => [folder.id, folder.suggestion ? { kind: 'suggested', path: folder.suggestion.path } : folder.repository ? { kind: 'clone' } : { kind: 'path', path: '' }])) }]));
+    includeSettings = Boolean(opened.settings?.length) && !opened.hasWorkspaces;
+    screen = 'map'; render(); focusFirst();
+  }
+
+  // One check a second while a move is open, only while this dialog shows it.
+  function stopPolling() { clearTimeout(polling); polling = null; }
+  function poll() {
+    stopPolling();
+    const sending = screen === 'sending', path = sending ? '/api/move/send' : '/api/move/receive';
+    if (!dialog.open || !['sending', 'receiving'].includes(screen)) return;
+    polling = setTimeout(async () => {
+      try {
+        const value = await api().api(path);
+        if (sending) sendState = value; else receiveState = value;
+        if (screen === 'sending' && sending) renderSending();
+        else if (screen === 'receiving' && !sending) { if (value.state === 'ready') { await openReceived(); return; } renderReceiving(); }
+        if (['waiting', 'sending', 'asking', 'connecting', 'receiving'].includes(value.state)) poll();
+      } catch { poll(); }
+    }, 1000);
+  }
+  // Leaving a move screen stops the move, so a listener never stays open behind a closed dialog.
+  function stopMove() {
+    stopPolling();
+    if (screen === 'sending' && ['waiting', 'sending'].includes(sendState?.state)) api().post('/api/move/send/stop', {}).catch(() => {});
+    if (screen === 'receiving' || received) { received = false; api().post('/api/move/receive/stop', {}).catch(() => {}); }
+  }
+
+  const RENDER = { export: renderExport, exported: renderExported, open: renderOpen, map: renderMap, conflicts: renderConflicts, done: renderDone, send: renderSend, sending: renderSending, receive: renderReceive, receiving: renderReceiving };
+  function render() { showError(''); submit.hidden = false; cancel.textContent = ['done', 'exported'].includes(screen) ? t('Close') : t('Cancel'); RENDER[screen](); }
 
   $('backup-form').addEventListener('submit', async event => {
     event.preventDefault(); if (busy) return;
     if (screen === 'exported') { dialog.close(); return; }
+    if (screen === 'sending') { if (sendState?.state === 'sent') { dialog.close(); return; } screen = 'send'; render(); focusFirst(); return; }
+    if (screen === 'receiving') { stopMove(); screen = 'receive'; render(); focusFirst(); return; }
     if (screen === 'done') { const only = result.workspaces.length === 1 && !$('setup-dialog')?.open ? result.workspaces[0] : null; dialog.close(); if (only) await api().selectProject?.(only.id); return; }
-    try { if (screen === 'export') await runExport(); else if (screen === 'open') await runOpen(); else await runImport(); }
+    try { if (screen === 'export') await runExport(); else if (screen === 'send') await runSend(); else if (screen === 'receive') await runReceive(); else if (screen === 'open') await runOpen(); else await runImport(); }
     catch (failure) { setBusy(false); showError(failure.message || t('This could not be done. Please try again.')); }
     if (dialog.open) focusFirst();
   });
   cancel.addEventListener('click', () => { if (!busy) dialog.close(); });
   dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-  dialog.addEventListener('close', () => { passphrase = ''; opened = null; result = null; conflicts = []; decisions = {}; content.replaceChildren(); if (reload) { reload = false; window.location.reload(); } });
+  dialog.addEventListener('close', () => { stopMove(); sendState = null; receiveState = null; drawn = ''; submit.hidden = false; passphrase = ''; opened = null; result = null; conflicts = []; decisions = {}; content.replaceChildren(); if (reload) { reload = false; window.location.reload(); } });
 
   async function open(kind = 'export') {
     if (busy) return;
     if (dialog.open) dialog.close();
     window.relaySettings?.isOpen?.() && window.relaySettings.close();
-    screen = kind === 'import' ? 'open' : 'export'; file = ''; picked = ''; exported = null;
+    screen = { import: 'open', send: 'send', receive: 'receive' }[kind] || 'export'; file = ''; picked = ''; exported = null;
     render(); dialog.showModal();
-    if (screen === 'export') {
+    if (screen === 'export' || screen === 'send') {
       summary = null; render();
       try { summary = await api().api('/api/backup'); exportChoice = { workspaces: new Set(summary.workspaces.filter(item => !item.running).map(item => item.id)), checkpoints: false, settings: true }; render(); }
       catch (failure) { showError(failure.message); }

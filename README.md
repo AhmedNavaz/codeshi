@@ -52,6 +52,8 @@ irm https://raw.githubusercontent.com/AhmedNavaz/codeshi/main/install.ps1 | iex
 
 *Or download the latest zipped releases directly from [Releases](https://github.com/AhmedNavaz/codeshi/releases/latest).*
 
+Once installed, Codeshi offers new versions itself, on macOS and Windows. It downloads and checks the update, and you restart when you're ready.
+
 ### Run from Source
 
 Codeshi has **zero build steps** (vanilla ES modules). All you need is **Node.js 22.12+**:

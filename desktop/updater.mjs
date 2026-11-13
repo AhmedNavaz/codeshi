@@ -1,16 +1,22 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { atomicJSON } from '../src/patches.mjs';
 import { compareVersions, versionPattern } from './updates.mjs';
 
-// Updates from GitHub Releases, for the macOS builds the release workflow publishes. A newer release is offered, never
-// installed unasked. Installing downloads the zip for this Mac, checks it against the release's SHA256SUMS.txt and checks
-// the app inside (its version, bundle ID and signature), then a small helper replaces the app once Codeshi has quit
-// and opens the new version. Files the app downloads itself are not marked as downloaded from the internet, so the
-// updated app opens without the security prompt a browser download gets. Codeshi never restarts while an agent works.
+// Updates from GitHub Releases, for the macOS and Windows builds the release workflow publishes. A newer release is
+// offered, never installed unasked. Installing downloads the zip for this computer, checks it against the release's
+// SHA256SUMS.txt and checks the app inside, then a small helper replaces the app once Codeshi has quit and opens the
+// new version. Codeshi never restarts while an agent works.
+// - macOS: the app's version, bundle ID and signature are checked. Files the app downloads itself are not marked as
+//   downloaded from the internet, so the updated app opens without the security prompt a browser download gets.
+// - Windows: builds are not signed yet, so the checksum is the check, as in install.ps1, with the folder's Codeshi.exe
+//   and the version in its package.json. The update is unpacked beside the installed folder, so the swap is a rename on
+//   the same drive, and a PowerShell helper does it once Codeshi and its helper processes have let go of the folder.
 export const REPOSITORY = 'AhmedNavaz/codeshi';
+export const PACKAGE_NAME = 'codeshi';
 export const BUNDLE_ID = 'local.throughline.desktop';
 // Codeshi was called Throughline. Release files may come from the repository under either name, since GitHub sends
 // the old one to the new after a rename, and the zip and the app inside may carry either name.
@@ -19,8 +25,14 @@ const fromRepository = (url, part) => typeof url === 'string' && REPOSITORIES.so
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000, FIRST_CHECK = 15 * 1000;
 const MAX_DOWNLOAD = 1024 * 1024 * 1024, MAX_CHECKSUMS = 64 * 1024;
 
-// Apple Silicon Macs get the Apple Silicon build, also when this copy runs as the Intel build under Rosetta.
-export function updateBuild({ arch, translated = false }) { return arch === 'arm64' || translated ? 'apple-silicon' : 'intel'; }
+// Apple Silicon Macs get the Apple Silicon build, also when this copy runs as the Intel build under Rosetta. Windows has
+// one build, x64, which Windows on Arm runs too.
+export function updateBuild({ arch, translated = false, platform = 'darwin' }) {
+  if (platform === 'win32') return 'windows-x64';
+  return arch === 'arm64' || translated ? 'apple-silicon' : 'intel';
+}
+const windowsBuild = build => String(build).startsWith('windows-');
+const archiveName = (name, version, build) => windowsBuild(build) ? `${name}-${version}-${build}.zip` : `${name}-${version}-mac-${build}.zip`;
 
 // The running app bundle, and why it cannot be replaced in place: macOS runs an app opened straight from Downloads from
 // a read-only copy (App Translocation), and a folder the person cannot write to needs an administrator.
@@ -32,6 +44,25 @@ export function bundleLocation(executable, access = fs.accessSync) {
   catch { return { bundle, blocked: 'read-only' }; }
   return { bundle, blocked: null };
 }
+
+// The running Windows app's folder, the one install.ps1 makes (…\Programs\Codeshi with Codeshi.exe in it), and why it
+// cannot be replaced: a zip opened in Explorer without extracting runs from a temporary copy, and a folder such as
+// Program Files needs an administrator. Windows decides write access by the folder's permissions, which fs.accessSync
+// does not read, so a file is written and removed to find out.
+export function windowsLocation(executable, { temporary = os.tmpdir(), probe = canWrite } = {}) {
+  const exe = path.win32.basename(executable);
+  if (exe.toLowerCase() !== 'codeshi.exe') return { bundle: null, blocked: 'not-bundle' };
+  const bundle = path.win32.dirname(executable), inside = (folder, parent) => { const relative = path.win32.relative(parent, folder); return relative === '' || Boolean(relative) && !relative.startsWith('..') && !path.win32.isAbsolute(relative); };
+  if (temporary && inside(bundle, temporary)) return { bundle, blocked: 'temporary' };
+  if (!probe(path.win32.dirname(bundle)) || !probe(bundle)) return { bundle, blocked: 'read-only' };
+  return { bundle, blocked: null };
+}
+function canWrite(folder) {
+  const file = path.join(folder, `.codeshi-write-${process.pid}-${Date.now()}`);
+  try { fs.writeFileSync(file, ''); fs.rmSync(file, { force: true }); return true; } catch { return false; }
+}
+// Beside the installed folder: the unpacked update waiting to move in, and the previous version during the swap.
+const siblings = bundle => ({ update: `${bundle}.update`, previous: `${bundle}.previous` });
 
 // The expected hash of one file in a SHA256SUMS.txt written by sha256sum: "<hash>  <file>" per line.
 export function checksumFor(text, file) {
@@ -48,7 +79,7 @@ export function releaseFrom(json, build) {
   const version = json.tag_name.replace(/^v/, '');
   if (!versionPattern.test(version)) return null;
   const asset = name => (json.assets || []).find(item => item?.name === name && fromRepository(item.browser_download_url, 'releases/download/'));
-  const file = NAMES.map(name => `${name}-${version}-mac-${build}.zip`).find(asset) || `Codeshi-${version}-mac-${build}.zip`;
+  const file = NAMES.map(name => archiveName(name, version, build)).find(asset) || archiveName('Codeshi', version, build);
   const archive = asset(file), sums = asset('SHA256SUMS.txt');
   const notesUrl = fromRepository(json.html_url, 'releases/') ? json.html_url : `https://github.com/${REPOSITORY}/releases/tag/v${version}`;
   return { version, notesUrl, publishedAt: typeof json.published_at === 'string' ? json.published_at : null, file, url: archive?.browser_download_url || null, size: Number.isSafeInteger(archive?.size) ? archive.size : null, checksumsUrl: sums?.browser_download_url || null };
@@ -79,18 +110,64 @@ fi
 "$@" "$target"
 `;
 
+// The Windows helper, run by Windows PowerShell 5.1, which every supported Windows has. It waits for Codeshi to quit,
+// then retries the rename for up to 30 seconds, since Codeshi's own helper processes can hold files in its folder for a
+// moment after it has gone. Renames on one drive move a folder whole or not at all. If the new version cannot move in,
+// the previous one is put back. Open is the Codeshi.exe to start afterwards, or "-" for none. ASCII only: Windows
+// PowerShell reads a script without a byte order mark in the system's code page.
+export const WINDOWS_HELPER = `param([int]$ProcessId, [string]$Target, [string]$Staged, [string]$Previous, [string]$Open)
+$ErrorActionPreference = 'Stop'
+function Log([string]$message) { Write-Output ((Get-Date -Format 'yyyy-MM-ddTHH:mm:ss') + ' ' + $message) }
+function Reopen { if ($Open -and $Open -ne '-') { try { Start-Process -FilePath $Open -WorkingDirectory (Split-Path -Parent $Open) } catch { Log ('Codeshi could not be opened: ' + $_.Exception.Message) } } }
+$waited = 0
+while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+  $waited++
+  if ($waited -gt 1200) { Log 'Codeshi did not quit, so the update was not installed.'; exit 1 }
+  Start-Sleep -Milliseconds 100
+}
+if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Recurse -Force -ErrorAction SilentlyContinue }
+$moved = $false
+for ($try = 0; $try -lt 100 -and -not $moved; $try++) {
+  try { Move-Item -LiteralPath $Target -Destination $Previous; $moved = $true } catch { Start-Sleep -Milliseconds 300 }
+}
+if (-not $moved) { Log 'The installed app could not be moved aside.'; Reopen; exit 1 }
+try {
+  Move-Item -LiteralPath $Staged -Destination $Target
+  Log 'Installed the update.'
+  Remove-Item -LiteralPath $Previous -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Split-Path -Parent $Staged) -Recurse -Force -ErrorAction SilentlyContinue
+} catch {
+  Log 'The update could not be moved into place, so the previous version was restored.'
+  if (Test-Path -LiteralPath $Target) { Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue }
+  Move-Item -LiteralPath $Previous -Destination $Target
+}
+Reopen
+`;
+const powershell = () => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const windowsTar = () => path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+function launchHelper(platform) {
+  return (script, args, log) => {
+    const out = fs.openSync(log, 'a');
+    const [file, list] = platform === 'win32' ? [powershell(), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script, ...args]] : ['/bin/sh', [script, ...args]];
+    // The helper starts in the updates folder, never in the folder it is about to move.
+    spawn(file, list, { detached: true, windowsHide: true, cwd: path.dirname(script), stdio: ['ignore', out, out] }).unref();
+    fs.closeSync(out);
+  };
+}
+
 const run = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 120000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => error ? reject(Object.assign(error, { stderr })) : resolve(String(stdout))));
 
 export function createUpdater({
   version, build, location, directory, platform = process.platform, supported = true,
-  fetchImpl = globalThis.fetch, exec = run, launch = (script, args, log) => { const out = fs.openSync(log, 'a'); spawn('/bin/sh', [script, ...args], { detached: true, stdio: ['ignore', out, out] }).unref(); fs.closeSync(out); },
+  fetchImpl = globalThis.fetch, exec = run, launch = launchHelper(platform),
   busy = () => false, quit = () => {}, onState = () => {}, now = () => Date.now(), timers = { setTimeout, clearTimeout }, pid = process.pid,
 }) {
+  const windows = platform === 'win32';
   const preferencesFile = path.join(directory, 'preferences.json');
   let preferences = { automatic: true, skipped: null, checkedAt: null };
   try { const saved = JSON.parse(fs.readFileSync(preferencesFile, 'utf8')); preferences = { automatic: saved.automatic !== false, skipped: typeof saved.skipped === 'string' && versionPattern.test(saved.skipped) ? saved.skipped : null, checkedAt: typeof saved.checkedAt === 'string' ? saved.checkedAt : null }; }
   catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
-  const enabled = supported && platform === 'darwin' && Boolean(location?.bundle);
+  const enabled = supported && (platform === 'darwin' || windows) && Boolean(location?.bundle);
   let status = 'idle', latest = null, error = null, progress = null, staged = null, controller = null, timer = null, checking = null, lastProgress = 0;
   // The installer runs after Codeshi has gone, so the next launch is the first chance to say it failed. It says so once.
   const installLog = path.join(directory, 'install.log');
@@ -171,6 +248,7 @@ export function createUpdater({
     if (text.length > MAX_CHECKSUMS) throw new Error('The checksums file is larger than expected.');
     const expected = checksumFor(text, release.file);
     if (!expected || expected !== actual) throw new Error('The download does not match its published checksum, so nothing was installed.');
+    if (windows) return stageWindows(release, work, zip);
     const unpacked = path.join(work, 'app');
     await exec('/usr/bin/ditto', ['-x', '-k', zip, unpacked]);
     fs.rmSync(zip, { force: true });
@@ -185,22 +263,47 @@ export function createUpdater({
     return { version: release.version, app, work };
   }
 
+  // Windows: unpacked beside the installed folder with the system's tar, which reads zip files, then checked: one
+  // Codeshi folder with Codeshi.exe, and Codeshi's package.json at the release's version.
+  async function stageWindows(release, work, zip) {
+    const unpacked = siblings(location.bundle).update;
+    fs.rmSync(unpacked, { recursive: true, force: true });
+    fs.mkdirSync(unpacked, { recursive: true });
+    try { await exec(windowsTar(), ['-xf', zip, '-C', unpacked]); }
+    catch { throw new Error('The update could not be unpacked, so nothing was installed.'); }
+    fs.rmSync(work, { recursive: true, force: true });
+    const app = path.join(unpacked, 'Codeshi');
+    let manifest = null;
+    try { manifest = JSON.parse(fs.readFileSync(path.join(app, 'resources', 'app', 'package.json'), 'utf8')); } catch {}
+    if (!fs.existsSync(path.join(app, 'Codeshi.exe')) || !manifest) throw new Error('The download does not contain Codeshi.exe.');
+    if (manifest.name !== PACKAGE_NAME || manifest.version !== release.version) throw new Error('The downloaded app is not the expected version of Codeshi.');
+    return { version: release.version, app, work: unpacked };
+  }
+
   // Hands the swap to the helper; the helper puts the new version in place once this process has exited. Restarting
   // opens it, and quitting with an update ready leaves it in place for the next launch.
   function swap({ reopen = true } = {}) {
     if (!staged || status === 'installing') return;
     set('installing');
-    const script = path.join(directory, 'install-update.sh'), previous = path.join(directory, 'previous', 'Codeshi.app');
-    fs.mkdirSync(path.dirname(previous), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(script, HELPER, { mode: 0o700 });
-    launch(script, [String(pid), location.bundle, staged.app, previous, reopen ? '/usr/bin/open' : '/usr/bin/true'], path.join(directory, 'install.log'));
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const log = path.join(directory, 'install.log');
+    if (windows) {
+      const script = path.join(directory, 'install-update.ps1');
+      fs.writeFileSync(script, WINDOWS_HELPER, { mode: 0o700 });
+      launch(script, [String(pid), location.bundle, staged.app, siblings(location.bundle).previous, reopen ? path.join(location.bundle, 'Codeshi.exe') : '-'], log);
+    } else {
+      const script = path.join(directory, 'install-update.sh'), previous = path.join(directory, 'previous', 'Codeshi.app');
+      fs.mkdirSync(path.dirname(previous), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(script, HELPER, { mode: 0o700 });
+      launch(script, [String(pid), location.bundle, staged.app, previous, reopen ? '/usr/bin/open' : '/usr/bin/true'], log);
+    }
     if (reopen) quit();
   }
 
   // Downloads the update and checks it, then waits as ready: the person restarts when they choose.
   async function install() {
-    if (!enabled) throw new Error('Updates are installed from the macOS app.');
-    if (location.blocked) throw new Error(location.blocked === 'translocated' ? 'Move Codeshi to your Applications folder to install updates.' : 'Codeshi can’t replace itself in this folder. Download the update instead.');
+    if (!enabled) throw new Error('This copy of Codeshi can’t update itself.');
+    if (location.blocked) throw new Error({ translocated: 'Move Codeshi to your Applications folder to install updates.', temporary: 'Codeshi is running from a temporary folder. Install it with the installer to get updates.' }[location.blocked] || 'Codeshi can’t replace itself in this folder. Download the update instead.');
     if (['downloading', 'ready', 'waiting', 'installing'].includes(status)) return state();
     if (!latest) throw new Error('There is no update to install.');
     if (staged?.version === latest.version) { set('ready'); return state(); }
@@ -212,6 +315,7 @@ export function createUpdater({
       const cancelled = controller.signal.aborted;
       controller = null;
       fs.rmSync(path.join(directory, `download-${latest.version}`), { recursive: true, force: true });
+      if (windows) fs.rmSync(siblings(location.bundle).update, { recursive: true, force: true });
       if (cancelled) { set('available'); return state(); }
       set('error', { error: failure.message || 'The update could not be downloaded.' });
       return state();
@@ -251,7 +355,10 @@ export function createUpdater({
   }
 
   // A previous attempt's files are removed at launch; a finished update leaves nothing behind.
-  if (enabled) for (const entry of fs.existsSync(directory) ? fs.readdirSync(directory) : []) if (/^(download-|previous$|install-update\.sh$)/.test(entry)) fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
+  if (enabled) for (const entry of fs.existsSync(directory) ? fs.readdirSync(directory) : []) if (/^(download-|previous$|install-update\.(sh|ps1)$)/.test(entry)) fs.rmSync(path.join(directory, entry), { recursive: true, force: true });
+  // On Windows the leftovers sit beside the installed folder. Codeshi is running from that folder, so a previous
+  // version kept there by an interrupted swap is no longer needed.
+  if (enabled && windows && !location.blocked) for (const leftover of Object.values(siblings(location.bundle))) fs.rmSync(leftover, { recursive: true, force: true });
   schedule(FIRST_CHECK);
   return { state, check, install, restart, cancel, skip, setAutomatic, idle, finishOnQuit, dispose() { if (timer) timers.clearTimeout(timer); controller?.abort(); } };
 }

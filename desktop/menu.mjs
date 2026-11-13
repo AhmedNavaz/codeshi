@@ -50,6 +50,8 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     separator(),
     command(t('Export Codeshi Backup…'), ['backup-export']),
     command(t('Import Codeshi Backup…'), ['backup-import']),
+    command(t('Move to Another Computer…'), ['move-send']),
+    command(t('Receive from Another Computer…'), ['move-receive']),
     separator(),
     command(t('Share Live…'), ['share-live'], { enabled: page.workspace }),
     command(t('Watch a Teammate…'), ['watch-teammate']),
@@ -131,7 +133,8 @@ export function menuTemplate({ platform, packaged, updates = false, version, osV
     // Codeshi is free: a star helps contributors find it, and Patreon supports its development.
     link(t('Star Codeshi on GitHub'), repository),
     link(t('Support Codeshi on Patreon'), patreon),
-    ...mac ? [] : [separator(), { role: 'about' }],
+    // Windows has no application menu, so Check for Updates… sits in Help, beside About.
+    ...mac ? [] : [separator(), ...updates ? [command(t('Check for Updates…'), ['check-updates'], { id: 'check-updates' })] : [], { role: 'about' }],
   ] };
   const application = { label: 'Codeshi', submenu: [{ role: 'about' }, ...updates ? [command(t('Check for Updates…'), ['check-updates'], { id: 'check-updates' })] : [], separator(), settings, setup, ...cli, separator(), { role: 'services' }, separator(), { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator(), { role: 'quit' }] };
   return [...mac ? [application] : [], file, edit, view, agent, workspace, { role: 'windowMenu' }, help];

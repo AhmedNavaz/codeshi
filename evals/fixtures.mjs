@@ -14,8 +14,8 @@ const chores = (from, count, bytes) => Array.from({ length: count }, (_, offset)
 }).flat();
 // The rolling brief (#85). Invoice formats are agreed once, `after` exchanges before a task that needs them, in a conversation
 // past the 48 KB a fresh agent takes word for word. `--context task,task-unfolded` compares folding the older part with
-// cutting it off, as before 0.38.0. With long replies the formats sit just past the cut-off's reach and within the fold's;
-// with short ones, past the fold's 16 requests and within the cut-off's reach. Both are placed to show a difference.
+// cutting it off, as before 0.38.0. With long replies the formats sit just past the cut-off's reach and within the fold's.
+// With short ones they sit 30 exchanges back, past where a fold of a fixed 16 requests reached; a fold bounded by size reaches them.
 const longChat = ({ id, title, before, after, bytes, knownGap = null }) => ({
   id, title, ...(knownGap ? { knownGap } : {}),
   folders: { app: { 'invoice.mjs': '// Invoices.\n' } },
@@ -31,6 +31,70 @@ const longChat = ({ id, title, before, after, bytes, knownGap = null }) => ({
   rubric: 'Uses all three agreed formats without asking for them again.',
   // The recorded agent can only write the formats it was told, so a recorded run fails when the envelope lost them.
   trace: [{ requiresPrompt: ['INV-2026-0007', '05.01.2026', '12,34 EUR'], steps: [{ type: 'write', folder: 'app', file: 'invoice.mjs', content: "const two = value => String(value).padStart(2, '0');\nexport function invoiceLine({ year, counter, date, totalCents }) {\n  const number = `INV-${year}-${String(counter).padStart(4, '0')}`;\n  const day = `${two(date.getDate())}.${two(date.getMonth() + 1)}.${date.getFullYear()}`;\n  const amount = `${(totalCents / 100).toFixed(2).replace('.', ',')} EUR`;\n  return [number, day, amount].join(' | ');\n}\n" }, { type: 'say', text: 'Added invoiceLine with the agreed formats.' }], usage: { input: 2400, cached: 300, output: 160, reasoning: 40 } }],
+});
+// A longer task (#85): six turns building a small notes library, after a long chat that holds two formats agreed early on.
+// Turn two corrects turn one, turn four works in another folder, and the last two need everything agreed so far. Run with
+// `--threads fresh`, every turn starts a new session built from the journal, as after a handoff or a context refresh, so
+// the context policy decides each turn what the agent knows and what it has to read again. Still a built task, not a
+// person's real conversation.
+const NOTES_FORMATS = 'For the notes library, two things to keep for later. Note ids look like n-0001: a counter padded to four digits, starting at 1, never reused. When a note is shown on one line, it is the id, a middle dot (·), the title, then its tags in square brackets separated by a comma and a space, like n-0003 · Groceries [Home, Food]. Leave the brackets off when a note has no tags.';
+const STORE_V1 = "export function createStore() {\n  const notes = new Map();\n  let counter = 0;\n  return {\n    add({ title, body = '', tags = [] }) {\n      counter += 1;\n      const note = { id: `n-${String(counter).padStart(4, '0')}`, title, body, tags: [...new Set(tags.map(tag => tag.trim()).filter(Boolean))] };\n      notes.set(note.id, note);\n      return note;\n    },\n    get: id => notes.get(id),\n    all: () => [...notes.values()],\n  };\n}\n";
+const STORE_TAGS = "const cleanTags = (tags = []) => {\n  const seen = new Set(), kept = [];\n  for (const raw of tags) {\n    const tag = String(raw).trim(), key = tag.toLowerCase();\n    if (!tag || seen.has(key)) continue;\n    seen.add(key);\n    kept.push(tag);\n  }\n  return kept;\n};\n";
+const STORE_V2 = STORE_TAGS + STORE_V1.replace("[...new Set(tags.map(tag => tag.trim()).filter(Boolean))]", 'cleanTags(tags)');
+const STORE_V3 = STORE_V2.replace('    all: () => [...notes.values()],\n', '    all: () => [...notes.values()],\n    remove: id => notes.delete(id),\n');
+const longTask = () => ({
+  id: 'long-task', title: 'A six-turn task after a long chat, with a correction and a detour',
+  folders: { notes: { 'store.mjs': '// Notes store.\n', 'search.mjs': '// Search.\n', 'format.mjs': '// One-line formatting.\n', 'README.md': '# Notes\n\nA small notes library: a store, search and formatting.\n' },
+    site: { 'changelog.md': '# Changelog\n\n## Unreleased\n\n## 0.1.0\n\n- First page.\n' } },
+  history: () => [
+    ...chores(0, 14, 3000),
+    { role: 'user', text: NOTES_FORMATS },
+    { role: 'assistant', text: 'Noted. The notes files are still placeholders, so nothing to change yet.' },
+    ...chores(14, 25, 600),
+  ],
+  turns: [
+    { prompt: 'In notes/store.mjs, export createStore(), returning { add({ title, body, tags }), get(id), all() }. add returns the note it created: { id, title, body, tags }. Use the id format I gave earlier. Trim tags and drop duplicates.',
+      standalone: 'In notes/store.mjs, export createStore(), returning { add({ title, body, tags }), get(id), all() }. add returns the note it created: { id, title, body, tags }. Ids look like n-0001: a counter padded to four digits, starting at 1, never reused. Trim tags and drop duplicates.',
+      facts: ['n-0001'] },
+    { prompt: 'Change of mind on tags: keep each tag in its original case, but treat tags that differ only in case as duplicates, keeping the first. Update store.mjs.',
+      standalone: 'In notes/store.mjs, tags keep their original case, but tags that differ only in case are duplicates: keep the first. Ids stay n-0001 style.',
+      facts: ['n-0001'] },
+    { prompt: 'In notes/search.mjs, export search(store, query): the notes whose title or body contains the query, ignoring case, or that have a tag equal to the query, ignoring case. Return them newest first.',
+      standalone: 'In notes/search.mjs, export search(store, query) for the store in store.mjs (store.all() lists notes oldest first): the notes whose title or body contains the query, ignoring case, or that have a tag equal to the query, ignoring case. Return them newest first.',
+      facts: ['original case'] },
+    { prompt: "Separate small thing: in site/changelog.md, add the line '- Notes library: store and search.' under '## Unreleased'. Don't touch the notes folder.",
+      standalone: "In site/changelog.md, add the line '- Notes library: store and search.' under '## Unreleased'. Don't touch the notes folder.",
+      facts: [] },
+    { prompt: 'Back to notes. In notes/format.mjs, export formatNote(note), in the one-line format I described before we started.',
+      standalone: 'In notes/format.mjs, export formatNote(note): the id, a middle dot (·), the title, then its tags in square brackets separated by a comma and a space, like n-0003 · Groceries [Home, Food]. No brackets when a note has no tags.',
+      facts: ['square brackets', 'original case'] },
+    { prompt: 'Last one: add remove(id) to the store, returning true when a note was removed and false otherwise. search must not return removed notes. Keep everything else we agreed.',
+      standalone: 'In notes/store.mjs, add remove(id) to the store, returning true when a note was removed and false otherwise. Removed notes must not appear in search (notes/search.mjs). Ids are never reused: after n-0001 and n-0002, removing one and adding another gives n-0003. Tags keep their original case and drop case-only duplicates; search is newest first.',
+      facts: ['n-0001', 'original case', 'newest first', 'square brackets'] },
+  ],
+  check: {
+    notes: { 'notes.test.mjs': test([
+      "import { createStore } from '../store.mjs';", "import { search } from '../search.mjs';", "import { formatNote } from '../format.mjs';",
+      "const filled = () => { const store = createStore(); const a = store.add({ title: 'Groceries', body: 'Milk and eggs', tags: [' Home ', 'home', 'Food'] }); const b = store.add({ title: 'Plain', body: 'Call the bank about groceries', tags: [] }); return { store, a, b }; };",
+      "test('ids look like n-0001', () => { const { a, b, store } = filled(); assert.equal(a.id, 'n-0001'); assert.equal(b.id, 'n-0002'); assert.equal(store.get('n-0002').title, 'Plain'); });",
+      "test('tags keep their case and drop case-only duplicates', () => assert.deepEqual(filled().a.tags, ['Home', 'Food']));",
+      "test('search ignores case, matches tags and is newest first', () => { const { store } = filled(); assert.deepEqual(search(store, 'GROCERIES').map(note => note.id), ['n-0002', 'n-0001']); assert.deepEqual(search(store, 'food').map(note => note.id), ['n-0001']); assert.deepEqual(search(store, 'nothing'), []); });",
+      "test('the agreed one-line format', () => { const { a, b } = filled(); assert.equal(formatNote(a), 'n-0001 · Groceries [Home, Food]'); assert.equal(formatNote(b), 'n-0002 · Plain'); });",
+      "test('remove, and ids are never reused', () => { const { store } = filled(); assert.equal(store.remove('n-0001'), true); assert.equal(store.remove('n-0001'), false); assert.deepEqual(search(store, 'groceries').map(note => note.id), ['n-0002']); assert.equal(store.add({ title: 'Next', body: '', tags: [] }).id, 'n-0003'); });",
+    ].join('\n')) },
+    site: { 'changelog.test.mjs': test("import fs from 'node:fs';\ntest('the changelog line', () => assert.match(fs.readFileSync(new URL('../changelog.md', import.meta.url), 'utf8'), /## Unreleased\\s*\\n(?:\\s*\\n)*- Notes library: store and search\\.\\n/));") },
+  },
+  rubric: 'Keeps the early id and one-line formats, follows the later correction on tag case rather than the first instruction, leaves notes alone during the changelog detour, and does not invent behavior that was never agreed. Compare repeated reads and total usage between context settings, not only the checks.',
+  // Each turn reads the files it builds on, as agents do, so repeated reads show up in recorded runs too. Only the first
+  // turn checks its prompt: later turns resume natively by default, and a resume carries only what changed.
+  trace: [
+    { requiresPrompt: ['n-0001', '·'], steps: [{ type: 'command', command: 'cat store.mjs', output: '// Notes store.' }, { type: 'write', folder: 'notes', file: 'store.mjs', content: STORE_V1 }, { type: 'say', text: 'Added createStore with n-0001 style ids.' }], usage: { input: 2600, cached: 300, output: 220, reasoning: 40 } },
+    { steps: [{ type: 'command', command: 'cat store.mjs', output: 'export function createStore() { ... }' }, { type: 'write', folder: 'notes', file: 'store.mjs', content: STORE_V2 }, { type: 'say', text: 'Tags keep their case; case-only duplicates are dropped.' }], usage: { input: 1400, cached: 900, output: 160, reasoning: 30 } },
+    { steps: [{ type: 'command', command: 'cat store.mjs', output: 'export function createStore() { ... }' }, { type: 'write', folder: 'notes', file: 'search.mjs', content: "export function search(store, query) {\n  const wanted = String(query).toLowerCase();\n  return store.all().filter(note => note.title.toLowerCase().includes(wanted) || note.body.toLowerCase().includes(wanted) || note.tags.some(tag => tag.toLowerCase() === wanted)).reverse();\n}\n" }, { type: 'say', text: 'Added search, newest first.' }], usage: { input: 1500, cached: 1000, output: 170, reasoning: 30 } },
+    { steps: [{ type: 'write', folder: 'site', file: 'changelog.md', content: '# Changelog\n\n## Unreleased\n\n- Notes library: store and search.\n\n## 0.1.0\n\n- First page.\n' }, { type: 'say', text: 'Added the changelog line.' }], usage: { input: 1200, cached: 1000, output: 80, reasoning: 20 } },
+    { steps: [{ type: 'command', command: 'cat store.mjs', output: 'export function createStore() { ... }' }, { type: 'write', folder: 'notes', file: 'format.mjs', content: "export function formatNote(note) {\n  return `${note.id} · ${note.title}${note.tags.length ? ` [${note.tags.join(', ')}]` : ''}`;\n}\n" }, { type: 'say', text: 'Added formatNote in the agreed format.' }], usage: { input: 1400, cached: 1100, output: 120, reasoning: 30 } },
+    { steps: [{ type: 'command', command: 'cat store.mjs', output: 'export function createStore() { ... }' }, { type: 'command', command: 'cat search.mjs', output: 'export function search(store, query) { ... }' }, { type: 'write', folder: 'notes', file: 'store.mjs', content: STORE_V3 }, { type: 'say', text: 'Added remove; search reads the store, so removed notes are gone from it.' }], usage: { input: 1600, cached: 1200, output: 150, reasoning: 30 } },
+  ],
 });
 const CHANGE_NOTE ='---\nname: change-note\ndescription: Record a change in CHANGES.md in the format this project requires.\nlicense: MIT\n---\n\nUnder "## Unreleased" in CHANGES.md, add one line in exactly this format:\n\n- [<area>] <one sentence saying what changed>. (#<issue>)\n\nThe square brackets and the (#number) are required. Do not add anything else to the file.\n';
 const CHANGE_CHECK = test("import fs from 'node:fs';\nimport { add } from '../math.mjs';\ntest('procedure', () => { assert.equal(add(2, 3), 5); assert.match(fs.readFileSync(new URL('../CHANGES.md', import.meta.url), 'utf8'), /^- \\[math\\] .+\\. \\(#12\\)$/m); });");
@@ -351,9 +415,8 @@ export const fixtures = [
     ],
   },
   longChat({ id: 'long-chat', title: 'Formats agreed before many long replies', before: 4, after: 16, bytes: 5600 }),
-  longChat({ id: 'long-chat-short', title: 'Formats agreed before many short replies', before: 50, after: 30, bytes: 600,
-    // A recorded run under the current policy fails here: the fold keeps 16 requests, fewer than the cut-off reached.
-    knownGap: 'The rolling brief keeps only the 16 latest folded requests, so formats 30 short exchanges back are lost.' }),
+  longChat({ id: 'long-chat-short', title: 'Formats agreed before many short replies', before: 50, after: 30, bytes: 600 }),
+  longTask(),
   {
     id: 'review', title: 'Read-only review finds a seeded bug', readOnly: true,
     folders: { app: { 'discount.mjs': 'export function discount(price, percent) {\n  // percent is 0 to 100\n  return price * percent;\n}\n' } },

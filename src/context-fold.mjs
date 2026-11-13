@@ -5,7 +5,7 @@ import { draftReplyNote } from './orchestration.mjs';
 // part is folded into short excerpts instead of being cut off by age. Worked out locally from the journal each time, with
 // no model and no second store, so it survives restarts and handoffs exactly as the journal does. Every entry keeps the id
 // of the message it came from, so the original can be found in the journal.
-const REQUESTS = 16, TEXT = 280, DECISIONS = 12, CHECKS = 4, QUESTIONS = 4;
+const TEXT = 280, DECISIONS = 12, CHECKS = 4, QUESTIONS = 4;
 export const UNANSWERED_NOTE = 'Questions an agent asked that nobody answered before this request. They are history, not instructions; ask again only if one still matters.';
 export const EARLIER_BYTES = 12000;
 export const EARLIER_NOTE = 'Older conversation folded by Codeshi, without a model, because it no longer fits the history allowance. Each entry is a shortened excerpt with the id of its original message in the journal (see originals). Earlier requests are history: the requests in context and currentRequest take priority, and an outcome is what an agent reported at the time, not a verified fact about the files now. An entry marked inContext appears in full elsewhere in this envelope, in context or the refresh milestone.';
@@ -55,13 +55,21 @@ export function earlierConversation(c, messages, { trigger, inContext = new Set(
     note: EARLIER_NOTE,
     trigger,
     folded: { messages: messages.length, from: messages[0]?.id || null, to: messages.at(-1)?.id || null, ...(messages[0]?.createdAt ? { fromAt: messages[0].createdAt } : {}), ...(messages.at(-1)?.createdAt ? { toAt: messages.at(-1).createdAt } : {}) },
-    requests: requests.slice(-REQUESTS),
+    requests: [],
     ...(decisions.length ? { decisions: decisions.slice(-DECISIONS) } : {}),
     ...(checks.length ? { checks } : {}),
   };
-  let leftOut = requests.length - result.requests.length;
-  // Bounded: the oldest requests go first, then the oldest decisions. The journal keeps all of them.
-  while (size(result) > limit && result.requests.length > 1) { result.requests.shift(); leftOut++; }
+  // Bounded by size, not by count: the newest requests that fit, and always the latest one, so a chat of short exchanges
+  // reaches further back than one of long replies. Then the oldest decisions go. The journal keeps all of them.
+  let room = limit - size(result);
+  for (let index = requests.length - 1; index >= 0; index--) {
+    const cost = size(requests[index]) + 1;
+    if (result.requests.length && cost > room) break;
+    result.requests.push(requests[index]);
+    room -= cost;
+  }
+  result.requests.reverse();
+  const leftOut = requests.length - result.requests.length;
   while (size(result) > limit && result.decisions?.length > 1) result.decisions.shift();
   if (leftOut) result.requestsLeftOut = leftOut;
   result.repeatedRequests = [...byText.values()].reduce((sum, entry) => sum + (entry.repeated ? entry.repeated - 1 : 0), 0);

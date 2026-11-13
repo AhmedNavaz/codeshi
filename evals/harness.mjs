@@ -62,10 +62,12 @@ export function repeatedFileReads(messages, { workspace = null } = {}) {
 
 const describeAgent = text => { const [provider, model, effort] = String(text).split(':'); return { provider, model: model || null, effort: effort || null }; };
 export const parsePolicy = ({ agent, to = null, context = 'task', skills = true, skill = null, limits = null, threads = 'continuous', contextLimit = 'off' }) => {
-  if (!['continuous', 'separate'].includes(threads)) throw new Error('Choose continuous or separate task threads.');
+  // 'fresh' keeps one conversation but starts every turn after the first in a new native session, as after a handoff or a
+  // context refresh, so each turn is built from the journal by the context policy rather than resumed.
+  if (!['continuous', 'separate', 'fresh'].includes(threads)) throw new Error('Choose continuous, separate or fresh task threads.');
   contextLimit = validateContextLimit(contextLimit);
   return { builder: describeAgent(agent), to: to ? describeAgent(to) : null, context, skills, skill, limits, threads, contextLimit,
-    id: [agent, to && `to-${to}`, context, threads === 'separate' && 'separate-threads', contextLimit !== 'off' && `context-limit-${contextLimit}`, skills ? null : 'no-skills', skill && `skill-${skill}`, limits && `limits-${JSON.stringify(limits)}`].filter(Boolean).join(' ') };
+    id: [agent, to && `to-${to}`, context, threads === 'separate' && 'separate-threads', threads === 'fresh' && 'fresh-sessions', contextLimit !== 'off' && `context-limit-${contextLimit}`, skills ? null : 'no-skills', skill && `skill-${skill}`, limits && `limits-${JSON.stringify(limits)}`].filter(Boolean).join(' ') };
 };
 
 // Includes each skill's text, so a changed skill counts as a different experiment.
@@ -171,10 +173,10 @@ export async function runFixture(fixture, policy, { live = false, budget, stateD
         // This probe measures what a fresh handoff can reconstruct, not what the provider retained internally.
         const probe = prepareContext(c, text, { workspace: folders[names[0]], workspaceFolders, fresh: true, provider: agent.provider, mode: 'edit', policy: policy.context, readAttachment: () => ({ text: '' }), includeImages: false });
         const facts = turn.facts || [];
-        const started = await start(agent, text);
+        const started = await start(agent, text, { fresh: index > 0 && policy.threads === 'fresh' });
         if (!started) break;
         const context = c.lastRun?.context;
-        run.turns.push({ index, provider: agent.provider, status: c.lastRun?.status || null,
+        run.turns.push({ index, provider: agent.provider, status: c.lastRun?.status || null, repeatedFileReadsSoFar: repeatedFileReads(conversations.flatMap(conversation => conversation.messages), { workspace: folders[names[0]] }),
           context: context ? { bytes: context.bytes, estimatedTokens: context.size?.estimatedTokens ?? null, sessionMode: context.sessionMode, sessionReason: context.sessionReason, omittedMessages: context.omittedMessages, shortenedMessages: context.shortenedMessages, ...(context.restoredAfterCompaction ? { restoredAfterCompaction: true } : {}) } : null,
           reconstruction: { source: 'fresh-envelope-probe', factsKept: facts.filter(fact => probe.prompt.includes(fact)).length, factsTotal: facts.length } });
         // Limits count every reported input, including cache hits; reasoning is already part of output.

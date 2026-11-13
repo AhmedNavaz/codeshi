@@ -7,7 +7,7 @@ import {createRelayServer} from '../src/server.mjs';
 import {migrateLegacyData,preferredUserData} from './storage.mjs';
 import {createReleaseState} from './updates.mjs';
 import {createKeepAwake} from './keep-awake.mjs';
-import {createUpdater,updateBuild,bundleLocation} from './updater.mjs';
+import {createUpdater,updateBuild,bundleLocation,windowsLocation} from './updater.mjs';
 import {prepareHelper} from '../src/terminal.mjs';
 import {helperPath} from '../src/voice.mjs';
 import {execFile} from 'node:child_process';
@@ -193,8 +193,8 @@ else {
     const busy=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.running||broker.backgroundReview||broker.tasks?.busy||[...broker.conversations.values()].some(c=>c.queue?.length&&!c.queuePaused));
     // A schedule with a time still to come (#132) keeps Codeshi in the menu bar after its window closes.
     const scheduled=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.schedules?.waiting>0);
-    const build=updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation}),demo=updateDemo?(await import('./update-demo.mjs')).updateDemo({version:app.getVersion(),build,relaunch:()=>{app.relaunch();app.quit();}}):null;
-    updater=createUpdater({version:app.getVersion(),build,location:demo?.location||bundleLocation(process.execPath),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
+    const build=updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation,platform:process.platform}),demo=updateDemo?(await import('./update-demo.mjs')).updateDemo({version:app.getVersion(),build,relaunch:()=>{app.relaunch();app.quit();}}):null;
+    updater=createUpdater({version:app.getVersion(),build,location:demo?.location||(process.platform==='win32'?windowsLocation(process.execPath):bundleLocation(process.execPath)),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
     if(demo)updater.check();
     relay.registry.on('update',()=>setTimeout(()=>updater.idle(),0));
     // Live status on the Mac (#13): the menu bar item follows every workspace's runs, approvals and waits.

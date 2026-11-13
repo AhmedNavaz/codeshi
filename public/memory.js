@@ -51,7 +51,10 @@
     const row = node('li', 'panel-row suggestion'), title = node('div', 'panel-row-title');
     title.append(kind(item), node('span', 'panel-row-text', item.text));
     const actions = node('span', 'panel-row-actions always'), meta = node('div', 'panel-row-meta', `Suggested ${(KINDS[item.kind] || '').toLowerCase()}`);
-    actions.append(button('Keep', () => act({ action: 'add', kind: item.kind, text: item.text, folderId: item.folderId, messageId: item.messageId, runId: item.runId, suggested: true })), button('Dismiss', () => act({ action: 'dismiss', key: item.key })));
+    // Keep opens it for review first: the text, its kind and the folder it applies to can all change before it's saved.
+    const keep = button('Keep…', () => open(null, { text: item.text, kind: item.kind, folderId: item.folderId, messageId: item.messageId, runId: item.runId, suggested: true, suggestion: item.key }));
+    keep.setAttribute('aria-label', `Review and keep: ${item.text.slice(0, 80)}`);
+    actions.append(keep, button('Dismiss', () => act({ action: 'dismiss', key: item.key })));
     meta.append(actions);
     row.append(title, meta);
     return row;
@@ -77,7 +80,12 @@
 
   function open(entry = null, prefill = {}) {
     editing = entry;
-    $('memory-dialog-title').textContent = entry ? 'Edit this memory' : 'Remember this';
+    const suggested = !entry && prefill.suggested === true;
+    $('memory-dialog-title').textContent = entry ? 'Edit this memory' : suggested ? 'Keep this suggestion' : 'Remember this';
+    // Where a suggestion came from, so the person can judge it before keeping it.
+    const from = !suggested ? '' : prefill.kind === 'solution' ? 'Found in a task whose tests passed: a check failed, files changed, then the same check passed. ' : prefill.kind === 'failed-approach' ? 'Found in a task whose tests passed: this step failed along the way. ' : 'Taken from a message you wrote. ';
+    if ($('memory-dialog-note')) $('memory-dialog-note').textContent = `${from}Every agent in this workspace will be told this when it's relevant. ${suggested ? 'Edit it to what should stay true, then keep it.' : 'Keep it to what matters.'}`;
+    if ($('memory-save')) $('memory-save').textContent = suggested ? 'Keep' : 'Save';
     $('memory-text').value = entry?.text || prefill.text || '';
     $('memory-kind').value = entry?.kind || prefill.kind || 'convention';
     const folders = foldersOf(), select = $('memory-folder');
@@ -99,7 +107,7 @@
     event.preventDefault();
     const input = { kind: $('memory-kind').value, text: $('memory-text').value, folderId: $('memory-folder').value || null };
     try {
-      await change(editing ? { action: 'edit', id: editing.id, ...input } : { action: 'add', ...input, messageId: dialog.prefill?.messageId, runId: dialog.prefill?.runId });
+      await change(editing ? { action: 'edit', id: editing.id, ...input } : { action: 'add', ...input, messageId: dialog.prefill?.messageId, runId: dialog.prefill?.runId, ...(dialog.prefill?.suggested ? { suggested: true, suggestion: dialog.prefill.suggestion } : {}) });
       dialog.close();
       if (!panel.hidden) load();
     } catch (error) { $('memory-error').textContent = error.message; $('memory-error').hidden = false; }

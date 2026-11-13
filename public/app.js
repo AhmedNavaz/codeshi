@@ -3074,6 +3074,8 @@
     "local-models": () => window.relayLocal?.open(),
     "backup-export": () => { if (covered() || !window.relayBackup) return false; window.relayBackup.open("export"); return true; },
     "backup-import": () => { if (covered() || !window.relayBackup) return false; window.relayBackup.open("import"); return true; },
+    "move-send": () => { if (covered() || !window.relayBackup) return false; window.relayBackup.open("send"); return true; },
+    "move-receive": () => { if (covered() || !window.relayBackup) return false; window.relayBackup.open("receive"); return true; },
     "previous-chats": press("open-import"), export: press("open-export"), "ask-friend": press("ask-friend"), "share-live": press("share-live"), "watch-teammate": press("watch-teammate"), files: () => { if ($('files-dialog')?.open) { $('close-files').click(); return true; } return press('toggle-explorer')(); }, "keep-awake": press("keep-awake"),
     "add-folder": () => { if (covered()) return false; toggleFolderForm(true); return true; },
     agent: provider => ["codex", "claude", "gemini"].includes(provider) && press("select-" + provider)(),

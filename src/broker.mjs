@@ -21,7 +21,7 @@ import { waitingSummary } from './context-fold.mjs';
 import { privatePath } from './task-context.mjs';
 import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
-import { cleanEntryInput, editedEntry, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
+import { cleanEntryInput, editedEntry, isSuggestionKey, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
 import { planCopy, writeCopy } from './memory-instructions.mjs';
 import { applyBudgetRecord, isExplicitRetry, TaskBudgets } from './task-budget.mjs';
 import { SkillCatalog, CLAUDE_PLUGIN } from './skills.mjs';
@@ -594,7 +594,7 @@ export class Broker extends EventEmitter {
       this.record(c, { type: 'memory_update', id: input.id, changes: { status: input.action === 'retire' ? 'retired' : 'active' } });
     } else if (input.action === 'remove') { found(); this.record(c, { type: 'memory_remove', id: input.id }); }
     else if (input.action === 'dismiss') {
-      if (typeof input.key !== 'string' || !/^[\da-f]{16}$/.test(input.key)) throw Object.assign(new Error('Choose a suggestion to dismiss.'), { status: 400 });
+      if (!isSuggestionKey(input.key)) throw Object.assign(new Error('Choose a suggestion to dismiss.'), { status: 400 });
       this.record(c, { type: 'memory_dismiss', key: input.key });
     } else throw Object.assign(new Error('Unknown memory action.'), { status: 400 });
     return this.memory(c);

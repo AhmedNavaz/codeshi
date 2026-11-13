@@ -102,6 +102,7 @@
     if (window.relayBackup) {
       const move = kit.group(host, t('Move to another computer'));
       kit.row(move, { label: t('Codeshi backup'), description: t('Save your workspaces, their conversations, memory, skills, board cards and tasks, and these settings to one file locked with a passphrase. Import it on the other computer. Sign-ins never move.'), keywords: 'backup export import move migrate transfer new computer laptop restore', control: [kit.button(t('Export…'), () => window.relayBackup.open('export')), kit.button(t('Import…'), () => window.relayBackup.open('import'))] });
+      kit.row(move, { label: t('Over this network'), description: t('Send the same contents straight to another computer on this Wi-Fi or network, with a move code and no file. Nothing goes through a server.'), keywords: 'move send receive network wifi lan transfer new computer laptop', control: [kit.button(t('Send…'), () => window.relayBackup.open('send')), kit.button(t('Receive…'), () => window.relayBackup.open('receive'))] });
     }
     const bridge = window.relayDesktop;
     if (bridge?.getKeepAwake && bridge?.setKeepAwake) {

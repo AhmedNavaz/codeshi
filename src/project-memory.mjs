@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { continuationRequest } from './context.mjs';
-import { failedAttempts, fileHash, fileText, foldersInText, headOf, revisionOf } from './task-context.mjs';
+import { failedAttempts, fileHash, fileText, foldersInText, headOf, looksFailed, privatePath, revisionOf } from './task-context.mjs';
+import { commandOutcome } from './tool-outcomes.mjs';
 
 // Project memory (#21): what should outlive a single task, shared by every agent in a workspace. Entries are records in the
 // conversation's journal, and nothing enters without the person's approval, so a file or a command can't plant an instruction.
@@ -66,7 +68,7 @@ export function cleanEntryInput(input = {}, folders = []) {
 export function newEntry(input, folders, { now = new Date().toISOString() } = {}) {
   const clean = cleanEntryInput(input, folders), grounds = groundsOf(clean.folderId, folders);
   return { id: randomUUID(), ...clean, status: 'active', createdAt: now, updatedAt: now, files: attachedFiles(clean.text, folders, clean.folderId), dependencies: grounds.dependencies,
-    source: { ...(typeof input.messageId === 'string' ? { messageId: input.messageId.slice(0, 200) } : {}), ...(typeof input.runId === 'string' ? { runId: input.runId.slice(0, 200) } : {}), ...grounds.source, suggested: input.suggested === true } };
+    source: { ...(typeof input.messageId === 'string' ? { messageId: input.messageId.slice(0, 200) } : {}), ...(typeof input.runId === 'string' ? { runId: input.runId.slice(0, 200) } : {}), ...grounds.source, suggested: input.suggested === true, ...(input.suggested === true && isSuggestionKey(input.suggestion) ? { suggestion: input.suggestion } : {}) } };
 }
 
 // Whether what an entry rests on has moved. It stays usable, but is no longer stated as fact.
@@ -131,17 +133,59 @@ export function memoryForTask(c, { words, scope, folders, fresh, provider, limit
 }
 
 const suggestionKey = (kind, text) => createHash('sha256').update(`${kind}\0${text.trim().toLowerCase()}`).digest('hex').slice(0, 16);
+export const isSuggestionKey = value => typeof value === 'string' && /^[\da-f]{16}$/.test(value);
 const SAID = /\b(decision|convention)\s*:\s*([^\n]{8,400})/gi, REMEMBER = /\bremember (?:that |to )([^\n]{8,400})/gi, RULE = /^\s*(?:[-*]\s*)?((?:always|never)\s[^\n]{8,300})$/gim;
+// Commands that check the work. Only these can show a fix: a build or a test that failed, then passed after edits.
+const CHECKING = /\b(?:test|tests|spec|build|lint|check|typecheck|tsc|compile|pytest|jest|vitest|mocha|eslint|cargo|go (?:test|build|vet)|make|mvn|gradle|swift build|xcodebuild)\b/i;
+const FIXES = 3;
+
+// Files a step edited, as paths inside the workspace's folders. Paths outside them, and private files, are left out.
+function editedFiles(message, folders) {
+  const text = String(message.text || ''), found = [];
+  const take = target => {
+    if (typeof target !== 'string' || !target) return;
+    const folder = path.isAbsolute(target) ? folders.find(item => target === item.path || target.startsWith(item.path + path.sep)) : folders[0];
+    const relative = folder && (path.isAbsolute(target) ? path.relative(folder.path, target) : target);
+    if (relative && !relative.startsWith('..') && !privatePath(relative)) found.push({ folderId: folder.id, path: relative });
+  };
+  if (text.startsWith('File changes: ')) { try { for (const change of JSON.parse(text.slice(14))) take(change.path); } catch { /* Not the usual shape. */ } }
+  else if (/^(?:Edit|Write|MultiEdit|NotebookEdit)\n/.test(text)) { try { take(JSON.parse(text.split('\n')[1]).file_path); } catch { /* Cut short in the journal. */ } }
+  return found;
+}
+// A working fix, found without a model: in one task, a checking command failed, files were edited, and the same command then
+// finished without failing. It says what failed and which files the fix touched, not why it worked.
+function workingFixes(messages, folders) {
+  const fixes = [], fixed = new Set(), failures = new Map();
+  for (const message of messages) {
+    if (message.role !== 'activity') continue;
+    for (const file of editedFiles(message, folders)) for (const failure of failures.values()) failure.edits.set(file.folderId + '\0' + file.path, file);
+    const outcome = commandOutcome(message), command = outcome?.command?.trim();
+    if (!command || command.length > 200 || !CHECKING.test(command) || fixed.has(command)) continue;
+    if (outcome.failed) { if (!failures.has(command)) failures.set(command, { message, output: outcome.output, edits: new Map() }); continue; }
+    const failure = failures.get(command);
+    if (!failure || !(outcome.completed || outcome.output.trim())) continue;
+    failures.delete(command);
+    if (!failure.edits.size) continue; // Passing again with nothing changed is a flaky check, not a fix.
+    const files = [...failure.edits.values()], owners = [...new Set(files.map(file => file.folderId))];
+    const error = failure.output.split('\n').map(line => line.trim()).filter(Boolean).find(line => looksFailed(`$ ${command}\n${line}`)) || failure.output.trim().split('\n').at(-1) || '';
+    const names = files.slice(0, 5).map(file => file.path).join(', ') + (files.length > 5 ? ` and ${files.length - 5} more` : '');
+    fixed.add(command);
+    fixes.push({ command, text: `\`${command}\` failed${error ? ` with “${error.slice(0, 160)}”` : ''}; it passed after changes to ${names}.`, folderId: owners.length === 1 ? owners[0] : null, message: failure.message });
+  }
+  return { fixes, fixed };
+}
 
 // Suggestions, worked out when asked for and never sent to an agent until accepted: what the person wrote themselves as a
-// lasting rule, and approaches that failed in a task whose tests later passed. Nothing else here counts as verified.
+// lasting rule, and, in a task whose tests later passed, the fixes that worked and the approaches that failed. Nothing else
+// here counts as verified. Keeping one opens it for review first, and an entry kept from a suggestion remembers which, so
+// the suggestion stays gone even when the text was edited.
 export function memorySuggestions(c, folders) {
-  const taken = new Set([...(c.memory || []).map(entry => suggestionKey(entry.kind, entry.text)), ...(c.memoryDismissed || [])]), found = new Map();
-  const add = (kind, text, message) => {
+  const taken = new Set([...(c.memory || []).flatMap(entry => [suggestionKey(entry.kind, entry.text), entry.source?.suggestion].filter(Boolean)), ...(c.memoryDismissed || [])]), found = new Map();
+  const add = (kind, text, message, folderId) => {
     const clean = text.trim().slice(0, MAX_TEXT), key = suggestionKey(kind, clean);
     if (taken.has(key) || found.has(key)) return;
     const seen = foldersInText(message?.text, folders);
-    found.set(key, { key, kind, text: clean, folderId: seen.length === 1 ? seen[0] : null, messageId: message?.id || null, runId: message?.runId || null });
+    found.set(key, { key, kind, text: clean, folderId: folderId !== undefined ? folderId : seen.length === 1 ? seen[0] : null, messageId: message?.id || null, runId: message?.runId || null });
   };
   const said = (c.messages || []).filter(message => message.role === 'user' && !message.rewound && !message.imported && !message.retry && !message.reviewId && message.text && message.text !== continuationRequest).slice(-200).reverse();
   for (const message of said) {
@@ -149,11 +193,17 @@ export function memorySuggestions(c, folders) {
     for (const match of message.text.matchAll(REMEMBER)) add('convention', match[1], message);
     for (const match of message.text.matchAll(RULE)) add('convention', match[1], message);
   }
+  const tasks = new Set();
   for (const run of [...(c.runs || [])].reverse()) {
-    if (run.check?.status !== 'passed' || found.size >= MAX_SUGGESTIONS * 2) continue;
-    const taskRuns = new Set((c.runs || []).filter(item => (item.taskId || item.id) === (run.taskId || run.id)).map(item => item.id));
+    const task = run.taskId || run.id;
+    if (run.check?.status !== 'passed' || tasks.has(task) || found.size >= MAX_SUGGESTIONS * 2) continue;
+    tasks.add(task);
+    const taskRuns = new Set((c.runs || []).filter(item => (item.taskId || item.id) === task).map(item => item.id));
     const messages = (c.messages || []).filter(message => taskRuns.has(message.runId));
-    for (const attempt of failedAttempts(messages, [])) if (attempt.source === 'step' && attempt.what !== run.check.command) add('failed-approach', `${attempt.what}: ${attempt.how}`, messages.find(message => message.id === attempt.messageId));
+    const { fixes, fixed } = workingFixes(messages, folders);
+    for (const fix of fixes.slice(-FIXES)) add('solution', fix.text, fix.message, fix.folderId);
+    // A command that was fixed later is a working fix, not a failed approach.
+    for (const attempt of failedAttempts(messages, [])) if (attempt.source === 'step' && attempt.what !== run.check.command && !fixed.has(attempt.what.trim())) add('failed-approach', `${attempt.what}: ${attempt.how}`, messages.find(message => message.id === attempt.messageId));
   }
   return [...found.values()].slice(0, MAX_SUGGESTIONS);
 }
