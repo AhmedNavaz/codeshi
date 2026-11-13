@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 // contracts, task-scoped briefs, structured artifacts and gated integration checks.
 // steps bounds a plan written in the old step editor. A plan an agent drafts (#162) becomes draft cards on the Plan, so it
 // has no fixed number of cards: drafted is only the Plan's own size, and the board checks the room left.
-export const planLimits = { steps: 5, drafted: 300, title: 120, instructions: 4000, files: 12, path: 300, goal: 100000, summary: 1000, reply: 64000, plans: 10, phase: 60, done: 5, question: 300, questions: 5 };
+export const planLimits = { steps: 5, drafted: 300, title: 120, instructions: 4000, files: 12, path: 300, goal: 100000, summary: 1000, reply: 64000, plans: 10, phase: 60, done: 5, question: 300, questions: 5, option: 120 };
 const PROVIDERS = ['codex', 'claude', 'gemini'], TIERS = ['light', 'standard', 'deep'];
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 export const SPECIALIST_ROLES = ['builder', 'reviewer', 'frontend', 'backend', 'database', 'design', 'qa'];
@@ -44,7 +44,7 @@ export function planningRequest(goal, { documents = [] } = {}) {
       'Plan major cards: each a milestone of the project, grouped in phases. Each major card is split into small subtasks when it starts, against the code the earlier cards produced, so don\'t plan those subtasks now. The agents doing the cards won\'t see the documents, so put what each card needs from them in its instructions: names, fields, rules, wording and limits.',
       '',
     ] : []),
-    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 short questions for the person, usually empty) and steps (an array of cards, in order). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (the folders or files it expects to change, as paths relative to the project), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.',
+    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions for the person, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of cards, in order). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.',
     '',
     'Request:',
     goal,
@@ -52,11 +52,12 @@ export function planningRequest(goal, { documents = [] } = {}) {
 }
 
 // The plan the card shows, while it is open: being made, a draft, or one that never became a plan and waits to be planned
-// again or put away. Queued messages wait while it is open (see PromptQueue.tick).
+// again or put away.
 export const OPEN_PLANS = ['planning', 'draft', 'unstructured', 'failed', 'interrupted'];
-// A plan moved onto the Plan (#162) stays open while any of its cards is still a draft: queued messages wait for you to
-// accept or discard them, as they waited for a plan to be approved.
-export const openPlan = c => { const plan = c.orchestrations?.[0]; return plan && (OPEN_PLANS.includes(plan.status) || (plan.status === 'moved' && (c.board || []).some(card => card.draft?.batch?.id === plan.id))) ? plan : null; };
+// The plan queued messages wait for (see PromptQueue.tick): one being made, or a plan in the chat waiting for you to run
+// it. A plan that never became one has nothing to wait for, and a drafted plan moved onto the Plan (#162) is reviewed
+// there in its own time, so neither holds the queue: the chat carries on with what you queued.
+export const openPlan = c => { const plan = c.orchestrations?.[0]; return plan && ['planning', 'draft'].includes(plan.status) ? plan : null; };
 
 // Orchestrate plans from the main conversation, which holds the plan. Review after belongs to the steps' combined
 // changes, not to the planning run.
@@ -75,7 +76,11 @@ function checkStep(raw, index, earlier, { fromPlanner }) {
   if (!title) fail(`Give step ${index + 1} a title of at most ${planLimits.title} characters.`);
   if (!instructions) fail(`Give step ${index + 1} instructions of at most ${planLimits.instructions.toLocaleString('en-US')} characters.`);
   if (!TIERS.includes(raw.tier)) fail(`Choose light, standard or deep as step ${index + 1}'s tier.`);
-  const files = raw.files ?? [];
+  let files = raw.files ?? [];
+  // Files are a hint for the agent, so a planner that lists too many loses the extra ones, with a note on the card,
+  // rather than the whole plan. A list you edit yourself is still held to the limit.
+  let moreFiles = 0;
+  if (fromPlanner && Array.isArray(files) && files.length > planLimits.files) { moreFiles = files.length - planLimits.files; files = files.slice(0, planLimits.files); }
   if (!Array.isArray(files) || files.length > planLimits.files || files.some(file => !text(file, planLimits.path))) fail(`List at most ${planLimits.files} files or folders for step ${index + 1}, each as a path.`);
   const dependsOn = raw.dependsOn ?? [];
   if (!Array.isArray(dependsOn)) fail(`Step ${index + 1} can only depend on an earlier step.`);
@@ -109,7 +114,7 @@ function checkStep(raw, index, earlier, { fromPlanner }) {
   if (phase === null && raw.phase !== undefined && raw.phase !== null && raw.phase !== '') fail(`Give step ${index + 1} a phase of at most ${planLimits.phase} characters.`);
   const done = raw.done ?? [];
   if (!Array.isArray(done) || done.length > planLimits.done || done.some(item => !text(item, planLimits.question))) fail(`List at most ${planLimits.done} short statements of what done means for step ${index + 1}.`);
-  return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills, phase, done: done.map(item => item.trim()) };
+  return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills, phase, done: done.map(item => item.trim()), ...(moreFiles ? { moreFiles } : {}) };
 }
 
 // Verify specialist workflow dependency rules:
@@ -159,6 +164,7 @@ export function reviewDraft(steps) {
       const built = [...before(step.id)].map(id => byId.get(id)).filter(other => other && BUILDS.includes(other.role || 'builder') && !CONTRACTS.includes(other.artifact));
       if (built.length) note(step.id, `This ${step.artifact} comes after building work (${built.map(other => `card ${number.get(other.id)}`).join(', ')}). Contracts should come before the cards that use them.`);
     }
+    if (step.moreFiles) note(step.id, `The planner listed ${step.moreFiles} more ${step.moreFiles === 1 ? 'file' : 'files'} than a card holds, so only the first ${planLimits.files} are kept. Add any it needs to its instructions.`);
     if (step.instructions.length > 2500 || step.files.length > 8) note(step.id, 'It looks large for one run. Consider splitting it into smaller cards.');
   }
   return notes;
@@ -352,6 +358,18 @@ export function evaluateIntegration({ step, checkResult = null, reviewFindings =
 }
 
 // The planner's reply, read strictly: a plan that doesn't match is reported, never repaired by guessing.
+// A planner's question (#162): the question and the answers the person can choose from, the one it recommends first.
+// A plain string, as older plans and agents give, is a question with no choices, answered in the person's own words.
+export function planQuestions(list) {
+  return (Array.isArray(list) ? list : []).map(item => {
+    const question = text(typeof item === 'string' ? item : item?.question, planLimits.question);
+    if (!question) return null;
+    const options = [...new Set((Array.isArray(item?.options) ? item.options : []).map(option => text(typeof option === 'string' ? option : option?.label, planLimits.option)).filter(Boolean))].slice(0, 4);
+    return { question, options };
+  }).filter(Boolean).slice(0, planLimits.questions);
+}
+export const questionText = item => typeof item === 'string' ? item : item?.question || '';
+
 export function parsePlan(reply) {
   try {
     if (typeof reply !== 'string' || Buffer.byteLength(reply) > planLimits.reply) throw Error();
@@ -359,10 +377,12 @@ export function parsePlan(reply) {
     const summary = text(plan?.summary, planLimits.summary);
     if (!summary || !Array.isArray(plan.steps) || !plan.steps.length) throw Error();
     // Questions the planner couldn't answer from the request (#162): kept for you, never answered for you.
-    const questions = Array.isArray(plan.questions) ? plan.questions.map(item => text(item, planLimits.question)).filter(Boolean).slice(0, planLimits.questions) : [];
+    const questions = planQuestions(plan.questions);
     return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true }), ...(questions.length ? { questions } : {}) };
-  } catch { return { status: 'unstructured', summary: 'The planner\'s reply could not be read as a plan. Open its response, plan again, or write the steps yourself.', steps: [] }; }
+  } catch (error) { return { status: 'unstructured', summary: unreadable(error), steps: [] }; }
 }
+// Why a reply wasn't taken: the rule a card broke, in the planner's own numbering, or that it wasn't a plan at all.
+const unreadable = error => error?.status ? `The planner's plan broke a rule, so none of it was added: ${error.message.replace(/\bstep(s?)\b/g, 'card$1')} Try again, or write the cards yourself.` : 'The planner\'s reply could not be read as a plan. Try again, or write the cards yourself.';
 
 // Suggest next (#162): one read-only run proposes 1 to 3 follow-up cards after an existing card, read with the same strict rules.
 export function parseSuggest(reply) {
@@ -372,7 +392,7 @@ export function parseSuggest(reply) {
     const summary = text(plan?.summary, planLimits.summary);
     if (!summary || !Array.isArray(plan.steps) || !plan.steps.length) throw Error();
     if (plan.steps.length > 3) return { status: 'unstructured', summary: `The agent suggested ${plan.steps.length} cards, more than the 3 “Suggest next” allows. Suggest again, or use Add next to write one yourself.`, steps: [] };
-    const questions = Array.isArray(plan.questions) ? plan.questions.map(item => text(item, planLimits.question)).filter(Boolean).slice(0, planLimits.questions) : [];
+    const questions = planQuestions(plan.questions);
     return { status: 'draft', summary, steps: checkSteps(plan.steps, { fromPlanner: true, max: 3 }), ...(questions.length ? { questions } : {}) };
   } catch {
     return { status: 'unstructured', summary: 'The agent’s reply could not be read as suggested cards. Suggest again, or use Add next to write one yourself.', steps: [] };
@@ -387,7 +407,7 @@ export function applyOrchestration(c, record) {
     for (const item of c.orchestrations) if (OPEN_PLANS.includes(item.status)) Object.assign(item, { status: 'superseded', updatedAt: record.at });
     c.orchestrations = [value, ...c.orchestrations].slice(0, planLimits.plans);
   };
-  if (record.type === 'submission' && record.orchestration) add({ id: record.id, goal: record.orchestration.goal, ...(record.orchestration.documents?.length ? { documents: record.orchestration.documents } : {}),source: 'agent', status: 'planning', summary: '', steps: [], review: true, revision: 0, planner: { provider: record.provider, model: record.model ?? null, effort: record.effort ?? null }, createdAt: record.at, updatedAt: record.at });
+  if (record.type === 'submission' && record.orchestration) add({ id: record.id, goal: record.orchestration.goal, ...(record.orchestration.documents?.length ? { documents: record.orchestration.documents } : {}), ...(record.orchestration.replaces ? { replaces: record.orchestration.replaces } : {}), source: 'agent', status: 'planning', summary: '', steps: [], review: true, revision: 0, planner: { provider: record.provider, model: record.model ?? null, effort: record.effort ?? null }, createdAt: record.at, updatedAt: record.at });
   if (record.type === 'orchestration_plan') add({ ...record.plan, createdAt: record.at, updatedAt: record.at });
   if (!plan) return;
   if (record.type === 'orchestration_result') Object.assign(plan, record.result, { revision: plan.revision + 1, updatedAt: record.at });

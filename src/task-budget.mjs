@@ -218,7 +218,13 @@ export function classifyStep(input) {
 }
 
 export class TaskBudgets {
-  constructor(broker) { this.broker = broker; this.timers = new Map(); this.watches = new Map(); }
+  constructor(broker) { this.broker = broker; this.timers = new Map(); this.watches = new Map(); this.shared = null; }
+  // A part of a split message (#107 stage 2) shares the message's limits with the other parts (#87). The coordinator sets
+  // shared on the part's lane: it returns what the message and the other parts have used, or null for a task of its own.
+  sharedOf(c, state) {
+    const extra = c && state && this.shared ? this.shared(c, state.taskId) : null;
+    return extra ? { workingMs: 0, tokens: 0, spendUSD: 0, retries: 0, reviews: 0, handoffs: 0, runsWithoutUsage: 0, runsWithPartialUsage: 0, runsWithoutCost: 0, ...extra } : null;
+  }
 
   policy(c) { return { ...defaultPolicy(), ...(c.taskPolicy || {}) }; }
   setPolicy(c, input) {
@@ -236,22 +242,22 @@ export class TaskBudgets {
     if (models && (!model || !models.includes(model))) return { allowed: false, reason: `${model ? `The model ${model}` : `${NAMES[provider] || provider}'s default model`} isn't allowed by this workspace's task limits.` };
     return { allowed: true };
   }
-  used(state) {
-    const live = Object.values(state.active), now = Date.now();
-    return { workingMs: state.workingMs + live.reduce((sum, entry) => sum + Math.max(0, now - new Date(entry.startedAt).getTime()), 0),
-      tokens: state.tokens.input + state.tokens.output + state.tokens.cacheWrite + live.reduce((sum, entry) => sum + newTokens(entry.usage), 0),
-      spendUSD: state.spendUSD + live.reduce((sum, entry) => sum + (entry.billing === 'api' && knownCost(entry.costUSD) ? entry.costUSD : 0), 0) };
+  used(state, c = null) {
+    const live = Object.values(state.active), now = Date.now(), extra = this.sharedOf(c, state) || { workingMs: 0, tokens: 0, spendUSD: 0 };
+    return { workingMs: extra.workingMs + state.workingMs + live.reduce((sum, entry) => sum + Math.max(0, now - new Date(entry.startedAt).getTime()), 0),
+      tokens: extra.tokens + state.tokens.input + state.tokens.output + state.tokens.cacheWrite + live.reduce((sum, entry) => sum + newTokens(entry.usage), 0),
+      spendUSD: extra.spendUSD + state.spendUSD + live.reduce((sum, entry) => sum + (entry.billing === 'api' && knownCost(entry.costUSD) ? entry.costUSD : 0), 0) };
   }
   // The first limit a task has used up, if any.
   exceeded(c, state) {
-    const limits = this.limits(c, state), used = this.used(state);
+    const limits = this.limits(c, state), used = this.used(state, c), extra = this.sharedOf(c, state);
     const repeated = Object.values(state.failures).filter(item => item.kind !== 'probe' && !isDiagnosticProbe(item.what) && item.count >= limits.maxRepeatedFailures).sort((a, b) => b.count - a.count)[0];
     if (repeated) return { limit: 'maxRepeatedFailures', used: repeated.count, allowed: limits.maxRepeatedFailures, message: `The same step has gone wrong ${repeated.count} times in this task: ${repeated.what}` };
     if (limits.maxWorkingMinutes !== null && used.workingMs >= limits.maxWorkingMinutes * 60000) return { limit: 'maxWorkingMinutes', used: Math.round(used.workingMs / 60000), allowed: limits.maxWorkingMinutes, message: `This task has reached its limit of ${limits.maxWorkingMinutes} working minutes.` };
     if (limits.maxTokens !== null && used.tokens >= limits.maxTokens) return { limit: 'maxTokens', used: used.tokens, allowed: limits.maxTokens, message: `This task has used ${used.tokens.toLocaleString('en-US')} tokens, over its limit of ${limits.maxTokens.toLocaleString('en-US')}.` };
     if (limits.maxSpendUSD !== null && used.spendUSD >= limits.maxSpendUSD) return { limit: 'maxSpendUSD', used: used.spendUSD, allowed: limits.maxSpendUSD, message: `This task has reached its API spending limit of $${limits.maxSpendUSD}.` };
-    if (limits.maxTokens !== null && (state.runsWithoutUsage || state.runsWithPartialUsage)) return { limit: 'tokenUsageUnknown', message: 'Earlier runs did not report complete token usage. The remaining token allowance is unknown. Review task limits before continuing.' };
-    if (limits.maxSpendUSD !== null && state.runsWithoutCost) return { limit: 'spendUsageUnknown', message: 'Earlier API runs did not report a cost or confirmed billing. The remaining spending allowance is unknown. Review task limits before continuing.' };
+    if (limits.maxTokens !== null && (state.runsWithoutUsage || state.runsWithPartialUsage || extra?.runsWithoutUsage || extra?.runsWithPartialUsage)) return { limit: 'tokenUsageUnknown', message: 'Earlier runs did not report complete token usage. The remaining token allowance is unknown. Review task limits before continuing.' };
+    if (limits.maxSpendUSD !== null && (state.runsWithoutCost || extra?.runsWithoutCost)) return { limit: 'spendUsageUnknown', message: 'Earlier API runs did not report a cost or confirmed billing. The remaining spending allowance is unknown. Review task limits before continuing.' };
     return null;
   }
   // Why this run can't start, or null. Nothing is reserved here: the record that saves the run does that, in the same step.
@@ -270,7 +276,8 @@ export class TaskBudgets {
     if (others && MEASURED_LIMITS.some(key => limits[key] !== null)) return { limit: 'reservation', message: 'This task’s remaining time, token or spending allowance is reserved by its running agent. Wait for it to finish before continuing or reviewing the same task.' };
     if (counted) {
       const limit = { retries: 'maxRetries', reviews: 'maxReviews', handoffs: 'maxHandoffs' }[counted], words = { retries: 'retries', reviews: 'reviews', handoffs: 'handoffs' }[counted];
-      if (state[counted] >= limits[limit]) return { limit, used: state[counted], allowed: limits[limit], message: `This task has used its ${limits[limit]} ${words}.` };
+      const total = state[counted] + (this.sharedOf(c, state)?.[counted] || 0);
+      if (total >= limits[limit]) return { limit, used: total, allowed: limits[limit], message: `This task has used its ${limits[limit]} ${words}${total > state[counted] ? ', counting the other parts of its split' : ''}.` };
     }
     return this.exceeded(c, state);
   }
@@ -299,7 +306,7 @@ export class TaskBudgets {
   // The most an API-billed run may spend, for agents that can enforce it themselves.
   remainingSpend(c, taskId) {
     const state = c.taskBudgets?.[taskId], { maxSpendUSD } = this.limits(c, state);
-    return maxSpendUSD === null ? null : state?.runsWithoutCost ? 0 : Math.max(0, maxSpendUSD - (state ? this.used(state).spendUSD : 0));
+    return maxSpendUSD === null ? null : state?.runsWithoutCost || this.sharedOf(c, state)?.runsWithoutCost ? 0 : Math.max(0, maxSpendUSD - (state ? this.used(state, c).spendUSD : 0));
   }
 
   // While a run works: the working-time limit, stopped on time, whatever the agent is doing. A quiet run is left alone otherwise.
@@ -309,7 +316,7 @@ export class TaskBudgets {
     this.watches.set(run.id, { run, owner, c, taskId, recordRunId });
     const state = c.taskBudgets?.[taskId], { maxWorkingMinutes } = this.limits(c, state);
     if (!state || maxWorkingMinutes === null) return;
-    const delay = Math.max(0, maxWorkingMinutes * 60000 - this.used(state).workingMs) / Math.max(1, Object.keys(state.active).length), timer = setTimeout(() => { this.check(run); this.watch(run, { owner, c, taskId, recordRunId }); }, delay + 50);
+    const delay = Math.max(0, maxWorkingMinutes * 60000 - this.used(state, c).workingMs) / Math.max(1, Object.keys(state.active).length + (this.sharedOf(c, state)?.running || 0)), timer = setTimeout(() => { this.check(run); this.watch(run, { owner, c, taskId, recordRunId }); }, delay + 50);
     timer.unref(); this.timers.set(run.id, timer);
   }
   unwatch(run) { clearTimeout(this.timers.get(run.id)); this.timers.delete(run.id); this.watches.delete(run.id); }
@@ -351,7 +358,7 @@ export class TaskBudgets {
   view(c) {
     const policy = this.policy(c), review = c.reviews?.find(item => c.taskOfRun?.[item.id]), taskId = c.routingPending?.taskId || c.activeRun?.taskId || Object.keys(c.taskBudgets || {}).at(-1) || c.lastRun?.taskId || c.lastRun?.id || c.taskOfRun?.[review?.id], state = taskId ? c.taskBudgets?.[taskId] : null;
     if (!state) return { policy, defaults: defaultPolicy(), task: null, quota: this.quota(c) };
-    const limits = this.limits(c, state), used = this.used(state), exceeded = this.exceeded(c, state);
+    const limits = this.limits(c, state), used = this.used(state, c), exceeded = this.exceeded(c, state);
     return { policy, defaults: defaultPolicy(), quota: this.quota(c), task: { taskId, limits, runs: state.runs, retries: state.retries, reviews: state.reviews, handoffs: state.handoffs, workingMs: used.workingMs, tokens: used.tokens, cacheRead: state.tokens.cacheRead, spendUSD: used.spendUSD, runsWithoutUsage: state.runsWithoutUsage, active: Object.keys(state.active).length,
       runsWithPartialUsage: state.runsWithPartialUsage, runsWithoutCost: state.runsWithoutCost,
       enforcement: { tokens: 'reported-usage', spendCaps: { ...state.spendCaps }, activeSpendCaps: Object.values(state.active).map(entry => entry.budgetEnforcement).filter(Boolean) },

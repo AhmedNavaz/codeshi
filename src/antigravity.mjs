@@ -10,7 +10,8 @@ export const isAntigravityACP = bin => /^(?:agy_acp_server(?:\.par|\.exe)?|antig
 export const antigravityReadOnly = 'Antigravity does not expose a verified read-only mode through this connection. Choose Edit with approvals, or use Codex or Claude for read-only work.';
 // Older runtimes without additionalDirectories can still work as a task in one folder.
 export const antigravityOneFolder = 'This Antigravity runtime does not support additional workspace folders. Reinstall the Google connection in Settings, run the message as a task in one folder, or choose Codex or Claude for the whole workspace.';
-export const antigravityCapabilities = initialized => ({ additionalDirectories: Boolean(initialized.agentCapabilities?.sessionCapabilities?.additionalDirectories) });
+// images: whether its prompts take images, which routing needs before sending a message with images there (#12).
+export const antigravityCapabilities = initialized => ({ additionalDirectories: Boolean(initialized.agentCapabilities?.sessionCapabilities?.additionalDirectories), images: initialized.agentCapabilities?.promptCapabilities?.image === true });
 // Antigravity sends fixed-choice questions through the permission RPC. Every option is an answer, regardless of
 // its permission kind; only the person's selected label may choose its native optionId. ACP cannot take free text.
 export function antigravityQuestion({ toolCall, options }) {

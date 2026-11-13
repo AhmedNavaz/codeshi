@@ -104,9 +104,9 @@ export class HandoffMonitor {
       const allowedModels = models.map(row => row.id || row.model || row.value).filter(id => id && allowed(id));
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
-      candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
+      candidates.push({ provider, models, billingSource: account.billingSource, usage, eligible: true, images: this.broker.imageConnection?.(c, provider, account), ...(models.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
     }
-    const choice = globalThis.relayRouting.route({ text: request?.text || '', attachments: request?.attachments?.length || 0, assessment: run.routing?.assessment || null, mode, candidates, quotaThreshold: threshold });
+    const choice = globalThis.relayRouting.route({ text: request?.text || '', attachments: request?.attachments?.length || 0, needs: globalThis.relayRouting.taskNeeds(request?.attachments), assessment: run.routing?.assessment || null, mode, candidates, quotaThreshold: threshold });
     if (choice.error || choice.quota.state !== 'ok' || !atLimit && !choice.handoffLine?.fits) return null;
     const { quota, bindingWindow, handoffLine, ...routing } = choice;
     return { provider: choice.provider, model: choice.model, effort: choice.effort, routing, mode: run.mode, approvalPolicy: run.approvalPolicy,

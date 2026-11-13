@@ -1162,7 +1162,9 @@
     if (!user && message.orchestrationId) {
       const plan = state.conversation?.orchestrations?.find(item => item.id === message.orchestrationId);
       body.append(element('p', '', window.relayOrchestration?.describe(plan) || (streaming ? 'Planning the steps…' : 'The planner’s response.')));
-      if (window.relayOrchestration?.isCurrent(plan)) { const view = element('button', 'secondary-button', 'View plan'); view.type = 'button'; view.addEventListener('click', () => window.relayPlanView?.open()); body.append(view); }
+      // A plan that wasn't taken has nothing to view: Try again sends the same message and files once more.
+      if (['unstructured', 'failed', 'interrupted'].includes(plan?.status) && window.relayOrchestration?.isCurrent(plan)) { const again = element('button', 'secondary-button', 'Try again'); again.type = 'button'; again.addEventListener('click', () => window.relayOrchestration?.again()); body.append(again); }
+      else if (window.relayOrchestration?.isCurrent(plan)) { const view = element('button', 'secondary-button', 'View plan'); view.type = 'button'; view.addEventListener('click', () => window.relayPlanView?.open()); body.append(view); }
       // A plan drafted onto the Plan (#162) opens there.
       else if (plan?.status === 'moved') { const view = element('button', 'secondary-button', 'Open the Plan'); view.type = 'button'; view.addEventListener('click', () => window.relayBoard?.open()); body.append(view); }
       const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the planner…')); body.append(raw);
@@ -2015,7 +2017,7 @@
     const queueing = Boolean(state.conversation) && (running || Boolean(state.conversation?.resume));
     const planAsking = window.relayBoard?.asking?.() || null;
     const canAdd = running && state.conversation?.canAddToRun === true, modKey = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘" : "Ctrl+";
-    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : planAsking ? (planAsking.draft ? t("Describe the cards to draft, or attach a brief or spec…") : t("Ask about the Plan, a card, or the project…")) : t("Describe the task or ask a question…");
+    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : planAsking ? (planAsking.draft ? t("Describe what you want to plan…") : t("Ask about the Plan or a card…")) : t("Describe the task or ask a question…");
     $("steer-button").hidden = !canAdd;
     $("steer-button").disabled = !state.ready || busy || !ui.input.value.trim() || Boolean(window.relayFiles?.ids().length);
     $("steer-button").title = window.relayFiles?.ids().length ? t("Attachments go with a queued message") : t("Add this to the current run ({shortcut})", { shortcut: `${modKey}↵` });
@@ -2498,8 +2500,21 @@
           state.retrySubmission.localContext = catalog.context;
         }
         await post('/api/local-models/start', { model:localChoice.model, digest:localChoice.digest, task:continuing ? 'Continue the unfinished task from the saved conversation. Inspect current files first.' : text, ...(continuing ? { continuing:true } : {}), attachments, requestId, context:state.retrySubmission.localContext }, projectId);
-      } else accepted = await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), ...(orchestrate ? { orchestrate: true } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
+      } else accepted = await post(endpoint(id, continuing ? "continue" : "messages"), continuing ? { provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, billingConfirmed:window.relayBillingConfirmed === true } : { executionRevision: state.conversation?.execution?.defaults?.revision ?? 0, text, attachments, provider, mode, approvalPolicy, requestId, model:model || undefined, effort:effort || null, routing, ...(automaticReview ? { automaticReview } : {}), ...(orchestrate ? { orchestrate: true } : {}), ...(orchestrate && asking?.replaces ? { replaces: asking.replaces } : {}), ...(routing && !orchestrate && !automaticReview && !attachments.length && !state.taskId ? { allowSplit: true } : {}), billingConfirmed:window.relayBillingConfirmed === true }, projectId);
       state.retrySubmission = null;
+      // Flow found separate parts (#107 stage 2): nothing started. The suggestion shows above the message box, holding the
+      // message, or the parts are already running as tasks when you chose splitting without asking.
+      if (accepted?.split) {
+        window.relayFiles?.accepted(projectId, attachments);
+        accepting = true;
+        if (taken) draftAccepted();
+        state.sending = null;
+        await refresh();
+        render(true);
+        const parts = state.conversation?.splitHistory?.findLast?.(item => item.id === accepted.split.id)?.cards?.length || state.conversation?.splitProposal?.parts?.length || 0;
+        announce(accepted.split.automatic ? `Flow split this into ${parts} tasks that run side by side.` : `Flow suggests splitting this into ${parts} tasks. Choose above the message box.`);
+        return true;
+      }
       window.relayAutomaticReview?.accepted(projectId, automaticReview);
       if (!continuing && !again) window.relayFiles?.accepted(projectId, attachments);
       asking?.sent();

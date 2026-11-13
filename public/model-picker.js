@@ -44,7 +44,7 @@
     // While routing is on, the button shows the mode instead of a model and opens Routing in the Agents panel.
     $('picked-agent').textContent = auto ? 'Routing' : names[actual];
     $('picked-model').textContent = auto ? window.relayRouting?.modeNames[auto.mode] || t('Auto') : local?.model || (state.model ? modelName(selectedRow(state.provider) || { id: state.model }) : t('Default'));
-    $('picked-agent-icon').className = 'agent-icon ' + (auto ? 'auto' : actual === 'local' ? 'codex' : actual);
+    $('picked-agent-icon').className = 'agent-icon ' + (auto ? 'auto ' + (window.relayRouting?.normalizeMode?.(auto.mode) || 'smart') : actual === 'local' ? 'codex' : actual);
     trigger.classList.toggle('routing', Boolean(auto));
     trigger.disabled = !state.ready || !state.projectId || Boolean(state.pending || state.settingsPending);
     trigger.setAttribute('aria-label', auto ? t('Routing: {model}. Change it in the Agents panel.', { model: $('picked-model').textContent }) : t('Choose agent and model. Current: {agent}, {model}', { agent: names[actual], model: $('picked-model').textContent }));

@@ -5,13 +5,16 @@
 
 /* The view switch at the right of the header: Normal, Flow and the Plan (#162), drawn like the Plan's own switch
    between Columns, Canvas and Outline. The view in use is filled. */
-.view-switch { flex: none; display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; padding: 2px; border: 1px solid var(--border-strong); border-radius: 8px; -webkit-app-region: no-drag; }
-.view-switch-option { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
-.view-switch-option:hover:enabled { background: var(--hover); color: var(--text-strong); }
-.view-switch-option[aria-pressed="true"] { background: var(--surface-strong); color: var(--text-strong); }
+.view-switch { flex: none; display: inline-flex; align-items: center; gap: 2px; height: 30px; margin-left: 6px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--chip-bg); -webkit-app-region: no-drag; }
+.view-switch-option { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color .12s, color .12s; }
+.view-switch-option:hover:enabled { color: var(--text-strong); }
+.view-switch-option[aria-pressed="true"] { background: var(--surface-raised); color: var(--text-strong); box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-sm); }
+.view-switch-option[aria-pressed="true"] .icon { color: var(--accent); }
 .view-switch-option:disabled, .view-switch-option[aria-disabled="true"] { opacity: .4; cursor: default; }
 .view-switch-option:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .view-switch-option .icon, .flow-entry-mark { flex: none; width: 14px; height: 14px; }
+.flow-entry-mark { stroke: currentColor; }
+@media (prefers-reduced-motion: reduce) { .view-switch-option { transition: none; } }
 
 /* The shell: a header across the whole window, then three columns with no sidebar and no docked panels. */
 #app-shell.flow, #app-shell.flow:has(.side-panel:not([hidden])), #app-shell.flow:has(#review-panel:not([hidden])) { grid-template-columns: minmax(330px, 430px) minmax(0, 1fr) minmax(330px, 430px); --content-width: 780px; }

@@ -51,13 +51,13 @@ else app.setPath('userData',preferredUserData(app.getPath('appData'),app.getPath
 // Windows ties notifications and the taskbar entry to this ID (see windows.mjs).
 if(process.platform==='win32'&&!development)app.setAppUserModelId(APP_ID);
 const primary=app.requestSingleInstanceLock();
-let relay,win,origin,keepAwake,updater,tray=null,overlay=null,preview=null,quitting=false;
+let relay,win,origin,keepAwake,updater,tray=null,overlay=null,preview=null,quitting=false,confirmQuit=()=>true;
 // The words of the menus and the status item, in the interface language (#27).
 let text=english;
 if(!primary) app.quit();
 else {
   app.on('second-instance',(_event,argv=[])=>{if(argv.includes('--background'))return;if(openMain)return openMain();windowWanted=true;app.dock?.show();if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
-  app.on('before-quit',event=>{if(relay&&!quitting){event.preventDefault();quitting=true;if(win&&!win.isDestroyed())win.webContents.send('relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{app.quit();setTimeout(()=>app.exit(0),2000);});}});
+  app.on('before-quit',event=>{if(relay&&!quitting){if(!confirmQuit()){event.preventDefault();return;}event.preventDefault();quitting=true;if(win&&!win.isDestroyed())win.webContents.send('relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{app.quit();setTimeout(()=>app.exit(0),2000);});}});
   app.on('will-quit',()=>{removeConnection(connectionFile(app.getPath('userData')));keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
@@ -177,8 +177,14 @@ else {
       text=relay.getText();
       appearance.set(relay.getAppearancePreference());
       keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;if(win&&!win.isDestroyed())win.webContents.send('relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
-      await new Promise((resolve,reject)=>{relay.server.once('error',reject);relay.server.listen(0,'127.0.0.1',resolve);});
+      // The same port as last time when it is free: the page keeps its saved state (the last workspace, drafts), which the
+      // browser stores per address. A taken port falls back to any free one.
+      const portFile=path.join(app.getPath('userData'),'last-port.json');
+      let lastPort=0;try{lastPort=Number(JSON.parse(fs.readFileSync(portFile,'utf8')).port)||0;}catch{}
+      const listenOn=port=>new Promise((resolve,reject)=>{const failed=error=>reject(error);relay.server.once('error',failed);relay.server.listen(port,'127.0.0.1',()=>{relay.server.off('error',failed);resolve();});});
+      try{await listenOn(lastPort>=1024&&lastPort<65536?lastPort:0);}catch(error){if(!lastPort||error?.code!=='EADDRINUSE')throw error;await listenOn(0);}
       origin=`http://127.0.0.1:${relay.server.address().port}`;
+      if(!smoke){try{fs.writeFileSync(portFile,JSON.stringify({port:relay.server.address().port}));}catch{}}
       // The codeshi command (#90) finds this engine through cli.json; the smoke test leaves it alone.
       if(!smoke){try{writeConnection(connectionFile(app.getPath('userData')),{url:origin,token,version:app.getVersion()});}catch(error){console.warn('The codeshi command cannot reach Codeshi:',error.message);}}
     }
@@ -228,8 +234,17 @@ else {
     app.on('activate',()=>{if(!windowWanted)openTarget(null);});
     // Closing the window while a schedule waits keeps Codeshi in the menu bar, with the page unloaded so nothing draws.
     // The menu bar item, the Dock or opening Codeshi again brings it back. Quitting still quits.
+    // Closing the window while an agent is working asks first, since it ends the work.
+    let quitConfirmed=false;
+    confirmQuit=()=>{
+      if(quitting||quitConfirmed||smoke||!busy()||!win||win.isDestroyed())return true;
+      const {t}=text,choice=dialog.showMessageBoxSync(win,{type:'warning',buttons:[t('Keep working'),t('Quit Codeshi')],defaultId:0,cancelId:0,message:t('An agent is still working.'),detail:t('Quitting stops it. Anything it has not finished is left as it is.')});
+      quitConfirmed=choice===1;
+      return quitConfirmed;
+    };
     win.on('close',event=>{
-      if(quitting||smoke||!scheduled())return;
+      if(quitting||smoke)return;
+      if(!scheduled()){if(!confirmQuit())event.preventDefault();return;}
       event.preventDefault();
       windowWanted=false;win.hide();app.dock?.hide();
       if(pageLoaded){pageLoaded=false;win.loadURL('about:blank').catch(()=>{});}

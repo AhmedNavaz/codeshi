@@ -524,7 +524,9 @@
     if (plan.status === 'planning') return { chip: 'Planning', text: `${agentName(plan.planner?.provider)} is drafting the plan. Its cards show on the Plan when they’re ready.` };
     if (plan.status === 'moved') return { chip: 'Drafts waiting', board: true, text: `${plural(plan.drafts, 'drafted card')} ${plan.drafts === 1 ? 'waits' : 'wait'} on the Plan. Nothing from ${plan.drafts === 1 ? 'it' : 'them'} runs until you accept ${plan.drafts === 1 ? 'it' : 'them'}.` };
     if (plan.status === 'draft') return { chip: 'Plan waiting', text: count ? `A plan of ${plural(count, 'step')} is waiting. Nothing from it runs until you approve it.` : 'An empty plan is waiting. Open the plan to add its steps.' };
-    return { chip: 'Plan not ready', text: 'The plan isn’t ready. Open the plan to plan again or write the steps yourself.' };
+    // A draft that ended without cards shows on the Plan, beside the cards you already have, with Draft again and Dismiss.
+    if (window.relayOrchestration?.notReady?.()) return { chip: 'Draft not used', board: true, text: plan.status === 'interrupted' ? 'Drafting cards stopped, so nothing was added to the Plan.' : `${agentName(plan.planner?.provider)}’s drafted cards couldn’t be used, so nothing was added to the Plan. Draft again or dismiss it there.` };
+    return null;
   }
   function renderNext(card) {
     const state = api.getState(), c = state.conversation, { steps, held, running, run } = planFor(), queue = c?.queue || [], tasks = c?.parallelTasks || [];
@@ -544,7 +546,7 @@
     }
     else if (plan?.board) {
       const openBoard = node('button', 'secondary-button flow-plan-open', 'Open the Plan'); openBoard.type = 'button';
-      openBoard.addEventListener('click', () => window.relayBoard?.open());
+      openBoard.addEventListener('click', () => window.relayBoard?.open?.());
       body.append(openBoard);
     }
     else if (running && !steps.length) {
@@ -581,7 +583,7 @@
       body.append(list);
     }
     if (queue.length) {
-      body.append(node('h3', 'flow-subhead', `Then · ${plural(queue.length, 'queued message')}${plan ? ' · waiting for the plan' : c.queuePaused ? ' · paused' : ''}`));
+      body.append(node('h3', 'flow-subhead', `Then · ${plural(queue.length, 'queued message')}${plan && !plan.board ? ' · waiting for the plan' : c.queuePaused ? ' · paused' : ''}`));
       const list = node('ol', 'flow-queue');
       for (const item of queue.slice(0, 5)) list.append(node('li', 'flow-queue-item', clip(item.text, 110)));
       if (queue.length > 5) list.append(node('li', 'flow-queue-more', `and ${queue.length - 5} more`));

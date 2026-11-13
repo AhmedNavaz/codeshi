@@ -95,6 +95,19 @@ test('takeover preserves the current native turn, invalidates automatic queue de
   assert(reopened.execution.allows(saved, saved.queue[0].execution, { action: 'manual' }));
 });
 
+test('resuming the queue after a takeover runs a routed prompt manually with the agent its row shows', { skip: scriptCLIs }, async t => {
+  const env = setup(t), { broker, c } = env; flow(broker, c);
+  broker.queue.pause(c, 'Preparing a queue');
+  broker.queueAction(c, { action: 'add', text: 'Hello', provider: 'claude', model: 'sonnet', effort: 'low', mode: 'edit', routing: { mode: 'smart' } });
+  const item = c.queue[0];
+  env.takeover(item.execution.taskId);
+  assert.notEqual(broker.execution.current(c, item.execution.taskId).revision, item.execution.revision, 'The takeover moved the task on while its prompt waited.');
+  broker.queueAction(c, { action: 'resume' });
+  await until(() => c.lastRun?.status === 'complete');
+  assert.equal(c.queue.length, 0); assert.equal(c.queuePaused, null);
+  assert.equal(c.lastRun.provider, 'claude'); assert.equal(env.captures().length, 1);
+});
+
 test('revocation while checkpoint preparation awaits prevents a native process from starting', { skip: scriptCLIs }, async t => {
   const env = setup(t), { broker, c } = env; flow(broker, c);
   const gate = deferred(); broker.checkpoints.before = () => gate.promise;
@@ -246,15 +259,18 @@ test('takeover while queue routing awaits a model lookup leaves the queued owner
   env.release(); await run.done;
 });
 
-test('automatic child creation fails closed while independent explicit tasks remain a separate capability', { skip: scriptCLIs }, async t => {
+test('a task started automatically for a split needs its parent to be in Flow, and records the parent whose limits it shares', { skip: scriptCLIs }, async t => {
   const { broker, c } = setup(t);
   broker.start(c, { text: 'Hello', provider: 'codex' }); await broker.running.done;
   const taskId = c.lastRun.taskId;
-  const input = { text: 'Child', requestId: 'child', parentTaskId: taskId, execution: broker.execution.token(c, taskId) };
+  const input = { text: 'Child', requestId: 'child', provider: 'codex', folderId: broker.workspaceFolders[0].id, parent: { taskId, execution: broker.execution.token(c, taskId), automatic: true } };
   assert.throws(() => broker.tasks.start(c, input), /Normal/);
-  broker.execution.change(c, { taskId, revision: 1, policy: { mode: 'flow' } });
-  assert.throws(() => broker.tasks.start(c, { ...input, execution: broker.execution.token(c, taskId) }), /not available yet/);
+  assert.throws(() => broker.tasks.start(c, { ...input, parent: { taskId, execution: { taskId: 'another', revision: 1 }, automatic: true } }), /parent execution policy/);
   assert.equal(c.parallelTasks, undefined);
+  broker.execution.change(c, { taskId, revision: 1, policy: { mode: 'flow' } });
+  broker.tasks.tick = () => {};
+  const task = broker.tasks.start(c, { ...input, parent: { taskId, execution: broker.execution.token(c, taskId), automatic: true } });
+  assert.equal(c.parallelTasks.find(item => item.id === task.id).parentTaskId, taskId);
 });
 
 test('a direct task caller cannot supply an internal queue token to bypass Normal authority', async t => {

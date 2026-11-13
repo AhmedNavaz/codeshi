@@ -9,7 +9,7 @@ import { scriptCLIs } from './platform.mjs';
 import { gitExecutable } from '../src/resolve-binary.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { Broker } from '../src/broker.mjs';
-import { openPlan, parsePlan, planningRequest, validateSteps, SPECIALIST_ROLES, ARTIFACT_KINDS, INTEGRATION_OUTCOMES, validateWorkflowOrder, invalidatedDownstream, stepBrief, recordArtifact, evaluateIntegration } from '../src/orchestration.mjs';
+import { openPlan, parsePlan, reviewDraft, planningRequest, validateSteps, SPECIALIST_ROLES, ARTIFACT_KINDS, INTEGRATION_OUTCOMES, validateWorkflowOrder, invalidatedDownstream, stepBrief, recordArtifact, evaluateIntegration } from '../src/orchestration.mjs';
 import { ledgerFromRecords, usageByRole } from '../src/task-ledger.mjs';
 
 // A planner's reply in the agreed shape: steps refer to earlier steps by number, and never choose an agent.
@@ -123,7 +123,6 @@ test('a reply that is not a valid plan is reported, never guessed at', () => {
     JSON.stringify({ summary: 'No instructions.', steps: [{ ...reply.steps[0], instructions: ' ' }] }),
     JSON.stringify({ summary: 'Long title.', steps: [{ ...reply.steps[0], title: 'x'.repeat(121) }] }),
     JSON.stringify({ summary: 'Long instructions.', steps: [{ ...reply.steps[0], instructions: 'y'.repeat(4001) }] }),
-    JSON.stringify({ summary: 'Too many files.', steps: [{ ...reply.steps[0], files: Array.from({ length: 13 }, (_, index) => `file${index}.js`) }] }),
     JSON.stringify({ summary: 'Long path.', steps: [{ ...reply.steps[0], files: ['p'.repeat(301)] }] }),
     JSON.stringify({ summary: 'Step zero.', steps: [reply.steps[0], { ...reply.steps[1], dependsOn: [0] }] }),
     'x'.repeat(70000),
@@ -136,6 +135,20 @@ test('a reply that is not a valid plan is reported, never guessed at', () => {
     assert.deepEqual(result.steps, []);
   }
   assert.equal(parsePlan(undefined).status, 'unstructured');
+  // A rejected plan says which card broke which rule, so the person knows why nothing was added.
+  assert.match(parsePlan(wrong.find(text => text.includes('Long path'))).summary, /none of it was added: List at most 12 files or folders for card 1, each as a path\. Try again/);
+  assert.match(parsePlan('Not JSON').summary, /could not be read as a plan\. Try again/);
+});
+
+test('a planner that lists too many files loses the extra ones, with a note on the card, not the whole plan', () => {
+  const files = Array.from({ length: 14 }, (_, index) => `file${index}.js`);
+  const result = parsePlan(JSON.stringify({ summary: 'Many files.', steps: [{ title: 'Rename', instructions: 'Rename the owner everywhere.', tier: 'standard', files }] }));
+  assert.equal(result.status, 'draft');
+  assert.deepEqual(result.steps[0].files, files.slice(0, 12));
+  assert.equal(result.steps[0].moreFiles, 2);
+  assert.match(reviewDraft(result.steps).s1.join(' '), /listed 2 more files than a card holds, so only the first 12 are kept/);
+  // A list you edit yourself is still held to the limit.
+  assert.throws(() => validateSteps([{ ...step('s1'), files: files.slice(0, 13) }]), /List at most 12 files/);
 });
 
 test('edited steps are checked before they are saved', () => {
@@ -167,8 +180,10 @@ test('edited steps are checked before they are saved', () => {
   for (const [steps, message] of invalid) assert.throws(() => validateSteps(steps), error => error.status === 400 && message.test(error.message), JSON.stringify(steps)?.slice(0, 80));
 });
 
-test('the newest plan is open until it is put away, also when it never became a plan', () => {
-  for (const status of ['planning', 'draft', 'unstructured', 'failed', 'interrupted']) assert.equal(openPlan({ orchestrations: [{ status }, { status: 'discarded' }] })?.status, status);
+test('queued messages wait only for a plan being made or one waiting in the chat to run', () => {
+  for (const status of ['planning', 'draft']) assert.equal(openPlan({ orchestrations: [{ status }, { status: 'discarded' }] })?.status, status);
+  // A plan that never became one has nothing to wait for, and a plan moved onto the Plan is reviewed there.
+  for (const status of ['unstructured', 'failed', 'interrupted', 'moved']) assert.equal(openPlan({ orchestrations: [{ id: 'p', status }], board: [{ draft: { batch: { id: 'p' } } }] }), null, status);
   for (const status of ['superseded', 'discarded']) assert.equal(openPlan({ orchestrations: [{ status }, { status: 'draft' }] }), null, 'Only the newest plan counts.');
   assert.equal(openPlan({ orchestrations: [] }), null); assert.equal(openPlan({}), null);
 });
@@ -217,7 +232,7 @@ test('an Orchestrate message with an attached brief is planned from it, and its 
   const cards = plan.cards.map(id => c.board.find(card => card.id === id));
   assert.deepEqual(cards[0].draft.batch.documents, ['brief.md']);
   assert.deepEqual(cards[0].source.documents, ['brief.md']);
-  assert.ok(cards.every(card => card.split === true), 'Cards planned from documents are major cards, split into subtasks when each starts.');
+  assert.ok(cards.every(card => card.split === true), 'Cards planned from documents are major cards, run through their subtasks.');
   // A plan from a message alone records no documents.
   f.scenario({ output: JSON.stringify(reply) });
   broker.board.drafts(api.c(), { action: 'discard', ids: plan.cards });
@@ -226,7 +241,8 @@ test('an Orchestrate message with an attached brief is planned from it, and its 
   await broker.running?.done;
   assert.equal(api.c().orchestrations[0].documents, undefined);
   assert.equal(api.c().board.find(card => card.id === api.c().orchestrations[0].cards[0]).draft.batch.documents, undefined);
-  assert.equal(api.c().board.find(card => card.id === api.c().orchestrations[0].cards[0]).split, false);
+  // Every card an agent drafts is a major card on Smart routing (#162), from a message as from a document.
+  assert.deepEqual(['split', 'auto', 'agent'].map(key => api.c().board.find(card => card.id === api.c().orchestrations[0].cards[0])[key]), [true, true, null]);
 });
 
 test('a planning run is read-only, leaves the conversation settings alone and saves the plan it returns', { skip: scriptCLIs }, async t => {
@@ -369,7 +385,7 @@ test('a stopped planning run says so, and takes no notes while it plans', { skip
   }
 });
 
-test('while a plan is open, queued messages wait for it, and planning never hands off or runs the tests', { skip: scriptCLIs }, async t => {
+test('queued messages wait while the planner runs and go on once its cards land, and planning never hands off or runs the tests', { skip: scriptCLIs }, async t => {
   const f = fixture(t), release = path.join(f.root, 'release');
   // A committed workspace, so a file written while the planner runs shows up as a change.
   const git = (...args) => { const result = spawnSync(gitExecutable(), args, { cwd: f.workspace, encoding: 'utf8' }); assert.equal(result.status, 0, result.stderr); };
@@ -388,33 +404,50 @@ test('while a plan is open, queued messages wait for it, and planning never hand
   assert.equal(broker.handoff.timers.has(run.id), false);
   assert.equal(broker.handoff.atLimit(run), false);
   assert.equal(broker.handoff.atLimit({ ...run, orchestrate: false }), true, 'A routed coding run at the same point would hand off.');
-  // A message queued while it plans waits while the plan is open.
+  // A message queued while it plans waits for the planner.
   const queued = await api.send({ action: 'add', text: 'Then rename the helper.', mode: 'edit', approvalPolicy: 'auto' }, 'queue');
   assert.equal(queued.status, 200, JSON.stringify(queued.body));
-  fs.writeFileSync(path.join(f.workspace, 'app.js'), 'export const value = 2;\n');
-  fs.writeFileSync(release, '');
-  await until(() => !broker.running && ended.length);
-  assert.equal(api.c().orchestrations[0].status, 'moved', 'The plan became draft cards on the Plan.');
   await broker.queue.tick(api.c());
-  assert.equal(broker.running, null); assert.equal(api.c().queue.length, 1); assert.equal(api.c().queuePaused, null);
+  assert.equal(broker.running.id, run.id); assert.equal(api.c().queue.length, 1);
+  fs.writeFileSync(path.join(f.workspace, 'app.js'), 'export const value = 2;\n');
+  await until(() => f.captures().length === 1);
+  f.scenario({ output: 'Renamed.' });
+  fs.writeFileSync(release, '');
+  // Once the plan has become draft cards on the Plan, the queue goes on by itself: the drafts are reviewed there.
+  await until(() => ended.length && f.captures().length === 2 && !broker.running && !api.c().queue.length);
+  assert.equal(api.c().orchestrations[0].status, 'moved', 'The plan became draft cards on the Plan.');
+  assert.ok(api.c().board.some(card => card.draft?.batch?.id === api.c().orchestrations[0].id), 'Its cards are still drafts.');
+  assert.match(f.captures().at(-1).payload.currentRequest, /Then rename the helper\.$/);
+  assert.equal(api.c().queuePaused, null);
   // Planning is never checked with the tests, though a file changed while it ran.
   assert.equal(broker.checks.wanted(api.c(), ended[0], 'complete'), null);
   assert.deepEqual(broker.checks.wanted(api.c(), { ...ended[0], orchestrate: false }, 'complete'), { command: 'npm test' }, 'A coding run at the same point would be checked.');
-  // A limit reached while planning doesn't set up a wait for a reset with planning's read-only access.
+  // A limit reached while planning doesn't set up a wait for a reset with planning's read-only access: the queue pauses
+  // and says why.
+  broker.queue.held.add(api.c().id);
+  await api.send({ action: 'add', text: 'And tidy up.', mode: 'edit', approvalPolicy: 'auto' }, 'queue');
   broker.queue.runEnded(api.c(), { ...ended[0], errorCategory: 'quota' }, 'incomplete');
-  assert.equal(api.c().resume, null); assert.equal(api.c().queuePaused, null);
-  // A message the person sends themselves still goes ahead, and the queue goes on waiting.
-  f.scenario({ output: 'Fixed.' });
-  const own = await api.send({ text: 'Fix the typo first.', mode: 'edit', approvalPolicy: 'auto' });
-  assert.equal(own.status, 202, JSON.stringify(own.body));
-  await until(() => !broker.running && f.captures().length === 2);
-  await broker.queue.tick(api.c());
-  assert.equal(api.c().queue.length, 1, 'The queue waits while the plan’s cards are drafts.');
-  // Once its drafts are decided, the queue goes on.
-  broker.board.drafts(api.c(), { action: 'discard', ids: api.c().orchestrations[0].cards });
-  await until(() => f.captures().length === 3 && !broker.running);
+  broker.queue.held.delete(api.c().id);
+  assert.equal(api.c().resume, null); assert.equal(api.c().queue.length, 1);
+  assert.match(api.c().queuePaused?.reason || '', /Planning reached the agent’s usage limit/);
+});
+
+test('a plan that could not be read leaves the queue free', { skip: scriptCLIs }, async t => {
+  const f = fixture(t), release = path.join(f.root, 'release');
+  const app = await f.launch(), api = client(app), broker = api.broker();
+  await api.route();
+  f.scenario({ output: 'Not a plan.', release });
+  const sent = await api.send({ text: 'Plan the change.', orchestrate: true });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  const queued = await api.send({ action: 'add', text: 'Then rename the helper.', mode: 'edit', approvalPolicy: 'auto' }, 'queue');
+  assert.equal(queued.status, 200, JSON.stringify(queued.body));
+  await until(() => f.captures().length === 1);
+  f.scenario({ output: 'Renamed.' });
+  fs.writeFileSync(release, '');
+  await until(() => f.captures().length === 2 && !broker.running && !api.c().queue.length);
+  assert.equal(api.c().orchestrations[0].status, 'unstructured');
   assert.match(f.captures().at(-1).payload.currentRequest, /Then rename the helper\.$/);
-  assert.equal(api.c().queue.length, 0);
+  assert.equal(api.c().queuePaused, null);
 });
 
 test('Write the steps yourself takes a goal as long as a message', { skip: scriptCLIs }, async t => {

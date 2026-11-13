@@ -29,6 +29,42 @@ export const splitRequest = brief => [
   'Return only a JSON object with subtasks (an array, in order). Each has title (short), instructions (what to do and how to know it is done) and tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning). Do not choose agents or models.',
 ].join('\n');
 
+// Split with an agent (#162): one read-only run splits one card, or every card you chose, before any of them runs, so you
+// can review the subtasks and choose who does each. Each card is given in full; its subtasks are planned against the
+// project as it is now, so a card whose earlier cards haven't run yet is split against what they are meant to produce.
+export function splitCardsRequest(briefs, { goals = [] } = {}) {
+  const one = briefs.length === 1;
+  return [
+    `Split ${one ? 'this Plan card' : `each of these ${briefs.length} Plan cards`} into subtasks, before any work on ${one ? 'it' : 'them'}. This is a read-only planning run: inspect the project as needed, but do not edit files or run commands that change anything.`,
+    '- Each subtask is one small piece of work, in order, that one agent can finish and check in one run.',
+    '- As many subtasks as the card needs and no more. A small card may need only one.',
+    '- Together they do everything the card asks, and the last one checks what done means for the card. Tests are part of each subtask.',
+    '- A card that builds on earlier cards may be split before those have run: plan against what they are meant to produce, and don\'t redo their work.',
+    '- Where something is unclear, decide the simplest reading that fits the card, and say so in that subtask\'s instructions.',
+    '',
+    ...(goals.length ? [`${one ? 'The card is' : 'The cards are'} part of a plan for:`, ...goals, '', 'Other agents do the other cards of the plan.', ''] : []),
+    ...briefs.flatMap((brief, index) => [`# Card ${index + 1}`, '', brief, '']),
+    `Return only a JSON object with cards, an array with one entry for each card above, in order. Each entry has card (its number) and subtasks (an array, in order). Each subtask has title (short), instructions (what to do and how to know it is done) and tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning). Do not choose agents or models.`,
+  ].join('\n');
+}
+// The split run's reply, as one list of subtasks per card, in the order asked. A card the reply leaves out gets null.
+export function parseSplitCards(reply, count) {
+  if (typeof reply !== 'string' || !reply.trim() || Buffer.byteLength(reply) > SUBTASK_LIMITS.reply * Math.max(1, Math.min(count, 8))) throw fail('The split didn’t return any subtasks.', 422);
+  const start = reply.indexOf('{'), end = reply.lastIndexOf('}');
+  let value;
+  try { value = JSON.parse(reply.slice(start, end + 1)); } catch { throw fail('The split didn’t return its subtasks as JSON.', 422); }
+  const entries = Array.isArray(value?.cards) ? value.cards : count === 1 && Array.isArray(value?.subtasks) ? [{ card: 1, subtasks: value.subtasks }] : null;
+  if (!entries?.length) throw fail('The split didn’t return any subtasks.', 422);
+  const out = Array.from({ length: count }, () => null);
+  entries.forEach((entry, index) => {
+    const at = Number.isInteger(entry?.card) && entry.card >= 1 && entry.card <= count ? entry.card - 1 : index < count ? index : -1;
+    if (at < 0 || out[at] || !Array.isArray(entry?.subtasks) || !entry.subtasks.length) return;
+    try { out[at] = parseSplit(JSON.stringify({ subtasks: entry.subtasks })); } catch { out[at] = null; }
+  });
+  if (!out.some(Boolean)) throw fail('The split didn’t return any subtasks.', 422);
+  return out;
+}
+
 // What each subtask's run is asked. The first run of a task also carries the card's brief and what earlier subtasks did,
 // as a card that was paused or stopped carries on in a new task; later runs continue the same conversation.
 export function subtaskRequest(card, sub, { brief = null } = {}) {
@@ -61,10 +97,14 @@ export function parseSplit(reply) {
     return fresh({ title, instructions: text(item.instructions, SUBTASK_LIMITS.instructions) || '', tier: TIERS.includes(item.tier) ? item.tier : 'standard' }, { kind: 'agent' });
   });
 }
-const fresh = ({ title, instructions = '', tier = 'standard', agent = null }, by) => ({ id: randomUUID().slice(0, 8), title, instructions, tier, agent, status: 'pending', by, createdAt: new Date().toISOString() });
+const fresh = ({ title, instructions = '', tier = 'standard', agent = null, auto = false }, by) => ({ id: randomUUID().slice(0, 8), title, instructions, tier, agent, ...(auto ? { auto: true } : {}), status: 'pending', by, createdAt: new Date().toISOString() });
+
+const FULL = /already running, the most/;
 
 export class Subtasks {
-  constructor(board) { this.board = board; this.starting = new Set(); }
+  constructor(board) { this.board = board; this.starting = new Set(); this.gap = new Set(); this.slotWait = new Set(); }
+  // Cards between one subtask ending and the next starting: they still hold their slot, so another task isn't admitted into it.
+  holding(task) { return this.gap.has(task.id); }
   get main() { return this.board.main; }
   card(c, task) { const card = this.board.cards(c).find(item => item.id === task.board?.cardId); return card && card.task === task.id && (card.split || card.subtasks?.length) ? card : null; }
 
@@ -92,20 +132,44 @@ export class Subtasks {
 
   // Starts one subtask in the card's task. Errors reach the caller: in begin they fail the task as any start does.
   launch(c, task, lane, card, sub, { brief = null } = {}) {
+    // The slot is checked first, here, so a full workspace makes the card wait (as a task does) instead of a routed start
+    // failing it later, out of sight, once its rating is done.
+    this.main.tasks.admit(c, task);
     const requestId = `task-${task.id}-sub-${sub.id}-${randomUUID().slice(0, 6)}`;
     const subtasks = (card.subtasks || []).map(item => item.id === sub.id ? { ...item, status: 'running', taskId: task.id, requestId, startedAt: new Date().toISOString() } : item);
     this.board.update(c, card, { subtasks });
     const input = { text: subtaskRequest({ ...card, subtasks }, sub, { brief }), mode: task.accessMode, approvalPolicy: task.approvalPolicy, billingConfirmed: task.billingConfirmed, requestId };
-    // Pinned by you: that agent at its default model and effort. On Auto in Flow: routed at the subtask's size. Otherwise
-    // the card's own agent.
-    if (sub.agent) return lane.broker.start(lane.c, { ...input, provider: sub.agent.provider, model: null, effort: null }, { execution: task.execution });
-    if (task.routing) {
+    // Chosen by you: that agent, model and effort. On Smart, the subtask's own or its card's: routed at the subtask's size,
+    // as a Flow message is (#12). Otherwise the card's own agent.
+    if (sub.agent) return lane.broker.start(lane.c, { ...input, provider: sub.agent.provider, model: sub.agent.model || null, effort: sub.agent.effort || null }, { execution: task.execution });
+    if (task.routing && (sub.auto === true || card.auto === true)) {
       this.starting.add(task.id);
       return lane.broker.dispatch(lane.c, { ...input, provider: task.provider, model: task.model, effort: task.effort, routing: { ...task.routing, planned: sub.tier } }, { execution: task.execution })
-        .catch(error => this.main.tasks.update(c, task, { status: 'failed', reason: clip(error.message, 500), subtasksEnded: true, endedAt: new Date().toISOString() }))
-        .finally(() => { this.starting.delete(task.id); this.main.tasks.sync(c, task); });
+        .catch(error => { if (error.status === 409 && lane.broker.running) return; if (FULL.test(error.message || '')) return this.waitForSlot(c, task, lane, card.id, sub.id); this.main.tasks.update(c, task, { status: 'failed', reason: clip(error.message, 500), subtasksEnded: true, endedAt: new Date().toISOString() }); })
+        .finally(() => { if (!this.slotWait.has(task.id)) this.starting.delete(task.id); this.main.tasks.sync(c, task); });
     }
     return lane.broker.start(lane.c, { ...input, provider: task.provider, model: task.model, effort: task.effort }, { execution: task.execution });
+  }
+
+  // Every slot was taken by the time a routed subtask had its rating: it goes back to pending and the card waits for a slot,
+  // trying again by itself, as a task waiting to start does.
+  waitForSlot(c, task, lane, cardId, subId) {
+    const reset = () => { const card = this.card(c, task); if (card) this.board.update(c, card, { subtasks: (card.subtasks || []).map(item => item.id === subId && item.status === 'running' ? { ...item, status: 'pending', taskId: null, requestId: null, startedAt: null } : item) }); };
+    reset(); this.slotWait.add(task.id); this.starting.add(task.id);
+    if (task.reason !== 'Waiting for a free slot') this.main.tasks.update(c, task, { reason: 'Waiting for a free slot' });
+    const again = () => {
+      if (['stopped', 'failed', 'cancelled', 'discarded', 'lost', 'detached'].includes(task.status) || this.main.tasks.closed) { this.slotWait.delete(task.id); this.starting.delete(task.id); return; }
+      const card = this.card(c, task), sub = card?.subtasks?.find(item => item.id === subId && item.status === 'pending');
+      if (!sub || lane.broker.running) { this.slotWait.delete(task.id); this.starting.delete(task.id); return this.main.tasks.sync(c, task); }
+      this.slotWait.delete(task.id); this.starting.delete(task.id);
+      try { const started = this.launch(c, task, lane, card, sub); if (!(started instanceof Promise)) this.main.tasks.sync(c, task); }
+      catch (error) {
+        reset();
+        if (FULL.test(error.message || '')) { this.slotWait.add(task.id); this.starting.add(task.id); setTimeout(again, 3000).unref?.(); return; }
+        this.main.tasks.update(c, task, { status: 'stopped', reason: `Paused before “${sub.title}”: ${clip(error.message, 400)}`, subtasksEnded: true, endedAt: new Date().toISOString() });
+      }
+    };
+    setTimeout(again, 3000).unref?.();
   }
 
   // Each time the card's task finishes a run. 'continue' while the card has more to do, so the task keeps running; a
@@ -114,7 +178,7 @@ export class Subtasks {
   ended(c, task, lane) {
     const card = this.card(c, task);
     if (!card || this.main.tasks.closed) return null;
-    if (this.starting.has(task.id)) return 'continue';
+    if (this.starting.has(task.id) || this.slotWait.has(task.id)) return 'continue';
     // A routed run that changed files may be checked, and retried, before the next subtask starts (#12).
     const pending = lane.broker.checks?.pending;
     if (pending?.size) { Promise.allSettled([...pending]).then(() => setImmediate(() => this.main.tasks.sync(c, task))); return 'continue'; }
@@ -140,20 +204,28 @@ export class Subtasks {
     const done = list.filter(item => item.status === 'done').length;
     if (card.subtasksPaused) return { status: 'stopped', reason: `Paused after ${done} of ${list.length} subtasks. Run carries on from “${next.title}”.` };
     // The next subtask starts once the run that ended has let go of the task.
-    this.starting.add(task.id);
+    this.starting.add(task.id); this.gap.add(task.id);
     const go = () => {
       // Tests the run that ended started go first: they may retry it (#12).
       const checks = lane.broker.checks?.pending;
       if (checks?.size) { Promise.allSettled([...checks]).then(() => setImmediate(go)); return; }
-      this.starting.delete(task.id);
+      this.starting.delete(task.id); this.gap.delete(task.id);
+      if (['stopped', 'failed', 'cancelled', 'discarded', 'lost', 'detached'].includes(task.status)) return;
       const current = this.card(c, task);
       if (!current || this.main.tasks.closed || lane.broker.running) return this.main.tasks.sync(c, task);
       const sub = (current.subtasks || []).find(item => item.id === next.id && item.status === 'pending');
       if (!sub) return this.main.tasks.sync(c, task);
       try { const started = this.launch(c, task, lane, current, sub); if (!(started instanceof Promise)) this.main.tasks.sync(c, task); }
       catch (error) {
-        // No free slot, a limit or a setting stops it here: the card goes back to Ready, and Run carries on from it.
         this.board.update(c, current, { subtasks: (current.subtasks || []).map(item => item.id === sub.id ? { ...item, status: 'pending', taskId: null, requestId: null, startedAt: null } : item) });
+        // Every slot is busy: the card waits for one, as a task waiting to start does, and carries on by itself.
+        if (/already running, the most/.test(error.message || '')) {
+          this.starting.add(task.id);
+          if (task.reason !== 'Waiting for a free slot') this.main.tasks.update(c, task, { reason: 'Waiting for a free slot' });
+          setTimeout(go, 3000).unref?.();
+          return;
+        }
+        // A limit or a setting stops it here: the card goes back to Ready, and Run carries on from it.
         this.main.tasks.update(c, task, { status: 'stopped', reason: `Paused before “${sub.title}”: ${clip(error.message, 400)}`, subtasksEnded: true, endedAt: new Date().toISOString() });
       }
     };
@@ -173,10 +245,19 @@ export class Subtasks {
       if (!sub.id || 'title' in input) { out.title = text(input.title, SUBTASK_LIMITS.title); if (!out.title) throw fail(`Give the subtask a title of up to ${SUBTASK_LIMITS.title} characters.`, 400); }
       if ('instructions' in input) { const value = input.instructions == null ? '' : String(input.instructions).trim(); if (value.length > SUBTASK_LIMITS.instructions) throw fail(`A subtask’s instructions can be up to ${SUBTASK_LIMITS.instructions.toLocaleString('en-US')} characters.`, 400); out.instructions = value; }
       if ('tier' in input) { if (!TIERS.includes(input.tier)) throw fail('Choose light, standard or deep as the subtask’s size.', 400); out.tier = input.tier; }
+      // Who does it: the card's choice (agent null, auto false), Smart routing (auto), or an agent, model and effort.
       if ('agent' in input) {
         if (input.agent === null) out.agent = null;
-        else { if (!PROVIDERS.includes(input.agent?.provider)) throw fail('Choose Codex, Claude or Gemini for this subtask, or leave it to the card.', 400); out.agent = { provider: input.agent.provider, model: null, effort: null }; }
+        else {
+          if (!PROVIDERS.includes(input.agent?.provider)) throw fail('Choose Codex, Claude or Gemini for this subtask, or leave it to the card.', 400);
+          const model = input.agent.model == null || input.agent.model === '' ? null : text(input.agent.model, 200), effort = input.agent.effort || null;
+          if (input.agent.model && !model) throw fail('Choose a model for this subtask.', 400);
+          this.main.validateSelection(model, 'auto', effort);
+          out.agent = { provider: input.agent.provider, model, effort };
+          out.auto = false;
+        }
       }
+      if ('auto' in input) { out.auto = input.auto === true; if (out.auto) out.agent = null; }
       return out;
     };
     if (card.draft) throw fail('An agent drafted this card. Accept it before working on its subtasks.');

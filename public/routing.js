@@ -12,7 +12,8 @@
   // 2: new work and handoffs share each mode's handoff line (#12).
   // 3: retries, reviewers, reset resumption and plan steps use that line too, and plan steps are chosen when they start.
   // 4: only models on the rated list are chosen, so Fable and Astra stay manual and unknown models aren't guessed.
-  const POLICY_VERSION = 4;
+  // 5: a message with images goes only to a model and connection known to take images.
+  const POLICY_VERSION = 5;
   const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
   const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
   const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
@@ -207,21 +208,36 @@
     ...rate('light', ['gpt-6-luna', 'gpt-5.6-luna']),
     ...rate('standard', ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-6.1-terra', 'gpt-5.6-terra']),
     ...rate('deep', ['gpt-6-astra'], { manual: true }),
-    // Claude
-    ...rate('light', ['haiku', 'claude-haiku-4-5-20251001']),
-    ...rate('standard', ['sonnet', 'claude-sonnet-5', 'claude-sonnet-4-6']),
-    ...rate('deep', ['opus', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6']),
-    ...rate('deep', ['fable', 'claude-fable-5', 'claude-fable-5-2'], { manual: true }),
+    // Claude. Its catalog doesn't say what input a model takes; images: every model here takes images, per Anthropic's
+    // model documentation.
+    ...rate('light', ['haiku', 'claude-haiku-4-5-20251001'], { images: true }),
+    ...rate('standard', ['sonnet', 'claude-sonnet-5', 'claude-sonnet-4-6'], { images: true }),
+    ...rate('deep', ['opus', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6'], { images: true }),
+    ...rate('deep', ['fable', 'claude-fable-5', 'claude-fable-5-2'], { manual: true, images: true }),
     // Gemini, through Antigravity: its catalog has no descriptions, so Flash is light and Argon keeps the standard
-    // place it had before. Each id carries a thinking level; all three levels share one rating.
-    ...rate('light', ['gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high']),
-    ...rate('standard', ['gemini-4-argon-low', 'gemini-4-argon-medium', 'gemini-4-argon-high']),
+    // place it had before. Each id carries a thinking level; all three levels share one rating. Both take images, per
+    // Google's model documentation; the connection must report image input as well (imageConnection).
+    ...rate('light', ['gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high'], { images: true }),
+    ...rate('standard', ['gemini-4-argon-low', 'gemini-4-argon-medium', 'gemini-4-argon-high'], { images: true }),
+    // Codex's catalog lists each model's input types (inputModalities), so its entries carry no images rating.
   ]);
   const modelId = row => row?.id || row?.model || row?.value || '';
   // A model's rating from the list, or null when it isn't rated.
   const modelRating = row => MODEL_LIST.get(String(modelId(row)).toLowerCase()) || null;
   // A rated model's tier, or null. Nothing is worked out from the name.
   const modelTier = row => modelRating(row)?.tier || null;
+  // Whether a model takes images: what its agent's catalog reports, else the list, else null for not known.
+  const takesImages = row => Array.isArray(row?.inputModalities) ? row.inputModalities.includes('image') : typeof modelRating(row)?.images === 'boolean' ? modelRating(row).images : null;
+
+  // What a task needs from a model, beyond its size (#12). images: how many images the request itself carries, which
+  // the chosen model and its connection must both be known to take; one that can't, or isn't known to, is left out.
+  // files: attachment records ({ kind }) or a count, which says nothing about images.
+  function taskNeeds(files) {
+    const images = Array.isArray(files) ? files.filter(file => file?.kind === 'image').length : 0;
+    return images ? { images } : {};
+  }
+  // Whether a model may take this task's needs. Unknown counts as no.
+  const meetsNeeds = (row, needs) => !needs?.images || takesImages(row) === true;
   // Whether routing may choose a model on its own: rated, not kept for manual choice, listed and not hidden.
   const routable = row => Boolean(modelId(row)) && modelId(row) !== 'default' && !row.hidden && Boolean(modelRating(row)) && !modelRating(row).manual;
   const effortsOf = row => (row?.supportedEffortLevels || row?.supportedReasoningEfforts?.map(level => level.reasoningEffort) || []).filter(level => EFFORTS.includes(level)).sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
@@ -258,9 +274,11 @@
   // One step stronger than a choice, for a retry after failed tests (#12, stage 2): the same agent, so it keeps its
   // session, with a stronger model or more effort. Null when the choice is already the agent's strongest.
   const LADDER = [['light', 'low'], ['standard', 'medium'], ['deep', 'high'], ['deep', 'highest']];
-  function escalate(provider, rows, choice) {
-    // A model routing may not choose has no place on the ladder, so there is nothing to step up from.
-    const current = (rows || []).find(row => modelId(row) === choice.model);
+  function escalate(provider, rows, choice, needs = null) {
+    // A model routing may not choose has no place on the ladder, so there is nothing to step up from. A retry carries
+    // the same request, so the stronger model must take what it needs too.
+    rows = (rows || []).filter(row => meetsNeeds(row, needs));
+    const current = rows.find(row => modelId(row) === choice.model);
     if (!current || !routable(current)) return null;
     const tier = TIERS.indexOf(modelTier(current)), effort = choice.effort ? EFFORTS.indexOf(choice.effort) : -1;
     for (const [wantedTier, wantedEffort] of LADDER) {
@@ -317,20 +335,32 @@
   // limit is skipped, and allowance is spent where it resets soonest while respecting continuity.
   // allowNear: you chose "Proceed with remaining allowance", so an agent past the safety threshold but not at its limit
   // may still be chosen, after every agent with ordinary headroom.
-  function route({ text, attachments = 0, context = null, assessment = null, mode = 'smart', candidates = [], current = null, allowApi = false, allowNear = false, quotaThreshold = 95, now = Date.now() }) {
+  // needs: what the task needs beyond its size (taskNeeds). An agent is left out when its connection, or every model it
+  // may use, isn't known to take them; candidate.images says whether its connection sends images (true, false or unknown).
+  function route({ text, attachments = 0, context = null, assessment = null, mode = 'smart', candidates = [], current = null, allowApi = false, allowNear = false, quotaThreshold = 95, needs = null, now = Date.now() }) {
     mode = normalizeMode(mode) || 'smart';
     const task = assessment && TIERS.includes(assessment.tier) && typeof assessment.reason === 'string' ? assessment : classify(text, { attachments, context });
     const [tier, baseEffort] = plan[mode][task.tier];
     const wantedEffort = mode === 'smart' && ['low', 'medium', 'high'].includes(task.effort) && EFFORTS.indexOf(task.effort) > EFFORTS.indexOf(baseEffort) ? task.effort : baseEffort;
-    const skipped = [];
+    const skipped = [], unfit = [];
+    needs = needs?.images > 0 ? { images: needs.images } : null;
     const pool = candidates.flatMap(candidate => {
       if (!candidate.eligible) return [];
       if (!allowApi && candidate.billingSource !== 'subscription') { skipped.push(`${agentNames[candidate.provider]} isn’t billed to a subscription`); return []; }
-      const rows = (candidate.models || []).filter(row => !candidate.allowedModels || candidate.allowedModels.includes(modelId(row)));
+      const listed = (candidate.models || []).filter(row => !candidate.allowedModels || candidate.allowedModels.includes(modelId(row)));
+      const rows = listed.filter(row => meetsNeeds(row, needs));
+      if (needs) {
+        const name = agentNames[candidate.provider];
+        const why = candidate.images === false ? `${name}’s connection can’t send images`
+          : candidate.images !== true ? `${name}’s connection isn’t known to take images`
+          : !listed.some(row => modelId(row) && modelId(row) !== 'default' && !row.hidden) ? `${name}’s models couldn’t be read, so none is known to take images`
+          : listed.some(routable) && !rows.some(routable) ? `${name} has no ${candidate.allowedModels ? 'allowed ' : ''}rated model known to take images` : null;
+        if (why) { skipped.push(why); unfit.push(name); return []; }
+      }
       const preferred = pickModel(rows, tier);
       // An agent that lists models but none routing may choose is left out, rather than run on a default nobody rated.
       // Only an agent whose list couldn't be read runs its own default.
-      if (!preferred && rows.some(row => modelId(row) && modelId(row) !== 'default' && !row.hidden)) { skipped.push(`${agentNames[candidate.provider]} has no ${candidate.allowedModels ? 'model allowed by task limits that is ' : 'model '}on Codeshi’s rated list`); return []; }
+      if (!preferred && listed.some(row => modelId(row) && modelId(row) !== 'default' && !row.hidden)) { skipped.push(`${agentNames[candidate.provider]} has no ${candidate.allowedModels ? 'model allowed by task limits that is ' : 'model '}on Codeshi’s rated list`); return []; }
       if (candidate.allowedModels && !preferred) { skipped.push(`${agentNames[candidate.provider]} has no model allowed by task limits`); return []; }
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
       const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && routable(row) && distance(row) === distance(preferred))] : [null];
@@ -455,6 +485,9 @@
         : `${agentNames[chosen.provider]} is past ${modeNames[mode]}’s ${chosen.line.line}% handoff line, and no other agent has room under it`);
     }
 
+    // Say when images narrowed the choice, so a different agent than usual isn't a surprise.
+    if (unfit.length) why.push(`The message has images, which ${unfit.join(' and ')} can’t take here`);
+
     if (plannedHandoff) {
       why.push(`${agentNames[chosen.provider]} has ${Math.round(chosen.shortRoom.remaining)}% left before its reset (usual ${task.tier} run ~${Math.round(chosen.shortRoom.usual)}%), so a handoff is planned`);
     }
@@ -470,8 +503,9 @@
       ...(chosen.steppedDown ? { steppedDown: true } : {}),
       ...(plannedHandoff ? { plannedHandoff: true } : {}),
       ...(spendingRemainder ? { remainder: chosen.quota.burndown ? 'expiring' : 'asked' } : {}),
+      ...(needs ? { needs } : {}),
     };
-    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, handoffLine: { percent: chosen.line.line, fits: chosen.line.fits }, escalation: escalate(chosen.provider, chosen.models, choice) };
+    return { ...choice, ...(assessment ? { assessment: task } : {}), quota: chosen.quota, bindingWindow: chosen.bindingWindow, handoffLine: { percent: chosen.line.line, fits: chosen.line.fits }, escalation: escalate(chosen.provider, chosen.models, choice, needs) };
   }
 
   // A plan step (Orchestrate) is routed by the tier it was planned with, which then counts instead of how its text reads.
@@ -564,5 +598,5 @@
     return results;
   }
 
-  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, modelTier, modelRating, MODEL_LIST_DATE, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
+  root.relayRouting = { MODES, POLICY_VERSION, LEGACY_MODES, normalizeMode, modeNames, handoffThresholds, handoffFit, classify, triage, modelTier, modelRating, takesImages, taskNeeds, MODEL_LIST_DATE, route, routeTo, plannedStep, planner, escalate, assessQuota, adaptiveThreshold, quotaText, remainderText, windowApplies, windowSpendability, bindingWindow, replay };
 })(typeof window === 'undefined' ? globalThis : window);

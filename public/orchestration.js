@@ -13,6 +13,8 @@
   const ARTIFACTS = [['', 'None'], ['contract', 'Contract'], ['schema', 'Schema'], ['diff', 'Diff'], ['test_evidence', 'QA evidence'], ['findings', 'Findings']];
   const roleNames = { builder: 'Builder', reviewer: 'Reviewer', frontend: 'Frontend', backend: 'Backend', database: 'Database', design: 'Design', qa: 'QA' };
   const OPEN = ['planning', 'draft', 'unstructured', 'failed', 'interrupted'];
+  // A draft that ended without cards. Since One Plan (#162) it shows on the Plan, not in the old plan window.
+  const NOT_READY = ['unstructured', 'failed', 'interrupted'];
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
   const clip = (text, size = 280) => text.length > size ? `${text.slice(0, size - 1).trimEnd()}…` : text;
@@ -423,7 +425,10 @@
   window.addEventListener('relay-flow', render);
 
   window.relayOrchestration = {
-    render, mayReplace, planner, cannotDraft,
+    render, mayReplace, planner, cannotDraft, again: planAgain,
+    // Dismiss a draft that ended without cards, from the Plan (#162).
+    dismiss: () => { const plan = openPlan(); if (plan && NOT_READY.includes(plan.status)) action({ action: 'discard', id: plan.id }, () => api.announce('Dismissed.')); },
+    notReady: () => { const plan = onMain() ? openPlan() : null; return plan && NOT_READY.includes(plan.status) ? plan : null; },
     // The plan that holds the queue, for Flow's What's next: one being made or not ready, or one whose drafted cards still
     // wait on the Plan for you (#162).
     waiting: () => {
@@ -436,7 +441,7 @@
     describe(plan) {
       if (!plan) return '';
       if (plan.status === 'planning') return 'Planning the steps…';
-      if (plan.status === 'moved') return `Drafted ${plural(plan.cards?.length || plan.steps?.length || 0, 'card')} on the Plan: ${plan.summary || plan.goal}${plan.questions?.length ? ` It asks: ${plan.questions.join(' ')}` : ''}`;
+      if (plan.status === 'moved') return `Drafted ${plural(plan.cards?.length || plan.steps?.length || 0, 'card')} on the Plan: ${plan.summary || plan.goal}${plan.questions?.length ? ` It asks: ${plan.questions.map(item => typeof item === 'string' ? item : item?.question || '').join(' ')}` : ''}`;
       if (plan.steps?.length) return `Proposed a plan of ${plural(plan.steps.length, 'step')}: ${plan.summary || plan.goal}`;
       return plan.summary || '';
     },
@@ -448,7 +453,7 @@
     // For the Plan view (plan-view.js): the plan the card shows, drawn from the same draft, and the same edits.
     snapshot() {
       const plan = onMain() ? openPlan() || runningPlan() : null;
-      if (!plan) return null;
+      if (!plan || NOT_READY.includes(plan.status)) return null;
       const draft = plan.status === 'draft', running = RUN.includes(plan.status), editing = draft && edit?.planId === plan.id;
       return { plan, draft, running, steps: editing ? edit.steps : plan.steps || [], structure: editing ? edit.structure : 0, dirty: Boolean(editing && edit.dirty), busy, tasks: running ? planTasks(plan) : null, title: $('orchestration-title').textContent, status: $('orchestration-status').hidden ? '' : $('orchestration-status').textContent };
     },

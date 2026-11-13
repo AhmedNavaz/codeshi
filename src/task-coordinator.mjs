@@ -40,7 +40,9 @@ export class TaskCoordinator {
   // A card on the board (#132) follows the task it started, so the board hears about every change.
   update(c, task, changes) { this.main.record(c, { type: 'parallel_task_update', id: task.id, changes }); this.onTask?.(c, task); this.main.emit('update', { conversationId: c.id }); }
   get running() { return [...this.lanes.values()].filter(lane => lane.broker.running).length; }
-  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.preparing.size + (this.main.board?.suggestJobs?.size || 0) + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
+  get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.holding() + this.preparing.size + (this.main.board?.suggestJobs?.size || 0) + [...this.main.conversations.values()].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
+  // Cards between two subtasks have no run for a moment but keep their slot (src/subtasks.mjs).
+  holding() { let count = 0; for (const [id, lane] of this.lanes) if (!lane.broker.running && lane.task && this.main.board?.subtasks.holding(lane.task)) count++; return count; }
   get busy() { return this.running > 0 || this.checking.size > 0; }
   get waitingResumes() { return [...this.lanes.values()].reduce((count, lane) => count + (lane.broker.waitingResumes || 0), 0); }
   openLanes() { return [...this.lanes.values()].map(lane => lane.broker); }
@@ -54,7 +56,7 @@ export class TaskCoordinator {
     if (task && !this.available(task)) throw fail(`${task.folderName} is no longer in this workspace, so this task can't run. Its history stays.`);
     if (task && (ENDED.has(task.status) || task.status === 'lost')) throw fail('This task has ended, so it can’t run again. Its history stays. Start a new task to carry on.');
     const home = c || [...this.main.conversations.values()].find(item => item.id === this.main.mainConversationId) || [...this.main.conversations.values()][0];
-    const limit = this.main.budget.policy(home).maxConcurrent, others = this.activeWorkers - (task && this.lanes.get(task.id)?.broker.running ? 1 : 0);
+    const limit = this.main.budget.policy(home).maxConcurrent, others = this.activeWorkers - (task && (this.lanes.get(task.id)?.broker.running || this.main.board?.subtasks.holding(task)) ? 1 : 0);
     if (others >= limit) throw fail(`${others} ${others === 1 ? 'task is' : 'tasks are'} already running, the most this workspace's task limits allow at once.`);
     if (task) this.syncPolicy(home, task);
   }
@@ -108,7 +110,15 @@ export class TaskCoordinator {
     const allowed = this.main.budget.allows(c, provider, model);
     if (!allowed.allowed && !(prepareReview && input.routing)) throw fail(allowed.reason);
     this.main.execution.expect(this.main.execution.defaults(c).revision, input.executionRevision);
-    if (input.parentTaskId) { if (input.execution?.taskId !== input.parentTaskId) throw fail('The child task must name its parent execution policy.'); this.main.execution.assert(c, input.execution, { action: 'children' }); throw fail('Automatic child assignment is not available yet. Start an explicit independent task.'); }
+    // A part of a split message (#107 stage 2): it names the message's task, whose limits it shares (#87). Flow splitting
+    // by itself needs that task's policy to allow children; a split you chose is your own explicit action. A task that is
+    // already a part can't split again, as only the workspace chat proposes splits.
+    const parent = input.parent && typeof input.parent === 'object' ? input.parent : null;
+    if (parent) {
+      if (typeof parent.taskId !== 'string' || !parent.execution || parent.execution.taskId !== parent.taskId) throw fail('The child task must name its parent execution policy.');
+      if (parent.automatic === true) this.main.execution.assert(c, parent.execution, { action: 'children' });
+      else if (!this.main.execution.current(c, parent.taskId)) throw fail('The message this part came from is no longer recorded. Send it again.');
+    }
     const policyId = queueExecution?.taskId || randomUUID(); this.main.execution.ensure(c, policyId, { requestId: input.requestId });
     const execution = queueExecution || this.main.execution.token(c, policyId);
     this.main.execution.assert(c, execution, { action: input.routing ? 'routing' : 'manual', ...(prepareReview && input.routing ? {} : { provider, model, effort }) });
@@ -119,7 +129,7 @@ export class TaskCoordinator {
     for (const id of waitsFor({ dependsOn })) { const before = this.find(c, id); if (['discarded', 'cancelled'].includes(before.status)) throw fail(`“${before.title}” was ${before.status}, so nothing can wait for it.`); }
     const folder = this.plan(c, { ...input, provider, accessMode: mode, approvalPolicy }).folder;
     // Ownership is saved before anything can start, so a crash at any point finds a task it can recover.
-    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(plan ? { plan } : {}), ...(board ? { board } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
+    const task = { id: policyId, execution, requestId: input.requestId, title: prepareReview ? 'Prepare project review' : line(input.title || text), ...(plan ? { plan } : {}), ...(board ? { board } : {}), ...(held ? { held: true } : {}),...(prepareReview ? { purpose: 'project-review', workspaceFolders: this.main.workspaceFolders.map(folder => ({ ...folder })) } : {}), text, folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider, model, effort, accessMode: mode, approvalPolicy, billingConfirmed: input.billingConfirmed === true, attachments, includeHistory: input.includeHistory === true, dependsOn, ...(input.routing ? { routing: input.routing } : {}), ...(parent ? { parentTaskId: parent.taskId, splitId: typeof parent.splitId === 'string' ? parent.splitId : null } : {}), status: 'waiting', reason: 'Starting', createdAt: new Date().toISOString() };
     this.main.record(c, { type: 'parallel_task', task });
     const saved = this.find(c, task.id);
     this.tick(c);
@@ -259,6 +269,9 @@ export class TaskCoordinator {
     });
   }
   begin(c, task) {
+    // A task begins once: saving its setup can wake the queue before this call returns, and a second begin in the same lane
+    // would start a second run beside the first and fail the task for it.
+    if (task.status !== 'waiting' || this.lanes.get(task.id)?.broker.running) return;
     const lane = this.lane(c, task), first = !task.conversationId;
     if (first) {
       const conversation = lane.broker.get(lane.broker.create().id); lane.c = conversation;
@@ -296,6 +309,8 @@ export class TaskCoordinator {
     }
     broker.attachments = this.main.attachments; broker.skills.root = this.main.skills.root;
     broker.admit = () => this.admit(c, task);
+    // A part of a split message counts what the message and its other parts used against the same limits (#87).
+    if (task.parentTaskId) broker.budget.shared = (laneC, taskId) => taskId === task.id ? this.sharedUsage(c, task) : null;
     const lane = { broker, task, c: task.conversationId ? broker.conversations.get(task.conversationId) : null };
     broker.on('update', () => { if (lane.c) this.main.emit('update', { conversationId: lane.c.id }); this.sync(c, task); });
     broker.on('notify', notice => this.main.emit('notify', { ...notice, conversationId: c.id, taskId: task.id, title: `${task.folderName}: ${notice.title}` }));
@@ -321,9 +336,41 @@ export class TaskCoordinator {
     // A plan step that finishes is checked before anything builds on it, so the hold is saved with the status (#89). Working
     // on it again drops the old result; the next finish checks it afresh.
     const finished = tested(task) && status === 'complete' && task.status !== 'complete', check = finished ? { id: randomUUID().slice(0, 8), status: 'running', at: new Date().toISOString() } : null;
-    this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), provider, model, effort, ...(selected?.routing ? { routing: selected.routing } : {}), ...(check ? { stepCheck: check } : tested(task) && status === 'running' && task.stepCheck ? { stepCheck: null } : {}) });
+    const spent = task.parentTaskId && status !== 'running' ? this.budgetUsage(lane.c.taskBudgets?.[task.id], lane.broker.budget) : null;
+    this.update(c, task, { status, reason: null, ...(status === 'running' ? { endedAt: null } : { endedAt: new Date().toISOString() }), ...(spent ? { budgetUsed: { ...spent, running: 0 } } : {}), provider, model, effort, ...(selected?.routing ? { routing: selected.routing } : {}), ...(check ? { stepCheck: check } : tested(task) && status === 'running' && task.stepCheck ? { stepCheck: null } : {}) });
     if (check) this.stepEnded(c, task, check.id).catch(error => console.error('Codeshi could not check a plan step:', error.message));
     if (status !== 'running') setImmediate(() => this.tick(c));
+  }
+
+  // ---- Split messages (#107 stage 2)
+  // What a part's message and its other parts have used, for the limits they share. A part whose lane is open reads its
+  // live record; one that ended before a restart reads the usage saved on its task when it stopped working.
+  budgetUsage(state, budget) {
+    if (!state) return null;
+    const used = budget.used(state);
+    return { workingMs: used.workingMs, tokens: used.tokens, spendUSD: used.spendUSD, retries: state.retries, reviews: state.reviews, handoffs: state.handoffs, runsWithoutUsage: state.runsWithoutUsage, runsWithPartialUsage: state.runsWithPartialUsage, runsWithoutCost: state.runsWithoutCost, running: Object.keys(state.active).length };
+  }
+  // What one task has used, for watching it on the Plan (#162 stage 5). Working time is split into what finished runs took
+  // and when the runs still going began, so the page can count the minutes itself instead of being sent a new number on
+  // every update. Tokens and spend only change when the agent reports usage.
+  usageOf(task, lane = this.lanes.get(task.id)) {
+    const state = lane?.c?.taskBudgets?.[task.id];
+    if (!state) {
+      const saved = task.budgetUsed;
+      return saved ? { workedMs: Number(saved.workingMs) || 0, activeSince: null, tokens: Number(saved.tokens) || 0, spendUSD: Number(saved.spendUSD) || 0, retries: saved.retries || 0, reviews: saved.reviews || 0, handoffs: saved.handoffs || 0 } : null;
+    }
+    const used = lane.broker.budget.used(state), since = Object.values(state.active || {}).map(entry => entry.startedAt).filter(Boolean).sort()[0] || null;
+    return { workedMs: state.workingMs || 0, activeSince: since, tokens: used.tokens, spendUSD: used.spendUSD, retries: state.retries || 0, reviews: state.reviews || 0, handoffs: state.handoffs || 0 };
+  }
+  sharedUsage(c, task) {
+    const rows = [this.budgetUsage(c.taskBudgets?.[task.parentTaskId], this.main.budget)];
+    for (const other of (c.parallelTasks || []).filter(item => item.parentTaskId === task.parentTaskId && item.id !== task.id)) {
+      const lane = this.lanes.get(other.id), state = lane?.c?.taskBudgets?.[other.id];
+      rows.push(state ? this.budgetUsage(state, lane.broker.budget) : other.budgetUsed || null);
+    }
+    const total = { workingMs: 0, tokens: 0, spendUSD: 0, retries: 0, reviews: 0, handoffs: 0, runsWithoutUsage: 0, runsWithPartialUsage: 0, runsWithoutCost: 0, running: 0 };
+    for (const row of rows.filter(Boolean)) for (const key of Object.keys(total)) total[key] += Number(row[key]) || 0;
+    return total;
   }
 
   // ---- Plan steps (#89): briefs written from what earlier steps did, and each finished step checked before it is built on.
@@ -380,8 +427,11 @@ export class TaskCoordinator {
   // that worked in place, or the folder with the step's copy merged on top. Neither the folder nor the copy is touched.
   async runStepCheck(c, task) {
     let command = null;
-    try { command = this.tests?.saved?.(); } catch { /* No Run panel, no command. */ }
-    if (!command?.command) return { reason: 'No test command is marked in the Run panel, so Codeshi didn’t check this step.' };
+    // A Plan card's own test command (the one on its card) is what tests it; without one, the command marked in Run is.
+    const own = task.board ? String(this.stepOf(c, task).step?.check || '').trim() : '';
+    if (own) command = { command: own, directory: '' };
+    else try { command = this.tests?.saved?.(); } catch { /* No Run panel, no command. */ }
+    if (!command?.command) return { reason: task.board ? 'The card has no test command and none is marked in the Run panel, so Codeshi didn’t check it.' : 'No test command is marked in the Run panel, so Codeshi didn’t check this step.' };
     if (!this.main.execution.allows(c, task.execution, { action: 'check', sequence: true })) return { reason: 'This task’s execution policy doesn’t allow automatic checks.' };
     if (!task.repoRoot || !fs.existsSync(task.repoRoot)) return { reason: `${task.folderName} isn’t a Git repository, so its tests can’t run on a separate copy.` };
     if (this.checking.has(task.id)) return { reason: 'Its tests were already running.' };
@@ -445,8 +495,10 @@ export class TaskCoordinator {
       ...shown,
       runningProvider,
       runningModel: active?.model || null,
+      runningEffort: (runningProvider && active?.effort) || null,
       runningPhase: active?.phase || null,
       runningStep: active?.plan?.steps?.find(s => s.status === "active")?.text || null,
+      usage: this.usageOf(task, lane),
       approvals: lane?.broker.pendingCount() || 0,
       testing: this.checking.has(task.id),
       hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status)

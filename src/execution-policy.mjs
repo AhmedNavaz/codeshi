@@ -69,7 +69,7 @@ export class ExecutionPolicies {
         if (queued && queued.taskId !== taskId) this.broker.record(c, { type: 'execution_policy', policy: { ...queued, mode: 'normal', automation: Object.fromEntries(actions.map(action => [action, false])), revision: queued.revision + 1, authorization: policy.authorization } });
       }
     }
-    if (c.queue.some(item => item.routing) && !c.queuePaused) this.broker.queue.pause(c, 'Task authority changed. Review automatic queued decisions before resuming.');
+    if (c.queue.some(item => item.routing) && !c.queuePaused) this.broker.queue.pause(c, 'You took over from Flow. Queued prompts will run with the agent shown on each when you resume.');
     for (const run of c.runs.filter(run => run.taskId === taskId)) this.broker.automaticReviews?.invalidate(c, run, 'Task authority changed. Choose the next review manually.');
     const pending = this.broker.running;
     if (pending?.purpose === 'routing' && pending.taskId === taskId) { pending.stopped = true; if (pending.child) this.broker.cancel(pending); }

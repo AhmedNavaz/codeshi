@@ -722,6 +722,9 @@ code.activity-entry-detail { color: var(--faint); font: 11.5px/1.4 var(--mono); 
 .agent-icon.gemini { -webkit-mask-image: var(--icon-gemini); mask-image: var(--icon-gemini); }
 .agent-icon.claude { -webkit-mask-image: var(--icon-claude); mask-image: var(--icon-claude); }
 .agent-icon.auto { -webkit-mask-image: var(--icon-auto); mask-image: var(--icon-auto); color: var(--link); }
+.agent-icon.auto.saver { -webkit-mask-image: var(--icon-saver); mask-image: var(--icon-saver); color: var(--success); }
+.agent-icon.auto.smart { color: var(--gemini); }
+.agent-icon.auto.ultra { -webkit-mask-image: var(--icon-ultra); mask-image: var(--icon-ultra); color: var(--link); }
 #select-codex.selected .agent-icon { color: var(--codex); }
 #select-claude.selected .agent-icon { color: var(--claude); }
 #select-gemini.selected .agent-icon { color: var(--gemini); }
@@ -1125,7 +1128,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .prompt-queue { display: grid; gap: 4px; margin-top: 4px; min-width: 0; max-width: 100%; }
 .prompt-queue-head { display: flex; align-items: center; gap: 8px; min-height: 28px; min-width: 0; max-width: 100%; color: var(--muted); font-size: 12.5px; }
 #prompt-queue-title { flex: none; color: var(--text-strong); font-weight: 600; white-space: nowrap; }
-.prompt-queue-paused { flex: 1; min-width: 0; overflow: hidden; color: var(--warning); text-overflow: ellipsis; white-space: nowrap; }
+.prompt-queue-paused { flex: 1; min-width: 0; color: var(--warning); overflow-wrap: anywhere; }
 .prompt-queue-head .pill-button, #prompt-queue-toggle { flex: none; flex-shrink: 0; margin-left: auto; }
 .prompt-queue-paused-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 2px 0 6px; min-width: 0; max-width: 100%; }
 .prompt-queue-paused-actions .pill-button { font-size: 11.5px; padding: 3px 8px; border-radius: 6px; flex-shrink: 0; }
@@ -1168,6 +1171,35 @@ button.commit-hash:hover { text-decoration: underline; }
 .handoff-actions button:hover:enabled { background: var(--hover-strong, var(--surface-strong)); }
 .handoff-actions #handoff-accept:hover:enabled, .handoff-actions #retry-accept:hover:enabled { background: var(--accent-strong); }
 .handoff-actions #handoff-accept:disabled, .handoff-actions #retry-accept:disabled { background: var(--chip-bg); color: var(--faint); opacity: 1; }
+/* Flow found separate parts in a message (#107 stage 2): nothing runs until you choose. */
+.split-offer { display: grid; gap: 8px; margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); font-size: 12.5px; line-height: 1.45; }
+.split-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.split-head strong { flex: 1; min-width: 0; color: var(--text-strong); font-weight: 600; }
+.split-icon { flex: none; width: 15px; height: 15px; background: var(--link); -webkit-mask: var(--icon-tasks) center / contain no-repeat; mask: var(--icon-tasks) center / contain no-repeat; }
+.split-dismiss { flex: none; width: 24px; height: 24px; }
+.split-message { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.split-parts { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.split-part { display: grid; gap: 2px; padding: 6px 8px; border-radius: 6px; background: var(--chip-bg); min-width: 0; }
+.split-part-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.split-part-number { flex: none; min-width: 14px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.split-part-title { flex: 1; min-width: 0; color: var(--text-strong); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-part-after { flex: none; color: var(--faint); font-size: 11.5px; }
+.split-part-who { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-left: 22px; color: var(--muted); min-width: 0; }
+.split-part-who .agent-icon.codex { color: var(--codex); }
+.split-part-who .agent-icon.claude { color: var(--claude); }
+.split-part-who .agent-icon.gemini { color: var(--gemini); }
+.split-part-billing { font-size: 11px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+.split-part-billing.charged { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.split-part-error { color: var(--danger); overflow-wrap: anywhere; }
+.split-option { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
+.split-option select { min-width: 0; max-width: 240px; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-strong); font: inherit; }
+.split-note { margin: 0; color: var(--faint); font-size: 11.5px; }
+.split-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.split-actions button { height: 26px; padding: 0 12px; border: 0; border-radius: 13px; background: var(--chip-bg); color: var(--text-strong); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.split-actions button:hover:enabled { background: var(--hover-strong, var(--surface-strong)); }
+.split-actions #split-run { background: var(--accent); color: var(--on-accent); }
+.split-actions #split-run:hover:enabled { background: var(--accent-strong); }
+.split-actions #split-run:disabled { background: var(--chip-bg); color: var(--faint); opacity: 1; }
 /* A retry after failed tests (#12). */
 .retry-icon { background: var(--danger); -webkit-mask-image: var(--icon-alert); mask-image: var(--icon-alert); }
 
@@ -1509,7 +1541,9 @@ button.commit-hash:hover { text-decoration: underline; }
 
 /* While routing is on, the model button shows the mode in the accent colour. */
 .model-picker-button.routing { color: var(--link); }
-.model-picker-button.routing .agent-icon.auto { color: var(--link); }
+.model-picker-button.routing .agent-icon.auto.saver { color: var(--success); }
+.model-picker-button.routing .agent-icon.auto.smart { color: var(--gemini); }
+.model-picker-button.routing .agent-icon.auto.ultra { color: var(--link); }
 
 /* What Codeshi does, in a new conversation: four quiet lines, two of them leading to the Agents panel. */
 .capabilities { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; width: 100%; margin: 22px 0 0; padding: 0; list-style: none; text-align: left; }

@@ -11,6 +11,8 @@ import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
 import { LIMITS } from '../src/board.mjs';
+import { TaskBudgets } from '../src/task-budget.mjs';
+import { TaskCoordinator } from '../src/task-coordinator.mjs';
 import { openPlan, parsePlan } from '../src/orchestration.mjs';
 import { prepareContext } from '../src/context.mjs';
 
@@ -61,11 +63,10 @@ const column = (env, card) => env.card(card.id).column;
 test('cards are written, checked and kept with the workspace, and never default to an agent', async t => {
   const env = setup(t, ['a', 'b']);
   const first = env.board.create(env.c, { title: '  Add a login page  ', notes: 'Email and password.', checks: ['Tests pass', { text: 'Has a logout link', done: true }] });
-  assert.deepEqual([first.column, first.priority, first.agent, first.folderId, first.revision, first.createdBy], ['backlog', 'normal', null, null, 1, 'you'], 'A new card has no agent until you choose one: nothing runs on Auto by default.');
+  assert.deepEqual([first.column, 'normal', first.agent, first.folderId, first.revision, first.createdBy], ['backlog', 'normal', null, null, 1, 'you'], 'A new card has no agent until you choose one: nothing runs on Auto by default.');
   assert.equal(first.title, 'Add a login page');
   assert.deepEqual(first.checks, [{ text: 'Tests pass', done: false }, { text: 'Has a logout link', done: true }]);
   assert.throws(() => env.board.create(env.c, { title: ' ' }), /Give the card a title/);
-  assert.throws(() => env.board.create(env.c, { title: 'x', priority: 'urgent' }), /high, normal or low/);
   assert.throws(() => env.board.create(env.c, { title: 'x', agent: { provider: 'auto' } }), /Codex, Claude or Gemini/);
   assert.throws(() => env.board.create(env.c, { title: 'x', folderId: 'elsewhere' }), /folder in this workspace/);
   assert.throws(() => env.board.create(env.c, { title: 'x', column: 'doing' }), /Backlog or Ready/);
@@ -108,7 +109,7 @@ test('a card runs as its own task under Normal, finishes in Review with its summ
   const sent = env.captured(fs.realpathSync(env.folder('a')))[0].context.currentRequest;
   assert.match(sent, /^Fix the footer\n\nIt overlaps on phones\.\n\nDone means:\n- Looks right at 375 px/);
   assert.throws(() => env.board.edit(env.c, card.id, { notes: 'Changed while it works' }), /Stop it first/, 'What the agent works from stays as it started.');
-  assert.equal(env.board.edit(env.c, card.id, { priority: 'high' }).priority, 'high', 'The priority can still change.');
+  assert.equal(env.board.edit(env.c, card.id, { labels: ['later'] }).labels[0], 'later', 'Labels can still change.');
   assert.throws(() => env.board.accept(env.c, card.id), /Only a card in Review/);
   env.release(fs.realpathSync(env.folder('a')));
   await until(() => column(env, card) === 'review', 'the card to reach Review');
@@ -229,27 +230,26 @@ test('a card’s place on the canvas is saved without changing what an agent rea
   assert.deepEqual(env.card(second.id).at, { x: 5, y: 5 }, 'Places are kept in the workspace’s journal.');
 });
 
-test('labels and a due date sort and plan cards without changing what an agent reads (#97)', async t => {
+test('labels sort cards without changing what an agent reads (#97)', async t => {
   const env = setup(t);
-  const card = env.add({ title: 'Agree the API', labels: [' backend ', 'API', 'Backend', '', 'api  contract'], due: '2026-11-20' });
+  const card = env.add({ title: 'Agree the API', labels: [' backend ', 'API', 'Backend', '', 'api  contract'] });
   assert.deepEqual(env.card(card.id).labels, ['backend', 'API', 'api contract'], 'Labels are trimmed and kept once whatever their case, in the order given.');
-  assert.equal(env.card(card.id).due, '2026-11-20');
-  assert.deepEqual([env.add().labels, env.add().due], [[], null], 'A card starts with no labels and no due date.');
-  for (const [input, message] of [[{ labels: 'backend' }, /must be a list/], [{ labels: [3] }, /must be text/], [{ labels: ['x'.repeat(33)] }, /up to 32 characters/], [{ labels: Array.from({ length: 9 }, (_, i) => `l${i}`) }, /up to 8 labels/], [{ due: '2026-02-30' }, /isn’t a day on the calendar/], [{ due: '2026-2-3' }, /YYYY-MM-DD/], [{ due: 20261120 }, /YYYY-MM-DD/]]) {
+  assert.deepEqual(env.add().labels, [], 'A card starts with no labels.');
+  for (const [input, message] of [[{ labels: 'backend' }, /must be a list/], [{ labels: [3] }, /must be text/], [{ labels: ['x'.repeat(33)] }, /up to 32 characters/], [{ labels: Array.from({ length: 9 }, (_, i) => `l${i}`) }, /up to 8 labels/]]) {
     assert.throws(() => env.board.edit(env.c, card.id, input), error => error.status === 400 && message.test(error.message), JSON.stringify(input));
   }
-  assert.equal(env.board.edit(env.c, card.id, { labels: ['frontend'], due: '' }).revision, 1, 'The agent isn’t told labels or the due date, so they are no new revision.');
-  assert.deepEqual([env.card(card.id).labels, env.card(card.id).due], [['frontend'], null], 'An empty due date clears it.');
+  assert.equal(env.board.edit(env.c, card.id, { labels: ['frontend'] }).revision, 1, 'The agent isn’t told labels, so they are no new revision.');
+  assert.deepEqual(env.card(card.id).labels, ['frontend']);
   assert.doesNotMatch(env.board.prompt(env.c, env.card(card.id)), /frontend/);
-  // Like the priority, they can change while an agent works on the card; what it reads can't.
+  // Like labels, they can change while an agent works on the card; what it reads can't.
   env.c.board.find(item => item.id === card.id).column = 'doing';
-  assert.deepEqual(env.board.edit(env.c, card.id, { labels: ['frontend', 'urgent'], due: '2026-12-01' }).labels, ['frontend', 'urgent']);
+  assert.deepEqual(env.board.edit(env.c, card.id, { labels: ['frontend', 'urgent'] }).labels, ['frontend', 'urgent']);
   assert.throws(() => env.board.edit(env.c, card.id, { title: 'Something else' }), /An agent is working on this card/);
   env.c.board.find(item => item.id === card.id).column = 'backlog';
   const markdown = env.board.markdown(env.c, { now: new Date('2026-11-12T12:00:00Z') });
-  assert.match(markdown, /### Agree the API\n\n- Labels: frontend, urgent\n- Due: 2026-12-01\n- Agent: Codex\n/);
+  assert.match(markdown, /### Agree the API\n\n- Labels: frontend, urgent\n- Agent: Codex\n/);
   await env.reopen();
-  assert.deepEqual([env.card(card.id).labels, env.card(card.id).due], [['frontend', 'urgent'], '2026-12-01'], 'They are kept in the workspace’s journal.');
+  assert.deepEqual(env.card(card.id).labels, ['frontend', 'urgent'], 'They are kept in the workspace’s journal.');
 });
 
 test('a card’s comments say who wrote them and when, reach the agent on its next run and are read on their own (#97)', async t => {
@@ -300,8 +300,8 @@ test('through the real server: the board is read and changed for the workspace c
   const made = await call('/api/board/cards', { title: 'From the page', column: 'ready', agent: { provider: 'codex' } });
   assert.equal(made.status, 201); assert.equal(made.body.board.cards[0].title, 'From the page');
   const id = made.body.card.id;
-  assert.equal((await call(`/api/board/cards/${id}/edit`, { priority: 'high' })).body.card.priority, 'high');
-  assert.deepEqual((await call(`/api/board/cards/${id}/edit`, { labels: ['web'], due: '2026-12-01' })).body.card.labels, ['web']);
+  assert.equal((await call(`/api/board/cards/${id}/edit`, { labels: ['api'] })).body.card.labels[0], 'api');
+  assert.deepEqual((await call(`/api/board/cards/${id}/edit`, { labels: ['web'] })).body.card.labels, ['web']);
   const commented = await call(`/api/board/cards/${id}/comment`, { text: 'Use the new logo.' });
   assert.equal(commented.status, 201); assert.equal(commented.body.comment.text, 'Use the new logo.'); assert.equal(commented.body.card.commentCount, 1); assert.equal(commented.body.card.comments, undefined);
   assert.deepEqual((await call(`/api/board/cards/${id}/comments`)).body.comments.map(item => item.text), ['Use the new logo.']);
@@ -336,7 +336,7 @@ const drafted = (env, { steps, summary = 'Contract first, then the page and its 
 
 test('an agent’s plan becomes draft cards you edit, accept or discard, with what the plan checks found (#162)', async t => {
   const env = setup(t);
-  const plan = drafted(env, { questions: ['Should saved items sync across devices?'], steps: [
+  const plan = drafted(env, { questions: ['Should saved items sync across devices?', { question: 'Which store?', options: ['SQLite', 'Files', 'SQLite'] }], steps: [
     { title: 'Build the list page', instructions: 'Show the saved items.', tier: 'light', dependsOn: [], role: 'frontend' },
     { title: 'Agree the API', instructions: 'Write the contract for /api/items.', done: ['The contract lists every field'], files: ['docs/items.md'], tier: 'deep', dependsOn: [1], role: 'backend', artifact: 'contract', phase: 'Contracts' },
     { title: 'Check it all', instructions: 'Run the whole suite.', done: ['Suite passes'], tier: 'standard', dependsOn: [2], role: 'qa', check: 'npm test', phase: 'Verify' },
@@ -344,41 +344,51 @@ test('an agent’s plan becomes draft cards you edit, accept or discard, with wh
   ] });
   assert.equal(plan.status, 'moved'); assert.equal(plan.cards.length, 4);
   const cards = plan.cards.map(id => env.card(id)), [page, api, qa, polish] = cards;
-  // Each card keeps what its step said, waits for what its step waited for, and is Auto at the step's size until you choose.
-  assert.deepEqual(cards.map(card => [card.title, card.column, card.auto, card.agent, card.tier, card.role, card.group]), [
-    ['Build the list page', 'backlog', true, null, 'light', 'frontend', null],
-    ['Agree the API', 'backlog', true, null, 'deep', 'backend', 'Contracts'],
-    ['Check it all', 'backlog', true, null, 'standard', 'qa', 'Verify'],
-    ['Polish after QA', 'backlog', true, null, 'light', 'frontend', 'Verify'],
+  // Each card keeps what its step said and waits for what its step waited for. It's a major card on Smart routing, with no
+  // agent of its own, and runs only through its subtasks.
+  assert.deepEqual(cards.map(card => [card.title, card.column, card.auto, card.agent, card.split, card.tier, card.role, card.group]), [
+    ['Build the list page', 'backlog', true, null, true, 'light', 'frontend', null],
+    ['Agree the API', 'backlog', true, null, true, 'deep', 'backend', 'Contracts'],
+    ['Check it all', 'backlog', true, null, true, 'standard', 'qa', 'Verify'],
+    ['Polish after QA', 'backlog', true, null, true, 'light', 'frontend', 'Verify'],
   ]);
   assert.deepEqual([api.dependsOn, qa.dependsOn, polish.dependsOn], [[page.id], [api.id], [qa.id]]);
   assert.deepEqual([api.artifact, api.files, api.checks, qa.check], ['contract', ['docs/items.md'], [{ text: 'The contract lists every field', done: false }], 'npm test']);
   assert.deepEqual(api.draft.by, { kind: 'agent', provider: 'claude', model: 'opus' });
-  assert.deepEqual(api.draft.batch, { id: plan.id, summary: 'Contract first, then the page and its tests.', questions: ['Should saved items sync across devices?'] });
+  assert.deepEqual(api.draft.batch, { id: plan.id, summary: 'Contract first, then the page and its tests.', questions: [{ question: 'Should saved items sync across devices?', options: [] }, { question: 'Which store?', options: ['SQLite', 'Files'] }] });
   assert.equal(api.source.goal, 'Add saved items, with an API and a page.');
   // The plan checks are written on the cards they're about, and change nothing.
   assert.match(page.draft.notes.join(' '), /doesn’t say what done means/);
   assert.match(api.draft.notes.join(' '), /comes after building work \(card 1\)/);
   assert.match(polish.draft.notes.join(' '), /builds on card 3, a QA card/);
   assert.deepEqual(qa.draft.notes, []);
-  // A draft can be edited, but runs, moves to Ready and is scheduled only once accepted. Queued messages wait for it.
-  assert.equal(openPlan(env.c)?.id, plan.id, 'Queued messages wait while the plan’s cards are drafts.');
+  // A draft can be edited, but runs, moves to Ready and is scheduled only once accepted. Queued messages don't wait for
+  // it: the drafts are reviewed on the Plan.
+  assert.equal(openPlan(env.c), null, 'Queued messages go on while the plan’s cards are drafts.');
   assert.throws(() => env.board.run(env.c, { ids: [page.id] }), /Accept it before running it/);
   assert.throws(() => env.board.move(env.c, page.id, { column: 'ready' }), /Accept it first/);
   assert.throws(() => env.broker.schedules.create(env.c, { target: { type: 'card', cardId: page.id }, when: { repeat: 'daily', time: '09:00' } }), /Accept it before scheduling it/);
   assert.equal(env.board.edit(env.c, page.id, { checks: ['The list shows every item'], agent: { provider: 'codex' } }).draft.batch.id, plan.id, 'Editing keeps it a draft.');
   assert.deepEqual([env.card(page.id).auto, env.card(page.id).agent.provider], [false, 'codex'], 'Choosing an agent turns Auto off.');
   assert.throws(() => env.board.drafts(env.c, { action: 'keep', ids: [page.id] }), /Accept or discard/);
-  // Accepting keeps your edits and puts a card with an agent, or on Auto, in Ready.
+  // Accepting keeps your edits. A major card stays in Backlog until it has subtasks, and can't run without them.
   env.board.drafts(env.c, { action: 'accept', ids: [page.id, api.id] });
-  assert.deepEqual([env.card(page.id).draft, env.card(page.id).column, env.card(api.id).column], [null, 'ready', 'ready']);
+  assert.deepEqual([env.card(page.id).draft, env.card(page.id).column, env.card(api.id).column], [null, 'backlog', 'backlog']);
+  env.board.move(env.c, page.id, { column: 'ready' });
+  assert.throws(() => env.board.run(env.c, { ids: [page.id] }), /needs subtasks before it can run\. Split it with an agent, or add them yourself/);
   assert.throws(() => env.board.drafts(env.c, { action: 'accept', ids: [page.id] }), /isn’t a draft/);
-  // Discarding removes the rest, and the queue goes on.
+  // Discarding removes the rest.
   env.board.drafts(env.c, { action: 'discard', ids: [qa.id, polish.id] });
   assert.deepEqual([env.card(qa.id), env.card(polish.id)], [undefined, undefined]);
-  assert.equal(openPlan(env.c), null);
   // A plan that doesn't fit on the Plan adds nothing, and says why.
   const most = LIMITS.cards; LIMITS.cards = 3; t.after(() => { LIMITS.cards = most; });
+  // A redraft from your answers replaces the draft it answered, and keeps the cards you already accepted from it.
+  const first = drafted(env, { steps: [{ title: 'Old one', instructions: 'Old.', tier: 'light' }] });
+  const id = `plan-${Math.random().toString(16).slice(2, 10)}`, next = parsePlan(JSON.stringify({ summary: 'With your answers.', steps: [{ title: 'New one', instructions: 'New.', tier: 'light' }] }));
+  env.broker.record(env.c, { type: 'orchestration_plan', id, plan: { id, goal: 'Answers', source: 'agent', status: 'draft', summary: next.summary, steps: next.steps, replaces: first.id, review: true, revision: 1 } });
+  env.board.adopt(env.c, id);
+  assert.deepEqual(env.c.board.map(card => card.title), ['Build the list page', 'Agree the API', 'New one']);
+  env.board.drafts(env.c, { action: 'discard', ids: [env.c.board.at(-1).id] });
   const big = drafted(env, { steps: [{ title: 'One', instructions: 'One.', tier: 'light' }, { title: 'Two', instructions: 'Two.', tier: 'light' }] });
   assert.deepEqual([big.status, env.c.board.length], ['failed', 2]);
   assert.match(big.summary, /2 cards, and the Plan has room for 1 more/);
@@ -393,11 +403,29 @@ test('a card on Auto runs with the agent the Plan shows, and a schedule needs an
   assert.throws(() => env.broker.schedules.create(env.c, { target: { type: 'card', cardId: card.id }, when: { repeat: 'daily', time: '09:00' } }), /on Auto\. Choose an agent/);
   env.script(card, 'hold');
   const { tasks } = env.board.run(env.c, { ids: [card.id], assignments: { [card.id]: { provider: 'claude', model: null, effort: null, auto: true } } }), task = env.task(tasks[card.id]);
-  // In Normal, with no routing, it runs with exactly what was shown; the card remembers it ran on Auto.
-  assert.deepEqual([task.provider, task.routing, env.card(card.id).attempts[0].auto], ['claude', undefined, true]);
+  // Smart routing was chosen on the card, so even in Normal it starts with what was shown and is routed at its size when it
+  // starts, under a Flow policy of its own. The card remembers it ran on Smart.
+  assert.deepEqual([task.provider, task.routing, env.card(card.id).attempts[0].auto], ['claude', { mode: 'smart', planned: 'light' }, true]);
+  assert.equal(env.broker.execution.current(env.c, task.execution?.taskId || Object.keys(env.c.executionPolicies).at(-1)).mode, 'flow');
   env.board.stopMany(env.c, { ids: [card.id] });
   await until(() => column(env, card) === 'ready', 'it to stop');
   assert.throws(() => env.board.stopMany(env.c, { ids: [card.id] }), /None of these cards is running/);
+});
+
+test('a card on Auto can choose Saver, Smart or Ultra, and runs its task in that mode', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  assert.throws(() => env.add({ title: 'Bad mode', column: 'ready', auto: true, routingMode: 'max' }), /Choose Saver, Smart or Ultra/);
+  const follows = env.add({ title: 'Follows the workspace', column: 'ready', auto: true });
+  assert.equal(follows.routingMode, null, 'A card follows the workspace until you choose a mode.');
+  const card = env.add({ title: 'Ultra card', column: 'ready', auto: true, routingMode: 'ultra', tier: 'deep' });
+  assert.equal(card.routingMode, 'ultra');
+  env.script(card, 'hold');
+  const { tasks } = env.board.run(env.c, { ids: [card.id], assignments: { [card.id]: { provider: 'claude', model: null, effort: null, auto: true } } }), task = env.task(tasks[card.id]);
+  assert.deepEqual(task.routing, { mode: 'ultra', planned: 'deep' });
+  const policy = env.broker.execution.current(env.c, task.execution?.taskId || Object.keys(env.c.executionPolicies).at(-1));
+  assert.deepEqual([policy.mode, policy.routingMode], ['flow', 'ultra']);
+  env.board.stopMany(env.c, { ids: [card.id] });
+  await until(() => column(env, card) === 'ready', 'it to stop');
 });
 
 test('your yes to charges, asked on the Plan, goes with each card’s task, and is never assumed (#108)', { skip: scriptCLIs }, async t => {
@@ -582,20 +610,25 @@ function scriptMatch(env, part, scenario) {
 }
 const requests = env => env.captured(fs.realpathSync(env.folder('a'))).map(capture => capture.context.currentRequest);
 
-test('a major card is split when it starts, each subtask runs in its task, and its tests run after the last (#155)', { skip: scriptCLIs }, async t => {
+test('a major card is split with an agent before it runs, each subtask runs in its task, and its tests run after the last (#155, #162)', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   env.broker.tasks.tests = { saved: () => ({ command: 'node -e "process.exit(0)"', directory: '' }) };
-  const card = env.add({ title: 'Build checkout', column: 'ready', split: true, notes: 'A cart and a receipt.' });
+  const card = env.add({ title: 'Build checkout', column: 'backlog', split: true, notes: 'A cart and a receipt.' });
   assert.equal(card.split, true);
-  scriptMatch(env, 'This is a major card', { text: `Here it is:\n${JSON.stringify({ subtasks: [{ title: 'Add the cart', instructions: 'A cart model.', tier: 'light' }, { title: 'Add the receipt', instructions: 'A receipt page.', tier: 'deep' }] })}` });
+  assert.throws(() => env.board.run(env.c, { ids: [card.id] }), /isn’t in Ready|needs subtasks/);
+  // Split with an agent: one read-only run, before anything runs. The subtasks wait for you, and the card moves to Ready.
+  scriptMatch(env, 'into subtasks, before any work', { text: `Here it is:\n${JSON.stringify({ cards: [{ card: 1, subtasks: [{ title: 'Add the cart', instructions: 'A cart model.', tier: 'light' }, { title: 'Add the receipt', instructions: 'A receipt page.', tier: 'deep' }] }] })}` });
+  assert.equal(env.board.split(env.c, { ids: [card.id], provider: 'codex' }).kind, 'split');
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the split to finish');
+  const [split] = env.captured(fs.realpathSync(env.folder('a')));
+  assert.deepEqual(split.args.slice(split.args.indexOf('--sandbox'), split.args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only'], 'The split only reads.');
+  assert.match(split.context.currentRequest, /# Card 1\n\nBuild checkout\n\nA cart and a receipt\./, 'The split is planned from the card’s own brief.');
+  assert.match(split.context.currentRequest, /Return only a JSON object with cards/);
+  assert.match(env.c.boardSuggest.summary, /Split “Build checkout” into 2 subtasks\./);
+  assert.deepEqual([env.card(card.id).column, env.card(card.id).subtasks.map(item => item.status)], ['ready', ['pending', 'pending']]);
   scriptMatch(env, 'Subtask 1 of 2', { behavior: 'hold', text: 'Added the cart model and its tests.' });
   env.board.run(env.c, { ids: [card.id] });
   await until(() => env.card(card.id).subtasks?.[0]?.status === 'running', 'the first subtask');
-  const [split] = env.captured(fs.realpathSync(env.folder('a')));
-  assert.deepEqual(split.args.slice(split.args.indexOf('--sandbox'), split.args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only'], 'The split only reads.');
-  assert.ok(split.context.currentRequest.startsWith('Build checkout\n\nA cart and a receipt.'), 'The split is planned from the card’s own brief.');
-  assert.match(split.context.currentRequest, /Return only a JSON object with subtasks/);
-  assert.match(env.c.messages.at(-1).text, /“Build checkout” was split into 2 subtasks\./);
   const { subtasks } = env.card(card.id), [first, second] = subtasks;
   assert.deepEqual(subtasks.map(item => [item.title, item.tier, item.by.kind]), [['Add the cart', 'light', 'agent'], ['Add the receipt', 'deep', 'agent']]);
   assert.equal(env.task(env.card(card.id).task).status, 'running');
@@ -604,10 +637,11 @@ test('a major card is split when it starts, each subtask runs in its task, and i
   assert.throws(() => act({ action: 'edit', subtaskId: first.id, title: 'Changed' }), /An agent is working on that subtask/);
   act({ action: 'edit', subtaskId: second.id, instructions: 'A receipt page with totals.' });
   act({ action: 'add', title: 'Email the receipt', tier: 'light', agent: { provider: 'claude' } });
+  assert.deepEqual(env.card(card.id).subtasks.at(-1).agent, { provider: 'claude', model: null, effort: null });
   act({ action: 'add', title: 'Not needed' });
   act({ action: 'remove', subtaskId: env.card(card.id).subtasks.at(-1).id });
   assert.throws(() => act({ action: 'clear' }), /Stop it before splitting it again/);
-  assert.equal(env.card(card.id).revision, 1, 'Subtasks aren’t a change to what the card says.');
+  assert.equal(env.card(card.id).revision, 2, 'Editing subtasks isn’t a change to what the card says; only the split was.');
   env.release(env.folder('a'));
   await until(() => env.card(card.id).column === 'review', 'the card to finish');
   const done = env.card(card.id).subtasks;
@@ -616,7 +650,8 @@ test('a major card is split when it starts, each subtask runs in its task, and i
   // Each subtask continues the same task, told its place among the others.
   const asked = requests(env);
   assert.equal(asked.length, 4, 'One split, then one run for each subtask.');
-  assert.ok(asked[1].startsWith('Subtask 1 of 2 for the card “Build checkout”: Add the cart\n\nA cart model.'));
+  assert.ok(asked[1].startsWith('Build checkout'), 'The first subtask is the task’s first run, so it carries the card’s brief.');
+  assert.match(asked[1], /Subtask 1 of 2 for the card “Build checkout”: Add the cart\n\nA cart model\./);
   assert.match(asked[2], /^Subtask 2 of 3 for the card “Build checkout”: Add the receipt\n\nA receipt page with totals\./);
   assert.match(asked[2], /Do only this subtask\. One more follows: “Email the receipt”\./);
   assert.match(asked[3], /^Subtask 3 of 3[\s\S]*This is the card’s last subtask/);
@@ -655,20 +690,26 @@ test('a paused major card stops after its subtask, Run carries on from the next,
   assert.match(asked[1], /Subtasks already done for this card, by earlier runs:\n- 1\. Index the items: Indexed\./);
   assert.match(asked[1], /Subtask 2 of 2 for the card “Ship search”: Search box/);
   assert.equal(env.card(card.id).subtasksPaused, false);
-  // Split again: once it's sent back, its next run splits it afresh, and a split that isn't JSON fails the card.
+  // Sent back, a major card gets one more subtask for what should change. Cleared, it needs subtasks again, and a split
+  // that isn't JSON changes nothing.
   env.board.sendBack(env.c, card.id, { reason: 'Rethink it.' });
+  assert.deepEqual(env.card(card.id).subtasks.at(-1).title, 'Address: Rethink it.');
+  assert.equal(env.card(card.id).subtasks.at(-1).status, 'pending');
   act({ action: 'clear' });
   assert.deepEqual(env.card(card.id).subtasks, []);
-  scriptMatch(env, 'This is a major card', { text: 'I would rather not.' });
-  env.board.run(env.c, { ids: [card.id] });
-  await until(() => env.card(card.id).column === 'ready' && env.card(card.id).reason?.includes('JSON'), 'the split to fail');
-  assert.equal(env.card(card.id).reason, 'The split didn’t return its subtasks as JSON. Run the card again, or add its subtasks yourself.');
+  assert.throws(() => env.board.run(env.c, { ids: [card.id] }), /needs subtasks before it can run/);
+  scriptMatch(env, 'into subtasks, before any work', { text: 'I would rather not.' });
+  env.board.split(env.c, { ids: [card.id], provider: 'codex' });
+  await until(() => env.c.boardSuggest?.status === 'failed', 'the split to fail');
+  assert.equal(env.c.boardSuggest.summary, 'The split didn’t return its subtasks as JSON.');
+  assert.deepEqual(env.card(card.id).subtasks, []);
 });
 
-test('each subtask runs with the agent pinned on it, is routed at its size on Auto in Flow, or else uses the card’s agent (#155)', async () => {
+test('each subtask runs with the agent and model chosen on it, is routed at its size on Smart, or else uses the card’s agent (#155, #162)', async () => {
   const { Subtasks, parseSplit } = await import('../src/subtasks.mjs');
-  const card = { id: 'k', title: 'Card', split: true, subtasks: [{ id: 'a', title: 'One', instructions: 'Do one.', tier: 'light', agent: null, status: 'pending' }, { id: 'b', title: 'Two', instructions: '', tier: 'deep', agent: { provider: 'claude', model: null, effort: null }, status: 'pending' }] };
-  const calls = [], board = { cards: () => [card], update: (c, target, changes) => Object.assign(target, changes), main: { tasks: { update() {}, sync() {}, closed: false } } };
+  const card = { id: 'k', title: 'Card', split: true, auto: true, subtasks: [{ id: 'a', title: 'One', instructions: 'Do one.', tier: 'light', agent: null, status: 'pending' }, { id: 'b', title: 'Two', instructions: '', tier: 'deep', agent: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' }, status: 'pending' }] };
+  const calls = [], board = { cards: () => [card], update: (c, target, changes) => Object.assign(target, changes), main: { tasks: { update() {}, sync() {}, admit() { if (full) throw Object.assign(new Error('2 tasks are already running, the most this workspace\'s task limits allow at once.'), { status: 409 }); }, closed: false } } };
+  let full = false;
   const lane = { c: {}, broker: { start: (c, input) => { calls.push(['start', input]); return {}; }, dispatch: async (c, input) => { calls.push(['dispatch', input]); } } };
   const subtasks = new Subtasks(board), base = { id: 't', board: { cardId: 'k' }, provider: 'codex', model: 'gpt-6.1-sol', effort: 'medium', accessMode: 'edit', approvalPolicy: 'ask', billingConfirmed: false, execution: {} };
   card.task = 't';
@@ -676,7 +717,20 @@ test('each subtask runs with the agent pinned on it, is routed at its size on Au
   subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[1]);
   card.subtasks[0].status = 'pending';
   subtasks.launch({}, base, lane, card, card.subtasks[0]);
-  assert.deepEqual(calls.map(([how, input]) => [how, input.provider, input.model, input.routing?.planned ?? null, input.mode]), [['dispatch', 'codex', 'gpt-6.1-sol', 'light', 'edit'], ['start', 'claude', null, null, 'edit'], ['start', 'codex', 'gpt-6.1-sol', null, 'edit']]);
+  // A card with its own agent: a subtask that follows it uses that agent, and one set to Smart is routed.
+  card.auto = false; card.subtasks[0].status = 'pending';
+  subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[0]);
+  card.subtasks[0].auto = true; card.subtasks[0].status = 'pending';
+  await subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[0]);
+  assert.deepEqual(calls.map(([how, input]) => [how, input.provider, input.model, input.effort ?? null, input.routing?.planned ?? null, input.mode]), [['dispatch', 'codex', 'gpt-6.1-sol', 'medium', 'light', 'edit'], ['start', 'claude', 'claude-opus-5-5', 'high', null, 'edit'], ['start', 'codex', 'gpt-6.1-sol', 'medium', null, 'edit'], ['start', 'codex', 'gpt-6.1-sol', 'medium', null, 'edit'], ['dispatch', 'codex', 'gpt-6.1-sol', 'medium', 'light', 'edit']]);
+  // A full workspace stops the subtask before anything changes, so the card waits for a slot and its routed start can't fail later.
+  full = true; card.subtasks[0].status = 'pending'; const before = calls.length;
+  assert.throws(() => subtasks.launch({}, { ...base, routing: { mode: 'smart', planned: 'standard' } }, lane, card, card.subtasks[0]), /already running, the most/);
+  assert.equal(calls.length, before); assert.equal(card.subtasks[0].status, 'pending'); full = false;
+  // Splitting several cards in one run: one list per card, in order; a card the reply leaves out gets none.
+  const { parseSplitCards } = await import('../src/subtasks.mjs');
+  assert.deepEqual(parseSplitCards('{"cards":[{"card":2,"subtasks":[{"title":"B1"}]},{"card":1,"subtasks":[{"title":"A1"},{"title":"A2"}]}]}', 3).map(list => list?.map(item => item.title) ?? null), [['A1', 'A2'], ['B1'], null]);
+  assert.throws(() => parseSplitCards('{"cards":[]}', 2), /didn’t return any subtasks/);
   // The split's reply: JSON anywhere in it, each subtask with a title; a size it doesn't know is standard.
   assert.deepEqual(parseSplit('Sure: {"subtasks":[{"title":"A","tier":"huge"}]}').map(item => [item.title, item.tier, item.status]), [['A', 'standard', 'pending']]);
   assert.throws(() => parseSplit('{"subtasks":[]}'), /didn’t return any subtasks/);
@@ -811,4 +865,17 @@ test('Suggest next reads the card and open neighbors in a read-only run, drafts 
   await env.reopen();
   assert.equal(env.c.boardSuggest.status, 'interrupted');
   assert.match(env.c.boardSuggest.summary, /restarted/i);
+});
+
+// Watching the Plan run (#162 stage 5): a task's usage as the Plan shows it. Working time comes as what finished runs took
+// plus when the running ones began, so the page counts the minutes and isn't sent a new number on every update.
+test('a running card’s task reports its usage with the start of the runs still going, and a saved total once its lane is gone', () => {
+  const budget = new TaskBudgets({ record() {}, emit() {} });
+  const state = { taskId: 't1', runs: 2, retries: 1, reviews: 0, handoffs: 1, workingMs: 90000, tokens: { input: 1000, output: 200, cacheWrite: 0, cacheRead: 5000 }, spendUSD: 0.25, runsWithoutUsage: 0, runsWithPartialUsage: 0, runsWithoutCost: 0, spendCaps: {}, failures: {}, extra: {}, active: { r2: { provider: 'codex', startedAt: '2026-11-13T10:00:00.000Z', usage: null, costUSD: null, billing: 'subscription' }, r3: { provider: 'claude', startedAt: '2026-11-13T09:59:00.000Z', usage: null, costUSD: null, billing: 'subscription' } } };
+  const lane = { c: { taskBudgets: { t1: state } }, broker: { budget } };
+  const usageOf = TaskCoordinator.prototype.usageOf;
+  assert.deepEqual(usageOf.call({ lanes: new Map() }, { id: 't1' }, lane), { workedMs: 90000, activeSince: '2026-11-13T09:59:00.000Z', tokens: 1200, spendUSD: 0.25, retries: 1, reviews: 0, handoffs: 1 });
+  // A part that ended before a restart reads the usage saved on its task.
+  assert.deepEqual(usageOf.call({ lanes: new Map() }, { id: 't2', budgetUsed: { workingMs: 60000, tokens: 400, spendUSD: 0, retries: 0, reviews: 1, handoffs: 0 } }), { workedMs: 60000, activeSince: null, tokens: 400, spendUSD: 0, retries: 0, reviews: 1, handoffs: 0 });
+  assert.equal(usageOf.call({ lanes: new Map() }, { id: 't3' }), null, 'A task with nothing recorded shows no usage.');
 });

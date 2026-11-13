@@ -496,3 +496,69 @@ test("pre-flight quota check falls back to alternative provider when selected pr
   assert.equal(fallback.model, "sonnet");
   assert.equal(fallback.quota.state, "ok");
 });
+
+// Task needs (#12): a message with images goes only to a model and a connection known to take them.
+test('a message with images goes only to a model and connection known to take images, and says why', () => {
+  const { taskNeeds, takesImages } = globalThis.relayRouting;
+  assert.deepEqual(taskNeeds([{ kind: 'image' }, { kind: 'text' }, { kind: 'image' }]), { images: 2 });
+  assert.deepEqual(taskNeeds([{ kind: 'text' }]), {});
+  assert.deepEqual(taskNeeds(3), {}, 'A bare count says nothing about images.');
+  // Codex's catalog reports input types; Claude's models take images by the rated list; an unrated name proves nothing.
+  assert.equal(takesImages({ id: 'gpt-6-luna', inputModalities: ['text'] }), false);
+  assert.equal(takesImages({ id: 'gpt-6-luna', inputModalities: ['text', 'image'] }), true);
+  assert.equal(takesImages({ id: 'sonnet' }), true);
+  assert.equal(takesImages({ id: 'gpt-6-luna' }), null);
+  assert.equal(takesImages({ id: 'claude-sonnet-9' }), null);
+
+  const codexRows = [
+    { id: 'gpt-6.1-sol', displayName: 'GPT Sol', isDefault: true, inputModalities: ['text', 'image'], supportedReasoningEfforts: levels('low', 'medium', 'high') },
+    { id: 'gpt-6-luna', displayName: 'GPT Luna', inputModalities: ['text'], supportedReasoningEfforts: levels('low', 'medium') },
+  ];
+  const light = { tier: 'light', reason: 'a quick question' };
+  const both = agents({ codex: { models: codexRows, images: true, usedPercent: 5 }, claude: { images: true, usedPercent: 60 } });
+  // Without images, light work takes Codex's light model as before.
+  assert.equal(route({ text: 'What does this do?', assessment: light, mode: 'smart', candidates: both }).model, 'gpt-6-luna');
+  // With an image, Luna can't take it, so Codex's lightest model that can comes instead.
+  const pictured = route({ text: 'What does this do?', assessment: light, mode: 'smart', candidates: both, needs: { images: 1 } });
+  assert.equal(pictured.provider, 'codex');
+  assert.equal(pictured.model, 'gpt-6.1-sol');
+  assert.deepEqual(pictured.needs, { images: 1 });
+
+  // A connection that can't send images, or isn't known to, leaves its agent out, and the reason names it.
+  const cli = route({ text: 'What does this do?', assessment: light, mode: 'smart', candidates: agents({ codex: { models: codexRows, images: false, usedPercent: 5 }, claude: { images: true, usedPercent: 60 } }), needs: { images: 1 } });
+  assert.equal(cli.provider, 'claude');
+  assert.match(cli.reason, /The message has images, which Codex can’t take here/);
+  const unknown = route({ text: 'What does this do?', assessment: light, mode: 'smart', candidates: agents({ codex: { models: codexRows, usedPercent: 5 }, claude: { images: true, usedPercent: 60 } }), needs: { images: 1 } });
+  assert.equal(unknown.provider, 'claude', 'A connection not known to take images is not chosen for them.');
+
+  // Every model unable to take images: the agent is left out rather than run on one that can't.
+  const textOnly = codexRows.map(row => ({ ...row, inputModalities: ['text'] }));
+  const none = route({ text: 'What does this do?', assessment: light, mode: 'smart', candidates: agents({ codex: { models: textOnly, images: true }, claude: { images: false } }), needs: { images: 1 } });
+  assert.match(none.error, /Codex has no rated model known to take images/);
+  assert.match(none.error, /Claude’s connection can’t send images/);
+  // An agent whose model list couldn't be read runs its default, which nobody knows takes images.
+  const unread = route({ text: 'What does this do?', assessment: light, mode: 'smart', candidates: agents({ codex: { models: [], images: true }, claude: { images: false } }), needs: { images: 1 } });
+  assert.match(unread.error, /Codex’s models couldn’t be read, so none is known to take images/);
+});
+
+test('a retry after failed tests steps up only to a model that takes the images the request carries', () => {
+  const rows = [
+    { id: 'gpt-6-luna', displayName: 'GPT Luna', isDefault: true, inputModalities: ['text', 'image'], supportedReasoningEfforts: levels('low', 'medium') },
+    { id: 'gpt-6.1-sol', displayName: 'GPT Sol', inputModalities: ['text'], supportedReasoningEfforts: levels('low', 'medium', 'high') },
+  ];
+  const choice = { provider: 'codex', model: 'gpt-6-luna', effort: 'low' };
+  assert.equal(escalate('codex', rows, choice).model, 'gpt-6.1-sol', 'Without images, the stronger model comes next.');
+  const step = escalate('codex', rows, choice, { images: 1 });
+  assert.deepEqual([step.model, step.effort], ['gpt-6-luna', 'medium'], 'With an image, only more effort on a model that takes it.');
+});
+
+test('the broker knows which connections send images: never the CLI, and Gemini only when it says so', () => {
+  const broker = Object.create(Broker.prototype);
+  broker.configuredBins = {};
+  const c = { provider: 'codex', transport: 'auto', transports: { claude: 'cli' } };
+  assert.equal(broker.imageConnection(c, 'codex', {}), true);
+  assert.equal(broker.imageConnection(c, 'claude', {}), false, 'The CLI transport sends no images.');
+  assert.equal(broker.imageConnection(c, 'gemini', { capabilities: { images: true } }), true);
+  assert.equal(broker.imageConnection(c, 'gemini', { capabilities: { images: false } }), false);
+  assert.equal(broker.imageConnection(c, 'gemini', { capabilities: {} }), null, 'Not reported is not known.');
+});

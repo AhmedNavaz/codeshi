@@ -49,7 +49,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/local-models.js': ['local-models.js', 'text/javascript; charset=utf-8'], '/local-models.css': ['local-models.css', 'text/css; charset=utf-8'],
   '/agent-review.js': ['agent-review.js', 'text/javascript; charset=utf-8'], '/agent-review.css': ['agent-review.css', 'text/css; charset=utf-8'],
   '/github-context.js': ['github-context.js', 'text/javascript; charset=utf-8'], '/composer-more.js': ['composer-more.js', 'text/javascript; charset=utf-8'], '/pull-request.js': ['pull-request.js', 'text/javascript; charset=utf-8'], '/github-repos.js': ['github-repos.js', 'text/javascript; charset=utf-8'], '/backup.js': ['backup.js', 'text/javascript; charset=utf-8'], '/automatic-review.js': ['automatic-review.js', 'text/javascript; charset=utf-8'], '/automatic-review.css': ['automatic-review.css', 'text/css; charset=utf-8'],
-  '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'], '/plan-view.js': ['plan-view.js', 'text/javascript; charset=utf-8'], '/plan-view.css': ['plan-view.css', 'text/css; charset=utf-8'], '/board.js': ['board.js', 'text/javascript; charset=utf-8'], '/board.css': ['board.css', 'text/css; charset=utf-8'], '/watch-along.js': ['watch-along.js', 'text/javascript; charset=utf-8'], '/watch-along.css': ['watch-along.css', 'text/css; charset=utf-8'],
+  '/orchestration.js': ['orchestration.js', 'text/javascript; charset=utf-8'], '/split-offer.js': ['split-offer.js', 'text/javascript; charset=utf-8'], '/orchestration.css': ['orchestration.css', 'text/css; charset=utf-8'], '/plan-view.js': ['plan-view.js', 'text/javascript; charset=utf-8'], '/plan-view.css': ['plan-view.css', 'text/css; charset=utf-8'], '/board.js': ['board.js', 'text/javascript; charset=utf-8'], '/board.css': ['board.css', 'text/css; charset=utf-8'], '/watch-along.js': ['watch-along.js', 'text/javascript; charset=utf-8'], '/watch-along.css': ['watch-along.css', 'text/css; charset=utf-8'],
   '/run-plan.css': ['run-plan.css', 'text/css; charset=utf-8'],
   '/rewind.js': ['rewind.js', 'text/javascript; charset=utf-8'], '/rewind.css': ['rewind.css', 'text/css; charset=utf-8'],
   '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow-lounge.js': ['flow-lounge.js', 'text/javascript; charset=utf-8'], '/flow-lounge-puzzles.js': ['flow-lounge-puzzles.js', 'text/javascript; charset=utf-8'], '/flow-lounge-puzzles.css': ['flow-lounge-puzzles.css', 'text/css; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
@@ -396,7 +396,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           return json(res,existed?200:201,registry.mainConversation(projectId));
         }
       }
-      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry|compact|execution-policy|orchestration))?$/);
+      const match = url.pathname.match(/^\/api\/conversations\/([\da-f-]{36})(?:\/(messages|continue|stop|provider|context|memory|budget|skills|approval|answer|resume|queue|handoff|steer|routing|retry|compact|execution-policy|orchestration|split|split-preference))?$/);
       if (match) {
         const workspaceBroker = selectedBroker(url);
         // A conversation can belong to a task's lane (#88), which answers for its own run. Memory, skills, limits and the project
@@ -428,6 +428,13 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (['messages', 'queue'].includes(match[2]) && input.routing && !Number.isSafeInteger(input.executionRevision)) return json(res, 409, { error: 'Refresh execution settings before delegating new work.' });
           if (match[2] === 'routing') return json(res, 200, broker.setRouting(c, input, viewOptions));
           if (match[2] === 'orchestration') return json(res, 200, broker.orchestrationAction(c, input));
+          // A split Flow suggested (#107 stage 2): run the parts as tasks, do it as one, or put it away; and whether Flow asks.
+          if (match[2] === 'split' || match[2] === 'split-preference') {
+            if (!broker.splits) return json(res, 409, { error: 'Only the workspace chat splits messages into tasks.' });
+            if (match[2] === 'split-preference') return json(res, 200, broker.splits.prefer(c, input));
+            const answer = await broker.splits.act(c, input);
+            return json(res, input.action === 'dismiss' ? 200 : 202, answer);
+          }
           if (match[2] === 'retry') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissRetry(c, input.offerId) : broker.acceptRetry(c, input));
           if (match[2] === 'handoff') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissHandoff(c, input.offerId) : await broker.acceptHandoff(c, input));
           if (match[2] === 'messages') return json(res, 202, await broker.dispatch(c, input));

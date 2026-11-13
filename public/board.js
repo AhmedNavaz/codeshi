@@ -31,7 +31,7 @@
   function setChat(open, remember = true) {
     shell?.classList.toggle('plan-chat-hidden', !open);
     const toggle = $('board-chat');
-    if (toggle) { toggle.setAttribute('aria-pressed', String(open)); toggle.title = open ? 'Hide the chat' : 'Show the chat'; }
+    if (toggle) { toggle.setAttribute('aria-pressed', String(open)); toggle.title = 'Show the chat'; toggle.hidden = open; }
     if (remember) { try { localStorage.setItem(CHAT_KEY, open ? 'shown' : 'hidden'); } catch { /* A convenience only. */ } }
     chatAttention();
   }
@@ -43,6 +43,8 @@
   }
   // Something that happens in the chat, such as an attached card or a card's task, shows the chat.
   const showChat = () => { if (chatHidden()) setChat(true); };
+  // A model's name: as its agent reports it, or a readable form of its id (claude-opus-5-5 is Opus 5.5).
+  const modelLabel = (provider, id) => { if (!id) return ''; const named = window.relayModelPicker?.modelName?.(provider, id); if (named && named !== id) return named; const short = String(id).replace(/^claude-/, '').replace(/-(\d+)-(\d+)(?=$|-)/, ' $1.$2').replace(/-/g, ' '); return /^claude-/.test(id) ? short.replace(/\b\w/g, char => char.toUpperCase()) : id; };
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'secondary-button') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
   // The modifier that moves a card on the canvas, named as the keyboard labels it.
@@ -64,19 +66,8 @@
   // A card's own tests (#162), as its result and its task report them.
   const TESTS = { running: 'Testing…', passed: 'Tests passed', failed: 'Tests failed', interrupted: 'Tests interrupted', 'no-change': 'No changes to test', unverified: 'Not tested' };
   const NO_GROUP = 'Not in a group';
-  const PRIORITIES = [['high', 'High'], ['normal', 'Normal'], ['low', 'Low']];
   const OUTCOME = { complete: 'Finished', integrated: 'Merged', kept: 'Kept as a branch', stopped: 'Stopped', failed: 'Didn’t finish', cancelled: 'Cancelled', discarded: 'Discarded', blocked: 'Blocked', lost: 'Copy gone', detached: 'Folder removed' };
   const when = iso => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }); } catch { return ''; } };
-  // A due date is a calendar day (YYYY-MM-DD), compared with today where you are.
-  const today = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; };
-  const dayName = day => { const [y, m, d] = day.split('-').map(Number); try { return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(y !== new Date().getFullYear() ? { year: 'numeric' } : {}) }); } catch { return day; } };
-  function dueOf(card) {
-    if (!card.due) return null;
-    if (card.column === 'done') return { text: `Due ${dayName(card.due)}`, tone: '' };
-    const now = today();
-    if (card.due < now) return { text: `Overdue · ${dayName(card.due)}`, tone: 'late' };
-    return card.due === now ? { text: 'Due today', tone: 'soon' } : { text: `Due ${dayName(card.due)}`, tone: '' };
-  }
   const lockIcon = () => { const icon = svg('svg'); icon.setAttribute('class', 'icon'); icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true'); const body = svg('rect'); for (const [name, value] of [['x', '5'], ['y', '11'], ['width', '14'], ['height', '9'], ['rx', '1.5']]) body.setAttribute(name, value); const loop = svg('path'); loop.setAttribute('d', 'M8 11V8a4 4 0 0 1 8 0v3'); icon.append(body, loop); return icon; };
   const commentIcon = () => { const icon = svg('svg'); icon.setAttribute('class', 'icon'); icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true'); const path = svg('path'); path.setAttribute('d', 'M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-5 4v-4H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z'); icon.append(path); return icon; };
 
@@ -88,7 +79,7 @@
   // asked: the comment count they were read for, so a card is asked again only when that changes. said: a comment being
   // written, per card, kept when the drawer is drawn again.
   let seen = null, board = null, selected = null, draft = null, sdraft = null, picked = new Set(), failure = '', busy = false, loading = 0, drawn = null, dragging = null;
-  let filter = '', threads = new Map(), asked = new Map(), said = new Map(), moreOpen = false;
+  let filter = '', threads = new Map(), asked = new Map(), said = new Map();
   // subEdit: a subtask being written or edited in a card's drawer, kept when the drawer is drawn again.
   // draftNotice: inline undo banner for the last draft accept/discard; suggestConfirm: card ID confirming Suggest next.
   let subEdit = null, draftNotice = null, suggestConfirm = null;
@@ -106,15 +97,25 @@
   let view = (() => { try { const saved = localStorage.getItem(VIEW_KEY); return VIEWS.includes(saved) ? saved : 'columns'; } catch { return 'columns'; } })();
   // The agent Auto would pick for a card now, as Orchestrate's steps showed it (#12): routing's choice at the card's size, or
   // the conversation's own agent when routing is off. In Flow it is chosen again when the card starts.
+  // Smart routing is chosen on the card, so it routes in Normal too, with the workspace's routing preference.
+  const LEGACY_MODES = { saving: 'saver', balanced: 'smart', quality: 'ultra' };
+  const smartMode = () => { const mode = api.getState().conversation?.routing?.mode || api.getState().conversation?.execution?.defaults?.routingMode || 'smart'; return LEGACY_MODES[mode] || mode; };
+  // Auto's three modes. A card can choose one; until it does, it follows the workspace's routing preference.
+  const MODES = [['saver', 'Saver'], ['smart', 'Smart'], ['ultra', 'Ultra']], MODE = Object.fromEntries(MODES);
+  const modeOf = card => card?.routingMode || smartMode();
+  const modeName = card => MODE[modeOf(card)] || 'Smart';
   function autoPick(card) {
-    const state = api.getState(), routed = api.routeFor?.(card.notes || card.title || 'Plan card', 0, null, { tier: card.tier || 'standard' });
+    const state = api.getState(), routed = api.routeFor?.(card.notes || card.title || 'Plan card', 0, modeOf(card), card.tier ? { tier: card.tier } : undefined);
     if (!routed) { const provider = state.provider || 'codex', model = state.model || null; return { provider, model, effort: state.effort || null, text: `${AGENT[provider] || provider} · ${model || 'default model'}` }; }
     if (routed.error) return { error: routed.error, text: routed.error };
     const effort = routed.effort ? `${routed.effort[0].toUpperCase()}${routed.effort.slice(1)} effort` : '';
-    return { provider: routed.provider, model: routed.model || null, effort: routed.effort || null, auto: true, text: ['Auto:', [AGENT[routed.provider] || routed.provider, routed.modelName || 'default model', effort].filter(Boolean).join(' · ')].join(' ') };
+    return { provider: routed.provider, model: routed.model || null, effort: routed.effort || null, auto: true, text: [`${modeName(card)}:`, [AGENT[routed.provider] || routed.provider, routed.modelName || 'default model', effort].filter(Boolean).join(' · ')].join(' ') };
   }
   const shut = card => board?.closed === true || card?.closed === true;
-  const runnable = card => !card.draft && !shut(card) && (Boolean(card.agent) || card.auto === true);
+  // A major card (#162) runs only through its subtasks: it needs one still to do before it can run.
+  const needsSubtasks = card => Boolean(card.split || card.subtasks?.length) && !(card.subtasks || []).some(item => item.status !== 'done') && card.column !== 'done';
+  const notRunnable = card => needsSubtasks(card) ? 'It needs subtasks first. Split it with an agent, or add them yourself.' : 'Choose Auto or an agent first.';
+  const runnable = card => !card.draft && !shut(card) && (Boolean(card.agent) || card.auto === true) && !needsSubtasks(card);
   // What a Run sends for the cards on Auto: the pick shown, or the reason none can be made.
   function assignments(list) {
     const out = {};
@@ -164,17 +165,19 @@
   function subtaskLine(card) {
     const list = card.subtasks || [];
     if (list.length) { const done = list.filter(item => item.status === 'done').length; return { short: `${done}/${list.length} subtasks`, long: `${done} of ${plural(list.length, 'subtask')} done` }; }
-    return card.split ? { short: 'Major', long: 'Split into subtasks when it starts' } : null;
+    return card.split ? { short: 'Needs subtasks', long: 'Runs through its subtasks, and has none yet' } : null;
   }
   // What a card says about itself in one short line, from its task while it has one.
   function stateOf(card) {
     const task = card.taskState;
     if (card.draft) return { text: 'Draft', tone: 'draft', detail: (card.draft.notes || []).join(' ') };
+    if (board?.suggest?.kind === 'split' && board.suggest.status === 'running' && (board.suggest.cardIds || [board.suggest.cardId]).includes(card.id)) return { text: 'Splitting…', tone: 'running', detail: 'An agent is splitting it into subtasks, reading only.' };
     if (card.column === 'doing') {
       if (task?.approvals) return { text: 'Needs you', tone: 'attention' };
       if (task?.status === 'running' && card.splitting) return { text: 'Splitting', tone: 'running', detail: 'Splitting it into subtasks, reading only.' };
       const at = (card.subtasks || []).findIndex(item => item.status === 'running');
-      if (task?.status === 'running' && at >= 0) return { text: 'Working', tone: 'running', detail: `Subtask ${at + 1} of ${card.subtasks.length}: ${card.subtasks[at].title}${card.subtasksPaused ? '. Pauses after it.' : ''}` };
+      // The running subtask's name sits on the progress line, so this line only adds what that line can't say.
+      if (task?.status === 'running' && at >= 0) return { text: 'Working', tone: 'running', detail: card.subtasksPaused ? 'Pauses after it.' : '' };
       if (task?.status === 'running') return { text: 'Working', tone: 'running' };
       return { text: task?.held ? 'Held' : 'Waiting', tone: 'waiting', detail: task?.reason || '' };
     }
@@ -185,51 +188,179 @@
       if (tests === 'failed' || tests === 'interrupted') return { text: card.result.testsAccepted ? `${TESTS[tests]} · continued` : TESTS[tests], tone: 'trouble', detail: card.result.testsAccepted ? 'You chose to let the cards after it build on it anyway.' : `${card.result.testsReason || ''}${task?.holds ? ' The cards after it wait until you check it again or continue anyway.' : ''}`.trim() };
       return { text: tests === 'passed' ? TESTS.passed : 'Finished', tone: 'done' };
     }
+    if (card.column === 'ready' && /already running/i.test(card.reason || '')) return { text: 'Waiting', tone: 'waiting', detail: 'Waiting for a free slot' };
     if (card.column === 'ready' && card.reason) return { text: 'Back', tone: 'trouble', detail: card.reason };
     return null;
   }
+  // Small stroke icons for the card's footer, drawn like the rest of the app's icons.
+  const glyph = d => { const icon = svg('svg'); icon.setAttribute('class', 'icon'); icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true'); for (const part of d.split('|')) { const path = svg('path'); path.setAttribute('d', part); icon.append(path); } return icon; };
+  const ICONS = { checks: 'M4 12.5l3 3 6-7|M14 9h6M14 15h6', waits: 'M4 6h7a4 4 0 0 1 4 4v8|M11 14l4 4 4-4', smart: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z', subtasks: 'M5 6h4M5 12h4M5 18h4|M13 6h6M13 12h6M13 18h6' };
+  // Who does a card, in a few words: its task's agent while it runs, otherwise Smart routing or the agent chosen.
+  function whoOf(card) {
+    const provider = card.taskState?.provider || card.agent?.provider || null;
+    // A running card names the agent, model and effort its run is on now, which can change from one subtask to the next.
+    const live = liveOf(card);
+    if (live?.provider) return { provider: live.provider, short: AGENT[live.provider] || live.provider, text: [AGENT[live.provider] || live.provider, live.model ? modelLabel(live.provider, live.model) : '', effortWord(live.effort)].filter(Boolean).join(' · ') };
+    if (card.taskState?.provider) return { provider, text: AGENT[provider] || provider };
+    if (card.agent) return { provider, text: [AGENT[provider] || provider, card.agent.model ? modelLabel(provider, card.agent.model) : ''].filter(Boolean).join(' · ') };
+    if (card.auto) return { provider: 'auto', text: modeName(card), smart: true };
+    return { provider: null, text: 'No agent yet' };
+  }
+  // ---- Watching the Plan run (#162 stage 5)
+  // A running card reads its task as the workspace chat last reported it, so what it's doing now shows without reading the
+  // whole Plan again. Only the few lines that changed are rewritten (patchLive), and the minutes are counted here, once a
+  // minute, so a long run that's quiet doesn't redraw anything.
+  const PHASE = { starting: 'Starting', probing: 'Checking usage', reasoning: 'Thinking', responding: 'Writing', tool: 'Running tools', working: 'Working', compacting: 'Organizing its context', approval: 'Waiting for you' };
+  const effortWord = effort => effort ? `${String(effort).charAt(0).toUpperCase()}${String(effort).slice(1)} effort` : '';
+  const liveTask = card => { const id = card.taskState?.id; return id ? (api.getState().conversation?.parallelTasks || []).find(task => task.id === id) || null : null; };
+  function minutes(ms) { const total = Math.floor(Math.max(0, ms) / 60000); return total < 1 ? 'under a minute' : total < 60 ? `${total} min` : `${Math.floor(total / 60)} h${total % 60 ? ` ${total % 60} min` : ''}`; }
+  function tokenWord(count) { const value = Number(count) || 0; return value >= 1e6 ? `${(value / 1e6).toFixed(value >= 1e7 ? 0 : 1)}M tokens` : value >= 1000 ? `${(value / 1000).toFixed(value >= 1e4 ? 0 : 1)}k tokens` : `${value} tokens`; }
+  // Time, tokens, spend, retries and handoffs so far, in a few words, from what the task's limits count.
+  function usageWords(usage) {
+    if (!usage) return [];
+    const worked = (usage.workedMs || 0) + (usage.activeSince ? Math.max(0, Date.now() - Date.parse(usage.activeSince)) : 0);
+    const times = count => count === 1 ? 'once' : `${count} times`;
+    return [worked ? minutes(worked) : '', usage.tokens ? tokenWord(usage.tokens) : '', usage.spendUSD >= 0.005 ? `$${usage.spendUSD.toFixed(2)}` : '', usage.retries ? `retried ${times(usage.retries)}` : '', usage.handoffs ? `handed off ${times(usage.handoffs)}` : '', usage.reviews ? `reviewed ${times(usage.reviews)}` : ''].filter(Boolean);
+  }
+  function liveOf(card) {
+    if (card.column !== 'doing' || !card.taskState || card.draft) return null;
+    const task = liveTask(card), base = card.taskState, status = task?.status || base.status, running = status === 'running';
+    const provider = (running && task?.runningProvider) || base.provider || null, model = (running && task?.runningModel) || base.model || null, effort = (running && task?.runningEffort) || base.effort || null;
+    const needs = task ? task.approvals : base.approvals, sub = (card.subtasks || []).findIndex(item => item.status === 'running');
+    const now = needs ? `Needs you: ${needs === 1 ? 'an approval or a question' : `${needs} approvals or questions`}` : task?.testing ? 'Running its tests' : !running ? '' : card.splitting ? 'Splitting it into subtasks' : task?.runningStep ? `On “${task.runningStep}”` : PHASE[task?.runningPhase] || 'Working';
+    return { provider, model, effort, running, needs, now, sub, usage: usageWords(task?.usage || base.usage), brief: usageBrief(task?.usage || base.usage) };
+  }
+  // The same numbers as usageWords, short enough to share a card's row: "2m · 2.5k · $0.04".
+  function usageBrief(usage) {
+    if (!usage) return '';
+    const worked = (usage.workedMs || 0) + (usage.activeSince ? Math.max(0, Date.now() - Date.parse(usage.activeSince)) : 0), mins = Math.floor(worked / 60000);
+    const count = Number(usage.tokens) || 0;
+    return [worked ? (mins < 1 ? '<1m' : mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`) : '', count >= 1e6 ? `${(count / 1e6).toFixed(1)}M` : count >= 1000 ? `${(count / 1000).toFixed(count >= 1e4 ? 0 : 1)}k` : count ? String(count) : '', usage.spendUSD >= 0.005 ? `$${usage.spendUSD.toFixed(2)}` : ''].filter(Boolean).join(' · ');
+  }
+  // The live lines inside a card's face: what it's doing now, and what it has used. Their own elements, so they can be
+  // rewritten in place.
+  function liveLines(card, live, { withWho = false, agent = null } = {}) {
+    const box = node('span', 'board-card-live'); box.dataset.live = card.id;
+    const who = withWho ? node('span', 'board-card-who') : null, now = node('span', `board-card-now${live.needs ? ' attention' : ''}`), used = node('span', 'board-card-used');
+    box.liveParts = { who, now, used, agent };
+    if (who) box.append(who);
+    box.append(now, used); paintLive(box, card, live);
+    return box;
+  }
+  function paintLive(box, card, live = liveOf(card)) {
+    if (!live) return;
+    const who = whoOf(card), now = live.now || (live.running ? 'Working' : stateOf(card)?.text || ''), used = live.usage.join(' · ');
+    const key = JSON.stringify([who.text, now, used, live.brief, live.needs]);
+    if (box.dataset.liveKey === key) return;
+    box.dataset.liveKey = key;
+    const { who: whoLine, now: nowLine, used: usedLine, agent } = box.liveParts;
+    // Both lines keep their height when empty, so a card on the Canvas doesn't grow under its arrows as usage arrives.
+    nowLine.textContent = now; nowLine.classList.toggle('attention', Boolean(live.needs));
+    // On a card the numbers share the status row, so they're short; the drawer and the tooltip say them in full.
+    usedLine.textContent = whoLine ? used : live.brief; usedLine.title = used ? `Used so far: ${used}` : '';
+    if (whoLine) whoLine.textContent = who.text;
+    // The agent named on the card's face follows the run too: a subtask can be on another model.
+    const face = who.short || who.text; if (agent && agent.textContent !== face) agent.textContent = face; if (agent?.parentElement) agent.parentElement.title = who.text;
+    box.title = [who.text, now, used].filter(Boolean).join('. ');
+  }
+  // Called on every update from the chat: a card whose run changed what it's doing gets its lines rewritten; the rest are
+  // left alone. A card that needs you, or stopped needing you, is said aloud once.
+  let heard = new Map();
+  function patchLive() {
+    if (!showing || !board) return;
+    for (const box of document.querySelectorAll('.board-card-live')) { const card = box.liveParts && cardBy(box.dataset.live); if (card) paintLive(box, card); }
+    for (const row of document.querySelectorAll('.board-outline-live')) { const card = cardBy(row.dataset.outlineLive); const live = card && liveOf(card); if (live) { const text = [whoOf(card).text, live.now, ...live.usage].filter(Boolean).join(' · '); if (row.textContent !== text) row.textContent = text; } }
+    for (const card of cards().filter(item => item.column === 'doing')) {
+      const live = liveOf(card), needs = live?.needs || 0, before = heard.get(card.id);
+      if (before !== undefined && needs && !before) api.announce(`“${card.title}” needs you: open its task beside the Plan.`);
+      heard.set(card.id, needs);
+    }
+    paintTotals();
+  }
+  // The whole Plan's working time, tokens and spend so far, beside its progress, from the cards' current tasks.
+  function paintTotals() {
+    const line = $('board-progress'), slot = line?.querySelector('.board-progress-used'); if (!slot) return;
+    let worked = 0, tokens = 0, spend = 0, any = false;
+    for (const card of cards().filter(item => item.taskState && !item.draft)) {
+      const usage = liveTask(card)?.usage || card.taskState.usage; if (!usage) continue;
+      any = true; worked += (usage.workedMs || 0) + (usage.activeSince ? Math.max(0, Date.now() - Date.parse(usage.activeSince)) : 0); tokens += usage.tokens || 0; spend += usage.spendUSD || 0;
+    }
+    const text = any ? [worked ? minutes(worked) : '', tokens ? tokenWord(tokens) : '', spend >= 0.005 ? `$${spend.toFixed(2)}` : ''].filter(Boolean).join(' · ') : '';
+    if (slot.textContent !== text) { slot.textContent = text; slot.hidden = !text; slot.title = text ? `Used so far by the cards’ current tasks: ${text}` : ''; }
+  }
+  // Minutes move on by themselves: once every 20 seconds while a card works, and only lines whose words changed are written.
+  let ticker = null;
+  function tick() {
+    const working = showing && cards().some(card => card.column === 'doing');
+    if (working && !ticker) ticker = setInterval(patchLive, 20000);
+    if (!working && ticker) { clearInterval(ticker); ticker = null; }
+  }
+  // A card's status in one word, for the Canvas, where no column says it.
+  const STATUS = { backlog: 'Backlog', ready: 'Ready', doing: 'Working', review: 'Review', done: 'Done' };
   function cardButton(card, onCanvas = false) {
     const item = node('button', 'board-card'); item.type = 'button';
-    item.dataset.card = card.id; item.dataset.column = card.column; item.dataset.priority = card.priority;
+    item.dataset.card = card.id; item.dataset.column = card.draft ? 'draft' : card.column;
     item.setAttribute('aria-pressed', String(selected === card.id));
-    const state = stateOf(card), top = node('span', 'board-card-top');
-    // On the canvas there are no columns to say where a card stands, so the card says it.
-    if (onCanvas) top.append(node('span', 'board-card-column', COLUMNS.find(([id]) => id === card.column)[1]));
-    if (card.role && card.role !== 'builder') { const role = node('span', 'orchestration-step-role', ROLE[card.role] || card.role); role.dataset.role = card.role; top.append(role); }
-    if (card.priority !== 'normal') top.append(node('span', `board-priority ${card.priority}`, card.priority === 'high' ? 'High' : 'Low'));
-    if (state) { const badge = node('span', 'board-card-state', state.text); badge.dataset.tone = state.tone; top.append(badge); }
+    const state = stateOf(card), needs = !card.draft && needsSubtasks(card), top = node('span', 'board-card-top');
+    // The status: on the Canvas always, in Columns only what the column doesn't say.
+    const badge = state ? { text: state.text, tone: state.tone } : needs ? { text: 'Needs subtasks', tone: 'needs' } : onCanvas ? { text: STATUS[card.column], tone: card.column } : null;
+    if (badge) { const pill = node('span', 'board-card-state'); pill.dataset.tone = badge.tone; pill.append(node('span', 'board-card-dot'), document.createTextNode(badge.text)); top.append(pill); }
+    // The role: when it isn't the usual Builder, and always on a working card, so you can see who it is working as.
+    const showRole = card.role && (card.role !== 'builder' || card.column === 'doing');
+    if (showRole) { const role = node('span', 'orchestration-step-role', ROLE[card.role] || card.role); role.dataset.role = card.role; role.title = `Working as ${ROLE[card.role] || card.role}`; top.append(role); }
     const title = node('span', 'board-card-title', card.title);
+    const parts = [top, title];
+    // The first lines of what it says, so a card can be read without opening it.
+    const gist = String(card.notes || '').replace(/[#*`>_]+/g, '').replace(/\s+/g, ' ').trim();
+    if (gist) parts.push(node('span', 'board-card-notes', gist));
     // Up to three labels, then how many more; the one being filtered by is marked.
-    const names = card.labels || [], tags = node('span', 'board-card-labels');
-    for (const name of names.slice(0, names.length > 3 ? 2 : 3)) { const tag = node('span', 'board-label', name); if (filter && name.toLowerCase() === filter) tag.classList.add('current'); tags.append(tag); }
-    if (names.length > 3) { const more = node('span', 'board-label more', `+${names.length - 2}`); more.title = names.slice(2).join(', '); tags.append(more); }
-    const meta = node('span', 'board-card-meta'), provider = card.taskState?.provider || card.agent?.provider;
-    const icon = node('i', `agent-icon ${provider || 'auto'}`); icon.setAttribute('aria-hidden', 'true');
-    const who = provider ? AGENT[provider] : card.auto ? 'Auto' : 'No agent yet';
-    meta.append(icon, node('span', provider || card.auto ? 'board-card-agent' : 'board-card-missing', who));
+    const names = card.labels || [];
+    if (names.length) {
+      const tags = node('span', 'board-card-labels');
+      for (const name of names.slice(0, names.length > 3 ? 2 : 3)) { const tag = node('span', 'board-label', name); if (filter && name.toLowerCase() === filter) tag.classList.add('current'); tags.append(tag); }
+      if (names.length > 3) { const more = node('span', 'board-label more', `+${names.length - 2}`); more.title = names.slice(2).join(', '); tags.append(more); }
+      parts.push(tags);
+    }
+    // A major card's subtasks: how far they've got, as a bar and a count.
+    const list = card.subtasks || [];
+    if (list.length) {
+      const done = list.filter(sub => sub.status === 'done').length, row = node('span', 'board-card-progress'), bar = node('span', 'board-card-bar'), fill = node('span', 'board-card-fill');
+      fill.style.width = `${Math.round(done / list.length * 100)}%`; bar.append(fill);
+      // The subtask running now (or "Subtasks") and the count on one line, the bar full width under them.
+      const running = card.column === 'doing' ? list.find(sub => sub.status === 'running') : null, head = node('span', 'board-card-progress-head');
+      head.append(node('span', 'board-card-progress-now', running ? running.title : 'Subtasks'), node('span', 'board-card-progress-text', `${done}/${list.length}`));
+      row.append(head, bar);
+      row.title = [subtaskLine(card)?.long, running ? `Running now: ${running.title}` : ''].filter(Boolean).join('. ');
+      parts.push(row);
+    }
+    const meta = node('span', 'board-card-meta'), who = whoOf(card);
+    const agent = node('span', `board-card-agent${who.provider ? '' : ' missing'}`);
+    if (who.smart) agent.append(glyph(ICONS.smart)); else { const icon = node('i', `agent-icon ${who.provider || 'auto'}`); icon.setAttribute('aria-hidden', 'true'); agent.append(icon); }
+    const agentName = node('span', '', who.short || who.text); agent.append(agentName);
+    agent.title = who.smart ? `Auto, in ${who.text}${card.routingMode ? '' : ', as the workspace'}: ${card.split || list.length ? 'routing picks who splits it and who does each subtask, unless you choose one.' : 'routing picks the agent, model and effort when it runs.'}` : who.text;
+    // Who does it sits in the top row, at the right of the status, so it never takes a row of its own.
+    top.append(agent);
+    const fact = (cls, icon, text, tip) => { const value = node('span', `board-card-fact ${cls}`); if (icon) value.append(glyph(icon)); value.append(node('span', '', text)); if (tip) value.title = tip; meta.append(value); return value; };
     // Before a card runs, including a draft, it says when its agent bills by use (#108).
     const charged = (card.draft || ['backlog', 'ready'].includes(card.column)) && card.agent && bills(card.agent.provider) ? billsLabel(card.agent.provider) : '';
-    if (charged) { const tag = node('span', 'board-card-billing', charged); tag.title = `${billsSentence(card.agent.provider)} You’re asked before it runs.`; meta.append(tag); }
-    if (card.checks?.length) meta.append(node('span', 'board-card-checks', `${card.checks.filter(item => item.done).length}/${card.checks.length}`));
-    // A major card (#155): how far its subtasks have got, or that it splits when it starts.
-    const parts$ = subtaskLine(card);
-    if (parts$) { const tag = node('span', 'board-card-subtasks', parts$.short); tag.title = parts$.long; meta.append(tag); }
-    const due = dueOf(card);
-    if (due) { const day = node('span', `board-card-due${due.tone ? ` ${due.tone}` : ''}`, due.text); day.title = card.due; meta.append(day); }
+    if (charged) fact('board-card-billing', '', charged, `${billsSentence(card.agent.provider)} You’re asked before it runs.`);
+    if (card.checks?.length && !['doing', 'done'].includes(card.column)) fact('board-card-checks', ICONS.checks, `${card.checks.filter(check => check.done).length}/${card.checks.length}`, `Done means: ${plural(card.checks.length, 'check')}`);
+    const after = (card.dependsOn || []).map(cardBy).filter(other => other && other.column !== 'done');
+    if (after.length && (card.draft || ['backlog', 'ready'].includes(card.column))) fact('board-card-after', ICONS.waits, after.length === 1 ? after[0].title : `Waits for ${after.length}`, `Waits for ${after.map(other => `“${other.title}”`).join(', ')}`);
     // A card closed to agents says so; when the whole Plan is closed, the banner above says it once instead.
-    if (card.closed && !board?.closed) { const lock = node('span', 'board-card-closed'); lock.append(lockIcon(), document.createTextNode('Closed')); lock.title = 'Closed to agents'; meta.append(lock); }
-    if (card.commentCount) { const count = node('span', 'board-card-comments'); count.append(commentIcon(), document.createTextNode(String(card.commentCount))); count.title = plural(card.commentCount, 'comment'); meta.append(count); }
-    const timed = schedulesOf(card), soon = timed.filter(item => !item.paused && item.nextAt).sort((a, b) => a.nextAt.localeCompare(b.nextAt))[0];
-    if (timed.some(item => item.missed)) meta.append(node('span', 'board-card-schedule missed', 'Scheduled run missed'));
-    else if (timed.some(item => item.waiting && !item.paused)) meta.append(node('span', 'board-card-schedule', 'Waiting for a usage reset'));
-    else if (soon) meta.append(node('span', 'board-card-schedule', `Runs ${when(soon.nextAt)}`));
-    const after = (card.dependsOn || []).map(cardBy).filter(item => item && item.column !== 'done');
-    if (after.length && ['backlog', 'ready'].includes(card.column)) meta.append(node('span', 'board-card-after', `After ${after.map(item => item.title).join(', ')}`));
-    const group = card.group && view !== 'outline' ? node('span', 'board-card-group', card.group) : null;
-    item.append(top, ...(group ? [group] : []), title, ...(names.length ? [tags] : []), meta);
-    if (state?.detail && card.column === 'ready') item.append(node('span', 'board-card-reason', state.detail));
+    if (card.closed && !board?.closed) { const lock = node('span', 'board-card-fact board-card-closed'); lock.append(lockIcon(), node('span', '', 'Closed')); lock.title = 'Closed to agents'; meta.append(lock); }
+    if (card.commentCount) { const count = node('span', 'board-card-fact board-card-comments'); count.append(commentIcon(), node('span', '', String(card.commentCount))); count.title = plural(card.commentCount, 'comment'); meta.append(count); }
+    const timed = schedulesOf(card), soon = timed.filter(sched => !sched.paused && sched.nextAt).sort((a, b) => a.nextAt.localeCompare(b.nextAt))[0];
+    if (timed.some(sched => sched.missed)) fact('board-card-schedule missed', '', 'Scheduled run missed');
+    else if (timed.some(sched => sched.waiting && !sched.paused)) fact('board-card-schedule', '', 'Waiting for a usage reset');
+    else if (soon) fact('board-card-schedule', '', `Runs ${when(soon.nextAt)}`);
+    if (meta.children.length) parts.push(meta);
+    if (state?.detail && ['ready', 'doing'].includes(card.column)) parts.push(node('span', `board-card-reason${state.tone === 'trouble' ? ' trouble' : ''}`, state.detail));
+    const live = liveOf(card);
+    if (live && (live.running || live.needs)) { parts.push(liveLines(card, live, { agent: agentName })); item.classList.add('watching'); if (live.running) item.classList.add('live'); }
+    item.append(...parts);
     item.title = state?.detail || card.title;
-    item.setAttribute('aria-label', [card.draft ? 'Draft' : '', card.title, card.group ? `group ${card.group}` : '', card.role && card.role !== 'builder' ? `${ROLE[card.role]} role` : '', card.priority !== 'normal' ? `${card.priority} priority` : '', names.length ? `${names.length === 1 ? 'label' : 'labels'} ${listed(names)}` : '', provider ? AGENT[provider] : card.auto ? 'agent on Auto' : 'no agent yet', charged, subtaskLine(card)?.long || '', due?.text || '', card.commentCount ? plural(card.commentCount, 'comment') : '', card.closed ? 'closed to agents' : '', state?.text || '', state?.detail || '', timed.some(item => item.missed) ? 'a scheduled run was missed' : soon ? `scheduled to run ${when(soon.nextAt)}` : ''].filter(Boolean).join('. '));
+    item.setAttribute('aria-label', [card.draft ? 'Draft' : onCanvas ? STATUS[card.column] : '', card.title, card.group ? `group ${card.group}` : '', showRole ? `${ROLE[card.role]} role` : '', names.length ? `${names.length === 1 ? 'label' : 'labels'} ${listed(names)}` : '', who.smart ? `Auto routing, ${who.text}` : who.provider ? who.text : 'no agent yet', needs ? 'needs subtasks before it can run' : '', charged, subtaskLine(card)?.long || '', after.length ? `waits for ${listed(after.map(other => other.title))}` : '', card.commentCount ? plural(card.commentCount, 'comment') : '', card.closed ? 'closed to agents' : '', state?.text || '', state?.detail || '', live?.now || '', live?.usage.length ? `so far ${live.usage.join(', ')}` : '', timed.some(sched => sched.missed) ? 'a scheduled run was missed' : soon ? `scheduled to run ${when(soon.nextAt)}` : ''].filter(Boolean).join('. '));
     item.addEventListener('click', () => { if (moved === card.id) { moved = null; return; } select(card.id); });
     // Backlog, Ready and Done cards can be dragged: between Backlog and Ready, back from Done, and into a new order.
     if (!onCanvas && view === 'columns' && ['backlog', 'ready', 'done'].includes(card.column) && !card.draft) {
@@ -267,10 +398,10 @@
   }
 
   // ---- The drawer
-  const blank = (column, at = null, prefill = {}) => ({ title: '', notes: '', priority: 'normal', labels: filter ? [allLabels().find(item => item.name.toLowerCase() === filter)?.name].filter(Boolean) : [], due: null, agent: null, auto: false, folderId: null, dependsOn: [], checks: [], group: '', role: 'builder', artifact: null, check: '', files: '', tier: 'standard', closed: false, split: false, column, revision: null, at, ...prefill });
-  const editable = card => ({ title: card.title, notes: card.notes || '', priority: card.priority, labels: [...(card.labels || [])], due: card.due || null, agent: card.agent ? { ...card.agent } : null, auto: card.auto === true, folderId: card.folderId || null, dependsOn: [...(card.dependsOn || [])], checks: (card.checks || []).map(item => ({ ...item })), group: card.group || '', role: card.role || 'builder', artifact: card.artifact || null, check: card.check || '', files: (card.files || []).join(', '), tier: card.tier || 'standard', closed: card.closed === true, split: card.split === true, column: card.column, revision: card.revision });
+  const blank = (column, at = null, prefill = {}) => ({ title: '', notes: '', labels: filter ? [allLabels().find(item => item.name.toLowerCase() === filter)?.name].filter(Boolean) : [], agent: null, auto: false, routingMode: null, folderId: null, dependsOn: [], checks: [], group: '', role: 'builder', artifact: null, check: '', files: '', tier: null, closed: false, split: false, column, revision: null, at, ...prefill });
+  const editable = card => ({ title: card.title, notes: card.notes || '', labels: [...(card.labels || [])], agent: card.agent ? { ...card.agent } : null, auto: card.auto === true, routingMode: card.routingMode || null, folderId: card.folderId || null, dependsOn: [...(card.dependsOn || [])], checks: (card.checks || []).map(item => ({ ...item })), group: card.group || '', role: card.role || 'builder', artifact: card.artifact || null, check: card.check || '', files: (card.files || []).join(', '), tier: card.tier || null, closed: card.closed === true, split: card.split === true, column: card.column, revision: card.revision });
   const fileList = text => [...new Set(String(text || '').split(',').map(item => item.trim()).filter(Boolean))];
-  const fields = value => JSON.stringify([value.title.trim(), value.notes.trim(), value.priority, value.labels, value.due, value.agent?.provider || null, value.auto, value.folderId, [...value.dependsOn].sort(), value.checks.map(item => [item.text.trim(), item.done]), value.group.trim(), value.role, value.artifact, value.check.trim(), fileList(value.files), value.tier, value.closed === true, value.split === true]);
+  const fields = value => JSON.stringify([value.title.trim(), value.notes.trim(), value.labels, value.agent?.provider || null, value.auto, value.routingMode || null, value.folderId, [...value.dependsOn].sort(), value.checks.map(item => [item.text.trim(), item.done]), value.group.trim(), value.role, value.artifact, value.check.trim(), fileList(value.files), value.tier, value.closed === true, value.split === true]);
   // Every group on the Plan, in the order first used.
   const allGroups = () => [...new Set(cards().map(card => card.group).filter(Boolean))];
   const dirty = () => { if (!draft) return false; if (selected === 'new') return Boolean(draft.title.trim() || draft.notes.trim()); const card = cardBy(selected); return card ? fields(draft) !== fields(editable(card)) : false; };
@@ -279,6 +410,9 @@
     selected = selected === id ? null : id; failure = ''; suggestConfirm = null;
     draft = selected && cardBy(selected) ? editable(cardBy(selected)) : null; drawn = null;
     render();
+    // A card that's working shows its task beside the Plan: its messages, approvals, questions and Stop (#162 stage 5).
+    const chosen = selected && cardBy(selected);
+    if (chosen?.column === 'doing' && chosen.taskState?.id && api.getState().taskId !== chosen.taskState.id) openTask(chosen);
     if (selected) $('board-drawer-body').querySelector('input, textarea, button')?.focus();
   }
   function openNew(column = 'backlog', at = null, prefill = {}) {
@@ -310,16 +444,18 @@
   // Typing changes only the draft and the Save button; the drawer itself is rebuilt only when the card or the mode changes.
   function changed() { failure = ''; const save = $('board-drawer-body').querySelector('.board-save'); if (save) save.disabled = busy || !dirty() || !draft.title.trim(); const revert = $('board-drawer-body').querySelector('.board-revert'); if (revert) revert.hidden = selected === 'new' || !dirty(); showError(); }
 
+  // The card opens as a dialog over the Plan: what the card says, its subtasks and what done means in the wide column,
+  // and who does it, what it waits for and how it's sorted in the narrow one. Each part says which column it goes in.
+  const slot = (element, name) => { element.dataset.slot = name; return element; };
   function editor(card) {
     const locked = card?.column === 'doing', parts = [];
     const title = node('input', 'board-input board-field-title'); title.value = draft.title; title.maxLength = board?.limits?.title || 200; title.placeholder = 'What needs doing'; title.setAttribute('aria-label', 'Card title'); title.disabled = locked;
     title.addEventListener('input', () => { draft.title = title.value; changed(); });
     const notes = node('textarea', 'board-input board-field-notes'); notes.value = draft.notes; notes.rows = 5; notes.maxLength = board?.limits?.notes || 20000; notes.placeholder = 'Details the agent needs: where, what, and anything to avoid'; notes.setAttribute('aria-label', 'Card description'); notes.disabled = locked;
     notes.addEventListener('input', () => { draft.notes = notes.value; changed(); });
-    parts.push(title, notes);
-    if (locked) parts.push(node('p', 'board-note', 'An agent is working from this card. Stop it to change what it says.'));
-    parts.push(labelled('Priority', segment('Priority', PRIORITIES, draft.priority, value => { draft.priority = value; }, false)));
-    // Labels and the due date are yours to sort and plan by: the agent isn't told them, so they can change while it works.
+    parts.push(slot(title, 'main'), slot(notes, 'main'));
+    if (locked) parts.push(slot(node('p', 'board-note', 'An agent is working from this card. Stop it to change what it says.'), 'main'));
+    // Labels are yours to sort by: the agent isn't told them, so they can change while it works.
     const tags = node('div', 'board-labels-edit'), entry$ = node('input', 'board-label-input'), options = node('datalist');
     options.id = 'board-label-options'; entry$.setAttribute('list', options.id);
     entry$.maxLength = board?.limits?.label || 32; entry$.placeholder = draft.labels.length ? 'Add another' : 'Add a label'; entry$.setAttribute('aria-label', 'Add a label');
@@ -351,36 +487,63 @@
     entry$.addEventListener('blur', () => { if (entry$.value.trim()) addLabel(); });
     tags.addEventListener('click', event => { if (event.target === tags) entry$.focus(); });
     drawTags();
-    parts.push(labelled('Labels', tags));
-    const day = node('input', 'board-input board-due-input'); day.type = 'date'; day.value = draft.due || ''; day.setAttribute('aria-label', 'Due date');
-    const clear = button('Clear', () => { draft.due = null; day.value = ''; clear.hidden = true; changed(); day.focus(); }, 'text-link board-due-clear'); clear.hidden = !draft.due;
-    day.addEventListener('change', () => { draft.due = /^\d{4}-\d{2}-\d{2}$/.test(day.value) ? day.value : null; clear.hidden = !draft.due; changed(); });
-    const dueRow = node('div', 'board-due'); dueRow.append(day, clear);
-    parts.push(labelled('Due', dueRow));
+    const labelsField = labelled('Labels', tags);
     // Closed to agents (#97): yours alone. Like labels it's not something the agent reads, so it saves with the card.
     const privacy = node('label', 'board-closed-edit'), shutBox = node('input'); shutBox.type = 'checkbox';
     shutBox.checked = board?.closed === true || draft.closed === true; shutBox.disabled = board?.closed === true || (locked && !draft.closed);
     shutBox.addEventListener('change', () => { draft.closed = shutBox.checked; changed(); });
     privacy.append(shutBox, lockIcon(), node('span', '', 'Closed to agents'));
-    parts.push(labelled('Agents', privacy, board?.closed ? 'The whole Plan is closed to agents. Open it to agents from the top of the Plan.' : locked ? 'An agent is working on this card. Stop it before closing it to agents.' : 'A closed card can’t run, be scheduled or attached, isn’t named to the cards after it, and is left out of exports. An agent allowed to read anywhere on this computer could still find Codeshi’s own files.'));
-    // Auto (#162) is chosen here like an agent: routing picks the agent, model and effort when the card runs.
+    const privacyField = slot(labelled('Privacy', privacy, board?.closed ? 'The whole Plan is closed to agents. Open it to agents from the top of the Plan.' : locked ? 'An agent is working on this card. Stop it before closing it to agents.' : 'Keeps it out of every prompt, run, attachment and export.'), 'side');
+    privacy.title = 'A closed card can’t run, be scheduled or attached, isn’t named to the cards after it, and is left out of exports. An agent allowed to read anywhere on this computer could still find Codeshi’s own files.';
+    // Smart (#162) is chosen here like an agent: routing picks the agent, model and effort when the card runs, and for a
+    // major card who splits it and who does each subtask that follows the card. Or choose an agent, and its model.
     // What the agent bills is said either way (#108): a subscription, or by use, which asks before the card runs.
     const billedNote = provider => { if (!provider) return ''; const account = api.getState().accounts?.[provider]; return bills(provider) ? ` ${billsSentence(provider)} You’re asked before it runs, as it may cost money.` : account?.billingSource === 'subscription' ? ` Uses your ${AGENT[provider]} subscription.` : ''; };
-    const agentNote = () => { if (draft.auto) { const pick = autoPick(draft); return `Codeshi picks the agent, model and effort for a ${SIZES.find(([value]) => value === draft.tier)[1].toLowerCase()} card when it runs. Now that would be ${pick.text.replace(/^Auto: /, '')}.${pick.error ? '' : billedNote(pick.provider)}`; } return draft.agent ? `Runs with this agent’s default model and effort.${billedNote(draft.agent.provider)}` : 'Choose an agent, or Auto, before the card can run.'; };
-    const agentField = labelled('Agent', segment('Agent', [['auto', 'Auto', 'agent-icon auto'], ...AGENTS.map(([value, text]) => [value, text, `agent-icon ${value}`])], draft.auto ? 'auto' : draft.agent?.provider || null, value => { if (value === 'auto') { draft.auto = true; draft.agent = null; } else { draft.auto = false; draft.agent = { provider: value, model: null, effort: null }; } agentField.querySelector('.board-field-note').textContent = agentNote(); }, locked), agentNote());
-    parts.push(agentField);
-    parts.push(labelled('Size', segment('Size', SIZES, draft.tier, value => { draft.tier = value; agentField.querySelector('.board-field-note').textContent = agentNote(); }, locked)));
-    // A major card (#155): split into subtasks when it starts, against the code the cards before it produced.
-    const major = node('label', 'board-closed-edit board-split-edit'), majorBox = node('input'); majorBox.type = 'checkbox';
-    majorBox.checked = draft.split === true; majorBox.disabled = locked || Boolean(card?.subtasks?.length);
-    majorBox.addEventListener('change', () => { draft.split = majorBox.checked; changed(); });
-    major.append(majorBox, node('span', '', 'Split into subtasks when it starts'));
-    parts.push(labelled('Subtasks', major, card?.subtasks?.length ? 'It has subtasks. Split again from its subtasks to plan them afresh.' : 'For a big card. When it starts, a short read-only run splits it into subtasks, which then run one after another in its task. Its check runs after the last one.'));
+    const major = Boolean(draft.split || card?.subtasks?.length);
+    const agentNote = () => { if (draft.auto) { const pick = autoPick(draft); return `${major ? 'Routing picks who splits this card and who does each subtask, unless you choose one on the subtask.' : 'Routing picks the agent, model and effort when the card runs.'} Now that would be ${pick.text.replace(/^\w+: /, '')}.${pick.error ? '' : billedNote(pick.provider)} ${draft.routingMode ? `${MODE[draft.routingMode]} for this card and its subtasks, whatever the workspace uses.` : `Mode follows the workspace, now ${MODE[smartMode()] || 'Smart'}, until you choose one.`}`; } return draft.agent ? `${major ? 'Splits this card into subtasks and does them, unless you choose another agent on a subtask.' : 'Does this card’s work.'}${billedNote(draft.agent.provider)}` : 'Choose Auto or an agent before the card can run.'; };
+    const modelRow = node('div', 'board-model-row');
+    const cell = (text, control) => { const box = node('div', 'board-agent-cell'); box.append(node('span', 'board-field-label', text), control); return box; };
+    const drawModel = () => {
+      modelRow.replaceChildren();
+      if (!draft.agent) { modelRow.hidden = true; return; }
+      modelRow.hidden = false;
+      const models = window.relayModelPicker?.models?.(draft.agent.provider) || [], ids = models.map(row => row.id || row.model || row.value).filter(Boolean);
+      if (draft.agent.model && !ids.includes(draft.agent.model)) ids.unshift(draft.agent.model);
+      const model = node('select', 'board-input board-mini-select'); model.setAttribute('aria-label', 'Model'); model.disabled = locked;
+      model.append(...[['', 'Default model'], ...ids.map(id => [id, modelLabel(draft.agent.provider, id)])].map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
+      model.value = draft.agent.model || ''; model.addEventListener('change', () => { draft.agent = { ...draft.agent, model: model.value || null }; changed(); });
+      const effort = node('select', 'board-input board-mini-select'); effort.setAttribute('aria-label', 'Effort'); effort.disabled = locked;
+      effort.append(...EFFORTS.map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
+      effort.value = draft.agent.effort || ''; effort.addEventListener('change', () => { draft.agent = { ...draft.agent, effort: effort.value || null }; changed(); });
+      modelRow.append(cell('Model', model), cell('Effort', effort));
+    };
+    const agentPick = node('select', 'board-input'); agentPick.setAttribute('aria-label', 'Agent'); agentPick.disabled = locked;
+    agentPick.append(...[['auto', 'Auto (routing picks)'], ...AGENTS].map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
+    agentPick.value = draft.auto ? 'auto' : draft.agent?.provider || '';
+    if (!agentPick.value) { const none = node('option', '', 'Choose…'); none.value = ''; agentPick.prepend(none); agentPick.value = ''; }
+    agentPick.addEventListener('change', () => { const value = agentPick.value; if (value === 'auto') { draft.auto = true; draft.agent = null; } else { draft.auto = false; draft.agent = { provider: value, model: null, effort: null }; } drawModel(); modeField.hidden = !draft.auto; agentField.querySelector('.board-field-note').textContent = agentNote(); changed(); });
+    const agentField = node('div', 'board-field'), agentRow = node('div', 'board-agent-row');
+    agentRow.append(cell('Agent', agentPick), modelRow); agentField.append(agentRow, node('span', 'board-field-note', agentNote()));
+    drawModel();
+    parts.push(slot(agentField, 'side'));
+    // Auto's mode: the workspace's until you choose one for this card, which then stays with it. Its subtasks on Auto
+    // use it too, as a card's task runs in one mode.
+    const modeNote = () => draft.routingMode ? `${MODE[draft.routingMode]} for this card and its subtasks, whatever the workspace uses.` : `Follows the workspace, now ${MODE[smartMode()] || 'Smart'}, until you choose one here.`;
+    // Mode and Size sit with the agent, under one heading: Mode picks how Auto chooses, Size how big the card is.
+    const modeControls = node('div', 'board-mode');
+    const drawMode = () => {
+      const follow = button('Follow the workspace', () => { draft.routingMode = null; drawMode(); refreshNotes(); changed(); }, 'text-link board-mode-follow');
+      follow.hidden = !draft.routingMode; follow.disabled = locked;
+      modeControls.replaceChildren(node('span', 'board-field-label', 'Mode'), segment('Mode', MODES.map(([value, text]) => [value, text, `board-mode-icon ${value}`]), modeOf(draft), value => { draft.routingMode = value; drawMode(); refreshNotes(); changed(); }, locked), follow);
+    };
+    const refreshNotes = () => { agentField.querySelector('.board-field-note').textContent = agentNote(); };
+    const modeField = modeControls;
+    drawMode(); modeField.hidden = !draft.auto; agentField.insertBefore(modeControls, agentField.querySelector('.board-field-note'));
     if ((board?.folders || []).length > 1) {
       const folder = node('select', 'board-input'); folder.setAttribute('aria-label', 'Folder the card works in'); folder.disabled = locked;
-      folder.append(...[['', 'Choose a folder'], ...board.folders.map(item => [item.id, item.name])].map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
-      folder.value = draft.folderId || ''; folder.addEventListener('change', () => { draft.folderId = folder.value || null; changed(); });
-      parts.push(labelled('Works in', folder));
+      folder.append(...board.folders.map(item => [item.id, item.name]).map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
+      folder.value = draft.folderId || board.folders[0].id; folder.addEventListener('change', () => { draft.folderId = folder.value === board.folders[0].id && !draft.folderId ? null : folder.value; changed(); });
+      parts.push(slot(labelled('Folder', folder, 'The one folder the agent works in. A card runs in a single folder; the first is used unless you choose another.'), 'side'));
     }
     // Waits for: the cards chosen, each with a way to take it off, and a menu of the other cards not yet done.
     const others = cards().filter(other => other.id !== card?.id && other.column !== 'done');
@@ -402,24 +565,27 @@
         waits.replaceChildren(...(chosen.length ? [list] : []), add);
       };
       drawWaits();
-      parts.push(labelled('Waits for', waits, 'It runs only after these are done, or together with them.'));
+      parts.push(slot(labelled('Waits for', waits, 'It starts after these finish and pass their tests.'), 'side'));
     }
-    // What a plan step had (#162): its group, role, what it produces, its check and its files. Folded away until used.
-    const more = node('details', 'board-more'); more.open = moreOpen || Boolean(draft.group || draft.role !== 'builder' || draft.artifact || draft.check || draft.files);
-    more.addEventListener('toggle', () => { moreOpen = more.open; });
-    more.append(node('summary', '', 'Plan details'));
+    // What a plan step had (#162): its group, what it produces and its check, each shown. The role sits above the title.
     const group = node('input', 'board-input'); group.value = draft.group; group.maxLength = board?.limits?.group || 60; group.placeholder = 'A phase, such as Build or QA'; group.setAttribute('aria-label', 'Group');
     const groups = node('datalist'); groups.id = 'board-group-options'; group.setAttribute('list', groups.id);
     groups.append(...allGroups().map(name => { const option = node('option'); option.value = name; return option; }));
     group.addEventListener('input', () => { draft.group = group.value; changed(); });
     const groupRow = node('div', 'board-group-edit'); groupRow.append(group, groups);
     const choose = (label, options, current, set) => { const pick = node('select', 'board-input'); pick.setAttribute('aria-label', label); pick.disabled = locked; pick.append(...options.map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; })); pick.value = current; pick.addEventListener('change', () => { set(pick.value); changed(); }); return pick; };
-    const check = node('input', 'board-input'); check.value = draft.check; check.maxLength = 300; check.placeholder = 'A command that tests it, such as npm test'; check.setAttribute('aria-label', 'Acceptance check'); check.disabled = locked;
+    const check = node('input', 'board-input'); check.value = draft.check; check.maxLength = 300; check.placeholder = 'npm test'; check.setAttribute('aria-label', 'Test command'); check.disabled = locked;
     check.addEventListener('input', () => { draft.check = check.value; changed(); });
-    const files = node('input', 'board-input'); files.value = draft.files; files.placeholder = 'Files or folders it changes, separated by commas'; files.setAttribute('aria-label', 'Files it expects to change'); files.disabled = locked;
-    files.addEventListener('input', () => { draft.files = files.value; changed(); });
-    more.append(labelled('Group', groupRow, 'Cards in a group run and stop together from the Outline.'), labelled('Role', choose('Role', ROLES, draft.role, value => { draft.role = value; })), labelled('Produces', choose('What it produces', PRODUCES, draft.artifact || '', value => { draft.artifact = value || null; }), 'The cards after it are told this.'), labelled('Acceptance check', check, 'The agent is told this. The test command marked in Run is what tests the card.'), labelled('Files', files));
-    parts.push(more);
+    // The role, in the colour it has on the card in Columns and Canvas, above the title: who the agent works as.
+    const rolePick = choose('Role', ROLES, draft.role, value => { draft.role = value; rolePick.dataset.role = value; });
+    rolePick.className = 'orchestration-step-role board-role-pick'; rolePick.dataset.role = draft.role;
+    rolePick.title = 'Role: told to the agent, so it works as that specialist. QA and Reviewer cards check the work before them.';
+    const roleRow = slot(node('div', 'board-role-row'), 'lead'); roleRow.append(rolePick);
+    parts.push(roleRow);
+    parts.push(slot(labelled('Test command', check, 'Runs when the agent finishes. If it passes, the cards after this one can start; if it fails, they wait for you. Empty uses the command marked in Run.'), 'side'), slot(labelled('Produces', choose('What it produces', PRODUCES, draft.artifact || '', value => { draft.artifact = value || null; }), 'Its report is passed to the cards after it as this.'), 'side'), slot(labelled('Group', groupRow, 'A phase. The List runs and stops a group together.'), 'side'));
+    // Labels are only for you to sort by: the agent isn't told them.
+    labelsField.dataset.slot = 'side'; labelsField.append(node('span', 'board-field-note', 'Only for you to sort by. The agent isn’t told them.'));
+    parts.push(labelsField, privacyField);
     // Done means: what you'll check before accepting it. The agent is told these; ticking one isn't a change to the card.
     const checks = node('ul', 'board-checks');
     const drawChecks = () => checks.replaceChildren(...draft.checks.map((item, index) => {
@@ -432,17 +598,17 @@
     }));
     drawChecks();
     const addCheck = button('Add a check', () => { draft.checks.push({ text: '', done: false }); drawChecks(); checks.lastElementChild?.querySelector('.board-input')?.focus(); changed(); }, 'text-link board-add-check'); addCheck.disabled = locked || draft.checks.length >= (board?.limits?.checks || 20);
-    const checksField = labelled('Done means', checks); checksField.append(addCheck);
-    parts.push(checksField);
+    const checksField = labelled('Done means', checks, 'The agent is told these. You tick them when you review it.'); checksField.insertBefore(addCheck, checksField.querySelector('.board-field-note')); checksField.classList.add('board-done-means');
+    parts.push(slot(checksField, 'main'));
     const save = button(selected === 'new' ? 'Add card' : 'Save', save$ , 'primary-button board-save');
     const revert = button('Revert', () => { draft = editable(cardBy(selected)); drawn = null; render(); }, 'text-link board-revert');
-    const saving = node('div', 'board-save-row'); saving.append(revert, save);
+    const saving = slot(node('div', 'board-save-row'), 'foot'); saving.append(revert, save);
     parts.push(saving);
     return parts;
   }
   function save$() {
     if (!draft?.title.trim()) return;
-    const input = { title: draft.title, notes: draft.notes, priority: draft.priority, labels: draft.labels, due: draft.due, agent: draft.auto ? null : draft.agent, auto: draft.auto, folderId: draft.folderId, dependsOn: draft.dependsOn, checks: draft.checks.filter(item => item.text.trim()), group: draft.group.trim() || null, role: draft.role, artifact: draft.artifact, check: draft.check.trim() || null, files: fileList(draft.files), tier: draft.tier, closed: draft.closed === true, split: draft.split === true };
+    const input = { title: draft.title, notes: draft.notes, labels: draft.labels, agent: draft.auto ? null : draft.agent, auto: draft.auto, routingMode: draft.auto ? draft.routingMode || null : null, folderId: draft.folderId, dependsOn: draft.dependsOn, checks: draft.checks.filter(item => item.text.trim()), group: draft.group.trim() || null, role: draft.role, artifact: draft.artifact, check: draft.check.trim() || null, files: fileList(draft.files), tier: draft.tier, closed: draft.closed === true, split: draft.split === true };
     if (selected === 'new') act('/api/board/cards', { ...input, column: draft.column, ...(draft.at ? { at: draft.at } : {}) }, result => { selected = result.card.id; draft = editable(result.card); drawn = null; api.announce(`Added “${result.card.title}” to ${COLUMNS.find(([id]) => id === result.card.column)[1]}.`); });
     else act(`/api/board/cards/${selected}/edit`, { ...input, revision: draft.revision }, result => { draft = editable(result.card); drawn = null; api.announce('Card saved.'); });
   }
@@ -484,7 +650,7 @@
   // Exact agent, model and effort that Suggest next (#162) will use when confirmed.
   function suggestPick(card) {
     const state = api.getState();
-    const routed = api.routeFor?.(card?.notes || card?.title || 'Suggest follow-up cards', 0, null, { plan: true });
+    const routed = api.routeFor?.(card?.notes || card?.title || 'Suggest follow-up cards', 0, smartMode(), { plan: true });
     if (routed?.error) return { error: routed.error };
     const provider = routed ? routed.provider : (state.provider || 'codex');
     const model = routed ? (routed.model || null) : (state.model || null);
@@ -538,24 +704,43 @@
     box.append(lead, note, row);
     return [box];
   }
-  // What can be done with a card where it is now.
+  // What can be done with a card where it is now: the one or two things that move it on as full buttons, then the rest as
+  // a short list of rows with icons, like a menu, and Remove on its own at the end. Each row keeps its label as its text.
+  const ACTION_ICONS = {
+    'Move to Backlog': 'M4 8h16v11H4z|M6 5h12l2 3H4z|M10 12h4',
+    'Suggest next': ICONS.smart,
+    'Add next': 'M12 5v14|M5 12h14',
+    'Attach to message': 'M20 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8',
+    'Open its task': 'M14 4h6v6|M20 4l-9 9|M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
+    Remove: 'M4 7h16|M9 7V4h6v3|M6 7l1 13h10l1-13'
+  };
+  function actionRow(value) {
+    const label = value.textContent;
+    value.classList.remove('secondary-button', 'text-link'); value.classList.add('board-action-row');
+    const text = node('span', 'board-action-label', label);
+    value.replaceChildren(...(ACTION_ICONS[label] ? [glyph(ACTION_ICONS[label])] : []), text);
+    return value;
+  }
   function actions(card) {
-    const row = node('div', 'board-actions'), state = stateOf(card);
-    const move = (text, column) => button(text, () => act(`/api/board/cards/${card.id}/move`, { column }));
-    const remove = button('Remove', () => { if (window.confirm(`Remove “${card.title}” from the board?`)) act(`/api/board/cards/${card.id}/remove`, {}, () => { selected = null; draft = null; api.announce('Card removed.'); }); }, 'text-link board-remove');
+    const box = node('div', 'board-actions'), row = node('div', 'board-actions-main'), quiet = node('div', 'board-actions-more'), next = node('div', 'board-actions-next'), state = stateOf(card);
+    const link = actionRow;
+    const move = (text, column, cls) => button(text, () => act(`/api/board/cards/${card.id}/move`, { column }), cls);
+    const remove = actionRow(button('Remove', () => { if (window.confirm(`Remove “${card.title}” from the board?`)) act(`/api/board/cards/${card.id}/remove`, {}, () => { selected = null; draft = null; api.announce('Card removed.'); }); }, 'board-remove'));
+    quiet.setAttribute('role', 'group'); quiet.setAttribute('aria-label', 'More for this card');
+    box.append(row, quiet, next);
     // A draft (#162) is accepted or discarded; nothing else runs it.
     if (card.draft) {
-      row.append(button(runnable({ ...card, draft: null }) ? 'Accept to Ready' : 'Accept', () => draftAction('accept', [card.id], `“${card.title}” accepted.`), 'primary-button'),
-        suggestNextButton(card), addNextButton(card),
-        button('Discard', () => draftAction('discard', [card.id], 'Draft discarded.', () => { selected = null; draft = null; }), 'text-link board-remove'));
-      return row;
+      row.append(button('Accept', () => draftAction('accept', [card.id], `“${card.title}” accepted.`), 'primary-button'), button('Discard', () => draftAction('discard', [card.id], 'Draft discarded.', () => { selected = null; draft = null; }), 'secondary-button'));
+      next.append(suggestNextButton(card), addNextButton(card));
+      return box;
     }
-    if (card.column === 'backlog') row.append(move('Move to Ready', 'ready'), remove);
+    if (card.column === 'backlog') { row.append(move('Move to Ready', 'ready', needsSubtasks(card) ? 'secondary-button' : 'primary-button')); }
     if (card.column === 'ready') {
-      const pick = card.auto && !card.agent && !shut(card) ? autoPick(card) : null, why = shut(card) ? 'Closed to agents. Open it to agents to run it.' : !runnable(card) ? 'Choose an agent, or Auto, first.' : pick?.error ? pick.error : dirty() ? 'Save your changes first.' : '';
+      const pick = card.auto && !card.agent && !shut(card) ? autoPick(card) : null, why = shut(card) ? 'Closed to agents. Open it to agents to run it.' : !runnable(card) ? notRunnable(card) : pick?.error ? pick.error : dirty() ? 'Save your changes first.' : '';
       const run = button('Run', () => { const chosen = assignments([card]); if (chosen.error) { failure = chosen.error; showError(); return; } const billing = billingFor([card], chosen.assignments); if (!billing) return; act('/api/board/run', { ids: [card.id], assignments: chosen.assignments, ...billing }, () => api.announce(`“${card.title}” is running as a task.`)); }, 'primary-button');
       run.disabled = Boolean(why); run.title = why || (pick ? `Run this card as its own task. ${pick.text}.` : 'Run this card as its own task.');
-      row.append(run, scheduleButton(card), move('Move to Backlog', 'backlog'), remove);
+      row.append(run, ...(card.agent ? [scheduleButton(card)] : []));
+      quiet.append(link(move('Move to Backlog', 'backlog')));
     }
     if (card.column === 'doing') row.append(button('Open its task', () => openTask(card), 'primary-button'), button(card.taskState?.status === 'running' ? 'Stop' : 'Cancel', () => act(`/api/board/cards/${card.id}/stop`)));
     if (card.column === 'review') {
@@ -567,11 +752,17 @@
       if (card.taskState?.status === 'complete' && tests && tests !== 'running' && tests !== 'passed') row.append(button('Check again', () => act(`/api/board/cards/${card.id}/recheck`, {}, () => api.announce('Checking the card again.'))));
       if (card.taskState?.holds && tests !== 'running') row.append(button('Continue anyway', () => act(`/api/board/cards/${card.id}/continue`, {}, () => api.announce('The cards after it can start.'))));
       if (!card.taskState?.hasWorktree) row.append(button('Send back…', () => sendBack(card)));
-      if (card.taskState) row.append(button('Open its task', () => openTask(card), 'text-link'));
+      if (card.taskState) quiet.append(link(button('Open its task', () => openTask(card))));
     }
-    if (card.column === 'done') row.append(move('Reopen', 'ready'), scheduleButton(card), remove);
-    row.append(suggestNextButton(card), addNextButton(card), attachButton(card));
-    return row;
+    if (card.column === 'done') { row.append(move('Reopen', 'ready'), ...(card.agent ? [scheduleButton(card)] : [])); }
+    next.append(suggestNextButton(card), addNextButton(card));
+    quiet.append(link(attachButton(card)));
+    if (['backlog', 'ready', 'done'].includes(card.column)) quiet.append(remove);
+    // The action that moves the card on is the last one, at the far right of the bar.
+    row.append(...[...row.children].sort((a, b) => a.classList.contains('primary-button') - b.classList.contains('primary-button')));
+    if (!row.children.length) row.remove();
+    if (!quiet.children.length) quiet.remove();
+    return box;
   }
   function sendBack(card) {
     const reason = window.prompt('What should change? It goes back to Ready with this note. (Optional)', '');
@@ -602,6 +793,9 @@
       parts.push(box);
     }
     if (card.column === 'doing' && state) parts.push(node('p', 'board-status', state.detail ? `${state.text}: ${state.detail}` : state.text));
+    // While it runs: who's on it now, what it's doing and what it has used, kept up to date in place (#162 stage 5).
+    const watching = liveOf(card);
+    if (watching) { const lines = liveLines(card, watching, { withWho: true }); lines.classList.add('board-watch'); lines.setAttribute('aria-label', 'This card’s run'); parts.push(lines); }
     if (card.column === 'ready' && card.reason) parts.push(node('p', 'board-status trouble', card.reason));
     if (card.result && ['review', 'done'].includes(card.column)) {
       const tests = card.result.tests, box = node('div', 'board-result'), facts = [card.result.files != null ? plural(card.result.files, 'file') + ' changed' : '', tests ? (TESTS[tests] || `tests ${tests}`).toLowerCase() + (card.result.testsAccepted ? ', continued anyway' : '') : 'no tests recorded', card.result.inCopy ? (card.result.status === 'complete' ? 'in its own copy, not merged yet' : OUTCOME[card.result.status]?.toLowerCase()) : ''].filter(Boolean);
@@ -627,47 +821,90 @@
   // A major card's subtasks, in order, as they run: the agent and what it reported for each done, the one working now, and
   // the ones to come, which are yours to edit, remove, add to or pin to an agent. Pause stops the card after the subtask
   // it's on; Run then carries on from the next one. Split again clears them, so the next run splits the card afresh.
-  const SUB_STATE = { pending: 'Waiting', running: 'Working', done: 'Done' };
+  const SUB_STATE = { pending: 'To do', running: 'Working', done: 'Done' };
+  const EFFORTS = [['', 'Default effort'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']];
+  // Who does a subtask: what its card says (Smart, or the card's agent), Smart routing, or an agent and model you choose.
+  // A change saves at once: it's a choice about who works, not what the card says.
+  function whoPicker(card, sub, index) {
+    const wrap = node('span', 'board-subtask-who'), mode = sub.agent ? sub.agent.provider : sub.auto ? 'smart' : '';
+    const cardChoice = card.auto ? `Auto · ${modeName(card)}` : card.agent ? AGENT[card.agent.provider] : 'the card’s agent';
+    const pick = node('select', 'board-input board-mini-select'); pick.setAttribute('aria-label', `Who does subtask ${index + 1}`);
+    pick.append(...[['', `Card: ${cardChoice}`], ['smart', `Auto · ${modeName(card)}`], ...AGENTS].map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
+    pick.value = mode; pick.disabled = busy;
+    const save = changes => act(`/api/board/cards/${card.id}/subtasks`, { action: 'edit', subtaskId: sub.id, ...changes }, () => api.announce(`Subtask ${index + 1} saved.`));
+    pick.addEventListener('change', () => save(pick.value === '' ? { agent: null, auto: false } : pick.value === 'smart' ? { auto: true } : { agent: { provider: pick.value, model: null, effort: null } }));
+    wrap.append(pick);
+    if (sub.agent) {
+      const models = window.relayModelPicker?.models?.(sub.agent.provider) || [], model = node('select', 'board-input board-mini-select');
+      model.setAttribute('aria-label', `Model for subtask ${index + 1}`);
+      const ids = models.map(row => row.id || row.model || row.value).filter(Boolean);
+      if (sub.agent.model && !ids.includes(sub.agent.model)) ids.unshift(sub.agent.model);
+      model.append(...[['', 'Default model'], ...ids.map(id => [id, modelLabel(sub.agent.provider, id)])].map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
+      model.value = sub.agent.model || ''; model.disabled = busy;
+      model.addEventListener('change', () => save({ agent: { ...sub.agent, model: model.value || null } }));
+      const effort = node('select', 'board-input board-mini-select'); effort.setAttribute('aria-label', `Effort for subtask ${index + 1}`);
+      effort.append(...EFFORTS.map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
+      effort.value = sub.agent.effort || ''; effort.disabled = busy;
+      effort.addEventListener('change', () => save({ agent: { ...sub.agent, effort: effort.value || null } }));
+      wrap.append(model, effort);
+    }
+    return wrap;
+  }
+  const subWho = (card, sub) => sub.provider ? [AGENT[sub.provider] || sub.provider, sub.model].filter(Boolean).join(' · ') : sub.agent ? [AGENT[sub.agent.provider], modelLabel(sub.agent.provider, sub.agent.model)].filter(Boolean).join(' · ') : sub.auto || (!sub.agent && card.auto) ? modeName(card) : card.agent ? AGENT[card.agent.provider] : '';
+  let splitOne = null;
   function subtasksPanel(card) {
     const list = card.subtasks || [];
-    if (!list.length && !card.split) return [];
+    if (!list.length && !card.split && card.column === 'done') return [];
     if (subEdit && subEdit.cardId !== card.id) subEdit = null;
     const box = node('section', 'board-subtasks'), live = card.column === 'doing' && card.taskState?.status === 'running';
     box.setAttribute('aria-label', 'Subtasks');
-    const done = list.filter(item => item.status === 'done').length;
-    box.append(node('h4', 'board-field-label', list.length ? `Subtasks (${done} of ${list.length} done)` : 'Subtasks'));
-    if (!list.length) box.append(node('p', 'board-field-note', card.splitting && live ? 'Splitting it into subtasks now, reading only.' : card.draft ? 'Once accepted, it is split into subtasks when it starts. You can also write them yourself.' : 'It is split into subtasks when it starts, against the code the cards before it produced. You can also write them yourself.'));
+    const done = list.filter(item => item.status === 'done').length, head = node('div', 'board-subtasks-head');
+    head.append(node('h4', 'board-field-label', list.length ? `Subtasks · ${done} of ${list.length} done` : 'Subtasks'));
+    const splitting = board?.suggest?.kind === 'split' && board.suggest.status === 'running' && (board.suggest.cardIds || []).includes(card.id);
+    const canSplit = !card.draft && !shut(card) && !['doing', 'done'].includes(card.column) && !list.some(item => item.status !== 'pending') && !splitting;
+    const tools$ = node('div', 'board-subtasks-tools');
+    if (canSplit) { const split = button(list.length ? 'Split again…' : 'Split with an agent…', () => { splitOne = splitOne === card.id ? null : card.id; drawn = null; renderDrawer(); }, 'secondary-button'); split.disabled = busy || board?.suggest?.status === 'running'; split.setAttribute('aria-expanded', String(splitOne === card.id)); if (board?.suggest?.status === 'running') split.title = 'Wait for the agent working on the Plan to finish.'; tools$.append(split); }
+    if (!card.draft && !(card.splitting && live) && !splitting && subEdit?.id !== 'new' && card.column !== 'done') { const add = button('Add', () => { subEdit = { cardId: card.id, id: 'new', title: '', instructions: '', tier: 'standard', agent: '' }; drawn = null; renderDrawer(); $('board-drawer-body').querySelector('.board-subtask-form .board-input')?.focus(); }, 'secondary-button'); add.disabled = busy; add.title = 'Write a subtask yourself'; tools$.append(add); }
+    head.append(tools$); box.append(head);
+    if (splitOne === card.id && canSplit) box.append(splitPanel([card.id], () => { splitOne = null; drawn = null; renderDrawer(); }));
+    if (!list.length) box.append(node('p', `board-subtasks-empty${needsSubtasks(card) && !card.draft ? ' needs' : ''}`, splitting ? 'An agent is splitting it into subtasks now, reading only.' : card.draft ? 'This card runs through its subtasks. Accept it, then split it with an agent or write them yourself.' : card.split ? 'This card runs through its subtasks, so it needs at least one before it can run. Split it with an agent, or add them yourself.' : 'Optional. Split the card into subtasks to run it in smaller steps, each with its own agent if you like.'));
     const rows = node('ol', 'board-subtask-list');
     list.forEach((sub, index) => {
-      const row = node('li', 'board-subtask'), head = node('div', 'board-subtask-head');
+      const row = node('li', 'board-subtask'), top = node('div', 'board-subtask-head');
       // A subtask left running by a task that ended was stopped there; Run starts it again.
       const stateText = sub.status === 'running' && !live ? 'Stopped' : SUB_STATE[sub.status], state = node('span', 'board-subtask-state', stateText);
       state.dataset.tone = sub.status === 'done' ? 'done' : sub.status === 'running' ? (live ? 'running' : 'trouble') : '';
-      head.append(node('span', 'board-subtask-number', `${index + 1}.`), node('span', 'board-subtask-title', sub.title), state);
-      row.append(head);
-      const who = sub.provider ? [AGENT[sub.provider] || sub.provider, sub.model].filter(Boolean).join(' · ') : sub.agent ? `${AGENT[sub.agent.provider]}, pinned` : null;
-      const facts = [SIZES.find(([value]) => value === sub.tier)?.[1] || 'Standard', who, sub.by?.kind === 'you' ? 'Added by you' : ''].filter(Boolean).join(' · ');
-      row.append(node('p', 'board-subtask-meta', facts));
-      if (sub.status === 'done' && sub.summary) row.append(node('p', 'board-subtask-summary', sub.summary));
-      if (subEdit?.id === sub.id) row.append(subtaskForm(card));
-      else if (sub.status === 'pending' && !card.draft) {
-        const tools$ = node('div', 'board-subtask-tools');
+      top.append(node('span', 'board-subtask-number', `${index + 1}`), node('span', 'board-subtask-title', sub.title));
+      const editable$ = sub.status === 'pending' && !card.draft && subEdit?.id !== sub.id;
+      if (editable$) {
         const edit = button('Edit', () => { subEdit = { cardId: card.id, id: sub.id, title: sub.title, instructions: sub.instructions || '', tier: sub.tier, agent: sub.agent?.provider || '' }; drawn = null; renderDrawer(); $('board-drawer-body').querySelector('.board-subtask-form .board-input')?.focus(); }, 'text-link');
         const remove = button('Remove', () => act(`/api/board/cards/${card.id}/subtasks`, { action: 'remove', subtaskId: sub.id }, () => api.announce('Subtask removed.')), 'text-link board-remove');
         edit.setAttribute('aria-label', `Edit subtask ${index + 1}`); remove.setAttribute('aria-label', `Remove subtask ${index + 1}`); edit.disabled = remove.disabled = busy;
-        tools$.append(edit, remove); row.append(tools$);
+        const links = node('span', 'board-subtask-links'); links.append(edit, remove); top.append(links);
+      } else top.append(state);
+      row.dataset.status = sub.status;
+      row.append(top);
+      if (sub.instructions && subEdit?.id !== sub.id) row.append(node('p', 'board-subtask-notes', sub.instructions));
+      if (sub.status === 'done' && sub.summary) row.append(node('p', 'board-subtask-summary', sub.summary));
+      if (subEdit?.id === sub.id) row.append(subtaskForm(card));
+      else {
+        // Its size only steers Smart routing, so it shows only where Smart picks who does it.
+        const foot = node('div', 'board-subtask-foot'), smart = !sub.agent && (sub.auto || card.auto);
+        if (smart && sub.status === 'pending') { const size = node('span', 'board-subtask-size', SIZES.find(([value]) => value === sub.tier)?.[1] || 'Standard'); size.title = 'Auto picks a model for a subtask this size.'; foot.append(size); }
+        if (sub.status === 'pending' && !card.draft) foot.append(whoPicker(card, sub, index));
+        else { const who = subWho(card, sub); if (who) foot.append(node('span', 'board-subtask-agent', who)); if (sub.by?.kind === 'you') foot.append(node('span', 'board-subtask-agent', 'Added by you')); }
+        row.append(foot);
       }
       rows.append(row);
     });
     if (list.length) box.append(rows);
     if (subEdit?.id === 'new') box.append(subtaskForm(card));
-    const foot = node('div', 'board-subtask-foot');
-    if (!card.draft && !(card.splitting && live) && subEdit?.id !== 'new') { const add = button('Add a subtask', () => { subEdit = { cardId: card.id, id: 'new', title: '', instructions: '', tier: 'standard', agent: '' }; drawn = null; renderDrawer(); $('board-drawer-body').querySelector('.board-subtask-form .board-input')?.focus(); }, 'text-link'); add.disabled = busy; foot.append(add); }
+    const foot = node('div', 'board-subtask-foot board-subtasks-foot');
     if (card.column === 'doing' && list.some(item => item.status === 'pending')) {
       const pause = button(card.subtasksPaused ? 'Don’t pause' : 'Pause after this subtask', () => act(`/api/board/cards/${card.id}/subtasks`, { action: card.subtasksPaused ? 'resume' : 'pause' }, () => api.announce(card.subtasksPaused ? 'It carries on after this subtask.' : 'It pauses after this subtask.')));
       pause.disabled = busy; foot.append(pause);
     }
-    if (card.column !== 'doing' && list.length && !card.draft) { const again = button('Split again', () => { if (window.confirm('Clear these subtasks? The card is split afresh the next time it runs.')) act(`/api/board/cards/${card.id}/subtasks`, { action: 'clear' }, () => api.announce('Subtasks cleared.')); }, 'text-link'); again.disabled = busy; foot.append(again); }
+    if (!['doing'].includes(card.column) && list.length && !card.draft) { const clear = button('Clear subtasks', () => { if (window.confirm('Clear these subtasks? The card then needs new ones before it can run.')) act(`/api/board/cards/${card.id}/subtasks`, { action: 'clear' }, () => api.announce('Subtasks cleared.')); }, 'text-link board-remove'); clear.disabled = busy; foot.append(clear); }
     if (foot.children.length) box.append(foot);
     return [box];
   }
@@ -677,14 +914,15 @@
     const notes = node('textarea', 'board-input'); notes.value = subEdit.instructions; notes.rows = 3; notes.maxLength = 4000; notes.placeholder = 'Instructions, and how to know it’s done'; notes.setAttribute('aria-label', 'Subtask instructions');
     title.addEventListener('input', () => { subEdit.title = title.value; save.disabled = busy || !title.value.trim(); });
     notes.addEventListener('input', () => { subEdit.instructions = notes.value; });
-    const who = node('select', 'board-input'); who.setAttribute('aria-label', 'Subtask agent');
-    who.append(...[['', card.auto ? 'The card’s agent (Auto)' : 'The card’s agent'], ...AGENTS].map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
+    // Who does it is chosen on the subtask's row once it exists; a new one can say it here.
+    const who = node('select', 'board-input'); who.setAttribute('aria-label', 'Who does the subtask');
+    who.append(...[['', `As the card (${card.auto ? `Auto · ${modeName(card)}` : card.agent ? AGENT[card.agent.provider] : 'its agent'})`], ['smart', `Auto · ${modeName(card)}`], ...AGENTS].map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
     who.value = subEdit.agent; who.addEventListener('change', () => { subEdit.agent = who.value; });
     const row = node('div', 'board-subtask-form-row');
-    row.append(segment('Subtask size', SIZES, subEdit.tier, value => { subEdit.tier = value; }, false), who);
+    row.append(segment('Subtask size', SIZES, subEdit.tier, value => { subEdit.tier = value; }, false), ...(adding ? [who] : []));
     const cancel = button('Cancel', () => { subEdit = null; drawn = null; renderDrawer(); }, 'text-link');
     const save = button(adding ? 'Add' : 'Save', () => {
-      const input = { title: subEdit.title, instructions: subEdit.instructions, tier: subEdit.tier, agent: subEdit.agent ? { provider: subEdit.agent } : null };
+      const input = { title: subEdit.title, instructions: subEdit.instructions, tier: subEdit.tier, ...(adding ? subEdit.agent === 'smart' ? { auto: true } : { agent: subEdit.agent ? { provider: subEdit.agent } : null } : {}) };
       act(`/api/board/cards/${card.id}/subtasks`, adding ? { action: 'add', ...input } : { action: 'edit', subtaskId: subEdit.id, ...input }, () => { subEdit = null; drawn = null; api.announce(adding ? 'Subtask added.' : 'Subtask saved.'); });
     }, 'secondary-button');
     save.disabled = busy || !subEdit.title.trim();
@@ -746,8 +984,8 @@
   // Run Ready: the Ready cards with a box each. A card that waits for one that isn't done must run with it.
   function runPanel() {
     const ready = cards().filter(card => card.column === 'ready'), parts = [];
-    if (!ready.length) { parts.push(node('p', 'board-note', 'Nothing is in Ready. Move cards there, with an agent or Auto each, to run them.')); return parts; }
-    const blocked = card => !runnable(card) ? 'Choose an agent, or Auto, first.' : (card.auto && !card.agent && autoPick(card).error) || (card.dependsOn || []).map(cardBy).filter(item => item && item.column !== 'done' && !picked.has(item.id)).map(item => `Waits for “${item.title}”`)[0] || '';
+    if (!ready.length) { parts.push(node('p', 'board-note', 'Nothing is in Ready. Move cards there, with Auto or an agent each, to run them.')); return parts; }
+    const blocked = card => !runnable(card) ? notRunnable(card) : (card.auto && !card.agent && autoPick(card).error) || (card.dependsOn || []).map(cardBy).filter(item => item && item.column !== 'done' && !picked.has(item.id)).map(item => `Waits for “${item.title}”`)[0] || '';
     const list = node('ul', 'board-run-list');
     for (const card of ready) {
       const row = node('li', 'board-run-row'), label = node('label', 'board-run-label'), tick = node('input'); tick.type = 'checkbox';
@@ -928,8 +1166,15 @@
   // Plan as it is then, with cards closed to agents left out. × leaves one out of the next message. Ask | Draft cards says
   // what Send does: ask the agent, or have it draft new cards in one read-only run, from what you write and any brief or
   // spec attached to the message. The drafted cards arrive on the Plan to accept or discard. app.js asks asking() at Send.
-  let drafting = false, leftOut = { plan: false, card: null };
+  let drafting = false, leftOut = { plan: false, card: null }, replaces = null;
+  function setDrafting(value, { focus = true } = {}) {
+    if (drafting !== value) { drafting = value; if (!value) replaces = null; contextDrawn = null; drawContext(); }
+    if (focus) $('message-input')?.focus();
+  }
   const planningPlan = () => { const plan = api.getState().conversation?.orchestrations?.[0]; return plan?.status === 'planning' ? plan : null; };
+  // A draft that ended without cards: its reply couldn't be used, the planner didn't finish, or it was stopped. It shows
+  // here, where the cards would have been, until you draft again or dismiss it.
+  const failedPlan = () => { const plan = api.getState().conversation?.orchestrations?.[0]; return ['unstructured', 'failed', 'interrupted'].includes(plan?.status) && !api.getState().taskId && !api.getState().taskDraft ? plan : null; };
   const cannotDraft = () => planningPlan() ? 'An agent is drafting cards now. Wait for it, or stop it, before drafting more.' : window.relayOrchestration?.cannotDraft?.() || '';
   // What the next message takes from the Plan: the Plan's open cards and the card open beside it.
   function asked$() {
@@ -951,7 +1196,11 @@
   function drawContext() {
     const box = $('plan-context'); if (!box) return;
     const now = asked$(), blocked = drafting ? cannotDraft() : '', planner = drafting ? window.relayOrchestration?.planner?.() || 'with the message box’s agent' : '';
-    const key = JSON.stringify([now, drafting, blocked, planner]);
+    const key = JSON.stringify([now, drafting, blocked, planner, replaces]);
+    for (const [id, on] of [['plan-mode-ask', !drafting], ['plan-mode-draft', drafting]]) $(id)?.setAttribute('aria-pressed', String(on));
+    $('plan-chat-modes')?.classList.toggle('drafting', drafting);
+    const draftTitle = planner ? `An agent drafts cards for you to review, ${planner}. Attach a brief or spec to plan from it.` : 'An agent drafts cards for you to review. Attach a brief or spec to plan from it.';
+    if ($('plan-mode-draft')) $('plan-mode-draft').title = draftTitle;
     if (key === contextDrawn) return;
     contextDrawn = key; box.hidden = !now;
     $('composer')?.classList.toggle('plan-asking', Boolean(now));
@@ -961,24 +1210,22 @@
     const parts = [];
     if (now.plan.closed) { const shutChip = node('span', 'plan-context-chip off'); shutChip.append(planIcon(), node('span', 'plan-context-name', 'Plan closed to agents')); shutChip.title = 'Agents can’t read this Plan, so nothing from it goes with your message. Open it to agents from ⋯ at the top of the Plan.'; parts.push(shutChip); }
     else if (now.plan.count) parts.push(chip([`Plan · ${now.plan.count}`, node('span', 'plan-context-unit', ` ${now.plan.count === 1 ? 'card' : 'cards'}`)], now.plan.on ? 'The Plan goes with your message, as it is when you send. Cards closed to agents are left out.' : 'The Plan won’t go with this message.', now.plan.on, () => { leftOut.plan = !leftOut.plan; drawContext(); }, 'the Plan'));
-    else parts.push(node('span', 'plan-context-empty', 'The Plan has no cards yet'));
+    else if (!drafting) parts.push(node('span', 'plan-context-empty', 'The Plan has no cards yet'));
     if (now.card) parts.push(chip(now.card.title, now.card.on ? `${now.card.title} — goes with your message, so “this card” means it.` : `${now.card.title} — won’t go with this message.`, now.card.on, () => { leftOut.card = leftOut.card === now.card.id ? null : now.card.id; drawContext(); }, `“${now.card.title}”`, 'card'));
+    // Drafting with your answers to the planner's questions replaces that draft once the new one arrives.
+    if (drafting && replaces) { const redo = node('span', 'plan-context-chip plan-context-redraft'); redo.append(planIcon(), node('span', 'plan-context-name', 'Redrafts the plan with your answers')); const undo = button('×', () => { replaces = null; contextDrawn = null; drawContext(); }, 'plan-context-flip'); undo.setAttribute('aria-label', 'Draft new cards instead of redrafting'); redo.append(undo); parts.push(redo); }
     const chips = node('div', 'plan-context-chips'); chips.append(...parts);
-    const modes = node('div', 'plan-context-modes'); modes.setAttribute('role', 'group'); modes.setAttribute('aria-label', 'What Send does');
-    for (const [value, text, title] of [[false, 'Ask', 'Ask the agent about the Plan and the project.'], [true, 'Draft cards', 'An agent reads the project in one read-only run and drafts new cards for you to accept. Attach a brief or spec to plan from it.']]) {
-      const mode = button(text, () => { if (drafting === value) return; drafting = value; contextDrawn = null; drawContext(); $('message-input')?.focus(); }, 'plan-context-mode'); mode.setAttribute('aria-pressed', String(drafting === value)); mode.title = title; modes.append(mode);
-    }
-    const row = node('div', 'plan-context-row'); row.append(chips, modes);
-    box.replaceChildren(row);
-    // Drafting says who drafts, as the message box is set, or why it can't start now.
+    const row = node('div', 'plan-context-row'); row.append(chips);
+    box.replaceChildren(...(parts.length ? [row] : []));
+    // Why drafting can't start now.
     if (blocked) { const why = node('p', 'plan-context-note plan-context-blocked', blocked); why.setAttribute('role', 'status'); box.append(why); }
-    else if (drafting) box.append(node('p', 'plan-context-note', `It reads the project in one read-only run and drafts ${planner}. Nothing runs until you accept the cards.`));
+    box.hidden = !box.children.length;
   }
   // At Send: null outside the Plan view; otherwise whether Send drafts cards, why it can't, and attach() for the Plan's text.
   function asking() {
     const now = asked$(); if (!now) return null;
     return {
-      draft: drafting, blocked: drafting ? cannotDraft() : '',
+      draft: drafting, blocked: drafting ? cannotDraft() : '', replaces: drafting ? replaces : null,
       // The Plan and the card as attachments; the open card is named at the top of the Plan's text rather than sent twice.
       async attach() {
         const ids = [];
@@ -987,32 +1234,92 @@
         return ids.map(meta => meta.id);
       },
       // Once sent, the next message takes the Plan and the card again, and a draft goes back to asking.
-      sent() { leftOut = { plan: false, card: null }; if (drafting) { drafting = false; api.announce('Drafting cards. They’ll appear on the Plan for you to accept or discard.'); } contextDrawn = null; drawContext(); },
+      sent() { leftOut = { plan: false, card: null }; if (drafting) { drafting = false; replaces = null; api.announce('Drafting cards. They’ll appear on the Plan for you to accept or discard.'); } contextDrawn = null; drawContext(); },
     };
   }
 
+  // The title bar's own spot for the card's actions, made once beside the Close button.
+  function headActions() {
+    let bar = $('board-drawer-actions');
+    if (!bar) { bar = node('div', 'board-head-actions'); bar.id = 'board-drawer-actions'; { const close = $('board-drawer-close'); close.parentNode.insertBefore(bar, close); } }
+    return bar;
+  }
+  // After this card: the cards that wait for it, each opens on a click, and the two ways to add one, Suggest next with an
+  // agent or Add next by hand. Suggest's confirmation opens here, under its button.
+  function afterPanel(card, followUps) {
+    const box = node('section', 'board-after'), head = node('div', 'board-subtasks-head'), after = cards().filter(other => other.dependsOn?.includes(card.id));
+    box.setAttribute('aria-label', 'After this card');
+    head.append(node('h4', 'board-field-label', after.length ? `After this card · ${after.length}` : 'After this card'));
+    if (followUps?.children.length) { followUps.className = 'board-subtasks-tools'; for (const item of followUps.children) { const label = item.textContent; item.classList.add('board-head-button'); item.replaceChildren(glyph(ACTION_ICONS[label]), node('span', '', label)); } head.append(followUps); }
+    box.append(head);
+    if (after.length) {
+      const list = node('ul', 'board-wait-list board-after-list');
+      list.append(...after.map(other => {
+        const row = node('li'), open = button('', () => select(other.id), 'board-wait board-after-card');
+        if (other.role && other.role !== 'builder') { const role = node('span', 'orchestration-step-role', ROLE[other.role] || other.role); role.dataset.role = other.role; open.append(role); }
+        const name = node('span', 'board-wait-title', other.title); name.title = other.title;
+        open.append(name, node('span', 'board-wait-column', other.draft ? 'Draft' : COLUMNS.find(([id]) => id === other.column)[1]));
+        open.setAttribute('aria-label', `Open “${other.title}”`);
+        row.append(open); return row;
+      }));
+      box.append(list);
+    } else box.append(node('p', 'board-field-note', 'No card waits for this one yet. Suggest next has an agent draft follow-ups; Add next writes one yourself.'));
+    box.append(...suggestPanel(card));
+    return [box];
+  }
   function renderDrawer() {
     const aside = $('board-drawer'), body = $('board-drawer-body');
-    if (!selected || (!['new', 'run', 'schedules', 'schedule'].includes(selected) && !cardBy(selected))) { aside.hidden = true; body.replaceChildren(); drawn = null; if (selected && !cardBy(selected)) { selected = null; draft = null; } return; }
+    // A card opens as a dialog over the Plan, with a backdrop that closes it; Run and Schedules stay beside the board.
+    const shade = $('board-card-shade') || { hidden: true };
+    if (!selected || (!['new', 'run', 'schedules', 'schedule'].includes(selected) && !cardBy(selected))) { aside.hidden = true; shade.hidden = true; aside.classList.remove('board-card-dialog'); headActions().replaceChildren(); body.replaceChildren(); drawn = null; if (selected && !cardBy(selected)) { selected = null; draft = null; } return; }
     aside.hidden = false;
+    const asCard = !['run', 'schedules', 'schedule'].includes(selected);
+    if (!asCard) headActions().replaceChildren();
+    aside.classList.toggle('board-card-dialog', asCard); shade.hidden = !asCard;
+    if (asCard) { aside.setAttribute('role', 'dialog'); aside.setAttribute('aria-modal', 'true'); } else { aside.removeAttribute('role'); aside.removeAttribute('aria-modal'); }
     const card = cardBy(selected);
     // An untouched draft follows the card when it changes elsewhere; one you're editing waits for Save.
     if (card && draft && !dirty() && draft.revision !== card.revision) draft = editable(card);
     // A schedule being written is drawn again only when its kind of time changes, so typing keeps its place.
     if (card) readComments(card.id);
-    const key = JSON.stringify([selected, card && [card.column, card.revision, card.reason, card.taskState, card.result, card.acceptedAt, card.attempts?.length, card.priority, card.labels, card.due, card.checks, card.commentCount, card.draft, card.auto, card.group, card.split, card.subtasks, card.splitting, card.subtasksPaused, card.closed, subEdit?.cardId === card.id ? [subEdit.id, subEdit.tier, subEdit.agent] : null, threads.get(card.id)?.length ?? null, schedulesOf(card)], suggestConfirm === card?.id, board?.suggest, board?.closed, cards().length >= (board?.limits?.cards || 300), selected === 'run' ? [...picked] : null, selected === 'run' ? cards().map(item => [item.id, item.column, item.agent?.provider, item.dependsOn]) : null, selected === 'schedules' ? schedules() : null, selected === 'schedule' ? [sdraft?.id, sdraft?.when.repeat, sdraft?.target] : null, busy]);
+    const key = JSON.stringify([selected, card && [card.column, card.revision, card.reason, card.taskState, card.result, card.acceptedAt, card.attempts?.length, card.labels, card.checks, card.commentCount, card.draft, card.auto, card.routingMode, card.group, card.split, card.subtasks, card.splitting, card.subtasksPaused, card.closed, cards().filter(other => other.dependsOn?.includes(card.id)).map(other => [other.id, other.title, other.column, other.role]), subEdit?.cardId === card.id ? [subEdit.id, subEdit.tier, subEdit.agent] : null, threads.get(card.id)?.length ?? null, schedulesOf(card)], suggestConfirm === card?.id, board?.suggest, board?.closed, cards().length >= (board?.limits?.cards || 300), selected === 'run' ? [...picked] : null, selected === 'run' ? cards().map(item => [item.id, item.column, item.agent?.provider, item.dependsOn]) : null, selected === 'schedules' ? schedules() : null, selected === 'schedule' ? [sdraft?.id, sdraft?.when.repeat, sdraft?.target] : null, busy]);
     if (key === drawn) { changed(); return; }
     drawn = key;
     if (selected === 'run') { $('board-drawer-title').textContent = 'Run Ready cards'; body.replaceChildren(...runPanel()); return; }
     if (selected === 'schedules') { $('board-drawer-title').textContent = 'Schedules'; body.replaceChildren(...schedulesPanel()); return; }
     if (selected === 'schedule') { if (!sdraft) { selected = 'schedules'; drawn = null; renderDrawer(); return; } $('board-drawer-title').textContent = sdraft.id ? 'Edit schedule' : 'New schedule'; body.replaceChildren(...scheduleForm()); return; }
-    $('board-drawer-title').textContent = selected === 'new' ? `New card · ${COLUMNS.find(([id]) => id === draft.column)[1]}` : `${card.draft ? 'Draft' : COLUMNS.find(([id]) => id === card.column)[1]}${card.agent ? ` · ${AGENT[card.agent.provider]}` : card.auto ? ' · Auto' : ''}`;
+    $('board-drawer-title').textContent = selected === 'new' ? `New card · ${COLUMNS.find(([id]) => id === draft.column)[1]}` : `${card.draft ? 'Draft' : COLUMNS.find(([id]) => id === card.column)[1]}${card.agent ? ` · ${AGENT[card.agent.provider]}` : card.auto ? ` · ${modeName(card)}` : ''}`;
     // Someone writing a comment keeps their place when the drawer is drawn again.
     const writing = ['board-comment-input', 'board-comment-send'].some(name => document.activeElement?.classList?.contains(name)) && body.contains(document.activeElement);
-    body.replaceChildren(...(card ? [...status(card), actions(card), ...suggestPanel(card), ...subtasksPanel(card), ...cardSchedules(card)] : []), ...editor(card), ...(card ? [...commentsPanel(card), ...history(card)] : []));
+    const fields$ = editor(card), part = name => fields$.filter(item => item.dataset.slot === name);
+    const main = node('div', 'board-card-main'), side = node('div', 'board-card-side');
+    // Wide: where it stands, what it says, its subtasks, what done means, then the talk about it. Narrow: what to do
+    // with it now, who does it and what it waits for, then the sorting that's only for you.
+    // Like a desktop editor: what to do with the card sits in the title bar, the action that moves it on at the far right
+    // beside Close, and the column on the right holds its settings. Remove, Move to Backlog and Save sit in the bar under it.
+    const bar = headActions(); bar.replaceChildren();
+    const footActions = [];
+    let followUps = null;
+    if (card) {
+      const box = actions(card), primary = box.querySelector('.board-actions-main'), more = box.querySelector('.board-actions-more');
+      followUps = box.querySelector('.board-actions-next');
+      for (const item of [...(more?.children || [])]) {
+        item.classList.remove('board-action-row');
+        if (item.classList.contains('board-remove') || item.textContent === 'Move to Backlog') { item.classList.add('text-link', 'board-foot-action'); if (item.classList.contains('board-remove')) item.classList.add('board-foot-remove'); footActions.push(item); continue; }
+        item.classList.add('secondary-button', 'board-head-button');
+        bar.append(item);
+      }
+      if (primary) bar.append(...primary.children);
+    }
+    main.append(...(card ? status(card) : []), ...part('lead'), ...part('main').slice(0, locked$(card) ? 3 : 2), ...(card ? subtasksPanel(card) : []), ...part('main').slice(locked$(card) ? 3 : 2), ...(card ? afterPanel(card, followUps) : []), ...(card ? [...commentsPanel(card), ...history(card)] : []));
+    side.append(...part('side'), ...(card ? cardSchedules(card) : []));
+    const columns = node('div', 'board-card-columns'); columns.append(main, side);
+    body.replaceChildren(columns, ...part('foot'));
+    if (footActions.length) body.querySelector('.board-save-row')?.prepend(...footActions.sort((a, b) => b.classList.contains('board-remove') - a.classList.contains('board-remove')), node('span', 'board-save-spacer'));
     if (writing) { const box = body.querySelector('.board-comment-input'); box?.focus(); box?.setSelectionRange?.(box.value.length, box.value.length); }
     changed();
   }
+  const locked$ = card => card?.column === 'doing';
   function showError() { $('board-error').textContent = failure; $('board-error').hidden = !failure; }
 
   // ---- Drafts (#162)
@@ -1039,8 +1346,10 @@
     const batches = new Map();
     for (const card of cards().filter(item => item.draft)) { const id = card.draft.batch?.id || 'own'; if (!batches.has(id)) batches.set(id, []); batches.get(id).push(card); }
     const planning = planningPlan(), suggest = board?.suggest, suggestShown = suggest && ['running', 'failed', 'interrupted'].includes(suggest.status) ? suggest : null;
-    const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, suggestShown, draftNotice?.text || null]));
-    box.hidden = !batches.size && !planning && !suggestShown && !draftNotice;
+    const failed = failedPlan();
+    const splits = needingSplit().map(card => card.id);
+    const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, failed ? [failed.id, failed.status, failed.summary] : null, suggestShown, draftNotice?.text || null, splits, splitAsk ? [splitAsk.ids, splitAsk.who] : null, cannotDraft()]));
+    box.hidden = !batches.size && !planning && !failed && !suggestShown && !draftNotice && !splits.length;
     if (box.dataset.drawn === key) return;
     box.dataset.drawn = key;
     // While the planner or Suggest next works, a line says so, with Stop; failed/interrupted offers Dismiss.
@@ -1052,17 +1361,30 @@
       const stop = button('Stop', () => api.stopRun?.(), 'secondary-button'); stop.setAttribute('aria-label', 'Stop drafting cards');
       actions$.append(stop); row.append(text, actions$); working.push(row);
     }
+    if (failed) {
+      const row = node('section', 'board-draft-batch board-suggest-trouble'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
+      const who = AGENT[failed.planner?.provider] || 'The agent', stopped = failed.status === 'interrupted';
+      row.setAttribute('aria-label', stopped ? 'Drafting stopped' : 'Drafting cards didn’t work');
+      const goal = (failed.goal || '').trim().split('\n')[0], lead = stopped ? 'Drafting stopped. No cards were added.' : `${who}’s draft couldn’t be used. No cards were added.`;
+      text.append(node('p', 'board-draft-lead', lead), node('p', 'board-draft-note', [goal ? `For “${goal.length > 120 ? `${goal.slice(0, 119).trimEnd()}…` : goal}”.` : '', failed.summary || ''].filter(Boolean).join(' ')));
+      const dismiss = button('Dismiss', () => window.relayOrchestration?.dismiss?.(), 'secondary-button');
+      const again = button('Draft again', () => window.relayOrchestration?.again?.(), 'primary-button');
+      dismiss.disabled = busy; again.disabled = busy || Boolean(cannotDraft());
+      if (again.disabled && cannotDraft()) again.title = cannotDraft();
+      actions$.append(dismiss, again); row.append(text, actions$); working.push(row);
+    }
     if (suggestShown) {
       const isRun = suggestShown.status === 'running';
       const row = node('section', `board-draft-batch ${isRun ? 'board-draft-planning board-suggest-running' : 'board-suggest-trouble'}`), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
       row.setAttribute('aria-label', isRun ? 'Suggesting next cards' : 'Suggestions did not finish');
       const who = [AGENT[suggestShown.provider] || suggestShown.provider, suggestShown.model, suggestShown.phase && suggestShown.phase !== 'starting' ? suggestShown.phase : 'reading the project', suggestShown.toolCount ? plural(suggestShown.toolCount, 'tool call') : ''].filter(Boolean).join(' · ');
+      const splitting = suggestShown.kind === 'split';
       if (isRun) {
-        text.append(node('p', 'board-draft-lead', `Suggesting next cards after “${suggestShown.cardTitle}”…`), node('p', 'board-draft-note', `${who}. Suggested cards will appear here as drafts.`));
+        text.append(node('p', 'board-draft-lead', splitting ? `Splitting ${suggestShown.cardIds?.length > 1 ? plural(suggestShown.cardIds.length, 'card') : `“${suggestShown.cardTitle}”`} into subtasks…` : `Suggesting next cards after “${suggestShown.cardTitle}”…`), node('p', 'board-draft-note', `${who}. ${splitting ? 'The subtasks appear on each card for you to review.' : 'Suggested cards will appear here as drafts.'}`));
         const stop = button('Stop', () => act('/api/board/suggest/stop', {}, () => api.announce('Stopping suggestions.')), 'secondary-button'); stop.setAttribute('aria-label', 'Stop suggesting cards'); stop.disabled = busy;
         actions$.append(stop);
       } else {
-        text.append(node('p', 'board-draft-lead', suggestShown.status === 'interrupted' ? `Stopped suggesting after “${suggestShown.cardTitle}”.` : `Couldn’t suggest cards after “${suggestShown.cardTitle}”.`), node('p', 'board-draft-note', suggestShown.summary || 'Try again when ready.'));
+        text.append(node('p', 'board-draft-lead', splitting ? (suggestShown.status === 'interrupted' ? 'Stopped splitting.' : 'Couldn’t split the cards.') : suggestShown.status === 'interrupted' ? `Stopped suggesting after “${suggestShown.cardTitle}”.` : `Couldn’t suggest cards after “${suggestShown.cardTitle}”.`), node('p', 'board-draft-note', suggestShown.summary || 'Try again when ready.'));
         const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); dismiss.disabled = busy;
         actions$.append(dismiss);
       }
@@ -1072,22 +1394,140 @@
     if (noticeRow) working.push(noticeRow);
     box.replaceChildren(...working, ...[...batches].map(([, list]) => {
       const first = list[0], batch = first.draft.batch || {}, by = first.draft.by?.kind === 'agent' ? AGENT[first.draft.by.provider] || first.draft.by.provider : 'You';
-      const row = node('section', 'board-draft-batch'), text = node('div', 'board-draft-text');
+      const model = first.draft.by?.model ? modelLabel(first.draft.by.provider, first.draft.by.model) : '';
+      const row = node('section', 'board-draft-batch board-draft-plan'), text = node('div', 'board-draft-text');
       row.setAttribute('aria-label', `Drafted cards from ${by}`);
       const verb = batch.kind === 'suggest' && batch.cardTitle ? `suggested ${plural(list.length, 'card')} after “${batch.cardTitle}”` : `drafted ${plural(list.length, 'card')}`;
-      text.append(node('p', 'board-draft-lead', `${by} ${verb}${batch.summary ? `: ${batch.summary}` : '.'}`));
-      if (batch.documents?.length) text.append(node('p', 'board-draft-note board-draft-documents', `Planned from ${listNames(batch.documents)}.`));
-      const noted = list.filter(card => card.draft.notes?.length).length;
-      text.append(node('p', 'board-draft-note', `Nothing runs until you accept it. Open a card to edit it first.${noted ? ` The plan checks noted something on ${plural(noted, 'card')}.` : ''}`));
-      if (batch.questions?.length) { const asks = node('ul', 'board-draft-questions'); asks.setAttribute('aria-label', 'Questions from the planner'); asks.append(...batch.questions.map(question => node('li', '', question))); text.append(node('p', 'board-draft-note', 'It asks:'), asks); }
+      const lead = node('p', 'board-draft-lead'); lead.append(glyph(ICONS.smart), node('span', '', `${by} ${verb}`));
+      if (model) lead.append(node('span', 'board-draft-by', model));
+      text.append(lead);
+      if (batch.summary) {
+        const summary = node('p', `board-draft-summary${openSummaries.has(batch.id) ? ' open' : ''}`, batch.summary);
+        text.append(summary);
+        if (batch.summary.length > 220) { const more = button(openSummaries.has(batch.id) ? 'Less' : 'More', () => { if (openSummaries.has(batch.id)) openSummaries.delete(batch.id); else openSummaries.add(batch.id); box.dataset.drawn = ''; drawDrafts(); }, 'text-link board-draft-more'); text.append(more); }
+      }
+      const noted = list.filter(card => card.draft.notes?.length).length, facts = [];
+      if (batch.documents?.length) facts.push(`Planned from ${listNames(batch.documents)}`);
+      facts.push('Nothing runs until you accept');
+      if (noted) facts.push(`Plan checks noted something on ${plural(noted, 'card')}`);
+      text.append(node('p', 'board-draft-note', `${facts.join(' · ')}.`));
       const ids = list.map(card => card.id), actions$ = node('div', 'board-draft-actions');
       const accept = button(`Accept ${list.length === 1 ? '' : 'all '}${plural(list.length, 'card')}`, () => draftAction('accept', ids, `${plural(list.length, 'card')} accepted.`), 'primary-button');
       const discard = button('Discard', () => { if (window.confirm(`Discard ${plural(list.length, 'drafted card')}?`)) draftAction('discard', ids, 'Drafts discarded.', () => { if (ids.includes(selected)) { selected = null; draft = null; } }); }, 'secondary-button');
       accept.disabled = discard.disabled = busy;
       actions$.append(discard, accept);
-      row.append(text, actions$);
+      // The banner folds to one line, to give the cards the room; the questions stay a click away.
+      const folded = foldedBatches.has(batch.id), fold = button(folded ? (batch.questions?.length ? `Show ${plural(batch.questions.length, 'question')}` : 'Show details') : 'Hide', () => { if (foldedBatches.has(batch.id)) foldedBatches.delete(batch.id); else foldedBatches.add(batch.id); box.dataset.drawn = ''; drawDrafts(); }, 'text-link board-draft-fold');
+      fold.setAttribute('aria-expanded', String(!folded));
+      actions$.prepend(fold);
+      if (folded) { row.classList.add('folded'); for (const extra of text.querySelectorAll(':scope > :not(.board-draft-lead)')) extra.remove(); }
+      const head = node('div', 'board-draft-head'); head.append(text, actions$);
+      row.append(head);
+      if (batch.questions?.length && !folded) row.append(questionsPanel(batch, by));
       return row;
-    }));
+    }), ...splitRows());
+  }
+  // The planner's questions (#162), each with the answers it offers and your own. Update the plan sends your answers
+  // through the chat, and the agent redrafts the plan, replacing this draft once the new one arrives.
+  let answers = new Map(), openSummaries = new Set(), foldedBatches = new Set();
+  const questionOf = item => typeof item === 'string' ? { question: item, options: [] } : { question: item?.question || '', options: item?.options || [] };
+  function questionsPanel(batch, by) {
+    const list = batch.questions.map(questionOf), mine = answers.get(batch.id) || list.map(() => ({ pick: null, own: '' }));
+    answers.set(batch.id, mine);
+    const panel = node('div', 'board-questions'); panel.setAttribute('role', 'group'); panel.setAttribute('aria-label', `${by}’s questions`);
+    const head = node('div', 'board-questions-head');
+    head.append(node('span', 'board-questions-title', `${by} has ${plural(list.length, 'question')}`), node('span', 'board-questions-note', 'Answer them to redraft the plan, or accept it as it is.'));
+    panel.append(head);
+    const send = button('Update the plan', () => redraft(batch, list), 'primary-button board-questions-send');
+    const answered = () => mine.filter(item => item.pick !== null || item.own.trim()).length;
+    const sync = () => { const count = answered(); send.disabled = busy || !count || Boolean(cannotDraft()); send.textContent = count && count < list.length ? `Update the plan with ${count} of ${list.length}` : 'Update the plan'; send.title = cannotDraft() || (count ? 'Send your answers through the chat. The agent redrafts the plan, replacing this draft.' : 'Answer at least one question first.'); };
+    list.forEach((item, index) => {
+      const field = node('fieldset', 'board-question'), legend = node('legend', 'board-question-text');
+      legend.append(node('span', 'board-question-number', `${index + 1}`), node('span', '', item.question));
+      field.append(legend);
+      const choices = node('div', 'board-question-choices'), name = `board-q-${batch.id}-${index}`;
+      const own = node('input', 'board-input board-question-own'); own.type = 'text'; own.maxLength = 300; own.value = mine[index].own; own.placeholder = 'Your answer'; own.setAttribute('aria-label', `Your own answer to question ${index + 1}`);
+      item.options.forEach((option, at) => {
+        const label = node('label', 'board-question-choice'), radio = node('input'); radio.type = 'radio'; radio.name = name; radio.checked = mine[index].pick === at;
+        radio.addEventListener('change', () => { mine[index].pick = at; mine[index].own = ''; own.value = ''; own.hidden = item.options.length > 0; sync(); });
+        label.append(radio, node('span', '', option));
+        if (at === 0) label.append(node('span', 'board-question-recommended', 'Recommended'));
+        choices.append(label);
+      });
+      own.addEventListener('input', () => { mine[index].own = own.value; sync(); });
+      own.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !send.disabled) { event.preventDefault(); send.click(); } });
+      if (item.options.length) {
+        // Your own answer is one more choice, which opens a box to write it.
+        const other = node('label', 'board-question-choice'), radio = node('input'); radio.type = 'radio'; radio.name = name; radio.checked = Boolean(mine[index].own);
+        own.hidden = !mine[index].own;
+        radio.addEventListener('change', () => { mine[index].pick = null; own.hidden = false; own.focus(); sync(); });
+        other.append(radio, node('span', '', 'Other…')); choices.append(other);
+        field.append(choices);
+      }
+      field.append(own);
+      panel.append(field);
+    });
+    const foot = node('div', 'board-questions-foot'); foot.append(send); panel.append(foot);
+    sync();
+    return panel;
+  }
+  function redraft(batch, list) {
+    const mine = answers.get(batch.id) || [];
+    const lines = list.map((item, index) => { const pick = mine[index]?.pick, own = mine[index]?.own?.trim(); const answer = own || (pick !== null && pick !== undefined ? item.options[pick] : ''); return answer ? `${index + 1}. ${item.question}\n   ${answer}` : ''; }).filter(Boolean);
+    if (!lines.length) return;
+    const input = $('message-input'); if (!input) return;
+    input.value = ['Redraft the plan with my answers to your questions. Keep what still fits, and change only what the answers affect.', '', ...lines].join('\n');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    setChat(true); drafting = true; replaces = batch.id; contextDrawn = null; drawContext();
+    answers.delete(batch.id);
+    // One click: the answers go now, through the same chat, as a drafting message.
+    $('composer')?.requestSubmit?.();
+  }
+  // Major cards (#162) run only through their subtasks. Once accepted, the ones without any say so here, with one
+  // read-only run to split them all, or the card's own drawer to split one or write its subtasks yourself.
+  let splitAsk = null;
+  const needingSplit = () => cards().filter(card => !card.draft && needsSubtasks(card) && !shut(card) && ['backlog', 'ready'].includes(card.column));
+  function splitRows() {
+    const list = needingSplit(), job = board?.suggest;
+    if (!list.length || (job?.kind === 'split' && job.status === 'running')) return [];
+    const row = node('section', 'board-draft-batch board-split-row'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
+    row.setAttribute('aria-label', 'Cards that need subtasks');
+    const lead = node('p', 'board-draft-lead'); lead.append(glyph(ICONS.subtasks), node('span', '', `${plural(list.length, 'card needs', 'cards need')} subtasks before ${list.length === 1 ? 'it' : 'they'} can run`));
+    text.append(lead, node('p', 'board-draft-note', 'An agent splits them in one read-only run, and you review the subtasks and who does each before anything runs. Or open a card to write its subtasks yourself.'));
+    const head = node('div', 'board-draft-head'); head.append(text, actions$); row.append(head);
+    if (!splitAsk) {
+      const go = button(list.length === 1 ? 'Split it…' : `Split all ${list.length}…`, () => { splitAsk = { ids: list.map(card => card.id), who: 'smart' }; box$().dataset.drawn = ''; drawDrafts(); }, 'primary-button');
+      go.disabled = busy || Boolean(board?.suggest?.status === 'running');
+      if (board?.suggest?.status === 'running') go.title = 'Wait for the agent working on the Plan to finish.';
+      actions$.append(go);
+    } else row.append(splitPanel(splitAsk.ids, () => { splitAsk = null; box$().dataset.drawn = ''; drawDrafts(); }));
+    return [row];
+  }
+  const box$ = () => $('board-drafts');
+  // Who splits: Smart routing picks the agent, model and effort, or you choose an agent at its default model.
+  function splitPick(ids, who) {
+    const list = ids.map(cardBy).filter(Boolean), text = list.map(card => `${card.title}\n${card.notes || ''}`).join('\n\n').slice(0, 4000);
+    if (who !== 'smart') { const billed = bills(who), account = api.getState().accounts?.[who]; return { provider: who, model: null, effort: null, who: `${AGENT[who]} · default model`, billed, usageNote: billed ? `${billsSentence(who)} Splitting may cost money.` : account?.billingSource === 'subscription' ? `Uses your ${AGENT[who]} subscription.` : '' }; }
+    return suggestPick({ title: list[0]?.title || 'Split cards', notes: text });
+  }
+  function splitPanel(ids, cancel) {
+    const box = node('div', 'board-split-confirm'), state = splitAsk && splitAsk.ids === ids ? splitAsk : { ids, who: 'smart' };
+    const pick = splitPick(ids, state.who);
+    const whoRow = node('div', 'board-split-who'); whoRow.append(node('span', 'board-field-label', 'Who splits'));
+    whoRow.append(segment('Who splits', [['smart', 'Auto', 'agent-icon auto'], ...AGENTS.map(([value, name]) => [value, name, `agent-icon ${value}`])], state.who, value => { state.who = value; if (splitAsk) splitAsk.who = value; const next = splitPanel(ids, cancel); box.replaceWith(next); }, busy));
+    box.append(whoRow);
+    box.append(node('p', 'board-suggest-note', pick.error ? pick.error : `${state.who === 'smart' ? `Auto picks ${pick.who}` : pick.who}. One read-only run for ${plural(ids.length, 'card')}, counted toward your usage.${pick.usageNote ? ` ${pick.usageNote}` : ''} The subtasks follow each card’s choice, Auto in its mode unless you change it, and you can change any of them before it runs.`));
+    const row = node('div', 'board-suggest-actions');
+    const go = button(ids.length === 1 ? 'Split the card' : `Split ${plural(ids.length, 'card')}`, () => {
+      if (pick.error) { failure = pick.error; showError(); return; }
+      if (pick.billed && window.relayBillingConfirmed !== true && !window.confirm(`Split with charges?\n\n${billsSentence(pick.provider)} This read-only run may cost money.\n\nTo stop this question for this session, turn on Allow API and unconfirmed billing in Settings.`)) return;
+      splitAsk = null;
+      act('/api/board/split', { ids, provider: pick.provider, model: pick.model, effort: pick.effort, billingConfirmed: pick.billed ? true : window.relayBillingConfirmed === true }, result => { if (result?.suggest && board) board.suggest = result.suggest; api.announce(`Splitting ${plural(ids.length, 'card')} into subtasks.`); });
+    }, 'primary-button');
+    go.disabled = busy || Boolean(pick.error) || board?.suggest?.status === 'running';
+    row.append(button('Cancel', cancel, 'secondary-button'), go);
+    box.append(row);
+    return box;
   }
   // An Orchestrate plan from before the Plan held its cards, still running or stopped, stays where it was (plan-view.js).
   function drawEarlier() {
@@ -1125,9 +1565,12 @@
         const row = node('li'), face = node('button', 'board-outline-card'), state = stateOf(card); face.type = 'button';
         face.dataset.card = card.id; face.dataset.column = card.column; face.setAttribute('aria-pressed', String(selected === card.id));
         const after = (card.dependsOn || []).map(cardBy).filter(Boolean).map(other => `“${other.title}”`);
-        const agent = card.taskState?.provider ? AGENT[card.taskState.provider] : card.agent ? AGENT[card.agent.provider] : card.auto ? 'Auto' : 'No agent yet';
-        face.append(node('span', 'board-outline-title', card.title), node('span', 'board-outline-meta', [card.draft ? 'Draft' : COLUMNS.find(([id]) => id === card.column)[1], card.role !== 'builder' ? ROLE[card.role] : '', agent, card.closed && !board?.closed ? 'Closed to agents' : '', state && !card.draft ? state.text : '', after.length ? `after ${listed(after)}` : ''].filter(Boolean).join(' · ')));
+        const agent = card.taskState?.provider ? AGENT[card.taskState.provider] : card.agent ? AGENT[card.agent.provider] : card.auto ? modeName(card) : 'No agent yet';
+        face.append(node('span', 'board-outline-title', card.title), node('span', 'board-outline-meta', [card.draft ? 'Draft' : COLUMNS.find(([id]) => id === card.column)[1], card.role !== 'builder' ? ROLE[card.role] : '', agent, card.closed && !board?.closed ? 'Closed to agents' : '', state && !card.draft ? state.text : !card.draft && needsSubtasks(card) ? 'Needs subtasks' : '', after.length ? `after ${listed(after)}` : ''].filter(Boolean).join(' · ')));
         if (state?.tone) face.dataset.tone = state.tone;
+        // A running card's agent, what it's doing now and what it has used, rewritten in place as it changes (patchLive).
+        const live = liveOf(card);
+        if (live) { const line = node('span', 'board-outline-live', [whoOf(card).text, live.now, ...live.usage].filter(Boolean).join(' · ')); line.dataset.outlineLive = card.id; face.append(line); }
         face.addEventListener('click', () => select(card.id));
         row.append(face); return row;
       }));
@@ -1138,41 +1581,69 @@
   // ---- The canvas (#97)
   // A world of cards at their saved places, moved and scaled as one by the camera: screen = world × zoom + offset. A card
   // nobody has placed yet is laid out by what it waits for, below the placed ones, and stays there until it's dragged.
-  const SVG = 'http://www.w3.org/2000/svg', WIDTH = 220, FALLBACK = 88, STEP_X = 290, GAP_Y = 22, ZOOM = [0.25, 2];
+  const SVG = 'http://www.w3.org/2000/svg', WIDTH = 248, FALLBACK = 120, STEP_X = 300, GAP_Y = 18, ROW_GAP = 64, ZOOM = [0.25, 2];
   const frame = fn => (window.requestAnimationFrame ? window.requestAnimationFrame(fn) : fn());
   // camera: { x, y, z }, null until the canvas is first shown, when it fits the cards. heights: each card's last measured
   // height. gesture: a drag, a pan or a new arrow in progress. picked: the arrow chosen, as [from, to]. moved: the card
   // just dragged, whose click that ends the drag isn't a selection. undos and redos: what Undo and Redo do, newest last.
-  let camera = null, heights = new Map(), gesture = null, picked$ = null, moved = null, stale = false, undos = [], redos = [];
+  const FLOW_KEY = 'codeshi.planFlow';
+  let flow = (() => { try { return localStorage.getItem(FLOW_KEY) === 'down' ? 'down' : 'across'; } catch { return 'across'; } })();
+  let fitted = false, camera = null, heights = new Map(), gesture = null, picked$ = null, moved = null, stale = false, undos = [], redos = [];
   const space = $('board-space');
   const svg = tag => document.createElementNS ? document.createElementNS(SVG, tag) : document.createElement(tag);
   const height = id => heights.get(id) || FALLBACK;
   const title = id => `“${cardBy(id)?.title || 'a card'}”`;
 
-  // How deep each card sits in its chain of waits, among the given cards only.
+  // Where cards go when nobody has placed them: a tree running down. A card sits one row under the latest card it waits
+  // for, so work reads top to bottom like a waterfall; cards in a row sit side by side, each under the middle of the cards
+  // it waits for, and the rows are centred on one another. Cards that wait on nothing form the top row.
   function layout(list, top, left) {
-    const own = new Map(list.map(card => [card.id, card])), depth = new Map(), rows = new Map(), out = new Map();
+    const own = new Map(list.map(card => [card.id, card])), depth = new Map(), order = new Map(ordered(list).map((card, index) => [card.id, index]));
+    const parents = id => (own.get(id).dependsOn || []).filter(other => own.has(other));
     const deep = (id, trail) => {
       if (depth.has(id)) return depth.get(id);
       if (trail.has(id)) return 0; trail.add(id);
-      const value = Math.max(-1, ...(own.get(id).dependsOn || []).filter(other => own.has(other)).map(other => deep(other, trail))) + 1;
+      const value = Math.max(-1, ...parents(id).map(other => deep(other, trail))) + 1;
       depth.set(id, value); return value;
     };
-    // Cards in a chain stand in a column per step of it; cards with no arrows at all fill a grid below, so a board of
-    // unconnected cards doesn't become one long column.
-    const linked = new Set(list.flatMap(card => { const waits = (card.dependsOn || []).filter(id => own.has(id)); return waits.length ? [card.id, ...waits] : []; }));
-    const chained = list.filter(card => linked.has(card.id)), single = list.filter(card => !linked.has(card.id));
-    for (const card of chained) {
-      const level = deep(card.id, new Set()), y = rows.get(level) ?? top;
-      out.set(card.id, { x: left + level * STEP_X, y }); rows.set(level, y + height(card.id) + GAP_Y);
+    for (const card of list) deep(card.id, new Set());
+    const rows = [];
+    for (const card of ordered(list)) (rows[depth.get(card.id)] ||= []).push(card);
+    const out = new Map(), mid = new Map(), SPAN = WIDTH + 36;
+    if (flow === 'across') {
+      // Across: a column per level, left to right; cards in a column stack, each level with its parents' middle.
+      const centre = new Map(); let x = left;
+      rows.forEach(row => {
+        if (!row) return;
+        const want = card => { const ys = parents(card.id).map(id => centre.get(id)).filter(v => v !== undefined); return ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : null; };
+        row.sort((a, b) => ((want(a) ?? Infinity) - (want(b) ?? Infinity)) || order.get(a.id) - order.get(b.id));
+        let edge = -Infinity; const ys = [];
+        row.forEach((card, index) => { const h = height(card.id), ideal = (want(card) ?? (index ? edge : 0)) - h / 2; ys[index] = Math.max(ideal, edge === -Infinity ? ideal : edge + GAP_Y); edge = ys[index] + h; });
+        row.forEach((card, index) => { centre.set(card.id, ys[index] + height(card.id) / 2); out.set(card.id, { x, y: ys[index] }); });
+        x += WIDTH + 76;
+      });
+      const least = Math.min(...[...out.values()].map(at => at.y));
+      for (const [id, at] of out) out.set(id, { x: Math.round(at.x), y: Math.round(at.y - least + top) });
+      return out;
     }
-    const across = Math.max(4, rows.size), start = chained.length ? Math.max(...rows.values()) + 60 : top;
-    let y = start;
-    for (let first = 0; first < single.length; first += across) {
-      const line = single.slice(first, first + across);
-      line.forEach((card, index) => out.set(card.id, { x: left + index * (WIDTH + 30), y }));
-      y += Math.max(...line.map(card => height(card.id))) + GAP_Y;
-    }
+    let y = top;
+    rows.forEach((row, level) => {
+      if (!row) return;
+      // Order a row by where its parents sit, so arrows cross as little as they can.
+      const want = card => { const xs = parents(card.id).map(id => mid.get(id)).filter(x => x !== undefined); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
+      row.sort((a, b) => { const x = want(a), z = want(b); return (x ?? Infinity) - (z ?? Infinity) || order.get(a.id) - order.get(b.id); });
+      // Each card as near its parents as the row allows: left to right, never closer than a card and its gap.
+      const xs = []; let edge = -Infinity;
+      row.forEach((card, index) => { const x = want(card) ?? (index ? edge + SPAN : 0); xs[index] = Math.max(x, edge + SPAN); edge = xs[index]; });
+      // A level with parents slides back toward them as one block when the packing pushed it right.
+      const pull = row.map((card, index) => (want(card) ?? xs[index]) - xs[index]).reduce((a, b) => a + b, 0) / row.length;
+      row.forEach((card, index) => { const x = xs[index] + Math.min(0, pull); mid.set(card.id, x); });
+      row.forEach(card => out.set(card.id, { x: mid.get(card.id), y }));
+      y += Math.max(...row.map(card => height(card.id))) + ROW_GAP;
+    });
+    // Everything starts at the left edge asked for.
+    const least = Math.min(...[...out.values()].map(at => at.x));
+    for (const [id, at] of out) out.set(id, { x: Math.round(at.x - least + left), y: Math.round(at.y) });
     return out;
   }
   function places() {
@@ -1194,13 +1665,17 @@
     const zoom = space.querySelector('.board-zoom-level'); if (zoom) zoom.textContent = `${Math.round(camera.z * 100)}%`;
     space.style.backgroundSize = `${18 * camera.z}px ${18 * camera.z}px`; space.style.backgroundPosition = `${camera.x}px ${camera.y}px`;
   }
-  function fit() {
+  // Fit puts every card in view. The first look at a large Plan starts readable at its top left instead, at no less than
+  // 60%, and Fit is one click away.
+  function fit(first = false) {
     const rect = space.getBoundingClientRect(), at = places(), all = cards();
-    if (!all.length || !rect.width) { camera = { x: 40, y: 40, z: 1 }; aim(); return; }
+    if (!rect.width || !rect.height) { camera = null; return; }
+    if (!all.length) { camera = { x: 40, y: 40, z: 1 }; aim(); return; }
     const xs = all.map(card => at.get(card.id).x), ys = all.map(card => at.get(card.id).y);
     const left = Math.min(...xs), top = Math.min(...ys), right = Math.max(...xs) + WIDTH, bottom = Math.max(...all.map(card => at.get(card.id).y + height(card.id)));
     const z = Math.max(ZOOM[0], Math.min(1, (rect.width - 80) / (right - left), (rect.height - 120) / (bottom - top)));
-    camera = { x: (rect.width - (right - left) * z) / 2 - left * z, y: Math.max(40, (rect.height - 60 - (bottom - top) * z) / 2) - top * z, z };
+    if (first && z < 0.6) { camera = { x: 40 - left * 0.6, y: 56 - top * 0.6, z: 0.6 }; aim(); return; }
+    camera = { x: (rect.width - (right - left) * z) / 2 - left * z, y: Math.max(56, (rect.height - 60 - (bottom - top) * z) / 2) - top * z, z };
     aim();
   }
   function zoom(factor, around = null) {
@@ -1213,8 +1688,30 @@
 
   // An arrow from the card waited for to the card that waits, leaving one's right edge and entering the other's left.
   function curve(from, to, fromHeight, toHeight) {
+    // Under its card, an arrow leaves the bottom and enters the top; beside or above, it leaves the right and enters the left.
+    const beside = to.x >= from.x + WIDTH + 8;
+    if (to.y >= from.y + fromHeight + 8 && !(flow === 'across' && beside)) {
+      const x0 = from.x + WIDTH / 2, y0 = from.y + fromHeight, x3 = to.x + WIDTH / 2, y3 = to.y, bend = Math.max(30, (y3 - y0) / 2);
+      return { d: `M${x0} ${y0} C${x0} ${y0 + bend} ${x3} ${y3 - bend} ${x3} ${y3}`, mid: { x: (x0 + x3) / 2, y: (y0 + y3) / 2 } };
+    }
     const x0 = from.x + WIDTH, y0 = from.y + fromHeight / 2, x3 = to.x, y3 = to.y + toHeight / 2, bend = Math.max(40, Math.abs(x3 - x0) / 2);
     return { d: `M${x0} ${y0} C${x0 + bend} ${y0} ${x3 - bend} ${y3} ${x3} ${y3}`, mid: { x: (x0 + x3) / 2, y: (y0 + y3) / 2 } };
+  }
+  // What's moving along an arrow while the Plan runs (#162 stage 5): work arriving at a card that's running, a card waiting
+  // on one that's still working, or a finished card's test gate, testing or failed and holding the card after it. Nothing
+  // moves on screen: the arrow changes how it's drawn, so a long run doesn't redraw it every frame.
+  function flowOf(from, to) {
+    if (!from || !to || from.draft || to.draft) return null;
+    if (to.column === 'doing' && from.column === 'done') return { kind: 'feeding', say: `${to.title} is working with what ${from.title} did.` };
+    if (from.column === 'doing') return { kind: 'working', say: `${from.title} is still working.` };
+    if (from.column === 'review') {
+      const tests = from.result?.tests, held = from.taskState?.holds;
+      if (tests === 'running') return { kind: 'testing', label: 'Testing', say: `${from.title}’s tests are running. ${to.title} starts when they pass.` };
+      if ((tests === 'failed' || tests === 'interrupted') && !from.result?.testsAccepted && held) return { kind: 'held', label: tests === 'failed' ? 'Tests failed' : 'Tests stopped', say: `${from.title}’s tests didn’t pass, so ${to.title} waits until you check it again or continue anyway.` };
+      if (to.column === 'doing') return { kind: 'feeding', say: `${to.title} is working with what ${from.title} did.` };
+      return { kind: 'review', say: `${from.title} is finished and waits for your review.` };
+    }
+    return null;
   }
   function links() {
     const out = [];
@@ -1227,15 +1724,19 @@
     head.setAttribute('markerWidth', '8'); head.setAttribute('markerHeight', '8'); head.setAttribute('orient', 'auto-start-reverse');
     const tip = svg('path'); tip.setAttribute('d', 'M0 0L8 4L0 8z'); head.append(tip);
     const defs = svg('defs'); defs.append(head);
-    const drawn$ = [defs];
+    const drawn$ = [defs], gates = [];
     for (const [from, to] of links()) {
       const line = curve(at.get(from), at.get(to), height(from), height(to)), done = cardBy(from).column === 'done';
       const chosen = picked$ && picked$[0] === from && picked$[1] === to, related = selected === from || selected === to;
+      const moving = flowOf(cardBy(from), cardBy(to));
       const path = svg('path'); path.setAttribute('d', line.d); path.setAttribute('marker-end', 'url(#board-link-head)'); path.dataset.from = from; path.dataset.to = to;
+      if (moving) path.dataset.flow = moving.kind;
       path.setAttribute('class', `board-link${done ? ' done' : ''}${related ? ' related' : ''}${chosen ? ' picked' : ''}${filter && !(shown(cardBy(from)) && shown(cardBy(to))) ? ' faded' : ''}`);
+      // A test gate on the way says so at the arrow's middle: testing, or failed and holding the card after it.
+      if (moving?.label) gates.push({ ...moving, mid: line.mid, from, to });
       // A wider, invisible line over it is what the pointer catches.
       const hit = svg('path'); hit.setAttribute('d', line.d); hit.setAttribute('class', 'board-link-hit'); hit.dataset.from = from; hit.dataset.to = to;
-      const tooltip = svg('title'); tooltip.textContent = `${title(to)} waits for ${title(from)}`; hit.append(tooltip);
+      const tooltip = svg('title'); tooltip.textContent = `${title(to)} waits for ${title(from)}${moving ? `. ${moving.say}` : ''}`; hit.append(tooltip);
       hit.addEventListener('pointerdown', event => { event.stopPropagation?.(); });
       hit.addEventListener('click', event => { event.stopPropagation?.(); picked$ = chosen ? null : [from, to]; drawLinks(); });
       drawn$.push(path, hit);
@@ -1243,6 +1744,13 @@
     // An arrow being drawn is its own line (startLink), kept across a redraw.
     const drafting = gesture?.kind === 'link' ? [...layer.children].filter(line => line.getAttribute?.('class')?.includes('drafting')) : [];
     layer.replaceChildren(...drawn$, ...drafting);
+    // The gates' labels sit over the arrows' middles and zoom with the cards, so they stay in proportion to them.
+    for (const old of space.querySelectorAll('.board-link-gate')) old.remove();
+    for (const gate of gates) {
+      const chip = node('span', 'board-link-gate', gate.label); chip.dataset.flow = gate.kind; chip.title = gate.say; chip.setAttribute('aria-hidden', 'true');
+      chip.style.transform = `translate(${gate.mid.x}px, ${gate.mid.y}px) translate(-50%, -50%)`;
+      space.querySelector('.board-world')?.append(chip);
+    }
     // The chosen arrow gets a button at its middle to take it away.
     space.querySelector('.board-link-remove')?.remove();
     if (picked$ && cardBy(picked$[0]) && cardBy(picked$[1])?.dependsOn?.includes(picked$[0])) {
@@ -1258,14 +1766,20 @@
   // Each group's area: around its cards, with its name above them. Drawn again when cards move or change size.
   function drawGroups(at = places()) {
     const layer = space.querySelector('.board-groups'); if (!layer) return;
-    const areas = [];
+    // A frame is only drawn where it holds no card of another group, so a tree that crosses groups isn't boxed over.
+    const areas = [], boxed = [];
     for (const [name, own] of groupsOf(cards())) {
       if (name === NO_GROUP) continue;
       const boxes = own.map(card => ({ at: at.get(card.id), h: height(card.id) })).filter(item => item.at);
       if (!boxes.length) continue;
       const left = Math.min(...boxes.map(item => item.at.x)) - 16, top = Math.min(...boxes.map(item => item.at.y)) - 34, right = Math.max(...boxes.map(item => item.at.x)) + WIDTH + 16, bottom = Math.max(...boxes.map(item => item.at.y + item.h)) + 16;
-      const area = node('div', 'board-group-area'); area.style.transform = `translate(${left}px, ${top}px)`; area.style.width = `${right - left}px`; area.style.height = `${bottom - top}px`;
-      area.append(node('span', 'board-group-name', name)); areas.push(area);
+      boxed.push({ name, left, top, right, bottom });
+    }
+    for (const box of boxed) {
+      const foreign = cards().some(card => (card.group || NO_GROUP) !== box.name && at.get(card.id) && at.get(card.id).x < box.right && at.get(card.id).x + WIDTH > box.left && at.get(card.id).y < box.bottom && at.get(card.id).y + height(card.id) > box.top);
+      if (foreign) continue;
+      const area = node('div', 'board-group-area'); area.style.transform = `translate(${box.left}px, ${box.top}px)`; area.style.width = `${box.right - box.left}px`; area.style.height = `${box.bottom - box.top}px`;
+      area.append(node('span', 'board-group-name', box.name)); areas.push(area);
     }
     layer.replaceChildren(...areas);
   }
@@ -1275,14 +1789,14 @@
     const undo = tool('Undo', `Undo${undos.length ? `: ${undos.at(-1).label}` : ''} (⌘Z)`, () => step(undos, redos)), redo = tool('Redo', `Redo${redos.length ? `: ${redos.at(-1).label}` : ''} (⇧⌘Z)`, () => step(redos, undos));
     undo.disabled = !undos.length; redo.disabled = !redos.length;
     const level = tool('100%', 'Zoom to 100%', () => { zoom(1 / camera.z); }, 'board-zoom-level');
-    bar.append(undo, redo, node('span', 'board-tool-gap'), tool('−', 'Zoom out', () => zoom(1 / 1.2)), level, tool('+', 'Zoom in', () => zoom(1.2)), tool('Fit', 'Fit the cards in view', fit), node('span', 'board-tool-gap'), tool('Arrange', 'Lay every card out by what it waits for', arrange));
+    bar.append(undo, redo, node('span', 'board-tool-gap'), tool('−', 'Zoom out', () => zoom(1 / 1.2)), level, tool('+', 'Zoom in', () => zoom(1.2)), tool('Fit', 'Fit the cards in view', () => fit()), node('span', 'board-tool-gap'), tool('Arrange', 'Lay every card out by what it waits for', arrange), tool(flow === 'across' ? 'Across' : 'Down', flow === 'across' ? 'Arranged left to right. Switch to top to bottom' : 'Arranged top to bottom. Switch to left to right', turn));
     return bar;
   }
   // A card on the canvas is built again only when something it shows changes; the rest keep their elements, so a board of
   // a few hundred cards redraws in a few milliseconds when one changes (#97). Its place isn't part of this: it's only where
   // the element is moved to.
   let world$ = null, built = new Map();
-  const nodeKey = card => JSON.stringify([{ ...card, at: undefined }, selected === card.id, filter, schedulesOf(card), (card.dependsOn || []).map(id => { const other = cardBy(id); return other ? [other.title, other.column] : null; }), today()]);
+  const nodeKey = card => JSON.stringify([{ ...card, at: undefined }, selected === card.id, filter, schedulesOf(card), (card.dependsOn || []).map(id => { const other = cardBy(id); return other ? [other.title, other.column] : null; })]);
   function canvasNode(card) {
     // A card without the chosen label stays in its place, faded, so the arrows around it still make sense.
     const item = node('div', `board-node${shown(card) ? '' : ' faded'}`); item.dataset.card = card.id;
@@ -1330,9 +1844,10 @@
       // Only cards just built can have changed height.
       let changed = false;
       for (const item of fresh) { if (!item.parentNode) continue; const measured = item.offsetHeight; if (measured && measured !== heights.get(item.dataset.card)) { heights.set(item.dataset.card, measured); changed = true; } }
-      if (!camera) fit(); else aim();
+      if (!camera) fit(true); else aim();
       // Cards not placed yet sit by their heights: once those are known, they're drawn again where they belong.
-      if (changed && cards().some(card => !card.at)) { const again = places(); for (const item of world.querySelectorAll('.board-node')) { const p = again.get(item.dataset.card); if (p) item.style.transform = `translate(${p.x}px, ${p.y}px)`; } drawLinks(again); drawGroups(again); }
+      const firstLook = !fitted && camera; if (camera) fitted = true;
+      if (changed && cards().some(card => !card.at)) { const again = places(); for (const item of world.querySelectorAll('.board-node')) { const p = again.get(item.dataset.card); if (p) item.style.transform = `translate(${p.x}px, ${p.y}px)`; } drawLinks(again); drawGroups(again); if (firstLook) fit(true); }
       else { drawLinks(at); if (changed) drawGroups(at); }
     });
   }
@@ -1434,11 +1949,17 @@
     if (cardBy(to)?.column === 'doing') { failure = `An agent is working on ${title(to)}. Stop it before changing what it waits for.`; showError(); drawSpace(); return; }
     if (await setWaits(to, waits => waits.filter(id => id !== from))) { record(`${title(to)} stops waiting for ${title(from)}`, null, null, { undo: () => setWaits(to, waits => [...new Set([...waits, from])]), redo: () => setWaits(to, waits => waits.filter(id => id !== from)) }); api.announce(`${title(to)} no longer waits for ${title(from)}.`); }
   }
+  // Down or across: the way the tree runs. Choosing one lays every card out again, as one step to undo.
+  function turn() {
+    flow = flow === 'across' ? 'down' : 'across'; try { localStorage.setItem(FLOW_KEY, flow); } catch { /* A convenience only. */ }
+    api.announce(flow === 'across' ? 'The tree now runs left to right.' : 'The tree now runs top to bottom.');
+    arrange(); drawSpace();
+  }
   function arrange() {
     const all = cards(); if (!all.length) return;
     const before = Object.fromEntries(all.map(card => [card.id, card.at || null])), after = Object.fromEntries([...layout(all, 0, 0)].map(([id, at]) => [id, at]));
     record('Arrange', before, after);
-    place(after).then(() => fit());
+    place(after).then(() => fit(true));
   }
   // A move undoes to the places before it; an arrow undoes with its own pair of changes.
   function record(label, before, after, own = null) {
@@ -1488,7 +2009,12 @@
     for (const [id, mode] of [['board-columns-mode', 'columns'], ['board-canvas-mode', 'canvas'], ['board-outline-mode', 'outline']]) $(id)?.setAttribute('aria-pressed', String(view === mode));
     drawEarlier();
     if (!board) { const message = node('p', 'plan-view-empty', failure ? `The Plan couldn’t be loaded. ${failure}` : 'Loading the Plan…'); (onCanvas ? space : outline ? $('board-outline') : $('board-columns')).replaceChildren(message); drawContext(); return; }
-    drawFilter(); drawDrafts(); drawClosed();
+    drawFilter(); drawDrafts(); drawClosed(); drawProgress();
+    // With no cards and nothing being drafted, the Plan starts here: an agent drafts it, or you write the first card.
+    const starting = !cards().length && !planningPlan();
+    $('board-start').hidden = !starting;
+    $('board-canvas').classList.toggle('starting', starting);
+    if (starting) { $('board-columns').hidden = true; space.hidden = true; $('board-outline').hidden = true; }
     const ready = cards().filter(card => card.column === 'ready');
     $('board-run-ready').disabled = busy || !ready.some(runnable);
     $('board-run-ready').title = ready.length ? 'Choose Ready cards to run' : 'Nothing is in Ready';
@@ -1496,9 +2022,24 @@
     if (timed) { const count = $('board-schedules-count'); count.textContent = String(waitingFor || active || ''); count.hidden = !(waitingFor || active); timed.dataset.state = waitingFor ? 'missed' : ''; timed.title = waitingFor ? `${plural(waitingFor, 'scheduled run')} didn’t start` : active ? `${plural(active, 'schedule')} waiting` : 'Run a card or a prompt at a set time'; }
     // Typing keeps its place: the columns are drawn again only when the cards change.
     const where = onCanvas ? space : outline ? $('board-outline') : $('board-columns'), focused = document.activeElement?.closest?.(onCanvas ? '#board-space' : outline ? '#board-outline' : '#board-columns') ? document.activeElement.dataset?.card : null;
-    if (onCanvas) drawSpace(); else if (outline) drawOutline(); else drawColumns();
+    if (starting) { /* The start step stands in for the cards. */ } else if (onCanvas) drawSpace(); else if (outline) drawOutline(); else drawColumns();
     if (focused) where.querySelector(`${outline ? '.board-outline-card' : '.board-card'}[data-card="${focused}"]`)?.focus();
     renderDrawer(); drawContext(); showError(); entry();
+  }
+  // Where the Plan stands, in one line beside the views: done of all, then what's working, waiting for you, or blocked.
+  function drawProgress() {
+    const line = $('board-progress'); if (!line) return;
+    const all = cards(), live = all.filter(card => !card.draft), count = column => live.filter(card => card.column === column).length;
+    const needs = live.filter(needsSubtasks).length, drafts = all.length - live.length;
+    const parts = live.length ? [`${count('done')} of ${plural(live.length, 'card')} done`, count('doing') ? `${count('doing')} working` : '', count('review') ? `${count('review')} to review` : '', needs ? `${needs} need subtasks` : '', count('ready') - live.filter(card => card.column === 'ready' && needsSubtasks(card)).length > 0 ? `${count('ready') - live.filter(card => card.column === 'ready' && needsSubtasks(card)).length} ready` : ''].filter(Boolean) : [];
+    if (drafts) parts.push(plural(drafts, 'draft'));
+    line.replaceChildren();
+    if (live.length) { const bar = node('span', 'board-progress-bar'), fill = node('span', 'board-progress-fill'); fill.style.width = `${Math.round(count('done') / live.length * 100)}%`; bar.append(fill); bar.setAttribute('aria-hidden', 'true'); line.append(bar); }
+    // What the cards' tasks have used so far follows, kept up to date by paintTotals.
+    const used = node('span', 'board-progress-used'); used.hidden = true; used.setAttribute('aria-hidden', 'true');
+    line.append(node('span', '', parts.join(' · ')), used);
+    line.hidden = !parts.length;
+    paintTotals(); tick();
   }
   // The label filter appears once a card has a label. A label no card has any more stops being the filter.
   function drawFilter() {
@@ -1549,15 +2090,16 @@
     load().then(() => {
       if (!showing) return;
       if (next?.prefill) openNew('backlog', null, next.prefill);
-      else (view === 'canvas' ? space : view === 'outline' ? $('board-outline') : $('board-columns')).querySelector('[data-card]')?.focus();
+      // Focus lands on the first card so the keys work at once, but without the ring: opening the Plan isn't choosing a card.
+      else (view === 'canvas' ? space : view === 'outline' ? $('board-outline') : $('board-columns')).querySelector('[data-card]')?.focus({ focusVisible: false });
     });
   }
   function hide() {
     if (!showing) return;
-    showing = false; dialog.hidden = true; then = null;
+    showing = false; dialog.hidden = true; then = null; tick();
     selected = null; draft = null; sdraft = null; drawn = null; picked$ = null; suggestConfirm = null;
     const menu = $('board-export-menu'); if (menu) menu.hidden = true;
-    drafting = false; leftOut = { plan: false, card: null }; drawContext(); entry();
+    drafting = false; replaces = null; leftOut = { plan: false, card: null }; drawContext(); entry();
   }
   // Esc lets go of a chosen arrow, then closes the card beside the board. It never leaves the Plan: the view switch does.
   dialog.addEventListener('keydown', event => {
@@ -1603,7 +2145,16 @@
       if (view === 'canvas' || top?.anyView) { event.preventDefault(); step(redos, undos); }
     } else if (view === 'canvas' && (key === 'delete' || key === 'backspace') && picked$) { event.preventDefault(); disconnect(...picked$); }
   });
-  $('board-chat')?.addEventListener('click', () => setChat(chatHidden()));
+  $('board-chat')?.addEventListener('click', () => { setChat(true); $('message-input')?.focus(); });
+  $('plan-chat-hide')?.addEventListener('click', () => { setChat(false); $('board-chat')?.focus(); });
+  // The chat's header says what Send does: ask, or have an agent draft the plan.
+  $('plan-mode-ask')?.addEventListener('click', () => setDrafting(false));
+  $('plan-mode-draft')?.addEventListener('click', () => setDrafting(true));
+  // With no cards yet, the Plan starts with an agent drafting it from the chat, a brief or spec, or a card you write.
+  const startDrafting = () => { setChat(true); setDrafting(true); };
+  $('board-start-draft')?.addEventListener('click', startDrafting);
+  $('board-start-brief')?.addEventListener('click', () => { startDrafting(); $('attachment-input')?.click(); });
+  $('board-start-card')?.addEventListener('click', () => openNew('backlog'));
   // The More menu closes once a choice is made; Export stays open when it asks what to include.
   $('board-more-menu')?.addEventListener('click', event => {
     const item = event.target?.closest?.('button'), menu = $('board-more-menu');
@@ -1612,25 +2163,28 @@
   });
   $('board-more-menu')?.addEventListener('toggle', event => { if (event.newState === 'closed' && $('board-export-menu')) { $('board-export-menu').hidden = true; $('board-export')?.setAttribute('aria-expanded', 'false'); } });
   $('board-drawer-close').addEventListener('click', closeDrawer);
+  $('board-card-shade')?.addEventListener('click', closeDrawer);
   $('board-new').addEventListener('click', () => openNew('backlog'));
   $('board-run-ready').addEventListener('click', () => openRun());
   $('board-schedules')?.addEventListener('click', () => { if (selected === 'schedules') { closeDrawer(); return; } if (selected && dirty() && !window.confirm('Leave this card without saving your changes?')) return; selected = 'schedules'; draft = null; sdraft = null; failure = ''; drawn = null; render(); });
   // Leaving the Plan, or its workspace, asks first when a card has unsaved edits.
   const canLeave = () => !dirty() || window.confirm('Leave this card without saving your changes?');
   { let chat = null; try { chat = localStorage.getItem(CHAT_KEY); } catch { /* A convenience only. */ } setChat(chat !== 'hidden', false); }
-  // The board is read again when its cards or their tasks change: the workspace chat says when, and so do the tasks.
+  // The board is read again when its cards or their tasks change: the workspace chat says when, and so do the tasks. A task
+  // starting or ending a run is part of that, so a major card's subtasks move on even while the chat shows another task;
+  // what a run is doing within it is drawn in place instead (patchLive).
   let project = null;
   window.addEventListener('relay-state', () => {
     const state = api.getState();
     // Another workspace: the Plan stays and shows that workspace's cards, as Flow stays on.
     if (state.projectId !== project) {
-      project = state.projectId; era++; writes = 0; loading++; drafting = false; leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map();
+      project = state.projectId; era++; writes = 0; loading++; drafting = false; replaces = null; answers = new Map(); leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; fitted = false; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); heard = new Map();
       selected = null; draft = null; sdraft = null; drawn = null; failure = ''; picked = new Set();
       if (showing) { renderDrawer(); render(); }
     }
     chatAttention();
-    const key = JSON.stringify([state.projectId, state.conversation?.boardRevision, state.conversation?.boardSuggest ? [state.conversation.boardSuggest.id, state.conversation.boardSuggest.status, state.conversation.boardSuggest.phase, state.conversation.boardSuggest.toolCount] : null, (state.conversation?.parallelTasks || []).map(task => [task.id, task.status, task.approvals, task.hasWorktree])]);
-    if (key === seen) { entry(); if (showing) { drawEarlier(); if (board) drawDrafts(); drawContext(); } return; }
+    const key = JSON.stringify([state.projectId, state.conversation?.boardRevision, state.conversation?.boardSuggest ? [state.conversation.boardSuggest.id, state.conversation.boardSuggest.status, state.conversation.boardSuggest.phase, state.conversation.boardSuggest.toolCount] : null, (state.conversation?.parallelTasks || []).map(task => [task.id, task.status, task.approvals, task.hasWorktree, task.testing, Boolean(task.runningProvider), task.runningModel])]);
+    if (key === seen) { entry(); if (showing) { drawEarlier(); if (board) drawDrafts(); drawContext(); patchLive(); } return; }
     seen = key;
     if (state.projectId) load(); else entry();
   });

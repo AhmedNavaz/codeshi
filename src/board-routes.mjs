@@ -28,6 +28,8 @@ export function createBoardRoutes({ registry, body, json }) {
     if (url.pathname === '/api/board/run') { const result = board.run(c, input); json(res, 202, { tasks: result.tasks, board: board.view(c) }); return true; }
     // One Plan (#162): accept, discard or undo an agent's draft cards, stop running cards, and suggest next cards.
     if (url.pathname === '/api/board/drafts') { json(res, 200, { ...board.drafts(c, input), board: board.view(c) }); return true; }
+    // Split with an agent (#162): one read-only run splits the chosen cards into subtasks for you to review.
+    if (url.pathname === '/api/board/split') { json(res, 202, { suggest: board.split(c, input), board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/suggest/stop') { json(res, 200, { ...board.stopSuggest(c), board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/suggest/dismiss') { json(res, 200, { ...board.dismissSuggest(c), board: board.view(c) }); return true; }
     // Closed to agents (#97): the whole Plan; a single card is closed with its other fields. Attaching puts the Plan, or a

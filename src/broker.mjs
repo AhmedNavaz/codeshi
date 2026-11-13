@@ -42,6 +42,7 @@ import { RoutingDispatcher } from './routing-assessment.mjs';
 import { ExecutionPolicies, executionConfig } from './execution-policy.mjs';
 import { verificationForRun } from './verification.mjs';
 import { Board } from './board.mjs';
+import { FlowSplits, applySplitRecord } from './flow-split.mjs';
 import { applyOrchestration, checkPlanning, orchestrationAction, planningRequest, planningResult, restartedPlanning } from './orchestration.mjs';
 
 export const PROVIDERS = ['codex', 'claude', 'gemini'];
@@ -206,7 +207,7 @@ export class Broker extends EventEmitter {
           try { process.kill(-prev.pid, 0); if (!reused(prev.pid, prev.pidStart)) throw Object.assign(new Error(`A suggestion run from the previous session may still be active (process group ${prev.pid}). Stop that process group before restarting Codeshi.`), { status: 409 }); }
           catch (error) { if (!groupGone(error)) throw error; }
         }
-        this.record(conversation, { type: 'board_suggest_result', id: prev.id, status: 'interrupted', summary: 'Codeshi restarted while suggesting next cards. Try again when ready.', cards: [] });
+        this.record(conversation, { type: 'board_suggest_result', id: prev.id, status: 'interrupted', summary: prev.kind === 'split' ? 'Codeshi restarted while splitting cards. Try again when ready.' : 'Codeshi restarted while suggesting next cards. Try again when ready.', cards: [] });
       }
       for (const run of conversation.runs.filter(item => ['building', 'reviewing'].includes(item.automaticReview?.status))) {
         this.record(conversation, { type: 'automatic_review_phase', runId: run.id, phase: { status: 'interrupted', summary: 'Codeshi restarted. Review stopped; start a new review when ready.' } });
@@ -222,7 +223,7 @@ export class Broker extends EventEmitter {
     this.checks = new RunChecks(this, { tests });
     this.checkpoints = new RunCheckpoints(this);
     // A lane runs one task, so only the workspace's own broker coordinates others.
-    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); this.board = new Board(this); this.schedules = new Schedules(this); this.attachments.planGate = plan => this.board.gate(plan); }
+    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); this.board = new Board(this); this.schedules = new Schedules(this); this.splits = new FlowSplits(this); this.attachments.planGate = plan => this.board.gate(plan); }
     this.checks.restore();
     // The first check of a wait saved before a restart runs once startup has finished.
     if (this.resume.waiting) setTimeout(() => this.resume.tick(), 0);
@@ -232,6 +233,15 @@ export class Broker extends EventEmitter {
   get waitingResumes() { return this.resume.waiting; }
   availableProviders() { const hasConfigured = Object.keys(this.configuredBins).length > 0; return PROVIDERS.filter(provider => { if (hasConfigured && !this.configuredBins[provider]) return false; return resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot }); }); }
   checkRunSettings(provider, mode, approvalPolicy) { checkSettings(provider, mode, approvalPolicy); }
+  // Whether an agent's connection in this conversation can send images to its model (#12): true, false, or null when
+  // not known. The CLI transport sends none; Gemini's must report image input when it connects.
+  imageConnection(c, provider, account) {
+    const transport = transportFor(provider, provider === c.provider ? c.transport || 'auto' : c.transports?.[provider] || 'auto', this.configuredBins[provider]);
+    if (transport === 'cli') return false;
+    if (provider !== 'gemini') return true;
+    const images = account?.capabilities?.images;
+    return typeof images === 'boolean' ? images : null;
+  }
   usageOptions(provider) { return { bin: resolveBinary(provider, { override: this.configuredBins[provider], googleRoot: this.googleRoot }), workspace: this.workspace, googleRoot: this.googleRoot, refresh: true }; }
   scheduleResume(c, input = {}) { return this.resume.schedule(c, input); }
   cancelResume(c) { return this.resume.cancel(c); }
@@ -340,6 +350,7 @@ export class Broker extends EventEmitter {
     if (record.type === 'routing_submission' && c.routingRequests?.[record.requestId]) c.routingRequests[record.requestId].submission = record.submission;
     if (record.type === 'retry_offer') c.retryOffer = record.offer ? { ...record.offer, ...(record.offer.routingMode ? { routingMode: normalizeRoutingMode(record.offer.routingMode) } : {}) } : null;
     if (record.type === 'retry_offer_end' && c.retryOffer?.id === record.id) c.retryOffer = null;
+    applySplitRecord(c, record);
     if (record.type === 'check') { const run = c.runs?.findLast(item => item.id === record.runId); if (run) run.check = record.check; if (c.lastRun?.id === record.runId) c.lastRun.check = record.check; }
     if (record.type === 'resume') c.resume = record.resume;
     // Independent tasks (#88): saved before anything starts, so a crash can always find who owned what.
@@ -723,7 +734,7 @@ export class Broker extends EventEmitter {
       }
     }
 
-    return { ...visible, execution: this.execution.view(c), contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(messageCount !== undefined ? { messageCount } : {}), ...(earlier !== undefined ? { earlier } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), ...(c.boardSuggest ? { boardSuggest: { id: c.boardSuggest.id, cardId: c.boardSuggest.cardId, status: c.boardSuggest.status, phase: c.boardSuggest.phase, toolCount: c.boardSuggest.toolCount } } : {}), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: messages.map(({ seq, ...m }) => m) };
+    return { ...visible, execution: this.execution.view(c), contextControl: contextFor(c.activeRun?.provider || c.provider), usageWatch: c.lastRun?.provider ? usageWatch(c, contextFor(c.lastRun.provider)) : null, cursor: records, ...(this.tasks ? { parallelTasks: this.tasks.list(c) } : {}), ...(c.status === 'running' ? {} : { taskResult: taskResult(c) }), ...(messageCount !== undefined ? { messageCount } : {}), ...(earlier !== undefined ? { earlier } : {}), checkpoints: this.checkpoints?.summary(c) || {}, resume: c.resume ? { ...c.resume, ...this.resume?.view(c) } : null, reviews: reviews.map(publicReview), ...(c.boardSuggest ? { boardSuggest: { id: c.boardSuggest.id, kind: c.boardSuggest.kind || 'suggest', cardId: c.boardSuggest.cardId, status: c.boardSuggest.status, phase: c.boardSuggest.phase, toolCount: c.boardSuggest.toolCount } } : {}), pendingApprovals: this.pendingApprovals(c), canAddToRun: this.running?.c.id === c.id && this.running.steerable && !this.running.ending, messages: messages.map(({ seq, ...m }) => m) };
   }
 
   pendingApprovals(c) {
@@ -918,7 +929,7 @@ export class Broker extends EventEmitter {
   async findRoutingFallback(c, run, { failedProvider, failedModel, failedQuota, usage = null } = {}) {
     if (!run?.routing) return null;
     const mode = run.routing.mode || 'smart';
-    const text = run.message?.text || c.messages.find(m => m.runId === run.id && m.role === 'user')?.text || '';
+    const request = run.message?.text ? run.message : c.messages.find(m => m.runId === run.id && m.role === 'user'), text = request?.text || '';
     const assessment = run.routing.assessment || null;
     const allowApi = run.billingConfirmed === true;
     // The mode's handoff line, so the fallback never starts an agent the running task would leave at its first check (#12).
@@ -944,10 +955,10 @@ export class Broker extends EventEmitter {
       }
       if (models.length ? !allowedModels.length : !allowed(null)) continue;
       const usualSpend = usualWindowSpend(c, provider);
-      candidates.push({ provider, account, models: models.filter(m => !allowedModels.length || allowedModels.includes(m.id || m.model || m.value)), billingSource: account.billingSource, usage: provUsage, eligible: true, ...(allowedModels.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
+      candidates.push({ provider, account, models: models.filter(m => !allowedModels.length || allowedModels.includes(m.id || m.model || m.value)), billingSource: account.billingSource, usage: provUsage, eligible: true, images: this.imageConnection(c, provider, account), ...(allowedModels.length ? { allowedModels } : {}), ...(usualSpend ? { usualSpend } : {}) });
     }
     if (!candidates.length) return null;
-    const choice = globalThis.relayRouting.route({ text, attachments: run.message?.attachments?.length || 0, assessment, mode, candidates, current: failedProvider, allowApi, quotaThreshold: threshold });
+    const choice = globalThis.relayRouting.route({ text, attachments: request?.attachments?.length || 0, needs: globalThis.relayRouting.taskNeeds(request?.attachments), assessment, mode, candidates, current: failedProvider, allowApi, quotaThreshold: threshold });
     if (!choice || choice.error || choice.quota?.state !== 'ok') return null;
     const chosenRow = candidates.find(item => item.provider === choice.provider);
     return {
@@ -962,7 +973,7 @@ export class Broker extends EventEmitter {
     };
   }
 
-  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null, orchestrate = false, executionRevision, proceedWithNearQuota = false, role = null }, { execution = null, executionAction = 'manual', verifyExecution, review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null, assessedTask = null, routingEvidence = null, proceedWithNearQuota: optionProceedWithNearQuota = false } = {}) {
+  start(c, { text, attachments: attachmentIds = [], provider = c.provider, mode = c.mode, approvalPolicy = c.approvalPolicy || 'ask', fresh = false, model = provider === c.provider ? c.model : c.models[provider] || null, transport = provider === c.provider ? c.transport || 'auto' : c.transports[provider] || 'auto', requestId = randomUUID(), billingConfirmed = false, effort = c.efforts[provider]?.[model || 'default'] ?? null, routing = null, automaticReview = null, orchestrate = false, replaces = null, executionRevision, proceedWithNearQuota = false, role = null }, { execution = null, executionAction = 'manual', verifyExecution, review, verifyReview, local, verifyLocal, resume, queued, retryOf = null, limitChain = null, assessedTask = null, routingEvidence = null, proceedWithNearQuota: optionProceedWithNearQuota = false } = {}) {
     if (review) { mode = 'read'; approvalPolicy = 'ask'; fresh = true; attachmentIds = []; }
     // Orchestrate (#12): a read-only run that proposes a plan, in the conversation's own session so it knows the context.
     // Only a new message asks for one; reviews, queued prompts, retries, resumes and local runs never pass it.
@@ -1049,7 +1060,7 @@ export class Broker extends EventEmitter {
       this.execution.ensure(c, task.id, { requestId });
       this.execution.assert(c, execution, executionOptions);
       this.record(c, { type: 'submission', id: runId, task, execution, ...(plan ? { plan } : {}), previousProvider: c.lastRun?.provider || null, requestId, fingerprint, provider, mode, approvalPolicy, model, effort, transport, effectiveTransport: actualTransport, baseline, context: prepared.metadata, resetSession, workspaceSignature: this.workspaceSignature, ...(role ? { role } : {}),
-        ...(local ? { local } : {}), ...(review ? { review } : {}), ...(orchestrate ? { orchestration: { goal: text, ...(documents.length ? { documents } : {}) } } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
+        ...(local ? { local } : {}), ...(review ? { review } : {}), ...(orchestrate ? { orchestration: { goal: text, ...(documents.length ? { documents } : {}), ...(typeof replaces === 'string' && /^[\w-]{1,80}$/.test(replaces) ? { replaces } : {}) } } : {}), ...(c.messages.every(m => m.role !== 'user') ? { title: text.slice(0, 64) } : {}),
         ...(routing ? { routing } : {}), ...(retryOf ? { retryOf } : {}),
         ...(automaticReview ? { automaticReview } : {}),
         message: { id: randomUUID(), role: 'user', text, ...(text === continuationRequest ? { continuation: true } : {}), ...(local ? { connection: 'local' } : {}), ...(review ? { reviewId: runId } : {}), ...(orchestrate ? { orchestrationId: runId } : {}), ...(attachments.length ? { attachments } : {}), ...(routing ? { routing: { mode: routing.mode, reason: routing.reason, policy: globalThis.relayRouting.POLICY_VERSION, ...(routing.selectedBy === 'you' ? { selectedBy: 'you' } : {}), ...(routing.tier ? { tier: routing.tier } : {}), ...(routing.steppedDown ? { steppedDown: true } : {}), ...(routing.plannedHandoff ? { plannedHandoff: true } : {}), ...(routing.assessment ? { ratedBy: routing.assessment.source, ...(routing.assessment.ms ? { ratedMs: routing.assessment.ms } : {}) } : {}), model, effort } } : {}), ...(retryOf ? { retry: { of: retryOf } } : {}), provider, createdAt: new Date().toISOString(), runId } });

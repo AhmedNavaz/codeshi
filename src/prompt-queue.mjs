@@ -39,6 +39,19 @@ export class PromptQueue {
     this.broker.emit('update', { conversationId: c.id });
   }
 
+  // Resuming is the person's go-ahead for the queue as it stands now. A prompt whose task changed while it waited (a
+  // take over, say) takes the task's current revision instead of failing forever on the old one, and one whose task no
+  // longer allows routing runs with the agent and model its row shows, as a manual prompt.
+  reauthorize(c) {
+    const execution = this.broker.execution;
+    for (const item of c.queue) {
+      const policy = item.execution && execution.current(c, item.execution.taskId);
+      if (!policy || policy.revision === item.execution.revision) continue;
+      this.broker.record(c, { type: 'queue_execution', id: item.id, execution: execution.token(c, policy.taskId) });
+      if (item.routing && !policy.automation.routing) this.broker.record(c, { type: 'queue_update', id: item.id, clearRouting: true });
+    }
+  }
+
   item(c, id) {
     const item = c.queue.find(entry => entry.id === id);
     if (!item) throw Object.assign(new Error('This queued prompt has already started or been removed.'), { status: 409 });
@@ -102,7 +115,7 @@ export class PromptQueue {
     } else if (action === 'pause') {
       if (!c.queuePaused) this.pause(c, 'You paused the queue.');
     } else if (action === 'resume') {
-      if (c.queuePaused) broker.record(c, { type: 'queue_resume', ...(input.proceedWithNearQuota ? { proceedWithNearQuota: true } : {}) });
+      if (c.queuePaused) { this.reauthorize(c); broker.record(c, { type: 'queue_resume', ...(input.proceedWithNearQuota ? { proceedWithNearQuota: true } : {}) }); }
     } else throw Object.assign(new Error('Choose add, update, move, remove, pause, resume or switch_provider.'), { status: 400 });
     // An open handoff offer keeps saying what would really move.
     if (c.handoffOffer) c.handoffOffer.queue = this.cover(c, c.handoffOffer.from.provider, c.handoffOffer.to);
@@ -136,17 +149,18 @@ export class PromptQueue {
   // After a run: carry on when it finished, wait for a reset when it reached a limit, and pause otherwise.
   runEnded(c, run, status) {
     // A handoff stops a run on purpose and continues the task, so the queue waits for that run instead of pausing.
-    // A planning run leads to a plan, which holds the queue; it never waits for a reset with planning's read-only access.
-    if (run.review || run.orchestrate || run.handoff || !c.queue.length || c.queuePaused) return;
+    // A planning run carries on like any other once its plan has landed, and never waits for a reset with planning's
+    // read-only access: continuing it after a reset would no longer be planning.
+    if (run.review || run.handoff || !c.queue.length || c.queuePaused) return;
     if (status === 'complete') { setTimeout(() => this.tick(c), 0); return; }
-    if (run.errorCategory === 'quota') {
+    if (run.errorCategory === 'quota' && !run.orchestrate) {
       if (!c.resume) {
         try { this.broker.resume.schedule(c, { providers: this.broker.execution.allows(c, run.execution, { action: 'wait' }) ? this.broker.availableProviders() : [run.provider], execution: run.execution, mode: run.mode, approvalPolicy: run.approvalPolicy, billingConfirmed: run.billingConfirmed === true }); }
         catch (error) { this.pause(c, `Waiting for a reset could not start: ${error.message}`); }
       }
       return;
     }
-    this.pause(c, run.budgetStop ? run.budgetStop.message : run.stopped ? 'You stopped the run.' : 'The last run did not finish.');
+    this.pause(c, run.budgetStop ? run.budgetStop.message : run.stopped ? 'You stopped the run.' : run.orchestrate && run.errorCategory === 'quota' ? 'Planning reached the agent’s usage limit.' : 'The last run did not finish.');
   }
 
   // Which prompts a handoff from one agent to another would move, for the offer to name. Prompts for other agents aren't
