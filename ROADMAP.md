@@ -35,7 +35,6 @@ Every item links to its GitHub issue. Comment there to shape it or pick it up, a
 | Feature | Status | Issue |
 | --- | --- | --- |
 | Connect GitHub: a read-only sign-in without `gh` | **From GitHub** in New workspace, using your `gh` login, shipped in 0.47.0, and GitHub Enterprise hosts through `gh` in 0.52.0 | [#159](https://github.com/AhmedNavaz/codeshi/issues/159) |
-| Move to another computer: ongoing sync between your computers, building on the same pairing and encryption. [Plan](docs/roadmap-details.md#connect-github-and-move-to-another-computer) | A backup file locked with a passphrase shipped in 0.47.0, and moving directly over the same network, with a move code and six matching digits, in 0.52.0 | [#160](https://github.com/AhmedNavaz/codeshi/issues/160) |
 | Task-scoped context: a before/after run on a person's real long conversation. A six-turn built task, every turn fresh, measured the same correctness with about half the new tokens and no repeated reads (see [evals](evals/README.md)) | First version shipped in 0.26.0, the rolling brief in 0.38.0, and a brief that reaches further back in chats of short messages in 0.52.0 | [#85](https://github.com/AhmedNavaz/codeshi/issues/85) |
 | Project memory: a live test with real agents of stale memories, a memory that contradicts your request, and planted tool text | First version shipped in 0.26.0, Copy to AGENTS.md in 0.40.0, and suggested working fixes and editing a suggestion before you keep it in 0.52.0 | [#21](https://github.com/AhmedNavaz/codeshi/issues/21) |
 | Interface translations: the first languages, and the remaining panels, phone page and server messages | Base and main surfaces shipped in 0.42.0, help wanted | [#27](https://github.com/AhmedNavaz/codeshi/issues/27) |
@@ -49,6 +48,7 @@ Built and covered by automated tests. Each issue closes after one try on the rea
 | --- | --- | --- |
 | **Open pull request** | Opening a pull request on GitHub itself. Shipped in 0.46.0, tested against local repositories and a stand-in for `gh` | [#18](https://github.com/AhmedNavaz/codeshi/issues/18) |
 | **Task limits on a paid API account** | A time, token or spend limit on a real pay-per-use account. Everything shipped by 0.38.0 and was tested with simulated providers | [#87](https://github.com/AhmedNavaz/codeshi/issues/87) |
+| **Move to another computer over your network** | A move between two real computers on the same Wi-Fi, including the system's prompt to accept incoming connections. Shipped in 0.52.0, tested with both sides on one computer | [#160](https://github.com/AhmedNavaz/codeshi/issues/160) |
 | **Updates from inside the app on Windows** | Restarting into an update, quitting with one ready and putting the old version back after a failed swap, on a real Windows PC. Shipped in 0.52.0, tested on macOS with stand-ins for the PowerShell helper. Help wanted | [#163](https://github.com/AhmedNavaz/codeshi/issues/163) |
 | **Status in the Windows notification area** | The icon, tooltip, click and menu on a real Windows PC. Shipped in 0.42.0. Help wanted | [#74](https://github.com/AhmedNavaz/codeshi/issues/74) |
 
