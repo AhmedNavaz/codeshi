@@ -207,7 +207,7 @@ export class Broker extends EventEmitter {
           try { process.kill(-prev.pid, 0); if (!reused(prev.pid, prev.pidStart)) throw Object.assign(new Error(`A suggestion run from the previous session may still be active (process group ${prev.pid}). Stop that process group before restarting Codeshi.`), { status: 409 }); }
           catch (error) { if (!groupGone(error)) throw error; }
         }
-        this.record(conversation, { type: 'board_suggest_result', id: prev.id, status: 'interrupted', summary: prev.kind === 'split' ? 'Codeshi restarted while splitting cards. Try again when ready.' : 'Codeshi restarted while suggesting next cards. Try again when ready.', cards: [] });
+        this.record(conversation, { type: 'board_suggest_result', id: prev.id, status: 'interrupted', summary: prev.kind === 'split' ? 'Codeshi restarted while splitting cards. Try again when ready.' : prev.kind === 'update' ? 'Codeshi restarted while updating the Plan. Try again when ready.' : 'Codeshi restarted while suggesting next cards. Try again when ready.', cards: [] });
       }
       for (const run of conversation.runs.filter(item => ['building', 'reviewing'].includes(item.automaticReview?.status))) {
         this.record(conversation, { type: 'automatic_review_phase', runId: run.id, phase: { status: 'interrupted', summary: 'Codeshi restarted. Review stopped; start a new review when ready.' } });
@@ -369,10 +369,12 @@ export class Broker extends EventEmitter {
     }
     // Closed to agents (#97): the whole Plan.
     if (record.type === 'plan_access') { c.planClosed = record.closed === true; c.boardRevision = record.seq; }
+    // The Plan's own chat (#162), and the last Workspace chat message it has been given.
+    if (record.type === 'plan_chat') c.planChat = { taskId: record.taskId ?? c.planChat?.taskId ?? null, syncedThrough: record.taskId && record.taskId !== c.planChat?.taskId ? null : record.syncedThrough ?? c.planChat?.syncedThrough ?? null };
     if (record.type === 'board_card_remove') { c.board = (c.board || []).filter(item => item.id !== record.id); c.boardRevision = record.seq; }
     if (record.type === 'board_suggest') { c.boardSuggest = { ...record.suggest, status: 'running', phase: 'starting', toolCount: 0, pid: null, pidStart: null, startedAt: record.at, endedAt: null }; c.boardRevision = record.seq; }
     if (record.type === 'board_suggest_process') { if (c.boardSuggest?.id === record.id) Object.assign(c.boardSuggest, { pid: record.pid, pidStart: record.pidStart }); }
-    if (record.type === 'board_suggest_result') { if (c.boardSuggest?.id === record.id) Object.assign(c.boardSuggest, { status: record.status, summary: record.summary || null, cards: record.cards || [], endedAt: record.at }); c.boardRevision = record.seq; }
+    if (record.type === 'board_suggest_result') { if (c.boardSuggest?.id === record.id) Object.assign(c.boardSuggest, { status: record.status, summary: record.summary || null, cards: record.cards || [], ...(record.questions?.length ? { questions: record.questions } : {}), endedAt: record.at }); c.boardRevision = record.seq; }
     if (record.type === 'board_suggest_dismiss') { if (!record.id || c.boardSuggest?.id === record.id) { c.boardSuggest = null; c.boardRevision = record.seq; } }
     // Schedules (#132): beside the cards, and the board is read again when one changes.
     if (record.type === 'schedule') { c.schedules = [...(c.schedules || []), record.schedule]; c.boardRevision = record.seq; }

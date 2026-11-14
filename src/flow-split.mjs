@@ -92,10 +92,10 @@ export class FlowSplits {
     return proposal;
   }
 
-  // Split without asking: only when you turned it on, and only when every part would use an agent on a subscription
+  // Split without asking: on in Flow unless you turned it off, and only when every part would use an agent on a subscription
   // with room left, as automatic handoff does.
   automatic(c, picks) {
-    return c.splitPreference?.auto === true && picks.every(pick => !pick.error && pick.billing === 'subscription' && pick.quota === 'ok');
+    return c.splitPreference?.auto !== false && picks.every(pick => !pick.error && pick.billing === 'subscription' && pick.quota === 'ok');
   }
 
   prefer(c, { auto } = {}) {
@@ -142,8 +142,9 @@ export class FlowSplits {
     if (unpicked >= 0) throw fail(`Routing found no agent for part ${unpicked + 1}: ${parts[unpicked].pick?.error || 'nothing could take it'}. Do it as one message, or refresh plan usage and send it again.`);
     const charged = parts.filter(part => part.pick.billing !== 'subscription').length;
     if (charged && !billingConfirmed && c.routing?.allowApi !== true) throw fail(`${charged === 1 ? 'One part uses' : `${charged} parts use`} an agent that bills by use, or whose billing couldn’t be confirmed. Confirm it to run them.`, 409);
-    const folders = broker.workspaceFolders, folder = folderId || (folders.length === 1 ? folders[0].id : null);
-    if (!folder || !folders.some(item => item.id === folder)) throw Object.assign(fail('Choose the folder these parts work in.', 400), { details: { folderChoice: true } });
+    const folders = broker.workspaceFolders, folder = folderId || folders[0]?.id || null;
+    // No folder question: the parts work in the folder you're in, or the primary one. The agent finds its way from there.
+    if (!folder ||!folders.some(item => item.id === folder)) throw Object.assign(fail('Choose the folder these parts work in.', 400), { details: { folderChoice: true } });
     const taken = new Set(board.cards(c).filter(card => card.group).map(card => card.group)), group = groupName(proposal.request.text, taken);
     const source = { kind: 'flow-split', splitId: proposal.id, goal: clip(proposal.request.text, 4000), summary: `Split from one message into ${parts.length} parts that run side by side, then one review of the combined result.` };
     const managed = { splitId: proposal.id }, ids = [];

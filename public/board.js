@@ -21,8 +21,9 @@
   'use strict';
   const $ = id => document.getElementById(id);
   // The Plan is a view of the window (#162), beside Normal and Flow. flow.js changes view and calls show() and hide();
-  // open() asks for the Plan view. The Workspace chat stays on the right, and the button at the end of the toolbar hides it.
-  // In the Plan view the chat's message box knows it (see "Asking the chat about the Plan" below).
+  // open() asks for the Plan view. The Plan chat is on the right, not the Workspace chat, with each card's task beside it
+  // (see "The Plan's chats" below), and the button at the end of the toolbar hides it. In the Plan chat the message box
+  // knows the Plan (see "Asking the chat about the Plan" below).
   const dialog = $('board-view'), api = window.relayUI;
   if (!dialog || !api) return;
   let showing = false;
@@ -681,9 +682,9 @@
     });
   }
   // Exact agent, model and effort that Suggest next (#162) will use when confirmed.
-  function suggestPick(card, mode = smartMode()) {
+  function suggestPick(card, mode = smartMode(), about = null) {
     const state = api.getState();
-    const routed = api.routeFor?.(card?.notes || card?.title || 'Suggest follow-up cards', 0, mode, { plan: true });
+    const routed = api.routeFor?.(about || card?.notes || card?.title || 'Suggest follow-up cards', 0, mode, { plan: true });
     if (routed?.error) return { error: routed.error };
     const provider = routed ? routed.provider : (state.provider || 'codex');
     const model = routed ? (routed.model || null) : (state.model || null);
@@ -736,6 +737,85 @@
     row.append(cancel, go);
     box.append(lead, note, row);
     return [box];
+  }
+  // ---- Update the Plan from what a card found
+  // A finished card, research above all, can find what the Plan didn't know. Under its result, one read-only run reads
+  // the whole answer and the open Plan, and drafts the changes the findings call for: new cards, changes to cards that
+  // haven't started, and cards to remove or merge. They arrive on the Plan as one draft named after this card; nothing
+  // changes until you accept. While it runs, and once it's done, the same place says how it went.
+  const updateKey = card => `update:${card.id}`;
+  function updateBox(card, { questions = false } = {}) {
+    if (card.draft || !['review', 'done'].includes(card.column)) return null;
+    const job = board?.suggest, mine = job?.kind === 'update' && job.cardId === card.id ? job : null;
+    const box = node('section', 'board-update'); box.setAttribute('aria-label', 'Update the Plan from what it found');
+    const head = node('div', 'board-update-head'), text = node('div', 'board-update-text'), actions$ = node('div', 'board-update-actions');
+    const lead = node('p', 'board-update-lead'); lead.append(glyph(ICONS.smart));
+    const dismiss = () => { const value = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); value.disabled = busy; return value; };
+    head.append(text, actions$); box.append(head);
+    if (mine?.status === 'running') {
+      box.classList.add('running');
+      lead.append(node('span', '', 'Updating the Plan from what it found…'));
+      text.append(lead, node('p', 'board-update-note', [[AGENT[mine.provider] || mine.provider, mine.model].filter(Boolean).join(' · '), mine.phase && mine.phase !== 'starting' ? mine.phase : 'reading the findings and the Plan', mine.toolCount ? plural(mine.toolCount, 'tool call') : ''].filter(Boolean).join(' · ')));
+      const stop = button('Stop', () => act('/api/board/suggest/stop', {}, () => api.announce('Stopping the Plan update.')), 'secondary-button'); stop.disabled = busy;
+      actions$.append(stop);
+      return box;
+    }
+    if (mine && ['failed', 'interrupted'].includes(mine.status)) {
+      box.classList.add('trouble');
+      lead.append(node('span', '', mine.status === 'interrupted' ? 'Stopped updating the Plan.' : 'Couldn’t update the Plan.'));
+      text.append(lead, node('p', 'board-update-note', mine.summary || 'Try again when ready.'));
+      actions$.append(dismiss());
+      return box;
+    }
+    if (mine?.status === 'complete') {
+      const waiting = (mine.cards || []).filter(id => cardBy(id)?.draft?.batch?.id === mine.id).length;
+      if (waiting) {
+        box.classList.add('done');
+        lead.append(node('span', '', `Drafted ${plural(waiting, 'change')} to the Plan`));
+        text.append(lead, node('p', 'board-update-note', `${mine.summary ? `${mine.summary} ` : ''}They wait on the Plan for you to accept or discard.`));
+        actions$.append(button('Show on the Plan', () => closeDrawer(), 'primary-button'));
+        return box;
+      }
+      if (!(mine.cards || []).length) {
+        lead.append(node('span', '', 'The Plan needs no changes'));
+        text.append(lead, node('p', 'board-update-note', mine.summary || 'What it found fits the Plan as it is.'));
+        if (mine.questions?.length) { const list = node('ol', 'board-update-questions'); list.setAttribute('aria-label', 'Left for you to decide'); list.append(...mine.questions.map(item => { const row = node('li'); row.append(...inline(questionOf(item).question)); return row; })); text.append(list); }
+        actions$.append(dismiss());
+        return box;
+      }
+    }
+    // Not run yet, or its drafts were accepted or discarded: offer it.
+    const limit = board?.limits?.cards || 300, other = job?.status === 'running';
+    const why = shut(card) ? 'Closed to agents. Open it to agents before updating the Plan from it.' : other ? 'Wait for the agent working on the Plan to finish, or stop it first.' : cards().length >= limit ? `This Plan already has ${limit} cards. Remove some finished cards first.` : dirty() ? 'Save your changes first.' : '';
+    const open = suggestConfirm === updateKey(card);
+    lead.append(node('span', '', 'Does what it found change the Plan?'));
+    text.append(lead, node('p', 'board-update-note', 'An agent reads this result and the Plan, then drafts the changes it calls for: new cards, changes to cards that haven’t started, and cards to remove. Questions it can’t settle come back to you. Nothing changes until you accept.'));
+    const findings = card.artifact === 'findings' || ['reviewer', 'qa'].includes(card.role) || card.result?.files === 0;
+    const start = button('Update the Plan', () => { suggestConfirm = open ? null : updateKey(card); drawn = null; renderDrawer(); }, findings && !open ? 'primary-button' : 'secondary-button');
+    start.disabled = busy || Boolean(why); start.title = why || 'One read-only run that drafts changes to the Plan from this result.';
+    start.setAttribute('aria-expanded', String(open));
+    // Open, the confirm box below has the button; Cancel there closes it.
+    if (!open) { actions$.append(start); return box; }
+    const pick = suggestPick(card, smartMode(), card.result?.summary || card.title);
+    const confirm = node('div', 'board-update-confirm');
+    confirm.append(node('p', 'board-suggest-lead', pick.error ? pick.error : `Update the Plan with ${pick.who}.`));
+    confirm.append(node('p', 'board-suggest-note', pick.error ? 'Choose an agent or connect one in the message box first.' : `One read-only run. Counts toward your usage.${pick.usageNote ? ` ${pick.usageNote}` : ''}`));
+    // Its questions are answered in its own task; the update reads the answer that follows.
+    if (questions) confirm.append(node('p', 'board-update-ask', 'It asked you something above. Answer first so the update uses your answers, or update now and what it left open comes back to you as questions on the draft.'));
+    const row = node('div', 'board-suggest-actions');
+    const cancel = button('Cancel', () => { suggestConfirm = null; drawn = null; renderDrawer(); }, 'secondary-button');
+    const go = button('Update the Plan', () => {
+      if (pick.error) { failure = pick.error; showError(); return; }
+      if (pick.billed && window.relayBillingConfirmed !== true && !window.confirm(`Update the Plan with charges?\n\n${billsSentence(pick.provider)} This read-only run may cost money.\n\nTo stop this question for this session, turn on Allow API and unconfirmed billing in Settings.`)) return;
+      suggestConfirm = null;
+      act(`/api/board/cards/${card.id}/update-plan`, { provider: pick.provider, model: pick.model, effort: pick.effort, billingConfirmed: pick.billed ? true : window.relayBillingConfirmed === true }, result => {
+        if (result?.suggest && board) board.suggest = result.suggest;
+        api.announce(`Updating the Plan from what “${card.title}” found.`);
+      });
+    }, 'primary-button');
+    go.disabled = busy || Boolean(pick.error) || Boolean(why);
+    row.append(cancel, go); confirm.append(row); box.append(confirm);
+    return box;
   }
   // What can be done with a card where it is now: the one or two things that move it on as full buttons, then the rest as
   // a short list of rows with icons, like a menu, and Remove on its own at the end. Each row keeps its label as its text.
@@ -811,20 +891,20 @@
     const parts = [], state = stateOf(card);
     if (card.draft) {
       const by = card.draft.by?.kind === 'agent' ? [AGENT[card.draft.by.provider] || card.draft.by.provider, card.draft.by.model].filter(Boolean).join(' · ') : 'You';
-      const origin = card.draft.batch?.kind === 'suggest' && card.draft.batch.cardTitle ? ` as a follow-up to “${card.draft.batch.cardTitle}”` : card.source?.goal ? ' from your message' : '';
+      const origin = card.draft.batch?.kind === 'suggest' && card.draft.batch.cardTitle ? ` as a follow-up to “${card.draft.batch.cardTitle}”` : card.draft.batch?.kind === 'update' && card.draft.batch.cardTitle ? ` from what “${card.draft.batch.cardTitle}” found` : card.source?.goal ? ' from your message' : '';
       const kind = draftKind(card), target = card.draft.into ? cardBy(card.draft.into) : null;
       if (kind === 'change') {
         // A change to a card already on the Plan: what changed, and the short fields as they were.
         const what = (card.draft.changed || []).map(key => CHANGED[key]).filter(Boolean), was = card.draft.was?.fields || {};
-        parts.push(node('p', 'board-status', `${by} changed this card${what.length ? `: ${listed(what)}` : ''}. Accept to keep the change, or discard to put it back as it was.`));
+        parts.push(node('p', 'board-status', `${by} changed this card${card.draft.batch?.kind === 'update' && card.draft.batch.cardTitle ? ` from what “${card.draft.batch.cardTitle}” found` : ''}${what.length ? `: ${listed(what)}` : ''}. Accept to keep the change, or discard to put it back as it was.`));
         const before = ['title', 'group', 'role', 'tier'].filter(key => key in was);
         if (before.length) { const list = node('ul', 'board-draft-was'); list.setAttribute('aria-label', 'Before the change'); list.append(...before.map(key => node('li', '', `Was ${CHANGED[key]}: ${was[key] == null || was[key] === '' ? 'none' : key === 'role' ? ROLE[was[key]] || was[key] : String(was[key])}`))); parts.push(list); }
-      } else if (kind === 'remove') parts.push(node('p', 'board-status', target ? `${by} would merge this card into “${target.title}”. Accept to remove it, and the cards that wait for it wait for “${target.title}” instead. Discard to keep it.` : `${by} would remove this card. Accept to remove it, or discard to keep it.`));
+      } else if (kind === 'remove') parts.push(node('p', 'board-status', target ? `${by} would merge this card into “${target.title}”. Accept to remove it, and the cards that wait for it wait for “${target.title}” instead. Discard to keep it.` : `${by} would remove this card${card.draft.batch?.kind === 'update' && card.draft.batch.cardTitle ? `, from what “${card.draft.batch.cardTitle}” found` : ''}. Accept to remove it, or discard to keep it.`));
       else parts.push(node('p', 'board-status', `${by} drafted this card${origin}. Edit it, then accept or discard it. Nothing runs until you accept it.`));
       if (card.draft.notes?.length) { const list = node('ul', 'board-draft-notes'); list.setAttribute('aria-label', 'What the plan checks found'); list.append(...card.draft.notes.map(text => node('li', '', text))); parts.push(list); }
     }
     const suggest = board?.suggest;
-    if (suggest?.cardId === card.id && ['running', 'failed', 'interrupted'].includes(suggest.status)) {
+    if (suggest?.cardId === card.id && suggest.kind !== 'update' && ['running', 'failed', 'interrupted'].includes(suggest.status)) {
       const box = node('div', `board-suggest-status${suggest.status === 'running' ? ' running' : ' trouble'}`), detail = [AGENT[suggest.provider] || suggest.provider, suggest.model, suggest.phase && suggest.phase !== 'starting' ? suggest.phase : 'reading the project', suggest.toolCount ? plural(suggest.toolCount, 'tool call') : ''].filter(Boolean).join(' · ');
       if (suggest.status === 'running') {
         box.append(node('p', 'board-suggest-lead', 'Suggesting next cards…'), node('p', 'board-suggest-note', detail));
@@ -844,20 +924,7 @@
     else if (state?.detail && watching) parts.push(node('p', 'board-status', state.detail));
     if (watching) { const lines = liveLines(card, watching, { withWho: true }); lines.classList.add('board-watch'); lines.setAttribute('aria-label', 'This card’s run'); parts.push(lines); }
     if (card.column === 'ready' && card.reason) parts.push(node('p', 'board-status trouble', card.reason));
-    if (card.result && ['review', 'done'].includes(card.column)) {
-      const empty = card.taskState?.hasWorktree && card.taskState.copyFiles === 0;
-      const files = empty ? 0 : card.result.files;
-      const tests = card.result.tests, box = node('div', 'board-result'), facts = [files != null ? plural(files, 'file') + ' changed' : '', tests ? (TESTS[tests] || `tests ${tests}`).toLowerCase() + (card.result.testsAccepted ? ', continued anyway' : '') : 'no tests recorded', card.result.status === 'discarded' ? 'changes discarded' : empty ? 'nothing to merge' : card.result.inCopy ? (card.result.status === 'complete' ? 'in its own copy, not merged yet' : OUTCOME[card.result.status]?.toLowerCase()) : ''].filter(Boolean);
-      const line = facts.join(' · ');
-      box.append(node('p', 'board-result-facts', line.charAt(0).toUpperCase() + line.slice(1)));
-      // The whole answer, read when the card opens; the short summary stands in until then.
-      const reply = replies.get(card.id);
-      if (reply && reply.at === card.result.at && reply.text) box.append(answerBlock(reply.text));
-      else if (card.result.summary) { box.append(node('p', 'board-result-summary', card.result.summary)); readReply(card); }
-      if (card.result.testsReason && tests !== 'passed') box.append(node('p', 'board-result-facts', card.result.testsReason));
-      if (card.taskState?.testOutput && card.column === 'review') { const output = node('pre', 'plan-drawer-output', card.taskState.testOutput.trim().split('\n').slice(-20).join('\n')); output.setAttribute('aria-label', 'The end of the test output'); box.append(output); }
-      parts.push(box);
-    }
+    if (card.result && ['review', 'done'].includes(card.column)) parts.push(resultBox(card));
     const findings = reviewBox(card); if (findings) parts.push(findings);
     if (card.column === 'done' && card.acceptedAt) parts.push(node('p', 'board-status done', `Accepted by you, ${when(card.acceptedAt)}.`));
     return parts;
@@ -1008,6 +1075,98 @@
     form.append(title, notes, row, buttons);
     form.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); subEdit = null; drawn = null; renderDrawer(); } });
     return form;
+  }
+
+  // ---- A card's result
+  // Under the card's title, a section headed Result says who finished it and when, what it changed and how it was tested,
+  // then the agent's whole answer. The verdict a Reviewer or QA card ends with is for the Plan, which shows it as the
+  // review below, so it's left out of the answer. Questions the agent asks at the end show on their own, with a box to
+  // answer them: the answer goes to the card's task, which carries on from where it stopped.
+  function resultBox(card) {
+    const result = card.result, empty = card.taskState?.hasWorktree && card.taskState.copyFiles === 0, files = empty ? 0 : result.files, tests = result.tests;
+    const box = node('section', `board-result${result.status === 'complete' ? '' : ' trouble'}`); box.setAttribute('aria-label', `Result of “${card.title}”`);
+    const head = node('div', 'board-result-head'), mark = node('span', 'board-result-mark'); mark.setAttribute('aria-hidden', 'true');
+    mark.append(glyph(result.status === 'complete' ? 'M5 12.5l4.5 4.5L19 7.5' : 'M12 7v6|M12 16.5v.5'));
+    const provider = card.taskState?.provider || card.attempts?.at(-1)?.provider, model = card.taskState?.model || card.attempts?.at(-1)?.model;
+    const who = [provider ? [AGENT[provider] || provider, modelLabel(provider, model)].filter(Boolean).join(' · ') : '', result.at ? when(result.at) : ''].filter(Boolean).join(' · ');
+    head.append(mark, node('h3', 'board-result-title', result.status === 'complete' ? 'Result' : `Result · ${OUTCOME[result.status] || result.status}`), ...(who ? [node('span', 'board-result-who', who)] : []));
+    const facts = [files != null ? (files ? plural(files, 'file') + ' changed' : 'No files changed') : '', tests ? (TESTS[tests] || `Tests ${tests}`) + (result.testsAccepted ? ', continued anyway' : '') : 'No tests recorded', result.status === 'discarded' ? 'Changes discarded' : empty ? 'Nothing to merge' : result.inCopy ? (result.status === 'complete' ? 'In its own copy, not merged yet' : '') : ''].filter(Boolean);
+    const chips = node('ul', 'board-result-facts'); chips.setAttribute('aria-label', 'What it changed and how it was tested');
+    chips.append(...facts.map(text => node('li', '', text)));
+    box.append(head, chips);
+    // The whole answer, read when the card opens; the short summary stands in until then.
+    const reply = replies.get(card.id), text = reply && reply.at === result.at && reply.text ? stripVerdict(reply.text) : null;
+    let asked = [];
+    if (text) { const split = questionsIn(text); asked = split.questions; box.append(answerBlock(split.answer)); }
+    else if (result.summary) { box.append(node('p', 'board-result-summary', stripVerdict(result.summary))); readReply(card); }
+    if (result.testsReason && tests !== 'passed' && !(files === 0 && /^No files were changed\.?$/i.test(result.testsReason.trim()))) box.append(node('p', 'board-result-note', result.testsReason));
+    if (card.taskState?.testOutput && card.column === 'review') { const output = node('pre', 'plan-drawer-output', card.taskState.testOutput.trim().split('\n').slice(-20).join('\n')); output.setAttribute('aria-label', 'The end of the test output'); box.append(output); }
+    if (asked.length) box.append(questionsBox(card, asked, provider));
+    const update = updateBox(card, { questions: asked.length > 0 && card.column === 'review' }); if (update) box.append(update);
+    return box;
+  }
+  // The verdict block a review ends with (src/plan-review.mjs), fenced or bare, wherever it is in the answer.
+  function stripVerdict(text) {
+    const verdict = body => { try { const value = JSON.parse(body); return Boolean(value && typeof value === 'object' && 'verdict' in value); } catch { return false; } };
+    return String(text)
+      .replace(/```[\w-]*[ \t]*\n(\{[\s\S]*?\})\s*\n?```/g, (whole, body) => verdict(body) ? '' : whole)
+      .replace(/(^|\n)[ \t]*(\{"verdict"[^\n]*\})[ \t]*(?=\n|$)/g, (whole, start, body) => verdict(body) ? start : whole)
+      .replace(/\n{3,}/g, '\n\n').trimEnd();
+  }
+  // The questions an answer ends with: the list under a heading such as "Questions for you", or, without one, a last
+  // paragraph or list made only of questions. The rest is the answer. Questions asked along the way stay where they are.
+  function questionsIn(text) {
+    const lines = text.split('\n'), clean = line => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').replace(/^\*\*(.+)\*\*$/, '$1').trim();
+    const heading = lines.findLastIndex(line => /^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:open\s+)?questions?(?:\s+for\s+(?:you|the\s+person))?\s*:?\s*(?:\*\*)?\s*:?\s*$/i.test(line));
+    if (heading >= 0) {
+      const rest = lines.slice(heading + 1), items = [];
+      for (const line of rest) { if (/^\s*#{1,6}\s/.test(line) && items.length) break; const value = clean(line); if (value) items.push(value); }
+      if (items.length && items.length <= 8) return { answer: lines.slice(0, heading).join('\n').trimEnd(), questions: items };
+    }
+    // No heading: the last block, if every line of it asks something.
+    const blocks = text.trimEnd().split(/\n\s*\n/), last = blocks.at(-1) || '', items = last.split('\n').map(clean).filter(Boolean);
+    if (blocks.length > 1 && items.length && items.length <= 6 && items.every(item => /\?\s*(?:\*\*|_)?\)?$/.test(item))) return { answer: blocks.slice(0, -1).join('\n\n'), questions: items };
+    return { answer: text, questions: [] };
+  }
+  // The questions, and a box to answer them that goes on in the card's task. A card whose task can't carry on, such as
+  // one already accepted, shows the questions only.
+  function questionsBox(card, questions, provider) {
+    const box = node('section', 'board-questions'); box.setAttribute('aria-label', 'Questions for you');
+    box.append(node('h4', 'board-questions-title', `${AGENT[provider] || 'The agent'} asks`));
+    const list = node('ol', 'board-questions-list'); list.append(...questions.map(item => { const row = node('li'); row.append(...inline(item)); return row; })); box.append(list);
+    const task = card.taskState, open = card.column === 'review' && task?.conversationId && ['complete', 'stopped', 'failed'].includes(task.status);
+    if (!open) return box;
+    const input = node('textarea', 'board-input board-questions-input'); input.rows = 3; input.placeholder = questions.length === 1 ? 'Your answer…' : 'Your answers, in any order…';
+    input.setAttribute('aria-label', 'Your answer, sent to this card’s task');
+    const send = button('Answer and continue', async () => {
+      const text = input.value.trim(); if (!text) { input.focus(); return; }
+      send.disabled = true;
+      try { await answerCard(card, questions, text); } finally { send.disabled = false; }
+    }, 'primary-button board-questions-send');
+    const note = node('p', 'board-field-note', 'Goes to this card’s task with the questions, so its agent carries on. The card comes back here when it finishes.');
+    input.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); send.click(); } });
+    const row = node('div', 'board-questions-actions'); row.append(note, send);
+    box.append(input, row);
+    return box;
+  }
+  // Inline Markdown in a question: code, bold, italic and links.
+  function inline(text) {
+    const md = window.relayPhoneLogic;
+    if (!md?.spans) return [text];
+    return md.spans(text).map(span => span.type === 'text' ? document.createTextNode(span.text) : span.type === 'code' ? node('code', '', span.text) : span.type === 'bold' ? node('strong', '', span.text) : span.type === 'italic' ? node('em', '', span.text) : (() => { const link = node('a', '', span.text); link.href = span.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; return link; })());
+  }
+  // The answer goes on in the card's task, in the chat beside the Plan, with the questions quoted so the agent knows what
+  // it answers. The card's dialog closes, so the chat shows the task carrying on.
+  async function answerCard(card, questions, text) {
+    const message = `Answers to your questions:\n\n${questions.map((item, index) => `${index + 1}. ${item}`).join('\n')}\n\n${text}`;
+    try {
+      showChat();
+      await api.setTask(card.taskState.id);
+      const sent = await api.sendMessage?.(message);
+      if (sent === 'drafted') { closeDrawer(); api.announce('Your answer is in the message box of the card’s task. Send it when ready.'); return; }
+      if (!sent) { failure = 'The answer couldn’t be sent now. It’s in the message box of the card’s task.'; showError(); return; }
+      closeDrawer(); api.announce(`Answer sent. “${card.title}” carries on in its task.`);
+    } catch (error) { failure = error.message; showError(); }
   }
 
   // ---- A card's answer
@@ -1353,6 +1512,90 @@
     act(plan.id ? `/api/board/schedules/${plan.id}/edit` : '/api/board/schedules', { target, when: time, runLate: plan.runLate, ...(target.type === 'prompt' ? { title: plan.title } : {}) }, result => { api.announce(`Scheduled: ${describe(result.schedule.when)}.`); leaveSchedule(); });
   }
 
+  // ---- The Plan's chats (#162)
+  // The Plan view shows the Plan chat, never the Workspace chat. The Plan chat is the Plan's own conversation, a task that
+  // reads the workspace: asking about the Plan and drafting cards happen there, with what the Workspace chat said carried
+  // along (asking().attach). Each card's task is a chat of its own, and the bar above the chat lists them all, so a card's
+  // work is one click away. Leaving the Plan view goes back to the chat you were on before.
+  let chatTask = null, before = null, chatFailed = false, opening = null;
+  const planChatId = () => board?.chat?.taskId || chatTask;
+  const onPlanChat = () => { const state = api.getState(); return Boolean(state.taskId && !state.taskDraft && state.taskId === planChatId()); };
+  const planThreads = () => new Set([planChatId(), ...cards().map(card => card.taskState?.id)].filter(Boolean));
+  const onPlanThread = () => { const state = api.getState(); return Boolean(state.taskId && !state.taskDraft && planThreads().has(state.taskId)); };
+  // When the Plan chat can't open, the Plan view keeps the Workspace chat, which then asks and drafts for the Plan as
+  // before, and says why. Choosing the Plan chat in the bar tries again.
+  const fallback = () => { const state = api.getState(); return Boolean(chatFailed && !state.taskId && !state.taskDraft); };
+  const chatHere = () => onPlanChat() || fallback();
+  function openChat({ focus = false } = {}) {
+    if (!api.getState().projectId) return Promise.resolve();
+    opening ||= (async () => {
+      const from = era;
+      try {
+        const result = await api.post('/api/board/chat', {});
+        if (from !== era) return;
+        if (!result?.task?.id) throw new Error('This version of Codeshi’s server has no Plan chat.');
+        chatFailed = false; chatTask = result.task.id; board = own(result.board) || board;
+        if (showing && api.getState().taskId !== chatTask) await api.setTask(chatTask);
+        drawThreads();
+        if (focus) $('message-input')?.focus();
+      } catch (error) { if (from === era) { chatFailed = error.message || 'It didn’t answer.'; drawThreads(); drawContext(); } }
+      finally { opening = null; }
+    })();
+    return opening;
+  }
+  const THREAD_STATE = { running: 'Working', waiting: 'Waiting to start', complete: 'Finished', stopped: 'Stopped', failed: 'Didn’t finish', integrated: 'Merged', kept: 'Kept as a branch', discarded: 'Changes discarded', cancelled: 'Cancelled', blocked: 'Blocked', lost: 'Copy gone', detached: 'Folder removed' };
+  // Working cards first, then the ones waiting for your review, then the rest, each in the Plan's order.
+  const THREAD_ORDER = { doing: 0, review: 1, ready: 2, backlog: 2, done: 3 };
+  function drawThreads() {
+    const bar = $('plan-threads'); if (!bar) return;
+    const state = api.getState(), current = state.taskDraft ? null : state.taskId, chat = board?.chat;
+    const rows = [{ id: planChatId(), title: fallback() ? 'Workspace chat' : 'Plan chat', kind: 'chat', status: chat?.running ? 'running' : 'idle', approvals: chat?.approvals || 0 },
+      ...cards().filter(card => card.taskState?.conversationId).sort((a, b) => (THREAD_ORDER[a.column] ?? 2) - (THREAD_ORDER[b.column] ?? 2)).map(card => ({ id: card.taskState.id, title: card.title, kind: 'card', status: card.taskState.status, approvals: card.taskState.approvals || 0, review: card.column === 'review' }))];
+    const onChat = (!current && fallback()) || (current && current === planChatId()), currentCard = rows.find(row => row.kind === 'card' && row.id === current);
+    const title = $('plan-chat-title');
+    if (title) { title.textContent = currentCard ? 'Card’s task' : fallback() ? 'Workspace chat' : 'Plan chat'; title.title = fallback() ? `The Plan chat couldn’t open, so the Workspace chat asks and drafts for the Plan. ${chatFailed}` : ''; }
+    if ($('plan-chat-modes')) $('plan-chat-modes').hidden = !onChat;
+    emptyState(showing && chatHere());
+    const key = JSON.stringify([rows, current, showing, chatFailed]);
+    if (bar.dataset.drawn === key) return;
+    bar.dataset.drawn = key; bar.hidden = !showing;
+    bar.replaceChildren(...rows.map(row => {
+      const selected = row.kind === 'chat' ? onChat : row.id === current, item = node('button', `plan-thread ${row.kind}`);
+      item.type = 'button'; item.setAttribute('role', 'tab'); item.setAttribute('aria-selected', String(selected)); item.tabIndex = selected ? 0 : -1;
+      item.dataset.status = row.status; item.dataset.id = row.id || '';
+      const mark = node('span', row.kind === 'chat' ? 'plan-thread-icon' : 'plan-thread-dot'); mark.setAttribute('aria-hidden', 'true');
+      if (row.kind === 'chat') mark.append(glyph('M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z'));
+      const name = node('span', 'plan-thread-name', row.title);
+      item.append(mark, name);
+      const said = row.kind === 'chat' ? (fallback() ? `The Plan chat couldn’t open, so this is the Workspace chat. Choose it to try again. ${chatFailed}` : row.status === 'running' ? 'Working' : 'Asks and drafts cards for the Plan') : `${THREAD_STATE[row.status] || row.status}${row.review ? ', waiting for your review' : ''}`;
+      if (row.approvals) item.append(node('span', 'plan-thread-badge', String(row.approvals)));
+      else if (row.review) item.append(node('span', 'plan-thread-review', 'Review'));
+      item.title = `${row.title}: ${said}${row.approvals ? `. ${plural(row.approvals, 'approval')} waiting` : ''}`;
+      item.setAttribute('aria-label', item.title);
+      item.addEventListener('click', () => row.kind === 'chat' ? (chatFailed = false, openChat({ focus: true })) : api.setTask(row.id).then(() => $('message-input')?.focus()).catch(error => api.showNotice(error.message)));
+      return item;
+    }));
+    bar.querySelector('[aria-selected=true]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }
+  // An empty Plan chat says what it's for, instead of the Workspace chat's starters. Its words come back on leaving.
+  let emptyWords = null;
+  function emptyState(plan) {
+    const box = $('empty-state'), heading = box?.querySelector('h2'), text = box?.querySelector('p'), starters = box?.querySelector('.starter-prompts');
+    if (!heading || !text) return;
+    emptyWords ||= { heading: heading.textContent, text: text.textContent };
+    heading.textContent = plan ? 'Plan chat' : emptyWords.heading;
+    text.textContent = plan ? 'Ask about the Plan and its cards, or switch to Draft plan to have an agent draft or change cards. It reads the project and what the Workspace chat said, and changes no files.' : emptyWords.text;
+    if (starters) starters.hidden = plan;
+  }
+  // Left and Right move along the bar, as tabs do.
+  $('plan-threads')?.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const all = [...$('plan-threads').querySelectorAll('.plan-thread')], at = all.indexOf(document.activeElement);
+    if (at < 0) return;
+    const next = { ArrowLeft: all[at - 1], ArrowRight: all[at + 1], Home: all[0], End: all.at(-1) }[event.key];
+    if (next) { event.preventDefault(); next.focus(); }
+  });
+
   // ---- Asking the chat about the Plan (#162)
   // In the Plan view the chat's message box knows it. A line above what you write shows what goes with your message: the
   // Plan, and the card open beside it, sent as the text Attach to message makes, read again at Send so the agent sees the
@@ -1367,11 +1610,11 @@
   const planningPlan = () => { const plan = api.getState().conversation?.orchestrations?.[0]; return plan?.status === 'planning' ? plan : null; };
   // A draft that ended without cards: its reply couldn't be used, the planner didn't finish, or it was stopped. It shows
   // here, where the cards would have been, until you draft again or dismiss it.
-  const failedPlan = () => { const plan = api.getState().conversation?.orchestrations?.[0]; return ['unstructured', 'failed', 'interrupted'].includes(plan?.status) && !api.getState().taskId && !api.getState().taskDraft ? plan : null; };
+  const failedPlan = () => { const plan = api.getState().conversation?.orchestrations?.[0]; return ['unstructured', 'failed', 'interrupted'].includes(plan?.status) && chatHere() ? plan : null; };
   const cannotDraft = () => planningPlan() ? 'An agent is drafting cards now. Wait for it, or stop it, before drafting more.' : window.relayOrchestration?.cannotDraft?.() || '';
   // What the next message takes from the Plan: the Plan's open cards and the card open beside it.
   function asked$() {
-    if (!showing || !board) return null;
+    if (!showing || !board || !chatHere()) return null;
     const open = cards().filter(card => !shut(card)).length, card = selected ? cardBy(selected) : null;
     return {
       plan: { count: open, closed: board.closed === true, on: board.closed !== true && open > 0 && !leftOut.plan },
@@ -1438,6 +1681,9 @@
         const ask = drafting ? { draft: true } : { ask: true };
         if (now.plan.on) ids.push((await api.post('/api/board/attach', now.card?.on ? { focus: now.card.id, ...ask } : ask)).attachment);
         else if (now.card?.on) ids.push((await api.post('/api/board/attach', { cardId: now.card.id, ...ask })).attachment);
+        // What the Workspace chat said since the Plan chat last heard goes too, so it answers with the workspace's context.
+        // It helps but isn't needed, so the message still goes without it.
+        if (onPlanChat()) { try { const context = await api.post('/api/board/workspace-context', {}); if (context?.attachment?.id) ids.unshift(context.attachment); } catch { /* Sent without it. */ } }
         return ids.map(meta => meta.id);
       },
       // Once sent, the next message takes the Plan and the card again, and a draft goes back to asking.
@@ -1489,7 +1735,7 @@
     if (card && draft && !dirty() && draft.revision !== card.revision) draft = editable(card);
     // A schedule being written is drawn again only when its kind of time changes, so typing keeps its place.
     if (card) readComments(card.id);
-    const key = JSON.stringify([selected, card && [card.column, card.revision, card.reason, card.taskState, card.result, card.acceptedAt, card.attempts?.length, card.labels, card.checks, card.commentCount, card.draft, card.auto, card.routingMode, card.group, card.split, card.subtasks, card.splitting, card.subtasksPaused, card.closed, cards().filter(other => other.dependsOn?.includes(card.id)).map(other => [other.id, other.title, other.column, other.role]), subEdit?.cardId === card.id ? [subEdit.id, subEdit.tier, subEdit.agent] : null, threads.get(card.id)?.length ?? null, schedulesOf(card)], suggestConfirm === card?.id, board?.suggest, board?.closed, cards().length >= (board?.limits?.cards || 300), selected === 'run' ? [...picked] : null, selected === 'run' ? cards().map(item => [item.id, item.column, item.agent?.provider, item.dependsOn]) : null, selected === 'schedules' ? schedules() : null, selected === 'schedule' ? [sdraft?.id, sdraft?.when.repeat, sdraft?.target] : null, busy]);
+    const key = JSON.stringify([selected, card && [card.column, card.revision, card.reason, card.taskState, card.result, card.acceptedAt, card.attempts?.length, card.labels, card.checks, card.commentCount, card.draft, card.auto, card.routingMode, card.group, card.split, card.subtasks, card.splitting, card.subtasksPaused, card.closed, cards().filter(other => other.dependsOn?.includes(card.id)).map(other => [other.id, other.title, other.column, other.role]), subEdit?.cardId === card.id ? [subEdit.id, subEdit.tier, subEdit.agent] : null, threads.get(card.id)?.length ?? null, schedulesOf(card)], suggestConfirm, board?.suggest, board?.closed, cards().length >= (board?.limits?.cards || 300), selected === 'run' ? [...picked] : null, selected === 'run' ? cards().map(item => [item.id, item.column, item.agent?.provider, item.dependsOn]) : null, selected === 'schedules' ? schedules() : null, selected === 'schedule' ? [sdraft?.id, sdraft?.when.repeat, sdraft?.target] : null, busy]);
     if (key === drawn) { changed(); return; }
     drawn = key;
     if (selected === 'run') { $('board-drawer-title').textContent = 'Run Ready cards'; body.replaceChildren(...runPanel()); return; }
@@ -1518,7 +1764,15 @@
       }
       if (primary) bar.append(...primary.children);
     }
-    main.append(...(card ? status(card) : []), ...part('lead'), ...part('main').slice(0, locked$(card) ? 3 : 2), ...(card ? subtasksPanel(card) : []), ...part('main').slice(locked$(card) ? 3 : 2), ...(card ? afterPanel(card, followUps) : []), ...(card ? [...commentsPanel(card), ...history(card)] : []));
+    // A finished card reads as its title, then its result, then what it was asked, folded away: the result is what you came
+    // for, and it can't be taken for another card's.
+    const head = part('main').slice(0, locked$(card) ? 3 : 2), finished = Boolean(card?.result && ['review', 'done'].includes(card.column));
+    if (finished) {
+      const [title, notes, ...others] = head, asked = node('details', 'board-asked');
+      asked.append(node('summary', '', 'What it was asked'), ...(notes ? [notes] : []));
+      main.append(...part('lead'), ...(title ? [title] : []), ...status(card), asked, ...others);
+    } else main.append(...(card ? status(card) : []), ...part('lead'), ...head);
+    main.append(...(card ? subtasksPanel(card) : []), ...part('main').slice(locked$(card) ? 3 : 2), ...(card ? afterPanel(card, followUps) : []), ...(card ? [...commentsPanel(card), ...history(card)] : []));
     side.append(...part('side'), ...(card ? cardSchedules(card) : []));
     const columns = node('div', 'board-card-columns'); columns.append(main, side);
     body.replaceChildren(columns, ...part('foot'));
@@ -1552,7 +1806,7 @@
     const box = $('board-drafts'); if (!box) return;
     const batches = new Map();
     for (const card of cards().filter(item => item.draft)) { const id = card.draft.batch?.id || 'own'; if (!batches.has(id)) batches.set(id, []); batches.get(id).push(card); }
-    const planning = planningPlan(), suggest = board?.suggest, suggestShown = suggest && ['running', 'failed', 'interrupted'].includes(suggest.status) ? suggest : null;
+    const planning = planningPlan(), suggest = board?.suggest, suggestShown = suggest && (['running', 'failed', 'interrupted'].includes(suggest.status) || (suggest.kind === 'update' && suggest.status === 'complete' && !suggest.cards?.length)) ? suggest : null;
     const failed = failedPlan();
     const splits = needingSplit().map(card => card.id);
     const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, failed ? [failed.id, failed.status, failed.summary] : null, suggestShown, draftNotice?.text || null, splits, splitAsk ? [splitAsk.ids, splitAsk.who] : null, cannotDraft()]));
@@ -1564,7 +1818,7 @@
     if (planning) {
       const row = node('section', 'board-draft-batch board-draft-planning'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
       row.setAttribute('aria-label', 'Drafting cards');
-      text.append(node('p', 'board-draft-lead', `Drafting cards${planning.documents?.length ? ` from ${listNames(planning.documents)}` : ''}…`), node('p', 'board-draft-note', 'They’ll appear here to accept or discard. The planner’s progress shows in the Workspace chat.'));
+      text.append(node('p', 'board-draft-lead', `Drafting cards${planning.documents?.length ? ` from ${listNames(planning.documents)}` : ''}…`), node('p', 'board-draft-note', 'They’ll appear here to accept or discard. The planner’s progress shows in the Plan chat.'));
       const stop = button('Stop', () => api.stopRun?.(), 'secondary-button'); stop.setAttribute('aria-label', 'Stop drafting cards');
       actions$.append(stop); row.append(text, actions$); working.push(row);
     }
@@ -1585,13 +1839,18 @@
       const row = node('section', `board-draft-batch ${isRun ? 'board-draft-planning board-suggest-running' : 'board-suggest-trouble'}`), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
       row.setAttribute('aria-label', isRun ? 'Suggesting next cards' : 'Suggestions did not finish');
       const who = [AGENT[suggestShown.provider] || suggestShown.provider, suggestShown.model, suggestShown.phase && suggestShown.phase !== 'starting' ? suggestShown.phase : 'reading the project', suggestShown.toolCount ? plural(suggestShown.toolCount, 'tool call') : ''].filter(Boolean).join(' · ');
-      const splitting = suggestShown.kind === 'split';
-      if (isRun) {
-        text.append(node('p', 'board-draft-lead', splitting ? `Splitting ${suggestShown.cardIds?.length > 1 ? plural(suggestShown.cardIds.length, 'card') : `“${suggestShown.cardTitle}”`} into subtasks…` : `Suggesting next cards after “${suggestShown.cardTitle}”…`), node('p', 'board-draft-note', `${who}. ${splitting ? 'The subtasks appear on each card for you to review.' : 'Suggested cards will appear here as drafts.'}`));
+      const splitting = suggestShown.kind === 'split', updating = suggestShown.kind === 'update';
+      if (updating && suggestShown.status === 'complete') {
+        row.className = 'board-draft-batch board-update-none'; row.setAttribute('aria-label', 'The Plan needs no changes');
+        text.append(node('p', 'board-draft-lead', `“${suggestShown.cardTitle}” found nothing that changes the Plan.`), node('p', 'board-draft-note', `${suggestShown.summary || ''}${suggestShown.questions?.length ? ` ${plural(suggestShown.questions.length, 'question')} left for you on the card.` : ''}`.trim()));
+        const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); dismiss.disabled = busy;
+        actions$.append(dismiss);
+      } else if (isRun) {
+        text.append(node('p', 'board-draft-lead', splitting ? `Splitting ${suggestShown.cardIds?.length > 1 ? plural(suggestShown.cardIds.length, 'card') : `“${suggestShown.cardTitle}”`} into subtasks…` : updating ? `Updating the Plan from what “${suggestShown.cardTitle}” found…` : `Suggesting next cards after “${suggestShown.cardTitle}”…`), node('p', 'board-draft-note', `${who}. ${splitting ? 'The subtasks appear on each card for you to review.' : updating ? 'The changes will appear here as a draft to accept or discard.' : 'Suggested cards will appear here as drafts.'}`));
         const stop = button('Stop', () => act('/api/board/suggest/stop', {}, () => api.announce('Stopping suggestions.')), 'secondary-button'); stop.setAttribute('aria-label', 'Stop suggesting cards'); stop.disabled = busy;
         actions$.append(stop);
       } else {
-        text.append(node('p', 'board-draft-lead', splitting ? (suggestShown.status === 'interrupted' ? 'Stopped splitting.' : 'Couldn’t split the cards.') : suggestShown.status === 'interrupted' ? `Stopped suggesting after “${suggestShown.cardTitle}”.` : `Couldn’t suggest cards after “${suggestShown.cardTitle}”.`), node('p', 'board-draft-note', suggestShown.summary || 'Try again when ready.'));
+        text.append(node('p', 'board-draft-lead', splitting ? (suggestShown.status === 'interrupted' ? 'Stopped splitting.' : 'Couldn’t split the cards.') : updating ? (suggestShown.status === 'interrupted' ? `Stopped updating the Plan from “${suggestShown.cardTitle}”.` : `Couldn’t update the Plan from “${suggestShown.cardTitle}”.`) : suggestShown.status === 'interrupted' ? `Stopped suggesting after “${suggestShown.cardTitle}”.` : `Couldn’t suggest cards after “${suggestShown.cardTitle}”.`), node('p', 'board-draft-note', suggestShown.summary || 'Try again when ready.'));
         const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); dismiss.disabled = busy;
         actions$.append(dismiss);
       }
@@ -1607,6 +1866,7 @@
       // A draft can change the Plan as well as add to it: new cards, changed cards and cards to remove or merge.
       const fresh = list.filter(card => draftKind(card) === 'new').length, changing = list.filter(card => draftKind(card) === 'change').length, removing = list.length - fresh - changing;
       const verb = batch.kind === 'suggest' && batch.cardTitle ? `suggested ${plural(list.length, 'card')} after “${batch.cardTitle}”`
+        : batch.kind === 'update' && batch.cardTitle ? `updated the Plan from what “${batch.cardTitle}” found: ${listed([fresh ? plural(fresh, 'new card') : '', changing ? `${plural(changing, 'card')} changed` : '', removing ? `${plural(removing, 'card')} to remove` : ''].filter(Boolean))}`
         : changing || removing ? listed([fresh ? `drafted ${plural(fresh, 'new card')}` : '', changing ? `changed ${plural(changing, 'card')}` : '', removing ? `would remove ${plural(removing, 'card')}` : ''].filter(Boolean))
         : `drafted ${plural(list.filter(card => card.createdBy !== 'codeshi').length, 'card')}${list.some(card => card.createdBy === 'codeshi') ? ', and Codeshi added a review of the whole result' : ''}`;
       const lead = node('p', 'board-draft-lead'); lead.append(glyph(ICONS.smart), node('span', '', `${by} ${verb}`));
@@ -2291,7 +2551,8 @@
   }
 
   function render() {
-    if (!showing) { entry(); return; }
+    if (!showing) { entry(); const bar = $('plan-threads'); if (bar) bar.hidden = true; emptyState(false); return; }
+    drawThreads();
     const onCanvas = view === 'canvas', outline = view === 'outline';
     $('board-canvas').classList.toggle('canvas-mode', onCanvas); $('board-columns').hidden = view !== 'columns'; space.hidden = !onCanvas; $('board-outline').hidden = !outline;
     for (const [id, mode] of [['board-columns-mode', 'columns'], ['board-canvas-mode', 'canvas'], ['board-outline-mode', 'outline']]) $(id)?.setAttribute('aria-pressed', String(view === mode));
@@ -2375,6 +2636,9 @@
     selected = null; draft = null; failure = ''; drawn = null;
     const next = then; then = null;
     render(); chatAttention();
+    // The chat you were on comes back when you leave; a card's task you were on stays open beside the Plan.
+    before = api.getState().taskDraft ? null : api.getState().taskId || null; chatFailed = false;
+    if (!onPlanThread()) openChat(); else drawThreads();
     load().then(() => {
       if (!showing) return;
       if (next?.prefill) openNew('backlog', null, next.prefill);
@@ -2388,6 +2652,9 @@
     selected = null; draft = null; sdraft = null; drawn = null; picked$ = null; suggestConfirm = null;
     const menu = $('board-export-menu'); if (menu) menu.hidden = true;
     drafting = false; replaces = null; leftOut = { plan: false, card: null }; drawContext(); entry();
+    const back = before; before = null; chatFailed = false;
+    if (onPlanThread()) api.setTask(back && !planThreads().has(back) ? back : null).catch(error => api.showNotice(error.message));
+    window.relayTaskThreads?.refresh?.();
   }
   // Esc lets go of a chosen arrow, then closes the card beside the board. It never leaves the Plan: the view switch does.
   dialog.addEventListener('keydown', event => {
@@ -2478,10 +2745,13 @@
     // Another workspace: the Plan stays and shows that workspace's cards, as Flow stays on.
     if (state.projectId !== project) {
       project = state.projectId; era++; splitQueue = []; writes = 0; loading++; drafting = false; replaces = null; answers = new Map(); leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; fitted = false; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); replies = new Map(); replying = new Map(); heard = new Map();
-      selected = null; draft = null; sdraft = null; drawn = null; failure = ''; picked = new Set();
+      selected = null; draft = null; sdraft = null; drawn = null; failure = ''; picked = new Set(); chatTask = null; before = null; chatFailed = false;
       if (showing) { renderDrawer(); render(); }
     }
     chatAttention();
+    // The Plan view never shows the Workspace chat: going to it, by a shortcut or a notice, opens the Plan chat instead.
+    if (showing && state.projectId && state.ready && !state.taskId && !state.taskDraft && !chatFailed) openChat();
+    if (showing) drawThreads();
     const key = JSON.stringify([state.projectId, state.conversation?.boardRevision, state.conversation?.boardSuggest ? [state.conversation.boardSuggest.id, state.conversation.boardSuggest.status, state.conversation.boardSuggest.phase, state.conversation.boardSuggest.toolCount] : null, (state.conversation?.parallelTasks || []).map(task => [task.id, task.status, task.approvals, task.hasWorktree, task.testing, Boolean(task.runningProvider), task.runningModel])]);
     if (key === seen) { entry(); if (showing) { drawEarlier(); if (board) drawDrafts(); drawContext(); patchLive(); } return; }
     seen = key;
@@ -2489,5 +2759,5 @@
   });
   // open({ title, notes }) opens the Plan with a new card written from them, as Write it yourself does.
   // close() goes back to Normal, or to Flow when routing was on. showChat() opens the chat beside the Plan.
-  window.relayBoard = { open, show, hide, canLeave, showChat, asking, close: () => showing ? window.relayFlow?.setView?.(window.relayFlow.isRouted?.() ? 'flow' : 'normal') !== false : true, isOpen: () => showing, reload: load, drafts: () => cards().filter(card => card.draft) };
+  window.relayBoard = { open, show, hide, canLeave, showChat, asking, openChat: () => openChat({ focus: true }), chatTaskId: () => planChatId(), onPlanChat: () => showing && onPlanChat(), close: () => showing ? window.relayFlow?.setView?.(window.relayFlow.isRouted?.() ? 'flow' : 'normal') !== false : true, isOpen: () => showing, reload: load, drafts: () => cards().filter(card => card.draft) };
 })();

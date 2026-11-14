@@ -56,6 +56,9 @@
 .flow-brand-workspace { position: relative; display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 260px; height: 26px; margin-left: 12px; padding: 0 7px 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; line-height: 1.4; white-space: nowrap; cursor: pointer; }
 .flow-brand-workspace[hidden] { display: none; }
 .flow-brand-workspace span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.flow-brand-workspace .flow-brand-badge { flex: none; overflow: visible; }
+.flow-brand-badge.waiting { min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: var(--warning); color: var(--bg, #000); font-size: var(--font-ui-xs); font-weight: 600; line-height: 16px; text-align: center; }
+.flow-brand-badge.working { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .flow-brand-workspace::before { content: ""; position: absolute; left: -6px; top: 5px; bottom: 5px; width: 1px; background: var(--border-strong); }
 .flow-brand-workspace::after { content: ""; flex: none; width: 11px; height: 11px; background: currentColor; -webkit-mask: var(--icon-chevron-down) center / contain no-repeat; mask: var(--icon-chevron-down) center / contain no-repeat; }
 .flow-brand-workspace:hover, .flow-brand-workspace[aria-expanded="true"] { background: var(--hover); color: var(--text-strong); }

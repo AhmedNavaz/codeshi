@@ -19,7 +19,7 @@ const parts = [
 const rating = { tier: 'standard', effort: 'medium', reason: 'Two unrelated changes and a note.' };
 const request = 'Fix the login redirect so people land where they were going, add a CSV export to the reports page, and document the export in the README.';
 
-function setup(t, { billing = 'subscription' } = {}) {
+function setup(t, { billing = 'subscription', ask = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-split-test-')), workspace = path.join(root, 'project');
   fs.mkdirSync(workspace); fs.writeFileSync(path.join(workspace, '.mock-scenarios.json'), '{}');
   const bin = path.join(root, 'codex.mjs'); fs.writeFileSync(bin, `#!${process.execPath}\nimport ${JSON.stringify(new URL('./mock-cli.mjs', import.meta.url).href)};\n`, { mode: 0o700 });
@@ -32,6 +32,8 @@ function setup(t, { billing = 'subscription' } = {}) {
   broker.tasks.tick = () => {};
   const c = broker.get(broker.create().id);
   broker.setRouting(c, { mode: 'smart', executionRevision: broker.execution.defaults(c).revision });
+  // Splitting without asking is on by default in Flow; most of these tests look at the suggestion, so they turn it off.
+  if (ask) broker.splits.prefer(c, { auto: false });
   const input = { text: request, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'send-split', executionRevision: broker.execution.defaults(c).revision, allowSplit: true, routing: { mode: 'smart', tier: 'standard', reason: 'Draft estimate' } };
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   return { broker, c, input };
@@ -185,7 +187,7 @@ test('parts that bill by use need your yes, and splitting without asking never u
   assert.equal(done.cards.length, 3);
 });
 
-test('with splitting without asking on, subscription parts start at once; putting a suggestion away gives the message back', { skip: scriptCLIs }, async t => {
+test('splitting without asking is on by default in Flow, in the folder you are in; putting a suggestion away gives the message back', { skip: scriptCLIs }, async t => {
   const { broker, c, input } = setup(t);
   broker.router.worker = async () => JSON.stringify({ ...rating, parts });
   const first = await broker.dispatch(c, input);
@@ -210,4 +212,12 @@ test('a part’s limits count what its message and the other parts used', () => 
   assert.equal(budgets.used(state).tokens, 300, 'Without the conversation, a part’s own usage alone, as the other parts read it.');
   const refused = budgets.refusal({ taskPolicy: { maxRetries: 3 }, taskBudgets: { part: { ...state, tokens: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 } } } }, { task: { id: 'part', relation: 'retry' }, provider: 'codex' });
   assert.equal(refused.limit, 'maxRetries'); assert.match(refused.message, /other parts of its split/);
+});
+
+test('Flow splits subscription parts without asking by default, with no folder question', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t, { ask: false });
+  broker.router.worker = async () => JSON.stringify({ ...rating, parts });
+  const answer = await broker.dispatch(c, input);
+  assert.equal(answer.split.automatic, true);
+  assert.equal(answer.split.cards.length, 3);
 });

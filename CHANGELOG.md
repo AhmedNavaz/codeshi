@@ -4,6 +4,21 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-11-14
+
+### Added
+- **The Plan has its own chat** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). In the Plan view the message box talks to a **Plan chat**, apart from the Workspace chat. Asking about the Plan and **Draft cards** run there, with the Workspace chat's latest messages carried along, so neither chat waits for the other. It only reads your folders. A bar above it lists each card's task, so a card's conversation is one click away.
+- **Update the Plan from a card's findings** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). A finished card's result ends with **Update the Plan**, the main choice for research, review and QA cards and for cards that changed no files. After you confirm the agent and what it may cost, one read-only run reads the card's whole answer and your Plan and drafts what the findings call for: cards to change, merge or remove, new cards, and cards that now wait for the findings. Cards that are running, in review or done aren't touched. Nothing changes until you accept, and discarding the draft puts everything back. Questions the card left unanswered come back as questions on the draft.
+- **A card's result says whose it is** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). It's labelled with the card, shows the questions the agent asked at the end with a box to answer, and answering continues that card's task.
+- **Other workspaces' approvals and working agents show at a glance** ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)). The workspace name in the top bar shows a count of approvals waiting in other workspaces and a dot when an agent is working in one, without opening the menu.
+
+### Changed
+- **Flow's task list is quieter and shows what's happening** ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)). **You're here** and the folder name are gone: the vermilion bar marks the chat you're in. A row shows the agent and model working and what it's doing, a split's parts show with their agent and state, and the Plan chat shows only when it needs an approval.
+
+### Fixed
+- **Moving between Plan and Flow while a Plan runs no longer shows an error** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). Flow turns its routing on when the conversation is idle, instead of failing with *Stop the current run before changing how agents are chosen*.
+- **Switching workspace no longer opens Review changes by itself.**
+
 ## [0.53.0] - 2026-11-14
 
 ### Added

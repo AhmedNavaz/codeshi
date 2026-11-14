@@ -73,10 +73,10 @@ export const OPEN_PLANS = ['planning', 'draft', 'unstructured', 'failed', 'inter
 // there in its own time, so neither holds the queue: the chat carries on with what you queued.
 export const openPlan = c => { const plan = c.orchestrations?.[0]; return plan && ['planning', 'draft'].includes(plan.status) ? plan : null; };
 
-// Orchestrate plans from the main conversation, which holds the plan. Review after belongs to the steps' combined
+// Cards are drafted in the main conversation or the Plan chat (#162), whose drafts go on the Plan. Review after belongs to the steps' combined
 // changes, not to the planning run.
 export function checkPlanning(broker, { routing = null, automaticReview = null } = {}) {
-  if (!broker.tasks) fail('Orchestrate plans from the main conversation. Switch to it to plan this message.');
+  if (!broker.tasks && !broker.board) fail('Draft cards from the Plan chat or the main conversation.');
   if (automaticReview !== null && automaticReview !== undefined) fail('Review after doesn\u2019t apply to planning. The plan reviews the combined changes after its last step.');
 }
 

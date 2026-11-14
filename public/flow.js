@@ -65,12 +65,16 @@
   function rememberRouting() { const current = routing(), id = api.getState().projectId; if (current && id) write(ROUTING_KEY(id), JSON.stringify({ mode: canonicalMode(current.mode), allowApi: current.allowApi === true, check: current.check === true })); }
   function savedRouting(id) { try { const saved = JSON.parse(read(ROUTING_KEY(id)) || 'null'), mode = canonicalMode(saved?.mode); return saved && modes.some(option => option.mode === mode) ? { ...saved, mode } : null; } catch { return null; } }
   // Flow has no manual mode: entering turns routing on with the mode this workspace last used in Flow, or Smart.
+  // Routing can't change while the shown conversation runs, such as a Plan card's task, so it waits for the run to end
+  // and is turned on at the next idle moment.
+  const conversationBusy = () => { const c = api.getState().conversation; return Boolean(api.isRunning() || c?.activeRun || c?.status === 'running'); };
   async function ensureRouting() {
-    if (!routed || routing() || routingPending || !api.getState().projectId) return;
+    if (!routed || routing() || routingPending || !api.getState().projectId || conversationBusy()) return;
     const choice = savedRouting(api.getState().projectId) || { mode: 'smart', allowApi: false, check: false };
     routingPending = true; schedule();
     try { await api.setRouting({ mode: choice.mode, allowApi: choice.allowApi === true, check: choice.check === true }); }
-    catch (error) { api.showNotice?.(`Flow could not turn routing on. ${error.message}`); }
+    // A run that started meanwhile answers 409; routing is tried again when it ends.
+    catch (error) { if (error.status !== 409) api.showNotice?.(`Flow could not turn routing on. ${error.message}`); }
     finally { routingPending = false; schedule(); }
   }
   const needsManualControl = () => {
@@ -594,7 +598,10 @@
   // Tasks side by side (#88, #107): the workspace chat and every folder task running alongside it, with approvals,
   // copy/merge state and direct switching without leaving Flow.
   // A split's parts that Flow is finishing by itself show above the message box instead (split-progress.js).
-  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => (task.purpose !== 'project-review' && !task.managed) || task.id === state.taskId || (task.purpose === 'project-review' && task.approvals));
+  // A split's parts show here too, with their agent and state, so the list is never empty while Flow is working; Flow merges
+  // them itself, so they have no Review or Close buttons.
+  // The Plan chat (#162) shows only when it waits for an approval; the Plan view lists it with the cards' tasks.
+  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => task.purpose === 'plan-chat' ? Boolean(task.approvals) : task.purpose !== 'project-review' || task.id === state.taskId || task.approvals);
   const taskMergeable = task => Boolean(task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status));
   const taskEnded = task => !['running', 'waiting'].includes(task.status) && !taskMergeable(task);
   const TASK_STATUS_WORDS = { complete: 'finished', stopped: 'stopped', failed: 'didn’t finish', discarded: 'discarded', cancelled: 'cancelled', blocked: 'blocked', lost: 'copy gone', detached: 'folder removed' };
@@ -616,7 +623,7 @@
     const signature = JSON.stringify([
       state.projectId, state.taskId, state.taskDraft, pickingTaskFolder, hasThreads, mainRunning, mainApprovals,
       folders.map(folder => [folder.id, folder.displayName || folder.name]),
-      tasks.map(task => [task.id, task.title, task.status, task.folderName, task.mode, task.provider, task.runningProvider, task.runningPhase, task.runningStep, task.approvals, task.testing, task.hasWorktree, task.held, task.reason, task.conversationId, task.integration?.files, task.integration?.branch, task.cardColumn]),
+      tasks.map(task => [task.id, task.title, task.status, task.folderName, task.mode, task.provider, task.runningProvider, task.runningModel, task.model, task.managed, task.runningPhase, task.runningStep, task.approvals, task.testing, task.hasWorktree, task.held, task.reason, task.conversationId, task.integration?.files, task.integration?.branch, task.cardColumn]),
     ]);
     if (signature === card.signature) return;
     card.signature = signature;
@@ -659,7 +666,7 @@
     }
 
     if (tasks.length || state.taskId) {
-      // One row per conversation. The whole row switches to it; the one you're in is marked "You're here" and isn't a
+      // One row per conversation. The whole row switches to it; the one you're in has the accent bar and isn't a
       // button. Working is a small dot, needing you is the amber badge, so the three never look alike.
       const list = node('ul', 'flow-tasks');
       const row = ({ key, title, place, live, liveText, still, approvals, pill, here, onOpen, openLabel, kind }) => {
@@ -680,7 +687,6 @@
         const side = node('span', 'flow-task-side');
         if (approvals) side.append(node('span', 'flow-task-badge', plural(approvals, 'approval')));
         else if (pill) side.append(node('span', 'flow-task-pill', pill));
-        if (here) side.append(node('span', 'flow-task-here', 'You’re here'));
         face.append(mark, text, side);
         item.append(face);
         return item;
@@ -698,15 +704,16 @@
 
       for (const task of ownTasks) {
         const provider = task.runningProvider || task.provider, running = task.status === 'running';
-        const liveText = provider ? `${agentNames[provider] || provider}${task.runningStep ? ` · on “${clip(task.runningStep, 35)}”` : task.runningPhase ? ` · ${phaseWords[task.runningPhase] || task.runningPhase}` : ' · working'}` : 'Working';
-        const modeLabel = task.mode === 'worktree' ? 'own copy' : task.mode === 'direct' ? 'direct' : '';
-        const item = row({ key: task.id, title: task.title, place: [task.folderName, modeLabel].filter(Boolean).join(' · '), live: running, liveText, still: running ? '' : taskStatusText(task), approvals: task.approvals || 0, pill: taskMergeable(task) ? 'Review' : '', here: !state.taskDraft && state.taskId === task.id, onOpen: () => selectTask(task.id), openLabel: `Switch to “${task.title}”`, kind: `agent-icon ${provider || ''}` });
+        const modelId = task.runningModel || task.model, modelName = provider && modelId ? window.relayModelPicker?.modelName?.(provider, modelId) || modelId : '';
+        const liveText = task.runningStep ? `on “${clip(task.runningStep, 35)}”` : task.runningPhase ? (phaseWords[task.runningPhase] || task.runningPhase) : 'Working';
+        const item = row({ key: task.id, title: task.title, place: provider ? [agentNames[provider] || provider, modelName].filter(Boolean).join(' · ') : '', live: running, liveText, still: running ? '' : taskStatusText(task), approvals: task.approvals || 0, pill: taskMergeable(task) && !task.managed ? 'Review' : '', here: !state.taskDraft && state.taskId === task.id, onOpen: () => selectTask(task.id), openLabel: `Switch to “${task.title}”`, kind: `agent-icon ${provider || ''}` });
         if (task.reason && ['waiting', 'failed', 'stopped', 'blocked'].includes(task.status)) {
           const note = node('p', 'flow-task-note', clip(task.reason, 110)); note.title = task.reason; item.append(note);
         }
         const actions = node('div', 'flow-task-actions');
         if (task.status === 'waiting' && task.held && window.relayTaskThreads?.resume) actions.append(button('flow-button flow-task-action', 'Start', () => window.relayTaskThreads.resume(task.id)));
-        if (taskMergeable(task) && window.relayTaskThreads?.review) actions.append(button('flow-button flow-task-action', 'Review & merge', () => window.relayTaskThreads.review(task.id)));
+        if (task.managed) { /* Flow finishes it */ }
+        else if (taskMergeable(task) && window.relayTaskThreads?.review) actions.append(button('flow-button flow-task-action', 'Review & merge', () => window.relayTaskThreads.review(task.id)));
         else if (taskEnded(task) && window.relayTaskThreads?.close) actions.append(button('flow-button flow-task-action', 'Close', () => window.relayTaskThreads.close(task.id)));
         if (actions.querySelector('button')) item.append(actions);
         list.append(item);
@@ -1004,7 +1011,21 @@
       const word = mark.querySelector('.flow-brand-name'); if (word) word.textContent = view === 'plan' ? 'Plan' : 'Flow';
       // The workspace name opens the workspace menu, as Flow and the Plan have no sidebar to switch from.
       const name = state.projects?.find(project => project.id === state.projectId)?.name || '', button = $('flow-brand-workspace');
-      if (button) { button.hidden = !name; if (button.textContent !== name) button.replaceChildren(node('span', '', name)); button.title = `${name}: switch workspace`; button.setAttribute('aria-label', `Workspace: ${name}. Switch workspace`); }
+      if (button) {
+        // Other workspaces' approvals and running agents show beside the name, so they are seen without opening the menu.
+        const others = (state.projects || []).filter(project => project.id !== state.projectId && project.available !== false);
+        const waiting = others.reduce((sum, project) => sum + (project.pendingApprovals || 0), 0), working = others.filter(project => project.runningConversationId).length;
+        const note = [waiting ? `${plural(waiting, 'approval')} waiting in other workspaces` : '', working ? `${working === 1 ? 'An agent is' : `${working} agents are`} working in ${working === 1 ? 'another workspace' : 'other workspaces'}` : ''].filter(Boolean).join('; ');
+        const signature = JSON.stringify([name, waiting, working]);
+        if (button.dataset.signature !== signature) {
+          button.dataset.signature = signature;
+          const parts = [node('span', '', name)];
+          if (waiting) { const badge = node('span', 'flow-brand-badge waiting', String(waiting)); badge.setAttribute('aria-hidden', 'true'); parts.push(badge); }
+          if (working) { const dot = node('span', 'flow-brand-badge working'); dot.setAttribute('aria-hidden', 'true'); parts.push(dot); }
+          button.replaceChildren(...parts);
+        }
+        button.hidden = !name; button.title = `${name}: switch workspace${note ? `. ${note}` : ''}`; button.setAttribute('aria-label', `Workspace: ${name}.${note ? ` ${note}.` : ''} Switch workspace`);
+      }
     }
     if (input) { if (on && input.placeholder === DEFAULT_PLACEHOLDER) input.placeholder = FLOW_PLACEHOLDER; else if (!on && input.placeholder === FLOW_PLACEHOLDER) input.placeholder = DEFAULT_PLACEHOLDER; }
   }

@@ -27,7 +27,10 @@
   const conversation = () => state().conversation;
   const inFlow = () => window.relayFlow?.isOn?.() === true;
   // A plan belongs to the main conversation. A new task's draft starts from it, so it carries the plans too.
-  const onMain = () => !state().taskId && !state().taskDraft;
+  // Plans are drafted in the Workspace chat or, from the Plan view, in the Plan chat (#162), which is a task of its own.
+  const onPlanChat = () => Boolean(state().taskId && state().taskId === window.relayBoard?.chatTaskId?.());
+  const onMain = () => (!state().taskId || onPlanChat()) && !state().taskDraft;
+  const chatName = () => onPlanChat() ? 'The Plan chat' : 'The Workspace chat';
   const openPlan = () => { const plan = conversation()?.orchestrations?.[0]; return plan && OPEN.includes(plan.status) ? plan : null; };
   const modeName = () => (conversation()?.routing ? (window.relayRouting?.modeNames?.[conversation()?.routing?.mode] || 'the routing mode') : (names[state().provider] || 'your selected agent'));
   const copy = plan => ({ planId: plan.id, revision: plan.revision, review: plan.review !== false, steps: JSON.parse(JSON.stringify(plan.steps || [])), dirty: false, structure: 0 });
@@ -381,9 +384,9 @@
     const s = state();
     if (!s.ready) return 'Codeshi is still starting.';
     if (s.localSelections?.[s.projectId]) return 'A local model is chosen in the message box. Choose a connected agent there to draft cards.';
-    if (!onMain()) return 'Open the Workspace chat to draft cards. Tasks don’t draft plans.';
-    if (s.pending || api.isRunning() || conversation()?.status === 'running') return 'The Workspace chat is busy. Drafting can start when its current run finishes.';
-    if (conversation()?.resume) return 'The Workspace chat has unfinished work. Continue or dismiss it first.';
+    if (!onMain()) return 'Open the Plan chat to draft cards. A card’s task doesn’t draft plans.';
+    if (s.pending || api.isRunning() || conversation()?.status === 'running') return `${chatName()} is busy. Drafting can start when its current run finishes.`;
+    if (conversation()?.resume) return `${chatName()} has unfinished work. Continue or dismiss it first.`;
     return '';
   }
   function render() {

@@ -9,7 +9,8 @@
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'text-link') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
   // A split's parts that Flow is finishing by itself show above the message box instead (split-progress.js).
-  const tasks = () => (api.getState().conversation?.parallelTasks || []).filter(task => (task.purpose !== 'project-review' && !task.managed) || task.id === api.getState().taskId || (task.purpose === 'project-review' && task.approvals));
+  // The Plan chat (#162) belongs to the Plan view, which lists it with the cards' tasks, so it isn't listed here.
+  const tasks = () => (api.getState().conversation?.parallelTasks || []).filter(task => task.purpose !== 'plan-chat' && ((task.purpose !== 'project-review' && !task.managed) || task.id === api.getState().taskId || (task.purpose === 'project-review' && task.approvals)));
   const LABEL = { waiting: 'Waiting', running: 'Working', complete: 'Finished', stopped: 'Stopped', failed: 'Did not finish', integrated: 'Merged', kept: 'Kept as a branch', discarded: 'Discarded', cancelled: 'Cancelled', blocked: 'Blocked', lost: 'Copy gone', detached: 'Folder removed' };
   // What the copy has that a fresh checkout wouldn't, and the secrets it doesn't have.
   const copyNote = setup => {
@@ -176,12 +177,15 @@
   }
   function renderBanner() {
     const state = api.getState(), task = tasks().find(item => item.id === (focused || state.taskId));
-    banner.hidden = !task || Boolean(state.taskDraft);
-    if (!task) return;
+    // In the Plan view (#162) the Plan chat needs no banner: the Plan's thread bar names it. A card's task says it's a card's,
+    // and goes back to the Plan chat rather than the Workspace chat, which the Plan view doesn't show.
+    const plan = window.relayBoard?.isOpen?.() === true;
+    banner.hidden = !task || Boolean(state.taskDraft) || task.purpose === 'plan-chat';
+    if (!task || task.purpose === 'plan-chat') return;
     const text = node('div', 'task-banner-text');
     // Says which conversation this is by name, so a task's chat can't be mistaken for the workspace chat.
     const title = node('strong', 'task-banner-title'), name = node('span', 'task-banner-name', task.title || 'Task'); name.title = task.title || '';
-    title.append(node('span', 'task-banner-kind', 'Task'), name, node('span', 'task-banner-state', `${task.folderName} · ${LABEL[task.status] || task.status}`));
+    title.append(node('span', 'task-banner-kind', task.board ? 'Card' : 'Task'), name, node('span', 'task-banner-state', `${task.folderName} · ${LABEL[task.status] || task.status}`));
     text.append(title);
     const how = task.reason || (task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
     if (task.status === 'integrated') text.append(node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`));
@@ -193,8 +197,9 @@
       if (task.held) actions.append(button('Start', () => attempt(() => act(task, 'start')), 'secondary-button'));
       actions.append(button('Cancel', () => attempt(() => act(task, 'discard'))));
     }
-    if (!['running', 'waiting'].includes(task.status) && !canMerge(task)) actions.append(button('Close', () => attempt(async () => { await act(task, 'close'); await selectThread(null); })));
-    if (!focused) actions.append(button('Workspace chat', () => attempt(() => selectThread(null)), 'secondary-button task-banner-back'));
+    if (!['running', 'waiting'].includes(task.status) && !canMerge(task)) actions.append(button('Close', () => attempt(async () => { await act(task, 'close'); if (plan) await window.relayBoard.openChat(); else await selectThread(null); })));
+    if (plan) actions.append(button('Plan chat', () => attempt(() => window.relayBoard.openChat()), 'secondary-button task-banner-back'));
+    else if (!focused) actions.append(button('Workspace chat', () => attempt(() => selectThread(null)), 'secondary-button task-banner-back'));
     banner.dataset.status = task.status;
     banner.replaceChildren(text, actions);
   }
@@ -338,6 +343,6 @@
   });
   $('task-merge-close').addEventListener('click', () => $('task-merge-dialog').close());
   window.addEventListener('relay-state', () => render());
-  window.relayTaskThreads = { open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => selectThread(tasks().find(task => task.id === id) || null), review: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => openReview(task)); }, resume: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'start')); }, discard: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'discard')); }, close: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(async () => { await act(task, 'close'); if ((focused || api.getState().taskId) === task.id) await selectThread(null); }); } };
+  window.relayTaskThreads = { refresh: () => render(true), open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => selectThread(tasks().find(task => task.id === id) || null), review: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => openReview(task)); }, resume: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'start')); }, discard: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'discard')); }, close: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(async () => { await act(task, 'close'); if ((focused || api.getState().taskId) === task.id) await selectThread(null); }); } };
   render(true);
 })();

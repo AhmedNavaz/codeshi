@@ -68,7 +68,7 @@ export class TaskCoordinator {
     if (others >= limit) throw fail(`${others} ${others === 1 ? 'task is' : 'tasks are'} already running, the most this workspace's task limits allow at once.`);
     if (task) this.syncPolicy(home, task);
   }
-  available(task) { return task.purpose === 'project-review' ? JSON.stringify(task.workspaceFolders.map(({ id, path }) => ({ id, path }))) === JSON.stringify(this.main.workspaceFolders.map(({ id, path }) => ({ id, path }))) : this.main.workspaceFolders.some(folder => folder.id === task.folderId); }
+  available(task) { return task.purpose === 'plan-chat' ? this.main.workspaceFolders.some(folder => folder.id === task.folderId) : task.purpose === 'project-review' ? JSON.stringify(task.workspaceFolders.map(({ id, path }) => ({ id, path }))) === JSON.stringify(this.main.workspaceFolders.map(({ id, path }) => ({ id, path }))) : this.main.workspaceFolders.some(folder => folder.id === task.folderId); }
   syncPolicy(c, task) {
     const lane = this.lanes.get(task.id); if (!lane) return;
     const policy = this.policyFor(c, task);
@@ -143,6 +143,41 @@ export class TaskCoordinator {
     this.tick(c);
     this.main.emit('update', { conversationId: c.id });
     return this.public(saved);
+  }
+  // The Plan's own chat (#162): one per workspace, apart from the Workspace chat. Asking about the Plan and drafting cards
+  // happen there, in a lane of its own that reads every folder and changes none, so neither chat waits for the other.
+  // It opens with no first message, as an idle conversation, and stays; cards it drafts go on the Plan (Board.adoptFrom).
+  planChat(c) {
+    const saved = c.planChat?.taskId ? (c.parallelTasks || []).find(task => task.id === c.planChat.taskId) : null;
+    if (saved && saved.conversationId && this.available(saved) && !['detached', 'lost'].includes(saved.status) && !saved.closed) { this.lane(c, saved); return this.public(saved); }
+    if (this.closed) throw fail('Codeshi is stopping.', 503);
+    const folder = this.main.workspaceFolders[0];
+    if (!folder) throw fail('Add a folder to this workspace first.');
+    let identity;
+    try { identity = folderIdentity(folder.path); } catch { throw fail(`${folder.displayName || folder.name} is unavailable.`, 404); }
+    const id = randomUUID(), requestId = `plan-chat-${id}`;
+    this.main.execution.ensure(c, id, { requestId });
+    const task = { id, execution: this.main.execution.token(c, id), requestId, title: 'Plan chat', purpose: 'plan-chat', text: 'Plan chat', folderId: folder.id, folderName: folder.displayName || folder.name, folderPath: folder.path, provider: c.provider, model: null, effort: null, accessMode: 'read', approvalPolicy: 'ask', billingConfirmed: false, attachments: [], includeHistory: false, dependsOn: null, status: 'complete', reason: null, mode: 'direct', modeReason: 'Reads the workspace for the Plan', scopePath: identity.real, commonDir: identity.commonDir || null, createdAt: new Date().toISOString() };
+    this.main.record(c, { type: 'parallel_task', task });
+    const made = this.find(c, id), lane = this.lane(c, made);
+    const conversation = lane.broker.get(lane.broker.create().id); lane.c = conversation;
+    lane.broker.updateContext(conversation, c.context);
+    for (const entry of (c.memory || []).filter(item => item.status === 'active')) lane.broker.record(conversation, { type: 'memory_add', entry });
+    if (c.skills?.length) lane.broker.record(conversation, { type: 'skills', skills: c.skills, dirs: c.skillDirs || [] });
+    lane.broker.budget.setPolicy(conversation, this.policyFor(c, made));
+    lane.broker.record(conversation, { type: 'execution_policy', policy: this.main.execution.current(c, id) });
+    this.update(c, made, { conversationId: conversation.id });
+    this.main.record(c, { type: 'plan_chat', taskId: id });
+    this.main.emit('update', { conversationId: c.id });
+    return this.public(made);
+  }
+  // The Workspace chat's messages since the Plan chat last had them, for the Plan chat's next message to carry: at most
+  // the last 20 the first time, then only what's new. Returns null when there is nothing new.
+  workspaceSince(c) {
+    const said = c.messages.filter(item => ['user', 'assistant'].includes(item.role) && item.text?.trim() && !item.reviewId && !item.rewound && item.status !== 'streaming');
+    const after = c.planChat?.syncedThrough ? said.findIndex(item => item.id === c.planChat.syncedThrough) : -1;
+    const fresh = (after >= 0 ? said.slice(after + 1) : said).slice(-20);
+    return fresh.length ? fresh : null;
   }
   // A queued prompt started now as a task beside the main conversation (#108, first stage). It keeps the agent, model, effort,
   // access and permission setting it was queued with, and leaves the queue only once the task is recorded, so a task that can't
@@ -313,7 +348,13 @@ export class TaskCoordinator {
     const open = this.lanes.get(task.id);
     if (open) return open;
     if (!task.scopePath) return null;
-    const broker = new this.BrokerClass({ lane: true, workspace: task.scopePath, workspaceFolders: task.purpose === 'project-review' ? task.workspaceFolders : [{ id: task.folderId, name: task.folderName, path: task.scopePath }], dataDir: path.join(this.directory(task), 'journal'), googleRoot: this.main.googleRoot, bins: this.main.configuredBins, contextPolicy: this.main.contextPolicy, handoffPreferences: this.main.handoff.preferences, verificationCadence: this.main.verificationCadence, contextLimit: this.main.contextLimit, contextRouting: () => c.routing?.mode || null, acquireMutation: operation => task.purpose === 'project-review' ? { release() {}, setProcess() {} } : this.acquireFolders([task.scopePath], `${operation} for “${task.title}”`) });
+    const broker = new this.BrokerClass({ lane: true, workspace: task.scopePath, workspaceFolders: task.purpose === 'project-review' ? task.workspaceFolders : task.purpose === 'plan-chat' ? this.main.workspaceFolders.map(folder => ({ ...folder })) : [{ id: task.folderId, name: task.folderName, path: task.scopePath }], dataDir: path.join(this.directory(task), 'journal'), googleRoot: this.main.googleRoot, bins: this.main.configuredBins, contextPolicy: this.main.contextPolicy, handoffPreferences: this.main.handoff.preferences, verificationCadence: this.main.verificationCadence, contextLimit: this.main.contextLimit, contextRouting: () => c.routing?.mode || null, acquireMutation: operation => ['project-review', 'plan-chat'].includes(task.purpose) ? { release() {}, setProcess() {} } : this.acquireFolders([task.scopePath], `${operation} for “${task.title}”`) });
+    if (task.purpose === 'plan-chat') {
+      // The Plan chat only reads, whatever the message box is set to, so it never holds a folder another chat writes to.
+      // A draft it returns goes on the Plan, which lives in the Workspace chat's journal.
+      for (const name of ['dispatch', 'start']) { const original = broker[name].bind(broker); broker[name] = (laneC, input = {}, ...rest) => original(laneC, { ...input, mode: 'read' }, ...rest); }
+      broker.board = { adopt: (laneC, runId) => this.main.board?.adoptFrom(c, broker, laneC, runId) };
+    }
     if (task.purpose === 'project-review') {
       // This lane only reads project files; the validated map is saved by ProjectReview. It needs no exclusive writer lease.
       const check = broker.checkRunSettings.bind(broker);
@@ -573,7 +614,8 @@ export class TaskCoordinator {
   view(c, id, options) {
     const task = this.find(c, id), lane = this.lane(c, task);
     if (!lane?.c) return { execution: { defaults: this.main.execution.defaults(c), active: this.main.execution.current(c, task.execution?.taskId), policies: [] }, id: null, messages: [], status: task.status, queue: [], runs: [], task: this.public(task), parallelTasks: this.list(c), checkpoints: {} };
-    return { ...lane.broker.view(lane.c, options), task: this.public(task), parallelTasks: this.list(c), checkpoints: {} };
+    // The Plan's revision and suggestion come along, so the Plan beside a task's chat, such as the Plan chat (#162), stays current.
+    return { ...lane.broker.view(lane.c, options), task: this.public(task), parallelTasks: this.list(c), checkpoints: {}, boardRevision: c.boardRevision || 0, boardSuggest: c.boardSuggest ? (({ pid, pidStart, ...rest }) => rest)(c.boardSuggest) : null };
   }
 
   // A task's own changes, reviewed by another agent from inside the task (#88). The reviewer reads a copy of the files the
@@ -582,6 +624,7 @@ export class TaskCoordinator {
   reviewScope(c, id) {
     const task = this.find(c, id);
     if (task.purpose === 'project-review') throw fail('This task only prepares the app review, so it has no changes to review.');
+    if (task.purpose === 'plan-chat') throw fail('The Plan chat only reads the workspace, so it has no changes to review.');
     if (ENDED.has(task.status)) throw fail(task.status === 'cancelled' ? 'This task never started, so it has no changes to review.' : 'This task has ended and its copy is gone. Review its changes from the workspace chat.');
     if (!this.available(task) || task.status === 'detached') throw fail(`${task.folderName} is no longer in this workspace, so this task’s changes can’t be reviewed.`);
     if (task.mode === 'worktree' && (!task.worktree || !fs.existsSync(task.worktree))) throw fail('This task’s working copy is gone, so there is nothing to review.');

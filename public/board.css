@@ -112,7 +112,50 @@
 .board-status.done { background: color-mix(in srgb, var(--success) 10%, transparent); color: var(--success); }
 .board-result { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
 .board-result-facts { margin: 0; color: var(--muted); font-size: 11.5px; }
+/* A finished card's result (#162): headed, with an accent edge, so it reads as this card's and not as a message. */
+section.board-result { gap: 10px; padding: 12px 14px 14px; border-left: 3px solid var(--success); }
+section.board-result.trouble { border-left-color: var(--warning); }
+.board-result-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.board-result-mark { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--success-bg); color: var(--success); }
+.board-result.trouble .board-result-mark { background: var(--warning-bg); color: var(--warning); }
+.board-result-mark .icon { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.board-result-title { margin: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.board-result-who { min-width: 0; margin-left: auto; overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+ul.board-result-facts { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; list-style: none; }
+ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--chip-bg); line-height: 18px; }
+.board-result-note { margin: 0; color: var(--muted); font-size: 12px; }
+/* The questions a card's answer ends with, and the box that answers them in its task. */
+.board-questions { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.board-questions-title { margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.board-questions-list { margin: 0; padding-left: 20px; line-height: 1.5; }
+.board-questions-list li + li { margin-top: 4px; }
+.board-questions-list code { padding: 0 3px; border-radius: 3px; background: var(--surface); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
+.board-questions-input { width: 100%; min-height: 64px; resize: vertical; }
+.board-questions-actions { display: flex; align-items: center; gap: 10px; }
+.board-questions-actions .board-field-note { flex: 1; margin: 0; }
+.board-questions-send { flex: none; }
+/* What a finished card was asked, folded under its result. */
+.board-asked { border-top: 1px solid var(--border); padding-top: 8px; }
+.board-asked > summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+.board-asked > summary:hover { color: var(--text-strong); }
+.board-asked[open] > summary { margin-bottom: 8px; }
 .board-result-summary { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+/* Update the Plan from what a card found: the last part of its result, set off by a rule. */
+.board-update { display: grid; gap: 10px; margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--border); }
+.board-update-head { display: flex; align-items: center; gap: 12px; }
+.board-update-text { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.board-update-lead { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.board-update-lead .icon { flex: none; width: 14px; height: 14px; fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; }
+.board-update.running .board-update-lead .icon { animation: board-update-pulse 1.4s ease-in-out infinite; }
+.board-update.trouble .board-update-lead .icon { stroke: var(--warning); }
+.board-update.done .board-update-lead .icon { stroke: var(--success); }
+.board-update-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.board-update-actions { display: flex; flex: none; gap: 8px; }
+.board-update-questions { margin: 4px 0 0; padding-left: 20px; font-size: 12px; line-height: 1.5; }
+.board-update-confirm { display: grid; gap: 6px; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.board-update-ask { margin: 0; color: var(--warning); font-size: 12px; line-height: 1.45; }
+@keyframes board-update-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .board-update.running .board-update-lead .icon { animation: none; } }
 /* A card's whole answer, drawn like a chat reply. */
 .board-result-answer { min-width: 0; line-height: 1.55; overflow-wrap: anywhere; }
 .board-result-answer > :first-child { margin-top: 0; }
@@ -472,6 +515,30 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 .plan-chat-mode[aria-pressed=true] { background: var(--surface-raised); color: var(--text-strong); box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-sm); }
 .plan-chat-modes.drafting .plan-chat-mode[aria-pressed=true] { color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--border)), var(--shadow-sm); }
 .plan-chat-mode:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.plan-chat-modes[hidden] { display: none; }
+#app-shell.plan .plan-chat-head #plan-chat-hide { margin-left: auto; }
+#app-shell.plan .plan-chat-modes:not([hidden]) + #plan-chat-hide { margin-left: 0; }
+
+/* The Plan chat and each card's task (#162), as tabs above the chat. A card's dot says how its task stands. */
+.plan-threads { display: none; }
+#app-shell.plan .plan-threads:not([hidden]) { flex: none; display: flex; gap: 2px; padding: 6px 10px; overflow-x: auto; border-bottom: 1px solid var(--border); scrollbar-width: none; }
+.plan-threads::-webkit-scrollbar { display: none; }
+.plan-thread { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 220px; height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font: 12px var(--font); cursor: pointer; }
+.plan-thread:hover { background: var(--hover); color: var(--text-strong); }
+.plan-thread[aria-selected=true] { border-color: var(--border-strong); background: var(--surface-raised); color: var(--text-strong); box-shadow: var(--shadow-sm); }
+.plan-thread:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.plan-thread-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-thread-icon { display: inline-flex; color: var(--accent); }
+.plan-thread-icon .icon { width: 13px; height: 13px; }
+.plan-thread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.plan-thread[data-status=running] .plan-thread-dot { background: var(--accent); animation: task-working 1.6s ease-in-out infinite; }
+.plan-thread.chat[data-status=running] .plan-thread-icon { animation: task-working 1.6s ease-in-out infinite; }
+.plan-thread:is([data-status=complete], [data-status=integrated], [data-status=kept]) .plan-thread-dot { background: var(--success); }
+.plan-thread:is([data-status=failed], [data-status=blocked], [data-status=lost]) .plan-thread-dot { background: var(--danger); }
+.plan-thread:is([data-status=stopped], [data-status=detached], [data-status=waiting]) .plan-thread-dot { background: var(--warning); }
+.plan-thread-badge { flex: none; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--warning); color: #1a1a1a; font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; }
+.plan-thread-review { flex: none; color: var(--link); font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { .plan-thread[data-status=running] :is(.plan-thread-dot, .plan-thread-icon) { animation: none; } }
 #app-shell.plan .empty-state .capabilities { display: none; }
 #app-shell.plan .plan-context { padding-top: 8px; }
 .plan-context-redraft { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
@@ -812,3 +879,6 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 /* Where the run stands: one strip above the board while cards run. Running is the widest lane and the only one tinted, so
    the eye lands on it first; Up next and Done are quieter. Each entry is a button that opens its card. */
 /* The mark says the state without reading: spinner working, ! needs you, hollow ring waiting, check done. */
+
+/* The empty Plan chat (#162) has no starters: it says what it is for instead. */
+.starter-prompts[hidden] { display: none; }

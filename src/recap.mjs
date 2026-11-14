@@ -35,7 +35,7 @@ const QUIET = new Set(['integrated', 'kept', 'discarded', 'cancelled', 'detached
 function taskRecap(broker, c, from, running) {
   const tasks = [], plans = new Map();
   for (const task of c.parallelTasks || []) {
-    if (task.closed || QUIET.has(task.status) || task.purpose === 'project-review') continue;
+    if (task.closed || QUIET.has(task.status) || ['project-review', 'plan-chat'].includes(task.purpose)) continue;
     const lane = broker.tasks?.lanes?.get(task.id), approvals = lane?.broker?.pendingCount?.() || 0;
     const ended = Date.parse(task.endedAt || '') >= from, check = task.stepCheck?.status || null;
     const working = task.status === 'running' || running.has(task.id);

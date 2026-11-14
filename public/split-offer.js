@@ -48,13 +48,9 @@
     // Charges are their own yes, unless API billing is already allowed for routing.
     $('split-billing').hidden = !charged || allowApi;
     if (!$('split-billing').hidden) $('split-billing-text').textContent = `Accept charges: ${charged === 1 ? 'one part uses an agent' : `${charged} parts use agents`} that ${charged === 1 ? 'bills' : 'bill'} by use, or whose billing couldn’t be confirmed.`;
-    if (fresh) { $('split-billing-confirm').checked = false; $('split-auto').checked = api.getState().conversation?.splitPreference?.auto === true; }
-    const list$ = folders(), pickFolder = $('split-folder');
-    $('split-folder-row').hidden = list$.length < 2;
-    if (list$.length > 1 && (fresh || pickFolder.options.length !== list$.length)) {
-      pickFolder.replaceChildren(...list$.map(folder => { const option = node('option', '', folder.displayName || folder.name); option.value = folder.id; return option; }));
-      pickFolder.value = api.selectedFolderId?.() || list$[0].id;
-    }
+    if (fresh) { $('split-billing-confirm').checked = false; $('split-auto').checked = api.getState().conversation?.splitPreference?.auto !== false; }
+    // No folder question: the parts work in the folder you're in, or the primary one.
+    $('split-folder-row').hidden = true;
     $('split-note').textContent = `Each part runs as its own task, ${parts.some(part => part.dependsOn?.length) ? 'after the parts it needs, ' : ''}with this chat’s access and this message’s task limits. Flow merges each one when it’s safe, has another agent review the combined result, and answers here. Anything it can’t settle goes to the Plan for you. Routing picks each agent again when it starts.`;
     const run = $('split-run');
     run.textContent = busy === 'tasks' ? 'Starting…' : `Run as ${parts.length} tasks`;
@@ -69,7 +65,7 @@
     if (!offer || !id || busy) return;
     busy = action; draw();
     try {
-      const body = { id: offer.id, action, ...(action === 'tasks' ? { billingConfirmed: $('split-billing-confirm').checked, folderId: folders().length > 1 ? $('split-folder').value : null } : {}) };
+      const body = { id: offer.id, action, ...(action === 'tasks' ? { billingConfirmed: $('split-billing-confirm').checked, folderId: folders().length > 1 ? api.selectedFolderId?.() || null : null } : {}) };
       const result = await api.post(`/api/conversations/${id}/split`, body, projectId);
       // Put away: the message goes back in the message box, as it was sent.
       if (action === 'dismiss' && result?.text) {

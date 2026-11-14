@@ -2036,7 +2036,8 @@
   executionTakeover.addEventListener('click', takeManualControl);
   executionStrip.append(executionLabel, executionTakeover); ui.form.parentNode?.insertBefore(executionStrip, ui.form);
   function renderExecutionPolicy() {
-    if (document.getElementById('app-shell')?.classList.contains('flow')) {
+    // Flow says how it works on its own cards; the Plan chat (#162) only reads and drafts cards, so there is nothing to take over.
+    if (document.getElementById('app-shell')?.classList.contains('flow') || window.relayBoard?.onPlanChat?.()) {
       executionStrip.hidden = true;
       return;
     }
@@ -3276,6 +3277,13 @@
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
     commands, isRunning, filteredProjects, openWorkspaceMenu, wireWorkspaceButton, setRouting, takeManualControl, routeFor, planAgain: again => run(false, again), stopRun: () => stop(), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,
+    // Sends text in the open conversation as if typed, such as an answer to a Plan card's questions (#162). A draft already
+    // in the box isn't replaced: the text goes after it, unsent, and 'drafted' says so. true once the message is accepted.
+    async sendMessage(text) {
+      if (ui.input.value.trim()) { ui.input.value = `${ui.input.value.trimEnd()}\n\n${text}`; resizeInput(); renderControls(); ui.input.focus(); return 'drafted'; }
+      ui.input.value = text; resizeInput(); renderControls();
+      return (await run(false)) === true;
+    },
     prepareQuestionAnswer(conversationId, text, projectId = state.projectId) {
       const current = state.projectId === projectId && state.conversation?.id === conversationId && !state.taskDraft;
       const key = projectId ? `ai-relay:project:${projectId}:draft:${conversationId}` : storageKey(`ai-relay:draft:${conversationId}`);

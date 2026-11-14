@@ -769,6 +769,39 @@ test('a review that ends without a verdict holds the cards after it, and a plan�
   assert.equal(withFinalReview([{ ...steps[0], card: 'abc' }, steps[1]]).added, null, 'A plan that edits the Plan you have is left as it is.');
 });
 
+// The Plan chat (#162): the Plan's own conversation, apart from the Workspace chat, that reads and drafts cards.
+test('the Plan chat opens once, reads only, carries what the Workspace chat said, and drafts cards onto the Plan', { skip: scriptCLIs }, async t => {
+  const env = setup(t, ['a', 'b']);
+  env.broker.message(env.c, 'user', 'We agreed the sitemap goes in codeshi-web.');
+  const { task } = env.board.chat(env.c);
+  assert.equal(task.purpose, 'plan-chat'); assert.equal(task.title, 'Plan chat'); assert.equal(task.status, 'complete');
+  assert.equal(env.board.chat(env.c).task.id, task.id, 'It is opened once and kept.');
+  assert.deepEqual(env.board.view(env.c).chat, { taskId: task.id, conversationId: task.conversationId, status: 'complete', running: false, approvals: 0 });
+  const lane = env.lane(task.id);
+  assert.deepEqual(lane.broker.workspaceFolders.map(folder => folder.id), ['a', 'b'], 'It reads every folder of the workspace.');
+  assert.equal(lane.c.messages.length, 0, 'The Workspace chat isn’t copied into it.');
+  // The Workspace chat reaches it as an attachment on its next message, and only what's new after that.
+  const first = env.board.workspaceContext(env.c);
+  assert.equal(first.messages, 1);
+  assert.match(Buffer.from(env.broker.attachments.read(first.attachment.id).data, 'base64').toString(), /# Workspace chat[\s\S]*The person[\s\S]*sitemap goes in codeshi-web/);
+  assert.deepEqual(env.board.workspaceContext(env.c), { attachment: null, messages: 0 }, 'Nothing new, nothing attached.');
+  env.broker.message(env.c, 'assistant', 'Noted.');
+  assert.equal(env.board.workspaceContext(env.c).messages, 1);
+  // A message there runs read-only whatever the box says, and a draft goes on the Plan, not into the Workspace chat.
+  const plan = { summary: 'Sitemap, then a check.', questions: [], steps: [{ title: 'Add a sitemap', instructions: 'Generate sitemap.xml.', tier: 'light', dependsOn: [] }, { title: 'Check it', instructions: 'Validate the sitemap.', tier: 'light', dependsOn: [1], role: 'qa' }] };
+  const file = path.join(env.folder('a'), '.mock-scenarios.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(file, JSON.stringify({ ...saved, '~Plan the sitemap': { text: JSON.stringify(plan) } }));
+  await lane.broker.dispatch(lane.c, { text: 'Plan the sitemap', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', orchestrate: true, requestId: 'plan-chat-draft-1' });
+  await until(() => lane.c.orchestrations?.[0]?.status === 'moved' && !lane.broker.running, 'the drafted cards to reach the Plan');
+  assert.equal(lane.c.lastRun.mode, 'read');
+  const drafts = env.c.board.filter(card => card.draft);
+  assert.deepEqual(drafts.map(card => card.title), ['Add a sitemap', 'Check it']);
+  assert.equal(env.c.orchestrations?.length || 0, 0, 'The Workspace chat has no plan of its own.');
+  assert.equal(env.c.messages.filter(message => message.role === 'user').length, 1, 'Nothing was said in the Workspace chat.');
+  // It stays out of what's left to recap, and has no changes to review.
+  assert.throws(() => env.broker.tasks.reviewScope(env.c, task.id), /only reads the workspace/);
+});
+
 // Closed to agents (#97): a card or the whole Plan that Codeshi never puts in a prompt, and the Plan attached to a message.
 test('a card or the Plan closed to agents can’t run, be scheduled or attached, and stays out of briefs and exports (#97)', async t => {
   const env = setup(t);
@@ -1145,6 +1178,73 @@ test('Suggest next reads the card and open neighbors in a read-only run, drafts 
   await env.reopen();
   assert.equal(env.c.boardSuggest.status, 'interrupted');
   assert.match(env.c.boardSuggest.summary, /restarted/i);
+});
+
+test('Update the Plan reads a finished card’s findings and the Plan, and drafts changes, removals and new cards named after it', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  const cache = env.add({ title: 'Add Redis cache', notes: 'Cache sessions in Redis.', column: 'ready', group: 'Build' });
+  const limiter = env.add({ title: 'Write a rate limiter', column: 'backlog', group: 'Build' });
+  const secret = env.add({ title: 'Salary bands', notes: 'SECRET-UPDATE', column: 'backlog', closed: true });
+  const research = env.add({ title: 'Research caching', column: 'ready', artifact: 'findings', group: 'Research' });
+  // Not finished yet: nothing to update with.
+  assert.throws(() => env.board.updateFrom(env.c, research.id, { provider: 'codex' }), /hasn’t finished/);
+  env.board.update(env.c, env.card(research.id), { column: 'review', result: { status: 'complete', summary: 'FINDING-42: sessions already live in Postgres, and the gateway rate-limits.', files: 0 } });
+
+  const prompt = env.board.updatePrompt(env.c, env.card(research.id));
+  assert.match(prompt, /read-only planning run/);
+  assert.match(prompt, /FINDING-42/);
+  assert.match(prompt, new RegExp(`Id: ${env.board.refOf(env.c, cache.id)}`));
+  assert.match(prompt, /Don’t change, merge or remove “Research caching” itself/);
+  assert.doesNotMatch(prompt, /Salary bands|SECRET-UPDATE/);
+
+  const ref = id => env.board.refOf(env.c, id);
+  scriptMatch(env, 'has finished, and its findings are below', { text: JSON.stringify({
+    summary: 'Sessions stay in Postgres; the gateway already limits rates.',
+    questions: [{ question: 'Keep the Postgres sessions table?', options: ['Yes', 'No'] }],
+    steps: [
+      { card: ref(cache.id), title: 'Index the Postgres sessions table', instructions: 'Sessions live in Postgres. Add an index on user_id.' },
+      { card: ref(research.id), title: 'Should stay as it is' },
+      { title: 'Document the gateway rate limit', instructions: 'Write down the gateway limits.', done: ['Limits documented'], tier: 'light', dependsOn: [ref(research.id)], role: 'builder' },
+      { title: 'Second build card', instructions: 'Another change.', tier: 'light', dependsOn: [], role: 'builder' },
+    ],
+    remove: [ref(limiter.id), ref(research.id)],
+  }) });
+  const started = env.board.updateFrom(env.c, research.id, { provider: 'codex' });
+  assert.equal(started.kind, 'update');
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the update to finish');
+  const cap = env.captured(fs.realpathSync(env.folder('a'))).at(-1);
+  assert.deepEqual(cap.args.slice(cap.args.indexOf('--sandbox'), cap.args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only']);
+
+  const drafted = env.c.boardSuggest.cards.map(id => env.card(id));
+  // Two new cards, the changed cache card and the limiter to remove; no review of the whole result is added.
+  assert.equal(drafted.length, 4);
+  for (const card of drafted) assert.deepEqual([card.draft.batch.kind, card.draft.batch.cardId, card.draft.batch.cardTitle], ['update', research.id, 'Research caching']);
+  assert.equal(drafted[0].draft.batch.questions[0].question, 'Keep the Postgres sessions table?');
+  const documented = drafted.find(card => card.title === 'Document the gateway rate limit');
+  assert.deepEqual(documented.dependsOn, [research.id]);
+  assert.equal(drafted.some(card => card.role === 'reviewer'), false);
+  assert.equal(env.card(cache.id).title, 'Index the Postgres sessions table');
+  assert.equal(env.card(cache.id).draft.was.fields.title, 'Add Redis cache');
+  assert.equal(env.card(limiter.id).draft.remove, true);
+  // The card the findings came from is never changed or removed.
+  assert.equal(env.card(research.id).title, 'Research caching');
+  assert.equal(env.card(research.id).draft ?? null, null);
+
+  // Discarding puts the Plan back as it was.
+  env.board.drafts(env.c, { action: 'discard', ids: drafted.map(card => card.id) });
+  assert.equal(env.card(cache.id).title, 'Add Redis cache');
+  assert.equal(env.card(limiter.id).draft ?? null, null);
+  env.board.dismissSuggest(env.c);
+
+  // Findings that change nothing say so, with what's left to decide, and add nothing.
+  const before = env.board.cards(env.c).length;
+  scriptMatch(env, 'has finished, and its findings are below', { text: JSON.stringify({ summary: 'The Plan already covers this.', questions: ['Drop Redis entirely?'], steps: [] }) });
+  env.board.updateFrom(env.c, research.id, { provider: 'codex' });
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the no-change update to finish');
+  assert.deepEqual(env.c.boardSuggest.cards, []);
+  assert.equal(env.c.boardSuggest.summary, 'The Plan already covers this.');
+  assert.equal(env.c.boardSuggest.questions[0].question, 'Drop Redis entirely?');
+  assert.equal(env.board.cards(env.c).length, before);
 });
 
 // Watching the Plan run (#162 stage 5): a task's usage as the Plan shows it. Working time comes as what finished runs took

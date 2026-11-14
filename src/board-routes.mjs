@@ -44,6 +44,9 @@ export function createBoardRoutes({ registry, body, json }) {
     // card, in your next message as a text attachment.
     if (url.pathname === '/api/board/access') { json(res, 200, { ...board.access(c, input), board: board.view(c) }); return true; }
     if (url.pathname === '/api/board/attach') { json(res, 201, board.attach(c, input)); return true; }
+    // The Plan chat (#162): open it, once, and give its next message what the Workspace chat said since it last heard.
+    if (url.pathname === '/api/board/chat') { json(res, 200, { ...board.chat(c), board: board.view(c) }); return true; }
+    if (url.pathname === '/api/board/workspace-context') { json(res, 201, board.workspaceContext(c)); return true; }
     if (url.pathname === '/api/board/stop') { json(res, 200, { ...board.stopMany(c, input), board: board.view(c) }); return true; }
     // Schedules (#132): a card or a prompt run at a set time.
     const schedules = broker.schedules;
@@ -58,6 +61,9 @@ export function createBoardRoutes({ registry, body, json }) {
     // Suggest 1 to 3 follow-up draft cards from an existing card (#162).
     const suggest = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/suggest$/);
     if (suggest) { json(res, 202, { suggest: board.suggest(c, suggest[1], input), board: board.view(c) }); return true; }
+    // Update the Plan from a finished card's findings: one read-only run drafts the changes they call for.
+    const update = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/update-plan$/);
+    if (update) { json(res, 202, { suggest: board.updateFrom(c, update[1], input), board: board.view(c) }); return true; }
     // A major card's subtasks (#155): add, edit, remove, pause, resume, or clear to split again.
     const split = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/subtasks$/);
     if (split) { json(res, 200, { card: board.subtasks.act(c, split[1], input), board: board.view(c) }); return true; }
