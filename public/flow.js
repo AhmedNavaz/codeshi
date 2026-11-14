@@ -593,7 +593,8 @@
 
   // Tasks side by side (#88, #107): the workspace chat and every folder task running alongside it, with approvals,
   // copy/merge state and direct switching without leaving Flow.
-  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => task.purpose !== 'project-review' || task.id === state.taskId || task.approvals);
+  // A split's parts that Flow is finishing by itself show above the message box instead (split-progress.js).
+  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => (task.purpose !== 'project-review' && !task.managed) || task.id === state.taskId || (task.purpose === 'project-review' && task.approvals));
   const taskMergeable = task => Boolean(task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status));
   const taskEnded = task => !['running', 'waiting'].includes(task.status) && !taskMergeable(task);
   const TASK_STATUS_WORDS = { complete: 'finished', stopped: 'stopped', failed: 'didn’t finish', discarded: 'discarded', cancelled: 'cancelled', blocked: 'blocked', lost: 'copy gone', detached: 'folder removed' };
@@ -615,7 +616,7 @@
     const signature = JSON.stringify([
       state.projectId, state.taskId, state.taskDraft, pickingTaskFolder, hasThreads, mainRunning, mainApprovals,
       folders.map(folder => [folder.id, folder.displayName || folder.name]),
-      tasks.map(task => [task.id, task.title, task.status, task.folderName, task.mode, task.provider, task.runningProvider, task.runningPhase, task.runningStep, task.approvals, task.testing, task.hasWorktree, task.held, task.reason, task.conversationId, task.integration?.files, task.integration?.branch]),
+      tasks.map(task => [task.id, task.title, task.status, task.folderName, task.mode, task.provider, task.runningProvider, task.runningPhase, task.runningStep, task.approvals, task.testing, task.hasWorktree, task.held, task.reason, task.conversationId, task.integration?.files, task.integration?.branch, task.cardColumn]),
     ]);
     if (signature === card.signature) return;
     card.signature = signature;
@@ -623,12 +624,17 @@
     const selectTask = id => { if (peeking) closePeek(); return window.relayTaskThreads?.select?.(id)?.catch?.(error => api.showNotice?.(error.message)); };
     const startDraft = folderId => { pickingTaskFolder = false; if (peeking) closePeek(); return window.relayTaskThreads?.open?.(folderId); };
 
-    if (tasks.length) {
-      const runningCount = tasks.filter(task => task.status === 'running').length;
-      const approvalCount = tasks.filter(task => task.approvals > 0).length;
-      const mergeCount = tasks.filter(taskMergeable).length;
-      const waitingCount = tasks.filter(task => task.status === 'waiting').length;
-      const parts = [plural(tasks.length, 'task')];
+    // A Plan's cards run as tasks too, but they're followed and read on the Plan, so they share one row here. The card task
+    // you're in still shows as its own row.
+    const planTasks = tasks.filter(task => task.board && task.id !== state.taskId);
+    const planOpen = planTasks.filter(task => ['doing', 'review'].includes(task.cardColumn));
+    const ownTasks = tasks.filter(task => !task.board || task.id === state.taskId);
+    if (ownTasks.length || planOpen.length) {
+      const runningCount = ownTasks.filter(task => task.status === 'running').length;
+      const approvalCount = ownTasks.filter(task => task.approvals > 0).length;
+      const mergeCount = ownTasks.filter(taskMergeable).length;
+      const waitingCount = ownTasks.filter(task => task.status === 'waiting').length;
+      const parts = [ownTasks.length ? plural(ownTasks.length, 'task') : '', planOpen.length ? `Plan: ${plural(planOpen.length, 'card')}` : ''].filter(Boolean);
       if (runningCount) parts.push(`${runningCount} working`);
       if (approvalCount) parts.push(`${approvalCount} needing you`);
       if (mergeCount) parts.push(`${mergeCount} ready to merge`);
@@ -682,7 +688,15 @@
 
       list.append(row({ title: 'Workspace chat', place: 'Whole workspace', live: mainRunning, liveText: 'Working', approvals: mainApprovals, here: !state.taskId && !state.taskDraft, onOpen: () => selectTask(null), openLabel: 'Switch to the workspace chat', kind: 'main' }));
 
-      for (const task of tasks) {
+      if (planOpen.length) {
+        const working = planOpen.filter(task => task.status === 'running').length, waiting = planOpen.filter(task => task.status === 'waiting').length;
+        const needs = planOpen.reduce((sum, task) => sum + (task.approvals || 0), 0);
+        const review = planOpen.filter(task => task.cardColumn === 'review').length;
+        const still = [waiting ? `${waiting} waiting` : '', review ? `${review} to review` : ''].filter(Boolean).join(' · ') || plural(planOpen.length, 'card');
+        list.append(row({ key: 'plan', title: 'Plan', place: plural(planOpen.length, 'card'), live: working > 0, liveText: `${working} working${waiting ? ` · ${waiting} waiting` : ''}`, still: working ? '' : still, approvals: needs, pill: review && !working ? 'Results' : '', onOpen: () => window.relayBoard?.open?.(), openLabel: 'Open the Plan to follow its cards and read their results', kind: 'plan' }));
+      }
+
+      for (const task of ownTasks) {
         const provider = task.runningProvider || task.provider, running = task.status === 'running';
         const liveText = provider ? `${agentNames[provider] || provider}${task.runningStep ? ` · on “${clip(task.runningStep, 35)}”` : task.runningPhase ? ` · ${phaseWords[task.runningPhase] || task.runningPhase}` : ' · working'}` : 'Working';
         const modeLabel = task.mode === 'worktree' ? 'own copy' : task.mode === 'direct' ? 'direct' : '';

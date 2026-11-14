@@ -21,6 +21,12 @@ export function createBoardRoutes({ registry, body, json }) {
       if (req.method !== 'GET') fail('Use GET.', 405);
       json(res, 200, { comments: board.comments(c, thread[1]) }); return true;
     }
+    // A card's whole answer, read when its drawer opens: the card itself carries only its first lines.
+    const answer = url.pathname.match(/^\/api\/board\/cards\/([\da-f-]{36})\/answer$/);
+    if (answer) {
+      if (req.method !== 'GET') fail('Use GET.', 405);
+      json(res, 200, board.answer(c, answer[1])); return true;
+    }
     if (req.method !== 'POST') fail('Use POST.', 405);
     const input = await body(req, 256 * 1024);
     if (url.pathname === '/api/board/cards') { json(res, 201, { card: board.create(c, input), board: board.view(c) }); return true; }

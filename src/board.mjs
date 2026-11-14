@@ -11,7 +11,8 @@ import { FINAL_REVIEW_NOTE, PlanReviews, REVIEW_ROLES, reviewHolds, verdictReque
 // The task board (#132, first stage): cards you write, sort and run by hand. Cards are records in the workspace chat's
 // journal, beside the tasks they start, so they live in Codeshi's data and a crash finds them as they were. Running a card
 // starts an ordinary task (#88) with the card's own agent under a Normal policy. From then on the task decides where the card
-// is: working puts it in Doing, finishing in Review, and stopping, failing or being discarded back in Ready with the reason.
+// is: working puts it in Doing, finishing in Review, and stopping or failing back in Ready with the reason. A finished card
+// whose copy you discard stays in Review with its answer: you accept it without the changes, or send it back.
 // Only you move a card to Done. Schedules live in src/schedules.mjs; Flow choosing cards from the backlog comes later.
 // One Plan (#162): the board is the Plan. A card also carries what an Orchestrate step had (a group, a role, the result it
 // should produce, an acceptance check, the files it expects to change, a size, and Auto), and a plan an agent drafts
@@ -1040,7 +1041,7 @@ export class Board {
         const own = pick.routing && !(routed && pick.routing.mode === (defaults.routingMode || 'smart'));
         this.main.execution.ensure(c, policyId, pick.routing ? (own ? { config: { mode: 'flow', routingMode: pick.routing.mode }, source, requestId: id } : { source, requestId: id }) : { config: { mode: 'normal' }, source, requestId: id });
         // The text here is the card as it is now; the task is briefed again when it starts, with what earlier cards did.
-        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision, ...(parent ? { parent } : {}) }, { held: true, batch, queueExecution: this.main.execution.token(c, policyId), board:{ cardId: card.id, revision: card.revision, ...(card.group ? { group: card.group } : {}), ...(note ? { note } : {}) } });
+        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision, ...(parent ? { parent } : {}) }, { held: true, batch, queueExecution: this.main.execution.token(c, policyId), board:{ cardId: card.id, revision: card.revision, run: attempt, ...(card.group ? { group: card.group } : {}), ...(note ? { note } : {}) } });
         tasks[card.id] = task.id; made.push(task.id);
       }
     } catch (error) {
@@ -1145,35 +1146,95 @@ export class Board {
     else if (task.status === 'waiting') this.main.tasks.finish(c, task, { status: 'cancelled' });
     return this.public(c, this.find(c, id));
   }
-  // An agent never marks its own work done. A card in Review is accepted by you, once its changes are in the folder.
-  accept(c, id) {
+  // An agent never marks its own work done. A card in Review is accepted by you, once its changes are in the folder, or by
+  // Flow for the parts of a split message it finishes by itself (src/split-finish.mjs).
+  accept(c, id, { by = 'you' } = {}) {
     const card = this.find(c, id), task = this.task(c, card);
     if (card.column !== 'review') throw fail('Only a card in Review can be accepted.');
-    if (task && task.mode === 'worktree' && !['integrated', 'kept'].includes(task.status)) throw fail('Its changes are still in the task’s own copy. Review and merge them first, or keep them as a branch.');
     if (task && LIVE.has(task.status)) throw fail('Its task is working again. Wait until it finishes.');
-    this.update(c, card, { column: 'done', order: this.lastOrder(c, 'done') + 1, acceptedAt: new Date().toISOString(), acceptedBy: 'you', reason: null });
+    // A copy that changed nothing, such as research, has nothing to merge: accepting it frees the copy. Discarded changes
+    // are accepted as they are, without them.
+    const empty = task && task.mode === 'worktree' && !['integrated', 'kept', 'discarded'].includes(task.status) ? this.emptyCopy(c, task) : false;
+    if (task && task.mode === 'worktree' && !['integrated', 'kept', 'discarded'].includes(task.status) && !empty) throw fail('Its changes are still in the task’s own copy. Review and merge them first, or keep them as a branch.');
+    const now = new Date().toISOString();
+    // Done first, so freeing the copy doesn't move the card.
+    this.update(c, card, { column: 'done', order: this.lastOrder(c, 'done') + 1, acceptedAt: now, acceptedBy: by === 'flow' ? 'flow' : 'you', reason: null });
+    if (empty) this.main.tasks.finish(c, task, { status: 'integrated', integration: { files: 0, at: now } });
     return this.public(c, card);
+  }
+  // Whether a card's copy holds no changes, worked out from the copy itself rather than from what the agent reported.
+  emptyCopy(c, task) {
+    if (this.main.tasks.lanes.get(task.id)?.broker.running) return false;
+    try { const { plan } = this.main.tasks.planFor(c, task); return !plan.conflicts && plan.files.length === 0; }
+    catch { return false; }
+  }
+  // A card's whole answer, the agent's last reply in its task, read when its drawer opens. A card shows only its first
+  // lines, and the board doesn't carry the rest on every change.
+  answer(c, id) {
+    const card = this.find(c, id), task = this.task(c, card);
+    let reply = '', provider = null, model = null;
+    if (task) {
+      try {
+        const lane = this.main.tasks.lanes.get(task.id) || this.main.tasks.lane(c, task), messages = lane?.c?.messages || [];
+        const message = messages.findLast(item => item.role === 'assistant' && item.text?.trim() && !item.reviewId);
+        if (message) { reply = message.text; provider = message.provider || null; model = message.model || null; }
+      } catch { /* Its conversation can't be read; the saved summary stands in. */ }
+      if (!reply) reply = task.stepResult?.summary || '';
+    }
+    if (!reply) reply = card.result?.summary || '';
+    return { text: clip(reply, 60000), provider, model, taskId: task?.id || null };
   }
   sendBack(c, id, { reason = '' } = {}) {
     const card = this.find(c, id), task = this.task(c, card);
     if (card.column !== 'review') throw fail('Only a card in Review can be sent back.');
-    if (task?.mode === 'worktree' && !ENDED.has(task.status) && !['lost', 'detached'].includes(task.status)) throw fail('Its changes are still in the task’s own copy. Discard them in its task first, so they aren’t left behind.');
+    if (task && LIVE.has(task.status)) throw fail('Its task is working again. Wait until it finishes.');
+    // A copy that changed nothing is freed with it; one with changes is merged or discarded first.
+    const empty = task?.mode === 'worktree' && !ENDED.has(task.status) && !['lost', 'detached'].includes(task.status) ? this.emptyCopy(c, task) : false;
+    if (task?.mode === 'worktree' && !ENDED.has(task.status) && !['lost', 'detached'].includes(task.status) && !empty) throw fail('Its changes are still in the task’s own copy. Discard them in its task first, so they aren’t left behind.');
     const why = text(reason, LIMITS.reason, 'reason');
     // A major card carries on through its subtasks: what should change becomes one more, for its next run.
     if (card.split || card.subtasks?.length) this.update(c, card, { subtasks: [...(card.subtasks || []), { id: randomUUID().slice(0, 8), title: why ? clip(`Address: ${why}`, 200) : 'Another try at the card', instructions: why ? `The person sent the card back: ${why}` : 'The person sent the card back for another try. Check what done means for the card again.', tier: 'standard', agent: null, status: 'pending', by: { kind: 'you' }, createdAt: new Date().toISOString() }] });
     this.update(c, card, { column: 'ready', order: this.lastOrder(c, 'ready') + 1, reason: why ? `Sent back: ${why}` : 'Sent back for another try.', task: null });
+    // Ready first, so freeing the copy doesn't move the card.
+    if (empty) this.main.tasks.finish(c, task, { status: 'discarded' });
     return this.public(c, card);
   }
 
   // ---- Following tasks
   follow(c, task) {
+    // A split message Flow is finishing moves on as any of its tasks changes, repairs included.
+    if (task.splitId) this.main.splits?.finisher?.later(c);
+    // A repair round moves on as its cards' tasks change (src/plan-review.mjs), or a split's repair task.
+    if ((task.board || task.splitRepair) && (c.parallelTasks || []).some(item => item.review?.status === 'repairing')) this.reviews.later(c);
     if (!task.board) return;
-    // A repair round moves on as its cards' tasks change (src/plan-review.mjs).
-    if ((c.parallelTasks || []).some(item => item.review?.status === 'repairing')) this.reviews.later(c);
     const card = this.cards(c).find(item => item.id === task.board.cardId);
     if (!card || card.task !== task.id || !['doing', 'review'].includes(card.column)) return;
     const next = this.placement(c, card, task);
     if (next) this.update(c, card, next);
+    if (task.board.run && !LIVE.has(task.status)) this.runEnded(c, task.board.run);
+  }
+  // When every card of a run has stopped working and its tests are in, the workspace chat says so once, with where each
+  // card ended up, so the results are found on the Plan without watching its tasks. Working in a card's task later, or
+  // repairing it, doesn't say it again.
+  runEnded(c, run) {
+    const tasks = (c.parallelTasks || []).filter(item => item.board?.run === run);
+    if (!tasks.length || tasks.some(item => item.runAnnounced)) return;
+    if (tasks.some(item => LIVE.has(item.status) || item.stepCheck?.status === 'running' || item.review?.status === 'repairing')) return;
+    const cards = tasks.map(item => this.cards(c).find(card => card.id === item.board.cardId)).filter(Boolean);
+    // Flow answers for a split it is finishing by itself, once, when it's done.
+    if (!cards.length || cards.some(card => this.managed(c, card))) return;
+    this.main.tasks.update(c, tasks[0], { runAnnounced: true });
+    const count = column => cards.filter(card => card.column === column).length, review = count('review'), back = count('ready') + count('backlog'), done = count('done');
+    const needMerge = cards.filter(card => card.column === 'review' && this.task(c, card)?.mode === 'worktree' && !ENDED.has(this.task(c, card)?.status)).length;
+    let text;
+    if (cards.length === 1) {
+      const [card] = cards;
+      text = card.column === 'review' ? `“${card.title}” finished. Its result is on the Plan for you to read and accept.` : card.column === 'done' ? `“${card.title}” finished.` : `“${card.title}” didn’t finish: ${card.reason || 'it’s back in Ready'}. It’s on the Plan.`;
+    } else {
+      const parts = [review ? `${review} to review${needMerge ? ` (${needMerge} with changes to merge)` : ''}` : '', back ? `${back} back in Ready` : '', done ? `${done} done` : ''].filter(Boolean);
+      text = `The Plan’s run of ${cards.length} cards ended: ${parts.join(', ') || 'nothing left to do'}. Open the Plan to read each card’s result.`;
+    }
+    this.main.message(c, 'system', text);
   }
   // Where a card belongs given its task's state, or null when it is where it should be.
   placement(c, card, task) {
@@ -1184,6 +1245,8 @@ export class Board {
       if (card.column === 'review' && card.result?.status === status && card.result?.tests === this.tests(task) && Boolean(card.result?.testsAccepted) === Boolean(task.stepCheck?.accepted)) return null;
       return { column: 'review', ...(card.column === 'review' ? {} : { order: this.lastOrder(c, 'review') + 1 }), reason: null, result: this.result(task, c), attempts: this.ended(card, task) };
     }
+    // A finished card whose copy you discarded keeps its answer in Review, with its task, until you accept it or send it back.
+    if (status === 'discarded' && card.column === 'review') return card.result?.status === 'discarded' ? null : { reason: null, result: { ...(card.result || this.result(task, c)), status: 'discarded', inCopy: false, at: new Date().toISOString() } };
     const why = {
       stopped: task.subtasksEnded && task.reason ? task.reason : 'Stopped before it finished.',
       failed: task.subtasksEnded && task.reason ? clip(task.reason, 400) : `Didn’t finish${task.reason ? `: ${clip(task.reason, 300)}` : '.'}`,
@@ -1218,6 +1281,12 @@ export class Board {
   }
   // After a restart, or anything else that moved a task while the board wasn't listening.
   reconcile(c) {
+    // Before 0.53, discarding a finished card's copy sent it back to Ready and dropped its task. It goes back to Review
+    // with its answer, to accept or send back.
+    for (const card of this.cards(c).filter(item => item.column === 'ready' && item.reason === 'Its changes were discarded.' && item.result)) {
+      const last = card.attempts?.at(-1), task = last?.outcome === 'discarded' ? (c.parallelTasks || []).find(item => item.id === last.taskId) : null;
+      if (task?.status === 'discarded') this.update(c, card, { column: 'review', order: this.lastOrder(c, 'review') + 1, reason: null, task: task.id, result: { ...card.result, status: 'discarded', inCopy: false } });
+    }
     for (const card of this.cards(c).filter(item => item.task && ['doing', 'review'].includes(item.column))) {
       const task = this.task(c, card);
       if (!task) { if (card.column === 'doing') this.update(c, card, { column: 'ready', task: null, reason: 'Its task is gone.' }); continue; }
@@ -1225,6 +1294,9 @@ export class Board {
       if (next) this.update(c, card, next);
     }
   }
+
+  // A part of a split message Flow is still finishing (src/split-finish.mjs), which the Plan doesn't show.
+  managed(c, card) { return Boolean(card.managed?.splitId && this.main.splits?.finisher?.manages(c, card.managed.splitId)); }
 
   // ---- Showing the board
   // The board carries how many comments each card has, not their text: a full board's worth would be sent on every change.
@@ -1235,7 +1307,7 @@ export class Board {
     // A review's verdict, findings and repair round (#89), and whether it ran on an agent that built what it checks.
     const review = task?.review ? { status: task.review.status, verdict: task.review.verdict ?? null, round: task.review.round || 0, reason: task.review.reason || null, waiting: task.review.waiting || null, accepted: task.review.accepted === true, findings: (task.review.findings || []).map(item => ({ ...item, cardTitle: item.cardId ? this.cards(c).find(other => other.id === item.cardId)?.title || null : null })), repairs: task.review.repairs || [], earlier: task.review.earlier?.length || 0 } : null;
     const reviewer = REVIEW_ROLES.includes(card.role) && task ? (lane?.c?.activeRun?.provider || task.provider) : null;
-    return { ...rest, labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review ? { holds: held } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
+    return { ...rest, managed: this.managed(c, card), labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), ...(Number.isInteger(task.copyFiles) ? { copyFiles: task.copyFiles } : {}), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review ? { holds: held } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   view(c) {

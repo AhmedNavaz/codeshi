@@ -1,6 +1,7 @@
 // A message Flow found separate parts in (#107 stage 2, #108). Nothing has started: the card above the message box shows
 // each part, the agent and model routing would pick for it now and what that agent is billed to. Run them as tasks side
-// by side, do the message as one, or put it back in the message box. The parts become cards on the Plan when they run.
+// by side, do the message as one, or put it back in the message box. Run side by side, Flow finishes the parts by itself
+// and answers once (src/split-finish.mjs); they go to the Plan only if something needs you.
 (() => {
   const $ = id => document.getElementById(id), api = window.relayUI, section = $('split-offer');
   if (!section || !api) return;
@@ -54,7 +55,7 @@
       pickFolder.replaceChildren(...list$.map(folder => { const option = node('option', '', folder.displayName || folder.name); option.value = folder.id; return option; }));
       pickFolder.value = api.selectedFolderId?.() || list$[0].id;
     }
-    $('split-note').textContent = `Each part becomes a card on the Plan and runs as its own task, ${parts.some(part => part.dependsOn?.length) ? 'waiting for the parts it needs, ' : ''}with this chat’s access. They share this message’s task limits, and each waits for you to review it. Routing picks each agent again when it starts.`;
+    $('split-note').textContent = `Each part runs as its own task, ${parts.some(part => part.dependsOn?.length) ? 'after the parts it needs, ' : ''}with this chat’s access and this message’s task limits. Flow merges each one when it’s safe, has another agent review the combined result, and answers here. Anything it can’t settle goes to the Plan for you. Routing picks each agent again when it starts.`;
     const run = $('split-run');
     run.textContent = busy === 'tasks' ? 'Starting…' : `Run as ${parts.length} tasks`;
     run.disabled = Boolean(busy) || missing >= 0 || (charged > 0 && !allowApi && !$('split-billing-confirm').checked);
@@ -75,7 +76,7 @@
         const input = $('message-input');
         if (input) { input.value = input.value.trim() ? `${result.text}\n${input.value}` : result.text; input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); }
       }
-      if (action === 'tasks') api.announce?.(`Running ${offer.parts.length} tasks side by side. They’re on the Plan as “${result?.group || 'a new group'}”.`);
+      if (action === 'tasks') api.announce?.(`Running ${offer.parts.length} parts side by side. Flow answers here when they’re done.`);
       if (action === 'one') api.announce?.('Running it as one message.');
     } catch (error) { api.showNotice?.(error.message); }
     finally { busy = false; await api.refresh?.(); draw(); }

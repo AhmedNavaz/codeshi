@@ -8,7 +8,8 @@
   if (!api || !section || !list || !banner) return;
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'text-link') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
-  const tasks = () => (api.getState().conversation?.parallelTasks || []).filter(task => task.purpose !== 'project-review' || task.id === api.getState().taskId || task.approvals);
+  // A split's parts that Flow is finishing by itself show above the message box instead (split-progress.js).
+  const tasks = () => (api.getState().conversation?.parallelTasks || []).filter(task => (task.purpose !== 'project-review' && !task.managed) || task.id === api.getState().taskId || (task.purpose === 'project-review' && task.approvals));
   const LABEL = { waiting: 'Waiting', running: 'Working', complete: 'Finished', stopped: 'Stopped', failed: 'Did not finish', integrated: 'Merged', kept: 'Kept as a branch', discarded: 'Discarded', cancelled: 'Cancelled', blocked: 'Blocked', lost: 'Copy gone', detached: 'Folder removed' };
   // What the copy has that a fresh checkout wouldn't, and the secrets it doesn't have.
   const copyNote = setup => {

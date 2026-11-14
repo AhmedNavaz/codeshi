@@ -78,10 +78,12 @@
   // filter: the label whose cards are shown, lower case, or '' for all. threads: each card's comments once read, and
   // asked: the comment count they were read for, so a card is asked again only when that changes. said: a comment being
   // written, per card, kept when the drawer is drawn again.
+  // A split's parts Flow is finishing by itself aren't the Plan's until they need you: they show above the message box.
+  const own = view => view && Array.isArray(view.cards) && view.cards.some(card => card.managed) ? { ...view, cards: view.cards.filter(card => !card.managed) } : view;
   let seen = null, board = null, selected = null, draft = null, sdraft = null, picked = new Set(), failure = '', busy = false, loading = 0, drawn = null, dragging = null;
   // Flow's Run Ready (#132): the limit the cards you run together share, as typed. Filled from the task limits when it opens.
   let shared = null;
-  let filter = '', threads = new Map(), asked = new Map(), said = new Map();
+  let filter = '', threads = new Map(), asked = new Map(), said = new Map(), replies = new Map(), replying = new Map();
   // subEdit: a subtask being written or edited in a card's drawer, kept when the drawer is drawn again.
   // draftNotice: inline undo banner for the last draft accept/discard; suggestConfirm: card ID confirming Suggest next.
   let subEdit = null, draftNotice = null, suggestConfirm = null;
@@ -154,13 +156,13 @@
   async function load() {
     if (!api.getState().projectId) return;
     const request = ++loading;
-    try { const result = await api.api('/api/board'); if (request === loading) { if (writes) { seen = null; return; } board = result; render(); } }
+    try { const result = await api.api('/api/board'); if (request === loading) { if (writes) { seen = null; return; } board = own(result); render(); } }
     catch (error) { if (request === loading) { seen = null; failure = error.message; render(); } }
   }
   async function act(path, input = {}, done) {
     if (busy) return null; busy = true; failure = ''; render();
     const from = era;
-    try { const result = await api.post(path, input); if (from !== era) return null; board = result.board || board; done?.(result); return result; }
+    try { const result = await api.post(path, input); if (from !== era) return null; board = own(result.board) || board; done?.(result); return result; }
     catch (error) { if (from === era) failure = error.message; return null; }
     finally { busy = false; render(); }
   }
@@ -195,7 +197,9 @@
       return { text: task?.held ? 'Held' : 'Waiting', tone: 'waiting', detail: task?.reason || '' };
     }
     if (card.column === 'review') {
-      if (task?.hasWorktree) return { text: 'Merge first', tone: 'attention', detail: 'Its changes are in the task’s own copy. Review and merge them in its task.' };
+      if (card.result?.status === 'discarded') return { text: 'Changes discarded', tone: 'waiting', detail: 'Its answer stays. Accept it to finish without the changes, or send it back to run again.' };
+      // A copy that changed nothing (research, a question) has nothing to merge, so it's accepted like any other card.
+      if (task?.hasWorktree && task.copyFiles !== 0) return { text: 'Merge first', tone: 'attention', detail: 'Its changes are in the task’s own copy. Review and merge them in its task.' };
       const tests = card.result?.tests;
       if (tests === 'running') return { text: TESTS.running, tone: 'running', detail: 'Running the project’s tests on this card’s result. The cards after it wait for them.' };
       if (tests === 'failed' || tests === 'interrupted') return { text: card.result.testsAccepted ? `${TESTS[tests]} · continued` : TESTS[tests], tone: 'trouble', detail: card.result.testsAccepted ? 'You chose to let the cards after it build on it anyway.' : `${card.result.testsReason || ''}${task?.holds ? ' The cards after it wait until you check it again or continue anyway.' : ''}`.trim() };
@@ -637,7 +641,12 @@
     else act(`/api/board/cards/${selected}/edit`, { ...input, revision: draft.revision }, result => { draft = editable(result.card); drawn = null; api.announce('Card saved.'); });
   }
   // A card's task opens in the chat beside the Plan.
-  const openTask = card => { showChat(); window.relayTaskThreads?.select(card.taskState.id); };
+  const openTask = card => { showChat(); return window.relayTaskThreads?.select(card.taskState.id); };
+  async function askFollowUp(card) {
+    try { await openTask(card); } catch (error) { failure = error.message; showError(); return; }
+    const input = document.getElementById('message-input');
+    if (input) { input.focus(); api.announce(`Ask “${card.title}” a follow-up in the message box.`); }
+  }
   // Accept or discard drafted cards (#162), recording a server-backed Undo/Redo step when an undoId is returned.
   async function draftAction(action, ids, announcement, onDone) {
     return act('/api/board/drafts', { action, ids }, result => {
@@ -769,15 +778,19 @@
     if (card.column === 'doing') row.append(button('Open its task', () => openTask(card), 'primary-button'), button(card.taskState?.status === 'running' ? 'Stop' : 'Cancel', () => act(`/api/board/cards/${card.id}/stop`)));
     if (card.column === 'review') {
       const accept = button('Accept', () => act(`/api/board/cards/${card.id}/accept`, {}, () => api.announce(`“${card.title}” is done.`)), 'primary-button');
-      if (card.taskState?.hasWorktree) { row.append(button('Review and merge', () => openTask(card), 'primary-button')); accept.className = 'secondary-button'; accept.disabled = true; accept.title = state?.detail || ''; }
+      const merge = card.taskState?.hasWorktree && card.taskState.copyFiles !== 0;
+      if (merge) { row.append(button('Review and merge', () => openTask(card), 'primary-button')); accept.className = 'secondary-button'; accept.disabled = true; accept.title = state?.detail || ''; }
       row.append(accept);
       // Its tests hold the cards after it (#162): check it again, or let them build on it anyway.
       const tests = card.taskState?.tests;
       if (card.taskState?.status === 'complete' && tests && tests !== 'running' && tests !== 'passed') row.append(button('Check again', () => act(`/api/board/cards/${card.id}/recheck`, {}, () => api.announce('Checking the card again.'))));
       if (card.taskState?.holds && tests !== 'running' && card.taskState.review?.status !== 'repairing') row.append(button('Continue anyway', () => act(`/api/board/cards/${card.id}/continue`, {}, () => api.announce('The cards after it can start.'))));
-      if (!card.taskState?.hasWorktree) row.append(button('Send back…', () => sendBack(card)));
-      if (card.taskState) quiet.append(link(button('Open its task', () => openTask(card))));
+      if (!merge) row.append(button('Send back…', () => sendBack(card)));
+      // Asking more opens the card's own conversation with the message box ready; it comes back here when it finishes.
+      if (card.taskState?.status === 'complete') quiet.append(link(button('Ask a follow-up', () => askFollowUp(card))));
+      else if (card.taskState) quiet.append(link(button('Show the conversation', () => openTask(card))));
     }
+    if (card.column === 'done' && card.taskState) quiet.append(link(button('Show the conversation', () => openTask(card))));
     if (card.column === 'done') { row.append(move('Reopen', 'ready'), ...(card.agent ? [scheduleButton(card)] : [])); }
     next.append(suggestNextButton(card), addNextButton(card));
     quiet.append(link(attachButton(card)));
@@ -832,10 +845,15 @@
     if (watching) { const lines = liveLines(card, watching, { withWho: true }); lines.classList.add('board-watch'); lines.setAttribute('aria-label', 'This card’s run'); parts.push(lines); }
     if (card.column === 'ready' && card.reason) parts.push(node('p', 'board-status trouble', card.reason));
     if (card.result && ['review', 'done'].includes(card.column)) {
-      const tests = card.result.tests, box = node('div', 'board-result'), facts = [card.result.files != null ? plural(card.result.files, 'file') + ' changed' : '', tests ? (TESTS[tests] || `tests ${tests}`).toLowerCase() + (card.result.testsAccepted ? ', continued anyway' : '') : 'no tests recorded', card.result.inCopy ? (card.result.status === 'complete' ? 'in its own copy, not merged yet' : OUTCOME[card.result.status]?.toLowerCase()) : ''].filter(Boolean);
+      const empty = card.taskState?.hasWorktree && card.taskState.copyFiles === 0;
+      const files = empty ? 0 : card.result.files;
+      const tests = card.result.tests, box = node('div', 'board-result'), facts = [files != null ? plural(files, 'file') + ' changed' : '', tests ? (TESTS[tests] || `tests ${tests}`).toLowerCase() + (card.result.testsAccepted ? ', continued anyway' : '') : 'no tests recorded', card.result.status === 'discarded' ? 'changes discarded' : empty ? 'nothing to merge' : card.result.inCopy ? (card.result.status === 'complete' ? 'in its own copy, not merged yet' : OUTCOME[card.result.status]?.toLowerCase()) : ''].filter(Boolean);
       const line = facts.join(' · ');
       box.append(node('p', 'board-result-facts', line.charAt(0).toUpperCase() + line.slice(1)));
-      if (card.result.summary) box.append(node('p', 'board-result-summary', card.result.summary));
+      // The whole answer, read when the card opens; the short summary stands in until then.
+      const reply = replies.get(card.id);
+      if (reply && reply.at === card.result.at && reply.text) box.append(answerBlock(reply.text));
+      else if (card.result.summary) { box.append(node('p', 'board-result-summary', card.result.summary)); readReply(card); }
       if (card.result.testsReason && tests !== 'passed') box.append(node('p', 'board-result-facts', card.result.testsReason));
       if (card.taskState?.testOutput && card.column === 'review') { const output = node('pre', 'plan-drawer-output', card.taskState.testOutput.trim().split('\n').slice(-20).join('\n')); output.setAttribute('aria-label', 'The end of the test output'); box.append(output); }
       parts.push(box);
@@ -992,6 +1010,46 @@
     return form;
   }
 
+  // ---- A card's answer
+  // The card carries the first lines of its agent's last reply. Its drawer reads the whole reply once per result and shows
+  // it as the chat would, so the result is read here rather than in the card's task.
+  async function readReply(card) {
+    const at = card.result?.at, id = card.id;
+    if (replying.get(id) === at) return; replying.set(id, at);
+    try { const result = await api.api(`/api/board/cards/${id}/answer`); replies.set(id, { at, text: result.text || '' }); }
+    catch { replying.delete(id); return; }
+    if (selected === id) { drawn = null; renderDrawer(); }
+  }
+  function answerBlock(text) {
+    const md = window.relayPhoneLogic, host = node('div', 'board-result-answer markdown');
+    if (!md?.blocks) { host.append(node('p', 'board-result-summary', text)); return host; }
+    const spans = (into, value) => {
+      for (const span of md.spans(value)) {
+        if (span.type === 'text') into.append(span.text);
+        else if (span.type === 'code') into.append(node('code', '', span.text));
+        else if (span.type === 'bold') into.append(node('strong', '', span.text));
+        else if (span.type === 'italic') into.append(node('em', '', span.text));
+        else { const link = node('a', '', span.text); link.href = span.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; into.append(link); }
+      }
+      return into;
+    };
+    for (const block of md.blocks(text)) {
+      if (block.type === 'paragraph') host.append(spans(node('p'), block.text));
+      else if (block.type === 'heading') host.append(spans(node(block.level === 1 ? 'h3' : 'h4'), block.text));
+      else if (block.type === 'code') { const pre = node('pre'); pre.append(node('code', '', block.text)); host.append(pre); }
+      else if (block.type === 'quote') host.append(spans(node('blockquote'), block.text));
+      else if (block.type === 'rule') host.append(node('hr'));
+      else if (block.type === 'list') { const list = node(block.ordered ? 'ol' : 'ul'); for (const item of block.items) list.append(spans(node('li'), item)); host.append(list); }
+      else if (block.type === 'table') {
+        const table = node('table'), head = node('tr'), body = node('tbody'), thead = node('thead');
+        for (const cell of block.head) head.append(spans(node('th'), cell));
+        thead.append(head); table.append(thead);
+        for (const row of block.rows) { const line = node('tr'); for (const cell of row) line.append(spans(node('td'), cell)); body.append(line); }
+        table.append(body); const wrap = node('div', 'board-result-table'); wrap.append(table); host.append(wrap);
+      }
+    }
+    return host;
+  }
   // ---- Comments (#97)
   // Read when a card opens, and again only when its count changes. Each says who wrote it and when; the agent is told
   // yours the next time the card runs.
@@ -2153,7 +2211,7 @@
   // Canvas changes show at once and are saved behind; one that fails reloads the board as it is.
   async function quietly(path, input) {
     const request = ++written, from = era; writes++; failure = '';
-    try { const result = await api.post(path, input); if (from !== era) return true; writes--; if (request === written && result.board) { board = result.board; render(); } return true; }
+    try { const result = await api.post(path, input); if (from !== era) return true; writes--; if (request === written && result.board) { board = own(result.board); render(); } return true; }
     catch (error) { if (from !== era) return false; writes--; failure = error.message; showError(); await load(); return false; }
   }
   function place(positions) {
@@ -2419,7 +2477,7 @@
     const state = api.getState();
     // Another workspace: the Plan stays and shows that workspace's cards, as Flow stays on.
     if (state.projectId !== project) {
-      project = state.projectId; era++; splitQueue = []; writes = 0; loading++; drafting = false; replaces = null; answers = new Map(); leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; fitted = false; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); heard = new Map();
+      project = state.projectId; era++; splitQueue = []; writes = 0; loading++; drafting = false; replaces = null; answers = new Map(); leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; fitted = false; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); replies = new Map(); replying = new Map(); heard = new Map();
       selected = null; draft = null; sdraft = null; drawn = null; failure = ''; picked = new Set();
       if (showing) { renderDrawer(); render(); }
     }

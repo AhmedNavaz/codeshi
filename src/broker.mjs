@@ -1527,6 +1527,7 @@ export class Broker extends EventEmitter {
     if (this.automaticReviews) this.automaticReviews.closed = true;
     this.resume.close(); this.schedules?.close(); this.queue.close(); this.handoff.close(); this.checks.close();
     await this.tasks?.close();
+    this.splits?.finisher?.close();
     await this.board?.close?.();
     if (this.running) {
       const run = this.running;

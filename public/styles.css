@@ -1212,6 +1212,31 @@ button.commit-hash:hover { text-decoration: underline; }
 .split-actions #split-run { background: var(--accent); color: var(--on-accent); }
 .split-actions #split-run:hover:enabled { background: var(--accent-strong); }
 .split-actions #split-run:disabled { background: var(--chip-bg); color: var(--faint); opacity: 1; }
+/* A split Flow is finishing by itself: one line, with its parts on request. */
+.split-progress { display: grid; gap: 6px; margin: 0 0 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); font-size: 12.5px; line-height: 1.45; }
+.split-progress[data-attention="true"] { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+.split-progress-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.split-progress-head strong { flex: none; color: var(--text-strong); font-weight: 600; }
+.split-progress-summary { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-progress[data-attention="true"] .split-progress-summary { color: var(--warning); }
+.split-progress-head .text-link { flex: none; font-size: 12px; }
+.split-progress-stop { color: var(--muted); }
+.split-progress-list { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.split-progress-row { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 6px; border-radius: 6px; min-width: 0; }
+.split-progress-row:hover { background: var(--chip-bg); }
+.split-progress-mark { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.split-progress-row.running .split-progress-mark { background: var(--link); }
+.split-progress-row.done .split-progress-mark { background: var(--success, var(--link)); }
+.split-progress-row.attention .split-progress-mark { background: var(--warning); }
+.split-progress-name { flex: 1; min-width: 0; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-progress-agent { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--muted); font-size: 11.5px; }
+.split-progress-agent .agent-icon.codex { color: var(--codex); }
+.split-progress-agent .agent-icon.claude { color: var(--claude); }
+.split-progress-agent .agent-icon.gemini { color: var(--gemini); }
+.split-progress-state { flex: none; max-width: 40%; color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-progress-row.attention .split-progress-state { color: var(--warning); }
+.split-progress-open { flex: none; font-size: 11.5px; }
+.message-avatar.flow { --avatar-icon: var(--icon-tasks); color: var(--accent); }
 /* A retry after failed tests (#12). */
 .retry-icon { background: var(--danger); -webkit-mask-image: var(--icon-alert); mask-image: var(--icon-alert); }
 

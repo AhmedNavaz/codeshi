@@ -116,9 +116,15 @@ export class PlanReviews {
       return { ...item, cardId: target?.id || null };
     });
   }
-  // Whether a card can be repaired in its task now, or why not.
+  // Whether a card can be repaired in its task now, or why not. A part of a split Flow is finishing by itself was accepted
+  // by Flow, not you, and one merged from its own copy is repaired as a new task (src/split-finish.mjs).
   repairable(c, card) {
     if (this.isReview(card)) return 'It is a review card, which changes nothing itself.';
+    if (this.board.managed(c, card)) {
+      const task = this.board.task(c, card);
+      if (!task) return 'It has no task to repair in.';
+      return task.status === 'integrated' || (task.status === 'complete' && task.mode !== 'worktree' && task.conversationId && task.scopePath) ? null : `Its task is ${task.status}, not finished.`;
+    }
     if (card.column === 'done') return 'You’ve accepted it, so it isn’t changed without you. Send it back from Done to change it.';
     const task = this.board.task(c, card);
     if (!task) return 'It has no task to repair in. Run it again with the findings in a comment.';
@@ -184,7 +190,9 @@ export class PlanReviews {
       const target = (c.parallelTasks || []).find(item => item.id === running.taskId);
       if (target && ['running', 'waiting'].includes(target.status)) return;
       if (target?.status === 'complete' && target.stepCheck?.status === 'running') return;
-      if (target?.status === 'complete') Object.assign(running, { status: 'done', tests: this.board.tests(target) || null, endedAt: new Date().toISOString() });
+      // A split's repair that ran in its own copy is done once Flow has merged it.
+      if (target?.status === 'complete' && target.splitRepair && target.mode === 'worktree') return;
+      if (target?.status === 'complete' || (target?.status === 'integrated' && target.splitRepair)) Object.assign(running, { status: 'done', tests: this.board.tests(target) || null, endedAt: new Date().toISOString() });
       else {
         Object.assign(running, { status: 'failed', reason: target ? `Its repair run ${target.status === 'stopped' ? 'was stopped' : 'didn’t finish'}.` : 'Its task is gone.' });
         return save({ repairs, status: 'held', reason: `The repair on “${running.title}” didn’t finish, so the cards after the review wait for you.` });
@@ -220,8 +228,9 @@ export class PlanReviews {
   }
   // One more run in the repaired card's own task, with the agent, model and effort that did it, and its history.
   repair(c, reviewTask, reviewCard, card) {
-    const target = this.board.task(c, card), lane = this.laneOf(c, target);
-    const mine = reviewTask.review.findings.filter(item => item.cardId === card.id);
+    const target = this.board.task(c, card), mine = reviewTask.review.findings.filter(item => item.cardId === card.id);
+    if (this.board.managed(c, card) && target.status === 'integrated') return this.main.splits.finisher.repair(c, card, target, mine.map(findingLine));
+    const lane = this.laneOf(c, target);
     const text = [
       `A ${reviewCard.role === 'qa' ? 'QA' : 'review'} card, “${reviewCard.title}”, checked this card’s work and asked for changes. Fix these, and only these:`,
       ...mine.map(findingLine),

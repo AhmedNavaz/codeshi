@@ -193,14 +193,47 @@ test('a card that worked in its own copy is accepted only once its changes are m
   const { tasks } = env.board.run(env.c, { ids: [card.id] });
   await until(() => column(env, card) === 'review', 'it to finish in its copy');
   assert.equal(env.task(tasks[card.id]).mode, 'worktree'); assert.equal(env.card(card.id).result.inCopy, true);
+  fs.writeFileSync(path.join(env.task(tasks[card.id]).scopePath, 'made.txt'), 'by the card\n');
   assert.throws(() => env.board.accept(env.c, card.id), /Review and merge them first/);
   assert.throws(() => env.board.sendBack(env.c, card.id), /Discard them in its task first/);
   env.release(fs.realpathSync(env.folder('a'))); await main.done;
-  fs.writeFileSync(path.join(env.task(tasks[card.id]).scopePath, 'made.txt'), 'by the card\n');
   await env.broker.tasks.integrate(env.c, tasks[card.id], { digest: env.broker.tasks.review(env.c, tasks[card.id]).digest });
   await until(() => env.card(card.id).result.status === 'integrated', 'the card to see the merge');
   assert.equal(env.card(card.id).result.files, 1);
   assert.equal(env.board.accept(env.c, card.id).column, 'done');
+});
+
+test('a card whose copy changed nothing is accepted without merging, and a discarded copy keeps the card in Review', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }); const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(env.folder('a'))).length, 'the main run');
+  const research = env.add({ title: 'Research', column: 'ready' }), built = env.add({ title: 'Build', column: 'ready' });
+  env.script(research, null, 'The answer is **here**, in full.'); env.script(built, null, 'Built it.');
+  const { tasks } = env.board.run(env.c, { ids: [research.id, built.id] });
+  await until(() => column(env, research) === 'review' && column(env, built) === 'review', 'both to finish in their copies');
+  await until(() => !(env.c.parallelTasks || []).some(task => task.stepCheck?.status === 'running'), 'their checks');
+  assert.equal(env.task(tasks[research.id]).copyFiles, 0, 'The copy itself is counted, not what the agent said.');
+  assert.equal(env.board.public(env.c, env.card(research.id)).taskState.copyFiles, 0);
+  // The whole answer is read from the card's task.
+  assert.equal(env.board.answer(env.c, research.id).text, 'The answer is **here**, in full.');
+  // One note in the workspace chat when the run is over, and only one.
+  const notes = () => env.c.messages.filter(message => message.role === 'system' && /The Plan’s run of 2 cards ended/.test(message.text));
+  await until(() => notes().length === 1, 'the end-of-run note');
+  assert.match(notes()[0].text, /2 to review/);
+  // Nothing to merge: accepting frees the copy.
+  const worktree = env.task(tasks[research.id]).worktree;
+  assert.equal(env.board.accept(env.c, research.id).column, 'done');
+  assert.equal(env.task(tasks[research.id]).status, 'integrated'); assert.equal(fs.existsSync(worktree), false);
+  assert.equal(column(env, research), 'done', 'Freeing the copy doesn’t move the card.');
+  // Discarding a copy with changes keeps the card in Review with its answer, to accept without them.
+  fs.writeFileSync(path.join(env.task(tasks[built.id]).scopePath, 'made.txt'), 'by the card\n');
+  assert.throws(() => env.board.accept(env.c, built.id), /Review and merge them first/);
+  env.release(fs.realpathSync(env.folder('a'))); await main.done;
+  env.broker.tasks.discard(env.c, tasks[built.id]);
+  assert.equal(column(env, built), 'review'); assert.equal(env.card(built.id).result.status, 'discarded'); assert.equal(env.card(built.id).result.summary, 'Built it.');
+  assert.equal(env.card(built.id).reason, null);
+  assert.equal(env.board.accept(env.c, built.id).column, 'done');
+  assert.equal(notes().length, 1);
 });
 
 test('a card’s place on the canvas is saved without changing what an agent reads, and survives a restart (#97)', async t => {

@@ -93,7 +93,7 @@ test('doing it as one runs the message once with the rating it was shown with', 
   await assert.rejects(broker.splits.act(c, { id: split.id, action: 'tasks' }), /no longer open/);
 });
 
-test('running the parts makes Plan cards in one group, run as tasks that wait for the parts they need and share the message’s task', { skip: scriptCLIs }, async t => {
+test('running the parts makes hidden cards in one group, with a review after them, run as tasks that wait for the parts they need and share the message’s task', { skip: scriptCLIs }, async t => {
   const { broker, c, input } = setup(t);
   broker.router.worker = async () => JSON.stringify({ ...rating, parts });
   const { split } = await broker.dispatch(c, input);
@@ -111,8 +111,67 @@ test('running the parts makes Plan cards in one group, run as tasks that wait fo
   const shared = broker.tasks.sharedUsage(c, tasks[0]);
   assert(shared.tokens >= 500); assert.equal(shared.retries, 1);
   assert.equal(c.messages.filter(message => message.role === 'user' && message.splitId === split.id).length, 1);
-  assert.match(c.messages.at(-1).text, /3 tasks that run side by side/);
+  assert.match(c.messages.at(-1).text, /3 parts that run side by side.*answers here/);
   assert.equal(c.splitProposal, null);
+  // One review of the combined result waits for every part, and Flow finishes them out of sight.
+  const run = c.splitRuns.at(-1), review = broker.board.find(c, run.reviewCardId);
+  assert.deepEqual([run.status, run.automatic, review.role, review.column], ['working', false, 'reviewer', 'doing']);
+  assert.deepEqual(review.dependsOn, done.cards);
+  assert(broker.board.view(c).cards.every(card => card.managed), 'The parts aren’t the Plan’s while Flow finishes them.');
+  assert(broker.view(c).parallelTasks.every(task => task.managed), 'Nor are they in Tasks.');
+});
+
+const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+// A part's task as it would end: finished in the folder, with its report, files and tests.
+const finishPart = (broker, c, cardId, changes = {}) => {
+  const task = broker.tasks.find(c, broker.board.find(c, cardId).task);
+  broker.tasks.update(c, task, { status: 'complete', mode: 'direct', provider: 'codex', stepResult: { summary: 'Did it.', files: [`${cardId.slice(0, 4)}.js`] }, stepCheck: { id: 'x', status: 'done', outcome: 'passed', command: 'npm test' }, ...changes });
+  return task;
+};
+
+test('Flow finishes a split by itself: it accepts each part, waits for the review, answers once and clears the parts away', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t);
+  broker.router.worker = async () => JSON.stringify({ ...rating, parts });
+  const { split } = await broker.dispatch(c, input);
+  const done = await broker.splits.act(c, { id: split.id, action: 'tasks' });
+  const run = c.splitRuns.at(-1);
+  for (const id of done.cards) finishPart(broker, c, id);
+  await settle();
+  assert(done.cards.every(id => broker.board.find(c, id).column === 'done' && broker.board.find(c, id).acceptedBy === 'flow'), 'Flow accepts a finished part whose tests passed.');
+  assert.equal(c.splitRuns.at(-1).status, 'working', 'It waits for the review.');
+  assert(!c.messages.some(message => /The Plan’s run/.test(message.text || '')), 'The Plan’s own end-of-run note isn’t given for Flow’s parts.');
+  const reviewTask = broker.tasks.find(c, broker.board.find(c, run.reviewCardId).task);
+  broker.tasks.update(c, reviewTask, { status: 'complete', mode: 'direct', provider: 'codex', review: { status: 'passed', verdict: 'pass', round: 1, earlier: [{ problem: 'x' }], findings: [] }, stepCheck: { id: 'y', status: 'done', outcome: 'passed', command: 'npm test' } });
+  await settle();
+  assert.equal(c.splitRuns.at(-1).status, 'finished'); assert.equal(c.splitRuns.at(-1).outcome, 'done');
+  const answer = c.messages.at(-1);
+  assert.deepEqual([answer.role, answer.splitResult.parts], ['assistant', 3]);
+  assert.match(answer.text, /^Flow did this in 3 parts side by side and merged them into project\./);
+  assert.match(answer.text, /\*\*1\. Fix the login redirect\*\* · Codex/);
+  assert.match(answer.text, /\*\*Review\*\* · Codex found 1 problem; one repair round fixed it\./);
+  assert.match(answer.text, /\*\*Tests\*\* · `npm test` passed on the combined result\./);
+  assert.match(answer.text, /\*\*Changed\*\* · `/);
+  assert.equal(broker.board.cards(c).length, 0, 'The parts and the review leave the Plan.');
+  assert.equal(broker.view(c).parallelTasks.length, 0, 'And Tasks; their conversations stay.');
+  assert.equal(c.parallelTasks.length, 4);
+});
+
+test('a part Flow can’t settle hands the split to the Plan, and what it finished stays', { skip: scriptCLIs }, async t => {
+  const { broker, c, input } = setup(t);
+  broker.router.worker = async () => JSON.stringify({ ...rating, parts });
+  const { split } = await broker.dispatch(c, input);
+  const done = await broker.splits.act(c, { id: split.id, action: 'tasks' });
+  finishPart(broker, c, done.cards[0]);
+  await settle();
+  assert.equal(broker.board.find(c, done.cards[0]).column, 'done');
+  finishPart(broker, c, done.cards[1], { stepCheck: { id: 'z', status: 'done', outcome: 'failed', command: 'npm test', exitCode: 1 } });
+  await settle();
+  const run = c.splitRuns.at(-1);
+  assert.deepEqual([run.status, run.merged], ['handed', 1]);
+  assert.match(c.messages.at(-1).text, /The tests failed on “Add CSV export to reports” \(npm test\)\. Flow had finished 1 of 3 parts.*on the Plan as “.*” for you to finish/);
+  assert(broker.board.view(c).cards.every(card => !card.managed), 'Every card is on the Plan now.');
+  assert(broker.view(c).parallelTasks.every(task => !task.managed));
+  assert.equal(broker.board.find(c, done.cards[1]).column, 'review', 'The failed part waits in Review as any card does.');
 });
 
 test('parts that bill by use need your yes, and splitting without asking never uses them', { skip: scriptCLIs }, async t => {
@@ -136,7 +195,8 @@ test('with splitting without asking on, subscription parts start at once; puttin
   const second = await broker.dispatch(c, { ...input, requestId: 'send-split-2' });
   assert.equal(second.split.automatic, true);
   assert.equal(second.split.cards.length, 3);
-  assert.match(c.messages.at(-1).text, /^Flow split this into 3 tasks/);
+  assert.match(c.messages.at(-1).text, /^Flow split this into 3 parts/);
+  assert.equal(c.splitRuns.at(-1).automatic, true);
 });
 
 test('a part’s limits count what its message and the other parts used', () => {

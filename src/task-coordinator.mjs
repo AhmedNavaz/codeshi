@@ -457,7 +457,11 @@ export class TaskCoordinator {
       const messages = conversation?.messages || [];
       reply = messages.findLast(message => message.role === 'assistant' && message.text?.trim() && (!run || message.runId === run.id))?.text || '';
       const result = { summary: clip(reply, 3000), files: runSteps(messages).files.slice(0, 20), runId: run?.id || null, at: new Date().toISOString() };
-      this.update(c, task, { stepResult: result });
+      // A Plan card in its own copy counts the files the copy really changed, so one that changed nothing, such as
+      // research, needn't be merged (src/board.mjs).
+      let copyFiles = null;
+      if (task.board && task.mode === 'worktree' && task.worktree && fs.existsSync(task.worktree)) { try { copyFiles = this.planFor(c, task).plan.files.length; } catch { /* Counted again when it's accepted. */ } }
+      this.update(c, task, { stepResult: result, ...(copyFiles !== null ? { copyFiles } : {}) });
       if (plan && step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
     }
     const ran = await this.runStepCheck(c, task);
@@ -557,7 +561,14 @@ export class TaskCoordinator {
       hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status)
     };
   }
-  list(c) { return (c.parallelTasks || []).filter(task => !task.closed).map(task => this.public(task)); }
+  // A Plan card's task says where its card is, so a summary of the Plan's tasks knows which still need you. A split's parts,
+  // while Flow finishes them by itself, are marked managed, which keeps them out of Tasks unless they need you.
+  list(c) {
+    return (c.parallelTasks || []).filter(task => !task.closed).map(task => {
+      const shown = { ...this.public(task), ...(task.splitId && this.main.splits?.finisher?.manages(c, task.splitId) ? { managed: true } : {}) }, card = task.board && this.main.board?.cards?.(c).find(item => item.id === task.board.cardId);
+      return card ? { ...shown, cardColumn: card.task === task.id ? card.column : null } : shown;
+    });
+  }
   // One task's conversation, as the page shows it. Undo works on the real folders from the main conversation, so a lane doesn't offer it.
   view(c, id, options) {
     const task = this.find(c, id), lane = this.lane(c, task);
@@ -621,7 +632,8 @@ export class TaskCoordinator {
   }
   // Under a lease on this folder, so no run, patch or undo can change it meanwhile. The plan is worked out again inside it,
   // and anything different from what was reviewed stops the merge.
-  integrate(c, id, { digest, acceptFailedCheck = false } = {}) {
+  // Flow merging a split's part by itself (src/split-finish.mjs) is quiet: it answers once for the whole message.
+  integrate(c, id, { digest, acceptFailedCheck = false, quiet = false } = {}) {
     const task = this.reviewable(c, id);
     return this.withFolders([task.folderPath], 'merging a task', async () => {
       const { plan } = this.planFor(c, task);
@@ -630,7 +642,7 @@ export class TaskCoordinator {
       if (task.check?.digest === digest && task.check.status !== 'passed' && acceptFailedCheck !== true) throw fail('The tests failed on the combined result. Confirm to merge anyway.');
       applyPlan(task.repoRoot, plan);
       const count = plan.writes.length;
-      this.main.message(c, 'system', count ? `Merged “${task.title}” into ${task.folderName}: ${count} file${count === 1 ? '' : 's'}.` : `“${task.title}” had nothing left to merge into ${task.folderName}.`);
+      if (!quiet) this.main.message(c, 'system', count ? `Merged “${task.title}” into ${task.folderName}: ${count} file${count === 1 ? '' : 's'}.` : `“${task.title}” had nothing left to merge into ${task.folderName}.`);
       this.finish(c, task, { status: 'integrated', integration: { files: count, at: new Date().toISOString() } });
       return { merged: count, task: this.public(task) };
     });

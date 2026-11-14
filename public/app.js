@@ -1125,21 +1125,24 @@
     const provider = message.provider || state.conversation?.provider || "codex";
     const streaming = !user && (message.status === "streaming" || message.status === "running");
     const row = element("article", `message ${user ? "message-user" : "message-assistant"}${user && message.steer ? " message-steer" : ""}${streaming ? " message-streaming" : ""}`);
-    if (!user) row.dataset.provider = message.connection === "local" ? "local" : provider;
+    // Flow's one answer for a split message it finished by itself (src/split-finish.mjs) is Flow's, not one agent's.
+    const flowAnswer = !user && Boolean(message.splitResult);
+    if (!user) row.dataset.provider = flowAnswer ? "flow" : message.connection === "local" ? "local" : provider;
     if (message.id) {
       row.id = "message-" + message.id;
       row.dataset.messageId = message.id;
     }
     if (message.runId) row.dataset.runId = message.runId;
     const teammate = user && typeof message.author?.name === "string" ? message.author.name : "";
-    row.setAttribute("aria-label", user ? (message.steer ? "Your note, added while the agent worked" : teammate ? `${teammate}’s message, sent through Share live` : "Your message") : `${label(provider)} response`);
+    row.setAttribute("aria-label", user ? (message.steer ? "Your note, added while the agent worked" : teammate ? `${teammate}’s message, sent through Share live` : "Your message") : flowAnswer ? "Flow’s combined answer" : `${label(provider)} response`);
     if (teammate) row.classList.add("message-teammate");
     // A reply opens with one line naming the agent. Time and copy sit in a row beneath every message and appear on hover.
     const heading = element("div", "message-heading");
     if (!user) {
-      const avatar = element("span", `message-avatar ${message.connection === 'local' ? 'local' : provider}`);
+      const avatar = element("span", `message-avatar ${flowAnswer ? 'flow' : message.connection === 'local' ? 'local' : provider}`);
       avatar.setAttribute("aria-hidden", "true");
-      heading.append(avatar, element("span", "message-author", message.connection === 'local' ? 'Local · Ollama' : label(provider)));
+      heading.append(avatar, element("span", "message-author", flowAnswer ? 'Flow' : message.connection === 'local' ? 'Local · Ollama' : label(provider)));
+      if (flowAnswer) heading.append(element("span", "message-model", `${message.splitResult.parts} parts side by side`));
       const details = [message.model && message.model !== "unknown" ? message.model : "", message.effort ? message.effort + " effort" : ""].filter(Boolean).join(" · ");
       if (details) heading.append(element("span", "message-model", details));
       if (message.imported) heading.append(element("span", "message-label", "Imported"));
@@ -1382,19 +1385,21 @@
         const run = forRun || (key && shownRun?.id === key ? shownRun : null);
         const model = source?.model && source.model !== "unknown" ? source.model : run?.effectiveModel && run.effectiveModel !== "unknown" ? run.effectiveModel : run?.model || "";
         const effort = source?.effort || run?.effectiveEffort || run?.effort || "";
-        const details = [model, effort ? effort + " effort" : ""].filter(Boolean).join(" · ");
+        // Flow's one answer for a split message it finished by itself (src/split-finish.mjs) is Flow's, not one agent's.
+        const flow = provider === "flow";
+        const details = flow ? `${source?.splitResult?.parts || 0} parts side by side` : [model, effort ? effort + " effort" : ""].filter(Boolean).join(" · ");
         const nodeKey = "thread:" + (ordinal++) + ":" + key, headKey = JSON.stringify([provider, connection, details, Boolean(source?.imported)]);
         let parts = oldNodes.get(nodeKey);
         if (!parts) {
           parts = { node: element("div", "run-thread"), body: element("div", "run-thread-body") };
-          if (key) { parts.node.setAttribute("data-run-id", key); parts.node.dataset.runId = key; }
+          if (key && !flow) { parts.node.setAttribute("data-run-id", key); parts.node.dataset.runId = key; }
         }
         if (parts.headKey !== headKey) {
           const heading = element("div", "message-heading run-thread-heading");
           heading.setAttribute("role", "heading"); heading.setAttribute("aria-level", "3");
-          const avatar = element("span", `message-avatar ${connection === "local" ? "local" : provider}`);
+          const avatar = element("span", `message-avatar ${flow ? "flow" : connection === "local" ? "local" : provider}`);
           avatar.setAttribute("aria-hidden", "true");
-          heading.append(avatar, element("span", "message-author", connection === "local" ? "Local · Ollama" : label(provider)));
+          heading.append(avatar, element("span", "message-author", flow ? "Flow" : connection === "local" ? "Local · Ollama" : label(provider)));
           if (details) heading.append(element("span", "message-model", details));
           if (source?.imported) heading.append(element("span", "message-label", "Imported"));
           parts.heading = heading; parts.headKey = headKey;
@@ -1407,6 +1412,10 @@
       };
       // The thread for a message of this run, continuing the open one when it is the same run and agent.
       const threadFor = (message, index) => {
+        if (message.role === "assistant" && message.splitResult) {
+          const key = "split:" + (message.splitResult.id || message.id);
+          return thread && thread.key === key ? thread : openThread(key, "flow", "", message);
+        }
         const key = message.runId || "", provider = message.provider || c?.provider || "codex";
         if (thread && thread.key === key && (key || thread.provider === provider)) return thread;
         let source = null;
@@ -2562,7 +2571,7 @@
         await refresh();
         render(true);
         const parts = state.conversation?.splitHistory?.findLast?.(item => item.id === accepted.split.id)?.cards?.length || state.conversation?.splitProposal?.parts?.length || 0;
-        announce(accepted.split.automatic ? `Flow split this into ${parts} tasks that run side by side.` : `Flow suggests splitting this into ${parts} tasks. Choose above the message box.`);
+        announce(accepted.split.automatic ? `Flow split this into ${parts} parts that run side by side. It answers here when they’re done.` : `Flow suggests splitting this into ${parts} tasks. Choose above the message box.`);
         return true;
       }
       window.relayAutomaticReview?.accepted(projectId, automaticReview);

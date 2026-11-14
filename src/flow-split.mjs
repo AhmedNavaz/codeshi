@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { REVIEW_CARD, SplitFinish, applySplitRunRecord } from './split-finish.mjs';
 
 // Flow splitting a request (#107 stage 2, #108). On Smart and Ultra every Flow message is rated by a small model before it
 // runs (routing-assessment.mjs). When the desktop composer allows it, that same rating can also name the request's separate
 // parts: pieces of work different agents could do at the same time. Nothing starts from them by itself. Codeshi shows the
 // parts, the agent and model routing would pick for each and what each is billed to, and you choose to run them as tasks
-// side by side or as one message. Running them makes them cards on the Plan, in a group named after the message, so they
-// can be rearranged, stopped and reviewed like any card, and they share the message's task limits (#87). Splitting without
-// asking is a preference you turn on first, and it applies only when every part would use an agent on a subscription.
+// side by side or as one message. Running them makes them cards in a group named after the message, with one review of the
+// combined result after them, and they share the message's task limits (#87). Flow finishes them by itself and answers once
+// (src/split-finish.mjs), so they stay off the Plan and out of Tasks unless something needs you. Splitting without asking
+// is a preference you turn on first, and it applies only when every part would use an agent on a subscription.
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 const TIERS = ['light', 'standard', 'deep'];
 export const SPLIT_LIMITS = { parts: 4, title: 120, instructions: 4000, group: 60 };
@@ -53,10 +55,11 @@ export function applySplitRecord(c, record) {
     c.splitProposal = null;
   }
   if (record.type === 'split_preference') c.splitPreference = { auto: record.auto === true, at: record.at };
+  applySplitRunRecord(c, record);
 }
 
 export class FlowSplits {
-  constructor(broker) { this.broker = broker; this.acting = new Set(); }
+  constructor(broker) { this.broker = broker; this.acting = new Set(); this.finisher = new SplitFinish(broker); this.finisher.restore(); }
 
   // Whether this message may come back as parts: only the desktop composer asks (allowSplit), in the workspace chat, for a
   // new message rated by an agent. A queued prompt, a retry, a plan, a card, a message with attachments or one with Review
@@ -126,11 +129,14 @@ export class FlowSplits {
     return { view: broker.view(c), accepted };
   }
 
-  // The parts become cards on the Plan, in Ready, on Auto in the message's mode, each waiting for the parts it needs, and
-  // run at once as tasks. They count toward Tasks at once like any task, and toward the message's own limits together.
+  // The parts become cards in Ready, on Auto in the message's mode, each waiting for the parts it needs, and run at once as
+  // tasks. A Reviewer card waits for all of them and checks the combined result; routing gives it another agent than the
+  // parts' when one can take it. They count toward Tasks at once like any task, and toward the message's own limits together.
+  // Flow then finishes them by itself (src/split-finish.mjs): the cards are marked as Flow's, which keeps them off the Plan
+  // until something needs you.
   asTasks(c, proposal, { billingConfirmed, folderId = null, by }) {
     const broker = this.broker, board = broker.board, parts = proposal.parts;
-    if (board.cards(c).length + parts.length > 300) throw fail(`The Plan has room for ${Math.max(0, 300 - board.cards(c).length)} more cards. Remove some finished ones, or do it as one message.`);
+    if (board.cards(c).length + parts.length + 1 > 300) throw fail(`The Plan has room for ${Math.max(0, 300 - board.cards(c).length)} more cards. Remove some finished ones, or do it as one message.`);
     if (c.planClosed) throw fail('The Plan is closed to agents, so its cards can’t run. Open it to agents, or do it as one message.');
     const unpicked = parts.findIndex(part => part.pick?.error || !part.pick?.provider);
     if (unpicked >= 0) throw fail(`Routing found no agent for part ${unpicked + 1}: ${parts[unpicked].pick?.error || 'nothing could take it'}. Do it as one message, or refresh plan usage and send it again.`);
@@ -139,24 +145,28 @@ export class FlowSplits {
     const folders = broker.workspaceFolders, folder = folderId || (folders.length === 1 ? folders[0].id : null);
     if (!folder || !folders.some(item => item.id === folder)) throw Object.assign(fail('Choose the folder these parts work in.', 400), { details: { folderChoice: true } });
     const taken = new Set(board.cards(c).filter(card => card.group).map(card => card.group)), group = groupName(proposal.request.text, taken);
-    const source = { kind: 'flow-split', splitId: proposal.id, goal: clip(proposal.request.text, 4000), summary: `Split from one message into ${parts.length} parts that run side by side.` };
-    const ids = [];
+    const source = { kind: 'flow-split', splitId: proposal.id, goal: clip(proposal.request.text, 4000), summary: `Split from one message into ${parts.length} parts that run side by side, then one review of the combined result.` };
+    const managed = { splitId: proposal.id }, ids = [];
+    let reviewId = null;
     try {
       for (const [index, part] of parts.entries()) {
-        const card = board.create(c, { title: part.title, notes: part.instructions, tier: part.tier, auto: true, routingMode: proposal.routingMode, group, folderId: folder, column: 'ready', dependsOn: part.dependsOn.map(number => ids[number - 1]) }, { createdBy: 'agent', source, splitPart: index + 1 });
+        const card = board.create(c, { title: part.title, notes: part.instructions, tier: part.tier, auto: true, routingMode: proposal.routingMode, group, folderId: folder, column: 'ready', dependsOn: part.dependsOn.map(number => ids[number - 1]) }, { createdBy: 'agent', source, splitPart: index + 1, managed });
         ids.push(card.id);
       }
-      const assignments = Object.fromEntries(ids.map((cardId, index) => [cardId, { provider: parts[index].pick.provider, model: parts[index].pick.model, effort: parts[index].pick.effort }]));
+      reviewId = board.create(c, { ...REVIEW_CARD, role: 'reviewer', tier: 'standard', auto: true, routingMode: proposal.routingMode, group, folderId: folder, column: 'ready', dependsOn: [...ids] }, { createdBy: 'agent', source, managed }).id;
+      // The review is chosen again when it starts, away from the parts' agents; until then it is counted as the first part's.
+      const assignments = Object.fromEntries([...ids.map((cardId, index) => [cardId, { provider: parts[index].pick.provider, model: parts[index].pick.model, effort: parts[index].pick.effort }]), [reviewId, { provider: parts[0].pick.provider, model: parts[0].pick.model, effort: parts[0].pick.effort }]]);
       const access = { mode: proposal.request.mode, approvalPolicy: proposal.request.approvalPolicy };
-      board.run(c, { ids, executionRevision: broker.execution.defaults(c).revision, assignments, billingConfirmed: billingConfirmed || charged === 0 }, { access, source: by === 'flow' ? 'flow-split' : 'split', parent: { taskId: proposal.taskId, execution: proposal.execution, splitId: proposal.id, automatic: by === 'flow' } });
+      board.run(c, { ids: [...ids, reviewId], executionRevision: broker.execution.defaults(c).revision, assignments, billingConfirmed: billingConfirmed || charged === 0 }, { access, source: by === 'flow' ? 'flow-split' : 'split', parent: { taskId: proposal.taskId, execution: proposal.execution, splitId: proposal.id, automatic: by === 'flow' } });
     } catch (error) {
-      for (const cardId of ids) { try { board.remove(c, cardId); } catch { /* A card that ran stays, with its task. */ } }
+      for (const cardId of [...ids, ...(reviewId ? [reviewId] : [])]) { try { board.remove(c, cardId); } catch { /* A card that ran stays, with its task. */ } }
       throw error;
     }
+    this.finisher.begin(c, { proposal, group, cards: ids, reviewCardId: reviewId, folderId: folder, by });
     broker.record(c, { type: 'split_proposal_end', id: proposal.id, outcome: 'tasks', cards: ids, group });
     // The message you sent is saved with the split, not when it was rated, so doing it as one never shows it twice.
     broker.record(c, { type: 'message', message: { id: randomUUID(), role: 'user', text: proposal.request.text, splitId: proposal.id, status: 'complete', createdAt: new Date().toISOString() } });
-    broker.message(c, 'system', `${by === 'flow' ? 'Flow split this' : 'Split this'} into ${parts.length} tasks that run side by side, on the Plan as “${group}”. ${parts.some(part => part.dependsOn.length) ? 'Parts that need others wait for them. ' : ''}They share this message’s task limits, and each waits for you to review it.`);
+    broker.message(c, 'system', `${by === 'flow' ? 'Flow split this' : 'Split this'} into ${parts.length} parts that run side by side${parts.some(part => part.dependsOn.length) ? ', each after the parts it needs' : ''}. Flow merges each one when it’s safe, reviews the combined result, and answers here.`);
     broker.emit('update', { conversationId: c.id });
     return { view: broker.view(c), cards: ids, group };
   }
