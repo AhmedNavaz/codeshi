@@ -1234,6 +1234,10 @@ test('Update the Plan reads a finished card’s findings and the Plan, and draft
   env.board.drafts(env.c, { action: 'discard', ids: drafted.map(card => card.id) });
   assert.equal(env.card(cache.id).title, 'Add Redis cache');
   assert.equal(env.card(limiter.id).draft ?? null, null);
+  // The card keeps what the update drafted and what you did with it, so it isn't offered as if it never ran.
+  assert.deepEqual((({ added, changed, removed, accepted, discarded }) => ({ added, changed, removed, accepted, discarded }))(env.card(research.id).updates[0]), { added: 2, changed: 1, removed: 1, accepted: 0, discarded: 4 });
+  // A later update is told what the earlier one did, and so is every agent reading the Plan once one is accepted.
+  assert.match(env.board.updatePrompt(env.c, env.card(research.id)), /# Earlier updates from these findings[\s\S]*2 new, 1 changed, 1 removed; its changes were discarded by the person/);
   env.board.dismissSuggest(env.c);
 
   // Findings that change nothing say so, with what's left to decide, and add nothing.
@@ -1245,6 +1249,28 @@ test('Update the Plan reads a finished card’s findings and the Plan, and draft
   assert.equal(env.c.boardSuggest.summary, 'The Plan already covers this.');
   assert.equal(env.c.boardSuggest.questions[0].question, 'Drop Redis entirely?');
   assert.equal(env.board.cards(env.c).length, before);
+  assert.deepEqual(env.card(research.id).updates.map(item => item.added + item.changed + item.removed), [4, 0]);
+});
+
+test('a follow-up asked in a finished card’s task is listed after its report, and a review’s verdict stands without a new one (#89)', async t => {
+  const env = setup(t);
+  const card = env.add({ title: 'Review the API', column: 'ready', role: 'reviewer' });
+  const message = (role, runId, text) => ({ id: `${runId}-${role}`, role, runId, text, createdAt: new Date().toISOString() });
+  const task = { id: 'task-followup', status: 'complete', board: { cardId: card.id }, review: { verdict: 'pass', status: 'passed', round: 0, findings: [], repairs: [] }, laterRuns: [{ runId: 'run-2', kind: 'follow-up' }] };
+  const lane = { c: { lastRun: { id: 'run-2' }, messages: [message('user', 'run-1', 'Review the API'), message('assistant', 'run-1', 'REPORT: all good.\n\n```json\n{"verdict": "pass"}\n```'), message('user', 'run-2', 'Save it to a file?'), message('assistant', 'run-2', 'Thanks, saved.')] } };
+  env.broker.tasks.lanes.set(task.id, lane);
+  const thread = env.board.thread(env.c, task);
+  assert.match(thread.report.text, /^REPORT/);
+  assert.deepEqual(thread.followUps.map(item => [item.ask, item.text]), [['Save it to a file?', 'Thanks, saved.']]);
+  assert.match(env.board.result(task, env.c).summary, /^REPORT/);
+  assert.equal(env.board.result(task, env.c).followUps, 1);
+  // The follow-up's reply has no verdict: the review's pass stands, and nothing is saved over it.
+  const saved = [], update = env.broker.tasks.update;
+  env.broker.tasks.update = (c, item, changes) => { saved.push(changes); };
+  try {
+    assert.equal(env.board.reviews.ended(env.c, task, 'Thanks, saved.'), task.review);
+    assert.deepEqual(saved, []);
+  } finally { env.broker.tasks.update = update; env.broker.tasks.lanes.delete(task.id); }
 });
 
 // Watching the Plan run (#162 stage 5): a task's usage as the Plan shows it. Working time comes as what finished runs took

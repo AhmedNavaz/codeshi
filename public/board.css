@@ -140,6 +140,11 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 .board-asked > summary:hover { color: var(--text-strong); }
 .board-asked[open] > summary { margin-bottom: 8px; }
 .board-result-summary { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+/* Questions asked in a finished card's task, listed after its report rather than replacing it. */
+.board-followups { display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.board-followups-title { margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
+.board-followup { display: grid; gap: 6px; padding-left: 10px; border-left: 2px solid var(--border); }
+.board-followup-ask { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 /* Update the Plan from what a card found: the last part of its result, set off by a rule. */
 .board-update { display: grid; gap: 10px; margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--border); }
 .board-update-head { display: flex; align-items: center; gap: 12px; }
@@ -151,6 +156,7 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 .board-update.done .board-update-lead .icon { stroke: var(--success); }
 .board-update-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .board-update-actions { display: flex; flex: none; gap: 8px; }
+.board-update-meta { margin: 0; color: var(--muted); font-size: 11.5px; }
 .board-update-questions { margin: 4px 0 0; padding-left: 20px; font-size: 12px; line-height: 1.5; }
 .board-update-confirm { display: grid; gap: 6px; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .board-update-ask { margin: 0; color: var(--warning); font-size: 12px; line-height: 1.45; }
@@ -537,7 +543,7 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 .plan-thread:is([data-status=failed], [data-status=blocked], [data-status=lost]) .plan-thread-dot { background: var(--danger); }
 .plan-thread:is([data-status=stopped], [data-status=detached], [data-status=waiting]) .plan-thread-dot { background: var(--warning); }
 .plan-thread-badge { flex: none; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--warning); color: #1a1a1a; font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; }
-.plan-thread-review { flex: none; color: var(--link); font-size: 11px; }
+.plan-thread-review { flex: none; padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); font-size: 10.5px; font-weight: 600; line-height: 17px; }
 @media (prefers-reduced-motion: reduce) { .plan-thread[data-status=running] :is(.plan-thread-dot, .plan-thread-icon) { animation: none; } }
 #app-shell.plan .empty-state .capabilities { display: none; }
 #app-shell.plan .plan-context { padding-top: 8px; }

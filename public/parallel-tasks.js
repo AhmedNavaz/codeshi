@@ -190,7 +190,8 @@
     const how = task.reason || (task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
     if (task.status === 'integrated') text.append(node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`));
     else if (task.status === 'kept') text.append(node('span', 'task-banner-detail', `Saved as the branch ${task.integration?.branch}. Nothing was merged.`));
-    else if (how) text.append(node('span', 'task-banner-detail', how));
+    // One line: the first sentence says how it runs, and the rest is in the tooltip and read out in full.
+    else if (how) { const detail = node('span', 'task-banner-detail', how); detail.title = how; text.append(detail); }
     const actions = node('div', 'task-banner-actions');
     if (canMerge(task)) actions.append(button('Review and merge', () => attempt(() => openReview(task)), 'primary-button'), button('Discard', () => attempt(() => act(task, 'discard').then(() => api.announce('The task’s copy was discarded.')))));
     if (task.status === 'waiting') {

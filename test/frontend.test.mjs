@@ -8874,10 +8874,10 @@ test('a major card shows its subtasks as they run, with the ones to come to edit
   assert.deepEqual(posted.at(-1).body, { action: 'edit', subtaskId: 's3', title: 'Email it', instructions: 'Send it to the buyer.', tier: 'standard' });
   press('Add'); await flush();
   typeInto(form().querySelector('.board-input'), 'Print it'); await flush();
-  form().querySelector('.board-segment').querySelectorAll('button').find(item => item.textContent === 'Light').click();
-  form().querySelector('select').value = 'smart'; form().querySelector('select').dispatchEvent(new UIEvent('change')); await flush();
+  assert.equal(form().querySelector('.board-segment'), null, 'A subtask has no Light, Standard or Deep choice: the card decides.');
+  assert.equal(form().querySelector('select'), null, 'Who runs a subtask is set on its row, not in the form.');
   press('Add', form()); await flush();
-  assert.deepEqual(posted.at(-1).body, { action: 'add', title: 'Print it', instructions: '', tier: 'light', auto: true });
+  assert.deepEqual(posted.at(-1).body, { action: 'add', title: 'Print it', instructions: '', tier: 'standard' });
   // A major card with no subtasks says it needs them, and an agent splits it on request, reading only.
   ui.$('board-drawer-close')?.click(); await flush();
   face(ids.next).click(); await flush();

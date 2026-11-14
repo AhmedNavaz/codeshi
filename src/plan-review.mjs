@@ -140,6 +140,10 @@ export class PlanReviews {
     if (!this.isReview(card)) return null;
     const was = task.review || null, round = was?.round || 0, at = new Date().toISOString();
     const parsed = parseVerdict(reply);
+    // A follow-up you asked in its task after the review answers your question; it doesn't review again. Without a new
+    // verdict, the one it gave stands, and so does what you decided about it.
+    const runId = this.tasks.lanes.get(task.id)?.c?.lastRun?.id, followUp = Boolean(runId && (task.laterRuns || []).some(item => item.runId === runId && item.kind === 'follow-up'));
+    if (!parsed && was && was.status !== 'reviewing' && (followUp || was.verdict)) return was;
     const keep = was ? { findings: was.findings, repairs: was.repairs } : {};
     let review;
     if (!parsed) review = { ...keep, round, verdict: null, status: 'held', reason: 'The review didn’t end with a verdict, so the cards after it wait. Read its report, then continue anyway or send it back.', at };
@@ -271,6 +275,27 @@ export class PlanReviews {
     if (!reviewHolds(task)) return false;
     if (task.review.status === 'repairing') throw Object.assign(new Error('The repair round is still running. Stop the repairing card first, or wait for the second review.'), { status: 409 });
     this.tasks.update(c, task, { review: { ...task.review, accepted: true, acceptedAt: new Date().toISOString() } });
+    return true;
+  }
+  // Before follow-ups kept a review's verdict, a question asked in its task after the review replaced the verdict with
+  // "no verdict". Read when the card opens: the verdict comes back from the review's own reply, as a decision for you
+  // (no repair starts after the fact), and the runs after it count as follow-ups.
+  recover(c, task) {
+    if (task.review?.status !== 'held' || task.review.verdict !== null || task.review.accepted || task.status !== 'complete') return false;
+    const card = this.cardOf(c, task);
+    if (!this.isReview(card) || card.task !== task.id) return false;
+    const all = this.board.runsOf(c, task), index = all.findLastIndex(run => parseVerdict(run.text));
+    if (index < 0 || index === all.length - 1) return false;
+    const parsed = parseVerdict(all[index].text), was = task.review, at = new Date().toISOString();
+    const findings = parsed.verdict === 'pass' ? [] : this.assign(c, card, parsed.findings);
+    const review = parsed.verdict === 'pass'
+      ? { ...was, verdict: 'pass', status: 'passed', findings: [], reason: 'The review found nothing that must change.', at }
+      : { ...was, verdict: 'changes', findings, status: 'held', reason: `The review found ${plural(findings.length, 'problem')}. The cards after it wait for you: continue anyway, or send cards back.`, at };
+    const known = new Set((task.laterRuns || []).map(item => item.runId));
+    const later = all.slice(index + 1).filter(run => !known.has(run.runId)).map(run => ({ runId: run.runId, kind: 'follow-up', at }));
+    this.tasks.update(c, task, { review, laterRuns: [...(task.laterRuns || []), ...later].slice(-30) });
+    // The card's result shows the report again, with the replies after it as follow-ups.
+    if (card.result && ['review', 'done'].includes(card.column)) this.board.update(c, card, { result: { ...card.result, summary: clip(all[index].text, 600), reportRun: all[index].runId, followUps: all.length - index - 1, at } });
     return true;
   }
   // After a restart, a repair round that was under way waits for you: its runs ended with the app.

@@ -4,6 +4,19 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-11-14
+
+### Added
+- **Answer an Update the Plan draft's questions** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). When the draft came from a card's **Update the Plan**, **Update the plan** under its questions reruns that same update with your answers and replaces the draft you answered, instead of sending them through the Plan chat. If the button is off, the reason shows beside it.
+- **A card remembers what its Plan updates did** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). A card's result says when the Plan was updated from it, with the agent and model, how many changes you accepted, and the update's summary, or that the drafts still wait, with **Show on the Plan**. **Update again** stays available and becomes the main choice when the card has answered something since. It reads the whole report and your follow-ups, and is told what earlier updates did, so it doesn't add the same cards twice or bring back ones you discarded. The Plan text other agents read notes a card's follow-ups and when the Plan was last updated from it.
+
+### Changed
+- **A Plan too big to attach is shortened, not refused** ([#97](https://github.com/AhmedNavaz/codeshi/issues/97)). Over 64 KB, cards already done or in review keep only their facts and result. If that isn't enough, other cards' instructions are clipped at 500 characters and their subtasks and comments are left out. The attached text says it was shortened. Cards still to run keep their full text unless the second step is needed.
+- **A subtask has no Light, Standard or Deep choice** ([#155](https://github.com/AhmedNavaz/codeshi/issues/155)). Its agent follows the card: when the card routes, the agent decides while running each subtask.
+
+### Fixed
+- **A follow-up on a review no longer wipes its verdict** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). A question asked in a Reviewer or QA card's task doesn't count as a new review, so a reply without a verdict leaves the original verdict. The card's result shows the original report, with your follow-ups and their answers under **Follow-ups**. A card that already lost its verdict gets it back from the review's own reply when you open it, as a decision for you, with no repair started.
+
 ## [0.54.0] - 2026-11-14
 
 ### Added
