@@ -62,7 +62,7 @@ test('a move is sent only after Allow, both sides show the same digits, and it i
   c.sender.allow(request.id);
   const ready = await until(() => { const view = c.receiver.view(); return view.state === 'ready' && view; });
   assert.equal(ready.received, ready.bytes);
-  assert.equal(c.sender.view().state, 'sent');
+  await until(() => c.sender.view().state === 'sent');
   const read = await readBackup({ registry: c.target, file: ready.path, passphrase: ready.passphrase, origin: noOrigin });
   assert.deepEqual(read.workspaces.map(item => item.name), ['My app']);
   assert.deepEqual(read.settings, ['appearance']);

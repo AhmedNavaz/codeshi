@@ -4,6 +4,8 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-11-14
+
 ### Added
 - **Mark design notes with the keyboard** ([#125](https://github.com/AhmedNavaz/codeshi/issues/125)). While Design notes is marking, the arrow keys move an outline through the page: up and down to the neighbouring parts, left to the part around it and right into it. Enter or Space marks the outlined part. The panel names what's outlined, so a screen reader can read it out, and the page never sees the keys marking uses. Esc stops marking and puts the keyboard in the first note that's still empty.
 
