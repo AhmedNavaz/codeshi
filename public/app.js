@@ -2021,35 +2021,7 @@
     catch (error) { showNotice(error.message); }
   }
 
-  const executionStrip = document.createElement('div'); executionStrip.className = 'execution-policy-strip';
-  const executionLabel = document.createElement('span'), executionTakeover = document.createElement('button');
-  executionTakeover.type = 'button'; executionTakeover.textContent = 'Take manual control';
-  // Revokes the active task's automatic decisions at a safe point. Flow offers it on its working card (#107).
-  async function takeManualControl() {
-    const policy = state.conversation?.execution?.active;
-    if (!policy || policy.mode !== 'flow') return false;
-    executionTakeover.disabled = true;
-    try { await post(endpoint(state.conversation.id, 'execution-policy'), { taskId: policy.taskId, revision: policy.revision, action: 'takeover' }, state.projectId); await refresh(); announce('Manual control. Nothing more starts on its own for this task.'); return true; }
-    catch (error) { showNotice(error.message); return false; }
-    finally { executionTakeover.disabled = false; }
-  }
-  executionTakeover.addEventListener('click', takeManualControl);
-  executionStrip.append(executionLabel, executionTakeover); ui.form.parentNode?.insertBefore(executionStrip, ui.form);
-  function renderExecutionPolicy() {
-    // Flow says how it works on its own cards; the Plan chat (#162) only reads and drafts cards, so there is nothing to take over.
-    if (document.getElementById('app-shell')?.classList.contains('flow') || window.relayBoard?.onPlanChat?.()) {
-      executionStrip.hidden = true;
-      return;
-    }
-    const execution = state.conversation?.execution, policy = execution?.active;
-    executionStrip.hidden = !execution;
-    executionLabel.textContent = execution ? t('Task: {task} · New work: {work}', { task: policy?.mode === 'flow' ? 'Flow' : t('Normal'), work: execution.defaults.mode === 'flow' ? 'Flow' : t('Normal') }) : '';
-    executionTakeover.hidden = !policy || policy.mode !== 'flow';
-    executionTakeover.title = 'Revoke pending automatic work. The current native turn may finish; Stop ends it immediately.';
-  }
-  window.addEventListener('relay-flow', renderExecutionPolicy);
   function renderControls() {
-    renderExecutionPolicy();
     const running = isRunning();
     const otherRunning = isOtherRunning();
     const busy = Boolean(state.pending) || state.loading || state.projectSaving;
@@ -3275,7 +3247,7 @@
   window.relayUI = {
     jumpToRun, jumpToMessage, loadEarlierMessages, loadToRun, loadToMessage,
     getState: () => state, describeActivity: parseActivity, api, post, refresh, renderControls, showNotice, selectProject, refreshAccounts, refreshProjects, announce, selectedFolderId: () => selectedFolderId(), selectFolder, highlightLines,
-    commands, isRunning, filteredProjects, openWorkspaceMenu, wireWorkspaceButton, setRouting, takeManualControl, routeFor, planAgain: again => run(false, again), stopRun: () => stop(), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
+    commands, isRunning, filteredProjects, openWorkspaceMenu, wireWorkspaceButton, setRouting, routeFor, planAgain: again => run(false, again), stopRun: () => stop(), showSidePanel, setTask, openTaskDraft, sidebarLevel: () => sidebarLevelFor(), showFolderLevel: () => { setSidebarLevel(state.projectId, 'folder'); renderWorkspaceList(); window.dispatchEvent(new CustomEvent('relay-state')); },
     ensureConversation: ensureCanonicalConversation,
     // Sends text in the open conversation as if typed, such as an answer to a Plan card's questions (#162). A draft already
     // in the box isn't replaced: the text goes after it, unsent, and 'drafted' says so. true once the message is accepted.

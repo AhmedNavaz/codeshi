@@ -693,18 +693,7 @@
     if (signedOut(provider)) return `Sign in to ${name(provider)} on your computer, or choose another agent.`;
     return '';
   }
-  const executionStrip = node('div', 'execution-policy-strip'), executionLabel = node('span');
-  const executionTakeover = button('Take manual control', () => attempt(async () => {
-    const policy = S.c?.execution?.active; if (!policy) return;
-    await api(endpoint('execution-policy'), { body: { taskId: policy.taskId, revision: policy.revision, action: 'takeover' } });
-    await refreshConversation();
-  }), 'big');
-  executionStrip.append(executionLabel, executionTakeover); $('composer').parentNode?.insertBefore(executionStrip, $('composer'));
   function renderComposer() {
-    const execution = S.c?.execution, policy = execution?.active;
-    executionStrip.hidden = !execution;
-    executionLabel.textContent = execution ? `Task: ${policy?.mode === 'flow' ? 'Flow' : 'Normal'} · New work: ${execution.defaults.mode === 'flow' ? 'Flow' : 'Normal'}` : '';
-    executionTakeover.hidden = !policy || policy.mode !== 'flow';
     const running = isRunning(), queueing = running || Boolean(S.c?.resume), blocked = sendBlocked(), other = otherRunning(), canAdd = running && S.c?.canAddToRun === true;
     input.placeholder = blocked ? 'Choose another agent to send' : other ? 'Another run is using this workspace' : S.draft ? 'What should this task do?' : queueing ? 'Queue a follow-up…' : routing() ? 'Message' : `Message ${name(S.settings.provider)}`;
     const send = $('send');

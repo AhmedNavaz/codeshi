@@ -76,6 +76,26 @@ const label = value => String(value).replace(/\s+/g, ' ').replace(/[#"<>]/g, cha
 const author = by => by?.kind === 'agent' ? [by.provider, by.model].filter(Boolean).join(' ') || 'An agent' : by?.kind === 'guest' ? `${by.name || 'A guest'} (guest)` : 'You';
 const clip = (value, limit) => { const line = String(value || '').trim(); return line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line; };
 
+// What a card's report says the Plan should change, under its “Plan changes” heading, or '' when it has none. A card's
+// agent is asked to add it only when what it found means other cards should change; Codeshi then updates the Plan from
+// the card by itself (Board.noticeChanges). A section that only says nothing needs to change counts as none.
+export const PLAN_CHANGES_REQUEST = 'If what you found means other cards on the Plan should change (work no card covers, a card that is wrong or no longer needed, or an order that no longer fits), add a heading “Plan changes” near the end and list each change on its own line, naming the cards. Leave it out when the Plan fits as it is. Codeshi drafts those changes for the person to accept.';
+export function planChanges(reply) {
+  const lines = String(reply || '').slice(-60000).split('\n');
+  const heading = /^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*plan changes\s*(?:\*\*|__)?\s*:?\s*(?:\*\*|__)?\s*(.*)$/i;
+  const start = lines.findLastIndex(line => heading.test(line));
+  if (start < 0) return '';
+  const body = [heading.exec(lines[start])[1]];
+  for (const line of lines.slice(start + 1)) {
+    // The next heading, a bold line on its own, or a code block (a review's verdict) ends the section.
+    if (/^\s*#{1,6}\s/.test(line) || /^\s*(?:\*\*|__)[^*_]+(?:\*\*|__)\s*:?\s*$/.test(line) || /^\s*```/.test(line) || /^\s*questions for you\s*:?\s*$/i.test(line)) break;
+    body.push(line);
+  }
+  const said = body.join('\n').trim();
+  if (!said || /^(?:[-*]\s*)?(?:none|no changes?(?: needed)?|n\/a|nothing(?: to change)?)\.?$/i.test(said)) return '';
+  return clip(said, 2000);
+}
+
 // An update from a card's findings that changes nothing (Board.updateFrom): a plan object with a summary, no steps and
 // nothing to remove. null for anything else, which is read as a plan.
 function noChanges(reply) {
@@ -99,7 +119,11 @@ export class Board {
     this.reviews = new PlanReviews(this);
     // The coordinator tells the board each time a task's record changes; the card follows its task from there.
     main.tasks.onTask = (c, task) => this.follow(c, task);
-    for (const c of main.conversations.values()) { this.reconcile(c); this.adopt(c); this.reviews.restore(c); }
+    for (const c of main.conversations.values()) {
+      this.reconcile(c); this.adopt(c); this.reviews.restore(c);
+      // An update still queued when Codeshi closed doesn't start by itself on launch; the cards it holds say so.
+      for (const card of this.cards(c).filter(item => item.autoUpdate && !item.autoUpdate.jobId && !item.autoUpdate.error && !item.autoUpdate.released)) this.update(c, card, { autoUpdate: { ...card.autoUpdate, error: 'Codeshi restarted before it could start.' } });
+    }
   }
   cards(c) { return c.board || []; }
   find(c, id) { const card = this.cards(c).find(item => item.id === id); if (!card) throw fail('That card is no longer on the board.', 404); return card; }
@@ -414,7 +438,10 @@ export class Board {
     const named = new Set(steps.map(step => step.card).filter(Boolean).map(ref => this.resolveRef(c, ref)?.id).filter(Boolean));
     const gone = new Set([...replaced].filter(id => !named.has(id) && !this.find(c, id).draft.was));
     const resolve = ref => { const card = this.resolveRef(c, ref); return card && !gone.has(card.id) ? card : null; };
-    const changeable = card => ['backlog', 'ready'].includes(card.column) && !this.closed(c, card);
+    // An update from a card's findings can also change a card queued behind it in the same run that hasn't started: its
+    // task is cancelled, so it waits in the draft instead, and runs again once you accept or discard.
+    const queued = card => Boolean(from) && card.column === 'doing' && this.task(c, card)?.status === 'waiting';
+    const changeable = card => (['backlog', 'ready'].includes(card.column) || queued(card)) && !this.closed(c, card);
     const where = card => this.closed(c, card) ? 'is closed to agents' : { doing: 'is running', review: 'is waiting for your review', done: 'is done' }[card.column] || `is in ${COLUMN_NAME[card.column]}`;
     const left = [], skip = (card, ref, what) => left.push(card ? `“${card.title}” ${where(card)}, so it wasn’t ${what}.` : `The plan named a card that isn’t on the Plan (${ref}), so it wasn’t ${what}.`);
     // Which card each step is: a card it changes, or a new one.
@@ -469,6 +496,13 @@ export class Board {
       const was = card.draft?.was;
       return was ? { ...structuredClone(was), fields: { ...values, ...structuredClone(was.fields || {}) } } : null;
     };
+    // 0. Queued cards this changes or removes leave the run first, back in Ready, so the draft starts from there.
+    for (const card of [...changes.map(item => item.card), ...removals].filter(queued)) {
+      this.main.tasks.finish(c, this.task(c, card), { status: 'cancelled' });
+      this.update(c, card, { reason: `Taken out of its run by the Plan update from “${from.title}”. Run it again when ready.` });
+      const step = changes.find(item => item.card.id === card.id)?.step;
+      if (step) (notes[step.id] ||= []).push('It was waiting to run after the card these findings came from. Run it again once you accept or discard this change.');
+    }
     // 1. The replaced draft's other cards are discarded first.
     for (const id of replaced) {
       if (named.has(id) || taken.has(id)) continue;
@@ -629,8 +663,9 @@ export class Board {
     if (!Array.isArray(ids) || !ids.length) throw fail('Choose the drafts.', 400);
     const chosen = [...new Set(ids)].map(id => this.find(c, id));
     for (const card of chosen) if (!card.draft) throw fail(`“${card.title}” isn’t a draft.`);
-    // Queued messages wait while a drafted plan's cards are undecided, so they look again once they are.
-    setTimeout(() => this.main.queue?.tick(c), 0);
+    // Queued messages wait while a drafted plan's cards are undecided, so they look again once they are, and so do the
+    // cards an update's draft held.
+    setTimeout(() => { this.main.queue?.tick(c); this.main.tasks?.tick(c); }, 0);
     const chosenIds = new Set(chosen.map(card => card.id)), ordered = [...chosen].sort((a, b) => a.order - b.order);
     // The undo snapshot: the cards as they are, and what every other card waiting for one of them waits for.
     const links = this.cards(c).filter(other => !chosenIds.has(other.id) && (other.dependsOn || []).some(dep => chosenIds.has(dep))).map(other => ({ cardId: other.id, dependsOn: [...other.dependsOn] }));
@@ -865,6 +900,8 @@ export class Board {
     const outcome = item => item.added + item.changed + item.removed === 0 ? 'found nothing to change' : item.accepted && item.discarded ? `${item.accepted} of its changes accepted, ${item.discarded} discarded` : item.accepted ? 'its changes were accepted and are in the Plan below' : item.discarded ? 'its changes were discarded by the person' : 'its changes are still a draft on the Plan';
     const earlier = (card.updates || []).filter(item => item.id !== replaces && item.id !== askedBefore).map(item => `- ${item.at.slice(0, 16).replace('T', ' ')}: ${[item.added && `${item.added} new`, item.changed && `${item.changed} changed`, item.removed && `${item.removed} removed`].filter(Boolean).join(', ') || 'no cards'}; ${outcome(item)}.${item.summary ? ` ${clip(item.summary, 400)}` : ''}`);
     const plan = this.agentText(c, [], { whole: true, ids: true });
+    // Cards queued in a run that haven't started can still change (draft): they're taken out of the run if they do.
+    const queued = this.cards(c).filter(item => item.column === 'doing' && !this.closed(c, item) && this.task(c, item)?.status === 'waiting');
     const request = [
       `The card “${title}” (Id ${this.refOf(c, card.id)}) has finished, and its findings are below. Update the Plan so it reflects what they found. Base every change on the findings, not on general improvements.`,
       '- Change cards whose instructions, files, done statements, phase or order the findings show are wrong or incomplete, and put what each card needs to know from the findings in its instructions: names, paths, numbers and decisions. Its agent may not see the findings.',
@@ -872,6 +909,7 @@ export class Board {
       '- Add cards for work the findings call for that no card covers.',
       `- A card that will build on the findings can wait for “${title}” (its Id, as a string, in dependsOn), so its report is passed to it when it starts.`,
       `- Don’t change, merge or remove “${title}” itself.`,
+      ...(queued.length ? [`- These cards show as Doing but haven’t started: they are queued to run. You may change or remove them like cards in Ready: ${queued.slice(0, 40).map(item => `“${item.title.replace(/\s+/g, ' ')}” (Id ${this.refOf(c, item.id)})`).join(', ')}.`] : []),
       '- Ask before you draft. When the findings leave the person something to decide that would change the update, including questions they end with, return only those questions with the answers to choose from, steps [] and no remove, and say in the summary what you’ll draft once they answer. Don’t decide it for them. Settle smaller choices with the option you’d recommend, and say which in the summary.',
       '- When the findings call for no change to the Plan, return steps [], no remove and no questions, with a summary that says why.',
       '',
@@ -922,7 +960,7 @@ export class Board {
     // Or to the questions an update asked before drafting anything, which are still on the Plan.
     const asked = answers && !replaces && c.boardSuggest?.kind === 'update' && c.boardSuggest.cardId === card.id && c.boardSuggest.status === 'complete' && !c.boardSuggest.cards?.length && c.boardSuggest.questions?.length ? c.boardSuggest.id : null;
     if (answers && !replaces && !asked) throw fail('Those questions are gone. Update the Plan from the card again.', 409);
-    return this.job(c, input, { kind: 'update', cardId: card.id, cardTitle: card.title, prompt: this.updatePrompt(c, card, answers, replaces, asked), finish: (reply, by, jobId) => {
+    const started = this.job(c, input, { kind: 'update', cardId: card.id, cardTitle: card.title, prompt: this.updatePrompt(c, card, answers, replaces, asked), finish: (reply, by, jobId) => {
       const current = this.cards(c).find(item => item.id === card.id);
       if (!current) return { status: 'failed', summary: 'The card was removed before the update finished.', cards: [] };
       if (this.closed(c, current)) return { status: 'failed', summary: 'The card or Plan was closed to agents before the update finished.', cards: [] };
@@ -942,6 +980,11 @@ export class Board {
       this.noteUpdate(c, current, { id: jobId, by, summary: parsed.summary, questions: parsed.questions?.length || 0, replaces: replaces || asked, added: kinds.filter(item => !item.was && !item.remove).length, changed: kinds.filter(item => item.was && !item.remove).length, removed: kinds.filter(item => item.remove).length });
       return { status: 'complete', summary: parsed.summary, cards: created };
     } });
+    // While this card's own update holds the cards after it, the hold follows the newest run: the one answering its
+    // questions, or the one you started again after it failed.
+    const now = this.cards(c).find(item => item.id === card.id);
+    if (now?.autoUpdate && !now.autoUpdate.released && started?.id) this.update(c, now, { autoUpdate: { ...now.autoUpdate, jobId: started.id, error: null } });
+    return started;
   }
   // Split with an agent (#162): one read-only run splits the cards you chose into subtasks, before any of them runs, so you
   // review the subtasks and choose who does each. A card that already has subtasks gets them replaced, unless one has
@@ -1045,6 +1088,7 @@ export class Board {
         })();
         this.suggestCleanups.add(cleanup);
         this.main.tasks?.tick(c);
+        setTimeout(() => this.drainUpdates(c), 0);
         this.main.emit('update', { conversationId: c.id });
         try { await cleanup; } finally { this.suggestCleanups.delete(cleanup); }
       });
@@ -1068,6 +1112,9 @@ export class Board {
   dismissSuggest(c) {
     if (c.boardSuggest?.status === 'running') throw fail('Stop suggesting before dismissing it.');
     if (c.boardSuggest) this.main.record(c, { type: 'board_suggest_dismiss', id: c.boardSuggest.id });
+    // Dismissing an update's questions lets the cards it held go, and the next queued update start.
+    this.main.tasks?.tick(c);
+    setTimeout(() => this.drainUpdates(c), 0);
     return { dismissed: true };
   }
   async close() {
@@ -1248,8 +1295,9 @@ export class Board {
     if (kept.length) parts.push('', 'The person’s comments on this card, oldest first:', ...(kept.length < said.length ? [`(${said.length - kept.length} earlier ${said.length - kept.length === 1 ? 'comment' : 'comments'} left out.)`] : []), ...kept);
     // A Reviewer or QA card ends with a verdict the Plan reads (#89): pass, or what should change on which card.
     // Questions the person must answer go in one section the Plan shows under the card's result, with a box to answer them.
-    if (REVIEW_ROLES.includes(card.role)) parts.push('', 'This is a card from the project’s task board. Say what you checked and how, then give your verdict.', 'If something needs the person’s answer, list it under a heading “Questions for you”, one question per line, just before your verdict.', '', verdictRequest(card.role));
-    else parts.push('', 'This is a card from the project’s task board. When you finish, say in a few sentences what you changed and how you checked it. You review nothing yourself: the person accepts the card.', 'If something needs the person’s answer before the work can go on, end with a heading “Questions for you” and list each question on its own line.');
+    // A card whose findings mean the Plan should change says so under its own heading, and the Plan updates from it.
+    if (REVIEW_ROLES.includes(card.role)) parts.push('', 'This is a card from the project’s task board. Say what you checked and how, then give your verdict.', PLAN_CHANGES_REQUEST, 'If something needs the person’s answer, list it under a heading “Questions for you”, one question per line, just before your verdict.', '', verdictRequest(card.role));
+    else parts.push('', 'This is a card from the project’s task board. When you finish, say in a few sentences what you changed and how you checked it. You review nothing yourself: the person accepts the card.', PLAN_CHANGES_REQUEST, 'If something needs the person’s answer before the work can go on, end with a heading “Questions for you” and list each question on its own line.');
     return parts.join('\n');
   }
   // ---- One way to run (#162)
@@ -1287,6 +1335,12 @@ export class Board {
   proceed(c, id) {
     const card = this.find(c, id), task = this.task(c, card);
     if (!task || !['review', 'done'].includes(card.column)) throw fail('Nothing is holding the cards after this one.');
+    // Continuing anyway lets the cards after it go whatever holds them: a Plan update it started, and its tests or review.
+    if (this.updateHold(c, card)) {
+      this.update(c, card, { autoUpdate: { ...card.autoUpdate, released: true } });
+      try { this.main.tasks.continueTask(c, task); } catch (error) { if (!/Nothing is holding/.test(error.message)) throw error; this.main.tasks.tick(c); }
+      return this.public(c, this.find(c, id));
+    }
     this.main.tasks.continueTask(c, task);
     return this.public(c, this.find(c, id));
   }
@@ -1408,6 +1462,59 @@ export class Board {
     // Working again in a finished card's task: noted, so its report stays the report (answer).
     if (next?.column === 'doing' && was === 'review') this.laterRun(c, task);
     if (task.board.run && !LIVE.has(task.status)) this.runEnded(c, task.board.run);
+    if (next?.result && card.column === 'review') this.noticeChanges(c, card, task);
+  }
+  // ---- Updating the Plan by itself
+  // A card whose report has a “Plan changes” section updates the Plan from its findings without being asked: the same
+  // read-only run as Update the Plan on the card, with the agent that wrote the report. One runs at a time; the others
+  // queue. If the update needs the person to decide something, it asks first; otherwise its changes arrive as a draft
+  // that names each card it affects. The cards after it wait until the draft is accepted or discarded, or the person
+  // continues anyway, so they never start from a Plan that's about to change. Each report is noticed once.
+  noticeChanges(c, card, task) {
+    const report = card.result?.reportRun;
+    if (!report || card.autoUpdate?.report === report || card.draft || this.managed(c, card) || this.closed(c, card)) return;
+    const said = planChanges(this.thread(c, task, { open: false }).report?.text);
+    if (!said) return;
+    this.update(c, card, { autoUpdate: { report, task: task.id, at: new Date().toISOString(), said, jobId: null, error: null, released: false } });
+    this.main.message(c, 'system', `“${card.title}” found that the Plan should change, so Codeshi is drafting those changes for you to accept. The cards after it wait until you do.`);
+    setTimeout(() => this.drainUpdates(c), 0);
+  }
+  // The next queued update starts once nothing else is running for the Plan and no update's questions are waiting.
+  drainUpdates(c) {
+    if (this.closing || this.suggestJobs.has(c.id) || c.boardSuggest?.status === 'running') return;
+    const open = c.boardSuggest;
+    if (open?.kind === 'update' && open.status === 'complete' && !open.cards?.length && open.questions?.length) return;
+    const card = this.cards(c).filter(item => item.autoUpdate && !item.autoUpdate.jobId && !item.autoUpdate.error && !item.autoUpdate.released).sort((a, b) => a.autoUpdate.at.localeCompare(b.autoUpdate.at))[0];
+    if (!card) return;
+    const task = this.task(c, card), read = task ? this.answer(c, card.id) : { provider: null, model: null };
+    const provider = read.provider || task?.provider || null, model = read.provider ? read.model : task?.model ?? null;
+    try { this.updateFrom(c, card.id, { provider, model }); }
+    catch (error) {
+      const now = this.cards(c).find(item => item.id === card.id);
+      if (now?.autoUpdate) this.update(c, now, { autoUpdate: { ...now.autoUpdate, error: clip(error.message, 400) } });
+      if (now) this.main.message(c, 'system', `Codeshi couldn’t update the Plan from “${now.title}”: ${clip(error.message, 300)} The cards after it wait. Update the Plan from the card, or continue anyway.`);
+      this.main.tasks?.tick(c);
+      setTimeout(() => this.drainUpdates(c), 0);
+    }
+  }
+  // Why the Plan update a card started by itself still holds the cards after it, or null when it doesn't.
+  updateHold(c, card) {
+    const auto = card?.autoUpdate;
+    if (!auto || auto.released || (auto.task && auto.task !== card.task)) return null;
+    const title = card.title;
+    if (auto.error) return `Couldn’t update the Plan from “${title}”. Update it again from the card, or continue anyway.`;
+    if (!auto.jobId) return `Waiting to update the Plan from what “${title}” found.`;
+    const job = c.boardSuggest?.id === auto.jobId ? c.boardSuggest : null;
+    if (job?.status === 'running') return `Waiting while the Plan updates from what “${title}” found.`;
+    if (job && ['failed', 'interrupted'].includes(job.status)) return `Couldn’t update the Plan from “${title}”. Update it again from the card, or continue anyway.`;
+    if (job?.status === 'complete' && !job.cards?.length && job.questions?.length) return `The Plan update from “${title}” has questions for you. Answer them on the Plan, or continue anyway.`;
+    if (this.cards(c).some(item => item.draft?.batch?.id === auto.jobId)) return `Waiting for you to accept or discard the Plan changes from “${title}”.`;
+    return null;
+  }
+  // The same, for a card's task: what the coordinator asks before starting the tasks that wait for it.
+  holdsAfter(c, task) {
+    const card = task?.board ? this.cards(c).find(item => item.id === task.board.cardId) : null;
+    return card && card.task === task.id ? this.updateHold(c, card) : null;
   }
   // When every card of a run has stopped working and its tests are in, the workspace chat says so once, with where each
   // card ended up, so the results are found on the Plan without watching its tasks. Working in a card's task later, or
@@ -1502,11 +1609,12 @@ export class Board {
   // The card's drawer reads them on their own.
   public(c, card) {
     const task = this.task(c, card), lane = task && this.main.tasks.lanes.get(task.id), { comments, ...rest } = card;
-    const check = task?.stepCheck, held = Boolean(task && task.status === 'complete' && ((check && (check.status === 'running' || ((check.outcome === 'failed' || check.status === 'interrupted') && !check.accepted))) || reviewHolds(task)));
+    const planUpdate = task && card.task === task.id ? this.updateHold(c, card) : null;
+    const check = task?.stepCheck, held = Boolean(task && task.status === 'complete' && ((check && (check.status === 'running' || ((check.outcome === 'failed' || check.status === 'interrupted') && !check.accepted))) || reviewHolds(task))) || Boolean(planUpdate);
     // A review's verdict, findings and repair round (#89), and whether it ran on an agent that built what it checks.
     const review = task?.review ? { status: task.review.status, verdict: task.review.verdict ?? null, round: task.review.round || 0, reason: task.review.reason || null, waiting: task.review.waiting || null, accepted: task.review.accepted === true, findings: (task.review.findings || []).map(item => ({ ...item, cardTitle: item.cardId ? this.cards(c).find(other => other.id === item.cardId)?.title || null : null })), repairs: task.review.repairs || [], earlier: task.review.earlier?.length || 0 } : null;
     const reviewer = REVIEW_ROLES.includes(card.role) && task ? (lane?.c?.activeRun?.provider || task.provider) : null;
-    return { ...rest, managed: this.managed(c, card), labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), ...(Number.isInteger(task.copyFiles) ? { copyFiles: task.copyFiles } : {}), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review ? { holds: held } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
+    return { ...rest, managed: this.managed(c, card), labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), ...(Number.isInteger(task.copyFiles) ? { copyFiles: task.copyFiles } : {}), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review || planUpdate ? { holds: held } : {}), ...(planUpdate ? { planUpdate } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   // The Plan chat, once opened: its task, whether it is working, and its approvals waiting.

@@ -260,12 +260,16 @@ export class TaskCoordinator {
         // A card whose run has used up its shared limit doesn't start, and nothing waits on it quietly.
         const spent = task.batch && this.runSpent(c, task.batch);
         if (spent) { this.update(c, task, { status: 'cancelled', batchHeld: true, reason: `Not started: ${spent}`, endedAt: new Date().toISOString() }); continue; }
-        const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !(before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete')) || gated(before));
+        // A card whose findings are updating the Plan holds the cards after it until you settle the update (src/board.mjs).
+        const updating = before => this.main.board?.holdsAfter?.(c, before) || null;
+        const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !(before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete')) || gated(before) || updating(before));
         if (pending) {
           // A step that ended without finishing can't be built on, so this one says what it needs instead of waiting quietly.
           const ended = { stopped: 'stopped', failed: 'did not finish', discarded: 'was discarded', cancelled: 'was cancelled', lost: 'lost its copy', detached: 'lost its folder', blocked: 'is blocked' }[pending.status];
           const check = pending.status === 'complete' ? pending.stepCheck : null, copy = pending.mode === 'worktree';
+          const held = ['complete', 'integrated', 'kept'].includes(pending.status) && !(copy && pending.status === 'complete') && !gated(pending) ? updating(pending) : null;
           wait(ended ? `Waiting for “${pending.title}”, which ${ended}. Continue it in its task, or cancel this one.`
+            : held ? held
             : check?.status === 'running' ? `Waiting for the tests on “${pending.title}”.`
             : check?.outcome === 'failed' && !check.accepted ? `The tests failed on “${pending.title}”. Fix it in its task, or ${copy ? 'merge it anyway' : 'continue anyway from the plan'}.`
             : check?.status === 'interrupted' && !check.accepted ? `The tests on “${pending.title}” were interrupted. Check it again or continue anyway from the plan.`

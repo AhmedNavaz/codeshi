@@ -1680,9 +1680,6 @@ button.capability strong::after { content: " →"; color: var(--faint); }
   .command-bar { position: relative; top: auto; left: auto; transform: none; flex: 1 1 auto; width: auto; margin: 0 auto; }
 }
 
-.execution-policy-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 14px; font-size: 12px; }
-.execution-policy-strip[hidden] { display: none; }
-.execution-policy-strip button { font: inherit; cursor: pointer; padding: 5px 9px; border: 1px solid currentColor; border-radius: 6px; color: inherit; background: transparent; }
 
 /* The workspace menu that Flow's and the Plan's workspace name open. It's placed under the name by script. */
 .workspace-switch-menu { position: fixed; inset: auto; min-width: 230px; max-width: 340px; max-height: min(420px, 70vh); margin: 0; padding: 4px; overflow: auto; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--overlay-bg); color: var(--text); box-shadow: 0 16px 40px rgb(0 0 0 / 0.32), 0 2px 6px rgb(0 0 0 / 0.16); }

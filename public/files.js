@@ -99,13 +99,35 @@
   }
   function stepImage(by) { if (!nav) return; const next = nav.index + by; if (next < 0 || next >= nav.count) return; const target = nav; pendingNav = { ...target, index: next }; target.go(next); }
   function closePreview() { nav = pendingNav = null; paintNav(); previewVersion++; selected = null; $('file-preview').hidden = true; document.body.classList.remove('file-preview-open'); }
+  // Pinch (a trackpad pinch arrives as ctrl+wheel) zooms toward the pointer, two-finger scroll or a drag pans a zoomed image, double-click resets.
+  function zoomable(box, img) {
+    let scale = 1, x = 0, y = 0, drag = null;
+    const apply = () => { img.style.transform = scale === 1 ? '' : 'translate(' + x + 'px,' + y + 'px) scale(' + scale + ')'; img.style.cursor = scale > 1 ? 'grab' : ''; };
+    const reset = () => { scale = 1; x = y = 0; apply(); };
+    img.style.transformOrigin = 'center'; img.draggable = false; box.style.overflow = 'hidden'; box.style.touchAction = 'none';
+    box.addEventListener('wheel', event => {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        const rect = box.getBoundingClientRect(), px = event.clientX - rect.left - rect.width / 2, py = event.clientY - rect.top - rect.height / 2;
+        const next = Math.min(16, Math.max(1, scale * Math.exp(-event.deltaY * 0.01))), ratio = next / scale;
+        x = px - (px - x) * ratio; y = py - (py - y) * ratio; scale = next;
+        if (scale === 1) x = y = 0;
+      } else if (scale > 1) { x -= event.deltaX; y -= event.deltaY; }
+      apply();
+    }, { passive: false });
+    box.addEventListener('pointerdown', event => { if (scale <= 1 || event.button !== 0) return; drag = { id: event.pointerId, x: event.clientX - x, y: event.clientY - y }; box.setPointerCapture?.(event.pointerId); img.style.cursor = 'grabbing'; });
+    box.addEventListener('pointermove', event => { if (!drag || drag.id !== event.pointerId) return; x = event.clientX - drag.x; y = event.clientY - drag.y; apply(); });
+    const end = event => { if (drag && drag.id === event.pointerId) { drag = null; apply(); } };
+    box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+    box.addEventListener('dblclick', () => { if (scale === 1) { scale = 2; apply(); } else reset(); });
+  }
   function showPreview(file, label, id, saved = false) {
     nav = null;
     selected = { file, projectId: id, saved };
     $('file-preview-name').textContent = file.name;
     $('file-preview-path').textContent = label;
     const content = $('file-preview-content'); content.replaceChildren();
-    if (file.kind === 'image') { const img = el('img'); img.src = 'data:' + file.mime + ';base64,' + file.data; img.alt = file.name; content.append(img); }
+    if (file.kind === 'image') { const img = el('img'); img.src = 'data:' + file.mime + ';base64,' + file.data; img.alt = file.name; content.append(img); zoomable(content, img); }
     else {
       // Syntax colors come from the shared highlighter so previews match chat code blocks.
       const source = el('pre', 'file-source'), text = String(file.text || ''), lines = api.highlightLines ? api.highlightLines(text, file.name.split('.').at(-1)) : text.split('\n').map(line => [['', line]]);

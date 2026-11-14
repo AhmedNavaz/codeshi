@@ -265,6 +265,3 @@ html:has(body.phone), body.phone { position: fixed; inset: 0; overflow: hidden; 
 #phone-handover-code { font-family: var(--mono); letter-spacing: .12em; text-transform: uppercase; }
 #phone-match-code { display: block; margin: 8px 0 14px; color: var(--text-strong); font: 600 38px var(--mono); letter-spacing: .14em; }
 
-.execution-policy-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 14px; font-size: 12px; }
-.execution-policy-strip[hidden] { display: none; }
-.execution-policy-strip button { font: inherit; cursor: pointer; padding: 5px 9px; border: 1px solid currentColor; border-radius: 6px; color: inherit; background: transparent; }

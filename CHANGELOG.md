@@ -4,6 +4,16 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-11-15
+
+### Added
+- **The Plan updates itself from a card's findings** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). A card's agent adds a short "Plan changes" section to its report when other cards should change. Codeshi then starts the Plan update itself with the same agent, read-only, and lists every card it would affect. Nothing changes until you accept. Questions it can't settle come to you first. The cards after it wait until you accept or discard the draft, or choose **Continue anyway**, and the card shows each stage. A queued card that hasn't started can be changed or removed by the update. Cards that finished before this keep the manual **Update the Plan**.
+- **Zoom an opened image** with a trackpad pinch toward the pointer. Drag or two-finger scroll pans a zoomed image, and double-click zooms to 2× or resets.
+
+### Changed
+- **On the Plan canvas, one click shows a card's branches and a double-click opens it.** The card is ringed, the cards it waits for say "Before this", the cards that wait for it say "After this", their arrows brighten and the rest fades. Click empty canvas to clear it.
+- **The message box no longer shows "Task: … · New work: …" or Take manual control.** Routing is chosen with the routing control only.
+
 ## [0.56.0] - 2026-11-15
 
 ### Changed

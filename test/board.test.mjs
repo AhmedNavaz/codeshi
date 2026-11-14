@@ -10,7 +10,7 @@ import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
-import { LIMITS } from '../src/board.mjs';
+import { LIMITS, planChanges } from '../src/board.mjs';
 import { TaskBudgets } from '../src/task-budget.mjs';
 import { TaskCoordinator } from '../src/task-coordinator.mjs';
 import { openPlan, parsePlan, parseSuggest, planningRequest } from '../src/orchestration.mjs';
@@ -1250,6 +1250,70 @@ test('Update the Plan reads a finished card’s findings and the Plan, and draft
   assert.equal(env.c.boardSuggest.questions[0].question, 'Drop Redis entirely?');
   assert.equal(env.board.cards(env.c).length, before);
   assert.deepEqual(env.card(research.id).updates.map(item => item.added + item.changed + item.removed), [4, 0]);
+});
+
+test('a report’s “Plan changes” section is read up to the next heading or verdict, and one that changes nothing counts as none', () => {
+  assert.equal(planChanges('All done.\n\n## Plan changes\n- “Build the store” should use Postgres.\n- Drop “Add Redis”.\n\n## Questions for you\n- Keep it?'), '- “Build the store” should use Postgres.\n- Drop “Add Redis”.');
+  assert.equal(planChanges('**Plan changes:** add a card for the gateway limits.\n\n```json\n{"verdict": "pass"}\n```'), 'add a card for the gateway limits.');
+  assert.equal(planChanges('Checked it.\n\nPlan changes\n\nNone.'), '');
+  assert.equal(planChanges('### Plan changes\n- No changes needed'), '');
+  assert.equal(planChanges('Nothing about the plan here.'), '');
+});
+
+test('a card whose report says the Plan should change updates it by itself, and the cards after it wait until you settle it', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.tasks.tests = { saved: () => null };
+  const research = env.add({ title: 'Research sessions', column: 'ready', artifact: 'findings' });
+  const build = env.add({ title: 'Build the session store', notes: 'Add Redis.', column: 'ready', dependsOn: [research.id] });
+  env.script(research, null, 'Sessions already live in Postgres.\n\n## Plan changes\n- “Build the session store” should index the Postgres table instead of adding Redis.');
+  scriptMatch(env, 'has finished, and its findings are below', { behavior: 'hold', text: JSON.stringify({ summary: 'Sessions stay in Postgres.', steps: [{ card: env.board.refOf(env.c, build.id), title: 'Index the Postgres sessions table', instructions: 'Add an index on user_id.' }] }) });
+  const { tasks } = env.board.run(env.c, { ids: [build.id, research.id] });
+  // It starts by itself, with the agent that wrote the report, and says so in the chat.
+  await until(() => env.c.boardSuggest?.kind === 'update' && env.c.boardSuggest.status === 'running', 'the update to start by itself');
+  assert.deepEqual([env.c.boardSuggest.cardId, env.c.boardSuggest.provider], [research.id, 'codex']);
+  assert.match(env.card(research.id).autoUpdate.said, /index the Postgres table/);
+  assert.equal(env.card(research.id).autoUpdate.jobId, env.c.boardSuggest.id);
+  assert.match(requests(env).find(text => /^Research sessions/.test(text || '')), /add a heading “Plan changes” near the end/);
+  assert.ok(env.c.messages.some(message => /“Research sessions” found that the Plan should change/.test(message.text)));
+  // The queued card is told it may change, and waits rather than starting from a Plan that's about to.
+  assert.match(await until(() => requests(env).find(text => /has finished, and its findings are below/.test(text || '')), 'the update’s request'), /haven’t started: they are queued to run[\s\S]*Build the session store/);
+  await until(() => /Plan updates from what “Research sessions” found/.test(env.task(tasks[build.id]).reason || ''), 'the next card to wait for the update');
+  assert.equal(env.task(tasks[build.id]).status, 'waiting');
+  const held = () => env.board.list(env.c).find(item => item.id === research.id).taskState;
+  assert.deepEqual([held().holds, /Plan updates/.test(held().planUpdate)], [true, true]);
+  env.release(fs.realpathSync(env.folder('a')));
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the update to draft');
+  // The queued card it changes leaves the run and waits in the draft, which names what it was.
+  assert.equal(env.task(tasks[build.id]).status, 'cancelled');
+  const changed = env.card(build.id);
+  assert.deepEqual([changed.title, changed.draft.was.column, changed.draft.batch.cardId], ['Index the Postgres sessions table', 'ready', research.id]);
+  assert.match(changed.reason, /Taken out of its run by the Plan update from “Research sessions”/);
+  assert.match(held().planUpdate, /accept or discard the Plan changes from “Research sessions”/);
+  // Accepting settles it: nothing holds the cards after it any more, and the same report isn't noticed twice.
+  env.board.drafts(env.c, { action: 'accept', ids: [build.id] });
+  assert.equal(held().planUpdate, undefined);
+  const id = env.c.boardSuggest.id;
+  env.board.follow(env.c, env.task(tasks[research.id]));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(env.c.boardSuggest.id, id);
+});
+
+test('continuing anyway lets the cards after a card go while its Plan update is still to settle', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.tasks.tests = { saved: () => null };
+  const research = env.add({ title: 'Audit the docs', column: 'ready', artifact: 'findings' });
+  const after = env.add({ title: 'Write the guide', column: 'ready', dependsOn: [research.id] });
+  env.script(research, null, 'Read every page.\n\n## Plan changes\n- Add a card for the missing install page.');
+  env.script(after, null, 'Wrote the guide.');
+  scriptMatch(env, 'has finished, and its findings are below', { behavior: 'hold', text: JSON.stringify({ summary: 'One new card.', steps: [{ title: 'Write the install page', instructions: 'Cover macOS and Windows.', tier: 'light' }] }) });
+  const { tasks } = env.board.run(env.c, { ids: [after.id, research.id] });
+  await until(() => /Plan updates from what “Audit the docs” found/.test(env.task(tasks[after.id]).reason || ''), 'the next card to wait for the update');
+  env.board.proceed(env.c, research.id);
+  await until(() => env.card(after.id).column === 'review', 'the next card to run once you continue');
+  assert.equal(env.card(research.id).autoUpdate.released, true);
+  env.release(fs.realpathSync(env.folder('a')));
+  await until(() => env.c.boardSuggest?.status === 'complete', 'the update to finish');
+  assert.equal(env.board.list(env.c).find(item => item.id === research.id).taskState.planUpdate, undefined);
 });
 
 test('a follow-up asked in a finished card’s task is listed after its report, and a review’s verdict stands without a new one (#89)', async t => {

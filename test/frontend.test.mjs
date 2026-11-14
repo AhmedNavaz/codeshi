@@ -5671,30 +5671,6 @@ test('Flow plan usage follows the selected model and keeps weekly exhaustion vis
   assert.match(ui.$('flow-strip').textContent, /Claude · 5-hour · 80% left · Weekly · Opus · 0% left/, 'The narrow layout also names both periods.');
 });
 
-test('Flow offers Take manual control on its working card while a delegated task still has work, since the view cannot change then', async () => {
-  const ui = await flowBrowser(), chat = ui.canonical.get('project-one'), taken = [];
-  const policy = (mode, revision) => ({ version: 1, mode, routingMode: 'smart', taskId: 'task-1', revision, automation: {} });
-  ui.setIntercept((request, next) => {
-    if (request.path === `/api/conversations/${chat.id}/execution-policy`) {
-      taken.push(request.body);
-      Object.assign(chat, { routing: null, execution: { defaults: policy('normal', 3), active: policy('normal', 2), policies: [] } });
-      return response(JSON.parse(JSON.stringify(chat)));
-    }
-    return next();
-  });
-  assert.equal(ui.window.relayFlow.enter(), true); await flush();
-  const takeover = () => ui.$('flow-card-working').querySelectorAll('button').find(button => button.textContent === 'Take manual control');
-  assert.equal(takeover().hidden, true, 'An idle Flow task has nothing to take back.');
-  Object.assign(chat, { routing: { mode: 'smart', allowApi: false, check: true }, execution: { defaults: policy('flow', 2), active: policy('flow', 1), policies: [] },
-    status: 'running', activeRun: { id: 'run-1', provider: 'claude', taskId: 'task-1', startedAt: new Date().toISOString() } });
-  await ui.window.relayUI.refresh(); await flush();
-  assert.equal(takeover().hidden, false, 'A running Flow task can be taken back without leaving Flow.');
-  assert.match(takeover().title, /current reply may finish; Stop ends it now/);
-  takeover().dispatchEvent(new UIEvent('click')); await flush(); await flush();
-  assert.deepEqual(taken, [{ taskId: 'task-1', revision: 1, action: 'takeover' }]);
-  assert.equal(takeover().hidden, true, 'Once the task is Normal, nothing is left to take back.');
-});
-
 test('Flow cards say in plain words how routing and handoff work, what is left, what is next and what changed', async () => {
   const later = hours => new Date(Date.now() + hours * 3600e3).toISOString();
   const ui = await flowBrowser({ usage: { claude: { available: true, windows: [{ id: 'five', label: '5-hour', usedPercent: 38, resetsAt: later(2) }, { id: 'week', label: 'Weekly', usedPercent: 62, resetsAt: later(50) }] }, codex: { available: true, windows: [{ id: 'week', label: 'Weekly', usedPercent: 92, resetsAt: later(30) }] } } });
@@ -5814,7 +5790,6 @@ test('Flow mode card polish: extra task indicators, multi-window quota glance, a
   allLimitsBtn.click(); await flush();
   assert.equal(ui.$('usage-dialog').matches(':popover-open'), true, 'Opens limits overlay window');
   assert.equal(ui.$('flow-card-plans').querySelector('.flow-plan-windows'), null, 'Cards avoid expanding multi-window lists directly in the rail');
-  assert.equal(ui.document.querySelector('.execution-policy-strip').hidden, true, 'Execution policy strip is hidden in Flow mode');
 
   // 4. Clean status copy for idle quota stop and continuation prompt filtering
   chat.status = 'incomplete';
@@ -5906,9 +5881,6 @@ test('leaving Flow restores manual task control and repairs saved Flow authority
     if (!alreadyOutside) { ui.window.relayFlow.leave(); await flush(); }
     assert.deepEqual(changes, [{ mode: null, executionRevision: 4 }], 'Normal explicitly releases previous task authority even if routing was already off.');
     assert.equal(ui.$('app-shell').classList.contains('flow'), false);
-    const strip = ui.document.querySelector('.execution-policy-strip');
-    assert.match(strip.textContent, /Task: Normal · New work: Normal/);
-    assert.equal(strip.querySelector('button').hidden, true, 'Manual control is already the default; no takeover action remains.');
     assert.equal(ui.$('agents-routing').hidden, true);
   }
 });
@@ -7003,22 +6975,6 @@ test('Remote access settings distinguish Active now from Allowed devices and exp
   const select = ui.labelledInput('Connection'); select.value = 'remote'; select.dispatchEvent(new UIEvent('change')); await flush();
   assert.match(ui.$('settings-content').textContent, /up to a week and across Codeshi restarts/);
   assert.match(ui.$('settings-content').textContent, /Away iPhone.*Allowed · last seen 10m ago/s);
-});
-
-test('desktop surfaces task execution policy and takes manual control without sending Stop', async () => {
-  const ui = await browser(), chat = ui.canonical.get('project-one');
-  chat.execution = { defaults: { mode: 'flow', revision: 3 }, active: { taskId: 'task-policy', revision: 2, mode: 'flow' } };
-  const policies = [];
-  ui.setIntercept((request, next) => {
-    if (request.path.endsWith('/execution-policy')) { policies.push(request.body); chat.execution.active = { ...chat.execution.active, mode: 'normal', revision: 3 }; chat.execution.defaults = { mode: 'normal', revision: 4 }; return response(chat); }
-    return next();
-  });
-  await ui.window.relayUI.refresh();
-  const strip = ui.document.querySelector('.execution-policy-strip'); assert.match(strip.textContent, /Task: Flow · New work: Flow/);
-  strip.querySelector('button').click(); await flush();
-  assert.deepEqual(policies, [{ taskId: 'task-policy', revision: 2, action: 'takeover' }]);
-  assert.match(strip.textContent, /Task: Normal · New work: Normal/); assert.equal(strip.querySelector('button').hidden, true);
-  assert.equal(ui.requests.some(request => request.path.endsWith('/stop')), false);
 });
 
 test('Normal reset controls wait only for the chosen task agent, while Flow may compare connected agents', async () => {

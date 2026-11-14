@@ -1,4 +1,3 @@
-#app-shell.flow .execution-policy-strip { display: none !important; }
 /* Flow mode (#107): just the chat in the middle, with plain-language cards in the space either side. It has its own
    look: the seal and the word Flow in the header, cards without frames, a larger message box and type, and controls
    at the foot of both rails. Details open in a focused Flow sheet; the workbench chrome steps aside. */

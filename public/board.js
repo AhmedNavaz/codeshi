@@ -388,7 +388,13 @@
     item.append(...parts);
     item.title = state?.detail || card.title;
     item.setAttribute('aria-label', [card.draft ? '' : onCanvas ? STATUS[card.column] : '', card.title, card.group ? `group ${card.group}` : '', showRole ? `${ROLE[card.role]} role` : '', names.length ? `${names.length === 1 ? 'label' : 'labels'} ${listed(names)}` : '', who.smart ? `Auto routing, ${who.text}` : who.provider ? who.text : 'no agent yet', needs ? 'needs subtasks before it can run' : '', charged, subtaskLine(card)?.long || '', after.length ? `waits for ${listed(after.map(other => other.title))}` : '', card.commentCount ? plural(card.commentCount, 'comment') : '', card.closed ? 'closed to agents' : '', state?.text || '', state?.detail || '', live?.now || '', live?.usage.length ? `so far ${live.usage.join(', ')}` : '', timed.some(sched => sched.missed) ? 'a scheduled run was missed' : soon ? `scheduled to run ${when(soon.nextAt)}` : ''].filter(Boolean).join('. '));
-    item.addEventListener('click', () => { if (moved === card.id) { moved = null; return; } select(card.id); });
+    item.addEventListener('click', event => {
+      if (moved === card.id) { moved = null; return; }
+      // On the canvas a click shows what the card connects to; a double-click, or Enter, opens it.
+      if (onCanvas && event.detail >= 1) { if (event.detail === 1) light(card.id); return; }
+      select(card.id);
+    });
+    if (onCanvas) item.addEventListener('dblclick', () => { if (moved !== card.id) select(card.id); });
     // Backlog, Ready and Done cards can be dragged: between Backlog and Ready, back from Done, and into a new order.
     if (!onCanvas && view === 'columns' && ['backlog', 'ready', 'done'].includes(card.column) && !card.draft) {
       item.draggable = true;
@@ -754,10 +760,21 @@
     const lead = node('p', 'board-update-lead'); lead.append(glyph(ICONS.smart));
     const dismiss = () => { const value = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); value.disabled = busy; return value; };
     head.append(text, actions$); box.append(head);
+    // Its report said the Plan should change, under its “Plan changes” heading, so the update started by itself
+    // (src/board.mjs noticeChanges). The cards after it wait until the update is settled or you continue anyway.
+    const auto = card.autoUpdate && !card.autoUpdate.released ? card.autoUpdate : null, holding = card.taskState?.planUpdate || '';
+    const waits = () => holding ? node('p', 'board-update-hold', 'The cards after it wait until you accept or discard these changes, or continue anyway.') : null;
+    if (auto && !auto.jobId && !auto.error && mine?.status !== 'running') {
+      box.classList.add('running');
+      lead.append(node('span', '', 'It found the Plan should change'));
+      text.append(lead, node('p', 'board-update-note', job?.status === 'running' ? 'Codeshi drafts the changes as soon as the Plan’s current update finishes.' : 'Codeshi drafts the changes once the questions waiting on the Plan are answered or dismissed.'));
+      text.append(...[waits()].filter(Boolean));
+      return box;
+    }
     if (mine?.status === 'running') {
       box.classList.add('running');
-      lead.append(node('span', '', 'Updating the Plan from what it found…'));
-      text.append(lead, node('p', 'board-update-note', [[AGENT[mine.provider] || mine.provider, mine.model].filter(Boolean).join(' · '), mine.phase && mine.phase !== 'starting' ? mine.phase : 'reading the findings and the Plan', mine.toolCount ? plural(mine.toolCount, 'tool call') : ''].filter(Boolean).join(' · ')));
+      lead.append(node('span', '', auto ? 'It found the Plan should change. Drafting the changes…' : 'Updating the Plan from what it found…'));
+      text.append(lead, node('p', 'board-update-note', [[AGENT[mine.provider] || mine.provider, mine.model].filter(Boolean).join(' · '), mine.phase && mine.phase !== 'starting' ? mine.phase : 'reading the findings and the Plan', mine.toolCount ? plural(mine.toolCount, 'tool call') : ''].filter(Boolean).join(' · ')), ...[holding && node('p', 'board-update-hold', 'The cards after it wait until you accept or discard what it drafts, or continue anyway.')].filter(Boolean));
       const stop = button('Stop', () => act('/api/board/suggest/stop', {}, () => api.announce('Stopping the Plan update.')), 'secondary-button'); stop.disabled = busy;
       actions$.append(stop);
       return box;
@@ -766,6 +783,7 @@
       box.classList.add('trouble');
       lead.append(node('span', '', mine.status === 'interrupted' ? 'Stopped updating the Plan.' : 'Couldn’t update the Plan.'));
       text.append(lead, node('p', 'board-update-note', mine.summary || 'Try again when ready.'));
+      if (holding) text.append(node('p', 'board-update-hold', 'The cards after it wait until you continue anyway, or dismiss this to update the Plan again.'));
       actions$.append(dismiss());
       return box;
     }
@@ -784,6 +802,7 @@
         lead.append(node('span', '', `It asked ${plural(asking, 'question')} before drafting`));
         const who = last.provider ? [AGENT[last.provider] || last.provider, modelLabel(last.provider, last.model)].filter(Boolean).join(' · ') : '';
         text.append(lead, node('p', 'board-update-meta', [who, when(last.at)].filter(Boolean).join(' · ')), node('p', 'board-update-note', 'Answer them on the Plan, and it drafts the update with your answers.'));
+        if (holding) text.append(node('p', 'board-update-hold', 'The cards after it wait until you answer, or continue anyway.'));
         actions$.append(button('Answer on the Plan', () => closeDrawer(), 'primary-button'));
         return box;
       }
@@ -798,7 +817,7 @@
       const who = last.provider ? [AGENT[last.provider] || last.provider, modelLabel(last.provider, last.model)].filter(Boolean).join(' · ') : '';
       text.append(lead, node('p', 'board-update-meta', [counts ? `Drafted ${counts}` : '', who, when(last.settledAt || last.at), card.updates.length > 1 ? `update ${card.updates.length} from this card` : ''].filter(Boolean).join(' · ')));
       if (last.summary) text.append(node('p', 'board-update-note', last.summary));
-      if (waiting) text.append(node('p', 'board-update-note', 'They wait on the Plan for you to accept or discard.'));
+      if (waiting) text.append(holding ? waits() : node('p', 'board-update-note', 'They wait on the Plan for you to accept or discard.'));
       else if (newer) text.append(node('p', 'board-update-ask', 'It has said more since this update. Update again to bring that into the Plan.'));
       if (waiting) { actions$.append(button('Show on the Plan', () => closeDrawer(), 'primary-button')); return box; }
     }
@@ -807,7 +826,7 @@
       if (waiting) {
         box.classList.add('done');
         lead.append(node('span', '', `Drafted ${plural(waiting, 'change')} to the Plan`));
-        text.append(lead, node('p', 'board-update-note', `${mine.summary ? `${mine.summary} ` : ''}They wait on the Plan for you to accept or discard.`));
+        text.append(lead, node('p', 'board-update-note', `${mine.summary ? `${mine.summary} ` : ''}They wait on the Plan for you to accept or discard.`), ...[holding && waits()].filter(Boolean));
         actions$.append(button('Show on the Plan', () => closeDrawer(), 'primary-button'));
         return box;
       }
@@ -823,12 +842,16 @@
     const limit = board?.limits?.cards || 300, other = job?.status === 'running';
     const why = shut(card) ? 'Closed to agents. Open it to agents before updating the Plan from it.' : other ? 'Wait for the agent working on the Plan to finish, or stop it first.' : cards().length >= limit ? `This Plan already has ${limit} cards. Remove some finished cards first.` : dirty() ? 'Save your changes first.' : '';
     const open = suggestConfirm === updateKey(card);
-    if (!last) {
+    if (auto?.error) {
+      box.classList.add('trouble');
+      lead.append(node('span', '', 'It found the Plan should change, but Codeshi couldn’t update it'));
+      text.append(lead, node('p', 'board-update-note', auto.error), ...[holding && node('p', 'board-update-hold', 'The cards after it wait until you update the Plan from here, or continue anyway.')].filter(Boolean));
+    } else if (!last) {
       lead.append(node('span', '', 'Does what it found change the Plan?'));
-      text.append(lead, node('p', 'board-update-note', 'An agent reads this result and the Plan, then drafts the changes it calls for: new cards, changes to cards that haven’t started, and cards to remove. If it needs you to decide something first, it asks before drafting. Nothing changes until you accept.'));
+      text.append(lead, node('p', 'board-update-note', 'No changes were flagged in its report, so nothing started by itself. To update the Plan anyway, an agent reads this result and the Plan, then drafts the changes it calls for: new cards, changes to cards that haven’t started, and cards to remove. If it needs you to decide something first, it asks before drafting. Nothing changes until you accept.'));
     }
     const findings = card.artifact === 'findings' || ['reviewer', 'qa'].includes(card.role) || card.result?.files === 0;
-    const start = button(last ? 'Update again' : 'Update the Plan', () => { suggestConfirm = open ? null : updateKey(card); drawn = null; renderDrawer(); }, (last ? newer : findings) && !open ? 'primary-button' : 'secondary-button');
+    const start = button(last ? 'Update again' : 'Update the Plan', () => { suggestConfirm = open ? null : updateKey(card); drawn = null; renderDrawer(); }, (auto?.error || (last ? newer : findings)) && !open ? 'primary-button' : 'secondary-button');
     start.disabled = busy || Boolean(why); start.title = why || 'One read-only run that drafts changes to the Plan from this result.';
     start.setAttribute('aria-expanded', String(open));
     // Open, the confirm box below has the button; Cancel there closes it.
@@ -2217,7 +2240,7 @@
   // just dragged, whose click that ends the drag isn't a selection. undos and redos: what Undo and Redo do, newest last.
   const FLOW_KEY = 'codeshi.planFlow';
   let flow = (() => { try { return localStorage.getItem(FLOW_KEY) === 'down' ? 'down' : 'across'; } catch { return 'across'; } })();
-  let fitted = false, camera = null, heights = new Map(), gesture = null, picked$ = null, moved = null, stale = false, undos = [], redos = [];
+  let lit = null, fitted = false, camera = null, heights = new Map(), gesture = null, picked$ = null, moved = null, stale = false, undos = [], redos = [];
   const space = $('board-space');
   const svg = tag => document.createElementNS ? document.createElementNS(SVG, tag) : document.createElement(tag);
   const height = id => heights.get(id) || FALLBACK;
@@ -2363,6 +2386,8 @@
   // moves on screen: the arrow changes how it's drawn, so a long run doesn't redraw it every frame.
   function flowOf(from, to) {
     if (!from || !to || from.draft || to.draft) return null;
+    // A Plan update the finished card started holds the cards after it until it's settled.
+    if (from.taskState?.planUpdate && ['review', 'done'].includes(from.column) && !['review', 'done'].includes(to.column)) return { kind: 'held', label: 'Updating the Plan', say: `${from.title} found the Plan should change, so ${to.title} waits until that update is accepted or discarded.` };
     if (to.column === 'doing' && from.column === 'done') return { kind: 'feeding', say: `${to.title} is working with what ${from.title} did.` };
     if (from.column === 'doing') return { kind: 'working', say: `${from.title} is still working.` };
     if (from.column === 'review') {
@@ -2373,6 +2398,36 @@
       return { kind: 'review', say: `${from.title} is finished and waits for your review.` };
     }
     return null;
+  }
+  // Clicking a card on the canvas (#162) shows its branches without opening it: the card is ringed, the cards it waits for
+  // and the cards that wait for it are tagged and joined by bright arrows, and the rest fade. The camera moves only if part
+  // of that is out of view. A click on empty space puts it all back.
+  const ease = () => { space.classList.add('easing'); clearTimeout(ease.timer); ease.timer = setTimeout(() => space.classList.remove('easing'), 320); };
+  function light(id) {
+    if (!cardBy(id)) return;
+    lit = id; applyFocus();
+    if (camera) {
+      const rect = space.getBoundingClientRect(), at = places();
+      const related = new Set([id, ...(cardBy(id).dependsOn || []), ...cards().filter(other => other.dependsOn?.includes(id)).map(other => other.id)].filter(other => cardBy(other) && at.get(other)));
+      const boxes = [...related].map(other => ({ x0: at.get(other).x, y0: at.get(other).y, x1: at.get(other).x + WIDTH, y1: at.get(other).y + height(other) }));
+      const left = Math.min(...boxes.map(b => b.x0)), right = Math.max(...boxes.map(b => b.x1)), top = Math.min(...boxes.map(b => b.y0)), bottom = Math.max(...boxes.map(b => b.y1));
+      const seen = left * camera.z + camera.x >= 16 && right * camera.z + camera.x <= rect.width - 16 && top * camera.z + camera.y >= 60 && bottom * camera.z + camera.y <= rect.height - 16;
+      if (!seen && rect.width && rect.height) {
+        const z = Math.max(ZOOM[0], Math.min(1, camera.z, (rect.width - 96) / (right - left), (rect.height - 150) / (bottom - top)));
+        ease(); camera = { x: rect.width / 2 - (left + right) / 2 * z, y: rect.height / 2 - (top + bottom) / 2 * z, z }; aim();
+      }
+    }
+    drawLinks();
+  }
+  function unlight() { if (!lit) return; lit = null; applyFocus(); drawLinks(); }
+  function applyFocus() {
+    const id = view === 'canvas' && lit && cardBy(lit) ? lit : null;
+    const before = new Set(id ? cardBy(id).dependsOn || [] : []), after = new Set(id ? cards().filter(other => other.dependsOn?.includes(id)).map(other => other.id) : []);
+    for (const [cardId, { item }] of built) {
+      const state = !id ? '' : cardId === id ? 'self' : before.has(cardId) ? 'before' : after.has(cardId) ? 'after' : 'far';
+      if (state) item.dataset.focus = state; else delete item.dataset.focus;
+    }
+    space.classList.toggle('focusing', Boolean(id));
   }
   function links() {
     const out = [];
@@ -2388,11 +2443,11 @@
     const drawn$ = [defs], gates = [];
     for (const [from, to] of links()) {
       const line = curve(at.get(from), at.get(to), height(from), height(to)), done = cardBy(from).column === 'done';
-      const chosen = picked$ && picked$[0] === from && picked$[1] === to, related = selected === from || selected === to;
+      const chosen = picked$ && picked$[0] === from && picked$[1] === to, related = lit === from || lit === to, focused = view === 'canvas' && Boolean(lit && cardBy(lit));
       const moving = flowOf(cardBy(from), cardBy(to));
       const path = svg('path'); path.setAttribute('d', line.d); path.setAttribute('marker-end', 'url(#board-link-head)'); path.dataset.from = from; path.dataset.to = to;
       if (moving) path.dataset.flow = moving.kind;
-      path.setAttribute('class', `board-link${done ? ' done' : ''}${related ? ' related' : ''}${chosen ? ' picked' : ''}${filter && !(shown(cardBy(from)) && shown(cardBy(to))) ? ' faded' : ''}`);
+      path.setAttribute('class', `board-link${done ? ' done' : ''}${related ? ' related' : ''}${focused && !related ? ' dim' : ''}${chosen ? ' picked' : ''}${filter && !(shown(cardBy(from)) && shown(cardBy(to))) ? ' faded' : ''}`);
       // A test gate on the way says so at the arrow's middle: testing, or failed and holding the card after it.
       if (moving?.label) gates.push({ ...moving, mid: line.mid, from, to });
       // A wider, invisible line over it is what the pointer catches.
@@ -2495,7 +2550,7 @@
       world$.append(layer);
       // The keyboard way to do what dragging does, read with each card (#26).
       const keys = node('p', 'sr-only', `${altKey} and the arrow keys move this card. Open it to choose which cards it waits for.`); keys.id = 'board-canvas-keys';
-      space.replaceChildren(world$, tools(), node('p', 'board-canvas-hint', `Drag a card to place it, or use ${altKey} and the arrow keys. Drag its dot onto another card to make that card wait. Double-click to add a card.`), keys);
+      space.replaceChildren(world$, tools(), node('p', 'board-canvas-hint', `Click a card to see its branches, double-click to open it. Drag a card to place it, or use ${altKey} and the arrow keys. Drag its dot onto another card to make that card wait. Double-click empty space to add a card.`), keys);
     } else space.querySelector('.board-canvas-tools')?.replaceWith(tools());
     const world = world$, fresh = [], present = new Set();
     for (const card of cards()) {
@@ -2507,6 +2562,7 @@
       built.set(card.id, { key, item }); fresh.push(item);
     }
     for (const [id, had] of built) if (!present.has(id)) { had.item.remove(); built.delete(id); }
+    applyFocus();
     const at = places();
     for (const [id, { item }] of built) { const place = at.get(id); item.style.transform = `translate(${place.x}px, ${place.y}px)`; }
     drawGroups(at);
@@ -2577,9 +2633,9 @@
   function startPan(event) {
     if (event.button !== 0 || gesture || event.target.closest?.('.board-node, .board-canvas-tools, .board-link-remove')) return;
     const origin = { x: event.clientX, y: event.clientY, cx: camera.x, cy: camera.y };
-    gesture = { kind: 'pan' }; space.classList.add('panning');
+    gesture = { kind: 'pan', dragged: false }; space.classList.add('panning');
     if (picked$) { picked$ = null; drawLinks(); }
-    follow(next => { camera = { ...camera, x: origin.cx + next.clientX - origin.x, y: origin.cy + next.clientY - origin.y }; aim(); }, () => { gesture = null; space.classList.remove('panning'); if (stale) drawSpace(); });
+    follow(next => { if (Math.hypot(next.clientX - origin.x, next.clientY - origin.y) > 3) gesture.dragged = true; camera = { ...camera, x: origin.cx + next.clientX - origin.x, y: origin.cy + next.clientY - origin.y }; aim(); }, () => { const clicked = !gesture.dragged; gesture = null; space.classList.remove('panning'); if (stale) drawSpace(); if (clicked) unlight(); });
   }
   // Alt and an arrow key move the focused card, for those who'd rather not drag.
   function nudge(event, id) {
