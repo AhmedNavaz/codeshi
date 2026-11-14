@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createWatchAlong, watchView, parseWatchLink, watchLink } from '../src/watch-along.mjs';
+import { once } from 'node:events';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createWatchAlong, watchView, roomView, parseWatchLink, watchLink } from '../src/watch-along.mjs';
+import { createRelayServer } from '../src/server.mjs';
+import { scriptCLIs } from './platform.mjs';
 
 // An in-memory stand-in for the Firebase relay: a JSON tree with PUT, GET, DELETE and live watches, one identity per client.
 function fakeRelay() {
@@ -43,7 +47,8 @@ test('a watcher sees an allowlisted view: no host paths, raw step output or sett
       { id: 'm2', role: 'assistant', provider: 'claude', text: 'Working on it.', runId: 'r1' },
     ],
   });
-  assert.deepEqual(Object.keys(view).sort(), ['activeRun', 'earlier', 'id', 'messages', 'model', 'provider', 'status', 'step', 'title', 'waiting']);
+  assert.deepEqual(Object.keys(view).sort(), ['activeRun', 'earlier', 'id', 'messages', 'model', 'paused', 'provider', 'queued', 'status', 'step', 'title', 'upNext', 'waiting']);
+  assert.deepEqual(view.upNext, [], 'the host’s own queued prompts stay private'); assert.equal(view.queued, 1);
   assert.equal(view.step, 'Running npm test');
   assert.deepEqual(view.waiting.map(item => item.label), ['Change demo-app/utils.js', 'Which branch?']);
   assert.deepEqual(view.messages.map(message => message.id), ['m1', 'm2']);
@@ -140,4 +145,112 @@ test('allowed watchers survive a restart; unanswered invites do not', async () =
       await until(() => viewer.status().watching[0].view, 'view after restart');
     } finally { await again.close(); }
   } finally { await viewer.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('each watcher learns only whether a teammate message is theirs', () => {
+  const room = 'a'.repeat(64), other = 'b'.repeat(64);
+  const view = watchView({ id: 'c', status: 'idle',
+    queue: [{ text: 'host prompt' }, { text: 'Add a test', author: { name: 'Sara', room } }, { text: 'Rename it', author: { name: 'Omar', room: other } }],
+    messages: [{ id: 'm1', role: 'user', text: 'Try the cache', author: { name: 'Sara', room } }, { id: 'm2', role: 'user', text: 'Mine' }] });
+  assert.deepEqual(view.upNext.map(item => [item.place, item.text]), [[2, 'Add a test'], [3, 'Rename it']]);
+  const sara = roomView(view, room);
+  assert.deepEqual(sara.messages[0].author, { name: 'Sara', mine: true });
+  assert.equal(sara.messages[1].author, undefined);
+  assert.deepEqual(sara.upNext.map(item => item.author), [{ name: 'Sara', mine: true }, { name: 'Omar', mine: false }]);
+  assert.doesNotMatch(JSON.stringify(sara), new RegExp(`${room}|${other}|host prompt`));
+});
+
+test('the host chooses what a watcher’s messages do: suggestions only, ask first, or straight to the queue', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-test-')), relay = fakeRelay();
+  const queue = [], sent = [];
+  let refuse = null;
+  const host = createWatchAlong({ config, storeFile: path.join(dir, 'host.json'), clientFactory: relay.factory, workspaceName: () => 'demo-app',
+    readConversation: () => watchView({ id: 'c1', status: 'idle', messages: [], queue }),
+    sendMessage: async (projectId, input) => { if (refuse) throw Error(refuse); sent.push({ projectId, ...input }); queue.push({ text: input.text, author: input.author }); } });
+  const viewer = createWatchAlong({ config, storeFile: path.join(dir, 'viewer.json'), clientFactory: relay.factory, readConversation: () => null });
+  try {
+    await host.manage({ action: 'invite', projectId: 'p1' });
+    const { joined } = await viewer.manage({ action: 'join', link: host.status('p1').host.invite.link, name: 'Sara' });
+    const roomId = host.status('p1').host.watchers[0].id;
+    await host.manage({ action: 'allow', projectId: 'p1', id: roomId });
+    await viewer.manage({ action: 'look', id: joined, looking: true });
+    await until(() => viewer.status().watching[0].state === 'active', 'allowed');
+    // Suggestions only, by default: a message is refused on the watcher and again on the host.
+    assert.equal(host.status('p1').host.watchers[0].level, 'suggest');
+    assert.equal(viewer.status().watching[0].level, 'suggest');
+    await assert.rejects(viewer.manage({ action: 'message', id: joined, text: 'Run the tests' }), /haven’t let you send messages/);
+    await assert.rejects(host.manage({ action: 'level', projectId: 'p1', id: roomId, level: 'admin' }), /Choose suggestions only/);
+
+    // Ask first: the message waits beside the host's message box until the host sends it, with the sender's name.
+    await host.manage({ action: 'level', projectId: 'p1', id: roomId, level: 'ask' });
+    await until(() => viewer.status().watching[0].level === 'ask', 'watcher told about ask');
+    const asked = await viewer.manage({ action: 'message', id: joined, text: 'Run the tests' });
+    assert.equal(asked.queued, false);
+    const [held] = host.status('p1').host.suggestions;
+    assert.equal(held.kind, 'message'); assert.equal(held.from, 'Sara'); assert.equal(sent.length, 0, 'nothing runs before the host sends it');
+    await host.manage({ action: 'send', projectId: 'p1', id: held.id, billingConfirmed: true });
+    assert.deepEqual(sent[0], { projectId: 'p1', text: 'Run the tests', author: { name: 'Sara', room: roomId }, billingConfirmed: true });
+    assert.equal(host.status('p1').host.suggestions.length, 0);
+    await assert.rejects(host.manage({ action: 'send', projectId: 'p1', id: held.id }), /already sent or dismissed/);
+
+    // Straight to the queue: it is queued at once, never with the host's billing go-ahead, and the watcher sees it waiting.
+    await host.manage({ action: 'level', projectId: 'p1', id: roomId, level: 'auto' });
+    await until(() => viewer.status().watching[0].level === 'auto', 'watcher told about auto');
+    const direct = await viewer.manage({ action: 'message', id: joined, text: 'Then fix the lint' });
+    assert.equal(direct.queued, true);
+    assert.equal(sent[1].billingConfirmed, undefined);
+    await until(() => viewer.status().watching[0].view?.upNext?.length === 2, 'both messages in the view');
+    assert.deepEqual(viewer.status().watching[0].view.upNext.map(item => [item.place, item.author]), [[1, { name: 'Sara', mine: true }], [2, { name: 'Sara', mine: true }]]);
+
+    // A message the queue refuses waits for the host, with the reason.
+    refuse = 'A workspace can queue up to 20 prompts.';
+    assert.equal((await viewer.manage({ action: 'message', id: joined, text: 'And the docs' })).queued, false);
+    assert.equal(host.status('p1').host.suggestions[0].reason, refuse);
+    // Three messages waiting, queued or held, is the most one person can have.
+    await assert.rejects(viewer.manage({ action: 'message', id: joined, text: 'One more' }), /3 messages waiting/);
+
+    // Taking it back: suggestions only again, and the watcher can't send.
+    await host.manage({ action: 'level', projectId: 'p1', id: roomId, level: 'suggest' });
+    await until(() => viewer.status().watching[0].level === 'suggest', 'watcher told about suggest');
+    queue.length = 0;
+    await assert.rejects(viewer.manage({ action: 'message', id: joined, text: 'Again' }), /haven’t let you send messages/);
+    // The level survives a restart of the host.
+    await host.manage({ action: 'level', projectId: 'p1', id: roomId, level: 'ask' });
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'host.json'), 'utf8'));
+    assert.equal(saved.rooms[0].level, 'ask');
+  } finally { await host.close(); await viewer.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('in Codeshi, a teammate’s message joins the workspace queue with its agent and Ask for permission, under their name', { skip: scriptCLIs }, async t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-server-')), workspace = path.join(folder, 'workspace'), relay = fakeRelay();
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(workspace, '.mock-scenarios.json'), JSON.stringify({ 'Hold the workspace': { behavior: 'hold' } }));
+  const bin = path.join(folder, 'codex-mock.mjs');
+  fs.writeFileSync(bin, `#!${process.execPath}\nimport ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('./mock-cli.mjs', import.meta.url))).href)};\n`, { mode: 0o700 });
+  const app = createRelayServer({ workspace, dataRoot: path.join(folder, 'data'), accessToken: 'desktop-token', lock: false, bins: { codex: bin },
+    phoneOptions: { interfaces: () => [], remoteConfig: config, remoteClientFactory: relay.factory, watchClientFactory: relay.factory } });
+  const viewer = createWatchAlong({ config, storeFile: path.join(folder, 'viewer.json'), clientFactory: relay.factory, readConversation: () => null });
+  t.after(async () => { await viewer.close(); await app.close({ force: true }); fs.rmSync(folder, { recursive: true, force: true }); });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  const base = `http://127.0.0.1:${app.server.address().port}`, headers = { 'X-AI-Relay-Token': 'desktop-token', 'X-AI-Relay': '1', 'Content-Type': 'application/json' };
+  const projectId = app.registry.list()[0].id;
+  assert.ok(projectId, 'a workspace is open');
+  const watch = async body => { const res = await fetch(`${base}/api/watch?projectId=${projectId}`, { method: 'POST', headers, body: JSON.stringify(body) }); const value = await res.json(); if (!res.ok) throw Error(value.error); return value; };
+  const broker = app.registry.broker(projectId), c = broker.get(app.registry.mainConversationId(projectId));
+  // The host's own setting is full auto-approval; a teammate's message still asks.
+  broker.start(c, { text: 'Hold the workspace', provider: 'codex', mode: 'edit', approvalPolicy: 'auto' });
+  c.approvalPolicy = 'auto';
+  const link = (await watch({ action: 'invite' })).host.invite.link;
+  const { joined } = await viewer.manage({ action: 'join', link, name: 'Sara' });
+  const roomId = (await (await fetch(`${base}/api/watch?projectId=${projectId}`, { headers })).json()).host.watchers[0].id;
+  await watch({ action: 'allow', id: roomId });
+  await until(() => viewer.status().watching[0]?.state === 'active', 'allowed');
+  await watch({ action: 'level', id: roomId, level: 'auto' });
+  await until(() => viewer.status().watching[0].level === 'auto', 'level');
+  assert.equal((await viewer.manage({ action: 'message', id: joined, text: 'Run the tests' })).queued, true);
+  const [item] = c.queue;
+  assert.equal(item.text, 'Run the tests'); assert.equal(item.provider, 'codex'); assert.equal(item.approvalPolicy, 'ask');
+  assert.deepEqual(item.author, { name: 'Sara', room: roomId });
+  assert.equal(item.billingConfirmed, false);
+  await assert.rejects(watch({ action: 'send', id: 'nope' }), /already sent or dismissed/);
 });

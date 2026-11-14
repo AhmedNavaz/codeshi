@@ -1,7 +1,8 @@
 // Watch-along (#24, first slice). Share live: a teammate watches this workspace's conversation in their own Codeshi,
 // read-only, after you match their code and allow them. Watch a teammate: paste their invite link to watch theirs.
 // While someone watches, a strip above the message box says so, and their suggestions wait there until you add one to
-// your message or dismiss it. Nothing a watcher sends runs by itself.
+// your message or dismiss it. You choose, per person, whether they may also send messages to your agent: each one waits
+// for you to send it, or joins your queue directly. Either way it runs on your account with Ask for permission.
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), api = window.relayUI, md = window.relayPhoneLogic;
@@ -14,6 +15,8 @@
   const spaced = code => String(code || '').replace(/^(\d{3})(\d{3})$/, '$1 $2');
   const AGENT = { codex: 'Codex', claude: 'Claude', gemini: 'Gemini', antigravity: 'Antigravity' };
   const agentName = id => AGENT[id] || (id ? id.charAt(0).toUpperCase() + id.slice(1) : 'The agent');
+  // What a person's messages may do, as the host sets it in Share live and as the watcher is told.
+  const LEVELS = [['suggest', 'Suggestions only'], ['ask', 'Messages, you send each'], ['auto', 'Messages, straight to your queue']];
 
   let status = null, failure = '', busy = false, loading = 0, current = null, adding = false, draft = { link: '', name: '', suggestion: '' };
   const path = () => { const projectId = api.getState().projectId; return projectId ? `/api/watch?projectId=${encodeURIComponent(projectId)}` : '/api/watch'; };
@@ -54,6 +57,8 @@
     const now = allowed.filter(item => item.watchingNow), away = allowed.filter(item => !item.watchingNow);
     const parts = [];
     if (now.length) parts.push(`${listed(now.map(item => item.name))} ${now.length === 1 ? 'is' : 'are'} watching`);
+    const senders = allowed.filter(item => item.level && item.level !== 'suggest');
+    if (senders.length) parts.push(`${listed(senders.map(item => item.name))} can send messages`);
     if (away.length) parts.push(`${listed(away.map(item => item.name))} can watch`);
     if (waiting.length) parts.push(`${listed(waiting.map(item => item.name))} ${waiting.length === 1 ? 'asks' : 'ask'} to watch`);
     const dot = node('span', `watch-dot${now.length ? ' live' : ''}`); dot.setAttribute('aria-hidden', 'true');
@@ -61,13 +66,22 @@
     line.append(button(waiting.length ? 'Review' : 'Manage', openShare, 'text-link'));
     const children = [line];
     for (const item of suggestions) {
-      const card = node('div', 'watch-suggestion');
+      const message = item.kind === 'message';
+      const card = node('div', `watch-suggestion${message ? ' watch-held' : ''}`);
       const text = node('div', 'watch-suggestion-text');
-      text.append(node('strong', '', `${item.from} suggests`), node('span', '', item.text));
+      text.append(node('strong', '', message ? `${item.from} wants to send` : `${item.from} suggests`), node('span', '', item.text));
       text.title = item.text;
       const actions = node('div', 'watch-suggestion-actions');
-      actions.append(button('Add to message', () => addToMessage(item), 'secondary-button'), button('Dismiss', () => act({ action: 'dismiss', id: item.id }), 'text-link'));
-      card.append(text, actions); children.push(card);
+      if (message) {
+        // Send queues it with your conversation's agent and Ask for permission; it starts now if nothing is running.
+        const go = button('Send', () => act({ action: 'send', id: item.id, billingConfirmed: window.relayBillingConfirmed === true }, () => api.announce?.(`${item.from}’s message is in your queue.`)), 'primary-button');
+        go.title = 'Runs on your computer and account, with Ask for permission. It waits its turn in your queue.';
+        actions.append(go, button('Edit', () => addToMessage(item), 'secondary-button'));
+      } else actions.append(button('Add to message', () => addToMessage(item), 'secondary-button'));
+      actions.append(button('Dismiss', () => act({ action: 'dismiss', id: item.id }), 'text-link'));
+      card.append(text, actions);
+      if (message && item.reason) { const why = node('p', 'watch-held-reason', `It couldn’t join your queue by itself: ${item.reason}`); card.append(why); }
+      children.push(card);
     }
     strip.replaceChildren(...children);
   }
@@ -105,7 +119,12 @@
           const dot = node('span', `watch-dot${item.watchingNow ? ' live' : ''}`); dot.setAttribute('aria-hidden', 'true');
           const who = node('div', 'watch-person-text');
           who.append(node('strong', '', item.name), node('span', 'panel-muted', `${item.watchingNow ? 'Watching now' : 'Not looking right now'} · until ${time(item.expiresAt)}`));
-          row.append(dot, who, button('Stop sharing', () => act({ action: 'stop', id: item.id })));
+          const level = node('select', 'watch-level'); level.setAttribute('aria-label', `What ${item.name} can send`);
+          level.title = 'Messages run on your computer and account, always with Ask for permission. You can change this at any time.';
+          for (const [value, text] of LEVELS) { const option = node('option', '', text); option.value = value; level.append(option); }
+          level.value = item.level || 'suggest';
+          level.addEventListener('change', () => act({ action: 'level', id: item.id, level: level.value }, () => api.announce?.(`${item.name}: ${LEVELS.find(([value]) => value === level.value)?.[1]}.`)));
+          row.append(dot, who, level, button('Stop sharing', () => act({ action: 'stop', id: item.id })));
           list.append(row);
         }
         children.push(list);
@@ -124,11 +143,12 @@
         invite.append(button(allowed.length ? 'Invite someone else' : 'Create invite link', () => act({ action: 'invite' }), 'primary-button'));
       }
       children.push(invite);
+      if (allowed.length) children.push(node('p', 'panel-muted watch-fineprint', 'A teammate’s message runs here, on your account, with your conversation’s current agent and model and always with Ask for permission. Their name stays on it, and you can edit or remove it in your queue.'));
       children.push(node('p', 'panel-muted watch-fineprint', 'Sent through Codeshi’s relay, encrypted end to end: the relay can’t read it. Each person’s agents still run on their own computer and account.'));
     } else children.push(node('p', 'panel-muted', 'Loading…'));
     if (failure) children.push(node('p', 'watch-error', failure));
     if (busy) body.setAttribute('aria-busy', 'true'); else body.removeAttribute('aria-busy');
-    for (const control of children.flatMap(child => child.querySelectorAll ? [...child.querySelectorAll('button')] : [])) control.disabled = busy;
+    for (const control of children.flatMap(child => child.querySelectorAll ? [...child.querySelectorAll('button, select')] : [])) control.disabled = busy;
     body.replaceChildren(...children);
   }
 
@@ -178,7 +198,9 @@
     if (view.earlier) feed.append(node('p', 'watch-earlier', `${view.earlier} earlier message${view.earlier === 1 ? '' : 's'} not shown.`));
     if (!view.messages.length) feed.append(node('p', 'panel-muted', 'No messages yet.'));
     for (const message of view.messages) {
-      const row = node('article', `watch-message ${message.role}`);
+      const row = node('article', `watch-message ${message.role}${message.author ? ' from-teammate' : ''}`);
+      // A message a teammate sent through Share live keeps their name: "You" for your own.
+      if (message.role === 'user' && message.author) row.append(node('div', 'watch-message-head', message.author.mine ? 'You' : message.author.name));
       if (message.role !== 'user') row.append(node('div', 'watch-message-head', message.role === 'assistant' ? agentName(message.provider) : message.role === 'error' ? 'Error' : 'Codeshi'));
       const body = node('div', 'watch-message-text');
       if (message.role === 'assistant' && md) body.append(markdown(message.text)); else body.textContent = message.text;
@@ -225,6 +247,17 @@
     line.append(dot, node('span', '', text));
     const block = [line];
     for (const item of view.waiting || []) block.push(node('p', 'watch-waiting', `${item.kind === 'question' ? `${agentName(item.provider)} asks` : `Waiting for their approval`}: ${item.label}`));
+    // Your messages waiting in their queue, and where they stand.
+    const mine = (view.upNext || []).filter(item => item.author?.mine);
+    if (mine.length) {
+      const list = node('ul', 'watch-upnext'); list.setAttribute('aria-label', 'Your messages in their queue');
+      for (const item of mine) {
+        const row = node('li');
+        row.append(node('span', 'watch-upnext-place', item.place === 1 ? (view.paused ? 'Next, their queue is paused' : 'Next') : `${item.place} of ${view.queued} in their queue`), node('span', 'watch-upnext-text', item.text));
+        list.append(row);
+      }
+      block.push(list);
+    }
     return block;
   }
 
@@ -233,7 +266,7 @@
     const body = $('watch-body'), foot = $('watch-foot'), title = $('watch-title'), subtitle = $('watch-subtitle');
     const item = adding ? null : session();
     const others = sessions().filter(entry => entry.id !== item?.id && ['pending', 'active'].includes(entry.state));
-    const footKey = item ? `${item.id}:${item.state}` : '';
+    const footKey = item ? `${item.id}:${item.state}:${item.level || 'suggest'}` : '';
     if (footKey !== foot.dataset.key) { foot.dataset.key = footKey; foot.hidden = true; foot.replaceChildren(); }
     const fresh = !foot.children.length;
     const previous = body.querySelector('.watch-feed');
@@ -243,7 +276,8 @@
     else if (!item) { title.textContent = 'Watch a teammate'; subtitle.textContent = 'Read-only. You see their conversation live and can send them suggestions.'; children.push(joinForm()); }
     else {
       title.textContent = item.workspace ? `Watching ‘${item.workspace}’` : 'Watching a teammate';
-      subtitle.textContent = item.view?.title && item.view.title !== item.workspace ? item.view.title : 'Read-only. Your suggestions go to them; nothing runs on your computer.';
+      const can = item.level === 'auto' ? 'Your messages join their queue and run on their account.' : item.level === 'ask' ? 'Your messages run on their account once they send them.' : 'Read-only. Your suggestions go to them; nothing runs on your computer.';
+      subtitle.textContent = item.view?.title && item.view.title !== item.workspace ? `${item.view.title} · ${can}` : can;
       if (item.state === 'pending') {
         const wait = node('section', 'watch-ask');
         wait.append(node('h3', '', 'Waiting for them to allow you'));
@@ -263,16 +297,32 @@
         foot.querySelectorAll('button').forEach(control => { control.disabled = busy; });
       }
       if (item.state === 'active' && fresh) {
+        // With messages allowed, Enter sends to their agent and Suggest still offers a note they add themselves.
+        const messages = item.level === 'ask' || item.level === 'auto';
         const form = node('form', 'watch-suggest');
-        const box = node('textarea'); box.rows = 1; box.maxLength = 2000; box.placeholder = 'Suggest something to them…'; box.value = draft.suggestion; box.setAttribute('aria-label', 'Suggestion');
+        const box = node('textarea'); box.rows = 1; box.maxLength = messages ? 8000 : 2000; box.value = draft.suggestion;
+        box.placeholder = messages ? 'Message their agent…' : 'Suggest something to them…'; box.setAttribute('aria-label', messages ? 'Message' : 'Suggestion');
         box.addEventListener('input', () => { draft.suggestion = box.value; });
         box.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } });
-        const send = node('button', 'primary-button', 'Send'); send.type = 'submit'; send.disabled = busy;
-        form.append(box, send);
+        const sent = (placeholder, said) => { draft.suggestion = ''; box.value = ''; box.placeholder = placeholder; api.announce?.(said); };
+        const suggest = () => {
+          if (!draft.suggestion.trim()) return;
+          if (draft.suggestion.trim().length > 2000) { failure = 'Keep a suggestion under 2000 characters.'; renderWatch(); return; }
+          act({ action: 'suggest', id: item.id, text: draft.suggestion }, () => sent(messages ? 'Suggestion sent. Message their agent…' : 'Sent. Suggest something else…', 'Suggestion sent.'));
+        };
+        const submit = node('button', 'primary-button', 'Send'); submit.type = 'submit'; submit.disabled = busy;
+        if (messages) {
+          submit.title = item.level === 'auto' ? 'Joins their queue and runs on their account' : 'Waits for them to send it';
+          const asSuggestion = button('Suggest', suggest, 'secondary-button'); asSuggestion.title = 'Send it as a suggestion they can add to their own message';
+          form.append(box, asSuggestion, submit);
+        } else form.append(box, submit);
         form.addEventListener('submit', event => {
-          event.preventDefault(); if (!draft.suggestion.trim()) return;
-          const text = draft.suggestion;
-          act({ action: 'suggest', id: item.id, text }, () => { draft.suggestion = ''; box.value = ''; box.placeholder = 'Sent. Suggest something else…'; api.announce?.('Suggestion sent.'); });
+          event.preventDefault();
+          if (!messages) { suggest(); return; }
+          if (!draft.suggestion.trim()) return;
+          act({ action: 'message', id: item.id, text: draft.suggestion }, result => result.queued
+            ? sent('In their queue. Message their agent…', 'Your message is in their queue.')
+            : sent('Sent. It waits for them to send it…', 'Sent. It waits for them to send it.'));
         });
         foot.append(button('Leave', () => act({ action: 'leave', id: item.id }, () => { current = null; adding = !sessions().length; look(false); })), form);
       }

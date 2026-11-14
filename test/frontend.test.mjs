@@ -5790,7 +5790,7 @@ test('Flow mode card polish: extra task indicators, multi-window quota glance, a
   const taskEl = ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.classList.contains('flow-task-running'));
   assert(taskEl, 'Running extra task row exists in Tasks side by side');
   assert(taskEl.querySelector('.flow-pulse-dot'), 'Running extra task has animated pulsing dot indicator');
-  assert.match(flowText(ui, 'tasks'), /Refactor background indexing engine\s*core · Working as extra task/, 'Extra task shows unclipped title and Working as extra task status');
+  assert.match(flowText(ui, 'tasks'), /Refactor background indexing engine\s*core · Working/, 'Extra task shows unclipped title and its Working status');
 
   // 2. Active agent highlighting on plans card and status bar
   chat.status = 'running';
@@ -6136,7 +6136,7 @@ test('Flow keeps waiting tasks and completed task threads reachable while view c
   await ui.window.relayUI.refresh(); await flush();
   const action = text => ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(item => item.textContent.includes(text))?.querySelector('button') || ui.$('flow-card-tasks').querySelectorAll('button').find(button => button.textContent === text);
   assert.equal(ui.window.relayFlow.leave(), false);
-  assert.match(flowText(ui, 'tasks'), /2 tasks · 1 waiting.*Workspace chat.*the whole workspace.*Viewing.*Docs.*website · waiting to start.*Another task is working\..*Open task.*Search.*website · finished.*Open task/, 'Tasks beside the chat are listed with where and how they stand with Open task buttons.');
+  assert.match(flowText(ui, 'tasks'), /2 tasks · 1 waiting.*Workspace chat.*Whole workspace.*You’re here.*Docs.*website · waiting to start.*Another task is working\..*Search.*website · finished/, 'Tasks beside the chat are listed with where and how they stand, and which one is open.');
   action('Docs').click(); await flush();
   assert.match(ui.$('task-banner').textContent, /website · Waiting/);
   ui.$('task-banner').querySelectorAll('button').find(button => button.textContent === 'Cancel').click(); await flush();
@@ -7068,10 +7068,10 @@ test('Flow card feedback: unclipped tasks, active agent parity, binding windows 
   assert.equal(titleEl.textContent, "Refactor backend API endpoints with comprehensive schema verification", "Task title is unclipped");
   assert.match(taskRow.querySelector(".flow-task-meta").textContent, /backend · Claude · on “Update controller validations”/, "Recorded lane activity is visible");
   assert(taskRow.querySelector(".flow-pulse-dot"), "Lane has pulsing dot indicator");
-  const openBtn = taskRow.querySelector(".flow-task-action");
-  assert(openBtn, "Clear Open task action button exists");
-  assert.equal(openBtn.textContent, "Open task");
-  assert.match(openBtn.getAttribute("aria-label"), /Open task: Refactor backend API/, "Accessible aria label exists");
+  const openBtn = taskRow.querySelector(".flow-task-row");
+  assert.equal(openBtn.tagName, "BUTTON");
+  assert(openBtn, "The whole row is the button that switches to the task");
+  assert.match(openBtn.getAttribute("aria-label"), /Switch to “Refactor backend API/, "Accessible aria label exists");
 
   // 2. Handoff moves the working mark
   chat.activeRun = { id: "run-handoff", provider: "gemini", phase: "responding", startedAt: new Date().toISOString() };
@@ -7209,10 +7209,10 @@ test('Tasks side by side shows workspace tasks, approvals, copy state, start/rev
   assert.equal(ui.$('task-merge-dialog').open, true);
   ui.$('task-merge-close').click(); await flush();
 
-  row(copy.id).querySelectorAll('button').find(b => b.textContent === 'Open task').click(); await flush();
+  row(copy.id).querySelector('.flow-task-row').click(); await flush();
   assert.equal(ui.state().taskId, copy.id);
   assert.equal(row(copy.id).getAttribute('aria-current'), 'true');
-  assert.match(row(copy.id).textContent, /Viewing/);
+  assert.match(row(copy.id).textContent, /You’re here/);
   mainRow().querySelector('button').click(); await flush();
   assert.equal(ui.state().taskId, null);
 

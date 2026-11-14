@@ -16,4 +16,8 @@ contextBridge.exposeInMainWorld('relayPreview', Object.freeze({
   // Design notes (#125): the sections marked on the page, and word that they went into the message.
   onDesign: listen('preview:design'),
   onDesignAdded: listen('preview:design-added'),
+  // Unsent notes from this interface's last window, the element the keyboard has outlined, and word to write notes.
+  onDesignRestore: listen('preview:design-restore'),
+  onDesignCursor: listen('preview:design-cursor'),
+  onDesignWrite: listen('preview:design-write'),
 }));

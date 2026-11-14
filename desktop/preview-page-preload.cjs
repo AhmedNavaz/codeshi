@@ -188,13 +188,66 @@ function dragTo(event) {
   return true;
 }
 function stopDesigning(reported = true) {
-  designing = false; drag = null; outline(null);
+  designing = false; drag = null; outline(null); said = null; cursor = null;
   if (band) { band = null; draw(); }
   if (reported) ipcRenderer.send('preview:design-stop');
 }
 
+// Marking with the keyboard, like moving through a tree: the up and down arrows move to the outlined element's
+// neighbours, the left arrow to the element around it and the right arrow into it; Enter or Space marks it. Only
+// elements that take up space count, and these keys never reach the page while marking. Each move tells the app
+// which element is outlined, so the toolbar can say it.
+const SKIP = new Set(['script', 'style', 'link', 'meta', 'head', 'template', 'noscript', 'title', 'codeshi-picker', 'codeshi-design']);
+const visible = element => { if (!element || element.nodeType !== 1 || SKIP.has(element.tagName.toLowerCase())) return false; const rect = element.getBoundingClientRect(); return rect.width >= 1 && rect.height >= 1; };
+const children = element => [...(element?.children || [])].filter(visible);
+let said = null, cursor = null, lastPoint = '';
+function startElement() {
+  const focused = document.activeElement;
+  if (visible(focused) && focused !== document.body && focused !== document.documentElement) return focused;
+  const main = document.querySelector('main, [role="main"]');
+  return visible(main) ? main : children(document.body)[0] || null;
+}
+function moved(element) {
+  if (!element) return;
+  cursor = element;
+  element.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  outline(element);
+  if (said === element) return;
+  said = element;
+  ipcRenderer.send('preview:design-cursor', describe(element));
+}
+function designKey(event) {
+  const current = [hovered, cursor].find(element => element?.isConnected) || null;
+  if (!current && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', ' '].includes(event.key)) { moved(startElement()); return true; }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const siblings = children(current.parentElement), at = siblings.indexOf(current);
+    moved(siblings[at + (event.key === 'ArrowDown' ? 1 : -1)] || current);
+    return true;
+  }
+  if (event.key === 'ArrowLeft') { const parent = current.parentElement; moved(parent && parent !== document.documentElement && visible(parent) ? parent : current); return true; }
+  if (event.key === 'ArrowRight') { moved(children(current)[0] || current); return true; }
+  if (event.key === 'Enter' || event.key === ' ') {
+    if (event.repeat) return true;
+    // The outline comes off first, as it does for a click, so it isn't in the section's screenshot; the next arrow
+    // key carries on from the marked element.
+    const rect = current.getBoundingClientRect();
+    outline(null); cursor = current;
+    mark(current, { x: rect.left, y: rect.top, width: rect.width, height: rect.height }, null);
+    return true;
+  }
+  return false;
+}
+
 window.addEventListener('mousemove', event => { if (picking && !designing) outline(target(event)); }, true);
-window.addEventListener('pointermove', event => { if (designing && !dragTo(event)) outline(target(event)); }, true);
+// A page that scrolls under a still pointer, as an arrow key's move can make it, reports a move to the same place;
+// that keeps the keyboard's outline.
+window.addEventListener('pointermove', event => {
+  if (!designing) return;
+  const point = event.clientX + ',' + event.clientY;
+  if (point === lastPoint && !drag) return;
+  lastPoint = point;
+  if (!dragTo(event)) outline(target(event));
+}, true);
 for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'auxclick', 'dblclick', 'contextmenu', 'submit']) window.addEventListener(type, swallow, true);
 window.addEventListener('click', event => {
   if (designing) { swallow(event); return; }
@@ -208,9 +261,12 @@ window.addEventListener('click', event => {
   ipcRenderer.send('preview:picked', { nonce, element: info, rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height }, viewport: { width: innerWidth, height: innerHeight } });
 }, true);
 window.addEventListener('keydown', event => {
+  if (designing && !event.metaKey && !event.ctrlKey && !event.altKey && event.key !== 'Escape' && designKey(event)) { swallow(event); return; }
   if (event.key !== 'Escape') return;
   if (designing) { swallow(event); stopDesigning(); } else if (picking) { swallow(event); stop(); }
 }, true);
+// The page never sees a key that marking used, so a button outlined with Enter isn't also pressed.
+for (const type of ['keyup', 'keypress']) window.addEventListener(type, event => { if (designing && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', ' ', 'Escape'].includes(event.key)) swallow(event); }, true);
 window.addEventListener('scroll', () => { if ((picking || designing) && hovered) outline(hovered); if (sections.length) redraw(); }, true);
 window.addEventListener('resize', () => { if (sections.length) redraw(); });
 ipcRenderer.on('preview:picking', (_event, on) => { if (on) { picking = true; } else stop(false); });

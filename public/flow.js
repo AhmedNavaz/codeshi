@@ -653,101 +653,48 @@
     }
 
     if (tasks.length || state.taskId) {
+      // One row per conversation. The whole row switches to it; the one you're in is marked "You're here" and isn't a
+      // button. Working is a small dot, needing you is the amber badge, so the three never look alike.
       const list = node('ul', 'flow-tasks');
-      const mainItem = node('li', 'flow-task');
-      mainItem.dataset.role = 'main';
-      const mainSelected = !state.taskId && !state.taskDraft;
-      if (mainSelected) { mainItem.classList.add('flow-task-selected'); mainItem.setAttribute('aria-current', 'true'); }
-      if (mainRunning) mainItem.classList.add('flow-task-running');
-      const mainHead = node('div', 'flow-task-head');
-      mainHead.append(node('strong', 'flow-task-title', 'Workspace chat'));
-      if (mainApprovals > 0) {
-        const badge = node('span', 'flow-task-badge', plural(mainApprovals, 'approval'));
-        badge.setAttribute('aria-label', `${plural(mainApprovals, 'approval')} waiting`);
-        mainHead.append(badge);
-      }
-      const mainMeta = node('div', 'flow-task-meta');
-      mainMeta.append(node('span', 'flow-task-folder', mainRunning ? 'the whole workspace · ' : 'the whole workspace'));
-      if (mainRunning) {
-        const badge = node('span', 'flow-task-status flow-task-status-running');
-        const dot = node('span', 'flow-pulse-dot'); dot.setAttribute('aria-hidden', 'true');
-        badge.append(dot, node('span', 'flow-task-status-text', 'Working'));
-        mainMeta.append(badge);
-      }
-      const mainActions = node('div', 'flow-task-actions');
-      if (mainSelected) {
-        mainActions.append(node('span', 'flow-task-viewing', 'Viewing'));
-      } else {
-        const mainBtn = button('flow-button flow-task-button flow-task-action', 'Workspace chat', () => selectTask(null));
-        mainBtn.title = 'Switch to workspace chat';
-        mainBtn.setAttribute('aria-label', 'Open workspace chat');
-        mainActions.append(mainBtn);
-      }
-      mainItem.append(mainHead, mainMeta, mainActions);
-      list.append(mainItem);
+      const row = ({ key, title, place, live, liveText, still, approvals, pill, here, onOpen, openLabel, kind }) => {
+        const item = node('li', 'flow-task');
+        if (key) item.dataset.taskId = key; else item.dataset.role = 'main';
+        if (here) { item.classList.add('flow-task-selected'); item.setAttribute('aria-current', 'true'); }
+        if (live) item.classList.add('flow-task-running');
+        if (approvals) item.classList.add('flow-task-needs');
+        const face = here ? node('div', 'flow-task-row') : button('flow-task-row', undefined, onOpen);
+        if (!here) { face.title = openLabel; face.setAttribute('aria-label', `${openLabel}${approvals ? `, ${plural(approvals, 'approval')} waiting` : ''}`); }
+        const mark = node('span', `flow-task-mark ${kind}`); mark.setAttribute('aria-hidden', 'true');
+        const text = node('span', 'flow-task-text'), titleEl = node('strong', 'flow-task-title', title); titleEl.title = title;
+        const meta = node('span', 'flow-task-meta');
+        if (place) meta.append(node('span', 'flow-task-folder', live || still ? `${place} · ` : place));
+        if (live) { const status = node('span', 'flow-task-status flow-task-status-running'), dot = node('span', 'flow-pulse-dot'); dot.setAttribute('aria-hidden', 'true'); status.append(dot, node('span', 'flow-task-status-text', liveText)); meta.append(status); }
+        else if (still) meta.append(node('span', 'flow-task-status', still));
+        text.append(titleEl, meta);
+        const side = node('span', 'flow-task-side');
+        if (approvals) side.append(node('span', 'flow-task-badge', plural(approvals, 'approval')));
+        else if (pill) side.append(node('span', 'flow-task-pill', pill));
+        if (here) side.append(node('span', 'flow-task-here', 'You’re here'));
+        face.append(mark, text, side);
+        item.append(face);
+        return item;
+      };
+
+      list.append(row({ title: 'Workspace chat', place: 'Whole workspace', live: mainRunning, liveText: 'Working', approvals: mainApprovals, here: !state.taskId && !state.taskDraft, onOpen: () => selectTask(null), openLabel: 'Switch to the workspace chat', kind: 'main' }));
 
       for (const task of tasks) {
-        const item = node('li', 'flow-task');
-        item.dataset.taskId = task.id;
-        const selected = !state.taskDraft && state.taskId === task.id;
-        if (task.status === 'running') item.classList.add('flow-task-running');
-        if (selected) { item.classList.add('flow-task-selected'); item.setAttribute('aria-current', 'true'); }
-
-        const titleRow = node('div', 'flow-task-head');
-        const titleEl = node('strong', 'flow-task-title', task.title);
-        titleEl.title = task.title;
-        titleRow.append(titleEl);
-        if (task.approvals > 0) {
-          const badge = node('span', 'flow-task-badge', plural(task.approvals, 'approval'));
-          badge.setAttribute('aria-label', `${plural(task.approvals, 'approval')} waiting`);
-          titleRow.append(badge);
-        } else if (taskMergeable(task)) {
-          titleRow.append(node('span', 'flow-task-pill', 'Review'));
-        }
-
-        const meta = node('div', 'flow-task-meta');
+        const provider = task.runningProvider || task.provider, running = task.status === 'running';
+        const liveText = provider ? `${agentNames[provider] || provider}${task.runningStep ? ` · on “${clip(task.runningStep, 35)}”` : task.runningPhase ? ` · ${phaseWords[task.runningPhase] || task.runningPhase}` : ' · working'}` : 'Working';
         const modeLabel = task.mode === 'worktree' ? 'own copy' : task.mode === 'direct' ? 'direct' : '';
-        const placeParts = [task.folderName, modeLabel].filter(Boolean);
-        if (placeParts.length) {
-          meta.append(node('span', 'flow-task-folder', `${placeParts.join(' · ')} · `));
-        }
-
-        const taskProvider = task.runningProvider || task.provider;
-        if (task.status === 'running') {
-          const badge = node('span', 'flow-task-status flow-task-status-running');
-          const dot = node('span', 'flow-pulse-dot'); dot.setAttribute('aria-hidden', 'true');
-          const activityText = taskProvider ? `${agentNames[taskProvider] || taskProvider}${task.runningStep ? ` · on “${clip(task.runningStep, 35)}”` : task.runningPhase ? ` · ${phaseWords[task.runningPhase] || task.runningPhase}` : ' · Working as extra task'}` : 'Working as extra task';
-          badge.append(dot, node('span', 'flow-task-status-text', activityText));
-          meta.append(badge);
-        } else {
-          meta.append(node('span', 'flow-task-status', taskStatusText(task)));
-        }
-
-        item.append(titleRow, meta);
+        const item = row({ key: task.id, title: task.title, place: [task.folderName, modeLabel].filter(Boolean).join(' · '), live: running, liveText, still: running ? '' : taskStatusText(task), approvals: task.approvals || 0, pill: taskMergeable(task) ? 'Review' : '', here: !state.taskDraft && state.taskId === task.id, onOpen: () => selectTask(task.id), openLabel: `Switch to “${task.title}”`, kind: `agent-icon ${provider || ''}` });
         if (task.reason && ['waiting', 'failed', 'stopped', 'blocked'].includes(task.status)) {
-          const note = node('p', 'flow-task-note', clip(task.reason, 110));
-          note.title = task.reason;
-          item.append(note);
+          const note = node('p', 'flow-task-note', clip(task.reason, 110)); note.title = task.reason; item.append(note);
         }
-
         const actions = node('div', 'flow-task-actions');
-        if (selected) {
-          actions.append(node('span', 'flow-task-viewing', 'Viewing'));
-        } else {
-          const openBtn = button('flow-button flow-task-button flow-task-action', 'Open task', () => selectTask(task.id));
-          openBtn.title = `Switch to “${task.title}”`;
-          openBtn.setAttribute('aria-label', `Open task: ${task.title}`);
-          actions.append(openBtn);
-        }
-        if (task.status === 'waiting' && task.held && window.relayTaskThreads?.resume) {
-          actions.append(button('flow-button flow-task-action', 'Start', () => window.relayTaskThreads.resume(task.id)));
-        }
-        if (taskMergeable(task) && window.relayTaskThreads?.review) {
-          actions.append(button('flow-button flow-task-action', 'Review & merge', () => window.relayTaskThreads.review(task.id)));
-        } else if (taskEnded(task) && window.relayTaskThreads?.close) {
-          actions.append(button('flow-button flow-task-action', 'Close', () => window.relayTaskThreads.close(task.id)));
-        }
-        item.append(actions);
+        if (task.status === 'waiting' && task.held && window.relayTaskThreads?.resume) actions.append(button('flow-button flow-task-action', 'Start', () => window.relayTaskThreads.resume(task.id)));
+        if (taskMergeable(task) && window.relayTaskThreads?.review) actions.append(button('flow-button flow-task-action', 'Review & merge', () => window.relayTaskThreads.review(task.id)));
+        else if (taskEnded(task) && window.relayTaskThreads?.close) actions.append(button('flow-button flow-task-action', 'Close', () => window.relayTaskThreads.close(task.id)));
+        if (actions.querySelector('button')) item.append(actions);
         list.append(item);
       }
       body.append(list);

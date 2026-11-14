@@ -289,7 +289,10 @@ export function apiInterceptorScript() {
 // Opening one never closes or replaces another: the person closes a window, Stop review closes the windows of the
 // review's own services, and quitting closes the rest.
 export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, shell, root, screen = null, folders = () => [], onPick = () => {}, toolbarHeight = 44, background = () => '#1c1a18', captureWait = 1500, paintWait = 120, platform = process.platform }) {
-  const previews = new Set(), projects = new Map();
+  // Design notes not yet in a message, kept when their window closes and given back to the next window that shows the
+  // same workspace's interface, for as long as Codeshi runs (#125).
+  const previews = new Set(), projects = new Map(), drafts = new Map();
+  const draftKey = (projectId, end) => `${projectId ?? ''}\n${end || ''}`;
   let capture = 'none', clock = 0;
   const previewSession = session.fromPartition(PREVIEW_PARTITION);
   previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -356,7 +359,9 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     return { x, y, width: bounds.width, height: bounds.height };
   }
   function create({ projectId, workspace, href }) {
-    const preview = { projectId, workspace, requested: href, picking: false, pickCount: 0, inspector: false, failed: false, used: ++clock, design: { open: false, marking: false, sections: [], clock: 0, missing: [], offscreen: [], busy: false } };
+    const preview = { projectId, workspace, requested: href, picking: false, pickCount: 0, inspector: false, failed: false, used: ++clock, design: freshDesign() };
+    const draft = drafts.get(draftKey(projectId, previewEndpoint(href)));
+    if (draft) { drafts.delete(draftKey(projectId, previewEndpoint(href))); Object.assign(preview.design, draft); }
     // On macOS the windows can also be merged into tabs, from the Window menu.
     const win = new BaseWindow({ ...placement(), minWidth: 480, minHeight: 320, title: 'Preview', backgroundColor: background(), ...(mac ? { tabbingIdentifier: 'codeshi-preview' } : {}) });
     const toolbar = new WebContentsView({ webPreferences: { preload: path.join(root, 'desktop', 'preview-toolbar-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
@@ -370,7 +375,12 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     toolbar.webContents.on('will-navigate', event => event.preventDefault());
     toolbar.webContents.loadFile(path.join(root, 'desktop', 'preview-toolbar.html'));
     // A new toolbar starts with its window's state, the review's stack and the agent's latest edit in the workspace.
-    toolbar.webContents.once('did-finish-load', () => { sync(preview); const edit = projects.get(projectId)?.edit; if (edit) toToolbar(preview, 'preview:edit', edit); });
+    toolbar.webContents.once('did-finish-load', () => {
+      sync(preview); const edit = projects.get(projectId)?.edit; if (edit) toToolbar(preview, 'preview:edit', edit);
+      // Unsent design notes from this interface's last window come back with their sections, and the panel opens.
+      const { sections, notes, overall } = preview.design;
+      if (sections.length || overall) toToolbar(preview, 'preview:design-restore', { notes, overall, count: sections.length });
+    });
     const contents = page.webContents;
     contents.on('before-input-event', onKey(preview));
     const injectInterceptor = () => { if (alive(page)) contents.executeJavaScript(apiInterceptorScript()).catch(() => {}); };
@@ -396,6 +406,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     // Electron leaves a view's page running after its window closes, so both views close with it.
     win.on('closed', () => {
       previews.delete(preview);
+      keepDraft(preview);
       for (const view of [toolbar, page]) if (!view.webContents.isDestroyed()) view.webContents.close();
       preview.win = preview.toolbar = preview.page = null; preview.picking = false;
       if (windowsOf(projectId).length) syncProject(projectId); else projects.delete(projectId);
@@ -425,6 +436,18 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   // selector that finds its element and, for an area, where the area sits inside it. The notes stay in the toolbar
   // until they are added to the message, and the names, code locations and screenshots stay here.
   const wait = (ms, value) => new Promise(resolve => setTimeout(resolve, ms, value));
+  function freshDesign() { return { open: false, marking: false, sections: [], clock: 0, missing: [], offscreen: [], busy: false, notes: {}, overall: '' }; }
+  // What the toolbar has typed so far, kept here too so it outlives the window. Only notes for sections that exist.
+  function setNotes(preview, value) {
+    const design = preview.design, notes = value?.notes && typeof value.notes === 'object' ? value.notes : {};
+    design.notes = Object.fromEntries(design.sections.filter(section => typeof notes[section.id] === 'string').map(section => [section.id, notes[section.id].slice(0, 2000)]));
+    design.overall = typeof value?.overall === 'string' ? value.overall.slice(0, 4000) : '';
+  }
+  function keepDraft(preview) {
+    const { sections, notes, overall, clock: count } = preview.design, end = previewEndpoint(address(preview));
+    if (!end || (!sections.length && !overall.trim())) return;
+    drafts.set(draftKey(preview.projectId, end), { sections, notes, overall, clock: count, missing: [], offscreen: [] });
+  }
   function designPage(preview) {
     if (!alive(preview.page)) return;
     const { open, marking, sections } = preview.design;
@@ -481,6 +504,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
   function removeSection(preview, id) {
     const design = preview.design, before = design.sections.length;
     design.sections = design.sections.filter(section => section.id !== id);
+    delete design.notes[id];
     if (design.sections.length !== before) syncDesign(preview);
   }
   // Adds the notes to the message box as one message: the page as shown with its numbered boxes, then the sections it
@@ -502,7 +526,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
       const notes = value?.notes && typeof value.notes === 'object' ? value.notes : {}, url = contents.getURL(), name = label(preview);
       const text = designText({ sections: design.sections, notes: Object.fromEntries(design.sections.map(section => [section.id, typeof notes[section.id] === 'string' ? notes[section.id] : ''])), overall: typeof value?.overall === 'string' ? value.overall : '', url, label: name, shots: images.length });
       const count = design.sections.length;
-      Object.assign(design, { sections: [], missing: [], offscreen: [] });
+      Object.assign(design, { sections: [], missing: [], offscreen: [], notes: {}, overall: '' });
       const result = { projectId, url, label: name, design: true, image: null, images, text };
       onPick(result);
       toToolbar(preview, 'preview:design-added', { count });
@@ -545,7 +569,8 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     else if (action === 'pick') setPicking(preview, !preview.picking);
     else if (action === 'design') setDesign(preview, value);
     else if (action === 'design-remove' && typeof value === 'string') removeSection(preview, value);
-    else if (action === 'design-clear') { Object.assign(preview.design, { sections: [], missing: [], offscreen: [] }); syncDesign(preview); }
+    else if (action === 'design-clear') { Object.assign(preview.design, { sections: [], missing: [], offscreen: [], notes: {}, overall: '' }); syncDesign(preview); }
+    else if (action === 'design-notes') setNotes(preview, value);
     else if (action === 'design-send') sendDesign(preview, value).catch(error => toToolbar(preview, 'preview:error', `The design notes could not be added: ${error.message}`));
     else if (action === 'open-external' && isPreviewURL(contents.getURL())) shell.openExternal(contents.getURL());
     else if (action === 'navigate') { try { contents.loadURL(previewURL(value)).catch(() => {}); } catch (error) { toToolbar(preview, 'preview:error', error.message); } }
@@ -569,8 +594,19 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     Object.assign(preview.design, { missing, offscreen });
     designToolbar(preview);
   };
-  const onDesignStop = event => { const preview = fromPage(event); if (preview?.design.marking) { preview.design.marking = false; syncDesign(preview); } };
-  ipcMain.on('preview:design-mark', onDesignMark); ipcMain.on('preview:design-layout', onDesignLayout); ipcMain.on('preview:design-stop', onDesignStop);
+  // Escape ends marking and takes the keyboard to the notes, to write them.
+  const onDesignStop = event => {
+    const preview = fromPage(event);
+    if (!preview?.design.marking) return;
+    preview.design.marking = false; syncDesign(preview);
+    if (alive(preview.toolbar) && preview.design.sections.length) { preview.toolbar.webContents.focus(); toToolbar(preview, 'preview:design-write'); }
+  };
+  // The element the keyboard has outlined, named as its section would be, for the toolbar to say.
+  const onDesignCursor = (event, value) => {
+    const preview = fromPage(event);
+    if (preview?.design.open && preview.design.marking) toToolbar(preview, 'preview:design-cursor', { name: sectionName({ element: cleanElement(value), offset: null }) });
+  };
+  ipcMain.on('preview:design-mark', onDesignMark); ipcMain.on('preview:design-layout', onDesignLayout); ipcMain.on('preview:design-stop', onDesignStop); ipcMain.on('preview:design-cursor', onDesignCursor);
   // A page's API calls go to its own window's inspector.
   const onApiCall = (event, call) => {
     const preview = fromPage(event);
@@ -629,7 +665,7 @@ export function createPreview({ BaseWindow, WebContentsView, session, ipcMain, s
     shows: projectId => windowsOf(projectId).length > 0,
     // The smoke test picks in the window used last.
     setPicking: on => setPicking(latest(), on),
-    dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); ipcMain.off('preview:api-call', onApiCall); ipcMain.off('preview:design-mark', onDesignMark); ipcMain.off('preview:design-layout', onDesignLayout); ipcMain.off('preview:design-stop', onDesignStop); for (const preview of [...previews]) if (live(preview)) preview.win.destroy(); previews.clear(); projects.clear(); },
+    dispose() { ipcMain.off('preview:toolbar', onToolbar); ipcMain.off('preview:picked', onPicked); ipcMain.off('preview:pick-cancelled', onCancelled); ipcMain.off('preview:api-call', onApiCall); ipcMain.off('preview:design-mark', onDesignMark); ipcMain.off('preview:design-layout', onDesignLayout); ipcMain.off('preview:design-stop', onDesignStop); ipcMain.off('preview:design-cursor', onDesignCursor); for (const preview of [...previews]) if (live(preview)) preview.win.destroy(); previews.clear(); projects.clear(); drafts.clear(); },
     get page() { return latest()?.page ?? null; }, get picking() { return Boolean(latest()?.picking); },
     get count() { return [...previews].filter(live).length; },
     // How the last pick's screenshot went: captured, blank, hung, or none when the pick had no area.

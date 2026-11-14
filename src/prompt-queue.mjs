@@ -58,7 +58,8 @@ export class PromptQueue {
     return item;
   }
 
-  act(c, input = {}) {
+  // author: a teammate's message from Share live (#24), set only by Codeshi itself, never taken from a request body.
+  act(c, input = {}, { author = null } = {}) {
     const broker = this.broker, action = input.action;
     if (action === 'add') {
       if (c.queue.length >= QUEUE_LIMIT) throw Object.assign(new Error(`A workspace can queue up to ${QUEUE_LIMIT} prompts.`), { status: 409 });
@@ -75,7 +76,7 @@ export class PromptQueue {
       const execution = broker.execution.token(c, taskId);
       // A routed item has no agent or model yet; they are checked against the task's limits once routing chooses them.
       broker.execution.assert(c, execution, routing ? { action: 'routing' } : { action: 'manual', provider, model, effort });
-      broker.record(c, { type: 'queue_add', item: { id: randomUUID(), execution, text, provider, model, effort, mode, approvalPolicy, attachments, billingConfirmed: input.billingConfirmed === true, ...(routing ? { routing } : {}), createdAt: new Date().toISOString() } });
+      broker.record(c, { type: 'queue_add', item: { id: randomUUID(), execution, text, provider, model, effort, mode, approvalPolicy, attachments, billingConfirmed: input.billingConfirmed === true, ...(routing ? { routing } : {}), ...(author ? { author } : {}), createdAt: new Date().toISOString() } });
     } else if (action === 'update') {
       const item = this.item(c, input.id);
       const text = typeof input.text === 'string' ? input.text.trim() : item.text;
@@ -135,7 +136,7 @@ export class PromptQueue {
     const proceedWithNearQuota = Boolean(c.queueResumeProceed || item.proceedWithNearQuota);
     try {
       const input = { text: item.text, provider: item.provider, model: item.model, effort: item.effort, mode: item.mode, approvalPolicy: item.approvalPolicy, attachments: item.attachments, billingConfirmed: item.billingConfirmed, routing: item.routing || null, proceedWithNearQuota, requestId: `queue-${item.id}` };
-      const options = { execution: item.execution, queued: item.id, proceedWithNearQuota, verifyExecution: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || current && queueDigest(current) !== digest || !current && !c.requests[`queue-${item.id}`]) throw Object.assign(new Error('The queue changed or was paused before the provider started.'), { status: 409 }); }, verifyRouting: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || !current || queueDigest(current) !== digest) throw Object.assign(new Error('The queued prompt changed or the queue was paused during assessment.'), { status: 409 }); } };
+      const options = { execution: item.execution, queued: item.id, proceedWithNearQuota, ...(item.author ? { author: item.author } : {}), verifyExecution: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || current && queueDigest(current) !== digest || !current && !c.requests[`queue-${item.id}`]) throw Object.assign(new Error('The queue changed or was paused before the provider started.'), { status: 409 }); }, verifyRouting: () => { const current = c.queue.find(row => row.id === item.id); if (c.queuePaused || !current || queueDigest(current) !== digest) throw Object.assign(new Error('The queued prompt changed or the queue was paused during assessment.'), { status: 409 }); } };
       const { runId } = item.routing ? await broker.dispatch(c, input, options) : broker.start(c, input, options);
       broker.record(c, { type: 'queue_started', id: item.id, runId });
       broker.emit('update', { conversationId: c.id });

@@ -5,7 +5,7 @@
 const CHAT = new Set(['user', 'assistant', 'error', 'system']);
 const FIELDS = ['id', 'title', 'status', 'provider', 'model', 'effort', 'mode', 'approvalPolicy', 'models', 'efforts', 'routing', 'taskPolicy', 'pendingApprovals', 'canAddToRun', 'queue', 'queuePaused', 'handoffOffer', 'retryOffer', 'resume', 'limitSwitching', 'parallelTasks', 'task', 'cursor'];
 const RUN_FIELDS = ['id', 'provider', 'model', 'mode', 'approvalPolicy', 'phase', 'purpose', 'startedAt', 'endedAt', 'status', 'errorCategory'];
-const MESSAGE_FIELDS = ['id', 'role', 'provider', 'runId', 'createdAt', 'steer', 'attachments', 'orchestrationId'];
+const MESSAGE_FIELDS = ['id', 'role', 'provider', 'runId', 'createdAt', 'steer', 'attachments', 'orchestrationId', 'author'];
 const STEP_LENGTH = 2000, MESSAGE_LENGTH = 60000, PLAN_SUMMARY_LENGTH = 1000;
 export const PHONE_MESSAGES = 40;
 

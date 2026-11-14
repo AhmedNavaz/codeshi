@@ -466,6 +466,14 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const phoneAccess = createPhoneAccess({ ...phoneOptions, ...phoneBridge, remote: remotePhone });
   const watchAlong = createWatchAlong({ config: remotePhoneConfig, storeFile: path.join(registry.dataRoot, 'watch-along.json'),
     readConversation: projectId => watchView(registry.mainConversation(projectId, { limit: 600 })),
+    // A teammate's message joins this workspace's queue like one of yours, with the conversation's current agent, model,
+    // effort and access, and always with Ask for permission. Flow doesn't route it: you see which agent will run it.
+    sendMessage: (projectId, { text, author, billingConfirmed = false }) => {
+      const broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId));
+      if (!c) throw Object.assign(Error('This workspace has no conversation yet.'), { status: 409 });
+      const model = c.model || null;
+      broker.queueAction(c, { action: 'add', text, provider: c.provider, model, effort: c.efforts?.[c.provider]?.[model || 'default'] ?? null, mode: c.mode, approvalPolicy: 'ask', billingConfirmed: billingConfirmed === true, executionRevision: broker.execution.defaults(c).revision }, { author });
+    },
     workspaceName: projectId => registry.get(projectId).name,
     defaultName: (() => { const name = os.userInfo().username || 'Teammate'; return name.charAt(0).toUpperCase() + name.slice(1); })(),
     ...(phoneOptions?.watchClientFactory ? { clientFactory: phoneOptions.watchClientFactory } : {}),

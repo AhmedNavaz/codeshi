@@ -824,9 +824,11 @@
       }
       parts.push(box);
     }
-    if (card.column === 'doing' && state) parts.push(node('p', 'board-status', state.detail ? `${state.text}: ${state.detail}` : state.text));
     // While it runs: who's on it now, what it's doing and what it has used, kept up to date in place (#162 stage 5).
+    // One box says all of it, so a running card doesn't also get a separate "Working" line above it.
     const watching = liveOf(card);
+    if (card.column === 'doing' && state && !(watching && (watching.running || watching.needs))) parts.push(node('p', 'board-status', state.detail ? `${state.text}: ${state.detail}` : state.text));
+    else if (state?.detail && watching) parts.push(node('p', 'board-status', state.detail));
     if (watching) { const lines = liveLines(card, watching, { withWho: true }); lines.classList.add('board-watch'); lines.setAttribute('aria-label', 'This card’s run'); parts.push(lines); }
     if (card.column === 'ready' && card.reason) parts.push(node('p', 'board-status trouble', card.reason));
     if (card.result && ['review', 'done'].includes(card.column)) {

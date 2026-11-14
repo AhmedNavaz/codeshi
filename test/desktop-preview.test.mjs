@@ -521,3 +521,113 @@ test('the toolbar keeps each note as it is typed, sends them with the sections, 
   assert.doesNotMatch(preload, /contextBridge|exposeInMainWorld|postMessage/, 'The boxes and marks never reach the page’s scripts.');
   assert.doesNotMatch(preload, /attributes: true/, 'The boxes follow the page’s structure, not every style change, to keep idle work low.');
 });
+
+// A small page for the page preload: elements with ids, sizes and children, and the window's listeners, so marking
+// with the keyboard can be tried without Electron.
+function preloadPage() {
+  const sent = [], listeners = {}, ipc = {};
+  const make = (tag, id, size = [100, 20], kids = []) => {
+    const node = { nodeType: 1, tagName: tag.toUpperCase(), id, children: kids, parentElement: null, classList: [], style: {}, isConnected: true, innerText: id, textContent: id, attributes: {}, scrolled: 0,
+      getAttribute(name) { return this.attributes[name] ?? null; }, setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; },
+      matches(selector) { return selector.split(',').map(part => part.trim()).includes(tag); }, closest: () => null, querySelector: () => null,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: size[0], bottom: size[1], width: size[0], height: size[1] }), scrollIntoView() { this.scrolled++; } };
+    for (const kid of kids) kid.parentElement = node;
+    return node;
+  };
+  const one = make('h2', 'one'), hidden = make('p', 'hidden', [0, 0]), two = make('p', 'two'), three = make('a', 'three');
+  const card = make('section', 'card', [300, 200], [one, hidden, two]), main = make('main', 'main', [800, 600], [card, three]);
+  const script = make('script', 'script'), body = make('body', 'body', [800, 600], [script, main]);
+  const all = [one, hidden, two, three, card, main, body];
+  const documentElement = { nodeType: 1, appendChild() {} };
+  body.parentElement = documentElement;
+  const document = { body, documentElement, activeElement: body, hidden: false,
+    querySelector: selector => selector.startsWith('main') ? main : null,
+    querySelectorAll: selector => all.filter(node => '#' + node.id === selector),
+    createElement: tag => ({ tagName: tag.toUpperCase(), style: {}, isConnected: true, remove() {}, attachShadow: () => ({ append() {}, replaceChildren() {} }) }) };
+  const window = { addEventListener: (type, handler) => { (listeners[type] ||= []).push(handler); }, innerWidth: 1000, innerHeight: 700 };
+  const require = () => ({ ipcRenderer: { send: (channel, value) => sent.push([channel, value]), on: (channel, handler) => { ipc[channel] = handler; } } });
+  const source = fs.readFileSync(new URL('../desktop/preview-page-preload.cjs', import.meta.url), 'utf8');
+  new Function('require', 'window', 'document', 'innerWidth', 'innerHeight', 'requestAnimationFrame', 'MutationObserver', 'CSS', 'addEventListener', 'setTimeout', source)(require, window, document, 1000, 700, () => 1, class { observe() {} disconnect() {} }, { escape: value => value }, window.addEventListener, () => 0);
+  const key = (name, extra = {}) => { const event = { key: name, stopped: false, preventDefault() {}, stopPropagation() { this.stopped = true; }, stopImmediatePropagation() {}, ...extra }; for (const handler of listeners.keydown) handler(event); return event; };
+  return { sent, ipc, key, nodes: { one, two, three, card, main, body } };
+}
+
+test('design notes can be marked with the keyboard: arrows move through the page like a tree, Enter marks, and the page never sees those keys (#125)', () => {
+  const page = preloadPage(), named = () => page.sent.filter(([channel]) => channel === 'preview:design-cursor').map(([, value]) => value.text);
+  // Not marking: the page keeps its keys.
+  assert.equal(page.key('ArrowDown').stopped, false);
+  page.ipc['preview:design'](null, { marking: true, sections: [] });
+  // The first key outlines where to start: the focused element, or else the page's main content.
+  assert.equal(page.key('ArrowDown').stopped, true);
+  assert.deepEqual(named(), ['main']);
+  page.key('ArrowRight'); page.key('ArrowRight');
+  assert.deepEqual(named(), ['main', 'card', 'one'], 'Right goes in.');
+  page.key('ArrowDown');
+  assert.equal(named().at(-1), 'two', 'Down skips what takes up no space.');
+  page.key('ArrowDown');
+  assert.equal(named().length, 4, 'The last child stays outlined, and isn’t said again.');
+  page.key('ArrowLeft'); page.key('ArrowDown');
+  assert.deepEqual(named().slice(-2), ['card', 'three'], 'Left goes out, to the element around it.');
+  assert.ok(page.nodes.three.scrolled, 'An outlined element is scrolled into view.');
+  page.key('Enter');
+  const marks = page.sent.filter(([channel]) => channel === 'preview:design-mark');
+  assert.deepEqual(marks.map(([, value]) => [value.element.selector, value.offset]), [['#three', null]]);
+  assert.equal(page.key('Enter', { repeat: true }).stopped, true, 'A held Enter marks once.');
+  assert.equal(page.sent.filter(([channel]) => channel === 'preview:design-mark').length, 1);
+  page.key('ArrowUp');
+  assert.equal(named().at(-1), 'card', 'After a mark the arrows carry on from it.');
+  // Shortcuts with ⌘ or Ctrl still reach the page, and Escape stops marking.
+  assert.equal(page.key('ArrowDown', { metaKey: true }).stopped, false);
+  page.key('Escape');
+  assert.deepEqual(page.sent.at(-1), ['preview:design-stop', undefined]);
+  assert.equal(page.key('ArrowDown').stopped, false, 'Marking is off, so the page has its keys back.');
+});
+
+test('design notes not yet in a message outlive their window, and come back to the next window on the same interface (#125)', async () => {
+  const w = previewWindows(), { preview, windows, toolbar, page, handlers } = w;
+  const last = (contents, name) => contents.sent.filter(([channel]) => channel === name).at(-1)?.[1];
+  const mark = (win, nonce, selector) => handlers['preview:design-mark']({ sender: page(win) }, { nonce, element: { tag: 'section', text: selector, selector }, rect: { x: 0, y: 0, width: 50, height: 20 }, viewport: { width: 1000, height: 700 } });
+  await preview.open({ projectId: 'p1', url: 'http://localhost:5173/' });
+  const first = windows[0];
+  w.act(first, 'design', { open: true, marking: true });
+  mark(first, 'aaaaaaaa01', '#hero'); mark(first, 'aaaaaaaa02', '#plans'); await w.settle();
+  w.act(first, 'design-notes', { notes: { s1: 'Bigger heading.', s2: 'Three columns.', nope: 'dropped' }, overall: 'Calmer.' });
+
+  // The keyboard's outline is named for the toolbar to say, only while marking.
+  handlers['preview:design-cursor']({ sender: page(first) }, { tag: 'nav', text: 'Menu', selector: 'nav' });
+  assert.deepEqual(last(toolbar(first), 'preview:design-cursor'), { name: 'the “Menu” navigation' });
+  // Escape on the page takes the keyboard to the notes.
+  let focused = 0; toolbar(first).focus = () => { focused++; };
+  handlers['preview:design-stop']({ sender: page(first) });
+  assert.deepEqual([focused, toolbar(first).sent.at(-1)], [1, ['preview:design-write', undefined]]);
+  handlers['preview:design-cursor']({ sender: page(first) }, { tag: 'nav', selector: 'nav' });
+  assert.equal(toolbar(first).sent.filter(([channel]) => channel === 'preview:design-cursor').length, 1, 'Nothing is said while marking is off.');
+
+  first.close();
+  // Another workspace, or another interface, doesn't get them.
+  await preview.open({ projectId: 'p2', url: 'http://localhost:5173/' });
+  await preview.open({ projectId: 'p1', url: 'http://localhost:4200/' });
+  for (const win of windows.slice(1)) { toolbar(win).emit('did-finish-load'); assert.equal(last(toolbar(win), 'preview:design-restore'), undefined); }
+  // The same interface in the same workspace gets them back, sections and all, under any of this computer's names.
+  await preview.open({ projectId: 'p1', url: 'http://127.0.0.1:5173/pricing' });
+  const again = windows.at(-1);
+  toolbar(again).emit('did-finish-load');
+  assert.deepEqual(last(toolbar(again), 'preview:design-restore'), { notes: { s1: 'Bigger heading.', s2: 'Three columns.' }, overall: 'Calmer.', count: 2 });
+  w.act(again, 'design', { open: true, marking: false });
+  assert.deepEqual(last(page(again), 'preview:design'), { marking: false, sections: [{ id: 's1', n: 1, selector: '#hero', offset: null }, { id: 's2', n: 2, selector: '#plans', offset: null }] });
+  mark(again, 'aaaaaaaa03', '#faq'); await w.settle();
+  assert.equal(last(toolbar(again), 'preview:design').sections.length, 2, 'The panel opens with marking off.');
+  w.act(again, 'design', { open: true, marking: true });
+  mark(again, 'aaaaaaaa04', '#faq'); await w.settle();
+  assert.deepEqual(last(toolbar(again), 'preview:design').sections.map(section => section.id), ['s1', 's2', 's3'], 'New sections never reuse an id.');
+
+  // Once they're in a message, closing keeps nothing.
+  w.act(again, 'design-send', { notes: {}, overall: '' });
+  for (const until = Date.now() + 2000; !w.picks.length && Date.now() < until;) await w.settle();
+  assert.equal(w.picks.length, 1);
+  again.close();
+  await preview.open({ projectId: 'p1', url: 'http://localhost:5173/' });
+  toolbar(windows.at(-1)).emit('did-finish-load');
+  assert.equal(last(toolbar(windows.at(-1)), 'preview:design-restore'), undefined);
+  preview.dispose();
+});

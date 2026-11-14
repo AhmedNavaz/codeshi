@@ -147,3 +147,19 @@ test("switch_provider changes the provider of a queued prompt and resumes withou
   await idle(broker, c);
   assert.deepEqual(env.requests().slice(1), [["claude", "Queued task"]]);
 });
+
+test('a teammate’s message from Share live keeps their name in the queue and on the message it runs, and a request body can’t claim one', { skip: scriptCLIs }, async t => {
+  const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
+  broker.start(c, { text: 'Hold the workspace', provider: 'codex', mode: 'edit' });
+  const author = { name: 'Sara', room: 'a'.repeat(64) };
+  broker.queueAction(c, { action: 'add', text: 'From a teammate', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }, { author });
+  add(broker, c, 'Pretending', { author: { name: 'Mallory', room: 'b'.repeat(64) } });
+  assert.deepEqual(c.queue.map(item => item.author || null), [author, null]);
+  env.release();
+  await idle(broker, c);
+  const ran = c.messages.filter(message => message.role === 'user').map(message => [message.text, message.author || null]);
+  assert.deepEqual(ran.slice(1), [['From a teammate', author], ['Pretending', null]]);
+  await broker.close();
+  const again = env.open(), saved = again.get(c.id);
+  assert.deepEqual(saved.messages.find(message => message.text === 'From a teammate').author, author, 'the name is kept in the journal');
+});

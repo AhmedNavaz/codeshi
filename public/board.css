@@ -482,7 +482,7 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 @media (max-width: 1100px) { .board-columns { grid-template-columns: repeat(5, 232px); } }
 
 /* A card: its status, title and the gist of what it says, then one line of who does it and how far it has got. */
-.board-card { gap: 7px; padding: 10px 11px; border-left-width: 1px; border-radius: 9px; }
+.board-card { grid-template-columns: minmax(0, 1fr); gap: 7px; padding: 10px 11px; border-left-width: 1px; border-radius: 9px; }
 .board-card[data-column=draft] { border-style: dashed; border-color: color-mix(in srgb, var(--link) 40%, var(--border)); background: color-mix(in srgb, var(--surface-raised) 88%, var(--link) 4%); }
 .board-card[data-column=draft][aria-pressed=true] { border-style: solid; border-color: var(--accent); }
 .board-card-top { flex-wrap: wrap; gap: 4px 6px; }
@@ -788,6 +788,9 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 @media (prefers-reduced-motion: reduce) { .board-card-state .board-card-dot { animation: none !important; } }
 /* The same lines in an open running card, with who's on it now above them. */
 .board-card-live.board-watch { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--link) 35%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--link) 5%, transparent); font-size: 12px; }
+.board-card-live.board-watch { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 2px; }
+.board-card-live.board-watch .board-card-who { grid-column: 1 / -1; }
+.board-card-live.board-watch .board-card-used { text-align: right; }
 .board-card-who { color: var(--text-strong); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Where the run stands: one strip above the board while cards run. Running is the widest lane and the only one tinted, so

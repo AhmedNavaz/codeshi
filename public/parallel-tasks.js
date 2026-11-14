@@ -178,7 +178,10 @@
     banner.hidden = !task || Boolean(state.taskDraft);
     if (!task) return;
     const text = node('div', 'task-banner-text');
-    text.append(node('strong', 'task-banner-title', `${task.folderName} · ${LABEL[task.status] || task.status}`));
+    // Says which conversation this is by name, so a task's chat can't be mistaken for the workspace chat.
+    const title = node('strong', 'task-banner-title'), name = node('span', 'task-banner-name', task.title || 'Task'); name.title = task.title || '';
+    title.append(node('span', 'task-banner-kind', 'Task'), name, node('span', 'task-banner-state', `${task.folderName} · ${LABEL[task.status] || task.status}`));
+    text.append(title);
     const how = task.reason || (task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
     if (task.status === 'integrated') text.append(node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`));
     else if (task.status === 'kept') text.append(node('span', 'task-banner-detail', `Saved as the branch ${task.integration?.branch}. Nothing was merged.`));
@@ -190,6 +193,7 @@
       actions.append(button('Cancel', () => attempt(() => act(task, 'discard'))));
     }
     if (!['running', 'waiting'].includes(task.status) && !canMerge(task)) actions.append(button('Close', () => attempt(async () => { await act(task, 'close'); await selectThread(null); })));
+    if (!focused) actions.append(button('Workspace chat', () => attempt(() => selectThread(null)), 'secondary-button task-banner-back'));
     banner.dataset.status = task.status;
     banner.replaceChildren(text, actions);
   }

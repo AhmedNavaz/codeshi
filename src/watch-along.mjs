@@ -20,9 +20,16 @@ const { describeStep, shortPath } = globalThis.relayPhoneLogic;
 //
 // Each side signs in to the relay with its own anonymous identity, separate from phone access, because each one deletes
 // relay rooms it no longer knows about when it starts.
+//
+// Messages (#24, steering): the host chooses, per person, what that person's messages may do. 'suggest' is the first
+// slice's suggestions only. With 'ask' a watcher's message waits beside the host's message box until the host sends it;
+// with 'auto' it goes straight into the host's queue. Either way it runs on the host's computer and account, with the
+// conversation's current agent and model and always with Ask for permission, so the host still approves every command
+// and edit, and can pause, edit or remove it in the queue. The person's name stays on the message.
 
 const INVITE = 30 * 60_000, SESSION = 24 * 60 * 60_000, ACTIVE_WINDOW = 45_000, HEARTBEAT = 20_000, REPLY_TIMEOUT = 20_000;
 const MAX_WATCHERS = 5, MAX_SUGGESTIONS = 20, SUGGESTION_LENGTH = 2000, NAME_LENGTH = 60;
+const LEVELS = ['suggest', 'ask', 'auto'], MESSAGE_INPUT = 8000, MAX_WAITING_MESSAGES = 3, QUEUE_SHOWN = 20;
 const VIEW_MESSAGES = 60, MESSAGE_LENGTH = 20_000, VIEW_BYTES = 600_000, LABEL_LENGTH = 300;
 const ROOM = /^[a-f0-9]{64}$/;
 const fail = (message, status = 400) => { throw Object.assign(Error(message), { status }); };
@@ -31,6 +38,8 @@ const cleanName = (value, fallback) => typeof value === 'string' && value.trim()
 
 // ---- What a watcher may see. Built from an allowlist, so fields added to conversations later stay on the host.
 const CHAT = new Set(['user', 'assistant', 'error', 'system']);
+// Who wrote a teammate's message. The room stays on the host: each watcher only learns whether a message was theirs.
+const author = value => value && typeof value.name === 'string' ? { name: clip(value.name, NAME_LENGTH), room: typeof value.room === 'string' ? value.room : null } : null;
 function approvalLabel(item) {
   const command = item.command || item.input?.command, target = item.input?.file_path || item.input?.path;
   if (item.kind === 'question') return clip(item.questions?.[0]?.question || 'The agent asked a question.', LABEL_LENGTH);
@@ -45,6 +54,7 @@ export function watchView(view, limit = VIEW_MESSAGES) {
     createdAt: typeof message.createdAt === 'string' ? message.createdAt : null,
     text: typeof message.text === 'string' ? clip(message.text, MESSAGE_LENGTH) : '',
     attachments: Array.isArray(message.attachments) ? message.attachments.slice(0, 20).map(file => ({ name: clip(String(file?.name || 'file'), 120), kind: file?.kind === 'image' ? 'image' : 'file' })) : [],
+    ...(message.role === 'user' && author(message.author) ? { author: author(message.author) } : {}),
   }));
   // A long reply can't push the packet over the relay's limit: the oldest messages go first.
   let size = messages.reduce((total, message) => total + message.text.length * 2, 0), earlier = short.earlier || 0;
@@ -61,7 +71,17 @@ export function watchView(view, limit = VIEW_MESSAGES) {
     waiting: (view.pendingApprovals || []).slice(0, 5).map(item => ({ kind: item.kind === 'question' ? 'question' : 'approval', provider: typeof item.provider === 'string' ? item.provider : null, label: approvalLabel(item) })),
     earlier,
     messages,
+    // Teammates' messages waiting in the queue, with their place, so a watcher sees theirs wait its turn. The host's own
+    // queued prompts stay private: only how many there are. Only the start of each message; the queue holds at most 20.
+    upNext: (Array.isArray(short.queue) ? short.queue : []).slice(0, QUEUE_SHOWN).map((item, index) => author(item.author) ? { place: index + 1, text: clip(typeof item.text === 'string' ? item.text : '', LABEL_LENGTH), author: author(item.author) } : null).filter(Boolean),
+    queued: Array.isArray(short.queue) ? short.queue.length : 0,
+    paused: Boolean(short.queuePaused),
   };
+}
+// One watcher's copy of the view: authors keep their name, and "mine" replaces the room so nobody learns another's.
+const mark = (value, roomId) => value.author ? { ...value, author: { name: value.author.name, mine: value.author.room === roomId } } : value;
+export function roomView(view, roomId) {
+  return { ...view, messages: (view.messages || []).map(message => mark(message, roomId)), upNext: (view.upNext || []).map(item => mark(item, roomId)) };
 }
 
 // The invite as text: codeshi://watch/<room>.<secret>. A pasted link may carry spaces or angle brackets from a chat app.
@@ -72,7 +92,8 @@ export function parseWatchLink(text) {
 }
 const sixDigits = () => String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, '0');
 
-export function createWatchAlong({ config, storeFile, readConversation, workspaceName = () => 'Workspace', defaultName = 'Teammate', clientFactory, onChange = () => {}, now = Date.now } = {}) {
+// sendMessage(projectId, { text, author, billingConfirmed }) queues a teammate's message on the host's conversation.
+export function createWatchAlong({ config, storeFile, readConversation, sendMessage, workspaceName = () => 'Workspace', defaultName = 'Teammate', clientFactory, onChange = () => {}, now = Date.now } = {}) {
   let settings = null, setupError = null;
   if (config) { try { settings = firebaseConfig(config); } catch (error) { setupError = error.message; } }
   const readStore = () => { try { return storeFile ? JSON.parse(fs.readFileSync(storeFile, 'utf8')) : {}; } catch { return {}; } };
@@ -98,9 +119,9 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
   function persist() {
     if (!storeFile || closed) return;
     const active = [...rooms.values()].filter(room => room.state === 'active' && now() < room.expiresAt)
-      .map(({ id, secret, owner, peer, name, code, projectId, expiresAt, lastSeenAt }) => ({ id, secret, owner, peer, name, code, projectId, expiresAt, lastSeenAt: lastSeenAt || null }));
+      .map(({ id, secret, owner, peer, name, code, projectId, expiresAt, lastSeenAt, level }) => ({ id, secret, owner, peer, name, code, projectId, expiresAt, lastSeenAt: lastSeenAt || null, level: level || 'suggest' }));
     const watching = [...sessions.values()].filter(session => ['pending', 'active'].includes(session.state) && now() < session.expiresAt)
-      .map(({ id, secret, name, code, state, workspace, title, expiresAt }) => ({ id, secret, name, code, state, workspace, title, expiresAt }));
+      .map(({ id, secret, name, code, state, workspace, title, expiresAt, level }) => ({ id, secret, name, code, state, workspace, title, expiresAt, level: level || 'suggest' }));
     try { atomicJSON(storeFile, { ...(store.host ? { host: store.host } : {}), ...(store.viewer ? { viewer: store.viewer } : {}), ...(store.name ? { name: store.name } : {}), rooms: active, sessions: watching, suggestions }); }
     catch (error) { console.error('Codeshi could not save watch-along:', error.message); }
   }
@@ -146,17 +167,17 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
       changed();
     } else if (request.kind === 'session') {
       if (room.state === 'active') { room.looking = request.active !== false; room.lastSeenAt = now(); changed(); }
-      reply = { id: request.id, state: room.state, expiresAt: room.expiresAt };
+      reply = { id: request.id, state: room.state, expiresAt: room.expiresAt, ...(room.state === 'active' ? { level: room.level || 'suggest' } : {}) };
     } else if (room.state !== 'active') reply = { id: request.id, status: 401, error: 'Waiting for the host to allow you.' };
     else if (request.kind === 'leave') { await remove(room); return; }
     else if (request.kind === 'view') {
       room.lastSeenAt = now(); room.looking = true;
       try {
-        const view = readConversation(room.projectId);
+        const view = roomView(readConversation(room.projectId), room.id);
         room.conversationId = view.id;
         const base = token(16), encoded = encodeConversation({ ...view, delta: true }, 'watch', request.base, room.sent, base);
         room.sent = encoded.state;
-        reply = { id: request.id, status: 200, base, workspace: workspaceName(room.projectId), view: { ...encoded.body, delta: undefined } };
+        reply = { id: request.id, status: 200, base, workspace: workspaceName(room.projectId), level: room.level || 'suggest', view: { ...encoded.body, delta: undefined } };
       } catch (failure) { reply = { id: request.id, status: 503, error: failure.status ? failure.message : 'The host’s conversation couldn’t be read.' }; }
     } else if (request.kind === 'suggest') {
       const text = typeof request.text === 'string' ? request.text.trim() : '';
@@ -169,11 +190,47 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
         persist(); changed();
         reply = { id: request.id, status: 200, sent: true };
       }
-    } else reply = { id: request.id, status: 400, error: 'Unknown watch request.' };
+    } else if (request.kind === 'message') reply = { id: request.id, ...await message(room, request.text) };
+    else reply = { id: request.id, status: 400, error: 'Unknown watch request.' };
     if (!rooms.has(room.id)) return;
     entry.reply = reply;
     await publish(room, reply).catch(() => {});
   }
+  // A watcher's message, by the level the host chose for them. The host's choice is checked here, on the host, each time.
+  async function message(room, value) {
+    const text = typeof value === 'string' ? value.trim() : '', level = room.level || 'suggest';
+    if (level === 'suggest') return { status: 403, error: 'They haven’t let you send messages. Send a suggestion instead.', level };
+    if (!text) return { status: 400, error: 'Write a message first.' };
+    if (text.length > MESSAGE_INPUT) return { status: 413, error: `Keep a message under ${MESSAGE_INPUT.toLocaleString('en-US')} characters.` };
+    let queuedByThem = 0;
+    try { queuedByThem = (readConversation(room.projectId).upNext || []).filter(item => item.author?.room === room.id).length; } catch { /* Counted from what waits here. */ }
+    const waiting = suggestions.filter(item => item.roomId === room.id && item.kind === 'message').length;
+    if (waiting + queuedByThem >= MAX_WAITING_MESSAGES) return { status: 429, error: `You have ${MAX_WAITING_MESSAGES} messages waiting. Send more once one of them has run.` };
+    if (suggestions.filter(item => item.projectId === room.projectId).length >= MAX_SUGGESTIONS) return { status: 429, error: 'The host has too many messages waiting. Try again after they read them.' };
+    const item = { id: token(8), kind: 'message', projectId: room.projectId, roomId: room.id, from: room.name, text, at: new Date(now()).toISOString() };
+    if (level === 'auto') {
+      // Straight into the queue. Anything the host's queue refuses waits for the host instead, with the reason.
+      try { await sendMessage(room.projectId, { text, author: { name: room.name, room: room.id } }); changed(); return { status: 200, sent: true, queued: true }; }
+      catch (failure) { item.reason = clip(failure?.message || 'It couldn’t join the queue.', LABEL_LENGTH); }
+    }
+    suggestions.push(item); persist(); changed();
+    return { status: 200, sent: true, queued: false };
+  }
+  async function setLevel(room, level) {
+    if (!LEVELS.includes(level)) fail('Choose suggestions only, ask first or send straight to the queue.');
+    if (room.state !== 'active') fail('Allow them first.', 409);
+    if ((room.level || 'suggest') === level) return;
+    room.level = level; persist(); changed();
+    await publish(room, { event: 'level', level }).catch(() => {});
+  }
+  async function sendHeld(projectId, id, billingConfirmed) {
+    const item = suggestions.find(entry => entry.id === id && entry.projectId === projectId && entry.kind === 'message');
+    if (!item) fail('That message was already sent or dismissed.', 409);
+    // The host is sending it, so it runs even if they've since stopped sharing with this person.
+    await sendMessage(projectId, { text: item.text, author: { name: item.from, room: item.roomId }, billingConfirmed: billingConfirmed === true });
+    suggestions = suggestions.filter(entry => entry !== item); persist(); changed();
+  }
+
   // Removes leftovers from an earlier run that this computer no longer knows, such as an invite nobody used.
   let cleaned = false;
   async function cleanUp() {
@@ -202,8 +259,8 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
   }
   async function allow(room) {
     if (room.state !== 'pending') fail('This request was already answered.', 409);
-    room.state = 'active'; room.expiresAt = now() + SESSION; room.lastSeenAt = now(); room.looking = true;
-    try { await metadata(room); await publish(room, { state: 'active', expiresAt: room.expiresAt, workspace: workspaceName(room.projectId) }); }
+    room.state = 'active'; room.expiresAt = now() + SESSION; room.lastSeenAt = now(); room.looking = true; room.level = 'suggest';
+    try { await metadata(room); await publish(room, { state: 'active', expiresAt: room.expiresAt, workspace: workspaceName(room.projectId), level: room.level }); }
     catch (failure) { await remove(room); fail(failure.message || 'The relay couldn’t be reached.', 503); }
     clearTimeout(room.timer); room.timer = setTimeout(() => remove(room), SESSION); room.timer.unref?.();
     persist(); changed();
@@ -226,7 +283,7 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
   const sessions = new Map();
   function sessionView(session) {
     return { id: session.id, workspace: session.workspace || '', title: session.title || '', state: session.state, code: session.code, name: session.name, expiresAt: session.expiresAt || null,
-      error: session.error || null, view: session.looking ? session.view || null : null, updatedAt: session.updatedAt || null, looking: Boolean(session.looking) };
+      error: session.error || null, view: session.looking ? session.view || null : null, updatedAt: session.updatedAt || null, looking: Boolean(session.looking), level: session.level || 'suggest' };
   }
   function dropSession(session, state = 'ended') {
     session.state = state; session.stop?.(); session.stop = null; clearInterval(session.heartbeat); session.heartbeat = null;
@@ -250,6 +307,7 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
       let value; try { value = await open(session.key, session.id, 'out', box); } catch { return; }
       if (value.id && session.waiting.has(value.id)) { const waiter = session.waiting.get(value.id); session.waiting.delete(value.id); waiter.resolve(value); }
       if (session.state === 'joining') return;
+      if (LEVELS.includes(value.level) && value.level !== session.level && (session.state === 'active' || value.state === 'active')) { session.level = value.level; persist(); changed(); }
       if (value.state === 'active' && session.state === 'pending') {
         session.state = 'active'; session.expiresAt = value.expiresAt || now() + SESSION; session.workspace = value.workspace || session.workspace; session.error = null;
         persist(); changed(); if (session.looking) { beat(session); refresh(session); }
@@ -288,18 +346,20 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
       session.base = reply.base; session.texts = decoded.state;
       session.view = { ...decoded.body, delta: undefined }; session.title = session.view.title || session.title;
       session.workspace = reply.workspace || session.workspace; session.updatedAt = new Date(now()).toISOString(); session.error = null;
+      if (LEVELS.includes(reply.level)) session.level = reply.level;
     } catch (failure) { session.error = failure.message; }
     finally { session.refreshing = false; changed(); if (session.again) { session.again = false; refresh(session); } }
   }
   function beat(session) {
     clearInterval(session.heartbeat);
-    session.heartbeat = setInterval(() => { if (session.state === 'active') send(session, { kind: 'session', active: true }).catch(() => {}); }, HEARTBEAT);
+    const ping = () => send(session, { kind: 'session', active: true }).then(reply => { if (LEVELS.includes(reply.level) && reply.level !== session.level) { session.level = reply.level; persist(); changed(); } }).catch(() => {});
+    session.heartbeat = setInterval(() => { if (session.state === 'active') ping(); }, HEARTBEAT);
     session.heartbeat.unref?.();
-    send(session, { kind: 'session', active: true }).catch(() => {});
+    ping();
   }
   function newSession(entry) {
     return { id: entry.id, secret: entry.secret, name: entry.name, code: entry.code, state: entry.state, workspace: entry.workspace || '', title: entry.title || '', expiresAt: entry.expiresAt,
-      key: null, waiting: new Map(), queue: Promise.resolve(), looking: false, view: null, base: null, texts: null };
+      level: LEVELS.includes(entry.level) ? entry.level : 'suggest', key: null, waiting: new Map(), queue: Promise.resolve(), looking: false, view: null, base: null, texts: null };
   }
   async function join(link, name) {
     const parsed = parseWatchLink(link);
@@ -332,7 +392,7 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
     const valid = entry => entry && ROOM.test(entry.id || '') && ROOM.test(entry.secret || '') && Number.isFinite(entry.expiresAt) && entry.expiresAt > now();
     const saved = Array.isArray(store.rooms) ? store.rooms.filter(entry => valid(entry) && typeof entry.peer === 'string' && entry.peer && typeof entry.projectId === 'string') : [];
     const watching = Array.isArray(store.sessions) ? store.sessions.filter(entry => valid(entry) && ['pending', 'active'].includes(entry.state)) : [];
-    for (const entry of saved) rooms.set(entry.id, { ...entry, name: cleanName(entry.name, 'Teammate'), state: 'active', looking: false, seen: new Map(), requests: 0 });
+    for (const entry of saved) rooms.set(entry.id, { ...entry, name: cleanName(entry.name, 'Teammate'), level: LEVELS.includes(entry.level) ? entry.level : 'suggest', state: 'active', looking: false, seen: new Map(), requests: 0 });
     for (const entry of watching) sessions.set(entry.id, newSession({ ...entry, name: cleanName(entry.name, defaultName) }));
     if (!rooms.size && !sessions.size) return;
     (async () => {
@@ -352,8 +412,8 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
       host: projectId ? {
         invite: inviteRoom && inviteRoom.state === 'waiting' ? { link: inviteRoom.link, expiresAt: inviteRoom.expiresAt } : null,
         watchers: [...rooms.values()].filter(room => room.projectId === projectId && room.state !== 'waiting').map(room => ({
-          id: room.id, name: room.name, code: room.code, state: room.state, watchingNow: isActiveNow(room), lastSeenAt: room.lastSeenAt || null, expiresAt: room.expiresAt })),
-        suggestions: suggestions.filter(item => item.projectId === projectId).map(({ id, from, text, at }) => ({ id, from, text, at })),
+          id: room.id, name: room.name, code: room.code, state: room.state, level: room.level || 'suggest', watchingNow: isActiveNow(room), lastSeenAt: room.lastSeenAt || null, expiresAt: room.expiresAt })),
+        suggestions: suggestions.filter(item => item.projectId === projectId).map(({ id, kind, from, text, at, reason }) => ({ id, kind: kind === 'message' ? 'message' : 'suggestion', from, text, at, ...(reason ? { reason } : {}) })),
       } : null,
       watching: [...sessions.values()].filter(session => session.state !== 'joining').map(sessionView),
     };
@@ -366,6 +426,8 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
     else if (action === 'cancel-invite') { const id = invites.get(projectId); if (id && rooms.has(id)) await remove(rooms.get(id)); }
     else if (action === 'allow') await allow(roomFor(input.id, projectId));
     else if (action === 'deny' || action === 'stop') await remove(roomFor(input.id, projectId));
+    else if (action === 'level') await setLevel(roomFor(input.id, projectId), input.level);
+    else if (action === 'send') await sendHeld(projectId, input.id, input.billingConfirmed);
     else if (action === 'dismiss') { suggestions = suggestions.filter(item => !(item.id === input.id && item.projectId === projectId)); persist(); changed(); }
     else if (action === 'join') { const session = await join(input.link, input.name); return { ...status(projectId), joined: session.id }; }
     else if (action === 'look') {
@@ -384,6 +446,15 @@ export function createWatchAlong({ config, storeFile, readConversation, workspac
       if (!text) fail('Write a suggestion first.');
       if (text.length > SUGGESTION_LENGTH) fail(`Keep a suggestion under ${SUGGESTION_LENGTH} characters.`, 413);
       await send(session, { kind: 'suggest', text });
+    } else if (action === 'message') {
+      const session = sessionFor(input.id), text = typeof input.text === 'string' ? input.text.trim() : '';
+      if (session.state !== 'active') fail('The host hasn’t allowed you yet.', 409);
+      if (session.level === 'suggest') fail('They haven’t let you send messages. Send a suggestion instead.', 403);
+      if (!text) fail('Write a message first.');
+      if (text.length > MESSAGE_INPUT) fail(`Keep a message under ${MESSAGE_INPUT.toLocaleString('en-US')} characters.`, 413);
+      const reply = await send(session, { kind: 'message', text });
+      if (session.looking) refresh(session);
+      return { ...status(projectId), queued: reply.queued === true };
     } else if (action === 'leave') {
       const session = sessionFor(input.id);
       if (session.state === 'active' || session.state === 'pending') await send(session, { kind: 'leave' }).catch(() => {});

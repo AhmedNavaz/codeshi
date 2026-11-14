@@ -40,7 +40,11 @@
 .task-banner { display: flex; align-items: center; gap: 12px; flex: none; padding: 7px 16px; border-bottom: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.45; }
 .task-banner[hidden] { display: none; }
 .task-banner-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
-.task-banner-title { color: var(--text-strong); font-weight: 600; }
+.task-banner-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--text-strong); font-weight: 600; }
+.task-banner-kind { flex: none; padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: 10.5px; font-weight: 600; line-height: 17px; }
+.task-banner-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-banner-state { flex: none; color: var(--muted); font-weight: 400; }
+.task-banner-back::before { content: "← "; }
 .task-banner-detail { color: var(--muted); overflow-wrap: anywhere; }
 .task-banner-actions { display: flex; align-items: center; gap: 10px; flex: none; }
 .task-banner-actions .primary-button, .task-banner-actions .secondary-button { height: 26px; padding: 0 10px; font-size: 12px; }

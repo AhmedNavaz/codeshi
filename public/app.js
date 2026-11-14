@@ -1131,7 +1131,9 @@
       row.dataset.messageId = message.id;
     }
     if (message.runId) row.dataset.runId = message.runId;
-    row.setAttribute("aria-label", user ? (message.steer ? "Your note, added while the agent worked" : "Your message") : `${label(provider)} response`);
+    const teammate = user && typeof message.author?.name === "string" ? message.author.name : "";
+    row.setAttribute("aria-label", user ? (message.steer ? "Your note, added while the agent worked" : teammate ? `${teammate}’s message, sent through Share live` : "Your message") : `${label(provider)} response`);
+    if (teammate) row.classList.add("message-teammate");
     // A reply opens with one line naming the agent. Time and copy sit in a row beneath every message and appear on hover.
     const heading = element("div", "message-heading");
     if (!user) {
@@ -1147,6 +1149,8 @@
     if (message.createdAt) time.dateTime = message.createdAt;
     actions.append(time);
     if (user && message.steer) heading.append(element("span", "message-steer-label", "Added while working"));
+    // A teammate's message from Share live (#24) says whose it is; it ran on your account.
+    if (teammate) { const from = element("span", "message-teammate-label", `From ${teammate}`); from.title = "Sent by a teammate through Share live. It ran on your computer and account."; heading.append(from); }
     // Each message opens with a heading, so a screen reader can move from message to message (#26).
     heading.setAttribute("role", "heading"); heading.setAttribute("aria-level", "3");
     if (user && message.runId && !message.steer) {
@@ -1704,7 +1708,7 @@
       const model = item.model ? window.relayModelPicker?.modelName?.(item.provider, item.model) || item.model : "";
       const effort = item.effort ? `${item.effort} effort` : "";
       const reason = item.routing?.reason ? ` · ${item.routing.reason}` : "";
-      const meta = `${label(item.provider)}${model ? ` · ${model}` : ""}${effort ? ` · ${effort}` : ""}${reason} · ${item.mode === "read" ? "Read only" : "Can edit files"} · ${item.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}${item.attachments?.length ? ` · ${item.attachments.length} attachment${item.attachments.length === 1 ? "" : "s"}` : ""}${item.movedFrom ? ` · Moved from ${label(item.movedFrom)}` : ""}`;
+      const meta = `${typeof item.author?.name === "string" ? `From ${item.author.name} · ` : ""}${label(item.provider)}${model ? ` · ${model}` : ""}${effort ? ` · ${effort}` : ""}${reason} · ${item.mode === "read" ? "Read only" : "Can edit files"} · ${item.approvalPolicy === "auto" ? "full auto-approval" : "asks before changes"}${item.attachments?.length ? ` · ${item.attachments.length} attachment${item.attachments.length === 1 ? "" : "s"}` : ""}${item.movedFrom ? ` · Moved from ${label(item.movedFrom)}` : ""}`;
       if (state.queueEditing === item.id) {
         const editor = element("textarea", "prompt-queue-editor"); editor.value = item.text; editor.rows = 3; editor.setAttribute("aria-label", "Edit queued message");
         const controls = element("div", "prompt-queue-edit-controls");

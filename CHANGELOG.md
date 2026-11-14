@@ -4,6 +4,20 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Added
+- **Mark design notes with the keyboard** ([#125](https://github.com/AhmedNavaz/codeshi/issues/125)). While Design notes is marking, the arrow keys move an outline through the page: up and down to the neighbouring parts, left to the part around it and right into it. Enter or Space marks the outlined part. The panel names what's outlined, so a screen reader can read it out, and the page never sees the keys marking uses. Esc stops marking and puts the keyboard in the first note that's still empty.
+
+- **Let a teammate send messages to your agent** ([#24](https://github.com/AhmedNavaz/codeshi/issues/24)). In **Share live**, each allowed teammate has a choice of what they can send: **Suggestions only**, as before and still the default, **Messages, you send each**, or **Messages, straight to your queue**. With the first, their message waits above your message box with their name, and **Send** puts it in your queue, **Edit** puts it in your message box and **Dismiss** drops it. With the second, it joins your queue at once. Either way it runs on your computer and account, with the conversation's current agent and model, and always with Ask for permission, so you approve every command and change it makes. Flow doesn't route it. Your message, the queue row and the watcher's window all show who wrote it. A message sent straight to the queue never confirms API billing for you, and one the queue refuses waits for you instead, with the reason. A teammate can have 3 messages waiting at a time. The watcher sees their own messages waiting in your queue, but not your queued prompts, and you can change the choice or **Stop sharing** at any time.
+
+### Changed
+- **Unsent design notes outlive their preview window** ([#125](https://github.com/AhmedNavaz/codeshi/issues/125)). Closing a preview window, or **Stop review** closing it for you, keeps the parts you marked and the notes you wrote. The next window on the same workspace's interface brings them back with their numbered boxes, with marking off. They're kept until they go into a message or you choose **Clear**, for as long as Codeshi is open. Quitting Codeshi still drops them.
+
+- **An open card that's working shows its agent in one box** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). The separate **Working** bar is gone while the card runs or needs you. One box has the agent, model and effort on its first line, then what it's doing on the left and the time and tokens it has used on the right. A detail such as *Pauses after it.* shows as its own line when there is one.
+- **The task list in Flow shows where you are** ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)). Each chat is one row with its icon, title and a single line of where it runs and what it's doing. Select anywhere on a row to open it. The chat you're in has a vermilion bar, a raised background and **You're here**. A chat that needs you has an amber bar and badge, and a working one only a dot in its status line. The orange glow on **What's next** and on the working agent's card under **What's left on your plans** is gone. A task's own bar above its messages now names the task, with a **Task** tag, its folder and status, and **← Workspace chat** to go back.
+
+### Fixed
+- **A running card on the Plan no longer overflows its column** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). Its title, progress bar and status line now fit the card, and a long one is cut off with an ellipsis.
+
 ## [0.52.0] - 2026-11-14
 
 ### Added

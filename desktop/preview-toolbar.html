@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-KtToxN1iGgkldFaLUvyiBGAEETYiP6uxfxziDFlsi4c='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-JP/7lNfzlm6Ztx1LmVMLAx4BJeksJSeTJeyDD0AgvcE='">
 <title>Preview toolbar</title>
 <style>
   /* Codeshi's Paper and Ink colours, as in public/editor-theme.css. */
@@ -134,7 +134,7 @@
       </div>
       <div class="drawer-tools design-tools">
         <button id="design-mark" class="pill-btn" type="button" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/></svg><span id="design-mark-label">Mark sections</span></button>
-        <span id="design-hint">Click a part of the page, or drag a box around an area.</span>
+        <span id="design-hint" role="status" aria-live="polite">Click a part of the page, or drag a box around an area.</span>
       </div>
       <div class="drawer-body">
         <p id="design-empty">Mark each section you want changed, then write what it should do or look like. Everything goes into your message as one, with a screenshot numbered to match.</p>
@@ -283,8 +283,11 @@
 
   // Design notes (#125). The app keeps the sections; the notes stay here, as typed, until they go into the message.
   // Rows are kept and updated in place, so a note being typed keeps its focus when another section is marked.
-  let design = { open: false, marking: false, busy: false, sections: [], limit: 12 };
+  let design = { open: false, marking: false, busy: false, sections: [], limit: 12 }, cursor = '';
   const notes = new Map(), rows = new Map();
+  // The app keeps a copy of what's typed, so notes not yet in a message outlive this window.
+  const keepNotes = () => bridge.act('design-notes', { notes: Object.fromEntries(notes), overall: $('design-overall').value });
+  const MARK_HINT = 'Click a part of the page, or drag a box around an area. Or use the arrow keys, then Enter.';
   function designRow(section) {
     const row = document.createElement('div'); row.className = 'design-row'; row.setAttribute('role', 'listitem');
     const badge = document.createElement('span'); badge.className = 'design-badge'; badge.setAttribute('aria-hidden', 'true');
@@ -292,10 +295,10 @@
     const remove = document.createElement('button'); remove.className = 'icon design-remove'; remove.type = 'button';
     remove.append(document.createElementNS('http://www.w3.org/2000/svg', 'svg')); remove.firstChild.setAttribute('viewBox', '0 0 24 24');
     const cross = document.createElementNS('http://www.w3.org/2000/svg', 'path'); cross.setAttribute('d', 'M18 6L6 18M6 6l12 12'); remove.firstChild.append(cross);
-    remove.addEventListener('click', () => { notes.delete(section.id); bridge.act('design-remove', section.id); });
+    remove.addEventListener('click', () => { notes.delete(section.id); keepNotes(); bridge.act('design-remove', section.id); });
     const meta = document.createElement('div'); meta.className = 'design-meta';
     const note = document.createElement('textarea'); note.placeholder = 'What should change here?'; note.spellcheck = true; note.value = notes.get(section.id) || '';
-    note.addEventListener('input', () => notes.set(section.id, note.value));
+    note.addEventListener('input', () => { notes.set(section.id, note.value); keepNotes(); });
     row.append(badge, name, remove, meta, note);
     row.parts = { badge, name, remove, meta, note };
     return row;
@@ -321,7 +324,9 @@
     $('design-mark').setAttribute('aria-pressed', String(design.marking));
     $('design-mark').disabled = full && !design.marking;
     $('design-mark-label').textContent = design.marking ? 'Marking · Esc stops' : 'Mark sections';
-    $('design-hint').textContent = full ? 'That’s ' + design.limit + ' sections, the most one message holds. Add them to your message first.' : design.marking ? 'Click a part of the page, or drag a box around an area.' : 'Marking is off, so the page works as usual.';
+    if (!design.marking) cursor = '';
+    const hint = full ? 'That’s ' + design.limit + ' sections, the most one message holds. Add them to your message first.' : design.marking ? (cursor ? 'Outlined: ' + cursor + '. Enter marks it.' : MARK_HINT) : 'Marking is off, so the page works as usual.';
+    if ($('design-hint').textContent !== hint) $('design-hint').textContent = hint;
     $('design-clear').disabled = !count || design.busy;
     $('design-send').disabled = !count || design.busy;
     $('design-send').textContent = design.busy ? 'Adding…' : 'Add to message';
@@ -430,6 +435,24 @@
     // A section marked by the page opens Design notes if it was closed some other way.
     if (value.open && activeDrawer !== 'design') { activeDrawer = 'design'; lastDrawer = 'design'; $('drawer').hidden = false; for (const id of ['stack', 'apis']) $(id + '-panel').hidden = true; $('design-panel').hidden = false; $('design-btn').setAttribute('aria-pressed', 'true'); bridge.act('show-inspector'); }
   });
+  // The keyboard's outline is said in the hint, which a screen reader reads out.
+  bridge.onDesignCursor?.(value => { cursor = String(value?.name || ''); renderDesign(); });
+  // Escape on the page ends marking and brings the keyboard here: to the first note still empty, or the last one.
+  bridge.onDesignWrite?.(() => {
+    const fields = design.sections.map(section => rows.get(section.id)?.parts.note).filter(Boolean);
+    (fields.find(field => !field.value.trim()) || fields.at(-1))?.focus();
+  });
+  // Notes not yet in a message, from this interface's last window: they come back with their sections, and the panel
+  // opens with marking off, so the page works as usual until the person marks more.
+  bridge.onDesignRestore?.(value => {
+    for (const [id, text] of Object.entries(value?.notes || {})) if (typeof text === 'string') notes.set(id, text);
+    $('design-overall').value = typeof value?.overall === 'string' ? value.overall : '';
+    for (const [id, row] of rows) row.parts.note.value = notes.get(id) || '';
+    if (activeDrawer !== 'design') { activeDrawer = 'design'; lastDrawer = 'design'; $('drawer').hidden = false; for (const id of ['stack', 'apis']) $(id + '-panel').hidden = true; $('design-panel').hidden = false; $('design-btn').setAttribute('aria-pressed', 'true'); bridge.act('show-inspector'); }
+    bridge.act('design', { open: true, marking: false });
+    const count = Number(value?.count) || 0;
+    status('', count ? 'Your unsent design notes are back: ' + (count === 1 ? '1 section' : count + ' sections') : 'Your unsent design note is back');
+  });
   bridge.onDesignAdded?.(value => { $('design-overall').value = ''; status('picked', (value?.count === 1 ? '1 section' : (value?.count || 0) + ' sections') + ' added to your message', true); });
   bridge.onError(message => status('error', message));
 
@@ -468,7 +491,8 @@
   $('design-btn')?.addEventListener?.('click', () => setDrawer('design'));
   $('design-close')?.addEventListener?.('click', () => setDrawer(null));
   $('design-mark')?.addEventListener?.('click', () => bridge.act('design', { open: true, marking: !design.marking }));
-  $('design-clear')?.addEventListener?.('click', () => { notes.clear(); bridge.act('design-clear'); });
+  $('design-clear')?.addEventListener?.('click', () => { notes.clear(); $('design-overall').value = ''; bridge.act('design-clear'); });
+  $('design-overall')?.addEventListener?.('input', keepNotes);
   $('design-send')?.addEventListener?.('click', sendDesign);
   $('design-panel')?.addEventListener?.('keydown', event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); sendDesign(); } });
   bridge.onToggleInspector?.(() => setDrawer(activeDrawer ? null : lastDrawer));

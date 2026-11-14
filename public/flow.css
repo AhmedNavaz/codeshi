@@ -273,72 +273,43 @@
   font-size: 11.5px;
   color: var(--link);
 }
-.flow-tasks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.flow-task {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
-  transition: border-color .15s, background .15s;
-  min-width: 0;
-}
-.flow-task:hover { border-color: var(--border-strong); background: var(--surface-raised); }
-.flow-task.flow-task-running {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised));
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-.flow-task-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-.flow-task-title {
-  color: var(--text-strong);
-  font-weight: 600;
-  font-size: 13px;
-  line-height: 1.4;
-  word-break: break-word;
-  min-width: 0;
-}
-.flow-task-button { align-self: flex-start; text-align: left; font-weight: 600; }
+.flow-tasks { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+/* Each conversation is one row. Where you are has the accent bar and "You’re here"; one that needs you has the amber
+   bar and badge; one that's working only has the dot in its status line. No row glows. */
+.flow-task { position: relative; display: grid; gap: 4px; min-width: 0; border-radius: 8px; }
+.flow-task::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 2px; background: transparent; }
+.flow-task.flow-task-needs::before { background: var(--warning); }
+.flow-task.flow-task-selected::before { background: var(--accent); }
+.flow-task.flow-task-selected { background: var(--surface-raised); }
+.flow-task-row { display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0; padding: 7px 10px 7px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; text-align: left; }
+button.flow-task-row { cursor: pointer; }
+button.flow-task-row:hover { background: var(--hover); }
+button.flow-task-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.flow-task-mark { flex: none; width: 14px; height: 14px; color: var(--muted); }
+.flow-task-mark.main { background: currentColor; -webkit-mask: var(--icon-agent) center / contain no-repeat; mask: var(--icon-agent) center / contain no-repeat; }
+.flow-task-selected .flow-task-mark.main { color: var(--text-strong); }
+.flow-task-text { display: grid; gap: 1px; flex: 1 1 auto; min-width: 0; }
+.flow-task-side { display: flex; align-items: center; gap: 6px; flex: none; }
+.flow-task-here { color: var(--accent); font-size: var(--font-ui-xs); font-weight: 600; white-space: nowrap; }
+.flow-task-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.flow-task-title { min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 12.5px; font-weight: 600; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.flow-task:not(.flow-task-selected) .flow-task-title { font-weight: 500; color: var(--text); }
 .flow-task-action { align-self: flex-start; padding: 4px 10px; font-size: 12px; }
-.flow-task.flow-task-selected {
-  border-color: var(--border-strong);
-  background: var(--surface-raised);
-}
-.flow-task-badge {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: 9px;
-  background: var(--warning);
-  color: var(--bg);
-  font-size: var(--font-ui-xs);
-  font-weight: 700;
-  line-height: 16px;
-}
-.flow-task-pill {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: 9px;
-  background: var(--chip-bg);
-  color: var(--link);
-  font-size: var(--font-ui-xs);
-  font-weight: 600;
-  line-height: 16px;
-}
-.flow-task-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; color: var(--faint); font-size: 11.5px; }
-.flow-task-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
-.flow-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
-.flow-task-viewing { color: var(--text-strong); font-size: 11.5px; font-weight: 600; }
+.flow-task-badge { flex: none; padding: 1px 7px; border-radius: 9px; background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); font-size: var(--font-ui-xs); font-weight: 600; line-height: 16px; white-space: nowrap; }
+.flow-task-pill { flex: none; padding: 1px 7px; border-radius: 9px; background: var(--chip-bg); color: var(--link); font-size: var(--font-ui-xs); font-weight: 600; line-height: 16px; }
+.flow-task-meta { display: flex; align-items: center; gap: 0; min-width: 0; overflow: hidden; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+.flow-task-meta > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.flow-task-meta > .flow-task-folder { flex: 0 1 auto; }
+.flow-task-meta > .flow-task-status { flex: 0 1 auto; }
+.flow-task-note { margin: 0; padding: 0 10px 0 35px; color: var(--muted); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.flow-task-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 0 10px 7px 35px; }
+/* A task being drafted keeps the older stacked layout. */
+.flow-task > .flow-task-head, .flow-task > .flow-task-meta { padding: 0 12px; }
+.flow-task > .flow-task-head { padding-top: 8px; }
+.flow-task > .flow-task-actions:first-child { padding-top: 7px; }
 .flow-task-folders { display: grid; gap: 6px; padding-top: 4px; }
 .flow-card-foot .flow-task-new::after { content: none; }
-.flow-task-status-running { display: inline-flex; align-items: center; gap: 5px; color: var(--link); font-weight: 500; }
+.flow-task-status-running { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
 .flow-pulse-dot {
   display: inline-block;
   width: 6px;
@@ -393,12 +364,8 @@
   border-color: var(--border-strong);
   outline: none;
 }
-.flow-plan.flow-plan-active {
-  padding: 10px 12px;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised));
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent);
-}
+/* The agent in use only gets its "Working" badge: the card itself stays plain, so it doesn't look like a task or an alert. */
+.flow-plan.flow-plan-active { padding: 10px 12px; }
 .flow-plan-head { display: flex; align-items: center; gap: 7px; }
 .flow-plan-head strong { flex: 1; min-width: 0; color: var(--text-strong); font-weight: 600; }
 .flow-plan-head .agent-icon { width: 13px; height: 13px; }
@@ -409,11 +376,8 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 1px 7px;
-  border-radius: 9px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--link);
+  padding: 1px 0;
+  color: var(--muted);
   font-size: var(--font-ui-xs);
   font-weight: 600;
   letter-spacing: .02em;
@@ -445,10 +409,9 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised));
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
   margin-bottom: 8px;
   min-width: 0;
   max-width: 100%;
