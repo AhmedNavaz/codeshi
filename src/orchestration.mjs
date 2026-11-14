@@ -27,7 +27,7 @@ export const planningMethod = [
   '- One outcome per card, with what done means, small enough to review in one sitting.',
   '- Explicit dependencies, no hidden order. A card lists every earlier card it needs and nothing else, so cards that don\'t depend on each other can run at the same time.',
   '- What the requirements ask for, and nothing more. Data migrations come with a way back. Security, accessibility and performance get their own cards only when the requirements or the project call for them. Tests are part of each card; a plan of more than 3 cards ends with a qa card that checks the whole result.',
-  '- Questions, not guesses. Where the requirements are unclear, don\'t invent an answer: ask it in questions.',
+  '- Ask first, not after. Where the requirements leave open something only the person can decide and the answer would change the cards, don\'t guess: ask it in questions before drafting. Settle smaller choices yourself with the option you\'d recommend, and say which in the summary.',
 ].join('\n');
 // Documents (#155, with thanks to @seeebbii): the text files attached to an Orchestrate message, such as a brief, a spec
 // or a Word document, are the requirements to plan from. They follow the request, as any attachment does. A plan from
@@ -57,7 +57,7 @@ export function planningRequest(goal, { documents = [], revising = false } = {})
       '',
     ] : []),
     ...(revising ? [revisionMethod, ''] : []),
-    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions for the person, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of cards, in order). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.',
+    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions you need the person to answer before you can draft, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of cards, in order). When questions has any, return steps [] (and no remove) and say in summary what you’ll draft once they answer: you draft after their answers, so no cards are drafted and thrown away. Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.',
     ...(revising ? ['When changing the attached Plan, a step may also have card (the Id of the card it changes; then only the fields that change are needed) and merges (Ids of cards folded into it), dependsOn may include Ids, and the object may have remove (Ids of cards to remove). steps may be empty when the request only removes cards.'] : []),
     '',
     'Request:',
@@ -65,9 +65,9 @@ export function planningRequest(goal, { documents = [], revising = false } = {})
   ].join('\n');
 }
 
-// The plan the card shows, while it is open: being made, a draft, or one that never became a plan and waits to be planned
-// again or put away.
-export const OPEN_PLANS = ['planning', 'draft', 'unstructured', 'failed', 'interrupted'];
+// The plan the card shows, while it is open: being made, a draft, questions the planner asks before it drafts, or one that
+// never became a plan and waits to be planned again or put away.
+export const OPEN_PLANS = ['planning', 'draft', 'questions', 'unstructured', 'failed', 'interrupted'];
 // The plan queued messages wait for (see PromptQueue.tick): one being made, or a plan in the chat waiting for you to run
 // it. A plan that never became one has nothing to wait for, and a drafted plan moved onto the Plan (#162) is reviewed
 // there in its own time, so neither holds the queue: the chat carries on with what you queued.
@@ -448,6 +448,11 @@ export function parsePlan(reply) {
     // A plan can also change the cards already on the Plan (#162): a step with card changes one, and remove takes cards
     // away. One that only removes cards has no steps.
     const remove = plan && typeof plan === 'object' ? refList(plan.remove, 'cards to remove') : [];
+    // Questions before any cards (#162): the planner asks what would change the cards, and drafts once you answer.
+    if (summary && Array.isArray(plan.steps) && !plan.steps.length && !remove.length) {
+      const asked = planQuestions(plan.questions);
+      if (asked.length) return { status: 'questions', summary, steps: [], questions: asked };
+    }
     if (!summary || !Array.isArray(plan.steps) || !(plan.steps.length || remove.length)) throw Error();
     // Questions the planner couldn't answer from the request (#162): kept for you, never answered for you.
     const questions = planQuestions(plan.questions);
@@ -472,6 +477,8 @@ export function draftReplyNote(c, message) {
   // A plan older than the ten the conversation keeps is read from the reply itself.
   if (!plan) { const read = parsePlan(message.text); if (read.status === 'draft') ({ summary } = read, count = read.steps.length); }
   const said = summary ? ` ${summary.replace(/\s+/g, ' ').trim()}` : '';
+  const asked = plan?.status === 'questions' || (plan?.status === 'superseded' && !count && plan?.questions?.length) ? plan.questions : null;
+  if (asked?.length) return `[Draft cards reply that asked the person ${asked.length} ${asked.length === 1 ? 'question' : 'questions'} before drafting, shown here as a note: ${asked.map(questionText).join(' ')}]${said}`;
   return count
     ? `[Draft cards reply, shown here as a note. Codeshi’s Draft cards mode asked for JSON, which became ${count} draft ${count === 1 ? 'card' : 'cards'} on the Plan. Other replies are plain prose.]${said}`
     : `[Draft cards reply that didn’t become cards, shown here as a note.]${said}`;

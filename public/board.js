@@ -88,6 +88,8 @@
   // subEdit: a subtask being written or edited in a card's drawer, kept when the drawer is drawn again.
   // draftNotice: inline undo banner for the last draft accept/discard; suggestConfirm: card ID confirming Suggest next.
   let subEdit = null, draftNotice = null, suggestConfirm = null;
+  // The answers you last sent to a planner's questions, shown while it drafts with them (#162).
+  let sent = null;
   const cards = () => board?.cards || [];
   const shown = card => !filter || (card.labels || []).some(name => name.toLowerCase() === filter);
   // Every label on the board, in the case first used, with how many cards have it.
@@ -776,6 +778,15 @@
       const drafted = (last.added || 0) + (last.changed || 0) + (last.removed || 0), result = card.result || {};
       newer = Boolean(last.basis && ((result.reportRun && last.basis.report && result.reportRun !== last.basis.report) || (result.followUps || 0) > (last.basis.followUps || 0)));
       box.classList.add('done');
+      // It asked before drafting, and the questions wait on the Plan: nothing was drafted yet.
+      const asking = mine?.id === last.id && mine.status === 'complete' && !drafted && mine.questions?.length ? mine.questions.length : 0;
+      if (asking) {
+        lead.append(node('span', '', `It asked ${plural(asking, 'question')} before drafting`));
+        const who = last.provider ? [AGENT[last.provider] || last.provider, modelLabel(last.provider, last.model)].filter(Boolean).join(' · ') : '';
+        text.append(lead, node('p', 'board-update-meta', [who, when(last.at)].filter(Boolean).join(' · ')), node('p', 'board-update-note', 'Answer them on the Plan, and it drafts the update with your answers.'));
+        actions$.append(button('Answer on the Plan', () => closeDrawer(), 'primary-button'));
+        return box;
+      }
       const title = waiting ? `Drafted ${plural(waiting, 'change')} to the Plan`
         : !drafted ? 'The Plan needed no changes'
         : last.accepted && last.discarded ? `Plan updated: ${last.accepted} accepted, ${last.discarded} discarded`
@@ -787,7 +798,6 @@
       const who = last.provider ? [AGENT[last.provider] || last.provider, modelLabel(last.provider, last.model)].filter(Boolean).join(' · ') : '';
       text.append(lead, node('p', 'board-update-meta', [counts ? `Drafted ${counts}` : '', who, when(last.settledAt || last.at), card.updates.length > 1 ? `update ${card.updates.length} from this card` : ''].filter(Boolean).join(' · ')));
       if (last.summary) text.append(node('p', 'board-update-note', last.summary));
-      if (mine?.id === last.id && mine.questions?.length && !drafted) { const list = node('ol', 'board-update-questions'); list.setAttribute('aria-label', 'Left for you to decide'); list.append(...mine.questions.map(item => { const row = node('li'); row.append(...inline(questionOf(item).question)); return row; })); text.append(list); }
       if (waiting) text.append(node('p', 'board-update-note', 'They wait on the Plan for you to accept or discard.'));
       else if (newer) text.append(node('p', 'board-update-ask', 'It has said more since this update. Update again to bring that into the Plan.'));
       if (waiting) { actions$.append(button('Show on the Plan', () => closeDrawer(), 'primary-button')); return box; }
@@ -815,7 +825,7 @@
     const open = suggestConfirm === updateKey(card);
     if (!last) {
       lead.append(node('span', '', 'Does what it found change the Plan?'));
-      text.append(lead, node('p', 'board-update-note', 'An agent reads this result and the Plan, then drafts the changes it calls for: new cards, changes to cards that haven’t started, and cards to remove. Questions it can’t settle come back to you. Nothing changes until you accept.'));
+      text.append(lead, node('p', 'board-update-note', 'An agent reads this result and the Plan, then drafts the changes it calls for: new cards, changes to cards that haven’t started, and cards to remove. If it needs you to decide something first, it asks before drafting. Nothing changes until you accept.'));
     }
     const findings = card.artifact === 'findings' || ['reviewer', 'qa'].includes(card.role) || card.result?.files === 0;
     const start = button(last ? 'Update again' : 'Update the Plan', () => { suggestConfirm = open ? null : updateKey(card); drawn = null; renderDrawer(); }, (last ? newer : findings) && !open ? 'primary-button' : 'secondary-button');
@@ -828,7 +838,7 @@
     confirm.append(node('p', 'board-suggest-lead', pick.error ? pick.error : `Update the Plan with ${pick.who}.`));
     confirm.append(node('p', 'board-suggest-note', pick.error ? 'Choose an agent or connect one in the message box first.' : `One read-only run. Counts toward your usage.${pick.usageNote ? ` ${pick.usageNote}` : ''}`));
     // Its questions are answered in its own task; the update reads the answer that follows.
-    if (questions) confirm.append(node('p', 'board-update-ask', 'It asked you something above. Answer first so the update uses your answers, or update now and what it left open comes back to you as questions on the draft.'));
+    if (questions) confirm.append(node('p', 'board-update-ask', 'It asked you something above. Answer first so the update uses your answers, or update now and anything it needs from you is asked before it drafts.'));
     const row = node('div', 'board-suggest-actions');
     const cancel = button('Cancel', () => { suggestConfirm = null; drawn = null; renderDrawer(); }, 'secondary-button');
     const go = button('Update the Plan', () => {
@@ -1650,6 +1660,8 @@
   // A draft that ended without cards: its reply couldn't be used, the planner didn't finish, or it was stopped. It shows
   // here, where the cards would have been, until you draft again or dismiss it.
   const failedPlan = () => { const plan = api.getState().conversation?.orchestrations?.[0]; return ['unstructured', 'failed', 'interrupted'].includes(plan?.status) && chatHere() ? plan : null; };
+  // Questions the planner asked before drafting anything (#162): answered here, then it drafts with the answers.
+  const questionsPlan = () => { const plan = api.getState().conversation?.orchestrations?.[0]; return plan?.status === 'questions' && plan.questions?.length && chatHere() ? plan : null; };
   const cannotDraft = () => planningPlan() ? 'An agent is drafting cards now. Wait for it, or stop it, before drafting more.' : window.relayOrchestration?.cannotDraft?.() || '';
   // What the next message takes from the Plan: the Plan's open cards and the card open beside it.
   function asked$() {
@@ -1846,10 +1858,13 @@
     const batches = new Map();
     for (const card of cards().filter(item => item.draft)) { const id = card.draft.batch?.id || 'own'; if (!batches.has(id)) batches.set(id, []); batches.get(id).push(card); }
     const planning = planningPlan(), suggest = board?.suggest, suggestShown = suggest && (['running', 'failed', 'interrupted'].includes(suggest.status) || (suggest.kind === 'update' && suggest.status === 'complete' && !suggest.cards?.length)) ? suggest : null;
-    const failed = failedPlan();
+    const failed = failedPlan(), asking = questionsPlan();
+    // An update that asked before drafting shows its questions here, to answer.
+    const updateAsks = suggest?.kind === 'update' && suggest.status === 'complete' && !suggest.cards?.length && suggest.questions?.length ? suggest : null;
+    if (sent && !draftingNow() && Date.now() - sent.at > 4000) sent = null;
     const splits = needingSplit().map(card => card.id);
-    const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, failed ? [failed.id, failed.status, failed.summary] : null, suggestShown, draftNotice?.text || null, splits, splitAsk ? [splitAsk.ids, splitAsk.who] : null, cannotDraft()]));
-    box.hidden = !batches.size && !planning && !failed && !suggestShown && !draftNotice && !splits.length;
+    const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, failed ? [failed.id, failed.status, failed.summary] : null, suggestShown, asking ? [asking.id, asking.questions] : null, sent ? [sent.id, draftingNow()] : null, draftNotice?.text || null, splits, splitAsk ? [splitAsk.ids, splitAsk.who] : null, cannotDraft()]));
+    box.hidden = !batches.size && !planning && !failed && !suggestShown && !asking && !draftNotice && !splits.length;
     if (box.dataset.drawn === key) return;
     box.dataset.drawn = key;
     // While the planner or Suggest next works, a line says so, with Stop; failed/interrupted offers Dismiss.
@@ -1857,7 +1872,9 @@
     if (planning) {
       const row = node('section', 'board-draft-batch board-draft-planning'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
       row.setAttribute('aria-label', 'Drafting cards');
-      text.append(node('p', 'board-draft-lead', `Drafting cards${planning.documents?.length ? ` from ${listNames(planning.documents)}` : ''}…`), node('p', 'board-draft-note', 'They’ll appear here to accept or discard. The planner’s progress shows in the Plan chat.'));
+      const withAnswers = sent && sent.kind !== 'update';
+      text.append(node('p', 'board-draft-lead', `Drafting cards${planning.documents?.length ? ` from ${listNames(planning.documents)}` : ''}${withAnswers ? ' with your answers' : ''}…`), node('p', 'board-draft-note', 'They’ll appear here to accept or discard. The planner’s progress shows in the Plan chat.'));
+      if (withAnswers) text.append(sentList(sent));
       const stop = button('Stop', () => api.stopRun?.(), 'secondary-button'); stop.setAttribute('aria-label', 'Stop drafting cards');
       actions$.append(stop); row.append(text, actions$); working.push(row);
     }
@@ -1879,13 +1896,28 @@
       row.setAttribute('aria-label', isRun ? 'Suggesting next cards' : 'Suggestions did not finish');
       const who = [AGENT[suggestShown.provider] || suggestShown.provider, suggestShown.model, suggestShown.phase && suggestShown.phase !== 'starting' ? suggestShown.phase : 'reading the project', suggestShown.toolCount ? plural(suggestShown.toolCount, 'tool call') : ''].filter(Boolean).join(' · ');
       const splitting = suggestShown.kind === 'split', updating = suggestShown.kind === 'update';
-      if (updating && suggestShown.status === 'complete') {
+      if (updating && suggestShown.status === 'complete' && updateAsks) {
+        row.className = 'board-draft-batch board-draft-plan board-draft-asking'; row.setAttribute('aria-label', 'Questions before updating the Plan');
+        const lead = node('p', 'board-draft-lead'), who = AGENT[suggestShown.provider] || 'The agent';
+        lead.append(glyph(ICONS.smart), node('span', '', `${who} has ${plural(suggestShown.questions.length, 'question')} before it updates the Plan from “${suggestShown.cardTitle}”`));
+        if (suggestShown.model) lead.append(node('span', 'board-draft-by', modelLabel(suggestShown.provider, suggestShown.model)));
+        text.append(lead);
+        if (suggestShown.summary) text.append(node('p', 'board-draft-summary', suggestShown.summary));
+        text.append(node('p', 'board-draft-note', 'No changes drafted yet. It drafts once you answer, so nothing is drafted twice.'));
+        const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); dismiss.disabled = busy;
+        actions$.append(dismiss);
+        const head = node('div', 'board-draft-head'); head.append(text, actions$); row.append(head);
+        row.append(questionsPanel({ id: suggestShown.id, kind: 'update-ask', cardId: suggestShown.cardId, cardTitle: suggestShown.cardTitle, questions: suggestShown.questions }, who));
+        working.push(row);
+      } else if (updating && suggestShown.status === 'complete') {
         row.className = 'board-draft-batch board-update-none'; row.setAttribute('aria-label', 'The Plan needs no changes');
         text.append(node('p', 'board-draft-lead', `“${suggestShown.cardTitle}” found nothing that changes the Plan.`), node('p', 'board-draft-note', `${suggestShown.summary || ''}${suggestShown.questions?.length ? ` ${plural(suggestShown.questions.length, 'question')} left for you on the card.` : ''}`.trim()));
         const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); dismiss.disabled = busy;
         actions$.append(dismiss);
       } else if (isRun) {
-        text.append(node('p', 'board-draft-lead', splitting ? `Splitting ${suggestShown.cardIds?.length > 1 ? plural(suggestShown.cardIds.length, 'card') : `“${suggestShown.cardTitle}”`} into subtasks…` : updating ? `Updating the Plan from what “${suggestShown.cardTitle}” found…` : `Suggesting next cards after “${suggestShown.cardTitle}”…`), node('p', 'board-draft-note', `${who}. ${splitting ? 'The subtasks appear on each card for you to review.' : updating ? 'The changes will appear here as a draft to accept or discard.' : 'Suggested cards will appear here as drafts.'}`));
+        const withAnswers = updating && sent?.kind === 'update';
+        text.append(node('p', 'board-draft-lead', splitting ? `Splitting ${suggestShown.cardIds?.length > 1 ? plural(suggestShown.cardIds.length, 'card') : `“${suggestShown.cardTitle}”`} into subtasks…` : updating ? `Updating the Plan from what “${suggestShown.cardTitle}” found${withAnswers ? ', with your answers' : ''}…` : `Suggesting next cards after “${suggestShown.cardTitle}”…`), node('p', 'board-draft-note', `${who}. ${splitting ? 'The subtasks appear on each card for you to review.' : updating ? 'The changes will appear here as a draft to accept or discard.' : 'Suggested cards will appear here as drafts.'}`));
+        if (withAnswers) text.append(sentList(sent));
         const stop = button('Stop', () => act('/api/board/suggest/stop', {}, () => api.announce('Stopping suggestions.')), 'secondary-button'); stop.setAttribute('aria-label', 'Stop suggesting cards'); stop.disabled = busy;
         actions$.append(stop);
       } else {
@@ -1893,7 +1925,23 @@
         const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', {}, () => api.announce('Dismissed.')), 'secondary-button'); dismiss.disabled = busy;
         actions$.append(dismiss);
       }
-      row.append(text, actions$); working.push(row);
+      if (!working.includes(row)) { row.append(text, actions$); working.push(row); }
+    }
+    // The planner asked before drafting: its questions, answered here, and nothing on the Plan yet.
+    if (asking) {
+      const row = node('section', 'board-draft-batch board-draft-plan board-draft-asking'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
+      const who = AGENT[asking.planner?.provider] || 'The agent';
+      row.setAttribute('aria-label', 'Questions before drafting');
+      const lead = node('p', 'board-draft-lead'); lead.append(glyph(ICONS.smart), node('span', '', `${who} has ${plural(asking.questions.length, 'question')} before it drafts`));
+      if (asking.planner?.model) lead.append(node('span', 'board-draft-by', modelLabel(asking.planner.provider, asking.planner.model)));
+      text.append(lead);
+      if (asking.summary) text.append(node('p', 'board-draft-summary', asking.summary));
+      text.append(node('p', 'board-draft-note', 'No cards yet. It drafts once you answer, so nothing is drafted twice.'));
+      const dismiss = button('Dismiss', () => window.relayOrchestration?.dismissQuestions?.(), 'secondary-button'); dismiss.disabled = busy;
+      actions$.append(dismiss);
+      const head = node('div', 'board-draft-head'); head.append(text, actions$); row.append(head);
+      row.append(questionsPanel({ id: asking.id, kind: 'ask', goal: asking.goal, documents: asking.documents, questions: asking.questions }, who));
+      working.push(row);
     }
     const noticeRow = undoNoticeRow();
     if (noticeRow) working.push(noticeRow);
@@ -1928,7 +1976,8 @@
       const accept = button(revises ? (list.length === 1 ? 'Accept the change' : 'Accept all changes') : `Accept ${list.length === 1 ? '' : 'all '}${plural(list.length, 'card')}`, () => draftAction('accept', ids, revises ? 'Changes accepted.' : `${plural(list.length, 'card')} accepted.`), 'primary-button');
       const ask = revises ? `Discard this draft? ${listed([fresh ? `${plural(fresh, 'new card')} ${fresh === 1 ? 'is' : 'are'} removed` : '', changing ? `${plural(changing, 'changed card')} ${changing === 1 ? 'goes' : 'go'} back to how ${changing === 1 ? 'it was' : 'they were'}` : '', removing ? `${plural(removing, 'card')} marked to remove ${removing === 1 ? 'stays' : 'stay'}` : ''].filter(Boolean))}.` : `Discard ${plural(list.length, 'drafted card')}?`;
       const discard = button('Discard', () => { if (window.confirm(ask)) draftAction('discard', ids, 'Drafts discarded.', () => { if (ids.includes(selected) && list.find(card => card.id === selected && draftKind(card) === 'new')) { selected = null; draft = null; } }); }, 'secondary-button');
-      accept.disabled = discard.disabled = busy;
+      accept.disabled = discard.disabled = busy || redrafting(batch.id);
+      if (redrafting(batch.id)) accept.title = discard.title = 'It’s redrafting this with your answers. Wait for it, or stop it.';
       actions$.append(discard, accept);
       // The banner folds to one line, to give the cards the room; the questions stay a click away.
       const folded = foldedBatches.has(batch.id), fold = button(folded ? (batch.questions?.length ? `Show ${plural(batch.questions.length, 'question')}` : 'Show details') : 'Hide', () => { if (foldedBatches.has(batch.id)) foldedBatches.delete(batch.id); else foldedBatches.add(batch.id); box.dataset.drawn = ''; drawDrafts(); }, 'text-link board-draft-fold');
@@ -1941,32 +1990,45 @@
       return row;
     }), ...splitRows());
   }
-  // The planner's questions (#162), each with the answers it offers and your own. Update the plan sends your answers
-  // through the chat, and the agent redrafts the plan, replacing this draft once the new one arrives.
+  // The planner's questions (#162), each with the answers it offers and your own. Asked before drafting (kind ask or
+  // update-ask), answering drafts the plan; asked with a draft, it redrafts and the new draft replaces this one. Your
+  // answers stay chosen while it works, and the draft they answer can't be accepted or discarded until it's done.
   let answers = new Map(), openSummaries = new Set(), foldedBatches = new Set();
+  const draftingNow = () => Boolean(planningPlan() || board?.suggest?.status === 'running');
+  const redrafting = id => Boolean(sent?.id === id && draftingNow());
+  function sentList(entry) {
+    const list = node('ol', 'board-questions-sent'); list.setAttribute('aria-label', 'Your answers');
+    list.append(...entry.pairs.map(pair => { const row = node('li'); row.append(node('span', 'board-questions-sent-q', pair.question), node('span', 'board-questions-sent-a', pair.answer)); return row; }));
+    return list;
+  }
   const questionOf = item => typeof item === 'string' ? { question: item, options: [] } : { question: item?.question || '', options: item?.options || [] };
   function questionsPanel(batch, by) {
     const list = batch.questions.map(questionOf), mine = answers.get(batch.id) || list.map(() => ({ pick: null, own: '' }));
     answers.set(batch.id, mine);
+    const before = batch.kind === 'ask' || batch.kind === 'update-ask', locked = redrafting(batch.id);
     const panel = node('div', 'board-questions'); panel.setAttribute('role', 'group'); panel.setAttribute('aria-label', `${by}’s questions`);
     const head = node('div', 'board-questions-head');
-    head.append(node('span', 'board-questions-title', `${by} has ${plural(list.length, 'question')}`), node('span', 'board-questions-note', 'Answer them to redraft the plan, or accept it as it is.'));
-    panel.append(head);
-    const send = button('Update the plan', () => redraft(batch, list), 'primary-button board-questions-send');
+    if (!before) { head.append(node('span', 'board-questions-title', `${by} has ${plural(list.length, 'question')}`), node('span', 'board-questions-note', 'Answer them to redraft the plan, or accept it as it is.')); panel.append(head); }
+    const verb = batch.kind === 'ask' ? 'Draft the plan' : batch.kind === 'update-ask' ? 'Update the Plan' : 'Update the plan';
+    const send = button(verb, () => redraft(batch, list), 'primary-button board-questions-send');
     const answered = () => mine.filter(item => item.pick !== null || item.own.trim()).length;
     const why = node('span', 'board-questions-note'); why.setAttribute('role', 'status');
     // A draft from a card's Update the Plan goes back to that update, beside the chat; any other goes through the chat.
-    const update = batch.kind === 'update';
+    const update = batch.kind === 'update' || batch.kind === 'update-ask';
     const blocked = () => update ? (board?.suggest?.status === 'running' ? 'Wait for the agent working on the Plan to finish, or stop it first.' : !cardBy(batch.cardId) ? `“${batch.cardTitle || 'The card'}” is no longer on the Plan.` : '') : cannotDraft();
-    const sync = () => { const count = answered(), no = blocked(); why.textContent = count ? (no || (busy ? 'Another change is saving. One moment.' : '')) : ''; send.disabled = busy || !count || Boolean(no); send.textContent = count && count < list.length ? `Update the plan with ${count} of ${list.length}` : 'Update the plan'; send.title = no || (count ? (update ? `One read-only run updates the Plan again from what “${batch.cardTitle}” found, with your answers, replacing this draft.` : 'Send your answers through the chat. The agent redrafts the plan, replacing this draft.') : 'Answer at least one question first.'); };
+    const sync = () => {
+      if (locked) { why.textContent = ''; send.disabled = true; send.textContent = before ? 'Drafting with your answers…' : 'Redrafting with your answers…'; send.title = 'It’s working with your answers. Its progress shows above.'; return; }
+      const count = answered(), no = blocked(); why.textContent = count ? (no || (busy ? 'Another change is saving. One moment.' : '')) : ''; send.disabled = busy || !count || Boolean(no); send.textContent = count && count < list.length ? `${verb} with ${count} of ${list.length}` : verb;
+      send.title = no || (!count ? 'Answer at least one question first.' : batch.kind === 'ask' ? 'Send your answers through the Plan chat. The agent drafts the plan with them.' : batch.kind === 'update-ask' ? `One read-only run drafts the update from what “${batch.cardTitle}” found, with your answers.` : update ? `One read-only run updates the Plan again from what “${batch.cardTitle}” found, with your answers, replacing this draft.` : 'Send your answers through the chat. The agent redrafts the plan, replacing this draft.');
+    };
     list.forEach((item, index) => {
       const field = node('fieldset', 'board-question'), legend = node('legend', 'board-question-text');
       legend.append(node('span', 'board-question-number', `${index + 1}`), node('span', '', item.question));
       field.append(legend);
       const choices = node('div', 'board-question-choices'), name = `board-q-${batch.id}-${index}`;
-      const own = node('input', 'board-input board-question-own'); own.type = 'text'; own.maxLength = 300; own.value = mine[index].own; own.placeholder = 'Your answer'; own.setAttribute('aria-label', `Your own answer to question ${index + 1}`);
+      const own = node('input', 'board-input board-question-own'); own.type = 'text'; own.maxLength = 300; own.value = mine[index].own; own.placeholder = 'Your answer'; own.readOnly = locked; own.setAttribute('aria-label', `Your own answer to question ${index + 1}`);
       item.options.forEach((option, at) => {
-        const label = node('label', 'board-question-choice'), radio = node('input'); radio.type = 'radio'; radio.name = name; radio.checked = mine[index].pick === at;
+        const label = node('label', 'board-question-choice'), radio = node('input'); radio.type = 'radio'; radio.name = name; radio.checked = mine[index].pick === at; radio.disabled = locked;
         radio.addEventListener('change', () => { mine[index].pick = at; mine[index].own = ''; own.value = ''; own.hidden = item.options.length > 0; sync(); });
         label.append(radio, node('span', '', option));
         if (at === 0) label.append(node('span', 'board-question-recommended', 'Recommended'));
@@ -1976,7 +2038,7 @@
       own.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !send.disabled) { event.preventDefault(); send.click(); } });
       if (item.options.length) {
         // Your own answer is one more choice, which opens a box to write it.
-        const other = node('label', 'board-question-choice'), radio = node('input'); radio.type = 'radio'; radio.name = name; radio.checked = Boolean(mine[index].own);
+        const other = node('label', 'board-question-choice'), radio = node('input'); radio.type = 'radio'; radio.name = name; radio.checked = Boolean(mine[index].own); radio.disabled = locked;
         own.hidden = !mine[index].own;
         radio.addEventListener('change', () => { mine[index].pick = null; own.hidden = false; own.focus(); sync(); });
         other.append(radio, node('span', '', 'Other…')); choices.append(other);
@@ -1992,26 +2054,31 @@
   }
   function redraft(batch, list) {
     const mine = answers.get(batch.id) || [];
-    const lines = list.map((item, index) => { const pick = mine[index]?.pick, own = mine[index]?.own?.trim(); const answer = own || (pick !== null && pick !== undefined ? item.options[pick] : ''); return answer ? `${index + 1}. ${item.question}\n   ${answer}` : ''; }).filter(Boolean);
+    const pairs = list.map((item, index) => { const pick = mine[index]?.pick, own = mine[index]?.own?.trim(); return { number: index + 1, question: item.question, answer: own || (pick !== null && pick !== undefined ? item.options[pick] : '') }; }).filter(pair => pair.answer);
+    const lines = pairs.map(pair => `${pair.number}. ${pair.question}\n   ${pair.answer}`);
     if (!lines.length) return;
+    const mark = kind => { sent = { id: batch.id, kind, pairs, at: Date.now() }; const box = $('board-drafts'); if (box) box.dataset.drawn = ''; drawDrafts(); };
     // A draft from a card's Update the Plan is redrafted by that update, which has the card's findings; the chat hasn't.
-    if (batch.kind === 'update') {
+    if (batch.kind === 'update' || batch.kind === 'update-ask') {
       const card = cardBy(batch.cardId); if (!card) { failure = `“${batch.cardTitle || 'The card'}” is no longer on the Plan.`; showError(); return; }
       const pick = suggestPick(card, smartMode(), card.result?.summary || card.title);
       if (pick.error) { failure = pick.error; showError(); return; }
       if (pick.billed && window.relayBillingConfirmed !== true && !window.confirm(`Update the Plan with charges?\n\n${billsSentence(pick.provider)} This read-only run may cost money.\n\nTo stop this question for this session, turn on Allow API and unconfirmed billing in Settings.`)) return;
-      act(`/api/board/cards/${card.id}/update-plan`, { provider: pick.provider, model: pick.model, effort: pick.effort, billingConfirmed: pick.billed ? true : window.relayBillingConfirmed === true, answers: lines.join('\n'), replaces: batch.id }, result => {
+      act(`/api/board/cards/${card.id}/update-plan`, { provider: pick.provider, model: pick.model, effort: pick.effort, billingConfirmed: pick.billed ? true : window.relayBillingConfirmed === true, answers: lines.join('\n'), ...(batch.kind === 'update' ? { replaces: batch.id } : {}) }, result => {
         if (result?.suggest && board) board.suggest = result.suggest;
-        answers.delete(batch.id);
-        api.announce(`Updating the Plan again with your answers. It replaces this draft when it's done.`);
+        mark('update');
+        api.announce(batch.kind === 'update' ? `Updating the Plan again with your answers. It replaces this draft when it's done.` : 'Drafting the update with your answers.');
       });
       return;
     }
     const input = $('message-input'); if (!input) return;
-    input.value = ['Redraft the plan with my answers to your questions. Keep what still fits, and change only what the answers affect.', '', ...lines].join('\n');
+    // Asked before drafting: the request again, with the answers, so the plan is drafted once, from both.
+    input.value = batch.kind === 'ask'
+      ? [String(batch.goal || '').trim(), '', 'My answers to your questions:', '', ...lines].join('\n').trim()
+      : ['Redraft the plan with my answers to your questions. Keep what still fits, and change only what the answers affect.', '', ...lines].join('\n');
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    setChat(true); drafting = true; replaces = batch.id; contextDrawn = null; drawContext();
-    answers.delete(batch.id);
+    setChat(true); drafting = true; replaces = batch.kind === 'ask' ? null : batch.id; contextDrawn = null; drawContext();
+    mark('chat');
     // One click: the answers go now, through the same chat, as a drafting message.
     $('composer')?.requestSubmit?.();
   }

@@ -888,3 +888,10 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 
 /* The empty Plan chat (#162) has no starters: it says what it is for instead. */
 .starter-prompts[hidden] { display: none; }
+/* Your answers, while the planner drafts with them (#162). */
+.board-questions-sent { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; font-size: 12px; line-height: 1.45; color: var(--muted, #9a9a9a); }
+.board-questions-sent li { display: flex; flex-wrap: wrap; gap: 0 6px; }
+.board-questions-sent-a { color: var(--text, #e6e6e6); font-weight: 500; }
+.board-questions-sent-a::before { content: "→ "; color: var(--muted, #9a9a9a); font-weight: 400; }
+.board-question-choice:has(input:disabled) { cursor: default; }
+.board-question-choice:has(input:disabled:not(:checked)) { opacity: 0.55; }

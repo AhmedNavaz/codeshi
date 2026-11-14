@@ -764,7 +764,7 @@ export class Board {
       parts.push('# Other open cards in this Plan', '', ...otherOpen.map(item => `- “${item.title.replace(/\s+/g, ' ')}” (${item.draft ? 'Draft' : COLUMN_NAME[item.column]}${item.group ? `, group: ${item.group}` : ''})`), '');
     }
     parts.push(
-      'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions for the person, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of 1 to 3 follow-up cards, in order, to come after the target card). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards within this steps array that it needs, starting at 1; leave [] if it directly follows the target card), phase (a short group/phase name, or leave null to keep the target card’s group), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.'
+      'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions for the person, usually empty: Suggest next always returns its cards, so settle open choices with the option you’d recommend and say which in the summary; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of 1 to 3 follow-up cards, in order, to come after the target card). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards within this steps array that it needs, starting at 1; leave [] if it directly follows the target card), phase (a short group/phase name, or leave null to keep the target card’s group), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.'
     );
     return parts.join('\n');
   }
@@ -855,7 +855,7 @@ export class Board {
     if (this.task(c, card) && LIVE.has(this.task(c, card).status)) return `“${card.title}” is working again. Wait until it finishes.`;
     return '';
   }
-  updatePrompt(c, card, answers = '', replaces = null) {
+  updatePrompt(c, card, answers = '', replaces = null, askedBefore = null) {
     const why = this.updatable(c, card); if (why) throw fail(why);
     const title = card.title.replace(/\s+/g, ' '), read = this.answer(c, card.id), found = read.text.trim() || card.result?.summary || '';
     if (!found) throw fail(`“${card.title}” reported nothing to update the Plan with.`);
@@ -863,7 +863,7 @@ export class Board {
     const asked = read.followUps.map((item, index) => `## Follow-up ${index + 1}\n\nThe person asked: ${clip(item.ask, 2000)}\n\nIt answered:\n\n${clip(item.text, 8000)}`).join('\n\n');
     // Earlier updates from this card are already on the Plan, or were turned down: this one adds only what they didn't.
     const outcome = item => item.added + item.changed + item.removed === 0 ? 'found nothing to change' : item.accepted && item.discarded ? `${item.accepted} of its changes accepted, ${item.discarded} discarded` : item.accepted ? 'its changes were accepted and are in the Plan below' : item.discarded ? 'its changes were discarded by the person' : 'its changes are still a draft on the Plan';
-    const earlier = (card.updates || []).filter(item => item.id !== replaces).map(item => `- ${item.at.slice(0, 16).replace('T', ' ')}: ${[item.added && `${item.added} new`, item.changed && `${item.changed} changed`, item.removed && `${item.removed} removed`].filter(Boolean).join(', ') || 'no cards'}; ${outcome(item)}.${item.summary ? ` ${clip(item.summary, 400)}` : ''}`);
+    const earlier = (card.updates || []).filter(item => item.id !== replaces && item.id !== askedBefore).map(item => `- ${item.at.slice(0, 16).replace('T', ' ')}: ${[item.added && `${item.added} new`, item.changed && `${item.changed} changed`, item.removed && `${item.removed} removed`].filter(Boolean).join(', ') || 'no cards'}; ${outcome(item)}.${item.summary ? ` ${clip(item.summary, 400)}` : ''}`);
     const plan = this.agentText(c, [], { whole: true, ids: true });
     const request = [
       `The card “${title}” (Id ${this.refOf(c, card.id)}) has finished, and its findings are below. Update the Plan so it reflects what they found. Base every change on the findings, not on general improvements.`,
@@ -872,8 +872,8 @@ export class Board {
       '- Add cards for work the findings call for that no card covers.',
       `- A card that will build on the findings can wait for “${title}” (its Id, as a string, in dependsOn), so its report is passed to it when it starts.`,
       `- Don’t change, merge or remove “${title}” itself.`,
-      '- Anything the findings leave for the person to decide, including any questions they end with, goes in questions with the answers to choose from. Don’t decide it for them; leave the cards it affects as they are, or say in their instructions what waits for the answer.',
-      '- When the findings call for no change to the Plan, return steps [] and no remove, with a summary that says why.',
+      '- Ask before you draft. When the findings leave the person something to decide that would change the update, including questions they end with, return only those questions with the answers to choose from, steps [] and no remove, and say in the summary what you’ll draft once they answer. Don’t decide it for them. Settle smaller choices with the option you’d recommend, and say which in the summary.',
+      '- When the findings call for no change to the Plan, return steps [], no remove and no questions, with a summary that says why.',
       '',
       `# Findings of “${title}”`,
       '',
@@ -881,8 +881,8 @@ export class Board {
       '',
       ...(asked ? ['# After the findings', '', 'The person asked the card more after it reported. Where an answer below corrects or adds to the findings, the answer wins.', '', clip(asked, 12000), ''] : []),
       ...(earlier.length ? ['# Earlier updates from these findings', '', 'The Plan was already updated from this card. Accepted changes are in the Plan below: don’t add them again. Don’t redo what the person discarded unless something after the findings calls for it.', '', ...earlier, ''] : []),
-      // Answers to the questions the last update asked: the draft it made is on the Plan, and this one replaces it.
-      ...(answers ? ['# The person’s answers to your questions', '', 'You drafted an update from these findings and asked the person some questions. Here are their answers. Draft the update again with them: keep what still fits, change what the answers affect, and don’t ask again what they answered.', '', clip(answers, 6000), ''] : []),
+      // Answers to the questions the last update asked: before it drafted, or with a draft that this one replaces.
+      ...(answers ? ['# The person’s answers to your questions', '', replaces ? 'You drafted an update from these findings and asked the person some questions. Here are their answers. Draft the update again with them: keep what still fits, change what the answers affect, and don’t ask again what they answered.' : 'You asked the person these questions before drafting. Here are their answers. Draft the update now with them, and don’t ask again what they answered.', '', clip(answers, 6000), ''] : []),
       '# Plan.md',
       '',
       plan.text.trim(),
@@ -919,25 +919,27 @@ export class Board {
     // Your answers to the questions on a draft this card's update made: the new run reads them and replaces that draft.
     const answers = typeof input.answers === 'string' ? input.answers.trim() : '';
     const replaces = typeof input.replaces === 'string' && /^[\w-]{1,80}$/.test(input.replaces) && this.cards(c).some(item => item.draft?.batch?.id === input.replaces && item.draft.batch.kind === 'update' && item.draft.batch.cardId === card.id) ? input.replaces : null;
-    if (answers && !replaces) throw fail('That draft is gone. Update the Plan from the card again.', 409);
-    return this.job(c, input, { kind: 'update', cardId: card.id, cardTitle: card.title, prompt: this.updatePrompt(c, card, answers, replaces), finish: (reply, by, jobId) => {
+    // Or to the questions an update asked before drafting anything, which are still on the Plan.
+    const asked = answers && !replaces && c.boardSuggest?.kind === 'update' && c.boardSuggest.cardId === card.id && c.boardSuggest.status === 'complete' && !c.boardSuggest.cards?.length && c.boardSuggest.questions?.length ? c.boardSuggest.id : null;
+    if (answers && !replaces && !asked) throw fail('Those questions are gone. Update the Plan from the card again.', 409);
+    return this.job(c, input, { kind: 'update', cardId: card.id, cardTitle: card.title, prompt: this.updatePrompt(c, card, answers, replaces, asked), finish: (reply, by, jobId) => {
       const current = this.cards(c).find(item => item.id === card.id);
       if (!current) return { status: 'failed', summary: 'The card was removed before the update finished.', cards: [] };
       if (this.closed(c, current)) return { status: 'failed', summary: 'The card or Plan was closed to agents before the update finished.', cards: [] };
       // Nothing to change is an answer too, not a failure.
       const none = noChanges(reply);
-      if (none) { this.noteUpdate(c, current, { id: jobId, by, summary: none.summary, questions: none.questions.length, replaces }); return { status: 'complete', summary: none.summary, cards: [], ...(none.questions.length ? { questions: none.questions } : {}) }; }
+      if (none) { this.noteUpdate(c, current, { id: jobId, by, summary: none.summary, questions: none.questions.length, replaces: replaces || asked }); return { status: 'complete', summary: none.summary, cards: [], ...(none.questions.length ? { questions: none.questions } : {}) }; }
       const parsed = parsePlan(reply);
       if (parsed.status !== 'draft') return { status: 'failed', summary: parsed.summary, cards: [] };
       // The card itself stays as it is, whatever the reply asked.
       const self = ref => this.resolveRef(c, ref)?.id === current.id;
       const steps = parsed.steps.filter(step => !(step.card && self(step.card))).map(step => step.merges ? { ...step, merges: step.merges.filter(ref => !self(ref)) } : step);
       const remove = (parsed.remove || []).filter(ref => !self(ref));
-      if (!steps.length && !remove.length) { this.noteUpdate(c, current, { id: jobId, by, summary: parsed.summary, questions: parsed.questions?.length || 0, replaces }); return { status: 'complete', summary: parsed.summary, cards: [], ...(parsed.questions?.length ? { questions: parsed.questions } : {}) }; }
+      if (!steps.length && !remove.length) { this.noteUpdate(c, current, { id: jobId, by, summary: parsed.summary, questions: parsed.questions?.length || 0, replaces: replaces || asked }); return { status: 'complete', summary: parsed.summary, cards: [], ...(parsed.questions?.length ? { questions: parsed.questions } : {}) }; }
       const plan = { id: jobId, goal: `Update the Plan from “${current.title}”`, summary: parsed.summary, steps, ...(remove.length ? { remove } : {}), ...(parsed.questions?.length ? { questions: parsed.questions } : {}), ...(replaces && this.cards(c).some(item => item.draft?.batch?.id === replaces) ? { replaces } : {}) };
       const created = this.draft(c, plan, { by, from: { id: current.id, title: current.title } });
       const kinds = created.map(cardId => this.cards(c).find(item => item.id === cardId)?.draft).filter(Boolean);
-      this.noteUpdate(c, current, { id: jobId, by, summary: parsed.summary, questions: parsed.questions?.length || 0, replaces, added: kinds.filter(item => !item.was && !item.remove).length, changed: kinds.filter(item => item.was && !item.remove).length, removed: kinds.filter(item => item.remove).length });
+      this.noteUpdate(c, current, { id: jobId, by, summary: parsed.summary, questions: parsed.questions?.length || 0, replaces: replaces || asked, added: kinds.filter(item => !item.was && !item.remove).length, changed: kinds.filter(item => item.was && !item.remove).length, removed: kinds.filter(item => item.remove).length });
       return { status: 'complete', summary: parsed.summary, cards: created };
     } });
   }

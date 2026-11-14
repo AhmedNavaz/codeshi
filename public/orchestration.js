@@ -431,6 +431,8 @@
     render, mayReplace, planner, cannotDraft, again: planAgain,
     // Dismiss a draft that ended without cards, from the Plan (#162).
     dismiss: () => { const plan = openPlan(); if (plan && NOT_READY.includes(plan.status)) action({ action: 'discard', id: plan.id }, () => api.announce('Dismissed.')); },
+    // Put away the questions a planner asked before drafting, without answering them (#162).
+    dismissQuestions: () => { const plan = conversation()?.orchestrations?.[0]; if (plan?.status === 'questions') action({ action: 'discard', id: plan.id }, () => api.announce('Dismissed.')); },
     notReady: () => { const plan = onMain() ? openPlan() : null; return plan && NOT_READY.includes(plan.status) ? plan : null; },
     // The plan that holds the queue, for Flow's What's next: one being made or not ready, or one whose drafted cards still
     // wait on the Plan for you (#162).
@@ -445,6 +447,8 @@
       if (!plan) return '';
       if (plan.status === 'planning') return 'Planning the steps…';
       if (plan.status === 'moved') return `Drafted ${plural(plan.cards?.length || plan.steps?.length || 0, 'card')} on the Plan: ${plan.summary || plan.goal}${plan.questions?.length ? ` It asks: ${plan.questions.map(item => typeof item === 'string' ? item : item?.question || '').join(' ')}` : ''}`;
+      // Questions before any cards (#162): answered on the Plan, above the cards.
+      if (plan.status === 'questions' || (!plan.steps?.length && !plan.cards?.length && plan.questions?.length)) return `Asked ${plural(plan.questions?.length || 0, 'question')} before drafting: ${(plan.questions || []).map(item => typeof item === 'string' ? item : item?.question || '').join(' ')}${plan.status === 'questions' ? ' Answer them on the Plan.' : ''}`;
       if (plan.steps?.length) return `Proposed a plan of ${plural(plan.steps.length, 'step')}: ${plan.summary || plan.goal}`;
       return plan.summary || '';
     },

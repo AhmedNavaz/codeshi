@@ -192,9 +192,10 @@ test('the planning request follows the planning method, asks for a JSON plan and
   const prompt = planningRequest('Add a list of saved items.');
   assert.match(prompt, /read-only/i);
   // One planning method for every drafted plan (#162), sized to the work rather than to a fixed number of steps.
-  for (const rule of [/Read the project first/, /AGENTS\.md/, /Size the plan to the work/, /Contracts first/, /Working slices/, /Unknowns early/, /One outcome per card/, /Explicit dependencies/, /a way back/, /Questions, not guesses/]) assert.match(prompt, rule);
+  for (const rule of [/Read the project first/, /AGENTS\.md/, /Size the plan to the work/, /Contracts first/, /Working slices/, /Unknowns early/, /One outcome per card/, /Explicit dependencies/, /a way back/, /Ask first, not after/]) assert.match(prompt, rule);
   assert.doesNotMatch(prompt, /at most 5/);
   assert.match(prompt, /questions \(an array/);
+  assert.match(prompt, /When questions has any, return steps \[\]/, 'Questions come before any cards, so none are drafted twice.');
   assert.match(prompt, /Return only a JSON object/);
   assert.match(prompt, /Do not choose agents or models\./);
   assert.ok(prompt.endsWith('Add a list of saved items.'));
@@ -775,4 +776,12 @@ test('stopping a plan stops the working step and cancels the steps that have not
   assert.equal(api.c().parallelTasks[1].status, 'cancelled');
   await until(() => api.c().parallelTasks[0].status === 'stopped');
   assert.match(api.c().messages.at(-1).text, /Stopped the plan: 1 step stopped, 1 that hadn’t started cancelled/);
+});
+
+test('a planner that asks before drafting returns its questions and no cards, and a reply with neither is still unreadable (#162)', () => {
+  const asked = parsePlan(JSON.stringify({ summary: 'I’ll draft the checkout once you choose.', questions: [{ question: 'Card or invoice?', options: ['Card', 'Invoice'] }], steps: [] }));
+  assert.equal(asked.status, 'questions');
+  assert.deepEqual(asked.steps, []);
+  assert.deepEqual(asked.questions, [{ question: 'Card or invoice?', options: ['Card', 'Invoice'] }]);
+  assert.equal(parsePlan(JSON.stringify({ summary: 'Nothing.', questions: [], steps: [] })).status, 'unstructured');
 });

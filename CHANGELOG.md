@@ -4,6 +4,14 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-11-15
+
+### Changed
+- **The planner asks before it drafts** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). When the planner needs you to decide something that would change the cards, **Draft cards** and **Update the Plan** return only the questions, with no cards on the Plan. You answer, click **Draft the plan**, and it drafts once with your request and answers, instead of drafting, asking, and drafting again. Smaller choices it settles itself with its recommended option and says so in the summary. **Suggest next** still always returns its cards. On an update from a card, the card says how many questions it asked, with **Answer on the Plan**.
+
+### Fixed
+- **Your answers stay selected while the Plan redrafts** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). Clicking **Update the plan** no longer clears your choices: the drafting line lists each question with what you chose. A draft that still has questions keeps your choices locked, with Accept and Discard off until the new draft replaces it.
+
 ## [0.55.0] - 2026-11-14
 
 ### Added
