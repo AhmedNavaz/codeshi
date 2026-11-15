@@ -346,7 +346,12 @@ export function prepareResolution({ root, worktree, id, base, result, plan, labe
     const mine = readCurrent(copy), now = readCurrent(path.join(root, file));
     if (mine.unreadable || now.unreadable) throw fail(`${file} isn’t a plain file on both sides, so it can’t be combined.`);
     const before = entryOf(root, base, file), theirs = entryOf(root, result, file);
-    const merged = mergeMarked(root, file, mine.content, before.mode ? checkedOut(root, base, file) : null, now.content, labels);
+    // The earlier version takes the line endings the two sides have, as stored or as a checkout writes it (core.autocrlf),
+    // so a file with LF on both sides isn't one whole-file conflict against a CRLF checkout.
+    const crlf = content => Boolean(content?.includes('\r\n')), sides = [now.content, mine.content].filter(Boolean);
+    const forms = before.mode ? [checkedOut(root, base, file), stored(root, base, file)] : [null];
+    const was = forms.find(form => !form || sides.every(side => crlf(side) === crlf(form))) ?? forms[0];
+    const merged = mergeMarked(root, file, mine.content, was, now.content, labels);
     writes.push({ copy, content: merged.content, mode: theirs.mode || before.mode, was: mine.content, wasMode: theirs.mode });
     changes.push(now.content === null ? { path: file, content: null } : { path: file, content: now.content, mode: before.mode || theirs.mode || '100644' });
     const known = markersIn(mine.content, labels) + markersIn(now.content, labels);

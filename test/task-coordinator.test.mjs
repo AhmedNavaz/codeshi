@@ -398,7 +398,8 @@ test('each conflict says whether an agent can combine it, and preparing one writ
   assert.deepEqual(ready.files.filter(file => file.resolved).map(file => [file.path, file.status]), [['both.txt', 'clean'], ['drop.txt', 'clean'], ['gone.txt', 'clean'], ['lines.txt', 'clean']]);
   assert.match(ready.files.find(file => file.path === 'lines.txt').diff, /^ B folder$/m, 'The review shows the change to the folder’s own version.');
   applyPlan(repo, ready);
-  assert.deepEqual(['lines.txt', 'gone.txt', 'drop.txt', 'both.txt', 'calm.txt'].map(name => read(repo, name)), ['a\nB card\nB folder\nc\n', 'G card\n', null, 'card\nfolder\n', 'ONE\n2\n3\n4\nFIVE\n']);
+  // The file the folder had deleted comes back as a checkout writes it: with CRLF where core.autocrlf is on, as on Windows.
+  assert.deepEqual(['lines.txt', 'gone.txt', 'drop.txt', 'both.txt', 'calm.txt'].map(name => read(repo, name)), ['a\nB card\nB folder\nc\n', git(repo, 'cat-file', '--filters', `${git(copy, 'rev-parse', 'HEAD').trim()}:gone.txt`), null, 'card\nfolder\n', 'ONE\n2\n3\n4\nFIVE\n']);
 });
 
 // A repository whose mock agent holds a run that resolves conflicts, so a test can look at the copy meanwhile.
