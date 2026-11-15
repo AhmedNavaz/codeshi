@@ -44,12 +44,14 @@ export function acpToolItem(tool) {
 // asks and can never be remembered, so the runtime's own names are translated here.
 export function acpApprovalRequest(tool) {
   const item = acpToolItem(tool), input = objectOf(tool.rawInput), kind = tool.kind || 'tool';
+  // Every file it would change, for the task's guarded folders (approval-rules.mjs), which a multi-file edit doesn't show otherwise.
+  const paths = [...new Set(diffsOf(tool).map(diff => diff.path))];
   if (item.type === 'command_execution') {
     const cwd = firstText(input, ['cwd', 'Cwd', 'working_dir', 'directory']);
     return { kind, title: tool.title, input: { command: item.command, ...(cwd ? { cwd } : {}) } };
   }
-  if (item.type === 'agent_tool' && ['Read', 'Edit', 'Write'].includes(item.name)) return { kind, input: item.input };
-  return { kind, title: tool.title, input: tool.rawInput || { action: tool.title } };
+  if (item.type === 'agent_tool' && ['Read', 'Edit', 'Write'].includes(item.name)) return { kind, input: item.input, ...(paths.length ? { paths } : {}) };
+  return { kind, title: tool.title, input: tool.rawInput || { action: tool.title }, ...(paths.length ? { paths } : {}) };
 }
 
 // A file write the person already allowed through this tool's own approval. The runtime then writes it through the

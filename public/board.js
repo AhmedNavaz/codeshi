@@ -66,6 +66,8 @@
   const SIZES = [['light', 'Light'], ['standard', 'Standard'], ['deep', 'Deep']];
   // A card's own tests (#162), as its result and its task report them.
   const TESTS = { running: 'Testing…', passed: 'Tests passed', failed: 'Tests failed', interrupted: 'Tests interrupted', 'no-change': 'No changes to test', unverified: 'Not tested' };
+  // A check that stopped at a missing folder or tool never reached the tests, so it isn't called a test failure.
+  const testsWord = (tests, result) => tests === 'failed' && result?.testsUnrunnable ? 'Check couldn’t run' : TESTS[tests];
   const NO_GROUP = 'Not in a group';
   const OUTCOME = { complete: 'Finished', integrated: 'Merged', kept: 'Kept as a branch', stopped: 'Stopped', failed: 'Didn’t finish', cancelled: 'Cancelled', discarded: 'Discarded', blocked: 'Blocked', lost: 'Copy gone', detached: 'Folder removed' };
   const when = iso => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }); } catch { return ''; } };
@@ -162,6 +164,9 @@
     try { const result = await api.api('/api/board'); if (request === loading) { if (writes) { seen = null; return; } board = own(result); render(); } }
     catch (error) { if (request === loading) { seen = null; failure = error.message; render(); } }
   }
+  // Split runs (#162) have their own list and can run side by side; an older Plan may still show one as its agent run.
+  const splitRuns = () => [...(board?.splits || []), ...(board?.suggest?.kind === 'split' ? [board.suggest] : [])];
+  const splitOf = id => splitRuns().find(item => item.status === 'running' && (item.cardIds || [item.cardId]).includes(id)) || null;
   async function act(path, input = {}, done) {
     if (busy) return null; busy = true; failure = ''; render();
     const from = era;
@@ -186,7 +191,7 @@
   function stateOf(card) {
     const task = card.taskState;
     if (card.draft) return { text: draftWord(card), tone: 'draft', detail: (card.draft.notes || []).join(' ') };
-    if (board?.suggest?.kind === 'split' && board.suggest.status === 'running' && (board.suggest.cardIds || [board.suggest.cardId]).includes(card.id)) return { text: 'Splitting…', tone: 'running', detail: 'An agent is splitting it into subtasks, reading only.' };
+    if (splitOf(card.id)) return { text: 'Splitting…', tone: 'running', detail: 'An agent is splitting it into subtasks, reading only.' };
     if (card.column === 'doing') {
       if (task?.approvals) return { text: 'Needs you', tone: 'attention' };
       // A review round (#89): the card being repaired, and the review checking the repairs.
@@ -195,6 +200,7 @@
       if (task?.status === 'running' && card.splitting) return { text: 'Splitting', tone: 'running', detail: 'Splitting it into subtasks, reading only.' };
       const at = (card.subtasks || []).findIndex(item => item.status === 'running');
       // The running subtask's name sits on the progress line, so this line only adds what that line can't say.
+      if (task?.status === 'running' && task.resolving) return { text: 'Resolving', tone: 'running', detail: 'Combining its changes with the folder’s, in its own copy.' };
       if (task?.status === 'running' && at >= 0) return { text: 'Working', tone: 'running', detail: card.subtasksPaused ? 'Pauses after it.' : '' };
       if (task?.status === 'running') return { text: 'Working', tone: 'running' };
       return { text: task?.held ? 'Held' : 'Waiting', tone: 'waiting', detail: task?.reason || '' };
@@ -202,10 +208,11 @@
     if (card.column === 'review') {
       if (card.result?.status === 'discarded') return { text: 'Changes discarded', tone: 'waiting', detail: 'Its answer stays. Accept it to finish without the changes, or send it back to run again.' };
       // A copy that changed nothing (research, a question) has nothing to merge, so it's accepted like any other card.
+      if (task?.hasWorktree && task.resolving) return { text: 'Merge first', tone: 'attention', detail: 'Resolving its merge conflicts isn’t finished. Answer its agent in its task, or review and merge it to try again.' };
       if (task?.hasWorktree && task.copyFiles !== 0) return { text: 'Merge first', tone: 'attention', detail: 'Its changes are in the task’s own copy. Review and merge them in its task.' };
       const tests = card.result?.tests;
       if (tests === 'running') return { text: TESTS.running, tone: 'running', detail: 'Running the project’s tests on this card’s result. The cards after it wait for them.' };
-      if (tests === 'failed' || tests === 'interrupted') return { text: card.result.testsAccepted ? `${TESTS[tests]} · continued` : TESTS[tests], tone: 'trouble', detail: card.result.testsAccepted ? 'You chose to let the cards after it build on it anyway.' : `${card.result.testsReason || ''}${task?.holds ? ' The cards after it wait until you check it again or continue anyway.' : ''}`.trim() };
+      if (tests === 'failed' || tests === 'interrupted') return { text: card.result.testsAccepted ? `${testsWord(tests, card.result)} · continued` : testsWord(tests, card.result), tone: 'trouble', detail: card.result.testsAccepted ? 'You chose to let the cards after it build on it anyway.' : `${card.result.testsReason || ''}${task?.holds ? ' The cards after it wait until you check it again or continue anyway.' : ''}`.trim() };
       const review = task?.review;
       if (review?.status === 'repairing') return { text: 'Repairing', tone: 'running', detail: review.waiting || review.reason || '' };
       if (review?.status === 'held') return { text: review.accepted ? `${review.verdict ? 'Changes needed' : 'No verdict'} · continued` : review.verdict ? 'Changes needed' : 'No verdict', tone: 'trouble', detail: review.accepted ? 'You chose to let the cards after it build on it anyway.' : review.reason || '' };
@@ -390,11 +397,10 @@
     item.setAttribute('aria-label', [card.draft ? '' : onCanvas ? STATUS[card.column] : '', card.title, card.group ? `group ${card.group}` : '', showRole ? `${ROLE[card.role]} role` : '', names.length ? `${names.length === 1 ? 'label' : 'labels'} ${listed(names)}` : '', who.smart ? `Auto routing, ${who.text}` : who.provider ? who.text : 'no agent yet', needs ? 'needs subtasks before it can run' : '', charged, subtaskLine(card)?.long || '', after.length ? `waits for ${listed(after.map(other => other.title))}` : '', card.commentCount ? plural(card.commentCount, 'comment') : '', card.closed ? 'closed to agents' : '', state?.text || '', state?.detail || '', live?.now || '', live?.usage.length ? `so far ${live.usage.join(', ')}` : '', timed.some(sched => sched.missed) ? 'a scheduled run was missed' : soon ? `scheduled to run ${when(soon.nextAt)}` : ''].filter(Boolean).join('. '));
     item.addEventListener('click', event => {
       if (moved === card.id) { moved = null; return; }
-      // On the canvas a click shows what the card connects to; a double-click, or Enter, opens it.
-      if (onCanvas && event.detail >= 1) { if (event.detail === 1) light(card.id); return; }
+      // Open on the first click, including keyboard activation. Ignore extra clicks in a double-click.
+      if (onCanvas) { if (event.detail > 1) return; unlight(); }
       select(card.id);
     });
-    if (onCanvas) item.addEventListener('dblclick', () => { if (moved !== card.id) select(card.id); });
     // Backlog, Ready and Done cards can be dragged: between Backlog and Ready, back from Done, and into a new order.
     if (!onCanvas && view === 'columns' && ['backlog', 'ready', 'done'].includes(card.column) && !card.draft) {
       item.draggable = true;
@@ -479,7 +485,17 @@
   }
   const labelled = (text, control, note) => { const row = node('div', 'board-field'); row.append(node('span', 'board-field-label', text), control); if (note) row.append(node('span', 'board-field-note', note)); return row; };
   // Typing changes only the draft and the Save button; the drawer itself is rebuilt only when the card or the mode changes.
-  function changed() { failure = ''; const save = $('board-drawer-body').querySelector('.board-save'); if (save) save.disabled = busy || !dirty() || !draft.title.trim(); const revert = $('board-drawer-body').querySelector('.board-revert'); if (revert) revert.hidden = selected === 'new' || !dirty(); showError(); }
+  // A Run that can't go ahead says why where you clicked it, instead of doing nothing.
+  function refuse(why) { failure = why; showError(); api.announce?.(why); }
+  // A button that can't act now looks unavailable but still takes the click, so the click can say why; the reason is
+  // also its tooltip. A busy Plan still disables it outright.
+  function blockedLook(value, why, title = '') {
+    if (why) { value.setAttribute('aria-disabled', 'true'); value.classList.add('board-blocked'); } else { value.removeAttribute('aria-disabled'); value.classList.remove('board-blocked'); }
+    value.title = why || title;
+  }
+  // An edit clears the last error; drawing the drawer again keeps it, so the reason a Run or Save failed stays in view.
+  function changed() { failure = ''; refreshSave(); }
+  function refreshSave() { const save = $('board-drawer-body').querySelector('.board-save'); if (save) save.disabled = busy || !dirty() || !draft.title.trim(); const revert = $('board-drawer-body').querySelector('.board-revert'); if (revert) revert.hidden = selected === 'new' || !dirty(); showError(); }
 
   // The card opens as a dialog over the Plan: what the card says, its subtasks and what done means in the wide column,
   // and who does it, what it waits for and how it's sorted in the narrow one. Each part says which column it goes in.
@@ -580,7 +596,9 @@
       const folder = node('select', 'board-input'); folder.setAttribute('aria-label', 'Folder the card works in'); folder.disabled = locked;
       folder.append(...board.folders.map(item => [item.id, item.name]).map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; }));
       folder.value = draft.folderId || board.folders[0].id; folder.addEventListener('change', () => { draft.folderId = folder.value === board.folders[0].id && !draft.folderId ? null : folder.value; changed(); });
-      parts.push(slot(labelled('Folder', folder, 'The one folder the agent works in. A card runs in a single folder; the first is used unless you choose another.'), 'side'));
+      // A card with no folder chosen runs in the one its files are in (board.mjs folderGuess), and says so.
+      const guessed = card?.folderGuessed && draft.folderId === card.folderId;
+      parts.push(slot(labelled('Folder', folder, guessed ? 'Taken from its files, as no folder was chosen. The agent works only in this folder; choose another to change it.' : 'The one folder the agent works in: the one you choose, otherwise the one its files are in, otherwise the first.'), 'side'));
     }
     // Waits for: the cards chosen, each with a way to take it off, and a menu of the other cards not yet done.
     const others = cards().filter(other => other.id !== card?.id && other.column !== 'done');
@@ -752,6 +770,10 @@
   // haven't started, and cards to remove or merge. They arrive on the Plan as one draft named after this card; nothing
   // changes until you accept. While it runs, and once it's done, the same place says how it went.
   const updateKey = card => `update:${card.id}`;
+  const updateHasNewResult = (card, update) => Boolean(update?.basis && (
+    (card.result?.reportRun || null) !== (update.basis.report || null) ||
+    (card.result?.followUps || 0) > (update.basis.followUps || 0)
+  ));
   function updateBox(card, { questions = false } = {}) {
     if (card.draft || !['review', 'done'].includes(card.column)) return null;
     const job = board?.suggest, mine = job?.kind === 'update' && job.cardId === card.id ? job : null;
@@ -767,8 +789,8 @@
     if (auto && !auto.jobId && !auto.error && mine?.status !== 'running') {
       box.classList.add('running');
       lead.append(node('span', '', 'It found the Plan should change'));
-      text.append(lead, node('p', 'board-update-note', job?.status === 'running' ? 'Codeshi drafts the changes as soon as the Plan’s current update finishes.' : 'Codeshi drafts the changes once the questions waiting on the Plan are answered or dismissed.'));
-      text.append(...[waits()].filter(Boolean));
+      text.append(lead, node('p', 'board-update-note', auto.asking ? 'Codeshi drafts the changes after you answer its questions, here or in its task, so your answers stay with this card.' : job?.status === 'running' ? 'Codeshi drafts the changes as soon as the Plan’s current update finishes.' : 'Codeshi drafts the changes once the questions waiting on the Plan are answered or dismissed.'));
+      text.append(...[auto.asking ? (holding ? node('p', 'board-update-hold', 'The cards after it wait until you answer, or continue anyway.') : null) : waits()].filter(Boolean));
       return box;
     }
     if (mine?.status === 'running') {
@@ -788,13 +810,13 @@
       return box;
     }
     // Updated before: what it drafted, what you did with it, and whether the card has said more since. It isn't offered
-    // again as if it never ran; Update again stays to hand, and leads when there's more to read.
+    // again as if it never ran. Offer another update only when there's more to read.
     const last = card.updates?.at(-1) || null;
     let waiting = 0, newer = false;
     if (last) {
       waiting = cards().filter(item => item.draft?.batch?.id === last.id).length;
-      const drafted = (last.added || 0) + (last.changed || 0) + (last.removed || 0), result = card.result || {};
-      newer = Boolean(last.basis && ((result.reportRun && last.basis.report && result.reportRun !== last.basis.report) || (result.followUps || 0) > (last.basis.followUps || 0)));
+      const drafted = (last.added || 0) + (last.changed || 0) + (last.removed || 0);
+      newer = updateHasNewResult(card, last);
       box.classList.add('done');
       // It asked before drafting, and the questions wait on the Plan: nothing was drafted yet.
       const asking = mine?.id === last.id && mine.status === 'complete' && !drafted && mine.questions?.length ? mine.questions.length : 0;
@@ -820,6 +842,7 @@
       if (waiting) text.append(holding ? waits() : node('p', 'board-update-note', 'They wait on the Plan for you to accept or discard.'));
       else if (newer) text.append(node('p', 'board-update-ask', 'It has said more since this update. Update again to bring that into the Plan.'));
       if (waiting) { actions$.append(button('Show on the Plan', () => closeDrawer(), 'primary-button')); return box; }
+      if (!newer && !auto?.error) return box;
     }
     if (!last && mine?.status === 'complete') {
       const waiting = (mine.cards || []).filter(id => cardBy(id)?.draft?.batch?.id === mine.id).length;
@@ -909,9 +932,11 @@
     }
     if (card.column === 'backlog') { row.append(move('Move to Ready', 'ready', needsSubtasks(card) ? 'secondary-button' : 'primary-button')); }
     if (card.column === 'ready') {
-      const pick = card.auto && !card.agent && !shut(card) ? autoPick(card) : null, why = shut(card) ? 'Closed to agents. Open it to agents to run it.' : !runnable(card) ? notRunnable(card) : pick?.error ? pick.error : dirty() ? 'Save your changes first.' : '';
-      const run = button('Run', () => { const chosen = assignments([card]); if (chosen.error) { failure = chosen.error; showError(); return; } const billing = billingFor([card], chosen.assignments); if (!billing) return; act('/api/board/run', { ids: [card.id], assignments: chosen.assignments, ...billing }, () => api.announce(`“${card.title}” is running as a task.`)); }, 'primary-button');
-      run.disabled = Boolean(why); run.title = why || (pick ? `Run this card as its own task. ${pick.text}.` : 'Run this card as its own task.');
+      const pick = card.auto && !card.agent && !shut(card) ? autoPick(card) : null;
+      // Why it can't run now, asked again on the click: an edit since it was drawn can change the answer.
+      const whyNot = () => shut(card) ? 'Closed to agents. Open it to agents to run it.' : !runnable(card) ? notRunnable(card) : pick?.error ? pick.error : dirty() ? 'Save your changes first.' : '';
+      const run = button('Run', () => { const why = whyNot(); if (why) { refuse(`“${card.title}” can’t run yet. ${why}`); return; } const chosen = assignments([card]); if (chosen.error) { refuse(chosen.error); return; } const billing = billingFor([card], chosen.assignments); if (!billing) return; act('/api/board/run', { ids: [card.id], assignments: chosen.assignments, ...billing }, () => api.announce(`“${card.title}” is running as a task.`)); }, 'primary-button');
+      blockedLook(run, whyNot(), pick ? `Run this card as its own task. ${pick.text}.` : 'Run this card as its own task.');
       row.append(run, ...(card.agent ? [scheduleButton(card)] : []));
       quiet.append(link(move('Move to Backlog', 'backlog')));
     }
@@ -1065,10 +1090,10 @@
     box.setAttribute('aria-label', 'Subtasks');
     const done = list.filter(item => item.status === 'done').length, head = node('div', 'board-subtasks-head');
     head.append(node('h4', 'board-field-label', list.length ? `Subtasks · ${done} of ${list.length} done` : 'Subtasks'));
-    const splitting = board?.suggest?.kind === 'split' && board.suggest.status === 'running' && (board.suggest.cardIds || []).includes(card.id);
+    const splitting = Boolean(splitOf(card.id));
     const canSplit = !card.draft && !shut(card) && !['doing', 'done'].includes(card.column) && !list.some(item => item.status !== 'pending') && !splitting;
     const tools$ = node('div', 'board-subtasks-tools');
-    if (canSplit) { const split = button(list.length ? 'Split again…' : 'Split with an agent…', () => { splitOne = splitOne === card.id ? null : card.id; drawn = null; renderDrawer(); }, 'secondary-button'); split.disabled = busy || board?.suggest?.status === 'running'; split.setAttribute('aria-expanded', String(splitOne === card.id)); if (board?.suggest?.status === 'running') split.title = 'Wait for the agent working on the Plan to finish.'; tools$.append(split); }
+    if (canSplit) { const split = button(list.length ? 'Split again…' : 'Split with an agent…', () => { splitOne = splitOne === card.id ? null : card.id; drawn = null; renderDrawer(); }, 'secondary-button'); split.disabled = busy; split.setAttribute('aria-expanded', String(splitOne === card.id)); tools$.append(split); }
     if (!card.draft && !(card.splitting && live) && !splitting && subEdit?.id !== 'new' && card.column !== 'done') { const add = button('Add', () => { subEdit = { cardId: card.id, id: 'new', title: '', instructions: '', tier: 'standard', agent: '' }; drawn = null; renderDrawer(); $('board-drawer-body').querySelector('.board-subtask-form .board-input')?.focus(); }, 'secondary-button'); add.disabled = busy; add.title = 'Write a subtask yourself'; tools$.append(add); }
     head.append(tools$); box.append(head);
     if (splitOne === card.id && canSplit) box.append(splitPanel([card.id], () => { splitOne = null; drawn = null; renderDrawer(); }));
@@ -1144,7 +1169,7 @@
     const provider = card.taskState?.provider || card.attempts?.at(-1)?.provider, model = card.taskState?.model || card.attempts?.at(-1)?.model;
     const who = [provider ? [AGENT[provider] || provider, modelLabel(provider, model)].filter(Boolean).join(' · ') : '', result.at ? when(result.at) : ''].filter(Boolean).join(' · ');
     head.append(mark, node('h3', 'board-result-title', result.status === 'complete' ? 'Result' : `Result · ${OUTCOME[result.status] || result.status}`), ...(who ? [node('span', 'board-result-who', who)] : []));
-    const facts = [files != null ? (files ? plural(files, 'file') + ' changed' : 'No files changed') : '', tests ? (TESTS[tests] || `Tests ${tests}`) + (result.testsAccepted ? ', continued anyway' : '') : 'No tests recorded', result.status === 'discarded' ? 'Changes discarded' : empty ? 'Nothing to merge' : result.inCopy ? (result.status === 'complete' ? 'In its own copy, not merged yet' : '') : ''].filter(Boolean);
+    const facts = [files != null ? (files ? plural(files, 'file') + ' changed' : 'No files changed') : '', tests ? (testsWord(tests, result) || `Tests ${tests}`) + (result.testsAccepted ? ', continued anyway' : '') : 'No tests recorded', result.status === 'discarded' ? 'Changes discarded' : empty ? 'Nothing to merge' : result.inCopy ? (result.status === 'complete' ? 'In its own copy, not merged yet' : '') : ''].filter(Boolean);
     const chips = node('ul', 'board-result-facts'); chips.setAttribute('aria-label', 'What it changed and how it was tested');
     chips.append(...facts.map(text => node('li', '', text)));
     box.append(head, chips);
@@ -1168,8 +1193,22 @@
       });
       box.append(list);
     }
-    if (result.testsReason && tests !== 'passed' && !(files === 0 && /^No files were changed\.?$/i.test(result.testsReason.trim()))) box.append(node('p', 'board-result-note', result.testsReason));
-    if (card.taskState?.testOutput && card.column === 'review') { const output = node('pre', 'plan-drawer-output', card.taskState.testOutput.trim().split('\n').slice(-20).join('\n')); output.setAttribute('aria-label', 'The end of the test output'); box.append(output); }
+    const testOutput = card.taskState?.testOutput && card.column === 'review' ? card.taskState.testOutput : '';
+    if (testOutput) {
+      box.append(node('p', 'board-result-note', /(?:^|\n).*\bcd:.*(?:No such file or directory|can't cd)/i.test(testOutput) ? 'The test check couldn’t start because its folder was not found.' : 'The test check failed. See details for the command and output.'));
+      const details = node('details', 'board-result-test-details');
+      details.append(node('summary', '', 'Test failure details'));
+      if (result.testCommand || card.taskState?.testCommand) details.append(node('pre', 'plan-drawer-output', result.testCommand || card.taskState.testCommand));
+      if (result.testsReason) details.append(node('p', 'board-result-note', result.testsReason));
+      const output = node('pre', 'plan-drawer-output', testOutput.trim().split('\n').slice(-20).join('\n')); output.setAttribute('aria-label', 'The end of the test output'); details.append(output); box.append(details);
+    } else if (result.testsReason && tests !== 'passed' && !(files === 0 && /^No files were changed\.?$/i.test(result.testsReason.trim()))) box.append(node('p', 'board-result-note', result.testsReason));
+    // The update planner settles the report's decisions before drafting. Once those changes are accepted, the
+    // original report must not offer the same questions again. A later report or follow-up can ask fresh questions.
+    const updated = card.updates?.at(-1);
+    if (asked.length && updated?.accepted && !updated.questions && updated.basis && !updateHasNewResult(card, updated)) {
+      asked = [];
+      box.append(node('p', 'board-result-note', 'These questions were resolved in the accepted Plan update.'));
+    }
     if (asked.length) box.append(questionsBox(card, asked, provider));
     const update = updateBox(card, { questions: asked.length > 0 && card.column === 'review' }); if (update) box.append(update);
     return box;
@@ -1364,15 +1403,18 @@
     parts.push(node('p', 'board-note', flow
       ? `Only the ticked cards run, in Ready order, each after the cards it waits for pass their tests. Flow picks an agent for a card without one as it starts. Up to ${at} at once; each ${access.mode === 'read' ? 'only reads files' : how}. Nothing is pushed or published.`
       : `Each card runs as its own task with its agent, using this workspace’s access: ${how}. A card that waits for another starts after it, once that one’s tests pass, and is told what it did. Tasks at once in the task limits decides how many run together. Nothing is pushed or published.`));
-    const cardProblem = chosen.map(blocked).find(Boolean);
+    // The first ticked card that can't run, named, with why: its row says the same.
+    const cardProblem = chosen.map(card => { const why = blocked(card); return why ? `“${card.title}” can’t run yet. ${why.startsWith('Waits for') ? `It ${why.replace('Waits', 'waits')}, which isn’t done. Tick that one too, or finish it first.` : why}` : ''; }).find(Boolean);
+    const problemNow = () => !chosen.length ? 'Tick the cards to run first.' : cardProblem || (flow ? readShared().wrong : '');
     const run = button(chosen.length ? `Run ${plural(chosen.length, 'card')}` : 'Run', () => {
-      const { limit, wrong } = flow ? readShared() : { limit: null, wrong: '' }; if (wrong) return;
-      const auto = assignments(chosen); if (auto.error) { failure = auto.error; showError(); return; }
+      const problem = problemNow(); if (problem) { refuse(problem); return; }
+      const { limit } = flow ? readShared() : { limit: null };
+      const auto = assignments(chosen); if (auto.error) { refuse(auto.error); return; }
       const billing = billingFor(chosen, auto.assignments); if (!billing) return;
       act('/api/board/run', { ids: chosen.map(card => card.id), assignments: auto.assignments, ...billing, ...(limit ? { shared: limit } : {}) }, () => { api.announce(`${plural(chosen.length, 'card')} running as tasks.`); selected = null; });
     }, 'primary-button');
     // The button follows the limit as you type, without drawing the panel again.
-    const paintRun = () => { const problem = cardProblem || (flow ? readShared().wrong : ''); run.disabled = busy || !chosen.length || Boolean(problem); run.title = problem || ''; };
+    const paintRun = () => { run.disabled = busy; blockedLook(run, problemNow()); };
     paintRun();
     const row = node('div', 'board-save-row'); row.append(run); parts.push(row);
     return parts;
@@ -1622,11 +1664,9 @@
     const bar = $('plan-threads'); if (!bar) return;
     const state = api.getState(), current = state.taskDraft ? null : state.taskId, chat = board?.chat;
     const rows = [{ id: planChatId(), title: fallback() ? 'Workspace chat' : 'Plan chat', kind: 'chat', status: chat?.running ? 'running' : 'idle', approvals: chat?.approvals || 0 },
-      ...cards().filter(card => card.taskState?.conversationId).sort((a, b) => (THREAD_ORDER[a.column] ?? 2) - (THREAD_ORDER[b.column] ?? 2)).map(card => ({ id: card.taskState.id, title: card.title, kind: 'card', status: card.taskState.status, approvals: card.taskState.approvals || 0, review: card.column === 'review' }))];
-    const onChat = (!current && fallback()) || (current && current === planChatId()), currentCard = rows.find(row => row.kind === 'card' && row.id === current);
-    const title = $('plan-chat-title');
-    if (title) { title.textContent = currentCard ? 'Card’s task' : fallback() ? 'Workspace chat' : 'Plan chat'; title.title = fallback() ? `The Plan chat couldn’t open, so the Workspace chat asks and drafts for the Plan. ${chatFailed}` : ''; }
-    if ($('plan-chat-modes')) $('plan-chat-modes').hidden = !onChat;
+      // Only cards that are working, waiting, asking for approval or awaiting your review, and the one open now. A finished card's task opens from the card.
+      ...cards().filter(card => card.taskState?.conversationId && (card.taskState.id === current || ['running', 'waiting'].includes(card.taskState.status) || card.taskState.approvals > 0 || card.column === 'review')).sort((a, b) => (THREAD_ORDER[a.column] ?? 2) - (THREAD_ORDER[b.column] ?? 2)).map(card => ({ id: card.taskState.id, title: card.title, kind: 'card', status: card.taskState.status, approvals: card.taskState.approvals || 0, review: card.column === 'review' }))];
+    const onChat = (!current && fallback()) || (current && current === planChatId());
     emptyState(showing && chatHere());
     const key = JSON.stringify([rows, current, showing, chatFailed]);
     if (bar.dataset.drawn === key) return;
@@ -1656,7 +1696,7 @@
     if (!heading || !text) return;
     emptyWords ||= { heading: heading.textContent, text: text.textContent };
     heading.textContent = plan ? 'Plan chat' : emptyWords.heading;
-    text.textContent = plan ? 'Ask about the Plan and its cards, or switch to Draft plan to have an agent draft or change cards. It reads the project and what the Workspace chat said, and changes no files.' : emptyWords.text;
+    text.textContent = plan ? 'Ask about the Plan and its cards, or describe cards to add or change. It reads the project and what the Workspace chat said, and changes no files.' : emptyWords.text;
     if (starters) starters.hidden = plan;
   }
   // Left and Right move along the bar, as tabs do.
@@ -1669,12 +1709,9 @@
   });
 
   // ---- Asking the chat about the Plan (#162)
-  // In the Plan view the chat's message box knows it. A line above what you write shows what goes with your message: the
-  // Plan, and the card open beside it, sent as the text Attach to message makes, read again at Send so the agent sees the
-  // Plan as it is then, with cards closed to agents left out. × leaves one out of the next message. Ask | Draft cards says
-  // what Send does: ask the agent, or have it draft new cards in one read-only run, from what you write and any brief or
-  // spec attached to the message. The drafted cards arrive on the Plan to accept or discard. app.js asks asking() at Send.
-  let drafting = false, leftOut = { plan: false, card: null }, replaces = null;
+  // Every Plan message carries the current Plan and card IDs implicitly. Only the selected card has a visible
+  // context chip. One read-only run answers questions or drafts changes for the person to accept.
+  let drafting = false, leftOut = { card: null }, replaces = null;
   function setDrafting(value, { focus = true } = {}) {
     if (drafting !== value) { drafting = value; if (!value) replaces = null; contextDrawn = null; drawContext(); }
     if (focus) $('message-input')?.focus();
@@ -1691,7 +1728,7 @@
     if (!showing || !board || !chatHere()) return null;
     const open = cards().filter(card => !shut(card)).length, card = selected ? cardBy(selected) : null;
     return {
-      plan: { count: open, closed: board.closed === true, on: board.closed !== true && open > 0 && !leftOut.plan },
+      plan: { count: open, closed: board.closed === true, on: board.closed !== true && open > 0 },
       card: card && !shut(card) ? { id: card.id, title: card.title, on: leftOut.card !== card.id } : null,
     };
   }
@@ -1702,30 +1739,19 @@
     const flip = button(on ? '×' : '+', toggle, 'plan-context-flip'); flip.setAttribute('aria-label', on ? `Don’t send ${what} with this message` : `Send ${what} with this message`);
     value.append(flip); return value;
   }
-  // Ask only answers, so a message in Ask that asks for new cards ("add that to the plan", "create cards for…") offers
-  // Draft cards while you write. It's a suggestion: Send still asks, and the agent then says Ask can't add cards.
-  const wantsCards = value => /\b(?:add|create|make|draft|write|put|turn|split|break)\b[^.?!\n]{0,80}\bcards?\b/i.test(value)
-    || /\b(?:add|put|include|insert|append)\b[^.?!\n]{0,80}\b(?:to|in|into|on)\s+(?:(?:the|my|our|this)\s+)?plan\b/i.test(value);
   let contextDrawn = null;
   function drawContext() {
     const box = $('plan-context'); if (!box) return;
-    const now = asked$(), blocked = drafting ? cannotDraft() : '', planner = drafting ? window.relayOrchestration?.planner?.() || 'with the message box’s agent' : '';
-    const offer = Boolean(now && !drafting && wantsCards($('message-input')?.value || ''));
-    const key = JSON.stringify([now, drafting, blocked, planner, replaces, offer]);
-    for (const [id, on] of [['plan-mode-ask', !drafting], ['plan-mode-draft', drafting]]) $(id)?.setAttribute('aria-pressed', String(on));
-    $('plan-chat-modes')?.classList.toggle('drafting', drafting);
-    const draftTitle = planner ? `An agent drafts cards for you to review, ${planner}. Attach a brief or spec to plan from it.` : 'An agent drafts cards for you to review. Attach a brief or spec to plan from it.';
-    if ($('plan-mode-draft')) $('plan-mode-draft').title = draftTitle;
+    const now = asked$(), blocked = now ? cannotDraft() : '';
+    const key = JSON.stringify([now, drafting, blocked, replaces]);
     if (key === contextDrawn) return;
     contextDrawn = key; box.hidden = !now;
     $('composer')?.classList.toggle('plan-asking', Boolean(now));
-    $('composer')?.classList.toggle('plan-drafting', Boolean(now && drafting));
+    $('composer')?.classList.toggle('plan-drafting', Boolean(now));
     api.renderControls?.();
     if (!now) { box.replaceChildren(); return; }
     const parts = [];
     if (now.plan.closed) { const shutChip = node('span', 'plan-context-chip off'); shutChip.append(planIcon(), node('span', 'plan-context-name', 'Plan closed to agents')); shutChip.title = 'Agents can’t read this Plan, so nothing from it goes with your message. Open it to agents from ⋯ at the top of the Plan.'; parts.push(shutChip); }
-    else if (now.plan.count) parts.push(chip([`Plan · ${now.plan.count}`, node('span', 'plan-context-unit', ` ${now.plan.count === 1 ? 'card' : 'cards'}`)], now.plan.on ? 'The Plan goes with your message, as it is when you send. Cards closed to agents are left out.' : 'The Plan won’t go with this message.', now.plan.on, () => { leftOut.plan = !leftOut.plan; drawContext(); }, 'the Plan'));
-    else if (!drafting) parts.push(node('span', 'plan-context-empty', 'The Plan has no cards yet'));
     if (now.card) parts.push(chip(now.card.title, now.card.on ? `${now.card.title} — goes with your message, so “this card” means it.` : `${now.card.title} — won’t go with this message.`, now.card.on, () => { leftOut.card = leftOut.card === now.card.id ? null : now.card.id; drawContext(); }, `“${now.card.title}”`, 'card'));
     // Drafting with your answers to the planner's questions replaces that draft once the new one arrives.
     if (drafting && replaces) { const redo = node('span', 'plan-context-chip plan-context-redraft'); redo.append(planIcon(), node('span', 'plan-context-name', 'Redrafts the plan with your answers')); const undo = button('×', () => { replaces = null; contextDrawn = null; drawContext(); }, 'plan-context-flip'); undo.setAttribute('aria-label', 'Draft new cards instead of redrafting'); redo.append(undo); parts.push(redo); }
@@ -1734,25 +1760,18 @@
     box.replaceChildren(...(parts.length ? [row] : []));
     // Why drafting can't start now.
     if (blocked) { const why = node('p', 'plan-context-note plan-context-blocked', blocked); why.setAttribute('role', 'status'); box.append(why); }
-    if (offer) {
-      const note = node('p', 'plan-context-note plan-context-offer', 'Ask only answers questions. To add cards, draft them. ');
-      note.setAttribute('role', 'status');
-      note.append(button('Draft cards instead', () => setDrafting(true), 'text-link plan-context-offer-action'));
-      box.append(note);
-    }
     box.hidden = !box.children.length;
   }
   // At Send: null outside the Plan view; otherwise whether Send drafts cards, why it can't, and attach() for the Plan's text.
   function asking() {
     const now = asked$(); if (!now) return null;
     return {
-      draft: drafting, blocked: drafting ? cannotDraft() : '', replaces: drafting ? replaces : null,
+      draft: true, blocked: cannotDraft(), replaces,
       // The Plan and the card as attachments; the open card is named at the top of the Plan's text rather than sent twice.
       async attach() {
         const ids = [];
-        // Asking tells the agent to answer in prose and point a request for cards to Draft cards (src/board.mjs ASK_NOTE).
-        // Drafting gives each card its Id, so the planner can change, merge or remove the cards already on the Plan.
-        const ask = drafting ? { draft: true } : { ask: true };
+        // Card IDs let the agent propose precise revisions instead of recreating existing cards.
+        const ask = { draft: true };
         if (now.plan.on) ids.push((await api.post('/api/board/attach', now.card?.on ? { focus: now.card.id, ...ask } : ask)).attachment);
         else if (now.card?.on) ids.push((await api.post('/api/board/attach', { cardId: now.card.id, ...ask })).attachment);
         // What the Workspace chat said since the Plan chat last heard goes too, so it answers with the workspace's context.
@@ -1760,8 +1779,8 @@
         if (onPlanChat()) { try { const context = await api.post('/api/board/workspace-context', {}); if (context?.attachment?.id) ids.unshift(context.attachment); } catch { /* Sent without it. */ } }
         return ids.map(meta => meta.id);
       },
-      // Once sent, the next message takes the Plan and the card again, and a draft goes back to asking.
-      sent() { leftOut = { plan: false, card: null }; if (drafting) { drafting = false; replaces = null; api.announce('Drafting cards. They’ll appear on the Plan for you to accept or discard.'); } contextDrawn = null; drawContext(); },
+      // Once sent, the next message takes the current Plan and selected card again.
+      sent() { leftOut = { card: null }; if (drafting) { drafting = false; replaces = null; api.announce('Drafting cards. They’ll appear on the Plan for you to accept or discard.'); } contextDrawn = null; drawContext(); },
     };
   }
 
@@ -1809,8 +1828,8 @@
     if (card && draft && !dirty() && draft.revision !== card.revision) draft = editable(card);
     // A schedule being written is drawn again only when its kind of time changes, so typing keeps its place.
     if (card) readComments(card.id);
-    const key = JSON.stringify([selected, card && [card.column, card.revision, card.reason, card.taskState, card.result, card.acceptedAt, card.attempts?.length, card.labels, card.checks, card.commentCount, card.draft, card.auto, card.routingMode, card.group, card.split, card.subtasks, card.splitting, card.subtasksPaused, card.closed, cards().filter(other => other.dependsOn?.includes(card.id)).map(other => [other.id, other.title, other.column, other.role]), subEdit?.cardId === card.id ? [subEdit.id, subEdit.tier, subEdit.agent] : null, threads.get(card.id)?.length ?? null, schedulesOf(card)], suggestConfirm, board?.suggest, board?.closed, cards().length >= (board?.limits?.cards || 300), selected === 'run' ? [...picked] : null, selected === 'run' ? cards().map(item => [item.id, item.column, item.agent?.provider, item.dependsOn]) : null, selected === 'schedules' ? schedules() : null, selected === 'schedule' ? [sdraft?.id, sdraft?.when.repeat, sdraft?.target] : null, busy]);
-    if (key === drawn) { changed(); return; }
+    const key = JSON.stringify([selected, card && [card.column, card.revision, card.reason, card.taskState, card.result, card.updates, card.acceptedAt, card.attempts?.length, card.labels, card.checks, card.commentCount, card.draft, card.auto, card.routingMode, card.group, card.split, card.subtasks, card.splitting, card.subtasksPaused, card.closed, cards().filter(other => other.dependsOn?.includes(card.id)).map(other => [other.id, other.title, other.column, other.role]), subEdit?.cardId === card.id ? [subEdit.id, subEdit.tier, subEdit.agent] : null, threads.get(card.id)?.length ?? null, schedulesOf(card)], suggestConfirm, board?.suggest, board?.closed, cards().length >= (board?.limits?.cards || 300), selected === 'run' ? [...picked] : null, selected === 'run' ? cards().map(item => [item.id, item.column, item.agent?.provider, item.dependsOn]) : null, selected === 'schedules' ? schedules() : null, selected === 'schedule' ? [sdraft?.id, sdraft?.when.repeat, sdraft?.target] : null, busy]);
+    if (key === drawn) { refreshSave(); return; }
     drawn = key;
     if (selected === 'run') { $('board-drawer-title').textContent = 'Run Ready cards'; body.replaceChildren(...runPanel()); return; }
     if (selected === 'schedules') { $('board-drawer-title').textContent = 'Schedules'; body.replaceChildren(...schedulesPanel()); return; }
@@ -1852,10 +1871,18 @@
     body.replaceChildren(columns, ...part('foot'));
     if (footActions.length) body.querySelector('.board-save-row')?.prepend(...footActions.sort((a, b) => b.classList.contains('board-remove') - a.classList.contains('board-remove')), node('span', 'board-save-spacer'));
     if (writing) { const box = body.querySelector('.board-comment-input'); box?.focus(); box?.setSelectionRange?.(box.value.length, box.value.length); }
-    changed();
+    refreshSave();
   }
   const locked$ = card => card?.column === 'doing';
-  function showError() { $('board-error').textContent = failure; $('board-error').hidden = !failure; }
+  // While a card or a panel is open, why something didn't happen shows in it, under its buttons, rather than above the Plan
+  // where the open card hides it from view.
+  function showError() {
+    const aside = $('board-drawer'), open = Boolean(aside && !aside.hidden);
+    let inner = $('board-drawer-error');
+    if (!inner && aside) { inner = node('p', 'board-error board-drawer-error'); inner.id = 'board-drawer-error'; inner.setAttribute('role', 'alert'); inner.hidden = true; aside.insertBefore(inner, $('board-drawer-body')); }
+    if (inner) { inner.textContent = open ? failure : ''; inner.hidden = !open || !failure; }
+    $('board-error').textContent = open ? '' : failure; $('board-error').hidden = open || !failure;
+  }
 
   // ---- Drafts (#162)
   // A banner for each plan an agent drafted: who drafted it, its summary, the questions it couldn't answer, and Accept all
@@ -1886,8 +1913,9 @@
     const updateAsks = suggest?.kind === 'update' && suggest.status === 'complete' && !suggest.cards?.length && suggest.questions?.length ? suggest : null;
     if (sent && !draftingNow() && Date.now() - sent.at > 4000) sent = null;
     const splits = needingSplit().map(card => card.id);
-    const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, failed ? [failed.id, failed.status, failed.summary] : null, suggestShown, asking ? [asking.id, asking.questions] : null, sent ? [sent.id, draftingNow()] : null, draftNotice?.text || null, splits, splitAsk ? [splitAsk.ids, splitAsk.who] : null, cannotDraft()]));
-    box.hidden = !batches.size && !planning && !failed && !suggestShown && !asking && !draftNotice && !splits.length;
+    const splitsShown = (board?.splits || []).filter(item => ['running', 'failed', 'interrupted'].includes(item.status));
+    const key = JSON.stringify([...batches].map(([id, list]) => [id, list.map(card => [card.id, card.draft.notes?.length || 0])]).concat([busy, planning?.id || null, failed ? [failed.id, failed.status, failed.summary] : null, suggestShown, asking ? [asking.id, asking.questions] : null, sent ? [sent.id, draftingNow()] : null, draftNotice?.text || null, splits, splitsShown, splitAsk ? [splitAsk.ids, splitAsk.who] : null, cannotDraft()]));
+    box.hidden = !batches.size && !planning && !failed && !suggestShown && !asking && !draftNotice && !splits.length && !splitsShown.length;
     if (box.dataset.drawn === key) return;
     box.dataset.drawn = key;
     // While the planner or Suggest next works, a line says so, with Stop; failed/interrupted offers Dismiss.
@@ -1949,6 +1977,23 @@
         actions$.append(dismiss);
       }
       if (!working.includes(row)) { row.append(text, actions$); working.push(row); }
+    }
+    // Each split run has its own line, with its own Stop, or Dismiss once it has failed or been stopped.
+    for (const split of splitsShown) {
+      const isRun = split.status === 'running', row = node('section', `board-draft-batch ${isRun ? 'board-draft-planning board-suggest-running' : 'board-suggest-trouble'}`), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
+      const what = split.cardIds?.length > 1 ? plural(split.cardIds.length, 'card') : `“${split.cardTitle}”`;
+      row.setAttribute('aria-label', isRun ? `Splitting ${what}` : 'A split did not finish');
+      if (isRun) {
+        const who = [AGENT[split.provider] || split.provider, split.model ? modelLabel(split.provider, split.model) : '', split.phase && split.phase !== 'starting' ? split.phase : 'reading the project', split.toolCount ? plural(split.toolCount, 'tool call') : ''].filter(Boolean).join(' · ');
+        text.append(node('p', 'board-draft-lead', `Splitting ${what} into subtasks…`), node('p', 'board-draft-note', `${who}. The subtasks appear on each card for you to review.`));
+        const stop = button('Stop', () => act('/api/board/suggest/stop', { id: split.id }, () => api.announce('Stopping the split.')), 'secondary-button'); stop.setAttribute('aria-label', `Stop splitting ${what}`); stop.disabled = busy;
+        actions$.append(stop);
+      } else {
+        text.append(node('p', 'board-draft-lead', split.status === 'interrupted' ? `Stopped splitting ${what}.` : `Couldn’t split ${what}.`), node('p', 'board-draft-note', split.summary || 'Try again when ready.'));
+        const dismiss = button('Dismiss', () => act('/api/board/suggest/dismiss', { id: split.id }, () => api.announce('Dismissed.')), 'secondary-button'); dismiss.disabled = busy;
+        actions$.append(dismiss);
+      }
+      row.append(text, actions$); working.push(row);
     }
     // The planner asked before drafting: its questions, answered here, and nothing on the Plan yet.
     if (asking) {
@@ -2108,10 +2153,10 @@
   // Major cards (#162) run only through their subtasks. Once accepted, the ones without any say so here, with one
   // read-only run to split them all, or the card's own drawer to split one or write its subtasks yourself.
   let splitAsk = null;
-  const needingSplit = () => cards().filter(card => !card.draft && needsSubtasks(card) && !shut(card) && ['backlog', 'ready'].includes(card.column));
+  const needingSplit = () => cards().filter(card => !card.draft && needsSubtasks(card) && !shut(card) && ['backlog', 'ready'].includes(card.column) && !splitOf(card.id));
   function splitRows() {
-    const list = needingSplit(), job = board?.suggest;
-    if (!list.length || splitQueue.length || (job?.kind === 'split' && job.status === 'running')) return [];
+    const list = needingSplit();
+    if (!list.length) return [];
     const row = node('section', 'board-draft-batch board-split-row'), text = node('div', 'board-draft-text'), actions$ = node('div', 'board-draft-actions');
     row.setAttribute('aria-label', 'Cards that need subtasks');
     const lead = node('p', 'board-draft-lead'); lead.append(glyph(ICONS.subtasks), node('span', '', `${plural(list.length, 'card needs', 'cards need')} subtasks before ${list.length === 1 ? 'it' : 'they'} can run`));
@@ -2119,15 +2164,14 @@
     const head = node('div', 'board-draft-head'); head.append(text, actions$); row.append(head);
     if (!splitAsk) {
       const go = button(list.length === 1 ? 'Split it…' : `Split all ${list.length}…`, () => { splitAsk = { ids: list.map(card => card.id) }; box$().dataset.drawn = ''; drawDrafts(); }, 'primary-button');
-      go.disabled = busy || Boolean(board?.suggest?.status === 'running');
-      if (board?.suggest?.status === 'running') go.title = 'Wait for the agent working on the Plan to finish.';
+      go.disabled = busy;
       actions$.append(go);
     } else row.append(splitPanel(splitAsk.ids, () => { splitAsk = null; box$().dataset.drawn = ''; drawDrafts(); }));
     return [row];
   }
   const box$ = () => $('board-drafts');
   // Every card splits with its own choice: its agent, model and effort, or Auto in its own mode (the workspace's when the
-  // card follows it). Cards that land on the same choice are split in one read-only run; the runs go one after another.
+  // card follows it). Cards that land on the same choice are split in one read-only run, and the runs start together.
   function cardSplitPick(card) {
     if (card.agent?.provider) {
       const provider = card.agent.provider, model = card.agent.model || null, effort = card.agent.effort || null, billed = bills(provider), account = api.getState().accounts?.[provider];
@@ -2146,22 +2190,13 @@
     }
     return { groups: [...groups.values()] };
   }
-  let splitQueue = [];
-  const splitGroup = group => act('/api/board/split', { ids: group.ids, provider: group.pick.provider, model: group.pick.model, effort: group.pick.effort, billingConfirmed: group.pick.billed ? true : window.relayBillingConfirmed === true }, result => { if (result?.suggest && board) board.suggest = result.suggest; api.announce(`Splitting ${plural(group.ids.length, 'card')} into subtasks.`); });
-  // The next run starts when the one before it has finished. If one fails or is stopped, the rest wait for you.
-  async function pumpSplits() {
-    if (!splitQueue.length || busy) return;
-    const job = board?.suggest; if (!job || job.kind !== 'split' || job.status === 'running') return;
-    if (job.status !== 'complete') { splitQueue = []; return; }
-    const next = splitQueue.shift();
-    if (!await splitGroup(next)) splitQueue = [];
-  }
+  const splitGroup = group => act('/api/board/split', { ids: group.ids, provider: group.pick.provider, model: group.pick.model, effort: group.pick.effort, billingConfirmed: group.pick.billed ? true : window.relayBillingConfirmed === true }, () => api.announce(`Splitting ${plural(group.ids.length, 'card')} into subtasks.`));
   function splitPanel(ids, cancel) {
     const box = node('div', 'board-split-confirm'), plan = splitPlan(ids), many = plan.groups.length > 1;
     const cardsText = plural(ids.length, 'card');
     if (plan.error) box.append(node('p', 'board-suggest-note', plan.error));
     else {
-      box.append(node('p', 'board-suggest-note', `Each card is split with its own agent, model or Auto mode. ${many ? `${plural(plan.groups.length, 'read-only run')}, one after another` : 'One read-only run'}, counted toward your usage. You can change any subtask before it runs.`));
+      box.append(node('p', 'board-suggest-note', `Each card is split with its own agent, model or Auto mode. ${many ? `${plural(plan.groups.length, 'read-only run')} at the same time, as many as Tasks at once allows` : 'One read-only run'}, counted toward your usage. You can change any subtask before it runs.`));
       const lines = node('ul', 'board-split-runs');
       for (const group of plan.groups) { const mode = group.modes.size === 1 ? `Auto (${MODE[[...group.modes][0]] || 'Smart'}) · ` : group.modes.size > 1 ? 'Auto · ' : ''; lines.append(node('li', '', `${mode}${group.pick.who}: ${plural(group.ids.length, 'card')}${group.pick.usageNote ? `. ${group.pick.usageNote}` : ''}`)); }
       box.append(lines);
@@ -2171,10 +2206,13 @@
       if (plan.error) { failure = plan.error; showError(); return; }
       const billed = plan.groups.find(group => group.pick.billed);
       if (billed && window.relayBillingConfirmed !== true && !window.confirm(`Split with charges?\n\n${billsSentence(billed.pick.provider)} This read-only run may cost money.\n\nTo stop this question for this session, turn on Allow API and unconfirmed billing in Settings.`)) return;
-      splitAsk = null; splitQueue = plan.groups.slice(1);
-      if (!await splitGroup(plan.groups[0])) splitQueue = [];
+      // Each run starts as soon as the one before it is accepted; one that can't start says why and the rest stop there.
+      // The confirmation closes once you confirm, in a card's drawer as on the board; the card then shows that it's splitting.
+      splitAsk = null;
+      if (ids.includes(splitOne)) { splitOne = null; drawn = null; }
+      for (const group of plan.groups) if (!await splitGroup(group)) break;
     }, 'primary-button');
-    go.disabled = busy || Boolean(plan.error) || board?.suggest?.status === 'running';
+    go.disabled = busy || Boolean(plan.error);
     row.append(button('Cancel', cancel, 'secondary-button'), go);
     box.append(row);
     return box;
@@ -2393,19 +2431,21 @@
     if (from.column === 'review') {
       const tests = from.result?.tests, held = from.taskState?.holds;
       if (tests === 'running') return { kind: 'testing', label: 'Testing', say: `${from.title}’s tests are running. ${to.title} starts when they pass.` };
-      if ((tests === 'failed' || tests === 'interrupted') && !from.result?.testsAccepted && held) return { kind: 'held', label: tests === 'failed' ? 'Tests failed' : 'Tests stopped', say: `${from.title}’s tests didn’t pass, so ${to.title} waits until you check it again or continue anyway.` };
+      if ((tests === 'failed' || tests === 'interrupted') && !from.result?.testsAccepted && held) return { kind: 'held', label: tests === 'failed' ? testsWord(tests, from.result) : 'Tests stopped', say: `${from.title}${from.result?.testsUnrunnable ? '’s check command couldn’t run' : '’s tests didn’t pass'}, so ${to.title} waits until you check it again or continue anyway.` };
       if (to.column === 'doing') return { kind: 'feeding', say: `${to.title} is working with what ${from.title} did.` };
       return { kind: 'review', say: `${from.title} is finished and waits for your review.` };
     }
     return null;
   }
-  // Clicking a card on the canvas (#162) shows its branches without opening it: the card is ringed, the cards it waits for
-  // and the cards that wait for it are tagged and joined by bright arrows, and the rest fade. The camera moves only if part
-  // of that is out of view. A click on empty space puts it all back.
+  // Hovering or focusing a canvas card shows its direct branches without moving anything under the pointer.
+  // Only the card's Fit branches button moves the camera to bring those branches into view.
   const ease = () => { space.classList.add('easing'); clearTimeout(ease.timer); ease.timer = setTimeout(() => space.classList.remove('easing'), 320); };
   function light(id) {
+    if (!cardBy(id) || lit === id) return;
+    lit = id; applyFocus(); drawLinks();
+  }
+  function frameBranch(id) {
     if (!cardBy(id)) return;
-    lit = id; applyFocus();
     if (camera) {
       const rect = space.getBoundingClientRect(), at = places();
       const related = new Set([id, ...(cardBy(id).dependsOn || []), ...cards().filter(other => other.dependsOn?.includes(id)).map(other => other.id)].filter(other => cardBy(other) && at.get(other)));
@@ -2528,13 +2568,20 @@
     // A card without the chosen label stays in its place, faded, so the arrows around it still make sense.
     const item = node('div', `board-node${shown(card) ? '' : ' faded'}`); item.dataset.card = card.id;
     const face = cardButton(card, true);
+    item.addEventListener('pointerenter', event => { if (event.pointerType !== 'touch' && !gesture) light(card.id); });
+    item.addEventListener('pointerleave', () => { if (lit === card.id) unlight(); });
+    item.addEventListener('focusin', () => light(card.id));
+    item.addEventListener('focusout', event => { if (!item.contains(event.relatedTarget) && lit === card.id) unlight(); });
     face.addEventListener('pointerdown', event => startMove(event, card.id));
     face.addEventListener('keydown', event => nudge(event, card.id));
     face.setAttribute('aria-describedby', 'board-canvas-keys');
     // The dot on the right edge starts an arrow to a card that will wait for this one.
     const port = node('span', 'board-port'); port.setAttribute('aria-hidden', 'true'); port.title = 'Drag to a card that should wait for this one';
     port.addEventListener('pointerdown', event => startLink(event, card.id));
-    item.append(face, port);
+    const fitBranch = button('Fit branches', () => { light(card.id); frameBranch(card.id); }, 'board-branch-fit');
+    fitBranch.title = `Fit “${card.title}” and its directly connected cards in view`;
+    fitBranch.setAttribute('aria-label', fitBranch.title);
+    item.append(face, port, fitBranch);
     return item;
   }
   function drawSpace() {
@@ -2550,7 +2597,7 @@
       world$.append(layer);
       // The keyboard way to do what dragging does, read with each card (#26).
       const keys = node('p', 'sr-only', `${altKey} and the arrow keys move this card. Open it to choose which cards it waits for.`); keys.id = 'board-canvas-keys';
-      space.replaceChildren(world$, tools(), node('p', 'board-canvas-hint', `Click a card to see its branches, double-click to open it. Drag a card to place it, or use ${altKey} and the arrow keys. Drag its dot onto another card to make that card wait. Double-click empty space to add a card.`), keys);
+      space.replaceChildren(world$, tools(), node('p', 'board-canvas-hint', `Hover a card to see its branches. Click to open it, or choose Fit branches to bring its connections into view. Drag a card to place it, or use ${altKey} and the arrow keys. Drag its dot onto another card to make that card wait. Double-click empty space to add a card.`), keys);
     } else space.querySelector('.board-canvas-tools')?.replaceWith(tools());
     const world = world$, fresh = [], present = new Set();
     for (const card of cards()) {
@@ -2738,7 +2785,7 @@
     for (const [id, mode] of [['board-columns-mode', 'columns'], ['board-canvas-mode', 'canvas'], ['board-outline-mode', 'outline']]) $(id)?.setAttribute('aria-pressed', String(view === mode));
     drawEarlier();
     if (!board) { const message = node('p', 'plan-view-empty', failure ? `The Plan couldn’t be loaded. ${failure}` : 'Loading the Plan…'); (onCanvas ? space : outline ? $('board-outline') : $('board-columns')).replaceChildren(message); drawContext(); return; }
-    drawFilter(); drawDrafts(); drawClosed(); drawProgress(); drawRuns(); Promise.resolve().then(pumpSplits);
+    drawFilter(); drawDrafts(); drawClosed(); drawProgress(); drawRuns();
     // With no cards and nothing being drafted, the Plan starts here: an agent drafts it, or you write the first card.
     const starting = !cards().length && !planningPlan();
     $('board-start').hidden = !starting;
@@ -2796,7 +2843,8 @@
     const drafts = cards().filter(card => card.draft).length, waiting = cards().filter(card => card.column === 'review').length, working = cards().filter(card => card.column === 'doing').length;
     const planning = api.getState().conversation?.orchestrations?.[0]?.status === 'planning';
     const suggesting = board?.suggest?.status === 'running' || api.getState().conversation?.boardSuggest?.status === 'running';
-    const [state, short, long] = planning ? ['planning', 'Planning…', 'Plan: an agent is drafting cards.'] : suggesting ? ['planning', 'Suggesting…', 'Plan: an agent is suggesting next cards.'] : drafts ? ['ready', String(drafts), `Plan: ${plural(drafts, 'drafted card')} waiting for you to accept or discard.`] : waiting ? ['ready', String(waiting), `Plan: ${plural(waiting, 'card')} to review.`] : working ? ['running', String(working), `Plan: ${plural(working, 'card')} working.`] : ['none', '', 'Plan: plan, run and review this workspace’s cards.'];
+    const splitting = (board?.splits || []).some(item => item.status === 'running');
+    const [state, short, long] = planning ? ['planning', 'Planning…', 'Plan: an agent is drafting cards.'] : splitting && !suggesting ? ['planning', 'Splitting…', 'Plan: an agent is splitting cards into subtasks.'] : suggesting ? ['planning', 'Suggesting…', 'Plan: an agent is suggesting next cards.'] : drafts ? ['ready', String(drafts), `Plan: ${plural(drafts, 'drafted card')} waiting for you to accept or discard.`] : waiting ? ['ready', String(waiting), `Plan: ${plural(waiting, 'card')} to review.`] : working ? ['running', String(working), `Plan: ${plural(working, 'card')} working.`] : ['none', '', 'Plan: plan, run and review this workspace’s cards.'];
     button.dataset.state = state; button.title = long; button.setAttribute('aria-label', long);
     const badge = $('open-plan-state');
     if (badge) { badge.textContent = short; badge.hidden = !short; }
@@ -2831,7 +2879,7 @@
     showing = false; dialog.hidden = true; then = null; tick();
     selected = null; draft = null; sdraft = null; drawn = null; picked$ = null; suggestConfirm = null;
     const menu = $('board-export-menu'); if (menu) menu.hidden = true;
-    drafting = false; replaces = null; leftOut = { plan: false, card: null }; drawContext(); entry();
+    drafting = false; replaces = null; leftOut = { card: null }; drawContext(); entry();
     const back = before; before = null; chatFailed = false;
     if (onPlanThread()) api.setTask(back && !planThreads().has(back) ? back : null).catch(error => api.showNotice(error.message));
     window.relayTaskThreads?.refresh?.();
@@ -2891,11 +2939,6 @@
   });
   $('board-chat')?.addEventListener('click', () => { setChat(true); $('message-input')?.focus(); });
   $('plan-chat-hide')?.addEventListener('click', () => { setChat(false); $('board-chat')?.focus(); });
-  // The chat's header says what Send does: ask, or have an agent draft the plan.
-  $('plan-mode-ask')?.addEventListener('click', () => setDrafting(false));
-  $('plan-mode-draft')?.addEventListener('click', () => setDrafting(true));
-  // What you write decides whether Ask offers Draft cards (wantsCards). drawContext redraws only when that changes.
-  $('message-input')?.addEventListener('input', () => { if (showing && !drafting) drawContext(); });
   // With no cards yet, the Plan starts with an agent drafting it from the chat, a brief or spec, or a card you write.
   const startDrafting = () => { setChat(true); setDrafting(true); };
   $('board-start-draft')?.addEventListener('click', startDrafting);
@@ -2924,7 +2967,7 @@
     const state = api.getState();
     // Another workspace: the Plan stays and shows that workspace's cards, as Flow stays on.
     if (state.projectId !== project) {
-      project = state.projectId; era++; splitQueue = []; writes = 0; loading++; drafting = false; replaces = null; answers = new Map(); leftOut = { plan: false, card: null }; board = null; seen = null; camera = null; fitted = false; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); replies = new Map(); replying = new Map(); heard = new Map();
+      project = state.projectId; era++; writes = 0; loading++; drafting = false; replaces = null; answers = new Map(); leftOut = { card: null }; board = null; seen = null; camera = null; fitted = false; heights = new Map(); undos = []; redos = []; draftNotice = null; suggestConfirm = null; picked$ = null; filter = ''; threads = new Map(); asked = new Map(); said = new Map(); replies = new Map(); replying = new Map(); heard = new Map();
       selected = null; draft = null; sdraft = null; drawn = null; failure = ''; picked = new Set(); chatTask = null; before = null; chatFailed = false;
       if (showing) { renderDrawer(); render(); }
     }

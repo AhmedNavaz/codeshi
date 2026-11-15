@@ -12,7 +12,7 @@
   const PAGES = [['general', t('General')], ['appearance', t('Appearance')], ['accounts', t('Agents & accounts')], ['routing', t('Routing & handoffs')], ['testing', t('Testing')], ['phone', t('Phone & remote')], ['voice', t('Voice')], ['alerts', t('Alerts')], ['updates', t('Updates')]];
   // Places in Settings by the names other parts of the app used before it had these pages.
   const ALIASES = { preferences: 'general', connections: 'accounts', remote: 'phone', handoff: 'routing', context: 'routing' };
-  const HEADINGS = { Alerts: 'alerts', Voice: 'voice', Updates: 'updates', Appearance: 'appearance', Testing: 'testing', 'Remote access': 'phone', 'While agents work': 'general' };
+  const HEADINGS = { Alerts: 'alerts', Voice: 'voice', Updates: 'updates', Appearance: 'appearance', Testing: 'testing', 'Remote access': 'phone', 'While agents work': 'general', 'Work time': 'general' };
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const providerName = provider => ({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini' })[provider];
   const openExternal = async url => { if (window.relayDesktop?.openExternal) await window.relayDesktop.openExternal(url); else window.open(url, '_blank', 'noopener,noreferrer'); };
@@ -127,6 +127,8 @@
         }).catch(() => {});
       }
     }
+    // Work time: today's time, break reminders and the activity history (public/activity.js).
+    if (window.relayActivity) { const part = node('div', undefined, 'settings-section'); host.append(part); window.relayActivity.settings(part, kit); }
     // The interface language (#27), once a catalog gives a language besides English. Each language is listed by its
     // own name. Choosing one reloads the window; the desktop menus follow.
     const slot = node('div'); host.append(slot);

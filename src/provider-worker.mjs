@@ -10,6 +10,8 @@ let running = false;
 let cancelled = false;
 let finished = false;
 const pending = new Map();
+// Why Codeshi refused an action, when it says, for an agent that can tell its model (Claude).
+const reasons = new Map();
 // Set by the adapter while its turn can take more input from the person (a note added during the run).
 let steer = null;
 const send = value => { if (process.connected) process.send(value); };
@@ -17,7 +19,7 @@ const send = value => { if (process.connected) process.send(value); };
 const sendLast = value => new Promise(resolve => { if (process.connected) process.send(value, () => resolve()); else resolve(); });
 process.on('disconnect', () => { if (!finished && process.platform !== 'win32') { try { process.kill(-process.pid, 'SIGTERM'); } catch {} } process.exit(finished ? process.exitCode || 0 : 1); });
 process.on('message', async message => {
-  if (message.type === 'approval-result') { pending.get(message.id)?.(message.allow); pending.delete(message.id); return; }
+  if (message.type === 'approval-result') { if (!message.allow && typeof message.reason === 'string') reasons.set(message.id, message.reason); pending.get(message.id)?.(message.allow); pending.delete(message.id); return; }
   // Answers to an agent's questions, one list per question, or null when the person skipped them.
   if (message.type === 'question-result') { pending.get(message.id)?.(Array.isArray(message.answers) ? message.answers : null); pending.delete(message.id); return; }
   if (message.type === 'steer') {
@@ -44,6 +46,7 @@ process.on('message', async message => {
       metadata: metadata => send({ type: 'metadata', metadata }),
       cancelled: () => cancelled,
       approval: request => new Promise(resolve => { const id = String(request.id); pending.set(id, resolve); send({ type: 'approval', request: { ...request, id } }); }),
+      refusal: id => { const reason = reasons.get(String(id)) || null; reasons.delete(String(id)); return reason; },
       // Stopping the run answers a waiting question with nothing, as it declines a waiting approval.
       question: request => new Promise(resolve => { const id = String(request.id); pending.set(id, answers => resolve(Array.isArray(answers) ? answers : null)); send({ type: 'question', request: { ...request, id } }); }),
       steerable: handler => { steer = handler; },

@@ -1187,7 +1187,8 @@
       const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text || 'Waiting for the reviewer…')); body.append(raw);
       row.append(heading, body, actions); return row;
     }
-    if (!user && message.orchestrationId) {
+    const planAnswer = !user && message.orchestrationId ? state.conversation?.orchestrations?.find(item => item.id === message.orchestrationId && item.status === 'answered')?.summary : null;
+    if (!user && message.orchestrationId && !planAnswer) {
       const plan = state.conversation?.orchestrations?.find(item => item.id === message.orchestrationId);
       body.append(element('p', '', window.relayOrchestration?.describe(plan) || (streaming ? 'Planning the steps…' : 'The planner’s response.')));
       // A plan that wasn't taken has nothing to view: Try again sends the same message and files once more.
@@ -1221,7 +1222,7 @@
       const raw = element('details', 'review-raw'); raw.append(element('summary', '', 'Agent response'), element('pre', '', message.text)); body.append(raw);
       row.append(heading, body, actions); return row;
     }
-    const text=message.text || (streaming ? '' : 'No text response.');
+    const text=planAnswer || message.text || (streaming ? '' : 'No text response.');
     const parts=text.split(/```([^\n`]*)\n([\s\S]*?)```/g);
     replyImages = user || !message.id ? null : { scope: message.id, seen: new Set(), list: [] };
     try {
@@ -1569,10 +1570,10 @@
     if (!text || state.pending || !state.conversation || $("queue-button").hidden) return;
     // From the Plan view (#162) a queued question takes the Plan as it is when queued; drafting cards waits for the run.
     const asking = window.relayBoard?.asking?.() || null;
-    if (asking?.draft) { showNotice("Cards can be drafted once the current run finishes. Switch to Ask to queue a question instead."); return; }
+    if (asking?.draft) { showNotice("Send your next Plan message once the current run finishes."); return; }
     if (asking) {
       try { attachments = [...new Set([...attachments, ...await asking.attach()])]; }
-      catch (error) { showNotice(`${error.message} Select × beside the Plan above the message box to queue it without the Plan.`); return; }
+      catch (error) { showNotice(`${error.message} The message was not queued. Try again.`); return; }
       if (state.pending || state.projectId !== projectId || $("queue-button").hidden) return;
     }
     try { window.relayAutomaticReview?.submission({}, { queued: true }); }
@@ -1804,16 +1805,53 @@
         where.append(cancel); body.append(where);
       }
       const actions = element("div", "prompt-queue-actions");
+      // One grip reorders the queue: drag it, or focus it and press Up or Down.
+      row.dataset.queueId = item.id;
+      const grip = element("button", "icon-button queue-action queue-drag"); grip.type = "button";
+      grip.title = "Drag to reorder"; grip.setAttribute("aria-label", `Reorder prompt ${index + 1} of ${queue.length}. Drag, or press Up or Down`);
+      grip.disabled = Boolean(state.pending) || queue.length < 2 || state.queueEditing === item.id; grip.draggable = !grip.disabled;
+      const moveTo = async target => {
+        if (target < 0 || target >= queue.length || target === index) return;
+        if (await queueAction({ action: "move", id: item.id, index: target })) [...$("prompt-queue-list").children].find(other => other.dataset.queueId === item.id)?.querySelector(".queue-drag")?.focus();
+      };
+      grip.addEventListener("keydown", event => {
+        const target = { ArrowUp: index - 1, ArrowDown: index + 1, Home: 0, End: queue.length - 1 }[event.key];
+        if (target === undefined) return;
+        event.preventDefault(); moveTo(target);
+      });
+      grip.addEventListener("dragstart", event => {
+        state.queueDrag = item.id; row.classList.add("dragging");
+        if (event.dataTransfer) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-codeshi-queue", item.id); event.dataTransfer.setDragImage?.(row, 12, 12); }
+      });
+      grip.addEventListener("dragend", () => { state.queueDrag = null; clearQueueDrop(); row.classList.remove("dragging"); });
+      // Dropping on the top half of a row puts the prompt above it, on the bottom half below it.
+      const after = event => { const box = row.getBoundingClientRect(); return event.clientY > box.top + box.height / 2; };
+      row.addEventListener("dragover", event => {
+        if (!state.queueDrag) return;
+        event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        const below = after(event);
+        if (!row.classList.contains(below ? "drop-after" : "drop-before")) { clearQueueDrop(); row.classList.add(below ? "drop-after" : "drop-before"); }
+      });
+      row.addEventListener("dragleave", event => { if (!row.contains(event.relatedTarget)) row.classList.remove("drop-before", "drop-after"); });
+      row.addEventListener("drop", event => {
+        const id = state.queueDrag; clearQueueDrop();
+        if (!id) return;
+        event.preventDefault(); event.stopPropagation(); state.queueDrag = null;
+        const from = queue.findIndex(entry => entry.id === id);
+        if (from < 0) return;
+        let target = index + (after(event) ? 1 : 0);
+        if (from < target) target -= 1;
+        if (target !== from) queueAction({ action: "move", id, index: target });
+      });
       actions.append(
-        icon("up", "Move up", () => queueAction({ action: "move", id: item.id, index: index - 1 }), index === 0),
-        icon("down", "Move down", () => queueAction({ action: "move", id: item.id, index: index + 1 }), index === queue.length - 1),
         icon("edit", "Edit", () => { state.queueEditing = item.id; renderQueue(); }),
         ...(folders.length ? [icon("task", chosen ? `Run as a task in ${folderName(chosen)}` : "Run as a task", () => queueAsTask(item, chosen?.id))] : []),
         icon("remove", "Remove from queue", () => queueAction({ action: "remove", id: item.id })));
-      row.append(element("span", "prompt-queue-number", String(index + 1)), body, actions);
+      row.append(grip, element("span", "prompt-queue-number", String(index + 1)), body, actions);
       return row;
     }));
   }
+  function clearQueueDrop() { for (const row of $("prompt-queue-list").querySelectorAll(".prompt-queue-item")) row.classList.remove("drop-before", "drop-after"); }
   // The first run stopped by a usage limit offers to handle the next ones without asking (#91). It's asked once: the
   // offer stays for this stop, and Settings has the switch after that. It only shows where it would apply: automatic
   // handoff goes to subscription-billed agents, and is off along with offers.
@@ -2049,7 +2087,7 @@
     const queueing = Boolean(state.conversation) && (running || Boolean(state.conversation?.resume));
     const planAsking = window.relayBoard?.asking?.() || null;
     const canAdd = running && state.conversation?.canAddToRun === true, modKey = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "⌘" : "Ctrl+";
-    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : planAsking ? (planAsking.draft ? t("Describe a Plan change or new work…") : t("Ask about the Plan (read-only)…")) : t("Describe the task or ask a question…");
+    ui.input.placeholder = queueing ? (canAdd ? t("Queue a follow-up, or {shortcut} to add it to this run…", { shortcut: `${modKey}↵` }) : t("Add a message to the queue…")) : state.taskDraft ? t("What should this task do?") : planAsking ? t("Ask about the Plan or describe a change…") : t("Describe the task or ask a question…");
     $("steer-button").hidden = !canAdd;
     $("steer-button").disabled = !state.ready || busy || !ui.input.value.trim() || Boolean(window.relayFiles?.ids().length);
     $("steer-button").title = window.relayFiles?.ids().length ? t("Attachments go with a queued message") : t("Add this to the current run ({shortcut})", { shortcut: `${modKey}↵` });
@@ -2464,7 +2502,7 @@
       state.pending = "send"; renderControls();
       let added = [];
       try { added = await asking.attach(); }
-      catch (error) { showNotice(`${error.message} Select × beside the Plan above the message box to send without it.`); return; }
+      catch (error) { showNotice(`${error.message} The message was not sent. Try again.`); return; }
       finally { state.pending = null; renderControls(); }
       if (state.projectId !== projectAtStart || isRunning()) return;
       attachments = [...new Set([...attachments, ...added])];
@@ -2891,6 +2929,7 @@
     { label: "Review your app: launch map and live services", run: () => window.relayProjectReview?.open() },
     ...(window.relayDesktop?.openPreview ? [{ label: "Preview your app and point at what to change", run: () => { if (window.relayFlow?.isOn()) { window.relayProjectReview?.open(); return; } const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
     { label: "While you were away", run: () => window.relayRecap?.open() },
+    { label: "Activity: working time, breaks and badges", run: () => window.relayActivity?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
     { label: "General settings: view and keep awake", run: () => window.relaySettings?.open("general") },
     { label: "Appearance settings: theme and text size", run: () => window.relaySettings?.open("appearance") },

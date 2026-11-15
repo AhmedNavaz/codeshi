@@ -25,6 +25,7 @@ export const planningMethod = [
   '- Working slices. Prefer cards that each leave the project working and testable end to end, starting with a thin version that runs, over cards that only make sense once every layer is done.',
   '- Unknowns early. A risky or unfamiliar part gets an early card that tries it out, before work that depends on it.',
   '- One outcome per card, with what done means, small enough to review in one sitting.',
+  '- Where a card runs is Codeshi\'s to decide: in its folder, or in a copy of it while other work is using that folder. So don\'t write a card\'s absolute path, ask it to check its working directory, or tell it to stop in a copy. A card that saves files Git ignores, such as notes or screenshots under output/, always works in the folder itself and waits while other work uses it, so list those paths in its files.',
   '- Explicit dependencies, no hidden order. A card lists every earlier card it needs and nothing else, so cards that don\'t depend on each other can run at the same time.',
   '- What the requirements ask for, and nothing more. Data migrations come with a way back. Security, accessibility and performance get their own cards only when the requirements or the project call for them. Tests are part of each card; a plan of more than 3 cards ends with a qa card that checks the whole result.',
   '- Ask first, not after. Where the requirements leave open something only the person can decide and the answer would change the cards, don\'t guess: ask it in questions before drafting. Settle smaller choices yourself with the option you\'d recommend, and say which in the summary.',
@@ -45,7 +46,15 @@ export const revisionMethod = [
   '- Cards you don’t mention stay as they are, so return only what is new or changed. Cards that are Doing, in Review or Done can be waited for, but not changed, merged or removed.',
   '- Use the Plan’s existing phase names where they fit. When regrouping, give every card you move its new phase.',
 ].join('\n');
-export function planningRequest(goal, { documents = [], revising = false } = {}) {
+// In a workspace with more than one folder, each card says which folder it works in. A card without one runs in the
+// first folder, so the planner is told the folders and asked to name one for every card.
+export function folderRule(folders = [], { otherwise = null } = {}) {
+  const names = folders.map(folder => folder.displayName || folder.name).filter(Boolean);
+  if (names.length < 2) return '';
+  return `This workspace has ${names.length} folders: ${names.map(name => `"${name}"`).join(', ')}. Give every card folder, the name of the folder it works in, exactly as written here, and write its files relative to that folder. A card changes only its own folder. It can read the others and run their builds, tests and dev servers, but Codeshi refuses anything else that changes them, so a card's notes, screenshots and other files go in its own folder, even ones Git ignores. ${otherwise ? otherwise[0].toUpperCase() + otherwise.slice(1) : `Without one it runs in "${names[0]}"`}. Work that changes two folders is two cards, one in each.`;
+}
+export function planningRequest(goal, { documents = [], revising = false, conversational = false, folders = [] } = {}) {
+  const folders$ = folderRule(folders);
   return [
     'Plan this request as cards for coding agents. This is a read-only planning run: inspect the project as needed, but do not edit files or run commands that change anything.',
     '',
@@ -57,7 +66,9 @@ export function planningRequest(goal, { documents = [], revising = false } = {})
       '',
     ] : []),
     ...(revising ? [revisionMethod, ''] : []),
-    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions you need the person to answer before you can draft, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of cards, in order). When questions has any, return steps [] (and no remove) and say in summary what you’ll draft once they answer: you draft after their answers, so no cards are drafted and thrown away. Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.',
+    ...(conversational ? ['This is the Plan’s conversation. Decide from the person’s message whether to answer a question, ask for a decision, or draft changes. For questions, explanations, discussion or acknowledgments that do not request card changes, return only {"answer":"your full response in Markdown","steps":[]}. Do not invent card changes for a question. For requests to add, change or remove cards, use the draft format below. No mode switch is needed. Drafts still require the person to accept them.', ''] : []),
+    'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions you need the person to answer before you can draft, usually empty; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of cards, in order). When questions has any, return steps [] (and no remove) and say in summary what you’ll draft once they answer: you draft after their answers, so no cards are drafted and thrown away. Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards it needs, starting at 1), phase (a short phase name, only when the plan has phases), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one; it runs from the root of the folder the card works in, so never cd to another folder, and give a card in another folder its own check there). Do not choose agents or models.',
+    ...(folders$ ? [folders$] : []),
     ...(revising ? ['When changing the attached Plan, a step may also have card (the Id of the card it changes; then only the fields that change are needed) and merges (Ids of cards folded into it), dependsOn may include Ids, and the object may have remove (Ids of cards to remove). steps may be empty when the request only removes cards.'] : []),
     '',
     'Request:',
@@ -134,10 +145,13 @@ function checkRevision(raw, index, earlier, options) {
     out.check = raw.check === null || raw.check === '' ? null : text(raw.check, 300);
     if (out.check === null && raw.check !== null && raw.check !== '') fail(`Give step ${number} an acceptance check of at most 300 characters.`);
   }
+  if (given('folder')) out.folder = stepFolder(raw.folder);
   if (given('dependsOn')) out.dependsOn = stepNeeds(raw.dependsOn, index, earlier, options);
   return out;
 }
 
+// The folder a planner names for a card, matched to the workspace's folders when the card is made (board.mjs).
+const stepFolder = value => typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : null;
 function checkStep(raw, index, earlier, options) {
   const { fromPlanner, revise = false } = options;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('Each of the steps needs a title, instructions and a tier.');
@@ -184,7 +198,7 @@ function checkStep(raw, index, earlier, options) {
   const done = raw.done ?? [];
   if (!Array.isArray(done) || done.length > planLimits.done || done.some(item => !text(item, planLimits.question))) fail(`List at most ${planLimits.done} short statements of what done means for step ${index + 1}.`);
   const merges = revise ? refList(raw.merges, 'cards to merge', index + 1) : [];
-  return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills, phase, done: done.map(item => item.trim()), ...(moreFiles ? { moreFiles } : {}), ...(merges.length ? { merges } : {}) };
+  return { id, title, instructions, files: files.map(file => file.trim()), tier: raw.tier, dependsOn: needs, agent, role, artifact, check, skills, phase, done: done.map(item => item.trim()), ...(stepFolder(raw.folder) ? { folder: stepFolder(raw.folder) } : {}), ...(moreFiles ? { moreFiles } : {}), ...(merges.length ? { merges } : {}) };
 }
 
 // Verify specialist workflow dependency rules:
@@ -448,6 +462,9 @@ export function parsePlan(reply) {
     // A plan can also change the cards already on the Plan (#162): a step with card changes one, and remove takes cards
     // away. One that only removes cards has no steps.
     const remove = plan && typeof plan === 'object' ? refList(plan.remove, 'cards to remove') : [];
+    if (typeof plan?.answer === 'string' && plan.answer.trim() && Array.isArray(plan.steps) && !plan.steps.length && !remove.length && !plan.questions?.length) {
+      return { status: 'answered', summary: text(plan.answer, planLimits.reply), steps: [] };
+    }
     // Questions before any cards (#162): the planner asks what would change the cards, and drafts once you answer.
     if (summary && Array.isArray(plan.steps) && !plan.steps.length && !remove.length) {
       const asked = planQuestions(plan.questions);
@@ -473,6 +490,7 @@ export function draftReplyNote(c, message) {
     return `[A reply written as a draft plan of ${read.steps.length} ${read.steps.length === 1 ? 'card' : 'cards'}, shown here as a note${moved ? '. The person put its cards on the Plan as drafts' : ''}. Replies outside Draft cards are plain prose.] ${read.summary.replace(/\s+/g, ' ').trim()}`;
   }
   const plan = c?.orchestrations?.find(item => item.id === message.orchestrationId);
+  if (plan?.status === 'answered') return plan.summary;
   let count = plan?.cards?.length || plan?.steps?.length || 0, summary = plan?.summary || '';
   // A plan older than the ten the conversation keeps is read from the reply itself.
   if (!plan) { const read = parsePlan(message.text); if (read.status === 'draft') ({ summary } = read, count = read.steps.length); }

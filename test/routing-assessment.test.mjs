@@ -134,7 +134,8 @@ test('a slow agent check holds up neither Send nor the next reading, but Send wa
   // No reading for the agent that holds the session: moving it elsewhere would lose that session, so this one is worth the wait.
   broker.router.readings.clear();
   broker.handoff.account = async provider => { if (provider === 'codex') await new Promise(resolve => setTimeout(resolve, 60)); return account; };
-  broker.router.worker = async () => JSON.stringify(assessment);
+  // Standard work, so continuity decides: deep work is owed Opus over Sol, whoever holds the session.
+  broker.router.worker = async () => JSON.stringify({ ...assessment, tier: 'standard', effort: 'medium' });
   const second = await broker.dispatch(c, { ...input, requestId: 'send-two', text: 'A different follow-up' }); await broker.running.done;
   assert.equal(second.provider, 'codex');
 });

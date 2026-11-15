@@ -15,8 +15,8 @@ const fail = (message, status = 409) => Object.assign(new Error(message), { stat
 const sha = value => createHash('sha256').update(value).digest('hex');
 
 // `magic` lets a call use pathspec magic such as :(exclude); every other call takes paths literally.
-export function git(cwd, args, { encoding = 'utf8', timeout = 30000, input, magic = false } = {}) {
-  return spawnSync(gitExecutable(), [...(magic ? PREFIX.filter(arg => arg !== '--literal-pathspecs') : PREFIX), ...args], { cwd, encoding, timeout, input, maxBuffer: MAX_OUTPUT, shell: false, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+export function git(cwd, args, { encoding = 'utf8', timeout = 30000, input, magic = false, env = null } = {}) {
+  return spawnSync(gitExecutable(), [...(magic ? PREFIX.filter(arg => arg !== '--literal-pathspecs') : PREFIX), ...args], { cwd, encoding, timeout, input, maxBuffer: MAX_OUTPUT, shell: false, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...env } });
 }
 function must(cwd, args, options) {
   const result = git(cwd, args, options);
@@ -51,12 +51,39 @@ export function pathsOverlap(first, second) {
 // sandbox with Full auto-approval, because it still asks for what the sandbox blocks.
 export const unrestricted = ({ provider, mode, approvalPolicy }) => mode === 'edit' && approvalPolicy === 'auto' && provider !== 'codex';
 
+// The paths a folder's Git ignores, of those given relative to it. A tracked file is never ignored, whatever its name, as
+// its changes come back from a copy like any other. A copy starts without the folder's ignored files, and its own are
+// left out when it's merged and deleted with it, so a Plan card that saves some (notes or screenshots under output/,
+// say) works in the folder itself instead. Pathspec magic (a leading ':') would stop Git reading the rest, so it's skipped.
+export function ignoredPaths(folder, paths = []) {
+  const clean = [...new Set((Array.isArray(paths) ? paths : []).map(item => String(item ?? '').trim().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '')).filter(item => item && item.length <= 300 && !item.startsWith(':') && !item.startsWith('~') && !path.isAbsolute(item) && !item.split('/').includes('..') && !item.includes('\0')))].slice(0, 40);
+  // Without a folder Git would answer for wherever Codeshi happens to run.
+  if (!clean.length || typeof folder !== 'string' || !path.isAbsolute(folder)) return [];
+  const found = git(folder, ['check-ignore', '-z', '--stdin'], { input: `${clean.join('\0')}\0`, timeout: 10000, magic: true });
+  // 1 is none ignored; a folder outside Git has none either.
+  if (found.error || typeof found.stdout !== 'string') return [];
+  const ignored = new Set(found.stdout.split('\0').filter(Boolean));
+  return clean.filter(item => ignored.has(item));
+}
+const someOf = (list, most = 3) => list.length <= most ? list.join(', ') : `${list.slice(0, most).join(', ')} and ${list.length - most} more`;
+// A card's own check can start by moving into the card's folder, as one written when cards ran in the workspace's first
+// folder did (cd ../site && npm test). It runs from that folder already, and from a copy the path leads nowhere, so the
+// move is dropped. A move anywhere else is left as written.
+export function ownCheck(command, folder) {
+  const value = String(command || '').trim(), match = /^cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()`$"']+))\s*&&\s*/.exec(value);
+  if (!match || !folder) return value;
+  try { if (fs.realpathSync.native(path.resolve(folder, match[1] ?? match[2] ?? match[3])) === fs.realpathSync.native(folder)) return value.slice(match[0].length).trim() || value; } catch { /* A folder that isn't there: the command fails as written. */ }
+  return value;
+}
+
 // occupants: what is working now, each { real, commonDir, unrestricted, label }.
-export function planIsolation(identity, occupants, { loose = false } = {}) {
+// keeps: the files a Plan card saves that Git ignores (ignoredPaths), which a copy would lose, so it waits for the folder.
+export function planIsolation(identity, occupants, { loose = false, keeps = [] } = {}) {
   const sharing = occupants.find(item => pathsOverlap(item.real, identity.real) || (identity.commonDir && item.commonDir === identity.commonDir));
   const blocker = sharing || occupants.find(item => item.unrestricted) || (loose ? occupants[0] : null);
   if (!blocker) return { mode: 'direct', reason: 'Runs directly in this folder, as nothing else is using it.' };
   const why = sharing ? `${blocker.label} is using ${identity.commonDir && blocker.commonDir === identity.commonDir ? 'this repository' : 'this folder'}` : `${blocker.label} could reach this folder, as it isn't asked before acting`;
+  if (keeps.length) return { mode: 'wait', blocker: blocker.label, keeps: true, reason: `${why}, and this card saves files Git ignores (${someOf(keeps)}), which its own copy would lose. So it waits until that finishes, then works in the folder itself.` };
   if (identity.git && identity.head) return { mode: 'worktree', blocker: blocker.label, reason: `${why}, so this task works in its own copy from the last commit. You review its changes before they're merged.` };
   return { mode: 'wait', blocker: blocker.label, reason: `${why}, and ${identity.git ? 'a repository with no commits' : 'a folder outside Git'} can't have its own copy, so this task waits until that finishes.` };
 }
@@ -185,21 +212,24 @@ function mergeText(root, current, base, theirs) {
 }
 // What merging a task would do, file by file, against the folder as it is right now. Nothing is written here. A file changed
 // only by the task is taken from it; one changed on both sides is merged if the changes don't touch, and otherwise is a
-// conflict, which stops the whole merge rather than overwriting either side.
-export function integrationPlan({ root, prefix = '', base, result }) {
+// conflict, which stops the whole merge rather than overwriting either side. Each conflict has a kind, which says whether
+// an agent can settle it in the task's copy (RESOLVABLE, prepareResolution).
+// pending: the files an agent is resolving, which can't be merged while they still have the markers they were given.
+export function integrationPlan({ root, prefix = '', base, result, pending = null }) {
   const named = must(root, ['diff', '--no-renames', '--no-ext-diff', '--name-status', '-z', base, result]).split('\0').filter(Boolean);
   const counts = new Map(must(root, ['diff', '--no-renames', '--no-ext-diff', '--numstat', '-z', base, result]).split('\0').filter(Boolean).map(line => { const [added, removed, ...file] = line.split('\t'); return [file.join('\t'), { added: Number(added) || 0, removed: Number(removed) || 0 }]; }));
-  const files = [], writes = [];
+  const files = [], writes = [], resolving = new Set(pending?.files || []);
   let total = 0;
   for (let index = 0; index < named.length; index += 2) {
     const code = named[index], file = named[index + 1], target = path.join(root, file), row = { path: file, change: code === 'A' ? 'add' : code === 'D' ? 'delete' : 'update', ...(counts.get(file) || { added: 0, removed: 0 }) };
-    const conflict = reason => files.push({ ...row, status: 'conflict', reason });
-    if (prefix && file !== prefix && !file.startsWith(`${prefix}/`)) { conflict(`It's outside this task's folder.`); continue; }
+    const conflict = (reason, kind) => files.push({ ...row, status: 'conflict', kind, reason });
+    if (prefix && file !== prefix && !file.startsWith(`${prefix}/`)) { conflict(`It's outside this task's folder.`, 'outside'); continue; }
     const { mode: baseMode, id: baseId } = entryOf(root, base, file), { mode: theirMode, id: theirId } = entryOf(root, result, file);
-    if (['120000', '160000'].includes(baseMode) || ['120000', '160000'].includes(theirMode)) { conflict(`Links and submodules aren't merged.`); continue; }
-    if (!reachable(root, file)) { conflict(`Its path goes through a link or into Git's own folder.`); continue; }
+    if (['120000', '160000'].includes(baseMode) || ['120000', '160000'].includes(theirMode)) { conflict(`Links and submodules aren't merged.`, 'link'); continue; }
+    if (!reachable(root, file)) { conflict(`Its path goes through a link or into Git's own folder.`, 'path'); continue; }
     const current = readCurrent(target);
-    if (current.unreadable) { conflict('Something other than a plain file is at this path now.'); continue; }
+    if (current.unreadable) { conflict('Something other than a plain file is at this path now.', 'path'); continue; }
+    if (resolving.has(file) && theirMode && markersIn(stored(root, result, file), pending.labels) > (pending.known?.[file] || 0)) { conflict('It still has conflict markers, so resolving it isn’t finished.', 'unresolved'); continue; }
     const now = current.content, nowId = now === null ? null : storedId(root, file, now), is = id => nowId === id;
     // A file keeps the form it has here: the stored bytes if that's what it holds, as when Git converts nothing, and
     // otherwise what a checkout writes, which is also what a new file gets.
@@ -212,13 +242,19 @@ export function integrationPlan({ root, prefix = '', base, result }) {
     else if (is(baseId)) { status = 'clean'; content = (forms.find(form => now && same(form.was, now)) || forms[0]).theirs; }
     else if (texts.length) {
       const merged = texts.reduce((done, form) => done ?? mergeText(root, now, form.was, form.theirs), null);
-      if (merged === null) { conflict('This file also changed here, in the same lines.'); continue; }
+      if (merged === null) { conflict('This file also changed here, in the same lines.', 'lines'); continue; }
       status = 'merged'; content = merged;
-    } else { conflict(now === null ? 'This file was deleted here after the task began.' : !theirMode ? 'The task deleted this file, and it also changed here.' : 'This file also changed here.'); continue; }
+    } else {
+      // Where one side has no file, the others decide: text on every side that has one can still be combined.
+      const textual = [now, forms[0].was, forms[0].theirs].every(item => item === null || isText(item));
+      conflict(now === null ? 'This file was deleted here after the task began.' : !theirMode ? 'The task deleted this file, and it also changed here.' : !baseMode && textual ? 'This file was also added here, with other content.' : 'This file also changed here.',
+        !textual ? 'binary' : now === null ? 'deleted-here' : !theirMode ? 'deleted-by-task' : !baseMode ? 'added-both' : 'binary');
+      continue;
+    }
     if (status !== 'same') writes.push({ path: file, content, mode: theirMode });
     const diff = total < 512 * 1024 ? git(root, ['diff', '--no-renames', '--no-ext-diff', '--no-textconv', base, result, '--', file]).stdout || '' : '';
     total += diff.length;
-    files.push({ ...row, status, ...(diff ? { diff: diff.length > DIFF_LIMIT ? `${diff.slice(0, DIFF_LIMIT)}\n[Shortened here. The whole change is in the task's commit.]` : diff } : {}) });
+    files.push({ ...row, status, ...(resolving.has(file) ? { resolved: true } : {}), ...(diff ? { diff: diff.length > DIFF_LIMIT ? `${diff.slice(0, DIFF_LIMIT)}\n[Shortened here. The whole change is in the task's commit.]` : diff } : {}) });
   }
   // The digest covers what would be written and what it would replace, so a change on either side means reviewing again.
   const digest = sha(JSON.stringify([result, files.map(file => [file.path, file.status]), writes.map(item => [item.path, item.content ? sha(item.content) : null, item.mode]), writes.map(item => { const now = readCurrent(path.join(root, item.path)); return now.content ? sha(now.content) : null; })]));
@@ -244,6 +280,128 @@ export function applyPlan(root, plan) {
     for (const { target, before } of done.reverse()) { try { if (before === null) fs.rmSync(target, { force: true }); else writeFile(target, before); } catch { /* The error below is what the person needs to know. */ } }
     throw error;
   }
+}
+
+// ---- Resolving a conflict with an agent, in the task's own copy and never the folder.
+// The conflicts an agent can settle: both sides changed the same lines, or one side deleted or both added a file, with
+// text on every side that has one. A file still marked from an earlier try starts again from where that one began.
+export const RESOLVABLE = new Set(['lines', 'deleted-here', 'deleted-by-task', 'added-both', 'unresolved']);
+// The markers' labels say whose each side is. The folder's name becomes one short line, as it goes into the file.
+export function markerLabels(folder) {
+  const name = String(folder || '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'the folder';
+  return { ours: 'this copy', base: 'when this copy was made', theirs: `${name} now` };
+}
+// How many of Codeshi's own marker lines a file has. Only those count, never a line of seven <s that a file holds anyway.
+export function markersIn(content, labels) {
+  if (!content || !labels) return 0;
+  const marks = new Set([`<<<<<<< ${labels.ours}`, `||||||| ${labels.base}`, `>>>>>>> ${labels.theirs}`]);
+  let count = 0;
+  for (const line of content.toString('utf8').split('\n')) if (marks.has(line.endsWith('\r') ? line.slice(0, -1) : line)) count++;
+  return count;
+}
+// The files an agent was given that still have more of those markers in the copy than they started with.
+export function unfinishedFiles(worktree, resolve) {
+  return (resolve?.files || []).filter(file => { const found = readCurrent(path.join(worktree, file)); return Boolean(found.content) && markersIn(found.content, resolve.labels) > (resolve.known?.[file] || 0); });
+}
+// Both sides of a file as Git merges them, with diff3 markers where they changed the same lines. A missing side is empty.
+function mergeMarked(root, file, mine, was, theirs, labels) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-resolve-'));
+  try {
+    const names = ['mine', 'was', 'theirs'].map(name => path.join(directory, name)), empty = Buffer.alloc(0);
+    fs.writeFileSync(names[0], mine || empty); fs.writeFileSync(names[1], was || empty); fs.writeFileSync(names[2], theirs || empty);
+    const merged = git(root, ['merge-file', '-p', '--diff3', '-L', labels.ours, '-L', labels.base, '-L', labels.theirs, ...names], { encoding: 'buffer' });
+    // Git answers with the number of conflicts, and with more than 127 only on an error.
+    if (merged.error || merged.status === null || merged.status > 127) throw fail(`Git could not combine ${file}: ${String(merged.stderr || merged.error?.message || '').trim().slice(0, 300)}`, 500);
+    return { content: merged.stdout, conflicts: merged.status };
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}
+// A commit of parent's files with some changed: { path, content, mode } stores content as Git would for that path,
+// { path, id, mode } names a file already stored, and { path, content: null } removes one. A temporary index leaves the
+// repository's own index and every worktree alone.
+function commitWith(root, parent, changes, message) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-index-')), env = { GIT_INDEX_FILE: path.join(directory, 'index') };
+  try {
+    must(root, ['read-tree', parent], { env });
+    for (const change of changes) {
+      if (!change.id && change.content === null) { must(root, ['update-index', '--force-remove', '--', change.path], { env }); continue; }
+      const id = change.id || must(root, ['hash-object', '-w', `--path=${change.path}`, '--stdin'], { input: change.content }).trim();
+      must(root, ['update-index', '--add', '--cacheinfo', `${change.mode || '100644'},${id},${change.path}`], { env });
+    }
+    const tree = must(root, ['write-tree'], { env }).trim();
+    return must(root, ['-c', 'user.name=Codeshi', '-c', 'user.email=codeshi@localhost', 'commit-tree', tree, '-p', parent, '-m', message]).trim();
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}
+// Brings the folder's current version of each conflicting file into the task's copy, merged with the task's own where Git
+// can and marked where both changed the same lines, for an agent to settle there. Only the copy is written. The base then
+// holds the folder's versions of those files, so the review afterwards shows what merging would change in the folder,
+// and a later change there merges as any change does. Returns the new base and, for each file, its kind, how many
+// conflicts are marked, and how many marker lines its two sides already had, which never count (markersIn).
+export function prepareResolution({ root, worktree, id, base, result, plan, labels }) {
+  const changes = [], files = [], writes = [];
+  // Everything is worked out before anything is written, so a file that can't be combined changes nothing.
+  for (const row of plan.files.filter(file => file.status === 'conflict')) {
+    const file = row.path, copy = path.join(worktree, file);
+    if (!RESOLVABLE.has(row.kind) || row.kind === 'unresolved') throw fail(`${file} can’t be combined: ${row.reason}`);
+    if (!reachable(worktree, file)) throw fail(`${file} can’t be written in the task’s copy.`);
+    const mine = readCurrent(copy), now = readCurrent(path.join(root, file));
+    if (mine.unreadable || now.unreadable) throw fail(`${file} isn’t a plain file on both sides, so it can’t be combined.`);
+    const before = entryOf(root, base, file), theirs = entryOf(root, result, file);
+    const merged = mergeMarked(root, file, mine.content, before.mode ? checkedOut(root, base, file) : null, now.content, labels);
+    writes.push({ copy, content: merged.content, mode: theirs.mode || before.mode, was: mine.content, wasMode: theirs.mode });
+    changes.push(now.content === null ? { path: file, content: null } : { path: file, content: now.content, mode: before.mode || theirs.mode || '100644' });
+    const known = markersIn(mine.content, labels) + markersIn(now.content, labels);
+    files.push({ path: file, kind: row.kind, conflicts: merged.conflicts, ...(known ? { known } : {}) });
+  }
+  if (!files.length) return { base, files };
+  const done = [];
+  try {
+    for (const item of writes) { writeFile(item.copy, item.content, item.mode); done.push(item); }
+    const next = commitWith(root, base, changes, `Codeshi task ${id}: the folder's versions of the files it resolves`);
+    patient(root, ['update-ref', refs(id).base, next]);
+    return { base: next, files };
+  } catch (error) {
+    for (const item of done.reverse()) { try { if (item.was === null) fs.rmSync(item.copy, { force: true }); else writeFile(item.copy, item.was, item.wasMode); } catch { /* The error below is what the person needs to know. */ } }
+    throw error;
+  }
+}
+// Files whose resolving didn't finish go back to where it began: the task's own version in the copy, from before (the
+// task's commit then), and the folder's version it was compared with, from from (the base then). Returns the new base.
+export function restoreResolution({ root, worktree, id, base, before, from, files }) {
+  const changes = [];
+  for (const file of files) {
+    if (!reachable(worktree, file)) continue;
+    const mine = entryOf(root, before, file), was = entryOf(root, from, file), copy = path.join(worktree, file);
+    if (mine.mode) writeFile(copy, checkedOut(root, before, file), mine.mode); else fs.rmSync(copy, { force: true });
+    changes.push(was.mode ? { path: file, id: was.id, mode: was.mode } : { path: file, content: null });
+  }
+  if (!changes.length) return base;
+  const next = commitWith(root, base, changes, `Codeshi task ${id}: back to before resolving`);
+  patient(root, ['update-ref', refs(id).base, next]);
+  return next;
+}
+// What the agent resolving the conflicts is asked, in the task's own conversation. Paths are from its own folder.
+export function resolvePrompt({ folder, card = false, prefix = '', files, labels }) {
+  const here = file => prefix ? path.posix.relative(prefix, file) : file, many = files.length !== 1;
+  const kind = file => ({
+    'deleted-here': `it was deleted in ${folder} since, so the “${labels.theirs}” side is empty`,
+    'deleted-by-task': `you deleted it, and it changed in ${folder} since, so the “${labels.ours}” side is empty`,
+    'added-both': `you both added it`,
+  })[file.kind] || `${file.conflicts} conflict${file.conflicts === 1 ? '' : 's'}`;
+  return [
+    `This ${card ? 'card' : 'task'}’s changes can’t be merged into ${folder} yet: ${many ? `${files.length} files` : 'a file'} you changed also changed there since this copy was made. Codeshi brought ${folder}’s current version of ${many ? 'them' : 'it'} into this copy and merged what Git could. Where both sides changed the same lines, there are conflict markers:`,
+    '',
+    '```text', `<<<<<<< ${labels.ours}`, 'your version', `||||||| ${labels.base}`, 'the lines as they were', '=======', `${folder}’s version now`, `>>>>>>> ${labels.theirs}`, '```',
+    '',
+    ...files.map(file => `- ${here(file.path)}: ${kind(file)}`),
+    '',
+    'Settle every conflict here, in this copy, and remove each marker line.',
+    '- Where both sides want things that fit together, keep both: two added imports, two new entries in a list, two new sections.',
+    `- Where they really disagree, don't choose: two different texts for one heading, say, or two values for one setting. Leave that conflict as it is and ask me which to keep, showing both versions. Use your tool for asking questions if you have one; otherwise end your reply with a heading “Questions for you”.`,
+    '- Where one side deleted the file, ask me too. To keep the deletion, delete the file rather than leaving it empty.',
+    `- Change nothing else, and don't commit: Codeshi saves this copy. ${folder} itself stays as it is until I review the combined result and merge it.`,
+    '',
+    'When you finish, say in a line per file how you combined it.',
+  ].join('\n');
 }
 
 // The tests against the combined result: a temporary worktree with the folder's current changes and the task's merged on

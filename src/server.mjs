@@ -37,6 +37,7 @@ import { phoneConversation } from './phone-conversation.mjs';
 import { chooseTip, dismissTip, markShown } from './suggestions.mjs';
 import { catalog, chooseLanguage, languages, localesDir as defaultLocales, textFor } from './i18n.mjs';
 import { shareableReport, sharePost } from './smart-results.mjs';
+import { activityPatch, createActivity, noteActivity } from './activity.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = { '/project-commands.js': ['project-commands.js', 'text/javascript; charset=utf-8'], '/project-commands.css': ['project-commands.css', 'text/css; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/desktop-controls.js': ['desktop-controls.js', 'text/javascript; charset=utf-8'], '/setup.js': ['setup.js', 'text/javascript; charset=utf-8'], '/polish.css': ['polish.css', 'text/css; charset=utf-8'], '/files.js': ['files.js', 'text/javascript; charset=utf-8'], '/files.css': ['files.css', 'text/css; charset=utf-8'], '/onboarding.css': ['onboarding.css', 'text/css; charset=utf-8'],
@@ -56,6 +57,7 @@ const assets = { '/project-commands.js': ['project-commands.js', 'text/javascrip
   '/flow.js': ['flow.js', 'text/javascript; charset=utf-8'], '/flow-lounge.js': ['flow-lounge.js', 'text/javascript; charset=utf-8'], '/flow-lounge-puzzles.js': ['flow-lounge-puzzles.js', 'text/javascript; charset=utf-8'], '/flow-lounge-puzzles.css': ['flow-lounge-puzzles.css', 'text/css; charset=utf-8'], '/flow.css': ['flow.css', 'text/css; charset=utf-8'],
   '/project-review.js': ['project-review.js', 'text/javascript; charset=utf-8'], '/project-review.css': ['project-review.css', 'text/css; charset=utf-8'],
   '/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'], '/alerts.css': ['alerts.css', 'text/css; charset=utf-8'],
+  '/activity.js': ['activity.js', 'text/javascript; charset=utf-8'], '/activity.css': ['activity.css', 'text/css; charset=utf-8'],
   '/questions.js': ['questions.js', 'text/javascript; charset=utf-8'], '/questions.css': ['questions.css', 'text/css; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'], '/editor-theme.css': ['editor-theme.css', 'text/css; charset=utf-8'], '/insights.js': ['insights.js', 'text/javascript; charset=utf-8'], '/conversation-history.js': ['conversation-history.js', 'text/javascript; charset=utf-8'], '/conversation-search.js': ['conversation-search.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/workbench.js': ['workbench.js', 'text/javascript; charset=utf-8'], '/settings.js': ['settings.js', 'text/javascript; charset=utf-8'], '/settings.css': ['settings.css', 'text/css; charset=utf-8'], '/workbench.css': ['workbench.css', 'text/css; charset=utf-8'], '/icon.svg': ['icon.svg', 'image/svg+xml'], '/logo.svg': ['logo.svg', 'image/svg+xml'], '/mark.svg': ['mark.svg', 'image/svg+xml'],
   '/sounds/rain.m4a': ['sounds/rain.m4a', 'audio/mp4'], '/sounds/snow.m4a': ['sounds/snow.m4a', 'audio/mp4'],
@@ -141,6 +143,9 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
   const projectReviewRoutes = createProjectReviewRoutes({ registry, commands: commandRoutes.commands, body, json });
   const terminalRoutes = createTerminalRoutes({ registry, body, json, cli: cliCommand(cliConnection) });
   const voiceRoutes = createVoiceRoutes({ body, json, ...(voice ? { sessions: voice } : {}) });
+  // Work time and activity: counted here from what the window reports, kept for this month and last month.
+  const activity = createActivity({ file: path.join(registry.dataRoot, 'activity.json'), preferences: () => config.activity,
+    working: () => [...registry.brokers.values()].some(({ broker }) => { const now = broker.workspaceActivity(); return now.running + now.reviewing + now.checking > 0; }) });
   const listeners = new Set();
   let closing = false;
   registry.on('update', update => {
@@ -266,6 +271,20 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
         if (req.method === 'GET') return json(res, 200, phoneAccess.status());
         if (req.method === 'POST') return json(res, 200, await phoneAccess.manage(await body(req, 4096)));
         return json(res, 405, { error: 'Use GET or POST for remote access.' });
+      }
+      if (url.pathname === '/api/activity' || url.pathname.startsWith('/api/activity/')) {
+        if (req.phoneClient) return json(res, 403, { error: 'Your activity is on the computer.' });
+        if (req.method === 'GET' && url.pathname === '/api/activity') return json(res, 200, activity.view());
+        if (req.method !== 'POST') return json(res, 405, { error: 'Use GET or POST for activity.' });
+        const input = await body(req, 4096), action = url.pathname.slice('/api/activity/'.length);
+        if (action === 'beat') return json(res, 200, activity.beat({ idleMs: Number(input.idleMs), focused: input.focused === true }));
+        // Only games are reported by the page; everything else is counted where it happens.
+        if (action === 'note') { if (input.kind !== 'games') return json(res, 400, { error: 'Only games are reported here.' }); activity.note({ kind: 'games' }); return json(res, 200, activity.live()); }
+        if (action === 'reminder') return json(res, 200, activity.remind(input));
+        if (action === 'seen') return json(res, 200, activity.seen(input));
+        if (action === 'clear') return json(res, 200, activity.clear());
+        if (action === 'settings') { saveSettings({ activity: activityPatch(input, config.activity) }); return json(res, 200, activity.view()); }
+        return json(res, 404, { error: 'Not found.' });
       }
       if (url.pathname === '/api/preferences') {
         const listed = languages(localesDir);
@@ -425,8 +444,9 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           if (match[2] === 'provider') return json(res, 200, await broker.settings(c, input, viewOptions));
           if (match[2] === 'stop') return json(res, 200, broker.stop(c.id));
           if (match[2] === 'resume') return json(res, 200, input.cancel === true ? broker.cancelResume(c) : broker.scheduleResume(c, input));
-          if (match[2] === 'queue') return json(res, 200, broker.queueAction(c, input));
-          if (match[2] === 'steer') return json(res, 200, await broker.addToRun(c, input));
+          // A prompt you send, queue or add to a running agent counts toward the day's activity, from here or a phone.
+          if (match[2] === 'queue') { const result = broker.queueAction(c, input); if (input.action === 'add') noteActivity('prompts'); return json(res, 200, result); }
+          if (match[2] === 'steer') { const result = await broker.addToRun(c, input); noteActivity('prompts'); return json(res, 200, result); }
           if (match[2] === 'routing' && !Number.isSafeInteger(input.executionRevision)) return json(res, 409, { error: 'Refresh execution settings before changing routing.' });
           if (['messages', 'queue'].includes(match[2]) && input.routing && !Number.isSafeInteger(input.executionRevision)) return json(res, 409, { error: 'Refresh execution settings before delegating new work.' });
           if (match[2] === 'routing') return json(res, 200, broker.setRouting(c, input, viewOptions));
@@ -440,7 +460,7 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
           }
           if (match[2] === 'retry') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissRetry(c, input.offerId) : broker.acceptRetry(c, input));
           if (match[2] === 'handoff') return json(res, input.accept === false ? 200 : 202, input.accept === false ? broker.dismissHandoff(c, input.offerId) : await broker.acceptHandoff(c, input));
-          if (match[2] === 'messages') return json(res, 202, await broker.dispatch(c, input));
+          if (match[2] === 'messages') { const result = await broker.dispatch(c, input); noteActivity('prompts'); return json(res, 202, result); }
           if (match[2] === 'continue') return json(res, 202, await broker.continueTask(c, input));
         }
       }
@@ -500,12 +520,13 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     await step('terminals', () => terminalRoutes.close());
     await step('voice', () => voiceRoutes.close());
     await step('workspaces', () => registry.close());
+    await step('activity', () => activity.close());
     clearInterval(heartbeat);
     for (const res of listeners) res.end();
     await step('connections', () => new Promise(resolve => { server.close(resolve); if (force) server.closeAllConnections(); }));
     if (failure) throw failure;
   })();
-  return { server, registry, collaboration, eventClients: () => listeners.size, sharing, commands: commandRoutes.commands, projectReview: projectReviewRoutes.review, terminals: terminalRoutes.sessions, close,
+  return { server, registry, collaboration, activity, eventClients: () => listeners.size, sharing, commands: commandRoutes.commands, projectReview: projectReviewRoutes.review, terminals: terminalRoutes.sessions, close,
     getAppearancePreference: () => appearance(config),
     // The menus' words, in the language the page uses (#27).
     getText: () => textFor(currentLanguage(), localesDir),

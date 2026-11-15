@@ -3,6 +3,9 @@
 .board-view .plan-view-head { align-items: center; }
 .board-view .plan-view-head .secondary-button, .board-view .plan-view-head .primary-button { flex: none; height: 28px; }
 .board-error { flex: none; margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
+/* The same line inside an open card or panel, under its buttons; and a button that can't act yet but says why when clicked. */
+.board-drawer-error { padding: 8px 20px; line-height: 1.45; }
+.board-blocked, .board-blocked:hover { opacity: .5; cursor: default; filter: none; }
 .board-canvas { flex: 1 1 auto; min-width: 0; overflow: auto; padding: 16px 16px 20px; }
 .board-columns { display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 12px; min-height: 100%; align-items: stretch; }
 .board-column { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel-bg); }
@@ -254,7 +257,12 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 
 .board-node { position: absolute; left: 0; top: 0; width: 220px; }
 .board-node .board-card { cursor: grab; }
+.board-node:hover, .board-node:focus-within { z-index: 2; }
 .board-node.moving { z-index: 3; }
+.board-branch-fit { position: absolute; right: 0; top: -24px; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); color: var(--text); font: 11px var(--font); cursor: pointer; visibility: hidden; }
+.board-node:hover .board-branch-fit, .board-node:focus-within .board-branch-fit { visibility: visible; }
+.board-branch-fit:hover { background: var(--hover); }
+.board-branch-fit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .board-node.faded { opacity: .32; }
 .board-node.faded:hover, .board-node.faded:focus-within { opacity: .7; }
 .board-link.faded { opacity: .25; }
@@ -404,7 +412,7 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 
 /* The Plan as a view (#162): the header across the window, the board on the left and the Workspace chat on the right, with
    the status bar under both. The button at the end of the Plan's toolbar hides the chat, and the board then fills the window. */
-#app-shell.plan, #app-shell.plan:has(.side-panel:not([hidden])), #app-shell.plan:has(#review-panel:not([hidden])) { --plan-chat-width: clamp(360px, 30vw, 460px); display: grid; grid-template-columns: minmax(0, 1fr) var(--plan-chat-width); grid-template-rows: 56px auto minmax(0, 1fr) var(--statusbar-height); overflow-x: hidden; }
+#app-shell.plan, #app-shell.plan:has(.side-panel:not([hidden])), #app-shell.plan:has(#review-panel:not([hidden])) { --plan-chat-width: clamp(420px, 34vw, 520px); display: grid; grid-template-columns: minmax(0, 1fr) var(--plan-chat-width); grid-template-rows: 56px auto minmax(0, 1fr) var(--statusbar-height); overflow-x: hidden; }
 #app-shell.plan.plan-chat-hidden, #app-shell.plan.plan-chat-hidden:has(.side-panel:not([hidden])), #app-shell.plan.plan-chat-hidden:has(#review-panel:not([hidden])) { grid-template-columns: minmax(0, 1fr) 0; }
 #app-shell.plan > .board-view { grid-column: 1; grid-row: 2 / 4; display: flex; flex-direction: column; width: auto; height: auto; min-width: 0; min-height: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
 #app-shell.plan > .main-panel { grid-column: 2; grid-row: 2 / 4; min-width: 0; border-left: 1px solid var(--border); }
@@ -467,7 +475,7 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 /* In a narrow window the chat lies over the board's right edge instead of taking a column from it. */
 @media (max-width: 900px) {
   #app-shell.plan, #app-shell.plan:has(.side-panel:not([hidden])), #app-shell.plan:has(#review-panel:not([hidden])) { grid-template-columns: minmax(0, 1fr) 0; }
-  #app-shell.plan > .main-panel { position: fixed; z-index: 30; top: 56px; right: 0; bottom: var(--statusbar-height); width: min(420px, 92vw); background: var(--bg); box-shadow: var(--shadow-lg); }
+  #app-shell.plan > .main-panel { position: fixed; z-index: 30; top: 56px; right: 0; bottom: var(--statusbar-height); width: min(480px, 92vw); background: var(--bg); box-shadow: var(--shadow-lg); }
 }
 
 /* Suggest next & draft undo (#162) */
@@ -512,20 +520,10 @@ span.plan-context-chip.off:not(:has(button)) { padding-right: 7px; }
 @media (max-width: 1240px) { .board-progress > span:not(.board-progress-bar) { display: none; } }
 @media (max-width: 1100px) { .board-modes button { padding: 0 8px; } .board-modes button .icon { display: none; } #board-schedules > span:not(.board-schedules-count), #board-new > span { display: none; } }
 
-/* The chat's header in the Plan view: what the column is, what Send does, and the button that hides it. */
+/* The Plan chat needs only its hide control above the conversation tabs. */
 .plan-chat-head { display: none; }
-#app-shell.plan .plan-chat-head { flex: none; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--border); }
-.plan-chat-title { color: var(--text-strong); font-size: 12.5px; font-weight: 600; }
-.plan-chat-modes { display: inline-flex; gap: 2px; margin-left: auto; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--chip-bg); }
-.plan-chat-mode { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 12px var(--font); font-weight: 500; white-space: nowrap; cursor: pointer; }
-.plan-chat-mode .icon { width: 13px; height: 13px; }
-.plan-chat-mode:hover { color: var(--text-strong); }
-.plan-chat-mode[aria-pressed=true] { background: var(--surface-raised); color: var(--text-strong); box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-sm); }
-.plan-chat-modes.drafting .plan-chat-mode[aria-pressed=true] { color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--border)), var(--shadow-sm); }
-.plan-chat-mode:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.plan-chat-modes[hidden] { display: none; }
+#app-shell.plan .plan-chat-head { flex: none; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; }
 #app-shell.plan .plan-chat-head #plan-chat-hide { margin-left: auto; }
-#app-shell.plan .plan-chat-modes:not([hidden]) + #plan-chat-hide { margin-left: 0; }
 
 /* The Plan chat and each card's task (#162), as tabs above the chat. A card's dot says how its task stands. */
 .plan-threads { display: none; }

@@ -44,7 +44,9 @@ export function permissionsRequest(id, params) {
   const { network, fileSystem } = params?.permissions || {}, wanted = [network?.enabled ? 'Network access' : '', fileSystem ? 'Access to files' : ''].filter(Boolean);
   const paths = fileSystem ? [['Read', fileSystem.read], ['Write', fileSystem.write]].filter(([, list]) => list?.length).map(([name, list]) => `${name}: ${list.join(', ')}`) : [];
   if (fileSystem?.entries?.length) paths.push(`Paths: ${shown(fileSystem.entries)}`);
-  return { id: String(id), kind: 'item/permissions/requestApproval', ...(params?.cwd ? { cwd: params.cwd } : {}), title: wanted.join(' and ') || 'More access', details: clipped([line(params?.reason, 1000) && `Reason: ${line(params.reason, 1000)}`, ...paths].filter(Boolean).join('\n')) };
+  // The folders it asks to write to, which the task's guarded folders are checked against (approval-rules.mjs).
+  const writes = Array.isArray(fileSystem?.write) ? fileSystem.write.filter(value => typeof value === 'string') : [];
+  return { id: String(id), kind: 'item/permissions/requestApproval', ...(params?.cwd ? { cwd: params.cwd } : {}), title: wanted.join(' and ') || 'More access', details: clipped([line(params?.reason, 1000) && `Reason: ${line(params.reason, 1000)}`, ...paths].filter(Boolean).join('\n')), ...(writes.length ? { writes } : {}) };
 }
 // Exactly what was asked for, for this turn only.
 export function permissionsAnswer(params, allow) {

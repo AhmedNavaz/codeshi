@@ -37,7 +37,7 @@ test('Send settles only a bare go-ahead on its own: anything that needs judging 
   assert.equal(triage('do it', { previous: deep, attachments: 1 }), null, 'An attachment may change the task.');
 });
 
-// The catalogs Codex, Claude and Antigravity reported on Nov 12, 2026, in their own order (#12).
+// The catalogs Codex and Claude reported on Nov 12, 2026, and Antigravity on Nov 16, in their own order (#12).
 const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
 const catalogs = {
   codex: [
@@ -55,8 +55,9 @@ const catalogs = {
     { id: 'fable', displayName: 'Fable 5.1', description: 'Most capable for your hardest and longest-running tasks', supportedEffortLevels: efforts },
   ],
   gemini: [
-    { id: 'gemini-4-argon-medium', displayName: 'Gemini 4 Argon (Medium)', supportedReasoningEfforts: levels('low', 'medium', 'high') },
-    { id: 'gemini-3.8-flash-medium', displayName: 'Gemini 3.8 Flash (Medium)', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high') },
+    { id: 'gemini-4-argon', displayName: 'Gemini 4 Argon', supportedReasoningEfforts: levels('low', 'medium', 'high') },
+    { id: 'gemini-4-hydrogen', displayName: 'Gemini 4 Hydrogen', supportedReasoningEfforts: levels('low', 'medium', 'high') },
+    { id: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', isDefault: true, supportedReasoningEfforts: levels('low', 'medium', 'high') },
   ],
 };
 const fresh = () => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }] });
@@ -65,18 +66,19 @@ const one = (provider, models = catalogs[provider]) => ({ provider, eligible: tr
 test('routing picks only models on the rated list, by exact id: nothing is worked out from a name (#12)', () => {
   assert.deepEqual(catalogs.codex.map(modelTier), ['standard', 'deep', 'standard', 'light']);
   assert.deepEqual(catalogs.claude.map(modelTier), [null, 'deep', 'deep', 'standard', 'light', 'deep']);
-  assert.deepEqual(catalogs.gemini.map(modelTier), ['standard', 'light']);
+  assert.deepEqual(catalogs.gemini.map(modelTier), ['deep', 'standard', 'light']);
+  assert.deepEqual(['gemini-4-argon-medium', 'gemini-4-hydrogen-high', 'gemini-3.8-flash-low'].map(id => modelTier({ id })), ['deep', 'standard', 'light'], 'The older listing, with the thinking level in the id, shares the rating.');
   for (const row of [{ id: 'claude-opus-6', displayName: 'Opus 6' }, { id: 'gpt-7-mini', displayName: 'GPT-7 Mini', description: 'Fast and affordable' }, { displayName: 'Gemini Pro' }, { id: 'qwen3-coder:30b' }]) {
     assert.equal(modelTier(row), null, `${row.displayName || row.id} isn't rated, whatever its name says.`);
   }
-  assert.equal(globalThis.relayRouting.modelRating({ id: 'fable' }).manual, true, 'Fable is rated, and kept for you to choose.');
-  assert.equal(globalThis.relayRouting.modelRating({ id: 'GPT-6-Astra' }).manual, true, 'Ids are matched without regard to case.');
+  assert.equal(globalThis.relayRouting.modelRating({ id: 'fable' }).ultra, true, 'Fable is rated, and chosen on its own only for deep work in Ultra.');
+  assert.equal(globalThis.relayRouting.modelRating({ id: 'GPT-6-Astra' }).ultra, true, 'Ids are matched without regard to case.');
 
   const pick = (provider, mode, tier) => route({ text: 'x', assessment: { tier, effort: 'medium', reason: 'rated' }, mode, current: provider, candidates: [one(provider)] }).model;
   const table = provider => Object.fromEntries(['saver', 'smart', 'ultra'].map(mode => [mode, ['light', 'standard', 'deep'].map(tier => pick(provider, mode, tier))]));
-  assert.deepEqual(table('claude'), { saver: ['haiku', 'sonnet', 'sonnet'], smart: ['haiku', 'sonnet', 'opus'], ultra: ['opus', 'opus', 'opus'] }, 'Fable 5.2 is listed before Sonnet, and a name guess sent everyday work to it.');
-  assert.deepEqual(table('codex'), { saver: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol'], smart: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol'], ultra: ['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol'] }, 'Astra stays a manual pick.');
-  assert.deepEqual(table('gemini'), { saver: ['gemini-3.8-flash-medium', 'gemini-4-argon-medium', 'gemini-4-argon-medium'], smart: ['gemini-3.8-flash-medium', 'gemini-4-argon-medium', 'gemini-4-argon-medium'], ultra: ['gemini-4-argon-medium', 'gemini-4-argon-medium', 'gemini-4-argon-medium'] });
+  assert.deepEqual(table('claude'), { saver: ['haiku', 'sonnet', 'sonnet'], smart: ['haiku', 'sonnet', 'opus'], ultra: ['opus', 'opus', 'claude-fable-5-2'] }, 'Fable 5.2 is listed before Sonnet, and a name guess sent everyday work to it. Only deep work in Ultra goes to Fable.');
+  assert.deepEqual(table('codex'), { saver: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol'], smart: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol'], ultra: ['gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6-astra'] }, 'Astra takes only deep work in Ultra.');
+  assert.deepEqual(table('gemini'), { saver: ['gemini-3.8-flash', 'gemini-4-hydrogen', 'gemini-4-hydrogen'], smart: ['gemini-3.8-flash', 'gemini-4-hydrogen', 'gemini-4-argon'], ultra: ['gemini-4-argon', 'gemini-4-argon', 'gemini-4-argon'] });
 
   // With Opus's own weekly window used up, Ultra steps down to Sonnet, never across to Fable.
   const opusOut = { ...one('claude'), usage: { available: true, checkedAt: new Date().toISOString(), windows: [{ label: '5-hour', usedPercent: 10 }, { id: 'opus', label: 'Weekly · Opus', scope: 'opus', usedPercent: 100 }] } };
@@ -90,12 +92,39 @@ test('an agent with no rated model is left out with its reason, and a model you 
   assert.deepEqual([routed.provider, routed.model], ['claude', 'sonnet']);
   const alone = route({ text: 'x', assessment: { tier: 'standard', effort: 'medium', reason: 'rated' }, mode: 'smart', current: 'codex', candidates: [unknown] });
   assert.match(alone.error, /Codex has no model on Codeshi’s rated list/);
-  const limited = route({ text: 'x', assessment: { tier: 'deep', effort: 'high', reason: 'rated' }, mode: 'ultra', current: 'claude', candidates: [{ ...one('claude'), allowedModels: ['fable', 'claude-fable-5-2'] }] });
-  assert.match(limited.error, /Claude has no model allowed by task limits that is on Codeshi’s rated list/, 'Task limits that allow only Fable leave routing nothing to choose.');
+  const limited = route({ text: 'x', assessment: { tier: 'deep', effort: 'high', reason: 'rated' }, mode: 'smart', current: 'claude', candidates: [{ ...one('claude'), allowedModels: ['fable', 'claude-fable-5-2'] }] });
+  assert.match(limited.error, /Claude has no model allowed by task limits that is on Codeshi’s rated list/, 'Task limits that allow only Fable leave Smart nothing to choose.');
+  assert.equal(route({ text: 'x', assessment: { tier: 'deep', effort: 'high', reason: 'rated' }, mode: 'ultra', current: 'claude', candidates: [{ ...one('claude'), allowedModels: ['fable', 'claude-fable-5-2'] }] }).model, 'claude-fable-5-2', 'Deep work in Ultra may use them.');
   assert.equal(route({ text: 'x', mode: 'smart', current: 'codex', candidates: [one('codex', [])] }).model, null, 'A list that could not be read still leaves the choice to the agent.');
   assert.equal(escalate('claude', catalogs.claude, { model: 'claude-fable-5-2', effort: 'high' }), null);
   assert.equal(escalate('codex', unknown.models, { model: 'gpt-7-sol', effort: 'low' }), null);
   assert.deepEqual([escalate('claude', catalogs.claude, { model: 'sonnet', effort: 'medium' }).model], ['opus'], 'A rated model still steps up its own ladder.');
+});
+
+test('Ultra sends deep work to Fable and Astra while they have room, and deep work goes below deep only when no deep model has room', () => {
+  const at = (provider, windows) => ({ ...one(provider), usage: { available: true, checkedAt: new Date().toISOString(), windows } });
+  const deep = { text: 'x', assessment: { tier: 'deep', effort: 'high', reason: 'rated' } };
+  const fable = route({ ...deep, mode: 'ultra', current: 'claude', candidates: [one('claude')] });
+  assert.deepEqual([fable.model, fable.effort, fable.escalation], ['claude-fable-5-2', 'max', null]);
+  // Fable has its own weekly window. Near it, or unconfirmed, Claude uses Opus and says why.
+  const tight = route({ ...deep, mode: 'ultra', current: 'claude', candidates: [at('claude', [{ label: '5-hour', usedPercent: 10 }, { label: 'Weekly · Fable', scope: 'fable', usedPercent: 97 }])] });
+  assert.deepEqual([tight.model, tight.steppedDown], ['opus', undefined]);
+  assert.match(tight.reason, /Fable 5\.2 is near its limit \(5-hour: 10% used; Weekly · Fable: 97% used\), so Opus 5\.5/);
+  const out = route({ ...deep, mode: 'ultra', current: 'claude', candidates: [at('claude', [{ label: '5-hour', usedPercent: 10 }, { label: 'Weekly · Fable', scope: 'fable', usedPercent: 100 }])] });
+  assert.match(out.reason, /Fable 5\.2 has reached its limit .*, so Opus 5\.5/);
+  // Smart never uses them, whatever the room.
+  assert.equal(route({ ...deep, mode: 'smart', current: 'claude', candidates: [one('claude')] }).model, 'opus');
+
+  // Across agents: Sol is a middle model, so a Codex with far more room loses deep work to a deep model with less.
+  const roomy = at('codex', [{ label: '5-hour', usedPercent: 0 }]), busy = at('claude', [{ label: '5-hour', usedPercent: 70 }]);
+  const solOnly = { ...roomy, models: catalogs.codex.filter(row => row.id !== 'gpt-6-astra') };
+  assert.equal(route({ ...deep, mode: 'smart', current: 'codex', candidates: [solOnly, busy] }).model, 'opus');
+  assert.equal(route({ ...deep, mode: 'ultra', current: 'codex', candidates: [roomy, busy] }).model, 'gpt-6-astra', 'With Astra, Codex has a deep model of its own.');
+  assert.deepEqual([route({ text: 'x', assessment: { tier: 'standard', effort: 'medium', reason: 'rated' }, mode: 'smart', current: 'codex', candidates: [solOnly, busy] }).provider], ['codex'], 'Smaller work is not owed a deep model.');
+  const alone = route({ ...deep, mode: 'smart', current: 'codex', candidates: [solOnly] });
+  assert.equal(alone.model, 'gpt-6.1-sol'); assert.equal(alone.reason, 'Rated', 'With no deep model connected, there is nothing to explain.');
+  const opusFull = at('claude', [{ label: '5-hour', usedPercent: 10 }, { label: 'Weekly', usedPercent: 99 }]);
+  assert.match(route({ ...deep, mode: 'smart', current: 'codex', candidates: [solOnly, opusFull] }).reason, /No deep model had usable allowance, so GPT-6\.1-Sol/);
 });
 
 test('Smart, Saver and Ultra match the model and effort to the task, within the levels each model supports', () => {
@@ -284,7 +313,9 @@ test('weekly and model-specific windows count separately: an exhausted Opus wind
   const usage = windows => ({ available: true, checkedAt: new Date().toISOString(), windows });
   const candidates = agents({ claude: { usage: usage([{ label: '5-hour', usedPercent: 5 }, { label: 'Opus weekly', scopes: ['opus'], usedPercent: 100 }]) } });
   const deep = route({ text: 'Refactor the payment module', current: 'claude', candidates });
-  assert.equal(deep.provider, 'codex', 'When another agent has full-tier room, it is chosen over stepping down.');
+  assert.deepEqual([deep.provider, deep.model], ['claude', 'sonnet'], 'Sol is no deeper than Sonnet, so allowance decides between them.');
+  const argon = route({ text: 'Refactor the payment module', current: 'claude', candidates: [...candidates, one('gemini')] });
+  assert.deepEqual([argon.provider, argon.model], ['gemini', 'gemini-4-argon'], 'When another agent has deep-tier room, it is chosen over stepping down.');
   const light = route({ text: 'Fix the typo', current: 'claude', candidates });
   assert.equal(light.model, 'haiku', 'Opus exhaustion does not block Haiku.');
   const onlyClaude = route({ text: 'Refactor the payment module', mode: 'ultra', current: 'claude', candidates: candidates.filter(row => row.provider === 'claude') });

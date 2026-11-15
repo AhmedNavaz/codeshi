@@ -125,3 +125,9 @@
 @media (max-width: 760px) {
   .mac-titlebar .plan-view { margin-bottom: 0; height: calc(100dvh - var(--titlebar-height)); }
 }
+
+.plan-view-filter { flex: none; display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.plan-view-filter[hidden] { display: none; }
+.plan-filter-chip { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: 12px; background: transparent; color: var(--muted); font: 12px var(--font); cursor: pointer; }
+.plan-filter-chip:hover { color: var(--text); background: var(--hover); }
+.plan-filter-chip[aria-pressed=true] { color: var(--text-strong); background: var(--surface-strong); border-color: var(--text-muted, var(--border)); }

@@ -911,6 +911,18 @@
     breakoutAnimId = safeRequestAnim(drawBreakout);
   }
 
+  // Games played count toward your day's activity (public/activity.js): a Breakout or Snake board once, when it first
+  // moves, whether from Start or Restart; any other activity once each time it's opened, at its first key or click.
+  function countGame(state) { if (state.counted) return; state.counted = true; try { window.relayActivity?.played?.(); } catch {} }
+  let openedPlay = null;
+  function countOpened(event) {
+    if (!activity || activity === "breakout" || activity === "snake" || openedPlay === activity) return;
+    if (event.type === "keydown" && ["Escape", "Tab", "Shift", "Meta", "Control", "Alt"].includes(event.key)) return;
+    if (!activityPanels[activity]?.contains?.(event.target)) return;
+    openedPlay = activity;
+    try { window.relayActivity?.played?.(); } catch {}
+  }
+
   function startBreakout() {
     if (!breakoutState || breakoutState.gameOver || breakoutState.won) initBreakout();
     if (breakoutState) {
@@ -939,6 +951,7 @@
   function stepBreakout() {
     const s = breakoutState;
     if (!s || !breakoutStarted || breakoutPaused || s.gameOver || s.won) return;
+    countGame(s);
 
     if (s.leftDown) s.paddle.x = Math.max(0, s.paddle.x - s.paddle.speed);
     if (s.rightDown) s.paddle.x = Math.min(s.w - s.paddle.w, s.paddle.x + s.paddle.speed);
@@ -1205,6 +1218,7 @@
   function stepSnake() {
     const s = snakeState;
     if (!s || !snakeStarted || snakePaused || s.gameOver) return;
+    countGame(s);
     s.played += GAME_STEP_MS;
     if (s.played - s.lastTick < s.tickRate) return;
     s.lastTick = s.played;
@@ -2030,6 +2044,7 @@
     if (!a || !viewEl) return;
     pauseGames(id);
     activity = id;
+    openedPlay = null;
     for (const [key, panel] of Object.entries(activityPanels)) panel.hidden = key !== id;
     viewTitleEl.textContent = a.title;
     viewNoteEl.textContent = a.description;
@@ -2054,6 +2069,8 @@
     updateObstacleRects();
   }
 
+  loungeLeft.addEventListener("pointerdown", countOpened, true);
+  loungeLeft.addEventListener("keydown", countOpened, true);
   loungeLeft.addEventListener("keydown", e => {
     if (e.key !== "Escape" || !activity || e.defaultPrevented) return;
     e.preventDefault();

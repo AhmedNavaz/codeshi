@@ -76,8 +76,10 @@ export function subtaskRequest(card, sub, { brief = null } = {}) {
   }
   parts.push(`Subtask ${number} of ${list.length} for the card “${card.title}”: ${sub.title}`, '', sub.instructions || sub.title, '');
   const rest = list.slice(number);
-  if (rest.length) parts.push(`Do only this subtask. ${rest.length === 1 ? 'One more follows' : `${rest.length} more follow`}: ${rest.map(item => `“${item.title}”`).join(', ')}.`);
-  else parts.push('This is the card’s last subtask: check what done means for the card as a whole.');
+  // The next subtask starts as soon as this one ends, so a question asked here goes unanswered: it waits for the last one,
+  // whose report the person reads and answers in the card's task.
+  if (rest.length) parts.push(`Do only this subtask. ${rest.length === 1 ? 'One more follows' : `${rest.length} more follow`}: ${rest.map(item => `“${item.title}”`).join(', ')}.`, 'The next subtask starts as soon as you finish, so don’t stop to ask the person: settle choices with the option you’d recommend and say which. Questions for them, and follow-ups to this card, wait for the last subtask.');
+  else parts.push('This is the card’s last subtask: check what done means for the card as a whole.', 'Do small follow-ups to this card’s work yourself rather than leaving them for new cards. If something needs the person’s answer, including a choice an earlier subtask settled that they should confirm, end with a heading “Questions for you” and list each question on its own line. They answer in this card’s task, and you carry on there. Only changes to other cards or separate work go under “Plan changes”.');
   parts.push('When you finish, say in a few sentences what you changed and how you checked it.');
   return parts.join('\n');
 }

@@ -10,7 +10,7 @@ import { scriptCLIs } from './platform.mjs';
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
-import { LIMITS, planChanges } from '../src/board.mjs';
+import { LIMITS, planChanges, openQuestions } from '../src/board.mjs';
 import { TaskBudgets } from '../src/task-budget.mjs';
 import { TaskCoordinator } from '../src/task-coordinator.mjs';
 import { openPlan, parsePlan, parseSuggest, planningRequest } from '../src/orchestration.mjs';
@@ -203,6 +203,25 @@ test('a card that worked in its own copy is accepted only once its changes are m
   assert.equal(env.board.accept(env.c, card.id).column, 'done');
 });
 
+test('a card that saves files Git ignores waits for its folder rather than work in a copy that would lose them', { skip: scriptCLIs }, async t => {
+  const env = setup(t), folder = env.folder('a');
+  fs.appendFileSync(path.join(folder, '.gitignore'), 'output/\n'); git(folder, 'commit', '-qam', 'ignore output');
+  env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }); const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(folder)).length, 'the main run');
+  const notes = env.add({ title: 'Launch notes', column: 'ready', files: ['output/launch/notes.md', 'README.md'] }), code = env.add({ title: 'Code', column: 'ready', files: ['src/'] });
+  env.script(notes, null, 'Wrote the notes.'); env.script(code, null, 'Changed the code.');
+  const { tasks } = env.board.run(env.c, { ids: [notes.id, code.id] });
+  await until(() => column(env, code) === 'review', 'the code card to finish in its copy');
+  assert.equal(env.task(tasks[code.id]).mode, 'worktree', 'A card whose files Git keeps still works in a copy.');
+  const waiting = env.task(tasks[notes.id]);
+  assert.deepEqual([waiting.status, waiting.mode, waiting.ignoredFiles], ['waiting', undefined, ['output/launch/notes.md']]);
+  assert.match(waiting.reason, /^The main conversation is using this repository, and this card saves files Git ignores \(output\/launch\/notes\.md\), which its own copy would lose\. So it waits until that finishes/);
+  assert.equal(env.board.public(env.c, env.card(notes.id)).taskState.reason, waiting.reason, 'The Plan shows why it waits.');
+  env.release(fs.realpathSync(folder)); await main.done;
+  await until(() => column(env, notes) === 'review', 'the notes card to run once the folder is free');
+  assert.equal(env.task(tasks[notes.id]).mode, 'direct', 'It works in the folder itself.');
+});
+
 test('a card whose copy changed nothing is accepted without merging, and a discarded copy keeps the card in Review', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }); const main = env.broker.running;
@@ -234,6 +253,41 @@ test('a card whose copy changed nothing is accepted without merging, and a disca
   assert.equal(env.card(built.id).reason, null);
   assert.equal(env.board.accept(env.c, built.id).column, 'done');
   assert.equal(notes().length, 1);
+});
+
+test('resolving a card’s merge conflict in its copy keeps its report, and a resolve that stops leaves it in Review', { skip: scriptCLIs }, async t => {
+  const env = setup(t), folder = env.folder('a'), scenarios = path.join(folder, '.mock-scenarios.json');
+  fs.writeFileSync(path.join(folder, 'page.md'), 'Title\n');
+  fs.writeFileSync(scenarios, JSON.stringify({ ...JSON.parse(fs.readFileSync(scenarios, 'utf8')), '~Settle every conflict here': { behavior: 'hold', text: 'Kept both titles.' } }));
+  git(folder, 'add', '.'); git(folder, 'commit', '-qm', 'page');
+  env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }); const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(folder)).length, 'the main run');
+  const card = env.add({ title: 'Retitle', column: 'ready' });
+  env.script(card, null, 'Changed the title.');
+  const { tasks } = env.board.run(env.c, { ids: [card.id] }), id = tasks[card.id];
+  await until(() => column(env, card) === 'review' && env.task(id).stepCheck?.status === 'done', 'it to finish in its copy');
+  const copy = env.task(id).scopePath;
+  fs.writeFileSync(path.join(copy, 'page.md'), 'Card title\n');
+  env.release(fs.realpathSync(folder)); await main.done;
+  fs.writeFileSync(path.join(folder, 'page.md'), 'Folder title\n');
+  env.broker.tasks.resolve(env.c, id, { digest: env.broker.tasks.review(env.c, id).digest });
+  await until(() => column(env, card) === 'doing', 'the card to work again');
+  assert.equal(env.board.public(env.c, env.card(card.id)).taskState.resolving, true);
+  // Stopped part-way: the card's own work is as it finished, so it stays in Review.
+  const resolves = () => env.captured(copy).filter(item => String(item.context.currentRequest).includes('Settle every conflict here')).length;
+  await until(() => resolves() === 1, 'the resolving run'); env.lane(id).broker.stop(env.lane(id).c.id);
+  await until(() => column(env, card) === 'review' && env.task(id).status === 'stopped', 'the card back in Review');
+  assert.match(env.card(card.id).reason, /^Resolving its merge conflicts was stopped/); assert.equal(env.task(id).resolve.open, true);
+  // Again, to the end.
+  env.broker.tasks.resolve(env.c, id, { digest: env.broker.tasks.review(env.c, id).digest });
+  await until(() => column(env, card) === 'doing' && resolves() === 2, 'the second resolving run');
+  fs.writeFileSync(path.join(copy, 'page.md'), 'Card title\nFolder title\n'); env.release(copy);
+  await until(() => column(env, card) === 'review' && env.task(id).status === 'complete' && env.task(id).stepCheck?.status === 'done', 'the card back in Review');
+  assert.deepEqual([env.card(card.id).reason, env.card(card.id).result.summary, env.task(id).stepResult.summary], [null, 'Changed the title.', 'Changed the title.'], 'Its report is still its own.');
+  assert.deepEqual(env.board.answer(env.c, card.id).followUps, [], 'Resolving isn’t a follow-up you asked.');
+  assert.deepEqual(env.task(id).laterRuns.map(item => item.kind), ['resolve', 'resolve']);
+  await env.broker.tasks.integrate(env.c, id, { digest: env.broker.tasks.review(env.c, id).digest });
+  assert.equal(fs.readFileSync(path.join(folder, 'page.md'), 'utf8'), 'Card title\nFolder title\n');
 });
 
 test('a card’s place on the canvas is saved without changing what an agent reads, and survives a restart (#97)', async t => {
@@ -790,7 +844,13 @@ test('the Plan chat opens once, reads only, carries what the Workspace chat said
   // A message there runs read-only whatever the box says, and a draft goes on the Plan, not into the Workspace chat.
   const plan = { summary: 'Sitemap, then a check.', questions: [], steps: [{ title: 'Add a sitemap', instructions: 'Generate sitemap.xml.', tier: 'light', dependsOn: [] }, { title: 'Check it', instructions: 'Validate the sitemap.', tier: 'light', dependsOn: [1], role: 'qa' }] };
   const file = path.join(env.folder('a'), '.mock-scenarios.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  fs.writeFileSync(file, JSON.stringify({ ...saved, '~Plan the sitemap': { text: JSON.stringify(plan) } }));
+  const answer = 'The sitemap should go in codeshi-web.';
+  fs.writeFileSync(file, JSON.stringify({ ...saved, '~Where should the sitemap go': { text: JSON.stringify({ answer, steps: [] }) }, '~Plan the sitemap': { text: JSON.stringify(plan) } }));
+  await lane.broker.dispatch(lane.c, { text: 'Where should the sitemap go?', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', orchestrate: true, requestId: 'plan-chat-answer-1' });
+  await until(() => lane.c.orchestrations?.[0]?.status === 'answered' && !lane.broker.running, 'the question to be answered without drafting');
+  assert.equal(lane.c.orchestrations[0].summary, answer);
+  assert.equal(env.c.board?.length || 0, 0, 'A question does not create cards.');
+  assert.match(env.captured(fs.realpathSync(env.folder('a')))[0].context.currentRequest, /No mode switch is needed/);
   await lane.broker.dispatch(lane.c, { text: 'Plan the sitemap', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', orchestrate: true, requestId: 'plan-chat-draft-1' });
   await until(() => lane.c.orchestrations?.[0]?.status === 'moved' && !lane.broker.running, 'the drafted cards to reach the Plan');
   assert.equal(lane.c.lastRun.mode, 'read');
@@ -932,12 +992,14 @@ test('a major card is split with an agent before it runs, each subtask runs in i
   // Split with an agent: one read-only run, before anything runs. The subtasks wait for you, and the card moves to Ready.
   scriptMatch(env, 'into subtasks, before any work', { text: `Here it is:\n${JSON.stringify({ cards: [{ card: 1, subtasks: [{ title: 'Add the cart', instructions: 'A cart model.', tier: 'light' }, { title: 'Add the receipt', instructions: 'A receipt page.', tier: 'deep' }] }] })}` });
   assert.equal(env.board.split(env.c, { ids: [card.id], provider: 'codex' }).kind, 'split');
-  await until(() => env.c.boardSuggest?.status === 'complete', 'the split to finish');
+  assert.equal(env.c.boardSuggest, null, 'A split keeps its own list, so Suggest next and Plan updates stay free.');
+  assert.throws(() => env.board.split(env.c, { ids: [card.id], provider: 'codex' }), /already splitting “Build checkout”/, 'One card is split by one run at a time.');
+  await until(() => env.c.boardSplits?.[0]?.status === 'complete', 'the split to finish');
   const [split] = env.captured(fs.realpathSync(env.folder('a')));
   assert.deepEqual(split.args.slice(split.args.indexOf('--sandbox'), split.args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only'], 'The split only reads.');
   assert.match(split.context.currentRequest, /# Card 1\n\nBuild checkout\n\nA cart and a receipt\./, 'The split is planned from the card’s own brief.');
   assert.match(split.context.currentRequest, /Return only a JSON object with cards/);
-  assert.match(env.c.boardSuggest.summary, /Split “Build checkout” into 2 subtasks\./);
+  assert.match(env.c.boardSplits[0].summary, /Split “Build checkout” into 2 subtasks\./);
   assert.deepEqual([env.card(card.id).column, env.card(card.id).subtasks.map(item => item.status)], ['ready', ['pending', 'pending']]);
   scriptMatch(env, 'Subtask 1 of 2', { behavior: 'hold', text: 'Added the cart model and its tests.' });
   env.board.run(env.c, { ids: [card.id] });
@@ -973,6 +1035,23 @@ test('a major card is split with an agent before it runs, each subtask runs in i
   await until(() => env.card(card.id).result?.tests === 'passed', 'the card’s tests after its last subtask');
   // Export lists them.
   assert.match(env.board.markdown(env.c), /Subtasks:\n\n1\. \[x\] Add the cart\n2\. \[x\] Add the receipt\n3\. \[x\] Email the receipt/);
+});
+
+test('splits run side by side, each with its own line, up to Tasks at once (#162)', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.budget.setPolicy(env.c, { maxConcurrent: 2 });
+  const one = env.add({ title: 'Build checkout', column: 'backlog', split: true, notes: 'A cart and a receipt.' });
+  const two = env.add({ title: 'Build search', column: 'backlog', split: true, notes: 'An index and a box.' });
+  const three = env.add({ title: 'Build email', column: 'backlog', split: true, notes: 'A template.' });
+  scriptMatch(env, 'into subtasks, before any work', { behavior: 'hold', text: JSON.stringify({ cards: [{ card: 1, subtasks: [{ title: 'Do it', instructions: 'All of it.', tier: 'light' }] }] }) });
+  env.board.split(env.c, { ids: [one.id], provider: 'codex' });
+  env.board.split(env.c, { ids: [two.id], provider: 'codex' });
+  assert.deepEqual(env.c.boardSplits.map(item => [item.cardTitle, item.status]), [['Build checkout', 'running'], ['Build search', 'running']], 'The second split starts while the first runs.');
+  assert.throws(() => env.board.split(env.c, { ids: [three.id], provider: 'codex' }), /already running/, 'Splits count toward Tasks at once.');
+  assert.deepEqual(env.board.view(env.c).splits.map(item => item.cardIds), [[one.id], [two.id]]);
+  env.release(fs.realpathSync(env.folder('a')));
+  await until(() => env.c.boardSplits.every(item => item.status === 'complete'), 'both splits to finish');
+  assert.deepEqual([one, two].map(card => env.card(card.id).subtasks.map(item => item.title)), [['Do it'], ['Do it']]);
 });
 
 test('a paused major card stops after its subtask, Run carries on from the next, and a bad split fails the card (#155)', { skip: scriptCLIs }, async t => {
@@ -1013,8 +1092,10 @@ test('a paused major card stops after its subtask, Run carries on from the next,
   assert.throws(() => env.board.run(env.c, { ids: [card.id] }), /needs subtasks before it can run/);
   scriptMatch(env, 'into subtasks, before any work', { text: 'I would rather not.' });
   env.board.split(env.c, { ids: [card.id], provider: 'codex' });
-  await until(() => env.c.boardSuggest?.status === 'failed', 'the split to fail');
-  assert.equal(env.c.boardSuggest.summary, 'The split didn’t return its subtasks as JSON.');
+  await until(() => env.c.boardSplits?.at(-1)?.status === 'failed', 'the split to fail');
+  assert.equal(env.c.boardSplits.at(-1).summary, 'The split didn’t return its subtasks as JSON.');
+  env.board.dismissSuggest(env.c, env.c.boardSplits.at(-1).id);
+  assert.equal(env.c.boardSplits.some(item => item.status === 'failed'), false, 'Dismiss clears that split’s line.');
   assert.deepEqual(env.card(card.id).subtasks, []);
 });
 
@@ -1298,6 +1379,33 @@ test('a card whose report says the Plan should change updates it by itself, and 
   assert.equal(env.c.boardSuggest.id, id);
 });
 
+test('a reply’s questions for the person are read from its heading or a last paragraph of questions, and “None” asks nothing', () => {
+  assert.deepEqual(openQuestions('Done.\n\n## Plan changes\n- Add a card.\n\n## Questions for you\n1. Also trim the footer?\n2. **Keep the old route?**'), ['Also trim the footer?', 'Keep the old route?']);
+  assert.deepEqual(openQuestions('Done.\n\n**Questions for you**\n- None.'), []);
+  assert.deepEqual(openQuestions('Changed the header.\n\nShould the logo link home?\nKeep the beta badge?'), ['Should the logo link home?', 'Keep the beta badge?']);
+  assert.deepEqual(openQuestions('Changed the header. Is that all?'), []);
+});
+
+test('a card that ends with questions keeps its Plan update waiting for your answers, and the cards after it wait too', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  env.broker.tasks.tests = { saved: () => null };
+  const research = env.add({ title: 'Polish the header', column: 'ready', artifact: 'findings' });
+  const after = env.add({ title: 'Write the guide', column: 'ready', dependsOn: [research.id] });
+  env.script(research, null, 'Changed the header.\n\n## Plan changes\n- Add a card for the footer links.\n\n## Questions for you\n- Should the logo link home too?');
+  env.script(after, null, 'Wrote the guide.');
+  const { tasks } = env.board.run(env.c, { ids: [after.id, research.id] });
+  await until(() => env.card(research.id).autoUpdate?.asking, 'the update to wait for the answers');
+  assert.match(requests(env).find(text => /^Polish the header/.test(text || '')), /Follow-ups to this card’s own work aren’t Plan changes/);
+  assert.ok(env.c.messages.some(message => /“Polish the header” has questions for you/.test(message.text)));
+  await until(() => /has questions for you/.test(env.task(tasks[after.id]).reason || ''), 'the next card to wait for the answers');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(env.c.boardSuggest?.kind === 'update' ? env.c.boardSuggest.status : null, null, 'No Plan update starts while the card asks.');
+  // Continuing anyway lets the cards after it go, and the update doesn't start by itself.
+  env.board.proceed(env.c, research.id);
+  await until(() => env.card(after.id).column === 'review', 'the next card to run once you continue');
+  assert.equal(env.card(research.id).autoUpdate.released, true);
+});
+
 test('continuing anyway lets the cards after a card go while its Plan update is still to settle', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   env.broker.tasks.tests = { saved: () => null };
@@ -1348,4 +1456,55 @@ test('a running card’s task reports its usage with the start of the runs still
   // A part that ended before a restart reads the usage saved on its task.
   assert.deepEqual(usageOf.call({ lanes: new Map() }, { id: 't2', budgetUsed: { workingMs: 60000, tokens: 400, spendUSD: 0, retries: 0, reviews: 1, handoffs: 0 } }), { workedMs: 60000, activeSince: null, tokens: 400, spendUSD: 0, retries: 0, reviews: 1, handoffs: 0 });
   assert.equal(usageOf.call({ lanes: new Map() }, { id: 't3' }), null, 'A task with nothing recorded shows no usage.');
+});
+
+// A card works in one folder. One with none chosen works in the folder its files point to, and its agent is told that it
+// changes only that folder.
+test('a card with no folder runs in the one its files point to, shows it, and its agent is told it changes only that folder', { skip: scriptCLIs }, async t => {
+  const env = setup(t, ['a', 'b']);
+  fs.mkdirSync(path.join(env.folder('a'), 'src'), { recursive: true });
+  fs.mkdirSync(path.join(env.folder('b'), 'components', 'demos'), { recursive: true });
+  const guess = files => env.board.folderGuess({ files });
+  assert.equal(guess(['b/app/', 'b/lib/site.ts']), 'b', 'A path that starts with a folder’s name names that folder.');
+  assert.equal(guess(['components/demos/flow.tsx']), 'b', 'A new file counts for the folder its parent is in.');
+  assert.equal(guess(['src/new.mjs', 'components/demos/x.tsx', 'src/other.mjs']), 'a', 'The folder most of its files are in.');
+  assert.equal(guess(['src/x.mjs', 'components/demos/x.tsx']), null, 'Split evenly, they point nowhere.');
+  assert.equal(guess(['.gitignore']), null, 'A file both folders have says nothing.');
+  assert.equal(guess(['a/x.mjs', 'b/y.ts']), null);
+  assert.equal(guess([]), null);
+  // The Plan shows where it will run, Plan.md says so, and its agent reads its files from inside that folder.
+  const card = env.add({ title: 'Site copy', folderId: null, files: ['b/lib/content.ts'], column: 'ready' });
+  const shown = () => env.board.list(env.c).find(item => item.id === card.id);
+  assert.deepEqual([shown().folderId, shown().folderGuessed], ['b', true]);
+  assert.equal(env.card(card.id).folderId, null, 'The guess isn’t saved on the card: choosing a folder still decides.');
+  assert.match(env.board.prompt(env.c, env.card(card.id)), /Files or folders it expects to change: lib\/content\.ts$/m);
+  assert.match(env.board.markdown(env.c), /### Site copy[\s\S]*?Works in: b/);
+  const chosen = env.add({ title: 'Engine', folderId: 'a', files: ['b/lib/content.ts'] });
+  assert.equal(env.board.list(env.c).find(item => item.id === chosen.id).folderGuessed, undefined, 'A folder you chose stays.');
+  env.script({ ...card, folderId: 'b' }, 'hold', 'Updated the copy.');
+  const { tasks } = env.board.run(env.c, { ids: [card.id] }), task = env.task(tasks[card.id]);
+  assert.equal(task.folderId, 'b', 'It runs in the folder its files point to, not the first one.');
+  const b = fs.realpathSync(env.folder('b')), a = fs.realpathSync(env.folder('a'));
+  await until(() => env.captured(b).length, 'the card’s task to start');
+  const scope = env.captured(b)[0].context.taskScope;
+  assert.ok(scope.startsWith(`This task works directly in ${b} and changes only that folder.`), scope);
+  assert.ok(scope.includes(`other folder, a (${a}), copy files out of it`) && scope.includes('dev servers there, but Codeshi refuses changes there'), scope);
+  assert.deepEqual(env.lane(task.id).broker.guarded.map(folder => [folder.name, folder.copy]), [['a', null], ['b', null]]);
+  env.release(b);
+  await until(() => column(env, card) === 'review', 'the card to reach Review');
+});
+
+test('a drafted card works in the folder its planner names, or the one its files point to (#162)', t => {
+  const env = setup(t, ['a', 'b']);
+  fs.mkdirSync(path.join(env.folder('b'), 'components'), { recursive: true });
+  drafted(env, { steps: [
+    { title: 'Named', instructions: 'Change the site.', tier: 'light', dependsOn: [], folder: 'B' },
+    { title: 'From its files', instructions: 'Add a demo.', tier: 'light', dependsOn: [], files: ['components/flow.tsx'] },
+    { title: 'Nowhere', instructions: 'Something.', tier: 'light', dependsOn: [], folder: 'elsewhere' },
+  ] });
+  const folderOf = title => env.c.board.find(card => card.title === title).folderId;
+  assert.deepEqual([folderOf('Named'), folderOf('From its files'), folderOf('Nowhere')], ['b', 'b', null], 'A folder that isn’t in the workspace leaves it to the first.');
+  // The planner is told the folders only when there is a choice.
+  assert.match(planningRequest('Ship it', { folders: env.list }), /This workspace has 2 folders: "a", "b"\. Give every card folder/);
+  assert.doesNotMatch(planningRequest('Ship it', { folders: env.list.slice(0, 1) }), /Give every card folder/);
 });

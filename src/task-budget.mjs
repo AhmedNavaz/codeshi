@@ -47,6 +47,16 @@ export const assessQuota = (...args) => globalThis.relayRouting.assessQuota(...a
 const emptyState = taskId => ({ taskId, runs: 0, retries: 0, reviews: 0, handoffs: 0, workingMs: 0, tokens: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }, spendUSD: 0, runsWithoutUsage: 0, runsWithPartialUsage: 0, runsWithoutCost: 0, spendCaps: { native: 0, reported: 0 }, failures: {}, active: {}, extra: {}, stopped: null, startedAt: null });
 const newTokens = usage => (usage?.input || 0) + (usage?.output || 0) + (usage?.cacheWrite || 0);
 const knownCost = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+// The run a record is about to finish, and its new tokens as task limits count them, read before the record is applied:
+// { provider, tokens }, or null when the record finishes no run that started. For the day's activity (src/activity.mjs).
+export function finishingRun(c, record) {
+  if (record.type === 'routing_assessment_end') record = { ...record, type: 'review_result' };
+  const id = record.type === 'run_end' ? c.budgetActive : record.type === 'review_result' ? record.id : null;
+  const entry = id && c.taskBudgets?.[c.taskOfRun?.[id]]?.active[id];
+  if (!entry?.began || (record.type === 'review_result' && !entry.background)) return null;
+  const usage = record.type === 'review_result' && record.result?.usage ? normalizeUsage(entry.provider, record.result.usage) : entry.usage;
+  return { provider: entry.provider, tokens: newTokens(usage) };
+}
 function stateFor(c, taskId) {
   c.taskBudgets ||= {};
   if (!c.taskBudgets[taskId]) {

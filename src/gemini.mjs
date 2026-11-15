@@ -69,7 +69,7 @@ export function geminiFile(config, filename) {
   throw new Error('Gemini requested a file outside this workspace.');
 }
 
-export async function runGemini(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, probe = probeCli, invocation = geminiInvocation, clientFactory = options => new GeminiClient(options), spawnImpl = spawn }) {
+export async function runGemini(config, { event, approval, refusal = () => null, question = null, metadata, cancelled = () => false, steerable = () => {}, probe = probeCli, invocation = geminiInvocation, clientFactory = options => new GeminiClient(options), spawnImpl = spawn }) {
   if (isAgy(config.bin)) return runAgy(config, { event, metadata, cancelled, spawnImpl });
   const antigravity = isAntigravityACP(config.bin);
   if (!antigravity && config.effort) throw new Error('Gemini reasoning effort is controlled by its native model; clear the effort selection.');
@@ -104,7 +104,8 @@ export async function runGemini(config, { event, approval, question = null, meta
             result = form.respond(cancelled() ? null : answers);
           } else {
             const allow = !cancelled() && config.mode !== 'read' && once && await ask({ id: String(message.id), ...acpApprovalRequest(tool), toolCall: tool });
-            if (!allow || cancelled()) { denied = true; result = { outcome: { outcome: 'cancelled' } }; }
+            // Codeshi's own refusal, such as a task's change to another folder, is part of the turn, not a failure of it.
+            if (!allow || cancelled()) { if (cancelled() || !refusal(message.id)) denied = true; result = { outcome: { outcome: 'cancelled' } }; }
             else { for (const key of allowedWrites(tool)) approvedWrites.add(key); result = { outcome: { outcome: 'selected', optionId: once.optionId } }; }
           }
         } else if (message.method === 'fs/read_text_file') {
@@ -119,7 +120,11 @@ export async function runGemini(config, { event, approval, question = null, meta
           if (config.mode === 'read' || cancelled()) throw new Error('Write permission denied in read-only mode.');
           const file = geminiFile(config, p.path), before = readWorkspaceFile(file.root, file.relative, { allowMissing: true });
           const allow = approvedWrites.delete(writeKey(p.path, p.content)) || await ask({ id: String(message.id), kind: 'write_file', input: { path: p.path, content: p.content } });
-          if (!allow || cancelled()) { denied = true; throw new Error('Write permission denied.'); }
+          if (!allow || cancelled()) {
+            const why = cancelled() ? null : refusal(message.id);
+            if (why) { client.send({ id: message.id, error: { code: -32000, message: why } }); return; }
+            denied = true; throw new Error('Write permission denied.');
+          }
           writeWorkspaceFile(file.root, file.relative, p.content, { expectedHash: before.sha256 }); result = {};
         } else throw new Error('This Gemini interaction is unsupported by Codeshi.');
         client.send({ id: message.id, result }); return;

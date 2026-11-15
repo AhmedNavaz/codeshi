@@ -13,7 +13,9 @@
   // 3: retries, reviewers, reset resumption and plan steps use that line too, and plan steps are chosen when they start.
   // 4: only models on the rated list are chosen, so Fable and Astra stay manual and unknown models aren't guessed.
   // 5: a message with images goes only to a model and connection known to take images.
-  const POLICY_VERSION = 5;
+  // 6: Ultra sends deep work to Fable and Astra; Gemini's plain ids are rated (Argon deep, Hydrogen standard); deep work
+  //    goes to a model below deep only when no deep model has usable allowance.
+  const POLICY_VERSION = 6;
   const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
   const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
   const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
@@ -199,26 +201,30 @@
   // most capable model, in the middle of the ladder, so Saver and Smart sent everyday work to it. A model not listed
   // here is "not rated": routing never picks it, and you can still choose it yourself. Unknown models do not inherit a
   // rating from a similar name. Each rating comes from the vendor's own catalog description on the date below, not
-  // from measured quality; review the list when an agent's catalog changes. manual: rated, but only ever chosen by
-  // you (Astra and Fable, decided Nov 7, 2026). Raise POLICY_VERSION when a change here changes what gets chosen.
-  const MODEL_LIST_DATE = '2026-11-12';
+  // from measured quality; review the list when an agent's catalog changes. ultra: chosen on its own only for deep work
+  // in Ultra, with the agent's other deep model used when its allowance is tight (Astra and Fable, Nov 16, 2026).
+  // manual: rated, but only ever chosen by you. Raise POLICY_VERSION when a change here changes what gets chosen.
+  const MODEL_LIST_DATE = '2026-11-16';
   const rate = (tier, ids, extra = {}) => ids.map(id => [id, { tier, ...extra }]);
   const MODEL_LIST = new Map([
     // Codex
     ...rate('light', ['gpt-6-luna', 'gpt-5.6-luna']),
     ...rate('standard', ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-6.1-terra', 'gpt-5.6-terra']),
-    ...rate('deep', ['gpt-6-astra'], { manual: true }),
+    ...rate('deep', ['gpt-6-astra'], { ultra: true }),
     // Claude. Its catalog doesn't say what input a model takes; images: every model here takes images, per Anthropic's
     // model documentation.
     ...rate('light', ['haiku', 'claude-haiku-4-5-20251001'], { images: true }),
     ...rate('standard', ['sonnet', 'claude-sonnet-5', 'claude-sonnet-4-6'], { images: true }),
     ...rate('deep', ['opus', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6'], { images: true }),
-    ...rate('deep', ['fable', 'claude-fable-5', 'claude-fable-5-2'], { manual: true, images: true }),
-    // Gemini, through Antigravity: its catalog has no descriptions, so Flash is light and Argon keeps the standard
-    // place it had before. Each id carries a thinking level; all three levels share one rating. Both take images, per
-    // Google's model documentation; the connection must report image input as well (imageConnection).
-    ...rate('light', ['gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high'], { images: true }),
-    ...rate('standard', ['gemini-4-argon-low', 'gemini-4-argon-medium', 'gemini-4-argon-high'], { images: true }),
+    ...rate('deep', ['fable', 'claude-fable-5', 'claude-fable-5-2'], { ultra: true, images: true }),
+    // Gemini, through Antigravity: its catalog has no descriptions. Argon is the strongest, as its own weekly limit
+    // suggests (like Fable's), Hydrogen sits in the middle and Flash is light (your rating, Nov 16, 2026). Antigravity
+    // reports plain ids (gemini-4-argon) with the thinking level as the effort; the older agy listing put the level in
+    // the id, and every level shares one rating. All take images, per Google's model documentation; the connection
+    // must report image input as well (imageConnection).
+    ...rate('light', ['gemini-3.8-flash', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high'], { images: true }),
+    ...rate('standard', ['gemini-4-hydrogen', 'gemini-4-hydrogen-low', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-high'], { images: true }),
+    ...rate('deep', ['gemini-4-argon', 'gemini-4-argon-low', 'gemini-4-argon-medium', 'gemini-4-argon-high'], { images: true }),
     // Codex's catalog lists each model's input types (inputModalities), so its entries carry no images rating.
   ]);
   const modelId = row => row?.id || row?.model || row?.value || '';
@@ -238,29 +244,34 @@
   }
   // Whether a model may take this task's needs. Unknown counts as no.
   const meetsNeeds = (row, needs) => !needs?.images || takesImages(row) === true;
-  // Whether routing may choose a model on its own: rated, not kept for manual choice, listed and not hidden.
-  const routable = row => Boolean(modelId(row)) && modelId(row) !== 'default' && !row.hidden && Boolean(modelRating(row)) && !modelRating(row).manual;
+  // Whether routing may choose a model on its own: rated, not kept for manual choice, listed and not hidden. A model
+  // rated ultra only when top is set: deep work in Ultra.
+  const routable = (row, { top = false } = {}) => Boolean(modelId(row)) && modelId(row) !== 'default' && !row.hidden && Boolean(modelRating(row)) && !modelRating(row).manual && (top || !modelRating(row).ultra);
+  const ultraModel = row => Boolean(modelRating(row)?.ultra);
   const effortsOf = row => (row?.supportedEffortLevels || row?.supportedReasoningEfforts?.map(level => level.reasoningEffort) || []).filter(level => EFFORTS.includes(level)).sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
 
   // The model tier and effort each mode uses for each kind of task (#128):
   // - Saver: light and standard models at low effort.
   // - Smart: whole ladder from light/low through standard/medium to deep/high.
-  // - Ultra: strongest models first, stepping down one tier only when no strong model has usable allowance.
+  // - Ultra: strongest models first, stepping down one tier only when no strong model has usable allowance. Deep work
+  //   goes to Fable or Astra first (ultraModel), and to the agent's other deep model when theirs is tight.
   const plan = {
     saver: { light: ['light', 'low'], standard: ['standard', 'low'], deep: ['standard', 'low'] },
     smart: { light: ['light', 'low'], standard: ['standard', 'medium'], deep: ['deep', 'high'] },
     ultra: { light: ['deep', 'high'], standard: ['deep', 'high'], deep: ['deep', 'highest'] },
   };
 
-  // The agent's rated model closest to the wanted tier, preferring its default within a tier.
-  function pickModel(rows, tier) {
-    const usable = (rows || []).filter(routable);
+  // The agent's rated model closest to the wanted tier, preferring an Ultra-only model when top is set, then its
+  // default, within a tier.
+  function pickModel(rows, tier, { top = false } = {}) {
+    const usable = (rows || []).filter(row => routable(row, { top }));
     if (!usable.length) return null;
     const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
+    const rank = row => (top && ultraModel(row) ? 2 : 0) + (row.isDefault ? 1 : 0);
     return usable.reduce((best, row) => {
       if (!best) return row;
       const a = distance(row), b = distance(best);
-      return a < b || a === b && row.isDefault && !best.isDefault ? row : best;
+      return a < b || a === b && rank(row) > rank(best) ? row : best;
     }, null);
   }
   // The supported level closest to the wanted one; "highest" takes the top level.
@@ -341,6 +352,8 @@
     mode = normalizeMode(mode) || 'smart';
     const task = assessment && TIERS.includes(assessment.tier) && typeof assessment.reason === 'string' ? assessment : classify(text, { attachments, context });
     const [tier, baseEffort] = plan[mode][task.tier];
+    // Deep work in Ultra may use Fable and Astra. Deep work is owed a deep model in Smart and Ultra alike.
+    const top = mode === 'ultra' && task.tier === 'deep', owedDeep = task.tier === 'deep' && tier === 'deep';
     const wantedEffort = mode === 'smart' && ['low', 'medium', 'high'].includes(task.effort) && EFFORTS.indexOf(task.effort) > EFFORTS.indexOf(baseEffort) ? task.effort : baseEffort;
     const skipped = [], unfit = [];
     needs = needs?.images > 0 ? { images: needs.images } : null;
@@ -357,20 +370,32 @@
           : listed.some(routable) && !rows.some(routable) ? `${name} has no ${candidate.allowedModels ? 'allowed ' : ''}rated model known to take images` : null;
         if (why) { skipped.push(why); unfit.push(name); return []; }
       }
-      const preferred = pickModel(rows, tier);
-      // An agent that lists models but none routing may choose is left out, rather than run on a default nobody rated.
-      // Only an agent whose list couldn't be read runs its own default.
-      if (!preferred && listed.some(row => modelId(row) && modelId(row) !== 'default' && !row.hidden)) { skipped.push(`${agentNames[candidate.provider]} has no ${candidate.allowedModels ? 'model allowed by task limits that is ' : 'model '}on Codeshi’s rated list`); return []; }
-      if (candidate.allowedModels && !preferred) { skipped.push(`${agentNames[candidate.provider]} has no model allowed by task limits`); return []; }
       const distance = row => Math.abs(TIERS.indexOf(modelTier(row)) - TIERS.indexOf(tier));
-      const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && routable(row) && distance(row) === distance(preferred))] : [null];
+      let passedOver = null;
       const decorate = (model, steppedDown = false, steppedDownFrom = null, steppedDownQuota = null) => {
         const quota = assessQuota(candidate.usage, model && modelId(model), { threshold: quotaThreshold, now, tier: task.tier, workload: row => usualForWindow(candidate, row, task.tier) });
         const binding = bindingWindow(quota, now);
         const shortRoom = checkUsualRoom(candidate, quota, task.tier, now);
         const line = handoffFit(candidate.usage, model && modelId(model), { mode, current: candidate.provider === current, tier: task.tier, usual: candidate.usualSpend ?? candidate.usualPercent ?? null, now });
-        return { ...candidate, selectedModel: model, quota, bindingWindow: binding, shortRoom, line, steppedDown, steppedDownFrom, steppedDownQuota };
+        return { ...candidate, selectedModel: model, quota, bindingWindow: binding, shortRoom, line, steppedDown, steppedDownFrom, steppedDownQuota, passedOver };
       };
+      // Deep work in Ultra tries Fable or Astra first, and only with confirmed room under the handoff line: their own
+      // limits are separate, and the agent's other deep model is nearly as strong. Otherwise the usual choice follows.
+      const strongest = top ? pickModel(rows, tier, { top: true }) : null;
+      if (strongest && ultraModel(strongest)) {
+        const tries = [strongest, ...rows.filter(row => row !== strongest && ultraModel(row) && routable(row, { top: true }) && distance(row) === distance(strongest))].map(model => decorate(model));
+        const ready = tries.filter(row => row.quota.state === 'ok' && row.line.fits);
+        if (ready.length) return ready;
+        passedOver = tries[0];
+      }
+      // When Fable or Astra is all an agent may use, it stays the choice, under the usual allowance rules.
+      let preferred = pickModel(rows, tier);
+      if (!preferred && passedOver) { preferred = strongest; passedOver = null; }
+      // An agent that lists models but none routing may choose is left out, rather than run on a default nobody rated.
+      // Only an agent whose list couldn't be read runs its own default.
+      if (!preferred && listed.some(row => modelId(row) && modelId(row) !== 'default' && !row.hidden)) { skipped.push(`${agentNames[candidate.provider]} has no ${candidate.allowedModels ? 'model allowed by task limits that is ' : 'model '}on Codeshi’s rated list`); return []; }
+      if (candidate.allowedModels && !preferred) { skipped.push(`${agentNames[candidate.provider]} has no model allowed by task limits`); return []; }
+      const options = preferred ? [preferred, ...rows.filter(row => row !== preferred && routable(row, { top: ultraModel(preferred) }) && distance(row) === distance(preferred))] : [null];
       const choices = options.map(model => decorate(model));
       const usable = choices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
       if (usable.length) return usable;
@@ -404,6 +429,7 @@
     });
     if (!pool.length) return { error: `Auto found no connected agent within your rules${skipped.length ? ` (${skipped.join('; ')})` : ''}. Refresh plan usage or choose a model yourself. API-billed agents need separate consent.`, task, mode };
 
+    const shortOfDeep = candidate => owedDeep && Boolean(candidate.selectedModel) && modelTier(candidate.selectedModel) !== 'deep';
     // Rank by binding window spendability, continuity, full-tier availability and usual-run headroom (#128).
     const spendabilityOf = candidate => candidate.bindingWindow ? candidate.bindingWindow.spendability : Math.max(0, 100 - (candidate.quota.usedPercent ?? 100));
     const continuityBonus = candidate => {
@@ -419,7 +445,9 @@
       // partway costs more than starting a new session.
       if (candidate.quota.state === 'near') return -2000 + spendabilityOf(candidate);
       if (candidate.quota.state !== 'ok') return -1000 + continuityBonus(candidate);
-      const stepPenalty = candidate.steppedDown ? 400 : 0;
+      // A model below the tier deep work is owed costs the same as stepping down on one agent, so an agent whose best
+      // model is in the middle (Codex without Astra) takes deep work only when no deep model has room.
+      const stepPenalty = candidate.steppedDown || shortOfDeep(candidate) ? 400 : 0;
       const roomPenalty = candidate.shortRoom && !candidate.shortRoom.resetsSoon ? 200 : 0;
       return spendabilityOf(candidate) + continuityBonus(candidate) - stepPenalty - roomPenalty;
     };
@@ -441,6 +469,15 @@
       const fromName = chosen.steppedDownFrom.displayName || chosen.steppedDownFrom.name || modelId(chosen.steppedDownFrom);
       const toName = model.displayName || model.name || modelId(model);
       why.push(`${fromName} has no usable allowance (${quotaText(chosen.steppedDownQuota)}), so stepping down one tier to ${toName}`);
+    } else if (shortOfDeep(chosen) && model && candidates.some(item => item.eligible && (item.models || []).some(row => routable(row) && modelTier(row) === 'deep'))) {
+      // Only when a deep model was there to choose: with none connected, there is nothing to explain.
+      why.push(`No deep model had usable allowance, so ${model.displayName || model.name || modelId(model)}`);
+    }
+    // Say why Ultra didn't use Fable or Astra for deep work.
+    if (chosen.passedOver && model) {
+      const skippedModel = chosen.passedOver.selectedModel, name = skippedModel.displayName || skippedModel.name || modelId(skippedModel);
+      const state = chosen.passedOver.quota.state, instead = model.displayName || model.name || modelId(model);
+      why.push(['unknown', 'stale'].includes(state) ? `${name}’s usage isn’t confirmed, so ${instead}` : `${name} ${state === 'exhausted' ? 'has reached' : 'is near'} its limit (${quotaText(chosen.passedOver.quota)}), so ${instead}`);
     }
 
     // Explain the allowance / reset-timing logic in words (#128).
@@ -526,7 +563,8 @@
   function routeTo(provider, rows, { text, attachments = 0, assessment = null, mode = 'smart' }) {
     mode = normalizeMode(mode) || 'smart';
     const task = assessment && TIERS.includes(assessment.tier) ? assessment : classify(text, { attachments }), [tier, wantedEffort] = plan[mode][task.tier];
-    let model = pickModel(rows, tier);
+    // No usage is checked here, so Fable and Astra are used only when they are all the agent may run.
+    const model = pickModel(rows, tier) || (mode === 'ultra' && task.tier === 'deep' ? pickModel(rows, tier, { top: true }) : null);
     if (!model) return null;
     if (task.tier === 'deep' && modelTier(model) === 'light') return null;
     const choice = { provider, model: modelId(model), modelName: model.displayName || model.name || modelId(model), effort: pickEffort(effortsOf(model), wantedEffort), tier: task.tier, mode, reason: task.reason[0].toUpperCase() + task.reason.slice(1) };

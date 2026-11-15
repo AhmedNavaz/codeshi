@@ -120,6 +120,19 @@ test('Gemini rejects read-only writes, denied approvals and persistent-only perm
   }
 });
 
+test('Codeshi refusing a task’s change to another folder leaves Gemini’s turn complete, and tells a write why', async t => {
+  const workspace = folder(t), reason = 'Codeshi blocked this: site is another folder of this workspace.';
+  const client = new Client(async c => {
+    assert.equal((await c.rpc('session/request_permission', request)).result.outcome.outcome, 'cancelled');
+    assert.equal((await c.rpc('fs/write_text_file', { path: path.join(workspace, 'new.txt'), content: 'x' })).error.message, reason);
+  });
+  await run(client, { workspace }, { approval: async () => false, refusal: () => reason });
+  assert(!fs.existsSync(path.join(workspace, 'new.txt')));
+  // A refusal with no reason from Codeshi, such as the person's, still ends the turn as incomplete.
+  const declined = new Client(async c => { await c.rpc('session/request_permission', request); });
+  await assert.rejects(run(declined, { workspace }, { approval: async () => false, refusal: () => null }), /denied or unsupported/);
+});
+
 test('Gemini filesystem proxy rejects outside paths and symlinks and rechecks file contents after approval', { skip: noSymlinks }, async t => {
   const root = folder(t), workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
   fs.writeFileSync(path.join(workspace, 'file.txt'), 'original'); fs.writeFileSync(path.join(root, 'outside.txt'), 'private');

@@ -2,11 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { ARTIFACT_KINDS, SPECIALIST_ROLES, parsePlan, parseSuggest, planLimits, planningMethod, planningRequest, planQuestions, reviewDraft, upstreamLines } from './orchestration.mjs';
+import { ARTIFACT_KINDS, SPECIALIST_ROLES, folderRule, parsePlan, parseSuggest, planLimits, planningMethod, planningRequest, planQuestions, reviewDraft, upstreamLines } from './orchestration.mjs';
 import { attachmentLimits } from './attachments.mjs';
 import { runSteps } from './recap.mjs';
 import { Subtasks, splitCardsRequest, parseSplitCards } from './subtasks.mjs';
 import { FINAL_REVIEW_NOTE, PlanReviews, REVIEW_ROLES, reviewHolds, verdictRequest, withFinalReview } from './plan-review.mjs';
+import { ignoredPaths, ownCheck } from './task-isolation.mjs';
+import { noteActivity } from './activity.mjs';
 
 // The task board (#132, first stage): cards you write, sort and run by hand. Cards are records in the workspace chat's
 // journal, beside the tasks they start, so they live in Codeshi's data and a crash finds them as they were. Running a card
@@ -79,7 +81,23 @@ const clip = (value, limit) => { const line = String(value || '').trim(); return
 // What a card's report says the Plan should change, under its “Plan changes” heading, or '' when it has none. A card's
 // agent is asked to add it only when what it found means other cards should change; Codeshi then updates the Plan from
 // the card by itself (Board.noticeChanges). A section that only says nothing needs to change counts as none.
-export const PLAN_CHANGES_REQUEST = 'If what you found means other cards on the Plan should change (work no card covers, a card that is wrong or no longer needed, or an order that no longer fits), add a heading “Plan changes” near the end and list each change on its own line, naming the cards. Leave it out when the Plan fits as it is. Codeshi drafts those changes for the person to accept.';
+// Follow-ups to the card's own work stay with the card: done, or asked in its task, never drafted as new cards.
+export const PLAN_CHANGES_REQUEST = 'If what you found means other cards on the Plan should change (separate work no card covers, a card that is wrong or no longer needed, or an order that no longer fits), add a heading “Plan changes” near the end and list each change on its own line, naming the cards. Leave it out when the Plan fits as it is. Codeshi drafts those changes for the person to accept. Follow-ups to this card’s own work aren’t Plan changes: do the small ones yourself, and ask about the rest under “Questions for you”. The person answers in this card’s task, and you carry on there.';
+// The questions a reply ends with for the person, under a heading such as “Questions for you”, or a last paragraph made
+// only of questions; [] when it asks nothing. The Plan shows them on the card, with a box that answers in its task.
+export function openQuestions(reply) {
+  const lines = String(reply || '').slice(-20000).split('\n'), clean = line => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').replace(/^\*\*(.+)\*\*$/, '$1').trim();
+  const heading = lines.findLastIndex(line => /^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:open\s+)?questions?(?:\s+for\s+(?:you|the\s+person))?\s*:?\s*(?:\*\*)?\s*:?\s*$/i.test(line));
+  if (heading >= 0) {
+    const items = [];
+    for (const line of lines.slice(heading + 1)) { if (/^\s*#{1,6}\s/.test(line) && items.length) break; if (/^\s*```/.test(line)) break; const value = clean(line); if (value) items.push(value); }
+    const nothing = /^[*_\s]*(?:none|n\/?a|nothing|no(?:ne)?(?:\s+(?:open|further|other|more))?\s+questions?(?:\s+(?:for\s+(?:you|now)|at\s+(?:this|the)\s+(?:time|moment)))?|nothing\s+(?:to\s+ask|open|for\s+now))[\s.!—–-]*(?:[*_]+)?\s*$/i;
+    if (items.length && !items.every(item => nothing.test(item))) return items.slice(0, 8);
+    if (items.length) return [];
+  }
+  const blocks = String(reply || '').trimEnd().split(/\n\s*\n/), items = (blocks.at(-1) || '').split('\n').map(clean).filter(Boolean);
+  return blocks.length > 1 && items.length && items.length <= 6 && items.every(item => /\?\s*(?:\*\*|_)?\)?$/.test(item)) ? items : [];
+}
 export function planChanges(reply) {
   const lines = String(reply || '').slice(-60000).split('\n');
   const heading = /^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*plan changes\s*(?:\*\*|__)?\s*:?\s*(?:\*\*|__)?\s*(.*)$/i;
@@ -111,6 +129,8 @@ function noChanges(reply) {
 export class Board {
   constructor(main) {
     this.main = main;
+    // Folders guessed from cards' files (folderGuess), kept a minute so showing the Plan doesn't look at the disk each time.
+    this.guesses = new Map();
     this.draftUndos = new Map();
     this.suggestJobs = new Map();
     this.suggestCleanups = new Set();
@@ -122,14 +142,70 @@ export class Board {
     for (const c of main.conversations.values()) {
       this.reconcile(c); this.adopt(c); this.reviews.restore(c);
       // An update still queued when Codeshi closed doesn't start by itself on launch; the cards it holds say so.
-      for (const card of this.cards(c).filter(item => item.autoUpdate && !item.autoUpdate.jobId && !item.autoUpdate.error && !item.autoUpdate.released)) this.update(c, card, { autoUpdate: { ...card.autoUpdate, error: 'Codeshi restarted before it could start.' } });
+      for (const card of this.cards(c).filter(item => item.autoUpdate && !item.autoUpdate.jobId && !item.autoUpdate.error && !item.autoUpdate.released && !item.autoUpdate.asking)) this.update(c, card, { autoUpdate: { ...card.autoUpdate, error: 'Codeshi restarted before it could start.' } });
     }
   }
   cards(c) { return c.board || []; }
   find(c, id) { const card = this.cards(c).find(item => item.id === id); if (!card) throw fail('That card is no longer on the board.', 404); return card; }
-  update(c, card, changes) { this.main.record(c, { type: 'board_card_update', id: card.id, changes: { ...changes, updatedAt: new Date().toISOString() } }); }
+  update(c, card, changes) {
+    const done = changes.column === 'done' && card.column !== 'done';
+    this.main.record(c, { type: 'board_card_update', id: card.id, changes: { ...changes, updatedAt: new Date().toISOString() } });
+    // A card reaching Done counts toward the day's activity, and so does a group whose last open card it was.
+    if (done) {
+      noteActivity('cards');
+      if (card.group && this.cards(c).filter(item => item.group === card.group && !item.draft).every(item => item.column === 'done')) noteActivity('groups');
+    }
+  }
   task(c, card) { return card.task ? (c.parallelTasks || []).find(task => task.id === card.task) || null : null; }
   folders() { return this.main.workspaceFolders; }
+  // The folder a planner named for a card, by its name as the planner was told it (or its folder name or id); null when
+  // it names none or one that isn't in this workspace, so the card runs in the first folder as before.
+  folderNamed(name) {
+    if (typeof name !== 'string' || !name.trim()) return null;
+    const wanted = name.trim().toLowerCase();
+    return this.folders().find(folder => [folder.displayName, folder.name, folder.id].some(value => typeof value === 'string' && value.toLowerCase() === wanted))?.id || null;
+  }
+  // The folder a card with none chosen works in, in a workspace with more than one: the one its files point to. A path that
+  // starts with a folder's name names that folder ("codeshi-web/app/"). Otherwise a path counts for the one folder where
+  // more of it exists than in any other ("components/demos" for a new file in it). Null when they point nowhere or to
+  // several folders as much; the card then runs in the first folder, as before.
+  folderGuess(card) {
+    const folders = this.folders(), files = (card?.files || []).filter(file => typeof file === 'string' && file.trim());
+    if (folders.length < 2 || !files.length) return null;
+    const key = JSON.stringify([folders.map(folder => [folder.id, folder.path]), files]), kept = this.guesses.get(key);
+    if (kept && Date.now() - kept.at < 60000) return kept.id;
+    const named = new Map(), found = new Map(), add = (votes, id) => votes.set(id, (votes.get(id) || 0) + 1);
+    const exists = target => { try { fs.accessSync(target); return true; } catch { return false; } };
+    for (const file of files) {
+      const parts = file.trim().replace(/\\/g, '/').replace(/^\.\//, '').split('/').filter(Boolean);
+      if (!parts.length || path.isAbsolute(file.trim()) || /^~/.test(file.trim()) || parts.includes('..')) continue;
+      const byName = folders.find(folder => [folder.displayName, folder.name].some(name => typeof name === 'string' && name.toLowerCase() === parts[0].toLowerCase()));
+      if (byName && parts.length > 1 && !folders.some(folder => exists(path.join(folder.path, parts[0])))) { add(named, byName.id); continue; }
+      // How deep the path goes in each folder before it stops existing.
+      const depth = folders.map(folder => { let level = 0; while (level < parts.length && exists(path.join(folder.path, ...parts.slice(0, level + 1)))) level++; return level; });
+      const deepest = Math.max(...depth);
+      if (deepest > 0 && depth.filter(level => level === deepest).length === 1) add(found, folders[depth.indexOf(deepest)].id);
+    }
+    const winner = votes => { const ranked = [...votes].sort((a, b) => b[1] - a[1]); return ranked.length && (ranked.length === 1 || ranked[0][1] > ranked[1][1]) ? ranked[0][0] : null; };
+    const id = named.size ? (named.size === 1 ? [...named.keys()][0] : null) : winner(found);
+    this.guesses.set(key, { id, at: Date.now() });
+    if (this.guesses.size > 500) this.guesses.delete(this.guesses.keys().next().value);
+    return id;
+  }
+  // The folder a card works in: the one chosen for it, or the one its files point to. Null means the first folder.
+  folderOf(card) {
+    if (card?.folderId && this.folders().some(folder => folder.id === card.folderId)) return card.folderId;
+    return this.folderGuess(card);
+  }
+  // Where the card runs on disk: its folder, or the workspace's first one.
+  folderPath(card) { const folders = this.folders(), id = this.folderOf(card) || folders[0]?.id; return folders.find(folder => folder.id === id)?.path || null; }
+  // A card's files as its agent should read them: relative to the folder it works in, without that folder's name in front.
+  filesIn(card) {
+    const folders = this.folders(), folder = folders.find(item => item.id === (this.folderOf(card) || folders[0]?.id));
+    if (folders.length < 2 || !folder) return card.files || [];
+    const names = [folder.displayName, folder.name].filter(name => typeof name === 'string' && name).map(name => name.toLowerCase());
+    return (card.files || []).map(file => { const [first, ...rest] = String(file).replace(/^\.\//, '').split('/'); return rest.length && names.includes(first.toLowerCase()) && !fs.existsSync(path.join(folder.path, first)) ? rest.join('/') : file; });
+  }
 
   // ---- Writing cards
   clean(c, input, card = null) {
@@ -513,7 +589,7 @@ export class Board {
     // 2. New cards.
     let order = this.lastOrder(c, 'backlog');
     const made = fresh.map(({ id, step }) => {
-      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : null, labels: [], folderId: null, dependsOn: [], split: !REVIEW_ROLES.includes(step.role) };
+      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : null, labels: [], folderId: this.folderNamed(step.folder) || this.folderGuess({ files: step.files }), dependsOn: [], split: !REVIEW_ROLES.includes(step.role) };
       const fields = this.clean(c, input);
       // A drafted card is a major card (#162): a high-level piece of the plan that runs only through its subtasks. A review
       // or QA card isn't: it is one pass that ends with a verdict (#89). Either has
@@ -535,6 +611,7 @@ export class Board {
       if ('role' in step) input.role = step.role;
       if ('artifact' in step) input.artifact = step.artifact;
       if ('check' in step) input.check = step.check;
+      if ('folder' in step && this.folderNamed(step.folder)) input.folderId = this.folderNamed(step.folder);
       const fields = this.clean(c, input, card);
       if (step.dependsOn) fields.dependsOn = needs(step);
       const keys = Object.keys(fields).filter(key => JSON.stringify(fields[key] ?? null) !== JSON.stringify(card[key] ?? null));
@@ -756,7 +833,7 @@ export class Board {
       if (item.artifact) facts.push(`Produces: ${ARTIFACT_NAME[item.artifact]}`);
       if (item.files?.length) facts.push(`Files: ${item.files.join(', ')}`);
       if (item.check) facts.push(`Acceptance check: ${item.check}`);
-      if (item.folderId && this.folders().length > 1 && folder(item.folderId)) facts.push(`Works in: ${folder(item.folderId)}`);
+      if (this.folders().length > 1 && folder(this.folderOf(item) || this.folders()[0].id)) facts.push(`Works in: ${folder(this.folderOf(item) || this.folders()[0].id)}`);
       lines.push(...facts.map(f => `- ${f}`), '');
       if (item.notes) lines.push(item.notes, '');
       if (item.checks?.length) lines.push('Done means:', '', ...item.checks.map(chk => `- [${chk.done ? 'x' : ' '}] ${chk.text}`), '');
@@ -799,7 +876,8 @@ export class Board {
       parts.push('# Other open cards in this Plan', '', ...otherOpen.map(item => `- “${item.title.replace(/\s+/g, ' ')}” (${item.draft ? 'Draft' : COLUMN_NAME[item.column]}${item.group ? `, group: ${item.group}` : ''})`), '');
     }
     parts.push(
-      'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions for the person, usually empty: Suggest next always returns its cards, so settle open choices with the option you’d recommend and say which in the summary; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of 1 to 3 follow-up cards, in order, to come after the target card). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards within this steps array that it needs, starting at 1; leave [] if it directly follows the target card), phase (a short group/phase name, or leave null to keep the target card’s group), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one). Do not choose agents or models.'
+      'Return only a JSON object with summary (one or two sentences), questions (an array of up to 5 questions for the person, usually empty: Suggest next always returns its cards, so settle open choices with the option you’d recommend and say which in the summary; each an object with question, the short question, and options, 2 to 4 short answers the person can choose from, the one you recommend first) and steps (an array of 1 to 3 follow-up cards, in order, to come after the target card). Each card has title (short), instructions (what to do and how to know it is done), done (1 to 5 short statements of what done means), files (at most 12 folders or files it expects to change, as paths relative to the project; name a folder rather than many files inside it), tier ("light" for a small well-defined change, "standard" for a focused change, "deep" for complex reasoning), dependsOn (the numbers of earlier cards within this steps array that it needs, starting at 1; leave [] if it directly follows the target card), phase (a short group/phase name, or leave null to keep the target card’s group), and optional role ("builder", "reviewer", "frontend", "backend", "database", "design", "qa"), optional artifact ("contract", "schema", "diff", "test_evidence", "findings") and optional check (a command that tests the card, only when the project has one; it runs from the root of the folder the card works in, so never cd to another folder, and give a card in another folder its own check there). Do not choose agents or models.',
+      ...(folderRule(this.folders()) ? [folderRule(this.folders(), { otherwise: 'without one it works in the target card’s folder' })] : []),
     );
     return parts.join('\n');
   }
@@ -852,7 +930,7 @@ export class Board {
         rowAtDepth.set(d, row + 1);
         atProp = { at: { x: clampPos(card.at.x + (d + 1) * 290), y: clampPos(card.at.y + row * 130) } };
       }
-      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : (card.group || null), labels: [], folderId: card.folderId || null, dependsOn: [], split: true, ...atProp };
+      const input = { title: step.title, notes: step.instructions, checks: (step.done || []).map(item => ({ text: item.slice(0, LIMITS.check), done: false })), role: step.role || 'builder', artifact: step.artifact || null, check: step.check || null, files: (step.files || []).slice(0, LIMITS.files), tier: step.tier || 'standard', group: step.phase ? step.phase.slice(0, LIMITS.group) : (card.group || null), labels: [], folderId: this.folderNamed(step.folder) || this.folderOf(card) || this.folderGuess({ files: step.files }), dependsOn: [], split: true, ...atProp };
       const fields = this.clean(c, input);
       const stepDeps = step.dependsOn.map(id => ids.get(id)).filter(Boolean);
       return { id: ids.get(step.id), ...fields, agent: null, auto: true, dependsOn: stepDeps.length ? stepDeps : [card.id], column: 'backlog', order: this.lastOrder(c, 'backlog') + 1 + index, revision: 1, createdBy: 'agent', createdAt: now, updatedAt: now, attempts: [], source, draft: { by, at: now, batch, notes: notes[step.id] || [] } };
@@ -910,7 +988,9 @@ export class Board {
       `- A card that will build on the findings can wait for “${title}” (its Id, as a string, in dependsOn), so its report is passed to it when it starts.`,
       `- Don’t change, merge or remove “${title}” itself.`,
       ...(queued.length ? [`- These cards show as Doing but haven’t started: they are queued to run. You may change or remove them like cards in Ready: ${queued.slice(0, 40).map(item => `“${item.title.replace(/\s+/g, ' ')}” (Id ${this.refOf(c, item.id)})`).join(', ')}.`] : []),
-      '- Ask before you draft. When the findings leave the person something to decide that would change the update, including questions they end with, return only those questions with the answers to choose from, steps [] and no remove, and say in the summary what you’ll draft once they answer. Don’t decide it for them. Settle smaller choices with the option you’d recommend, and say which in the summary.',
+      `- Questions the findings end with, such as under “Questions for you”, are for “${title}” itself: the person answers them in its task, where it carries on. Don’t ask them again, and don’t draft cards for them or for their answers.`,
+      `- Follow-ups to “${title}”’s own work, such as a related small fix, a polish or a check it could have made, belong to that card, not to new cards. Leave them out. Add a card only for separate work another agent would do on its own.`,
+      '- Ask before you draft. When the findings leave the person something to decide about the Plan that would change the update, return only those questions with the answers to choose from, steps [] and no remove, and say in the summary what you’ll draft once they answer. Don’t decide it for them. Settle smaller choices with the option you’d recommend, and say which in the summary.',
       '- When the findings call for no change to the Plan, return steps [], no remove and no questions, with a summary that says why.',
       '',
       `# Findings of “${title}”`,
@@ -925,7 +1005,7 @@ export class Board {
       '',
       plan.text.trim(),
     ].join('\n');
-    return planningRequest(request, { revising: true });
+    return planningRequest(request, { revising: true, folders: this.folders() });
   }
   // Each update a card's findings made is kept on the card: when, by whom, what it drafted and what you did with it, and
   // which report it read. The card then says the Plan was updated instead of offering it again, and offers it again only
@@ -983,19 +1063,25 @@ export class Board {
     // While this card's own update holds the cards after it, the hold follows the newest run: the one answering its
     // questions, or the one you started again after it failed.
     const now = this.cards(c).find(item => item.id === card.id);
-    if (now?.autoUpdate && !now.autoUpdate.released && started?.id) this.update(c, now, { autoUpdate: { ...now.autoUpdate, jobId: started.id, error: null } });
+    if (now?.autoUpdate && !now.autoUpdate.released && started?.id) this.update(c, now, { autoUpdate: { ...now.autoUpdate, jobId: started.id, error: null, asking: false } });
     return started;
   }
   // Split with an agent (#162): one read-only run splits the cards you chose into subtasks, before any of them runs, so you
   // review the subtasks and choose who does each. A card that already has subtasks gets them replaced, unless one has
   // started. A major card in Backlog that can then run moves to Ready.
-  splittable(c, card) {
+  splittable(c, card, except = null) {
     if (card.draft) return `An agent drafted “${card.title}”. Accept it before splitting it.`;
+    if (this.splittingNow(c, card.id, except)) return `An agent is already splitting “${card.title}”.`;
     if (this.closed(c, card)) return `“${card.title}” is closed to agents.`;
     if (card.column === 'doing') return `An agent is working on “${card.title}”.`;
     if (card.column === 'done') return `“${card.title}” is done.`;
     if ((card.subtasks || []).some(item => item.status !== 'pending' && !(item.status === 'done' && card.subtasks.every(other => other.status === 'done')))) return `Some of “${card.title}”’s subtasks have already run. Clear them first.`;
     return '';
+  }
+  // Whether a split run is working on the card now, in the split list or (from before it) the Plan's one agent run.
+  splittingNow(c, id, except = null) {
+    const running = item => item?.status === 'running' && item.id !== except && (item.cardIds || [item.cardId]).includes(id);
+    return (c.boardSplits || []).some(running) || (c.boardSuggest?.kind === 'split' && running(c.boardSuggest));
   }
   split(c, input = {}) {
     if (this.closing) throw fail('Codeshi is shutting down.');
@@ -1004,13 +1090,13 @@ export class Board {
     const chosen = [...new Set(input.ids)].map(id => this.find(c, id));
     for (const card of chosen) { const why = this.splittable(c, card); if (why) throw fail(why); }
     const ids = chosen.map(card => card.id), title = chosen.length === 1 ? chosen[0].title : `${chosen.length} cards`;
-    return this.job(c, input, { kind: 'split', cardId: ids[0], cardTitle: title, cardIds: ids, prompt: splitCardsRequest(chosen.map(card => this.prompt(c, { ...card, source: null }).replace(/\n\nThis is a card from the project’s task board\.[\s\S]*$/, '')), { goals: [...new Set(chosen.map(card => card.source?.goal).filter(Boolean))] }), finish: reply => {
+    return this.job(c, input, { kind: 'split', cardId: ids[0], cardTitle: title, cardIds: ids, prompt: splitCardsRequest(chosen.map(card => this.prompt(c, { ...card, source: null }).replace(/\n\nThis is a card from the project’s task board\.[\s\S]*$/, '')), { goals: [...new Set(chosen.map(card => card.source?.goal).filter(Boolean))] }), finish: (reply, by, jobId) => {
       let lists;
       try { lists = parseSplitCards(reply, ids.length); } catch (error) { return { status: 'failed', summary: error.message, cards: [] }; }
       const done = [], skipped = [];
       ids.forEach((id, index) => {
         const card = this.cards(c).find(item => item.id === id), list = lists[index];
-        if (!card || !list || this.splittable(c, card)) { if (card) skipped.push(card.title); return; }
+        if (!card || !list || this.splittable(c, card, jobId)) { if (card) skipped.push(card.title); return; }
         this.update(c, card, { subtasks: list, split: true, splitAt: new Date().toISOString(), splitting: null, subtasksPaused: false, revision: card.revision + 1 });
         const now = this.find(c, id);
         if (now.column === 'backlog' && this.runnable(now)) this.update(c, now, { column: 'ready', order: this.lastOrder(c, 'ready') + 1, reason: null });
@@ -1021,9 +1107,12 @@ export class Board {
       return { status: 'complete', summary: `Split ${done.length === 1 ? `“${this.find(c, done[0].id).title}”` : `${done.length} cards`} into ${total} ${total === 1 ? 'subtask' : 'subtasks'}.${skipped.length ? ` Left out: ${skipped.map(name => `“${name}”`).join(', ')}.` : ''}`, cards: done.map(item => item.id) };
     } });
   }
-  // One read-only agent run for the Plan, beside the chat: Suggest next or Split with an agent. One at a time per workspace.
+  // One read-only agent run for the Plan, beside the chat: Suggest next, a Plan update, or Split with an agent. Suggest
+  // next and updates go one at a time per workspace. Splits only read, so several run at once, each on its own cards,
+  // as Tasks at once allows; they keep their own list (c.boardSplits) and records.
   job(c, input, { kind, cardId, cardTitle, cardIds = null, prompt: promptText, finish }) {
-    if (this.suggestJobs.has(c.id) || c.boardSuggest?.status === 'running') throw fail(c.boardSuggest?.kind === 'split' ? 'Wait for the current split to finish, or stop it first.' : c.boardSuggest?.kind === 'update' ? 'Wait for the Plan update to finish, or stop it first.' : 'Wait for the current suggestion to finish, or stop it first.');
+    const split = kind === 'split', type = split ? 'board_split' : 'board_suggest';
+    if (!split && (this.suggestJobs.has(c.id) || c.boardSuggest?.status === 'running')) throw fail(c.boardSuggest?.kind === 'split' ? 'Wait for the current split to finish, or stop it first.' : c.boardSuggest?.kind === 'update' ? 'Wait for the Plan update to finish, or stop it first.' : 'Wait for the current suggestion to finish, or stop it first.');
     const provider = input.provider ?? c.provider;
     if (!PROVIDERS.includes(provider)) throw fail('Choose Codex, Claude or Gemini.', 400);
     const model = input.model ? text(input.model, 200, 'model') : null;
@@ -1033,6 +1122,8 @@ export class Board {
     this.main.checkRunSettings(provider, 'read', 'ask');
     this.main.validateSelection(model, 'auto', effort);
     this.main.admit?.(c);
+    // Running side by side, a split takes one of the workspace's Tasks at once like any task.
+    if (split) this.main.tasks?.admit(c, null);
     this.main.budget.assertCanStart(c, { task: null, provider, model });
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-suggest-'));
     fs.chmodSync(directory, 0o700);
@@ -1043,11 +1134,12 @@ export class Board {
       const conversation = worker.get(worker.create().id), suggestId = randomUUID(), requestId = `${kind}-${suggestId}`;
       worker.budget.remainingSpend = () => this.main.budget.remainingSpend(c, suggestId);
       worker.updateContext(conversation, c.context);
-      this.main.record(c, { type: 'board_suggest', suggest: { id: suggestId, kind, cardId, cardTitle, ...(cardIds ? { cardIds } : {}), provider, model, effort } });
+      const saved = { id: suggestId, kind, cardId, cardTitle, ...(cardIds ? { cardIds } : {}), provider, model, effort };
+      this.main.record(c, split ? { type, split: saved } : { type, suggest: saved });
       savedId = suggestId;
       const progress = () => {
-        const current = c.boardSuggest?.id === suggestId ? c.boardSuggest : null, run = conversation.activeRun;
-        if (current && run?.pid && current.pid !== run.pid) this.main.record(c, { type: 'board_suggest_process', id: suggestId, pid: run.pid, pidStart: run.pidStart });
+        const current = split ? (c.boardSplits || []).find(item => item.id === suggestId) || null : c.boardSuggest?.id === suggestId ? c.boardSuggest : null, run = conversation.activeRun;
+        if (current && run?.pid && current.pid !== run.pid) this.main.record(c, { type: `${type}_process`, id: suggestId, pid: run.pid, pidStart: run.pidStart });
         if (current && run && worker.running) {
           watchedRun = worker.running;
           if (!this.main.budget.watches.has(watchedRun.id)) this.main.budget.watch(watchedRun, { owner: worker, c, taskId: suggestId, recordRunId: suggestId });
@@ -1061,26 +1153,27 @@ export class Board {
       worker.on('update', progress);
       worker.start(conversation, { text: promptText, provider, model, effort, mode: 'read', approvalPolicy: 'ask', billingConfirmed, requestId });
       job = { id: suggestId, cardId, worker, conversation, directory, stopping: false, done: null };
-      this.suggestJobs.set(c.id, job);
+      const key = split ? `${c.id}:split:${suggestId}` : c.id;
+      this.suggestJobs.set(key, job);
       progress();
       job.done = worker.running.done.then(() => {
         const what = kind === 'split' ? 'splitting cards' : kind === 'update' ? 'updating the Plan' : 'suggesting next cards';
         if (job.stopping || conversation.lastRun?.status === 'interrupted') {
-          this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'interrupted', summary: `Stopped ${what}.`, cards: [] });
+          this.main.record(c, { type: `${type}_result`, id: suggestId, status: 'interrupted', summary: `Stopped ${what}.`, cards: [] });
           return;
         }
         if (conversation.lastRun?.status !== 'complete') {
           const err = conversation.messages.filter(m => m.role === 'error').at(-1)?.text?.split('\n')[0];
-          this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'failed', summary: clip(err || (kind === 'split' ? 'The split did not finish.' : kind === 'update' ? 'The Plan update did not finish.' : 'Suggest next did not finish.'), 500), cards: [] });
+          this.main.record(c, { type: `${type}_result`, id: suggestId, status: 'failed', summary: clip(err || (kind === 'split' ? 'The split did not finish.' : kind === 'update' ? 'The Plan update did not finish.' : 'Suggest next did not finish.'), 500), cards: [] });
           return;
         }
         const reply = conversation.messages.filter(m => m.role === 'assistant' && m.text?.trim()).at(-1)?.text || '';
         const result = finish(reply, { kind: 'agent', provider, model }, suggestId);
-        this.main.record(c, { type: 'board_suggest_result', id: suggestId, ...result, summary: clip(result.summary || '', 1000) });
+        this.main.record(c, { type: `${type}_result`, id: suggestId, ...result, summary: clip(result.summary || '', 1000) });
       }).catch(error => {
-        this.main.record(c, { type: 'board_suggest_result', id: suggestId, status: 'failed', summary: clip(error.message, 500), cards: [] });
+        this.main.record(c, { type: `${type}_result`, id: suggestId, status: 'failed', summary: clip(error.message, 500), cards: [] });
       }).finally(async () => {
-        if (this.suggestJobs.get(c.id) === job) this.suggestJobs.delete(c.id);
+        if (this.suggestJobs.get(key) === job) this.suggestJobs.delete(key);
         if (watchedRun) this.main.budget.unwatch(watchedRun);
         const cleanup = (async () => {
           await worker.close();
@@ -1093,23 +1186,30 @@ export class Board {
         try { await cleanup; } finally { this.suggestCleanups.delete(cleanup); }
       });
       job.done.catch(() => {});
-      return this.view(c).suggest;
+      const view = this.view(c);
+      return split ? view.splits.find(item => item.id === suggestId) || null : view.suggest;
     } catch (error) {
-      if (savedId) this.main.record(c, { type: 'board_suggest_result', id: savedId, status: 'failed', summary: clip(error.message, 500), cards: [] });
-      if (job && this.suggestJobs.get(c.id) === job) this.suggestJobs.delete(c.id);
+      if (savedId) this.main.record(c, { type: `${type}_result`, id: savedId, status: 'failed', summary: clip(error.message, 500), cards: [] });
+      if (job) for (const [key, value] of this.suggestJobs) if (value === job) this.suggestJobs.delete(key);
       if (worker) worker.close().finally(() => fs.rmSync(directory, { recursive: true, force: true })).catch(() => {});
       else fs.rmSync(directory, { recursive: true, force: true });
       throw error;
     }
   }
-  stopSuggest(c) {
-    const job = this.suggestJobs.get(c.id);
-    if (!job) throw fail('Nothing is suggesting cards right now.');
+  // With a split's id, stops that split; without one, Suggest next or the Plan update.
+  stopSuggest(c, id = null) {
+    const job = id ? this.suggestJobs.get(`${c.id}:split:${id}`) : this.suggestJobs.get(c.id);
+    if (!job) throw fail(id ? 'That split has already finished.' : 'Nothing is suggesting cards right now.');
     job.stopping = true;
     const res = job.worker.stop(job.conversation.id);
     return { stopped: res.stopped };
   }
-  dismissSuggest(c) {
+  dismissSuggest(c, id = null) {
+    if (id && (c.boardSplits || []).some(item => item.id === id)) {
+      if ((c.boardSplits || []).some(item => item.id === id && item.status === 'running')) throw fail('Stop the split before dismissing it.');
+      this.main.record(c, { type: 'board_split_dismiss', id });
+      return { dismissed: true };
+    }
     if (c.boardSuggest?.status === 'running') throw fail('Stop suggesting before dismissing it.');
     if (c.boardSuggest) this.main.record(c, { type: 'board_suggest_dismiss', id: c.boardSuggest.id });
     // Dismissing an update's questions lets the cards it held go, and the next queued update start.
@@ -1158,7 +1258,7 @@ export class Board {
         if (card.artifact) facts.push(`Produces: ${ARTIFACT_NAME[card.artifact]}`);
         if (card.files?.length) facts.push(`Files: ${card.files.join(', ')}`);
         if (card.check) facts.push(`Acceptance check: \`${card.check.replace(/`/g, "'")}\``);
-        if (card.folderId && this.folders().length > 1 && folderName(card.folderId)) facts.push(`Works in: ${folderName(card.folderId)}`);
+        if (this.folders().length > 1 && folderName(this.folderOf(card) || this.folders()[0].id)) facts.push(`Works in: ${folderName(this.folderOf(card) || this.folders()[0].id)}`);
         const after = (card.dependsOn || []).map(id => all.find(item => item.id === id)?.title).filter(Boolean);
         if (after.length) facts.push(`Waits for: ${after.map(title => `“${title.replace(/\s+/g, ' ')}”`).join(', ')}`);
         if (card.result?.tests && ['review', 'done'].includes(card.column)) facts.push(`Tests: ${card.result.tests}`);
@@ -1223,7 +1323,7 @@ export class Board {
         pick = { provider: given.provider, model, effort, routing };
       }
       if (!pick) throw fail(`Choose an agent for ${name}.`, 400);
-      const folderId = card.folderId || folders[0]?.id || null;
+      const folderId = this.folderOf(card) || folders[0]?.id || null;
       if (!folderId || !folders.some(folder => folder.id === folderId)) throw fail(`Choose the folder ${name} works in.`, 400);
       for (const id of card.dependsOn || []) {
         const before = this.cards(c).find(item => item.id === id);
@@ -1241,7 +1341,10 @@ export class Board {
     const batch = limits ? { id: `run-${attempt}`, limits, cards: order.length, startedAt: new Date().toISOString() } : null;
     try {
       for (const card of order) {
-        const folderId = card.folderId || folders[0].id, policyId = randomUUID(), id = requestId && chosen.length === 1 ? requestId : `board-${card.id}-${attempt}`, pick = who.get(card.id);
+        const folderId = this.folderOf(card) || folders[0].id, policyId = randomUUID(), id = requestId && chosen.length === 1 ? requestId : `board-${card.id}-${attempt}`, pick = who.get(card.id);
+        // Files it saves that Git ignores, such as notes or screenshots under output/, would be lost with a copy, so a card
+        // that names some waits for its folder rather than work in one (task-isolation.mjs).
+        const ignoredFiles = card.files?.length ? ignoredPaths(folders.find(folder => folder.id === folderId).path, this.filesIn(card)) : [];
         // Normal: the card's own agent, model and effort, whatever the workspace's default is. An Auto card routed in Flow
         // runs under the workspace's own policy, which is what lets it be chosen again when it starts.
         // Smart cards run under a Flow policy of their own when the workspace isn't in Flow, as you chose Smart for them.
@@ -1249,7 +1352,7 @@ export class Board {
         const own = pick.routing && !(routed && pick.routing.mode === (defaults.routingMode || 'smart'));
         this.main.execution.ensure(c, policyId, pick.routing ? (own ? { config: { mode: 'flow', routingMode: pick.routing.mode }, source, requestId: id } : { source, requestId: id }) : { config: { mode: 'normal' }, source, requestId: id });
         // The text here is the card as it is now; the task is briefed again when it starts, with what earlier cards did.
-        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision, ...(parent ? { parent } : {}) }, { held: true, batch, queueExecution: this.main.execution.token(c, policyId), board:{ cardId: card.id, revision: card.revision, run: attempt, ...(card.group ? { group: card.group } : {}), ...(note ? { note } : {}) } });
+        const task = this.main.tasks.start(c, { text: this.prompt(c, card) + (note ? `\n\n${note}` : ''), title: card.title, provider: pick.provider, model: pick.model, effort: pick.effort, ...(pick.routing ? { routing: pick.routing } : {}), mode, approvalPolicy, folderId, billingConfirmed, requestId: id, dependsOn: (card.dependsOn || []).filter(id => picked.has(id)).map(id => tasks[id]), executionRevision, ...(parent ? { parent } : {}), ...(ignoredFiles.length ? { ignoredFiles } : {}) }, { held: true, batch, queueExecution: this.main.execution.token(c, policyId), board:{ cardId: card.id, revision: card.revision, run: attempt, ...(card.group ? { group: card.group } : {}), ...(note ? { note } : {}) } });
         tasks[card.id] = task.id; made.push(task.id);
       }
     } catch (error) {
@@ -1272,9 +1375,9 @@ export class Board {
     if (card.source?.goal) parts.push('This card is part of a plan for:', card.source.goal, ...(card.source.summary ? ['', `Plan: ${card.source.summary}`] : []), '', 'Other agents do the other cards, so do only this one.', '');
     parts.push(`${card.title}${card.role && card.role !== 'builder' ? ` (${card.role})` : ''}`);
     if (card.notes) parts.push('', card.notes);
-    if (card.files?.length) parts.push('', `Files or folders it expects to change: ${card.files.join(', ')}`);
+    if (card.files?.length) parts.push('', `Files or folders it expects to change: ${this.filesIn(card).join(', ')}`);
     if (card.checks?.length) parts.push('', 'Done means:', ...card.checks.map(item => `- ${item.text}`));
-    if (card.check) parts.push('', `Acceptance check: ${card.check}`);
+    if (card.check) parts.push('', `Acceptance check: ${ownCheck(card.check, this.folderPath(card))}`);
     if (card.artifact) parts.push('', `When you finish, your report is this card’s ${ARTIFACT_NAME[card.artifact].toLowerCase()}: the cards after it are told it.`);
     // A card closed to agents (#97) isn't named, and its result isn't passed on.
     const before = (card.dependsOn || []).map(id => this.cards(c).find(item => item.id === id)).filter(other => other && !this.closed(c, other));
@@ -1297,7 +1400,7 @@ export class Board {
     // Questions the person must answer go in one section the Plan shows under the card's result, with a box to answer them.
     // A card whose findings mean the Plan should change says so under its own heading, and the Plan updates from it.
     if (REVIEW_ROLES.includes(card.role)) parts.push('', 'This is a card from the project’s task board. Say what you checked and how, then give your verdict.', PLAN_CHANGES_REQUEST, 'If something needs the person’s answer, list it under a heading “Questions for you”, one question per line, just before your verdict.', '', verdictRequest(card.role));
-    else parts.push('', 'This is a card from the project’s task board. When you finish, say in a few sentences what you changed and how you checked it. You review nothing yourself: the person accepts the card.', PLAN_CHANGES_REQUEST, 'If something needs the person’s answer before the work can go on, end with a heading “Questions for you” and list each question on its own line.');
+    else parts.push('', 'This is a card from the project’s task board. When you finish, say in a few sentences what you changed and how you checked it. You review nothing yourself: the person accepts the card.', PLAN_CHANGES_REQUEST, 'If something about this card’s work needs the person’s answer, such as a choice between ways to do it or whether to also make a follow-up change, end with a heading “Questions for you” and list each question on its own line.');
     return parts.join('\n');
   }
   // ---- One way to run (#162)
@@ -1402,11 +1505,12 @@ export class Board {
     if (!reply) reply = card.result?.summary || '';
     return { text: clip(reply, 60000), provider, model, followUps, taskId: task?.id || null };
   }
-  // A task's runs, each with what started it and its last reply, split into the report and the follow-ups after it.
+  // A task's runs, each with what started it and its last reply, split into the report and the follow-ups after it. Runs
+  // that resolved a merge conflict in its copy are neither: Codeshi asked for them, and the task's chat shows them.
   thread(c, task, { open = true } = {}) {
-    const asked = new Set((task.laterRuns || []).filter(item => item.kind === 'follow-up' && item.runId).map(item => item.runId));
-    const list = this.runsOf(c, task, { open }), last = list.findLastIndex(run => !asked.has(run.runId));
-    return { report: last >= 0 ? list[last] : null, followUps: list.slice(last + 1).filter(run => asked.has(run.runId)) };
+    const kinds = new Map((task.laterRuns || []).filter(item => item.runId).map(item => [item.runId, item.kind]));
+    const all = this.runsOf(c, task, { open }), list = all.filter(run => kinds.get(run.runId) !== 'resolve'), last = list.findLastIndex(run => kinds.get(run.runId) !== 'follow-up');
+    return { report: last >= 0 ? list[last] : null, followUps: list.slice(last + 1).filter(run => kinds.get(run.runId) === 'follow-up'), resolves: all.length - list.length };
   }
   // Every run in a task's conversation that replied, in order: what started it and its last reply.
   // open: false reads only a task whose conversation is already open, as when a card's result is saved.
@@ -1426,7 +1530,7 @@ export class Board {
   // A run in a finished card's task, noted as it starts: a follow-up you asked, a repair or a second review.
   laterRun(c, task) {
     const reviewer = task.repairOf ? (c.parallelTasks || []).find(item => item.id === task.repairOf.taskId) : null;
-    const kind = reviewer?.review?.status === 'repairing' ? 'repair' : ['repairing', 'reviewing'].includes(task.review?.status) ? 'rereview' : 'follow-up';
+    const kind = task.resolve?.open ? 'resolve' : reviewer?.review?.status === 'repairing' ? 'repair' : ['repairing', 'reviewing'].includes(task.review?.status) ? 'rereview' : 'follow-up';
     let runId = null;
     try { const lane = this.main.tasks.lanes.get(task.id), conversation = lane?.c; runId = conversation?.activeRun?.id || conversation?.messages?.findLast(item => item.role === 'user' && item.runId)?.runId || null; } catch { /* Noted without its run. */ }
     if (runId && (task.laterRuns || []).some(item => item.runId === runId)) return;
@@ -1470,12 +1574,20 @@ export class Board {
   // queue. If the update needs the person to decide something, it asks first; otherwise its changes arrive as a draft
   // that names each card it affects. The cards after it wait until the draft is accepted or discarded, or the person
   // continues anyway, so they never start from a Plan that's about to change. Each report is noticed once.
+  // A card that ends with questions for you is answered in its own task first: the update waits (asking), so your answers
+  // stay with the card instead of becoming the update's questions and new cards. When the card's last reply asks nothing
+  // more, the update starts and reads the answers too; or, if the card no longer says the Plan should change, it lets go.
   noticeChanges(c, card, task) {
-    const report = card.result?.reportRun;
-    if (!report || card.autoUpdate?.report === report || card.draft || this.managed(c, card) || this.closed(c, card)) return;
-    const said = planChanges(this.thread(c, task, { open: false }).report?.text);
-    if (!said) return;
-    this.update(c, card, { autoUpdate: { report, task: task.id, at: new Date().toISOString(), said, jobId: null, error: null, released: false } });
+    const report = card.result?.reportRun, auto = card.autoUpdate;
+    if (!report || card.draft || this.managed(c, card) || this.closed(c, card)) return;
+    if (auto?.report === report && !(auto.asking && !auto.released)) return;
+    const thread = this.thread(c, task, { open: false }), latest = thread.followUps.at(-1)?.text || thread.report?.text || '';
+    const said = (thread.followUps.length ? planChanges(latest) : '') || planChanges(thread.report?.text);
+    if (!said) { if (auto?.asking) this.update(c, card, { autoUpdate: { ...auto, asking: false, released: true } }); return; }
+    const asking = openQuestions(latest).length > 0;
+    if (asking && auto?.asking && auto.report === report) return;
+    this.update(c, card, { autoUpdate: { report, task: task.id, at: new Date().toISOString(), said, jobId: null, error: null, released: false, ...(asking ? { asking: true } : {}) } });
+    if (asking) { this.main.message(c, 'system', `“${card.title}” has questions for you. Answer them on its card, and it carries on in its task. The Plan changes it found are drafted after that, and the cards after it wait.`); return; }
     this.main.message(c, 'system', `“${card.title}” found that the Plan should change, so Codeshi is drafting those changes for you to accept. The cards after it wait until you do.`);
     setTimeout(() => this.drainUpdates(c), 0);
   }
@@ -1484,7 +1596,7 @@ export class Board {
     if (this.closing || this.suggestJobs.has(c.id) || c.boardSuggest?.status === 'running') return;
     const open = c.boardSuggest;
     if (open?.kind === 'update' && open.status === 'complete' && !open.cards?.length && open.questions?.length) return;
-    const card = this.cards(c).filter(item => item.autoUpdate && !item.autoUpdate.jobId && !item.autoUpdate.error && !item.autoUpdate.released).sort((a, b) => a.autoUpdate.at.localeCompare(b.autoUpdate.at))[0];
+    const card = this.cards(c).filter(item => item.autoUpdate && !item.autoUpdate.jobId && !item.autoUpdate.error && !item.autoUpdate.released && !item.autoUpdate.asking).sort((a, b) => a.autoUpdate.at.localeCompare(b.autoUpdate.at))[0];
     if (!card) return;
     const task = this.task(c, card), read = task ? this.answer(c, card.id) : { provider: null, model: null };
     const provider = read.provider || task?.provider || null, model = read.provider ? read.model : task?.model ?? null;
@@ -1502,6 +1614,7 @@ export class Board {
     const auto = card?.autoUpdate;
     if (!auto || auto.released || (auto.task && auto.task !== card.task)) return null;
     const title = card.title;
+    if (auto.asking) return `“${title}” has questions for you. Answer them on its card, or continue anyway.`;
     if (auto.error) return `Couldn’t update the Plan from “${title}”. Update it again from the card, or continue anyway.`;
     if (!auto.jobId) return `Waiting to update the Plan from what “${title}” found.`;
     const job = c.boardSuggest?.id === auto.jobId ? c.boardSuggest : null;
@@ -1550,6 +1663,12 @@ export class Board {
     }
     // A finished card whose copy you discarded keeps its answer in Review, with its task, until you accept it or send it back.
     if (status === 'discarded' && card.column === 'review') return card.result?.status === 'discarded' ? null : { reason: null, result: { ...(card.result || this.result(task, c)), status: 'discarded', inCopy: false, at: new Date().toISOString() } };
+    // Resolving its merge conflicts stopped or failed, or is starting again after that: the card's own work is as it
+    // finished, so it stays in Review to merge.
+    if (['stopped', 'failed'].includes(status) && (task.resolve?.ended === status || task.resolve?.open) && card.result) {
+      const reason = `Resolving its merge conflicts ${status === 'stopped' ? 'was stopped' : 'didn’t finish'}. Review and merge it to try again, or keep it as a branch.`;
+      return card.column === 'review' && card.reason === reason ? null : { column: 'review', ...(card.column === 'review' ? {} : { order: this.lastOrder(c, 'review') + 1 }), reason };
+    }
     const why = {
       stopped: task.subtasksEnded && task.reason ? task.reason : 'Stopped before it finished.',
       failed: task.subtasksEnded && task.reason ? clip(task.reason, 400) : `Didn’t finish${task.reason ? `: ${clip(task.reason, 300)}` : '.'}`,
@@ -1571,11 +1690,11 @@ export class Board {
     const thread = known || (c ? this.thread(c, task, { open: false }) : { report: null, followUps: [] });
     const reply = thread.report?.text || conversation?.messages?.findLast(message => message.role === 'assistant' && message.runId === run?.id && message.text?.trim())?.text || '';
     const split = c ? this.cards(c).find(card => card.id === task.board?.cardId)?.subtasks?.length : 0;
-    // A split card's changes are its every subtask's, not only the last run's, and with follow-ups, the report's and theirs.
-    const from = thread.followUps.length && conversation ? (conversation.messages || []).findIndex(message => message.runId === thread.report?.runId) : -1;
+    // A split card's changes are its every subtask's, not only the last run's, and with follow-ups or resolving, the report's and theirs.
+    const from = (thread.followUps.length || thread.resolves) && conversation ? (conversation.messages || []).findIndex(message => message.runId === thread.report?.runId) : -1;
     const files = task.integration?.files ?? (split && conversation ? runSteps(conversation.messages || []).files.length : from >= 0 ? runSteps(conversation.messages.slice(from)).files.length : run && conversation.snapshots?.[run.id]?.files != null ? Number(conversation.snapshots[run.id].files) || 0 : null);
     const check = task.stepCheck;
-    return { status: task.status, summary: clip(reply.replace(/\s+/g, ' '), LIMITS.summary), files, tests: this.tests(task) ?? run?.check?.status ?? null, ...(check?.reason ? { testsReason: clip(check.reason, LIMITS.reason) } : {}), ...(check?.command ? { testCommand: check.command } : {}), ...(check?.accepted ? { testsAccepted: true } : {}), inCopy: task.mode === 'worktree', ...(thread.report?.runId ? { reportRun: thread.report.runId } : {}), ...(thread.followUps.length ? { followUps: thread.followUps.length } : {}), at: new Date().toISOString() };
+    return { status: task.status, summary: clip(reply.replace(/\s+/g, ' '), LIMITS.summary), files, tests: this.tests(task) ?? run?.check?.status ?? null, ...(check?.reason ? { testsReason: clip(check.reason, LIMITS.reason) } : {}), ...(check?.command ? { testCommand: check.command } : {}), ...(check?.unrunnable ? { testsUnrunnable: true } : {}), ...(check?.accepted ? { testsAccepted: true } : {}), inCopy: task.mode === 'worktree', ...(thread.report?.runId ? { reportRun: thread.report.runId } : {}), ...(thread.followUps.length ? { followUps: thread.followUps.length } : {}), at: new Date().toISOString() };
   }
   // What the card's own tests say (#162): running, passed, failed, interrupted, no changes to test, or not tested.
   tests(task) {
@@ -1614,7 +1733,9 @@ export class Board {
     // A review's verdict, findings and repair round (#89), and whether it ran on an agent that built what it checks.
     const review = task?.review ? { status: task.review.status, verdict: task.review.verdict ?? null, round: task.review.round || 0, reason: task.review.reason || null, waiting: task.review.waiting || null, accepted: task.review.accepted === true, findings: (task.review.findings || []).map(item => ({ ...item, cardTitle: item.cardId ? this.cards(c).find(other => other.id === item.cardId)?.title || null : null })), repairs: task.review.repairs || [], earlier: task.review.earlier?.length || 0 } : null;
     const reviewer = REVIEW_ROLES.includes(card.role) && task ? (lane?.c?.activeRun?.provider || task.provider) : null;
-    return { ...rest, managed: this.managed(c, card), labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), ...(Number.isInteger(task.copyFiles) ? { copyFiles: task.copyFiles } : {}), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review || planUpdate ? { holds: held } : {}), ...(planUpdate ? { planUpdate } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
+    // The folder it runs in: the one chosen, or the one its files point to, which the page says it guessed.
+    const folderId = this.folderOf(card), folderGuessed = Boolean(folderId && folderId !== card.folderId);
+    return { ...rest, folderId: folderId || null, ...(folderGuessed ? { folderGuessed } : {}), managed: this.managed(c, card), labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), ...(Number.isInteger(task.copyFiles) ? { copyFiles: task.copyFiles } : {}), ...(task.resolve?.open ? { resolving: true } : {}), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, ...(check.unrunnable ? { testsUnrunnable: true } : {}), testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review || planUpdate ? { holds: held } : {}), ...(planUpdate ? { planUpdate } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   // The Plan chat, once opened: its task, whether it is working, and its approvals waiting.
@@ -1626,6 +1747,7 @@ export class Board {
   }
   view(c) {
     const suggest = c.boardSuggest ? (({ pid, pidStart, ...rest }) => rest)(c.boardSuggest) : null;
-    return { cards: this.list(c), closed: c.planClosed === true, chat: this.chatView(c), schedules: this.main.schedules?.view(c) || [], runs: this.main.tasks.runs?.(c) || [], taskLimits: (({ maxConcurrent, maxWorkingMinutes, maxTokens, maxSpendUSD }) => ({ maxConcurrent, maxWorkingMinutes, maxTokens, maxSpendUSD }))(this.main.budget.policy(c)), suggest, revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
+    const splits = (c.boardSplits || []).map(({ pid, pidStart, ...rest }) => rest);
+    return { cards: this.list(c), closed: c.planClosed === true, chat: this.chatView(c), schedules: this.main.schedules?.view(c) || [], runs: this.main.tasks.runs?.(c) || [], taskLimits: (({ maxConcurrent, maxWorkingMinutes, maxTokens, maxSpendUSD }) => ({ maxConcurrent, maxWorkingMinutes, maxTokens, maxSpendUSD }))(this.main.budget.policy(c)), suggest, splits, revision: c.boardRevision || 0, access: { mode: c.mode, approvalPolicy: c.approvalPolicy || 'ask' }, folders: this.folders().map(({ id, name, displayName }) => ({ id, name: displayName || name })), limits: LIMITS };
   }
 }

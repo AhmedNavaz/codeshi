@@ -1,0 +1,176 @@
+/* Work time and activity (public/activity.js): today's time in the status bar or Flow's header, the cards that suggest a
+   break, and the Activity view of each day, week and month with this month's badges. Colours come from the theme. */
+
+/* Line icons drawn as masks, so they take the text colour like the rest of the app's icons. */
+.activity-glyph { display: inline-block; flex: none; width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--glyph) center / contain no-repeat; mask: var(--glyph) center / contain no-repeat; }
+.activity-glyph[data-icon="stopwatch"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='13.5' r='7.5'/%3E%3Cpath d='M12 10v3.5l2.2 1.5M9.5 3h5M12 3v3M18 7l1.3-1.3'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="cup"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 9.5h12V14a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-5z'/%3E%3Cpath d='M16.5 11h1.3a2.6 2.6 0 0 1 0 5.2H16'/%3E%3Cpath d='M8.5 3.5c-.8 1 .8 2 0 3.2M12.5 3.5c-.8 1 .8 2 0 3.2'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="walk"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='13.5' cy='4.5' r='1.8'/%3E%3Cpath d='M12.6 8 11 13.5M11 13.5l-2.6 3.7-1.4 3.6M11 13.5l3.1 2.8.6 4.5M12.3 9.2 8.8 11.4M12.3 9.2l2.4 2.6 2.6.7'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="lunch"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 3.5V9a2 2 0 0 0 2 2m0 0a2 2 0 0 0 2-2V3.5M9 3.5V20.5M9 11v9.5'/%3E%3Cpath d='M17 20.5v-17c-2 1.6-3 4-3 7 0 1.7.9 2.6 3 2.6'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="moon"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19.5 14.5A7.5 7.5 0 1 1 9.5 4.5a6 6 0 0 0 10 10z'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="sunset"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 17.5h18M7 17.5a5 5 0 0 1 10 0M12 6.5v2.5M5.6 10.3l1.6 1.6M18.4 10.3l-1.6 1.6M8.5 21h7'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="trophy"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 4h8v5a4 4 0 0 1-8 0z'/%3E%3Cpath d='M8 5.5H5.5a2.5 2.5 0 0 0 2.7 3.9M16 5.5h2.5a2.5 2.5 0 0 1-2.7 3.9M12 13v3.5M8.5 20.5h7M9.7 20.5l.6-4h3.4l.6 4'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="check"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 12.5 4.5 4.5L19 7.5'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="close"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.5 6.5l11 11M17.5 6.5l-11 11'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="steady-week"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='5' width='17' height='15' rx='2.5'/%3E%3Cpath d='M3.5 10h17M8 3v4M16 3v4M9 14.8l2 2 4-4'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="good-rhythm"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12.5h3.5l2.5-6 4 11.5 2.5-5.5H21'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="forty-hours"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.5'/%3E%3Cpath d='M12 7.5V12l3 2'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="finisher"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 21V3.5M5.5 4.5h11.5l-2.5 4 2.5 4H5.5'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="hundred-prompts"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4a2 2 0 0 1-2-2z'/%3E%3Cpath d='M8.5 10.5h.01M12 10.5h.01M15.5 10.5h.01'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="million-tokens"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 2.5 5 13.5h6l-1 8 8-11h-6z'/%3E%3C/svg%3E"); }
+.activity-glyph[data-icon="arcade"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='7' width='19' height='10' rx='5'/%3E%3Cpath d='M7.5 10.5v3M6 12h3M15.5 11h.01M17.5 13h.01'/%3E%3C/svg%3E"); }
+
+/* The timer. In the status bar it reads like its neighbours; the number is brighter while it counts, and a cup and a
+   countdown replace it during a break you chose to take. */
+.work-time { font-variant-numeric: tabular-nums; }
+.work-time .work-time-break { display: none; }
+.work-time[data-state="break"] .work-time-timer { display: none; }
+.work-time[data-state="break"] .work-time-break { display: block; }
+.work-time[data-state="counting"] { color: var(--text); }
+.work-time[data-state="counting"] .work-time-timer { color: var(--accent); }
+.work-time[data-state="break"] { color: var(--link); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.work-time[aria-expanded="true"] { color: var(--text-strong); background: var(--hover); }
+.work-time-label:empty { display: none; }
+/* In Flow, where there is no status bar, the same timer sits in the header beside the Lounge. */
+.flow-work-time { display: none; align-items: center; gap: 6px; flex: none; height: 28px; margin-left: 6px; padding: 0 10px 0 8px; border: 1px solid var(--border-strong); border-radius: 14px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; -webkit-app-region: no-drag; cursor: pointer; }
+#app-shell.flow .flow-work-time:not([hidden]) { display: inline-flex; }
+.flow-work-time .icon { width: 14px; height: 14px; }
+.flow-work-time:hover { color: var(--text-strong); background: var(--hover); }
+.flow-work-time[data-state="break"] { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+
+/* Cards at the foot of the window, above the status bar. */
+.activity-cards { position: fixed; z-index: 45; right: 16px; bottom: calc(var(--statusbar-height) + 12px); display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+.activity-cards[hidden] { display: none; }
+body:has(#app-shell.flow) .activity-cards { bottom: 18px; }
+.activity-card { position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; padding: 14px 16px 14px 14px; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--overlay-bg); color: var(--text); box-shadow: var(--shadow-lg); pointer-events: auto; animation: activity-in .32s cubic-bezier(.2, .8, .2, 1) both; }
+.activity-card-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.activity-card-mark .activity-glyph { width: 18px; height: 18px; }
+.activity-card[data-kind="welcome"] .activity-card-mark { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.activity-card[data-kind="badge"] .activity-card-mark { background: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); animation: activity-earned 1.6s ease-out .2s both; }
+.activity-card-text { min-width: 0; }
+.activity-card-head { display: flex; align-items: baseline; gap: 10px; padding-right: 22px; }
+.activity-card-title { min-width: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; line-height: 1.35; }
+.activity-card-time { margin-left: auto; color: var(--link); font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.activity-card[data-kind="pause"] .activity-card-head { padding-right: 0; }
+.activity-card-body { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.activity-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.activity-card-actions :is(.primary-button, .secondary-button) { height: 28px; padding: 0 12px; font-size: 12px; }
+.activity-card-close { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; color: var(--faint); }
+.activity-card-close:hover { color: var(--text); }
+.activity-card-close .activity-glyph { width: 14px; height: 14px; }
+/* A break's time left, as a line along the card's foot that shortens each second. */
+.activity-card-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--accent); transform-origin: left center; transition: transform 1s linear; }
+@keyframes activity-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+@keyframes activity-earned { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); } }
+
+/* Activity. */
+.activity-popover { padding: 0; }
+.activity-popover > header { padding-bottom: 6px; }
+.activity-popover #activity-date { margin: 2px 0 0; color: var(--faint); font-size: 11px; }
+.activity-content { display: grid; }
+.activity-content > section + section, .activity-foot { border-top: 1px solid var(--border); }
+.activity-eyebrow { color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+
+.activity-hero { padding: 6px 16px 16px; }
+.activity-hero-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 22px; }
+.activity-hero-label { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.activity-today-link { font-size: 11px; }
+.activity-total { margin: 4px 0 2px; color: var(--text-strong); font-size: 34px; font-weight: 650; letter-spacing: -.03em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.activity-unit { margin-left: 1px; color: var(--muted); font-size: 18px; font-weight: 500; letter-spacing: 0; }
+.activity-seconds { color: var(--faint); font-size: 14px; font-weight: 500; letter-spacing: 0; }
+.activity-hero-meta { margin: 0 0 14px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.activity-next { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 22px; padding: 0 9px; border-radius: 11px; background: var(--chip-bg); color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.activity-next[hidden] { display: none; }
+.activity-next .activity-glyph { width: 13px; height: 13px; }
+.activity-next[data-state="due"], .activity-next[data-state="break"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--link); }
+
+/* The day from midnight to midnight. */
+.activity-timeline { margin: 0 0 14px; }
+.activity-timeline-track { position: relative; height: 10px; overflow: hidden; border-radius: 5px; background: var(--chip-bg); }
+.activity-timeline-span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 3px; background: var(--accent); }
+.activity-timeline-marks { position: relative; height: 13px; margin-top: 4px; color: var(--faint); font-size: 10px; }
+.activity-timeline-marks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.activity-timeline-marks span:first-child { transform: none; }
+.activity-timeline-marks span:last-child { transform: translateX(-100%); }
+
+.activity-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; }
+.activity-range-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.activity-stat { display: flex; flex-direction: column-reverse; gap: 1px; min-width: 0; padding: 8px 10px; border-radius: 8px; background: var(--chip-bg); }
+.activity-stat dt { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.activity-stat dd { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.activity-range { padding: 14px 16px 16px; }
+.activity-tabs { display: flex; width: 100%; margin-bottom: 14px; box-sizing: border-box; }
+.activity-tabs button { flex: 1; }
+.activity-range-summary { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.activity-range-summary strong { color: var(--text-strong); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* A week: a bar a day. The chosen day is outlined; today is the solid one. */
+.activity-bars { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; height: 138px; margin-bottom: 14px; }
+.activity-bar { display: grid; grid-template-rows: 14px minmax(0, 1fr) 15px; gap: 4px; min-width: 0; padding: 0; border: 0; background: none; color: var(--faint); font: inherit; cursor: pointer; }
+.activity-bar:disabled { cursor: default; opacity: .45; }
+.activity-bar-value { overflow: hidden; color: var(--muted); font-size: 10px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.activity-bar-track { position: relative; border-radius: 6px; background: var(--chip-bg); }
+.activity-bar-fill { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 6px; background: color-mix(in srgb, var(--accent) 50%, var(--chip-bg)); transition: height .3s cubic-bezier(.2, .8, .2, 1); }
+.activity-bar[data-today="true"] .activity-bar-fill { background: var(--accent); }
+.activity-bar:hover:enabled .activity-bar-track { background: var(--hover); }
+.activity-bar[aria-pressed="true"] .activity-bar-track { outline: 1.5px solid var(--accent); outline-offset: 2px; }
+.activity-bar-day { font-size: 11px; text-align: center; }
+.activity-bar[data-today="true"] .activity-bar-day { color: var(--text-strong); font-weight: 600; }
+.activity-bar:focus-visible { outline: none; }
+.activity-bar:focus-visible .activity-bar-track { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* A month: a calendar, each day shaded by its hours (under 1, 1 to 3, 3 to 6, 6 or more). */
+.activity-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-bottom: 14px; }
+.activity-weekday { padding-bottom: 2px; color: var(--faint); font-size: 10px; text-align: center; }
+.activity-day { display: grid; place-items: center; aspect-ratio: 1.35; padding: 0; border: 0; border-radius: 6px; background: var(--chip-bg); color: var(--faint); font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.activity-day[data-level="1"] { background: color-mix(in srgb, var(--accent) 22%, var(--chip-bg)); color: var(--text); }
+.activity-day[data-level="2"] { background: color-mix(in srgb, var(--accent) 45%, var(--chip-bg)); color: var(--text-strong); }
+.activity-day[data-level="3"] { background: color-mix(in srgb, var(--accent) 70%, var(--chip-bg)); color: var(--on-accent); }
+.activity-day[data-level="4"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.activity-day[data-today="true"] { box-shadow: inset 0 0 0 1.5px var(--text-strong); }
+.activity-day[aria-pressed="true"] { position: relative; z-index: 1; box-shadow: 0 0 0 2px var(--overlay-bg), 0 0 0 3.5px var(--text-strong); }
+.activity-day:disabled { cursor: default; opacity: .4; }
+.activity-day:hover:enabled { filter: brightness(1.08); }
+.activity-day:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* Which agents the tokens went to. */
+.activity-agents { margin-top: 12px; }
+.activity-agents[hidden] { display: none; }
+.activity-agents-bar { display: flex; gap: 2px; height: 6px; overflow: hidden; border-radius: 3px; }
+.activity-agents-bar span { flex-basis: 0; min-width: 3px; background: var(--faint); }
+.activity-agents-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 7px 0 0; color: var(--muted); font-size: 11px; }
+.activity-agent { display: inline-flex; align-items: center; gap: 6px; }
+.activity-agent i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+:is(.activity-agents-bar span, .activity-agent i)[data-agent="claude"], .activity-agent[data-agent="claude"] i { background: var(--claude); }
+:is(.activity-agents-bar span, .activity-agent i)[data-agent="codex"], .activity-agent[data-agent="codex"] i { background: var(--codex); }
+:is(.activity-agents-bar span, .activity-agent i)[data-agent="gemini"], .activity-agent[data-agent="gemini"] i { background: var(--gemini); }
+
+/* Badges: a ring that fills toward the target, solid once it's earned. */
+.activity-badges { padding: 14px 16px 16px; }
+.activity-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+.activity-section-head h3 { margin: 0; color: var(--text-strong); font-size: 12px; font-weight: 600; }
+.activity-count { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.activity-badge-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 8px; margin: 0; padding: 0; list-style: none; }
+.activity-badge { display: grid; justify-items: center; gap: 3px; min-width: 0; text-align: center; cursor: default; }
+.activity-badge-ring { position: relative; display: grid; place-items: center; width: 46px; height: 46px; margin-bottom: 3px; border-radius: 50%; background: conic-gradient(color-mix(in srgb, var(--accent) 75%, transparent) calc(var(--progress, 0) * 360deg), var(--chip-bg) 0); color: var(--faint); }
+.activity-badge-ring::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--overlay-bg); }
+.activity-badge-ring .activity-glyph { position: relative; width: 19px; height: 19px; }
+.activity-badge[data-earned="true"] .activity-badge-ring { background: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+.activity-badge[data-earned="true"] .activity-badge-ring::before { display: none; }
+.activity-badge-name { max-width: 100%; color: var(--text); font-size: 11px; font-weight: 600; line-height: 1.25; }
+.activity-badge[data-earned="false"] .activity-badge-name { color: var(--muted); }
+.activity-badge-progress { color: var(--faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.activity-badge[data-earned="true"] .activity-badge-progress { color: var(--link); }
+
+.activity-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px 12px; color: var(--faint); font-size: 11px; }
+.activity-foot .text-link { flex: none; font-size: 11px; }
+.activity-off { display: grid; justify-items: center; gap: 8px; padding: 28px 28px 24px; text-align: center; }
+.activity-off strong { color: var(--text-strong); font-size: 13px; }
+.activity-off p { max-width: 300px; margin: 0 0 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.activity-off-mark { width: 28px; height: 28px; color: var(--faint); }
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-card, .activity-card[data-kind="badge"] .activity-card-mark { animation: none; }
+  .activity-card-progress, .activity-bar-fill { transition: none; }
+}

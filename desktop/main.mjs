@@ -1,4 +1,4 @@
-import {app,BaseWindow,BrowserWindow,Menu,Notification,Tray,WebContentsView,contentTracing,dialog,ipcMain,nativeImage,nativeTheme,screen,session,shell,powerSaveBlocker} from 'electron';
+import {app,BaseWindow,BrowserWindow,Menu,Notification,Tray,WebContentsView,contentTracing,dialog,ipcMain,nativeImage,nativeTheme,powerMonitor,screen,session,shell,powerSaveBlocker} from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -257,6 +257,18 @@ else {
     ipcMain.handle('relay:login:get',event=>{if(!trusted(event))throw Error('Untrusted renderer');return loginState();});
     ipcMain.handle('relay:login:set',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');if(!loginSupported)throw Error('Open at login is available in the installed app.');app.setLoginItemSettings({openAtLogin:enabled===true,...(process.platform==='win32'?{args:loginArgs}:{})});return loginState();});
     ipcMain.handle('relay:keep-awake:get',event=>{if(!trusted(event))throw Error('Untrusted renderer');return keepAwake.getState();});
+    // Work time: how long since the last key, click or touch anywhere on the computer, so time in another app while an
+    // agent works counts and time away doesn't. A locked screen is time away.
+    ipcMain.handle('relay:idle',event=>{if(!trusted(event))throw Error('Untrusted renderer');const locked=powerMonitor.getSystemIdleState(60)==='locked';return {idleMs:locked?7*86400000:powerMonitor.getSystemIdleTime()*1000,locked};});
+    // A break reminder while Codeshi is behind other windows: a quiet banner that brings it forward. In front, the page shows its own.
+    ipcMain.handle('relay:break-banner',(event,input)=>{
+      if(!trusted(event))throw Error('Untrusted renderer');
+      if(win.isFocused()||notificationsRefused||!Notification.isSupported())return {shown:false};
+      const notice=new Notification({title:String(input?.title||'').slice(0,120),body:String(input?.body||'').slice(0,240),silent:true});
+      notice.on('click',()=>openTarget(null));
+      notice.on('failed',(_event,error)=>{notificationsRefused=true;console.warn('macOS did not show a Codeshi notification:',error);});
+      notice.show();return {shown:true};
+    });
     ipcMain.handle('relay:keep-awake:set',(event,enabled)=>{if(!trusted(event))throw Error('Untrusted renderer');return keepAwake.setEnabled(enabled);});
     ipcMain.handle('relay:launch',event=>{if(!trusted(event))throw Error('Untrusted renderer');return releases.get();});
     ipcMain.handle('relay:acknowledge-update',event=>{if(!trusted(event))throw Error('Untrusted renderer');return releases.acknowledge();});

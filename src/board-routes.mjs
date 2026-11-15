@@ -38,8 +38,8 @@ export function createBoardRoutes({ registry, body, json }) {
     if (url.pathname === '/api/board/drafts') { json(res, 200, { ...board.drafts(c, input), board: board.view(c) }); return true; }
     // Split with an agent (#162): one read-only run splits the chosen cards into subtasks for you to review.
     if (url.pathname === '/api/board/split') { json(res, 202, { suggest: board.split(c, input), board: board.view(c) }); return true; }
-    if (url.pathname === '/api/board/suggest/stop') { json(res, 200, { ...board.stopSuggest(c), board: board.view(c) }); return true; }
-    if (url.pathname === '/api/board/suggest/dismiss') { json(res, 200, { ...board.dismissSuggest(c), board: board.view(c) }); return true; }
+    if (url.pathname === '/api/board/suggest/stop') { json(res, 200, { ...board.stopSuggest(c, typeof input.id === 'string' ? input.id : null), board: board.view(c) }); return true; }
+    if (url.pathname === '/api/board/suggest/dismiss') { json(res, 200, { ...board.dismissSuggest(c, typeof input.id === 'string' ? input.id : null), board: board.view(c) }); return true; }
     // Closed to agents (#97): the whole Plan; a single card is closed with its other fields. Attaching puts the Plan, or a
     // card, in your next message as a text attachment.
     if (url.pathname === '/api/board/access') { json(res, 200, { ...board.access(c, input), board: board.view(c) }); return true; }

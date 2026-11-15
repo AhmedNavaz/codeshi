@@ -1163,9 +1163,17 @@ button.commit-hash:hover { text-decoration: underline; }
 .prompt-queue-item:hover .prompt-queue-actions, .prompt-queue-item:focus-within .prompt-queue-actions, .prompt-queue-actions:focus-within { opacity: 1; }
 .queue-action { width: 24px; height: 24px; }
 .queue-action::before { content: ""; width: 13px; height: 13px; background: currentColor; -webkit-mask: var(--queue-icon) center / contain no-repeat; mask: var(--queue-icon) center / contain no-repeat; }
-.queue-up { --queue-icon: var(--icon-chevron-down); }
-.queue-up::before { transform: rotate(180deg); }
-.queue-down { --queue-icon: var(--icon-chevron-down); }
+/* One grip reorders the queue: it shows on hover or focus, and a vermilion line marks where the prompt will land. */
+.prompt-queue-item { position: relative; }
+.queue-drag { --queue-icon: var(--icon-grip); flex: none; width: 16px; height: 22px; margin: -1px -6px 0 -4px; color: var(--faint); opacity: 0; cursor: grab; transition: opacity .12s; }
+.prompt-queue-item:hover .queue-drag:enabled, .queue-drag:focus-visible, .prompt-queue-item.dragging .queue-drag { opacity: 1; }
+.queue-drag:hover:enabled { color: var(--text-strong); background: transparent; }
+.queue-drag:active { cursor: grabbing; }
+.queue-drag:disabled { cursor: default; }
+.prompt-queue-item.dragging { opacity: .45; }
+.prompt-queue-item.drop-before::before, .prompt-queue-item.drop-after::after { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
+.prompt-queue-item.drop-before::before { top: -2px; }
+.prompt-queue-item.drop-after::after { bottom: -2px; }
 .queue-edit { --queue-icon: var(--icon-pencil); }
 .queue-task { --queue-icon: var(--icon-tasks); }
 .queue-remove { --queue-icon: var(--icon-close); }

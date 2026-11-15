@@ -185,13 +185,13 @@
     const text = node('div', 'task-banner-text');
     // Says which conversation this is by name, so a task's chat can't be mistaken for the workspace chat.
     const title = node('strong', 'task-banner-title'), name = node('span', 'task-banner-name', task.title || 'Task'); name.title = task.title || '';
-    title.append(node('span', 'task-banner-kind', task.board ? 'Card' : 'Task'), name, node('span', 'task-banner-state', `${task.folderName} · ${LABEL[task.status] || task.status}`));
+    title.append(node('span', 'task-banner-kind', task.board ? 'Card' : 'Task'), name, node('span', 'task-banner-state', plan ? (LABEL[task.status] || task.status) : `${task.folderName} · ${LABEL[task.status] || task.status}`));
     text.append(title);
-    const how = task.reason || (task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
+    const how = task.reason || (task.resolving?.open ? (task.status === 'running' ? 'Resolving its merge conflicts in its own copy. You review the combined result before it’s merged.' : 'Resolving its merge conflicts isn’t finished. Answer the agent here, or review and merge it to resolve again.') : task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
     if (task.status === 'integrated') text.append(node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`));
     else if (task.status === 'kept') text.append(node('span', 'task-banner-detail', `Saved as the branch ${task.integration?.branch}. Nothing was merged.`));
     // One line: the first sentence says how it runs, and the rest is in the tooltip and read out in full.
-    else if (how) { const detail = node('span', 'task-banner-detail', how); detail.title = how; text.append(detail); }
+    else if (how && !(plan && task.mode === 'direct' && !task.reason)) { const detail = node('span', 'task-banner-detail', how); detail.title = how; text.append(detail); }
     const actions = node('div', 'task-banner-actions');
     if (canMerge(task)) actions.append(button('Review and merge', () => attempt(() => openReview(task)), 'primary-button'), button('Discard', () => attempt(() => act(task, 'discard').then(() => api.announce('The task’s copy was discarded.')))));
     if (task.status === 'waiting') {
@@ -199,8 +199,7 @@
       actions.append(button('Cancel', () => attempt(() => act(task, 'discard'))));
     }
     if (!['running', 'waiting'].includes(task.status) && !canMerge(task)) actions.append(button('Close', () => attempt(async () => { await act(task, 'close'); if (plan) await window.relayBoard.openChat(); else await selectThread(null); })));
-    if (plan) actions.append(button('Plan chat', () => attempt(() => window.relayBoard.openChat()), 'secondary-button task-banner-back'));
-    else if (!focused) actions.append(button('Workspace chat', () => attempt(() => selectThread(null)), 'secondary-button task-banner-back'));
+    if (!plan && !focused) actions.append(button('Workspace chat', () => attempt(() => selectThread(null)), 'secondary-button task-banner-back'));
     banner.dataset.status = task.status;
     banner.replaceChildren(text, actions);
   }
@@ -209,7 +208,7 @@
     // A blank task belongs to its folder, so going to the workspace or another folder puts it away. What was typed is kept.
     if (state.taskDraft && (api.sidebarLevel?.() === 'workspace' || (api.sidebarLevel?.() === 'folder' && api.selectedFolderId?.() !== state.taskDraft.folderId))) { attempt(() => selectThread(null)); return; }
     remember(state);
-    const key = JSON.stringify([state.projectId, state.taskId, state.taskDraft, state.provider, state.mode, state.approvalPolicy, focused, api.sidebarLevel?.(), api.selectedFolderId?.(), state.conversation?.status, state.conversation?.pendingApprovals?.length, state.status?.runningConversationId, tasks().map(task => [task.id, task.status, task.approvals, task.reason, task.hasWorktree, task.held, task.title, task.folderId]), [...plans.values()].map(plan => [plan.id, plan.status, plan.summary || plan.goal])]);
+    const key = JSON.stringify([state.projectId, state.taskId, state.taskDraft, state.provider, state.mode, state.approvalPolicy, focused, api.sidebarLevel?.(), api.selectedFolderId?.(), state.conversation?.status, state.conversation?.pendingApprovals?.length, state.status?.runningConversationId, tasks().map(task => [task.id, task.status, task.approvals, task.reason, task.hasWorktree, task.held, task.title, task.folderId, task.resolving?.open]), [...plans.values()].map(plan => [plan.id, plan.status, plan.summary || plan.goal])]);
     if (focused && !tasks().some(task => task.id === focused)) focused = null;
     if (!force && key === signature) return;
     signature = key; renderList(); renderBanner(); renderDraft(); loadTotals();
@@ -300,31 +299,75 @@
 
   // Reviewing a task's changes against the folder as it is now.
   const WORDS = { clean: 'Ready', merged: 'Merges with changes here', same: 'Already here', conflict: 'Conflict' }, CHANGE = { add: 'New', delete: 'Deleted', update: 'Changed' };
+  const AGENT = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' };
+  // The task whose conflicts an agent is resolving in its copy, so the review opens again once that's finished.
+  let watching = null, refreshing = false;
   async function openReview(task) {
     reviewing = task; review = await api.post(`/api/tasks/${task.id}/review`);
     renderReview();
     if (!$('task-merge-dialog').open) $('task-merge-dialog').showModal();
   }
   function renderReview() {
-    const { files, conflicts, check, canCheck, testCommand, folder } = review, total = files.length;
+    const { files, conflicts, check, canCheck, testCommand, folder, resolve = null, testing = false } = review, total = files.length;
+    const can = Boolean(conflicts && resolve?.can), unresolved = resolve?.unresolved || 0, combined = resolve?.combined || 0, agent = AGENT[resolve?.provider] || 'The agent', kind = reviewing.board ? 'card' : 'task';
     $('task-merge-title').textContent = `Merge “${reviewing.title}” into ${folder}`;
-    $('task-merge-summary').textContent = !total ? 'This task changed nothing.' : conflicts ? `${conflicts} of ${total} file${total === 1 ? '' : 's'} conflict${conflicts === 1 ? 's' : ''}. Nothing can be merged until that’s settled, and both versions are safe. Keep it as a branch to merge by hand.` : `${total} file${total === 1 ? '' : 's'} would change, shown against ${folder} as it is now. Your other work there stays as it is.`;
+    $('task-merge-summary').textContent = !total ? 'This task changed nothing.'
+      : conflicts && unresolved === conflicts ? `${unresolved} file${unresolved === 1 ? ' still has' : 's still have'} conflict markers, so nothing can be merged yet. Both versions are safe.`
+      : conflicts ? `${conflicts} of ${total} file${total === 1 ? '' : 's'} conflict${conflicts === 1 ? 's' : ''}. Nothing can be merged until that’s settled, and both versions are safe.${can ? '' : ' Keep it as a branch to merge by hand.'}`
+      : `${total} file${total === 1 ? '' : 's'} would change, shown against ${folder} as it is now. ${combined ? `${agent} combined ${combined === 1 ? 'one of them' : `${combined} of them`} with the changes there.` : 'Your other work there stays as it is.'}`;
     $('task-merge-files').replaceChildren(...files.map(file => {
-      const item = node('li', 'task-merge-file'); item.dataset.status = file.status;
+      // A file the agent combined shows the change it makes to the folder's own version.
+      const done = file.resolved && file.status !== 'conflict', item = node('li', 'task-merge-file'); item.dataset.status = done ? 'combined' : file.status;
       const head = node(file.diff ? 'summary' : 'div', 'task-merge-head');
-      head.append(node('span', 'task-merge-path', file.path), node('span', 'task-merge-change', CHANGE[file.change]), ...(file.added ? [node('span', 'line-count added', `+${file.added}`)] : []), ...(file.removed ? [node('span', 'line-count removed', `−${file.removed}`)] : []), node('span', 'task-merge-status', WORDS[file.status]));
+      head.append(node('span', 'task-merge-path', file.path), node('span', 'task-merge-change', CHANGE[file.change]), ...(file.added ? [node('span', 'line-count added', `+${file.added}`)] : []), ...(file.removed ? [node('span', 'line-count removed', `−${file.removed}`)] : []), node('span', 'task-merge-status', done ? 'Combined' : WORDS[file.status]));
       if (file.diff) { const details = node('details'); details.append(head, node('pre', 'task-merge-diff', file.diff)); item.append(details); } else item.append(head);
       if (file.reason) item.append(node('p', 'task-merge-reason', file.reason));
       return item;
     }));
     const failed = Boolean(check && check.status !== 'passed');
-    $('task-merge-check').textContent = conflicts ? '' : !canCheck ? 'No test command is marked in the Run panel, so the combined result can’t be checked.' : check ? (check.status === 'passed' ? `Tests passed on the combined result: ${check.command}` : `Tests ${check.status === 'timed-out' ? 'didn’t finish' : 'failed'} on the combined result: ${check.command}`) : `Run ${testCommand} on the combined result, in a temporary copy.`;
-    $('task-merge-check').dataset.status = check?.status || '';
+    $('task-merge-check').textContent = conflicts ? (can ? (unresolved ? `If ${agent} asked you something, answer it in this ${kind}’s chat. Or resolve again from where it began.` : `${agent} can combine both versions in this ${kind}’s copy, and asks you where they really disagree. ${folder} isn’t touched, and you still merge.`) : resolve?.why || '')
+      : testing ? 'Running the tests on the combined result…'
+      : !canCheck ? 'No test command is marked in the Run panel, so the combined result can’t be checked.' : check ? (check.status === 'passed' ? `Tests passed on the combined result: ${check.command}` : `Tests ${check.status === 'timed-out' ? 'didn’t finish' : 'failed'} on the combined result: ${check.command}`) : `Run ${testCommand} on the combined result, in a temporary copy.`;
+    $('task-merge-check').dataset.status = conflicts || testing ? '' : check?.status || '';
     $('task-merge-output').hidden = !failed || !check.output; $('task-merge-output').textContent = failed ? check.output : '';
-    $('task-merge-test').hidden = !canCheck || Boolean(conflicts); $('task-merge-test').textContent = check ? 'Run the tests again' : 'Run the tests';
+    $('task-merge-test').hidden = !canCheck || Boolean(conflicts) || testing; $('task-merge-test').textContent = check ? 'Run the tests again' : 'Run the tests';
+    $('task-merge-resolve').hidden = !can; $('task-merge-resolve').textContent = unresolved ? 'Resolve again' : 'Resolve with an agent';
     $('task-merge-accept-row').hidden = !failed || Boolean(conflicts); if (!failed) $('task-merge-accept').checked = false;
     $('task-merge-apply').disabled = Boolean(conflicts) || !total || (failed && !$('task-merge-accept').checked);
     $('task-merge-error').hidden = true;
+  }
+  // The agent works in the task's own conversation, so that's where you watch it and answer what it asks.
+  $('task-merge-resolve').addEventListener('click', async () => {
+    const control = $('task-merge-resolve'), task = reviewing, agent = AGENT[review.resolve?.provider] || 'The agent'; control.disabled = true;
+    try {
+      const result = await act(task, 'resolve', { digest: review.digest });
+      // Git combined everything by itself, so there is nothing to ask.
+      if (!result.started) { review = await api.post(`/api/tasks/${task.id}/review`); renderReview(); return; }
+      watching = task.id; $('task-merge-dialog').close();
+      if ((focused || api.getState().taskId) !== task.id) await selectThread(tasks().find(item => item.id === task.id) || task);
+      api.announce(`${agent} is resolving ${result.files === 1 ? 'one file' : `${result.files} files`} in the ${task.board ? 'card' : 'task'}’s copy.`);
+    } catch (error) { mergeError(error); if (/moved since/.test(error.message)) { try { review = await api.post(`/api/tasks/${task.id}/review`); renderReview(); mergeError(error); } catch { /* The error shown already says what to do. */ } } }
+    finally { control.disabled = false; }
+  });
+  // Once nothing it was given is marked any more, the review opens again with the combined result, if you're still on
+  // its task, and otherwise a notice offers it. A run that ends with markers left asked you something, or stopped.
+  function followResolve() {
+    if (!watching) return;
+    const task = tasks().find(item => item.id === watching);
+    if (!task?.hasWorktree) { watching = null; return; }
+    if (['running', 'waiting'].includes(task.status) || task.resolving?.open !== false) return;
+    watching = null;
+    const here = !api.getState().taskDraft && (focused || api.getState().taskId) === task.id;
+    if (here && !$('task-merge-dialog').open) attempt(() => openReview(task));
+    else if (!here) api.showNotice(`“${task.title}” is resolved. Review the combined result to merge it.`, null, 'Retry', [{ label: 'Review and merge', run: () => attempt(() => openReview(task)) }]);
+  }
+  // Tests already running on the combined result, such as a card's own: the review shows their result when they end.
+  function followTests() {
+    if (refreshing || !review?.testing || !reviewing || !$('task-merge-dialog').open) return;
+    const task = tasks().find(item => item.id === reviewing.id);
+    if (!task || task.testing) return;
+    refreshing = true;
+    api.post(`/api/tasks/${task.id}/review`).then(next => { if (reviewing?.id === task.id) { review = next; renderReview(); } }).catch(() => { /* Reviewing again shows it. */ }).finally(() => { refreshing = false; });
   }
   const mergeError = error => { $('task-merge-error').textContent = error.message; $('task-merge-error').hidden = false; };
   $('task-merge-accept').addEventListener('change', () => { $('task-merge-apply').disabled = Boolean(review?.conflicts) || !$('task-merge-accept').checked; });
@@ -343,7 +386,7 @@
     catch (error) { mergeError(error); }
   });
   $('task-merge-close').addEventListener('click', () => $('task-merge-dialog').close());
-  window.addEventListener('relay-state', () => render());
+  window.addEventListener('relay-state', () => { render(); followResolve(); followTests(); });
   window.relayTaskThreads = { refresh: () => render(true), open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => selectThread(tasks().find(task => task.id === id) || null), review: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => openReview(task)); }, resume: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'start')); }, discard: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'discard')); }, close: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(async () => { await act(task, 'close'); if ((focused || api.getState().taskId) === task.id) await selectThread(null); }); } };
   render(true);
 })();

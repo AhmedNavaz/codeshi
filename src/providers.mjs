@@ -116,6 +116,8 @@ export async function runCodex(config, { event, approval, question = null, metad
   if (config.local) config.local = { ...config.local, ...await verifyLocal(config.local.model, config.local.digest, { endpoint: config.local.endpoint }) };
   const client = clientFactory({ bin: config.bin, cwd: config.workspace, ...(config.local ? { local: config.local } : {}), ...(config.reviewSnapshot ? { reviewSnapshot: true } : {}), ...(config.routingAssessment ? { routingAssessment: true } : {}) });
   let threadId, turnId, resolveEnd, rejectEnd, compactionId = null, compactionNumber = 0;
+  // The files each change is about to write, from when it started: its approval names only the change.
+  const changing = new Map();
   const ended = new Promise((resolve, reject) => { resolveEnd = resolve; rejectEnd = reject; });
   // Initialization failures may happen before awaiting the terminal promise.
   ended.catch(() => {});
@@ -125,7 +127,8 @@ export async function runCodex(config, { event, approval, question = null, metad
       const p = message.params || {};
       if (message.id !== undefined && message.method) {
         if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) {
-          const allow = config.mode === 'read' ? false : await approval({ id: String(message.id), kind: message.method, ...p });
+          const paths = message.method === 'item/fileChange/requestApproval' ? changing.get(p.itemId) || [] : [];
+          const allow = config.mode === 'read' ? false : await approval({ id: String(message.id), kind: message.method, ...p, ...(paths.length ? { paths } : {}) });
           client.send({ id: message.id, result: { decision: allow ? 'accept' : 'decline' } });
         } else if (message.method === 'mcpServer/elicitation/request' && isToolApproval(p)) {
           // Running a connector or MCP tool is an approval like a command, so it follows the run's policy.
@@ -169,7 +172,11 @@ export async function runCodex(config, { event, approval, question = null, metad
         if (item?.type === 'commandExecution' || item?.type === 'fileChange') event({ type: 'relay.progress', phase: message.method === 'item/started' ? 'tool' : 'working' });
         if (item?.type === 'agentMessage') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'agent_message' } });
         if (item?.type === 'commandExecution') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'command_execution', aggregated_output: item.aggregatedOutput || '', exit_code: item.exitCode ?? item.exit_code } });
-        if (item?.type === 'fileChange') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'file_change' } });
+        if (item?.type === 'fileChange') {
+          if (message.method === 'item/started' && Array.isArray(item.changes)) changing.set(item.id, item.changes.map(change => change?.path).filter(value => typeof value === 'string'));
+          else changing.delete(item.id);
+          event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { ...item, type: 'file_change' } });
+        }
         if (item?.type === 'mcpToolCall') event({ type: message.method === 'item/completed' ? 'item.completed' : 'item.started', item: { id: item.id, type: 'mcp_tool_call', tool: item.tool, status: item.status, error: item.error || null, result: toolCallOutcome(item) } });
       }
       if (message.method === 'error') event(p.willRetry ? { type: 'error', message: p.error?.message || 'Retrying connection' } : { type: 'turn.failed', error: p.error });
@@ -226,7 +233,7 @@ export async function runCodex(config, { event, approval, question = null, metad
 // commands within two hours, so reaching that limit means something is stuck.
 export const claudeWaits = { settleMs: 5000, backgroundMs: 125 * 60_000 };
 
-export async function runClaude(config, { event, approval, question = null, metadata, cancelled = () => false, steerable = () => {}, queryImpl, waits = claudeWaits } = {}) {
+export async function runClaude(config, { event, approval, refusal = () => null, question = null, metadata, cancelled = () => false, steerable = () => {}, queryImpl, waits = claudeWaits } = {}) {
   if (config.routingAssessment) { if (config.mode !== 'read' || config.sessionId) throw new Error('Routing assessments require read-only access and a fresh session.'); config = { ...config, reviewSnapshot: true }; question = null; }
   const query = queryImpl || (await import('@anthropic-ai/claude-agent-sdk')).query;
   // Not for a routing assessment or a background review, which load nothing.
@@ -317,8 +324,9 @@ export async function runClaude(config, { event, approval, question = null, meta
         return answers ? { behavior: 'allow', updatedInput: { ...input, answers: claudeAnswers(input, answers) } } : { behavior: 'deny', message: 'The user skipped these questions. Continue with your best judgement, and say which choices you made.' };
       }
       if (config.mode === 'read' && !['Read', 'Glob', 'Grep'].includes(toolName)) return { behavior: 'deny', message: 'Read-only mode blocks this tool.' };
-      const allow = await approval({ id: options?.toolUseID || `${Date.now()}-${Math.random()}`, kind: toolName, input });
-      return allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'The user declined this action.' };
+      const id = options?.toolUseID || `${Date.now()}-${Math.random()}`, allow = await approval({ id, kind: toolName, input });
+      // Codeshi says why when it refused the action itself, such as a change outside the task's own folder.
+      return allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: refusal(id) || 'The user declined this action.' };
     }
     // Claude only sums a run up in its result, and a run that is stopped, as at a handoff, never gets one. Its messages each
     // carry their own usage, so what they add up to is kept until then, marked as a partial count.

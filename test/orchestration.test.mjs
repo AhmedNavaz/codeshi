@@ -24,6 +24,15 @@ const parsed = [
   { id: 's1', title: 'Add the API route', instructions: 'Add GET /api/items returning the saved items.', files: ['src/server.mjs'], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [], phase: null, done: [] },
   { id: 's2', title: 'Show the items', instructions: 'List the items from /api/items on the page.', files: ['public/app.js', 'public/styles.css'], tier: 'light', dependsOn: ['s1'], agent: null, role: 'builder', artifact: null, check: null, skills: [], phase: null, done: [] },
 ];
+test('Plan conversation answers questions without drafting cards or asking for a mode switch', () => {
+  const prompt = planningRequest('Why does checkout wait?', { conversational: true, revising: true });
+  assert.match(prompt, /Do not invent card changes for a question/);
+  assert.match(prompt, /No mode switch is needed/);
+  const answer = 'Checkout waits for the API contract.\n\nYou can review that card first.';
+  assert.deepEqual(parsePlan(JSON.stringify({ answer, steps: [] })), { status: 'answered', summary: answer, steps: [] });
+  assert.equal(parsePlan(JSON.stringify({ answer, steps: [], remove: ['card-123'] })).status, 'unstructured', 'An answer must not conceal card removals.');
+  assert.equal(parsePlan(JSON.stringify(reply)).status, 'draft', 'Change requests still produce reviewable drafts.');
+});
 // What the server's routing hands a planning run.
 const planned = { mode: 'smart', reason: 'Plans the steps', tier: 'deep' };
 const step = (id, extra = {}) => ({ id, title: `Step ${id}`, instructions: `Do ${id}.`, files: [], tier: 'standard', dependsOn: [], agent: null, role: 'builder', artifact: null, check: null, skills: [], ...extra });

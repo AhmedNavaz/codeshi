@@ -23,7 +23,8 @@ import { carriedPlan, reportedPlan } from './task-plan.mjs';
 import { TaskCoordinator } from './task-coordinator.mjs';
 import { cleanEntryInput, editedEntry, isSuggestionKey, memoryLimit, memoryView, newEntry } from './project-memory.mjs';
 import { planCopy, writeCopy } from './memory-instructions.mjs';
-import { applyBudgetRecord, isExplicitRetry, TaskBudgets } from './task-budget.mjs';
+import { applyBudgetRecord, finishingRun, isExplicitRetry, TaskBudgets } from './task-budget.mjs';
+import { noteActivity } from './activity.mjs';
 import { SkillCatalog, CLAUDE_PLUGIN } from './skills.mjs';
 import { fileChanges, toolInput } from './activity-format.mjs';
 import { AttachmentStore } from './attachments.mjs';
@@ -32,7 +33,7 @@ import { parseReviewResult, publicReview, reviewPrompt } from './agent-review.mj
 import { validateAutomaticReview } from './automatic-review.mjs';
 import { ResumeScheduler } from './resume.mjs';
 import { Schedules } from './schedules.mjs';
-import { readOnlyRequest, approvalScope, requestSummary, blockedBySandbox } from './approval-rules.mjs';
+import { readOnlyRequest, approvalScope, requestSummary, blockedBySandbox, guardedWrite, guardedReason } from './approval-rules.mjs';
 import { cleanQuestions, checkAnswers, answerSummary, codexAsyncQuestions } from './agent-questions.mjs';
 import { PermissionRules } from './permission-rules.mjs';
 import { PromptQueue } from './prompt-queue.mjs';
@@ -138,6 +139,8 @@ export class Broker extends EventEmitter {
     this.execution = new ExecutionPolicies(this); this.handoffPreferences = handoffPreferences;
     this.workspace = savedWorkspace(workspace); this.contextPolicy = contextPolicy; this.budget = new TaskBudgets(this);
     this.workspaces = [...new Set([this.workspace, ...workspaces.map(savedWorkspace), ...workspaceFolders.map(folder => savedWorkspace(folder.path))])];
+    // Folders a task's lane may not change (approval-rules.mjs guardedWrite), set by the task coordinator. None elsewhere.
+    this.guarded = [];
     this.workspaceFolders = this.workspaces.map(directory => {
       const configured = workspaceFolders.find(folder => savedWorkspace(folder.path) === directory);
       return { id: configured?.id || createHash('sha256').update(directory).digest('hex').slice(0, 16), name: configured?.name || path.basename(directory), ...(configured?.displayName ? { displayName: configured.displayName } : {}), path: directory };
@@ -208,6 +211,13 @@ export class Broker extends EventEmitter {
           catch (error) { if (!groupGone(error)) throw error; }
         }
         this.record(conversation, { type: 'board_suggest_result', id: prev.id, status: 'interrupted', summary: prev.kind === 'split' ? 'Codeshi restarted while splitting cards. Try again when ready.' : prev.kind === 'update' ? 'Codeshi restarted while updating the Plan. Try again when ready.' : 'Codeshi restarted while suggesting next cards. Try again when ready.', cards: [] });
+      }
+      for (const prev of (conversation.boardSplits || []).filter(item => item.status === 'running')) {
+        if (prev.pid && process.platform !== 'win32') {
+          try { process.kill(-prev.pid, 0); if (!reused(prev.pid, prev.pidStart)) throw Object.assign(new Error(`A split run from the previous session may still be active (process group ${prev.pid}). Stop that process group before restarting Codeshi.`), { status: 409 }); }
+          catch (error) { if (!groupGone(error)) throw error; }
+        }
+        this.record(conversation, { type: 'board_split_result', id: prev.id, status: 'interrupted', summary: 'Codeshi restarted while splitting cards. Try again when ready.', cards: [] });
       }
       for (const run of conversation.runs.filter(item => ['building', 'reviewing'].includes(item.automaticReview?.status))) {
         this.record(conversation, { type: 'automatic_review_phase', runId: run.id, phase: { status: 'interrupted', summary: 'Codeshi restarted. Review stopped; start a new review when ready.' } });
@@ -297,7 +307,7 @@ export class Broker extends EventEmitter {
 
   empty(id) {
     return { id, title: 'New conversation', provider: 'codex', mode: 'edit', approvalPolicy: 'ask', status: 'idle', messages: [], messageById: new Map(),
-      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], orchestrations: [], snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, boardSuggest: null, resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
+      sessions: {}, models: {}, efforts: {}, effort: null, imports: {}, runs: [], transports: {}, requests: {}, reviewRequests: {}, reviews: [], orchestrations: [], snapshots: {}, rewinds: [], context: emptyContext(), model: null, transport: 'auto', settingsRevision: 0, lastRun: null, records: 0, activeRun: null, boardSuggest: null, boardSplits: [], resume: null, resumeEnded: null, queue: [], queuePaused: null, handoffOffer: null, retryOffer: null, routing: null, createdAt: null, updatedAt: null };
   }
 
   apply(c, record) {
@@ -376,6 +386,12 @@ export class Broker extends EventEmitter {
     if (record.type === 'board_suggest_process') { if (c.boardSuggest?.id === record.id) Object.assign(c.boardSuggest, { pid: record.pid, pidStart: record.pidStart }); }
     if (record.type === 'board_suggest_result') { if (c.boardSuggest?.id === record.id) Object.assign(c.boardSuggest, { status: record.status, summary: record.summary || null, cards: record.cards || [], ...(record.questions?.length ? { questions: record.questions } : {}), endedAt: record.at }); c.boardRevision = record.seq; }
     if (record.type === 'board_suggest_dismiss') { if (!record.id || c.boardSuggest?.id === record.id) { c.boardSuggest = null; c.boardRevision = record.seq; } }
+    // Split runs (#162) keep their own list, so several can run at once beside Suggest next and Plan updates. Finished
+    // ones stay until dismissed; only the newest few are kept.
+    if (record.type === 'board_split') { c.boardSplits = [...(c.boardSplits || []).filter(item => item.status === 'running').concat((c.boardSplits || []).filter(item => item.status !== 'running').slice(-9)), { ...record.split, status: 'running', phase: 'starting', toolCount: 0, pid: null, pidStart: null, startedAt: record.at, endedAt: null }]; c.boardRevision = record.seq; }
+    if (record.type === 'board_split_process') { const split = (c.boardSplits || []).find(item => item.id === record.id); if (split) Object.assign(split, { pid: record.pid, pidStart: record.pidStart }); }
+    if (record.type === 'board_split_result') { const split = (c.boardSplits || []).find(item => item.id === record.id); if (split) Object.assign(split, { status: record.status, summary: record.summary || null, cards: record.cards || [], endedAt: record.at }); c.boardRevision = record.seq; }
+    if (record.type === 'board_split_dismiss') { c.boardSplits = (c.boardSplits || []).filter(item => item.status === 'running' || (record.id && item.id !== record.id)); c.boardRevision = record.seq; }
     // Schedules (#132): beside the cards, and the board is read again when one changes.
     if (record.type === 'schedule') { c.schedules = [...(c.schedules || []), record.schedule]; c.boardRevision = record.seq; }
     if (record.type === 'schedule_update') { const schedule = c.schedules?.find(item => item.id === record.id); if (schedule) Object.assign(schedule, record.changes); c.boardRevision = record.seq; }
@@ -656,7 +672,12 @@ export class Broker extends EventEmitter {
       // Remove a failed append, or the next record would be joined onto it. Windows cannot truncate through an append handle, so truncate by path.
       catch (error) { try { fs.truncateSync(filename, start); } catch {} throw error; }
     } finally { fs.closeSync(fd); }
+    // A finished run counts toward the day's activity with its new tokens. Only live records count, never a journal
+    // being read again at startup.
+    let finished = null;
+    if (['run_end', 'review_result', 'routing_assessment_end'].includes(record.type)) { try { finished = finishingRun(c, record); } catch { /* Not counted. */ } }
     this.apply(c, record);
+    if (finished) noteActivity('run', finished.tokens, { provider: finished.provider });
     for (const observation of observationsFor(c, record)) {
       const prior = c.semanticObservations?.find(item => item.id === observation.id);
       const { observedAt, ...value } = prior || {};
@@ -686,7 +707,7 @@ export class Broker extends EventEmitter {
 
   // With since, the messages changed after that record; an import can put messages anywhere, so one after it sends them all.
   view(c, { since = null, limit = null, before = null, toRun = null, toMessage = null } = {}) {
-    const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, board, boardSuggest, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
+    const { messageById, sessions, requests, reviewRequests, records, imports, reviews, snapshots, rewinds, reordered, memory, memoryDismissed, skills, skillDirs, taskBudgets, taskOfRun, budgetActive, budgetLast, budgetTotals, quotaReadings, quotaHistory, usageSeen, parallelTasks, board, boardSuggest, boardSplits, asyncQuestions, semanticObservations, contextRollovers, executionPolicies, executionDefault, executionMigrated, activeExecution, routingRequests, routingAssessment, routingPending, ...visible } = c;
     const changed = Number.isSafeInteger(since) && since >= (reordered || 0) && since <= records ? c.messages.filter(message => message.seq > since) : null;
     if (c.routingPending) { visible.status = 'running'; visible.activeRun = c.routingPending; visible.canAddToRun = false; }
     const contextFor = provider => contextControlView(c, provider, rolloverDecision(c, provider, { normalLimit: this.contextLimit(), routingMode: c.routing?.mode || this.contextRouting() }));
@@ -747,6 +768,18 @@ export class Broker extends EventEmitter {
     return [...(this.running?.c === c ? this.running.approvals.values() : []), ...(c.asyncQuestions || [])];
   }
 
+  // What a task's agent is told about where it works: its own copy of a folder, which stands in for the real one, or its
+  // own folder, and the workspace's folders it can't change (guarded, approval-rules.mjs). Null outside a task.
+  taskScope() {
+    const same = (a, b) => path.resolve(a) === path.resolve(b);
+    const copy = this.guarded.find(folder => folder.copy), others = this.guarded.filter(folder => !folder.copy && !this.workspaces.some(root => same(root, folder.path)));
+    if (!copy && !others.length) return null;
+    const list = folders => folders.map(folder => `${folder.name} (${folder.path})`).join(', ');
+    const own = copy ? `This task works in its own copy of ${copy.name}, at ${copy.copy}, made from that folder's last commit. Paths in the request under ${copy.path} mean the same files in this copy: read and change them here, and run commands here. Codeshi refuses changes to the real ${copy.name} folder; the person reviews this copy's changes and merges them.` : `This task works directly in ${this.workspace} and changes only that folder.`;
+    const one = others.length === 1;
+    const rest = others.length ? ` It can read the workspace's other ${one ? 'folder' : 'folders'}, ${list(others)}, copy files out of ${one ? 'it' : 'them'} into this task's folder or a scratch folder, and run ${one ? 'its' : 'their'} builds, tests, type checks, linters and dev servers there, but Codeshi refuses changes there, such as edits, installs, formatting and Git commits: if something in ${one ? 'it' : 'them'} needs to change, say so in your reply instead.` : '';
+    return own + rest;
+  }
   pendingCount() { return [...this.conversations.values()].reduce((sum, c) => sum + this.pendingApprovals(c).length, 0); }
 
   list() {
@@ -919,6 +952,7 @@ export class Broker extends EventEmitter {
     const activity = { running: 0, checking: this.tasks?.checking?.size || 0, reviewing: 0, waiting: 0, queued: 0 };
     for (const broker of [this, ...(this.tasks?.openLanes() || [])]) for (const c of broker.conversations.values()) {
       if (c.status === 'running' || broker.running?.c === c || c.boardSuggest?.status === 'running') activity.running++;
+      activity.running += (c.boardSplits || []).filter(item => item.status === 'running').length;
       activity.checking += (c.runs || []).filter(run => run.check?.status === 'running').length;
       activity.reviewing += (c.reviews || []).filter(review => review.status === 'running').length;
       if (c.resume || c.limitSwitching) activity.waiting++;
@@ -1052,7 +1086,7 @@ export class Broker extends EventEmitter {
     const sessionReason = review ? 'review' : local ? 'local-handoff' : rollover ? 'context-rollover' : changedWorkspace ? 'workspace-changed' : switchedAgent ? 'cross-agent-handoff' : fresh ? 'explicit-restart' : effectiveFresh ? 'new-conversation' : 'same-agent-continuation';
     let sessionId = effectiveFresh ? null : c.sessions[provider]?.id;
     const verification = verificationForRun(this.verificationCadence(), { retryOf, automaticReview });
-    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text, { documents, revising }) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider, native: !review && provider === 'claude' && actualTransport === 'sdk' }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
+    let prepared = review ? { prompt: reviewPrompt(review, { ...validateContext(c.context), workspaceFolders: this.workspaceFolders }), images: [], metadata: { purpose: 'review', fresh: true, digest: review.snapshot.digest } } : prepareContext(c, orchestrate ? planningRequest(text, { documents, revising, conversational: this.planChat === true, folders: this.workspaceFolders }) : text, { verification, rollover, workspace: this.workspace, workspaceFolders: this.workspaceFolders, taskScope: this.taskScope(), fresh: effectiveFresh, provider, mode, session: { sessionReason, ...(switchedAgent ? { previousProvider: c.lastRun.provider } : {}) }, attachments, readAttachment: id => this.attachments.forAgent(id), policy: this.contextPolicy, journal: path.join(this.dataDir, `${c.id}.jsonl`), skills: local ? null : this.skills.forTask(c, { text, relation: task.relation, fresh: effectiveFresh || restoreAfterCompaction(c, provider, effectiveFresh), provider, native: !review && provider === 'claude' && actualTransport === 'sdk' }), ...(local ? { maxBytes: 96000, includeImages: false } : {}) });
     if (review && Buffer.byteLength(prepared.prompt) > 192000) throw Object.assign(new Error('Review context exceeds 192 KB. Select fewer files or shorten the saved project brief.'), { status: 413 });
     if (actualTransport === 'cli' && prepared.images.length) throw Object.assign(new Error('Image attachments require the native Codex or Claude connection. Switch the transport from CLI, or remove the images.'), { status: 400 });
     const images = prepared.images.map(file => this.attachments.imageInput(file.id));
@@ -1127,6 +1161,7 @@ export class Broker extends EventEmitter {
           const planned = orchestrate ? c.orchestrations.find(item => item.id === runId) : null;
           if (!review && !waiting && !run.stopped) this.emit('notify', planned
             ? planned.status === 'draft' || planned.status === 'moved' ? { conversationId: c.id, kind: 'finished', title: 'Plan drafted', body: (() => { const added = (planned.cards || []).filter(id => c.board?.find(card => card.id === id)?.createdBy === 'codeshi').length, count = (planned.cards?.length || planned.steps?.length || 0) - added; return `${agent} drafted ${count} ${count === 1 ? 'card' : 'cards'} on the Plan${added ? ', and Codeshi added a review of the whole result' : ''}. Nothing runs until you accept them.`; })() }
+            : planned.status === 'answered' ? { conversationId: c.id, kind: 'finished', title: 'Plan reply', body: `${agent} replied to your Plan message.` }
             : { conversationId: c.id, kind: 'stopped', title: 'No plan yet', body: run.errorCategory === 'quota' ? `${agent} reached a usage limit while planning. Open the workspace to plan again.` : `${agent} didn’t return a plan. Open the workspace to plan again or write the steps yourself.` }
             : success
             ? { conversationId: c.id, kind: 'finished', title: 'Task finished', body: `${agent} finished${run.resume ? ' the work it continued while you were away' : ''}.` }
@@ -1276,6 +1311,14 @@ export class Broker extends EventEmitter {
             }
             if (message.type === 'approval') {
               if (review && !['Read', 'Glob', 'Grep'].includes(message.request.kind)) { run.child.send({ type: 'approval-result', id: message.request.id, allow: false }); return; }
+              // A task changes only its own copy or folder, whatever the policy: the workspace's real folders are refused
+              // before anything could allow them, and the agent is told where to make the change instead.
+              const guarded = this.guarded.length ? guardedWrite(message.request, { own: this.workspaces, guarded: this.guarded }) : null;
+              if (guarded) {
+                run.child.send({ type: 'approval-result', id: message.request.id, allow: false, reason: guardedReason(guarded, { own: this.workspaces }) });
+                this.message(c, 'activity', `Blocked: ${guarded.path} is in ${guarded.folder.copy ? `the real ${guarded.folder.name} folder, not this task’s copy` : `${guarded.folder.name}, another folder of this workspace`}. A task changes only its own ${guarded.folder.copy ? 'copy' : 'folder'}.`, run.provider);
+                return;
+              }
               if (run.approvalPolicy === 'auto') {
                 run.child.send({ type: 'approval-result', id: message.request.id, allow: true });
                 // Codex asks only for what its sandbox blocks, such as the network, so each request is worth showing.

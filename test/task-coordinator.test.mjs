@@ -11,7 +11,7 @@ import { captureReview, listReviewChanges, reviewFreshness } from '../src/agent-
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
-import { applyPlan, folderIdentity, integrationPlan, pathsOverlap, planIsolation, unrestricted } from '../src/task-isolation.mjs';
+import { applyPlan, folderIdentity, ignoredPaths, integrationPlan, markerLabels, ownCheck, pathsOverlap, planIsolation, prepareResolution, unrestricted } from '../src/task-isolation.mjs';
 import { stageChanges, unstageChanges, commitChanges } from '../src/workspace-commit.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
@@ -94,6 +94,35 @@ test('the plan: direct when nothing is shared, a worktree for a shared repositor
   assert.equal(unrestricted({ provider: 'claude', mode: 'edit', approvalPolicy: 'auto' }), true);
   assert.equal(unrestricted({ provider: 'codex', mode: 'edit', approvalPolicy: 'auto' }), false, 'Codex keeps its sandbox.');
   assert.equal(unrestricted({ provider: 'claude', mode: 'read', approvalPolicy: 'auto' }), false);
+});
+
+test('a card that saves files Git ignores waits for its folder, since a copy would lose them', t => {
+  const git1 = { real: '/r1', git: true, head: true, commonDir: '/r1/.git' };
+  const main = { real: '/r1', commonDir: '/r1/.git', unrestricted: false, label: 'The main conversation' };
+  assert.equal(planIsolation(git1, [], { keeps: ['output/a.md'] }).mode, 'direct', 'With nothing else working it runs in the folder, as any card does.');
+  const held = planIsolation(git1, [main], { keeps: ['output/a.md', 'output/b.png', 'output/shots/', 'output/d.md'] });
+  assert.equal(held.mode, 'wait');
+  assert.equal(held.reason, 'The main conversation is using this repository, and this card saves files Git ignores (output/a.md, output/b.png, output/shots/ and 1 more), which its own copy would lose. So it waits until that finishes, then works in the folder itself.');
+  assert.equal(planIsolation(git1, [main]).mode, 'worktree', 'A card that names no such file still gets a copy.');
+  // Which paths Git ignores, asked of the folder itself.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-ignored-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = repository(path.join(root, 'repo'), { 'src/a.js': '1', 'web/page.js': '2' });
+  fs.appendFileSync(path.join(repo, '.gitignore'), 'output/\n*.log\n'); git(repo, 'add', '-f', '.gitignore'); git(repo, 'commit', '-qm', 'ignore');
+  fs.mkdirSync(path.join(repo, 'output')); fs.writeFileSync(path.join(repo, 'output', 'kept.md'), 'tracked'); git(repo, 'add', '-f', 'output/kept.md'); git(repo, 'commit', '-qm', 'tracked');
+  assert.deepEqual(ignoredPaths(repo, ['output/launch/audit.md', './output/shots/', 'src/', 'src/a.js', 'README.md', 'build.log', 'output/kept.md', ':(glob)*', '/etc/output/x', '../output/x', '~/output/x', 'output/launch/audit.md']), ['output/launch/audit.md', 'output/shots/', 'build.log'], 'A tracked file isn’t ignored, whatever its name; magic, absolute and outside paths are skipped.');
+  assert.deepEqual(ignoredPaths(path.join(repo, 'web'), ['output/x.png', 'page.js']), ['output/x.png'], 'From a folder inside the repository, paths are its own.');
+  assert.deepEqual(ignoredPaths(repo, []), []);
+  const plain = path.join(root, 'plain'); fs.mkdirSync(plain);
+  assert.deepEqual(ignoredPaths(plain, ['output/x.md']), [], 'A folder outside Git ignores nothing.');
+  // A card's own check that moves into the card's folder first runs from that folder instead.
+  const site = path.join(root, 'site'); fs.mkdirSync(site);
+  assert.equal(ownCheck('cd ../site && npm run typecheck && npm run build', site), 'npm run typecheck && npm run build');
+  assert.equal(ownCheck(`cd "${site}" && npm test`, site), 'npm test');
+  assert.equal(ownCheck('cd . && npm test', site), 'npm test');
+  assert.equal(ownCheck('cd ../repo && npm test', site), 'cd ../repo && npm test', 'A move to another folder is left as written.');
+  assert.equal(ownCheck('cd ../missing && npm test', site), 'cd ../missing && npm test');
+  assert.equal(ownCheck('npm test', site), 'npm test');
+  assert.equal(ownCheck('cd ../site; rm -rf x', site), 'cd ../site; rm -rf x', 'Only a move joined with && is dropped.');
 });
 
 test('two tasks in different folders run at once, each with its own output and Stop, and stay apart after a restart', { skip: scriptCLIs }, async t => {
@@ -328,6 +357,127 @@ test('changes on both sides merge when they don’t touch, and a conflict overwr
   const { branch } = env2.broker.tasks.keep(env2.c, task.id);
   assert.match(branch, /^codeshi\/hold-a-/); assert.equal(git(env2.folders.a, 'show', `${branch}:clash.txt`), 'theirs\n', 'The task’s work is an ordinary branch.');
   assert.equal(fs.readFileSync(path.join(env2.folders.a, 'clash.txt'), 'utf8'), 'ours\n'); assert.equal(env2.task(task.id).status, 'kept');
+});
+
+test('each conflict says whether an agent can combine it, and preparing one writes only the copy, with the folder’s versions as the new base', t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-resolve-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const put = (folder, files) => { for (const [name, text] of Object.entries(files)) { if (text === null) fs.rmSync(path.join(folder, name)); else fs.writeFileSync(path.join(folder, name), text); } };
+  const read = (folder, name) => fs.existsSync(path.join(folder, name)) ? fs.readFileSync(path.join(folder, name), 'utf8') : null;
+  const repo = repository(path.join(root, 'repo'), { 'lines.txt': 'a\nb\nc\n', 'gone.txt': 'g\n', 'drop.txt': 'd\n', 'img.bin': 'x\0y', 'calm.txt': '1\n2\n3\n4\n5\n' }), base = git(repo, 'rev-parse', 'HEAD').trim();
+  const copy = path.join(root, 'copy'); git(repo, 'worktree', 'add', '-q', '--detach', copy, 'HEAD');
+  const commit = () => { git(copy, 'add', '-A'); git(copy, 'commit', '-qm', 'task'); return git(copy, 'rev-parse', 'HEAD').trim(); };
+  put(copy, { 'lines.txt': 'a\nB card\nc\n', 'gone.txt': 'G card\n', 'drop.txt': null, 'img.bin': 'x\0card', 'both.txt': 'card\n', 'calm.txt': 'ONE\n2\n3\n4\n5\n' });
+  const result = commit();
+  put(repo, { 'lines.txt': 'a\nB folder\nc\n', 'gone.txt': null, 'drop.txt': 'D folder\n', 'img.bin': 'x\0folder', 'both.txt': 'folder\n', 'calm.txt': '1\n2\n3\n4\nFIVE\n' });
+  const kinds = plan => Object.fromEntries(plan.files.map(file => [file.path, file.kind || file.status]));
+  const plan = integrationPlan({ root: repo, base, result });
+  assert.deepEqual(kinds(plan), { 'both.txt': 'added-both', 'calm.txt': 'merged', 'drop.txt': 'deleted-by-task', 'gone.txt': 'deleted-here', 'img.bin': 'binary', 'lines.txt': 'lines' });
+  const labels = markerLabels('my repo'), folder = Object.fromEntries(['lines.txt', 'gone.txt', 'drop.txt', 'both.txt', 'calm.txt'].map(name => [name, read(repo, name)]));
+  assert.throws(() => prepareResolution({ root: repo, worktree: copy, id: 'resolve-test', base, result, plan, labels }), /img\.bin can’t be combined/);
+  assert.equal(read(copy, 'lines.txt'), 'a\nB card\nc\n', 'A file that can’t be combined changes nothing, not even the others.');
+  put(repo, { 'img.bin': 'x\0y' });
+  const prepared = prepareResolution({ root: repo, worktree: copy, id: 'resolve-test', base, result, plan: integrationPlan({ root: repo, base, result }), labels });
+  assert.deepEqual(prepared.files.map(file => [file.path, file.kind, file.conflicts]), [['both.txt', 'added-both', 1], ['drop.txt', 'deleted-by-task', 1], ['gone.txt', 'deleted-here', 1], ['lines.txt', 'lines', 1]]);
+  assert.equal(read(copy, 'lines.txt'), 'a\n<<<<<<< this copy\nB card\n||||||| when this copy was made\nb\n=======\nB folder\n>>>>>>> my repo now\nc\n');
+  assert.equal(read(copy, 'drop.txt'), '<<<<<<< this copy\n||||||| when this copy was made\nd\n=======\nD folder\n>>>>>>> my repo now\n', 'A file the task deleted comes back marked, with its side empty.');
+  assert.equal(read(copy, 'gone.txt'), '<<<<<<< this copy\nG card\n||||||| when this copy was made\ng\n=======\n>>>>>>> my repo now\n');
+  assert.deepEqual(Object.fromEntries(Object.keys(folder).map(name => [name, read(repo, name)])), folder, 'The folder isn’t touched.');
+  assert.equal(git(repo, 'rev-parse', 'refs/codeshi/tasks/resolve-test/base').trim(), prepared.base);
+  assert.equal(git(repo, 'show', `${prepared.base}:lines.txt`), 'a\nB folder\nc\n', 'The new base holds the folder’s version.');
+  assert.equal(git(repo, 'show', `${prepared.base}:drop.txt`), 'D folder\n'); assert.equal(git(repo, 'show', `${prepared.base}:calm.txt`), '1\n2\n3\n4\n5\n', 'Files that didn’t conflict keep their base.');
+  assert.throws(() => git(repo, 'cat-file', '-e', `${prepared.base}:gone.txt`), 'What the folder deleted is gone from the new base too.');
+  assert.equal(git(repo, 'status', '--porcelain', '--', 'lines.txt'), ' M lines.txt\n', 'The folder’s own index is left alone.');
+  // Still marked: nothing can be merged.
+  const pending = { files: prepared.files.map(file => file.path), labels };
+  const marked = integrationPlan({ root: repo, base: prepared.base, result: commit(), pending });
+  assert.deepEqual(Object.entries(kinds(marked)).filter(([, kind]) => kind === 'unresolved').map(([name]) => name), ['both.txt', 'drop.txt', 'gone.txt', 'lines.txt']);
+  // Settled: both lines kept, the task's version of a file the folder deleted, the task's deletion, both additions.
+  put(copy, { 'lines.txt': 'a\nB card\nB folder\nc\n', 'gone.txt': 'G card\n', 'drop.txt': null, 'both.txt': 'card\nfolder\n' });
+  const ready = integrationPlan({ root: repo, base: prepared.base, result: commit(), pending });
+  assert.equal(ready.conflicts, 0);
+  assert.deepEqual(ready.files.filter(file => file.resolved).map(file => [file.path, file.status]), [['both.txt', 'clean'], ['drop.txt', 'clean'], ['gone.txt', 'clean'], ['lines.txt', 'clean']]);
+  assert.match(ready.files.find(file => file.path === 'lines.txt').diff, /^ B folder$/m, 'The review shows the change to the folder’s own version.');
+  applyPlan(repo, ready);
+  assert.deepEqual(['lines.txt', 'gone.txt', 'drop.txt', 'both.txt', 'calm.txt'].map(name => read(repo, name)), ['a\nB card\nB folder\nc\n', 'G card\n', null, 'card\nfolder\n', 'ONE\n2\n3\n4\nFIVE\n']);
+});
+
+// A repository whose mock agent holds a run that resolves conflicts, so a test can look at the copy meanwhile.
+const resolvingRepository = (folder, files) => {
+  repository(folder, files);
+  fs.writeFileSync(path.join(folder, '.mock-scenarios.json'), JSON.stringify({ ...JSON.parse(scenarios), '~Settle every conflict here': { behavior: 'hold' } }));
+  git(folder, 'commit', '-qam', 'resolving scenario');
+  return folder;
+};
+const resolveRun = (env, task) => until(() => env.captured(env.task(task.id).scopePath).find(item => String(item.context.currentRequest).includes('Settle every conflict here')), 'the resolving run');
+
+test('an agent resolves a conflict in the task’s copy, never the folder, and the review then shows the combined result', { skip: scriptCLIs }, async t => {
+  const env = setup(t, root => ({ a: resolvingRepository(path.join(root, 'a'), { 'list.md': 'intro\none\nend\n', 'other.txt': 'x\n' }) }), { policy: { maxConcurrent: 5 } });
+  const first = hold(env, 'a', 'Hold A'), second = hold(env, 'a', 'Hold B'); await working(env, first); await working(env, second);
+  edit(env, second, 'list.md', 'intro\none\nfrom the card\nend\n'); edit(env, second, 'other.txt', 'y\n');
+  await finish(env, second);
+  env.release(fs.realpathSync(env.folders.a)); await finished(env, first);
+  fs.writeFileSync(path.join(env.folders.a, 'list.md'), 'intro\none\nfrom the folder\nend\n');
+  const review = env.broker.tasks.review(env.c, second.id);
+  assert.equal(review.conflicts, 1); assert.equal(review.files.find(file => file.path === 'list.md').kind, 'lines');
+  assert.deepEqual([review.resolve.can, review.resolve.provider], [true, 'codex']);
+  assert.throws(() => env.broker.tasks.resolve(env.c, second.id, { digest: 'stale' }), /moved since you reviewed/);
+  const copy = env.task(second.id).scopePath; fs.rmSync(path.join(copy, '.release'));
+  const started = env.broker.tasks.resolve(env.c, second.id, { digest: review.digest });
+  assert.deepEqual([started.started, started.files, started.task.resolving], [true, 1, { open: true, files: 1 }]);
+  const asked = (await resolveRun(env, second)).context.currentRequest;
+  assert.match(asked, /^This task’s changes can’t be merged into a yet/); assert.match(asked, /^- list\.md: 1 conflict$/m); assert.match(asked, /ask me which to keep, showing both versions/);
+  assert.equal(fs.readFileSync(path.join(copy, 'list.md'), 'utf8'), 'intro\none\n<<<<<<< this copy\nfrom the card\n||||||| when this copy was made\n=======\nfrom the folder\n>>>>>>> a now\nend\n', 'The copy has both versions, marked.');
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'list.md'), 'utf8'), 'intro\none\nfrom the folder\nend\n', 'The folder isn’t touched.');
+  assert.equal(env.task(second.id).status, 'running'); assert.throws(() => env.broker.tasks.review(env.c, second.id), /Wait for this task to finish/);
+  // The agent combines both, and the review shows what merging changes in the folder.
+  edit(env, second, 'list.md', 'intro\none\nfrom the card\nfrom the folder\nend\n'); env.release(copy); await finished(env, second);
+  assert.deepEqual([env.task(second.id).status, env.task(second.id).resolve.open], ['complete', false]);
+  const after = env.broker.tasks.review(env.c, second.id), row = after.files.find(file => file.path === 'list.md');
+  assert.deepEqual([after.conflicts, row.status, row.resolved, after.resolve.combined], [0, 'clean', true, 1]);
+  assert.match(row.diff, /^\+from the card$/m); assert.doesNotMatch(row.diff, /^[-+]from the folder$/m);
+  // The folder moves on in other lines meanwhile: that merges as any change does.
+  fs.writeFileSync(path.join(env.folders.a, 'list.md'), 'INTRO\none\nfrom the folder\nend\n');
+  const last = env.broker.tasks.review(env.c, second.id);
+  assert.equal(last.files.find(file => file.path === 'list.md').status, 'merged');
+  await env.broker.tasks.integrate(env.c, second.id, { digest: last.digest });
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'list.md'), 'utf8'), 'INTRO\none\nfrom the card\nfrom the folder\nend\n');
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'other.txt'), 'utf8'), 'y\n');
+});
+
+test('a file left marked can’t be merged: resolving again starts from where it began, and a kept branch has no markers', { skip: scriptCLIs }, async t => {
+  const env = setup(t, root => ({ a: resolvingRepository(path.join(root, 'a'), { 'title.md': 'Old title\n' }) }), { policy: { maxConcurrent: 5 } });
+  const first = hold(env, 'a', 'Hold A'), second = hold(env, 'a', 'Hold B'); await working(env, first); await working(env, second);
+  edit(env, second, 'title.md', 'Card title\n'); await finish(env, second);
+  env.release(fs.realpathSync(env.folders.a)); await finished(env, first);
+  fs.writeFileSync(path.join(env.folders.a, 'title.md'), 'Folder title\n');
+  const copy = env.task(second.id).scopePath, folderBase = env.task(second.id).base;
+  // A run that can't start puts the copy back as it was.
+  const lane = env.lane(second.id), start = lane.broker.start;
+  lane.broker.start = () => { throw Object.assign(new Error('No agent today.'), { status: 409 }); };
+  assert.throws(() => env.broker.tasks.resolve(env.c, second.id, { digest: env.broker.tasks.review(env.c, second.id).digest }), /No agent today/);
+  lane.broker.start = start;
+  assert.equal(fs.readFileSync(path.join(copy, 'title.md'), 'utf8'), 'Card title\n'); assert.equal(env.task(second.id).resolve, null);
+  assert.equal(git(env.folders.a, 'show', `${env.task(second.id).base}:title.md`), git(env.folders.a, 'show', `${folderBase}:title.md`));
+  // The agent asks instead of choosing, and leaves the markers.
+  fs.rmSync(path.join(copy, '.release'));
+  env.broker.tasks.resolve(env.c, second.id, { digest: env.broker.tasks.review(env.c, second.id).digest });
+  await resolveRun(env, second); env.release(copy); await finished(env, second);
+  assert.equal(env.task(second.id).resolve.open, true, 'Still marked, so resolving isn’t finished.');
+  const marked = env.broker.tasks.review(env.c, second.id);
+  assert.deepEqual([marked.conflicts, marked.files[0].kind, marked.resolve.unresolved, marked.resolve.can], [1, 'unresolved', 1, true]);
+  await assert.rejects(env.broker.tasks.integrate(env.c, second.id, { digest: marked.digest }), /1 file conflicts/);
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'title.md'), 'utf8'), 'Folder title\n');
+  // The folder changes again; resolving again starts from the task's own version, against the folder as it is now.
+  fs.writeFileSync(path.join(env.folders.a, 'title.md'), 'Newer folder title\n');
+  fs.rmSync(path.join(copy, '.release'));
+  env.broker.tasks.resolve(env.c, second.id, { digest: env.broker.tasks.review(env.c, second.id).digest });
+  await until(() => env.captured(copy).filter(item => String(item.context.currentRequest).includes('Settle every conflict here')).length === 2, 'the second resolving run');
+  assert.equal(fs.readFileSync(path.join(copy, 'title.md'), 'utf8'), '<<<<<<< this copy\nCard title\n||||||| when this copy was made\nOld title\n=======\nNewer folder title\n>>>>>>> a now\n');
+  env.release(copy); await finished(env, second);
+  // Kept as a branch while still marked: the branch holds the task's own version.
+  const { branch } = env.broker.tasks.keep(env.c, second.id);
+  assert.equal(git(env.folders.a, 'show', `${branch}:title.md`), 'Card title\n');
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'title.md'), 'utf8'), 'Newer folder title\n');
 });
 
 test('two copies of one repository merge one after the other, each against what the last one left', { skip: scriptCLIs }, async t => {

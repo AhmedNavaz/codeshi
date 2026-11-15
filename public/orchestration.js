@@ -127,7 +127,7 @@
     const open = task.status === 'complete';
     if (check.status === 'running' || task.testing) return { tone: 'running', text: 'Testing…', reason: 'Running the project’s tests on this step’s result.', held: open };
     if (check.status === 'interrupted') return { tone: check.accepted ? 'accepted' : 'failed', text: check.accepted ? 'Not tested · continued' : 'Tests interrupted', reason: check.reason || '', command: check.command || null, held: open && !check.accepted, retry: open };
-    const [tone, text] = { passed: ['passed', 'Tests passed'], failed: check.accepted ? ['accepted', 'Tests failed · continued'] : ['failed', 'Tests failed'], no_change: ['quiet', 'No changes'] }[check.outcome] || ['quiet', 'Not tested'];
+    const [tone, text] = { passed: ['passed', 'Tests passed'], failed: check.unrunnable ? (check.accepted ? ['accepted', 'Check couldn’t run · continued'] : ['failed', 'Check couldn’t run']) : check.accepted ? ['accepted', 'Tests failed · continued'] : ['failed', 'Tests failed'], no_change: ['quiet', 'No changes'] }[check.outcome] || ['quiet', 'Not tested'];
     return { tone, text, reason: check.reason || '', command: check.command || null, output: check.output || '', held: open && check.outcome === 'failed' && !check.accepted, retry: open };
   }
   // The earlier steps that finished again after this one started, so this one was built on an older version of them.
@@ -454,6 +454,7 @@
     },
     label(plan) {
       if (!plan) return 'Orchestrate';
+      if (plan.status === 'answered') return 'Plan';
       if (plan.status === 'planning') return 'Orchestrate · planning the steps';
       return plan.steps?.length || plan.status === 'moved' ? 'Orchestrate · planned' : 'Orchestrate · not planned';
     },

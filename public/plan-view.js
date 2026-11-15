@@ -57,6 +57,30 @@
   // so typing in it never rebuilds it.
   // shown: whether this view has shown a plan since it opened, so it closes when that plan is discarded or closed.
   let view = readView(), selected = null, drawn = null, drawer = null, shown = false;
+  // Roles the chart and outline are narrowed to; empty shows every step. Not saved: a plan opens unfiltered.
+  const roles = new Set();
+  const roleOf = step => step.role || 'builder';
+  const visible = step => !roles.size || roles.has(roleOf(step));
+  // Columns of the steps the filter keeps; a column with none left is dropped.
+  const shownColumns = steps => columns(steps).map(group => ({ ...group, steps: group.steps.filter(visible) })).filter(group => group.steps.length);
+  // One chip per role the plan uses, with its step count; clicking toggles it. Rebuilt only when the roles or the choice change.
+  let chipsKey = null;
+  function drawFilter(snap) {
+    const bar = $('plan-view-filter'); if (!bar) return;
+    const counts = new Map(); for (const step of snap.steps) counts.set(roleOf(step), (counts.get(roleOf(step)) || 0) + 1);
+    for (const role of [...roles]) if (!counts.has(role)) roles.delete(role);
+    bar.hidden = counts.size < 2;
+    const key = JSON.stringify([...counts, [...roles]]);
+    if (key === chipsKey) return;
+    chipsKey = key;
+    const chip = (text, role, pressed) => {
+      const b = node('button', 'plan-filter-chip', text); b.type = 'button'; b.setAttribute('aria-pressed', String(pressed));
+      if (role) b.dataset.role = role;
+      b.addEventListener('click', () => { if (!role) roles.clear(); else if (!roles.delete(role)) roles.add(role); drawn = null; render(); });
+      return b;
+    };
+    bar.replaceChildren(chip(`All ${snap.steps.length}`, '', !roles.size), ...[...counts].map(([role, count]) => chip(`${orchestration().roleName(role)} ${count}`, role, roles.has(role))));
+  }
 
   // Columns: the plan's phases, in order, where it has them (a step without one stays in the phase before it).
   // Otherwise by depth: steps that wait for nothing come first, then each step one column after the latest it waits for.
@@ -120,7 +144,7 @@
 
   function drawChart(snap) {
     const chart = $('plan-view-chart');
-    chart.replaceChildren(...columns(snap.steps).map(group => {
+    chart.replaceChildren(...shownColumns(snap.steps).map(group => {
       const column = node('section', 'plan-column'), head = node('header', 'plan-column-head');
       head.append(node('span', 'plan-column-name', group.name), node('span', 'plan-column-count', String(group.steps.length)));
       const list = node('div', 'plan-column-cards');
@@ -159,7 +183,7 @@
   }
 
   function drawOutline(snap) {
-    $('plan-view-outline').replaceChildren(...columns(snap.steps).map(group => {
+    $('plan-view-outline').replaceChildren(...shownColumns(snap.steps).map(group => {
       const item = node('li', 'plan-outline-group'), list = node('ol', 'plan-outline-steps');
       item.append(node('h3', 'plan-outline-name', group.name), list);
       list.append(...group.steps.map(step => {
@@ -228,6 +252,7 @@
     if (!dialog.open) return;
     const snap = orchestration()?.snapshot();
     for (const id of ['plan-view-modes', 'plan-view-foot-slot']) $(id).hidden = !snap;
+    if (!snap && $('plan-view-filter')) $('plan-view-filter').hidden = true;
     if (!snap) {
       if (shown) { dialog.close(); return; }
       // No plan: the page says how to start one (orchestration.js shows it), or that the plan is in the Workspace chat.
@@ -254,7 +279,8 @@
     empty.hidden = !empty.textContent;
     $('plan-view-chart').hidden = view !== 'chart' || !snap.steps.length;
     $('plan-view-outline').hidden = view !== 'outline' || !snap.steps.length;
-    const signature = JSON.stringify([view, plan.id, plan.status, selected, snap.steps.map(step => [step.id, step.title, step.role, step.phase, step.tier, step.agent?.provider, step.dependsOn]), snap.tasks?.map(row => [row.task?.status, row.task?.reason, row.task?.runningProvider])]);
+    drawFilter(snap);
+    const signature = JSON.stringify([view, [...roles], plan.id, plan.status, selected, snap.steps.map(step => [step.id, step.title, step.role, step.phase, step.tier, step.agent?.provider, step.dependsOn]), snap.tasks?.map(row => [row.task?.status, row.task?.reason, row.task?.runningProvider])]);
     if (signature !== drawn) {
       drawn = signature;
       const focused = document.activeElement?.closest?.('#plan-view-canvas') ? document.activeElement.dataset?.step : null;
@@ -274,7 +300,7 @@
     ($('plan-view-canvas').querySelector('.plan-node') || $('plan-view-canvas').querySelector('.plan-outline-step') || (orchestration()?.snapshot() ? null : goal))?.focus();
   }
 
-  dialog.addEventListener('close', () => { selected = null; shown = false; drawn = null; drawer = null; $('plan-view-drawer-body').replaceChildren(); orchestration()?.render(); });
+  dialog.addEventListener('close', () => { roles.clear(); chipsKey = null; selected = null; shown = false; drawn = null; drawer = null; $('plan-view-drawer-body').replaceChildren(); orchestration()?.render(); });
   $('plan-view-close').addEventListener('click', () => dialog.close());
   $('plan-view-drawer-close').addEventListener('click', () => { const was = selected; selected = null; render(); if (was) $('plan-view-canvas').querySelector(`[data-step="${was}"]`)?.focus(); });
   for (const button of modes()) button.addEventListener('click', () => {

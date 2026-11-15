@@ -4,6 +4,25 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-11-16
+
+### Added
+- **Resolve a merge conflict with an agent.** When a task's or Plan card's changes conflict with your folder, **Review and merge** offers **Resolve with an agent**. The agent that made the changes works in the task's own copy, never your folder: Codeshi brings your folder's current version of each conflicting file into the copy, merged where Git can and marked where both sides changed the same lines. The agent keeps both sides where they fit, such as two added imports or two new sections, and asks you where they really disagree, showing both versions. The review then opens again with the combined result, and you still click **Merge**. A conflict an agent can't combine, such as an image changed on both sides, says why, and **Keep as a branch** never keeps the markers.
+- **Work time, break reminders and Activity.** The status bar shows how long you've worked today, or the header in Flow. Time counts while you're at the computer and Codeshi is in front or an agent is working for you, and five minutes away is a break. After an hour without one, a card suggests a walk, water or a stretch, with a 5-minute countdown if you take it. It also suggests lunch around midday, stopping after a long day, and sleep late at night. Click the time for **Activity**: today to the second, with a timeline, your breaks, prompts, tokens, cards done and Lounge games, then this week as bars and this month and last as calendars, with totals and which agents the tokens went to. Eight badges a month include three for breaks and rhythm, and none for long days. Everything stays on this computer for this month and last, and **Settings › General › Work time** turns each part off or clears it.
+
+### Changed
+- **Ultra sends deep work to Fable and Astra.** Smaller Ultra work stays on Opus or Sol, and so does deep work when Fable's or Astra's own limit is near or unconfirmed. The run's reason says when that happens. Smart and Saver never choose them.
+- **Deep work goes to a deep model first.** In Smart and Ultra, a deep task goes to an agent whose best model is a step lower, such as Codex with Sol, only when no deep model has usable allowance.
+- **A task changes only its own folder.** Whatever the approval setting, Codeshi refuses a task's changes to the workspace's other folders and to the real folder behind its copy, and tells the agent where the change belongs; the run carries on and isn't counted as failed. In another folder a task can still read, copy files out, and run builds, tests, type checks, linters and dev servers, such as `npm run build` or `next dev`, which write only their output there. Installs, formatting, snapshot updates, Git commits and other programs there are refused, and its own folder's builds and tests run in its copy. Commands are checked by the paths they name and the folder they run in, so this keeps agents' work in place but isn't a sandbox.
+- **A Plan card works in the folder its files are in.** In a workspace with several folders, a card with no folder chosen ran in the first one. It now takes the folder its files point to, and its Folder field says so. The planner names a folder for every card.
+- **A Plan card that saves files Git ignores waits for its folder** instead of working in a copy, which would lose those files when it's removed. The card says what it's waiting for.
+- **Drag queued prompts to reorder them.** Each prompt in **Up next** has one grip, shown on hover, in place of the up and down arrows. A line shows where it will land. With the keyboard, focus the grip and press Up or Down, or Home or End.
+
+### Fixed
+- **A card's check that starts by moving into the card's own folder** (`cd ../site && npm test`) runs again. The check already runs from that folder, so the `cd` is skipped.
+- **Flow chooses Gemini again.** Antigravity now lists its models without the thinking level in the id (`gemini-4-argon`), so none matched Codeshi's rated list and Smart and Ultra skipped Gemini without saying so. Argon is now rated deep, Hydrogen standard and Flash light.
+- **A Next.js site in Review your app's preview comes to life.** Launch maps opened previews at 127.0.0.1, where Next.js dev servers refuse their live-reload connection, so the page stayed still: no animations, and nothing its scripts draw. Agents now give a preview the address its dev server prints, usually localhost. A map made earlier keeps its address until you ask the agent to update it.
+
 ## [0.57.0] - 2026-11-15
 
 ### Added
