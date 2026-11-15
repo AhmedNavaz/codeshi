@@ -375,7 +375,7 @@ function checksOnly(words) {
 // guarded: each { path, name, copy }, copy being where this task's copy of that folder is, if it has one.
 // Returns { path, folder } for the first guarded path, or null.
 const changeKinds = new Set([...editTools, 'delete', 'move', 'item/fileChange/requestApproval', 'item/permissions/requestApproval']);
-export function guardedWrite(request = {}, { own = [], guarded = [], home = os.homedir(), caseless = process.platform !== 'linux' } = {}) {
+export function guardedWrite(request = {}, { own = [], guarded = [], home = os.homedir(), caseless = process.platform !== 'linux', windows = process.platform === 'win32' } = {}) {
   if (!guarded.length || !request || typeof request !== 'object') return null;
   const kind = String(request.kind || ''), input = request.input && typeof request.input === 'object' ? request.input : {};
   if (readTools.has(kind) || readKinds.has(kind)) return null;
@@ -407,6 +407,9 @@ export function guardedWrite(request = {}, { own = [], guarded = [], home = os.h
     let command = request.command ?? input.command ?? request.toolCall?.rawInput?.command;
     if (Array.isArray(command)) command = command.length === 3 && ['-c', '-lc'].includes(command[1]) ? command[2] : command.join(' ');
     if (typeof command !== 'string') return null;
+    // On Windows a backslash before a name is a path separator (D:\work\site), as PowerShell and cmd read it, not a POSIX
+    // escape, which there would only stand for the letter after it. An escaped space or quote stays an escape.
+    if (windows) command = command.replace(/\\(?=[\w.-])/g, '/');
     const everywhere = [...roots, ...guarded.map(folder => folder.path)];
     if (readOnlyCommand(command, { cwd, workspaces: everywhere })) return null;
     const steps = shellSteps(command, { cwd, home });

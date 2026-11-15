@@ -142,8 +142,7 @@ test('a task can’t change the workspace’s real folders: edits, file changes,
   assert.equal(guard({ kind: 'Bash', input: { command: `cat "${path.join(site, 'lib/content.ts')}"` } }), null);
   assert.equal(guard({ kind: 'Bash', input: { command: `git -C ${real} status --short` } }), null);
   // A command is refused when it names a guarded folder, however it writes the path, or runs there.
-  // A backslash-escaped space is a POSIX shell's way to write it; on Windows the backslash separates the path.
-  for (const command of [...(process.platform === 'win32' ? [] : [`touch ${site.replace(' ', '\\ ')}/x`]), `sed -i '' s/a/b/ '${path.join(site, 'x.ts')}'`, 'rm -rf ~/app/dist', 'echo hi > $HOME/app/notes.md', 'cp a ${HOME}/app/a', `npm --prefix=${real} run build`])
+  for (const command of [`touch ${site.replace(' ', '\\ ')}/x`, `sed -i '' s/a/b/ '${path.join(site, 'x.ts')}'`, 'rm -rf ~/app/dist', 'echo hi > $HOME/app/notes.md', 'cp a ${HOME}/app/a', `npm --prefix=${real} run build`])
     assert.notEqual(guard({ kind: 'Bash', input: { command } }), null, command);
   assert.equal(guard({ kind: 'item/commandExecution/requestApproval', command: ['/bin/zsh', '-lc', `touch ${path.join(real, 'x')}`], cwd: copy }), 'app', 'Codex argv, through its shell wrapper.');
   assert.equal(guard({ kind: 'item/commandExecution/requestApproval', command: 'npm test', cwd: real }), 'app', 'A command that runs in the real folder.');
@@ -159,7 +158,7 @@ test('a task can’t change the workspace’s real folders: edits, file changes,
   for (const command of [`cd "${site}" && npm install`, `cd "${site}" && npm run lint -- --fix`, `cd "${site}" && npm run format`, `cd "${site}" && npm test -- -u`, `cd "${site}" && npm run build > build.log`, `cd "${site}" && cat > lib/x.ts <<'EOF'\nexport const x = 1;\nEOF`, `cd "${site}" && npx prettier --write .`, `cd "${site}" && node scripts/gen.mjs`, `cd "${site}" && npm run build && git add -A`, `npm run build | tee "${site}/build.log"`, `echo "$(cd "${site}" && touch x)"`, `cp out/x.png "${site}/public/"`, `ffmpeg -i "${site}/demo.mp4" out.mp4`, `cd "${real}" && npm run build`])
     assert.notEqual(guard({ kind: 'Bash', input: { command } }), null, command);
   // A link into a guarded folder is followed, and on a case-insensitive disk any case names it.
-  fs.symlinkSync(site, path.join(root, 'link'));
+  fs.symlinkSync(site, path.join(root, 'link'), 'junction');
   assert.equal(guard({ kind: 'Write', input: { file_path: path.join(root, 'link', 'x.ts') } }), 'my site');
   assert.equal(guardedWrite({ kind: 'Edit', input: { file_path: path.join(real, 'A.js').toUpperCase() } }, { own: [copy], guarded, caseless: true })?.folder.name, 'app');
   // Working directly in its own folder keeps that folder open to it, and the workspace's other folders closed.
