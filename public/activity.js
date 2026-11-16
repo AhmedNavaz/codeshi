@@ -33,10 +33,10 @@
     'forty-hours': { icon: 'forty-hours', name: t('40 hours'), description: t('Work 40 hours this month') },
     finisher: { icon: 'finisher', name: t('Finisher'), description: t('Get 10 Plan cards done this month') },
     'hundred-prompts': { icon: 'hundred-prompts', name: t('100 prompts'), description: t('Send 100 prompts this month') },
-    'million-tokens': { icon: 'million-tokens', name: t('1M tokens'), description: t('Your agents use a million new tokens this month') },
+    'ten-million-tokens': { icon: 'ten-million-tokens', name: t('10M tokens'), description: t('Your agents use 10 million new tokens this month') },
     arcade: { icon: 'arcade', name: t('Arcade'), description: t('Play 10 games in the Lounge this month') },
   };
-  const progressOf = badge => badge.id === 'forty-hours' ? `${Math.floor(badge.value / 3_600_000)} / 40h` : badge.id === 'million-tokens' ? `${compact(badge.value)} / 1M` : `${badge.value} / ${badge.target}`;
+  const progressOf = badge => badge.id === 'forty-hours' ? `${Math.floor(badge.value / 3_600_000)} / 40h` : badge.id === 'ten-million-tokens' ? `${compact(badge.value)} / 10M` : `${badge.value} / ${badge.target}`;
   // Ideas for a break, one per stretch, so the card says the same thing until you take it.
   const TIPS = [
     t('Stand up and walk for five minutes. Your agents keep working while you’re away.'),

@@ -96,7 +96,7 @@ export const BADGES = [
   { id: 'forty-hours', target: 40 * 3_600_000, measure: days => days.reduce((sum, day) => sum + day.activeMs, 0) },
   { id: 'finisher', target: 10, measure: days => days.reduce((sum, day) => sum + day.cards, 0) },
   { id: 'hundred-prompts', target: 100, measure: days => days.reduce((sum, day) => sum + day.prompts, 0) },
-  { id: 'million-tokens', target: 1_000_000, measure: days => days.reduce((sum, day) => sum + day.tokens, 0) },
+  { id: 'ten-million-tokens', target: 10_000_000, measure: days => days.reduce((sum, day) => sum + day.tokens, 0) },
   { id: 'arcade', target: 10, measure: days => days.reduce((sum, day) => sum + day.games, 0) },
 ];
 // Days worked (a minute or more) in the busiest Monday-to-Sunday week.

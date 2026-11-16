@@ -4,6 +4,22 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-11-16
+
+### Added
+- **A Plan card shows what it changed, also after you merge it** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). In Review and Done, a card's result lists **Changed files**, each with the lines it adds and removes and whether it merged cleanly, was combined with your folder's version or was already there, and a file's saved diff opens under it. Merging a card, or keeping it as a branch, saves up to 200 of its changed files with their diffs, so a card in Done still says which files it changed, how many were merged and into which folder, or which branch has them. The card itself shows its file count and, in Done, its test result, and the Outline shows the file count too. What the card's run used is listed under its result. Cards that finished before this version list the files their agent edited, where those were recorded.
+- **Open a task's files from its chat** ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)). A file link or image in a reply, a file path in inline code or a changed file in a task's steps opens from the task's own copy, marked *(copy)*, while the copy exists, from your folder once it's merged, and from the branch when it was kept as one. Before, these paths pointed into the copy's folder in Codeshi's data and were refused with "Only files inside this workspace can be opened". Paths into a task's copy also show as the folder's own path.
+
+### Changed
+- **Tasks and Plan cards in a Git repository always work in their own copy** ([#88](https://github.com/AhmedNavaz/codeshi/issues/88)). A task or card that started while nothing else was running worked directly in the folder, and the Workspace chat and other tasks then had to wait for it ("Project files are busy: … is active in an overlapping workspace"). Now every task in a repository with at least one commit works in a Git worktree from the last commit, so the Workspace chat stays free, and you review and merge its changes as before. A task waits only while Codeshi stages, commits, merges, restores or applies a patch in that repository, so its copy starts from the result. Folders outside Git, and Plan cards that save files Git ignores, still work in the folder itself.
+- **A card or task whose copy changed nothing no longer holds up the ones after it.** Research and questions that ran in a copy count as finished for the cards waiting on them, with no merge needed, and when their tests fail, the message offers to continue anyway rather than to merge. A reviewer's repair round also works on a card that ran in its own copy, while the copy is there.
+- **Plan threads open in the Plan view** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). Choosing a Plan card's task or the Plan chat in Flow's task list, or wherever tasks are listed, opens the Plan view with that thread beside the Plan, instead of opening it inside Flow, where it was easy to keep typing in a Plan thread by mistake. Leaving the Plan returns to the chat you were in, and the **Plan** row also shows when only the Plan chat needs you.
+- **The monthly tokens badge is now 10M tokens**, up from 1M, which agents can use in a day.
+- **The README explains the first-open warnings beside the downloads** ([#1](https://github.com/AhmedNavaz/codeshi/issues/1)): **Open Anyway** on macOS and **Run anyway** on Windows, that the install commands don't trigger them, and which banner style to choose while macOS shows no **Needs you** banners for unsigned builds. The README and the guide also answer common questions, the README lists where contributions help most, and the repository's Sponsor button adds Buy Me a Coffee.
+
+### Fixed
+- **The update details close when you act on them.** Choosing **Update**, **Restart to update** or **Skip this version** closes them, and clicking the update button or its chevron while they're open closes them instead of opening them again.
+
 ## [0.58.1] - 2026-11-16
 
 ### Fixed

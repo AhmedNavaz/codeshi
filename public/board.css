@@ -127,6 +127,16 @@ section.board-result.trouble { border-left-color: var(--warning); }
 ul.board-result-facts { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; list-style: none; }
 ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--chip-bg); line-height: 18px; }
 .board-result-note { margin: 0; color: var(--muted); font-size: 12px; }
+.board-result-usage { margin: -4px 0 0; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.board-result-files-box { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.board-result-files-box > summary { display: flex; align-items: center; gap: 8px; color: var(--text-strong); font-size: 12px; font-weight: 600; cursor: pointer; }
+.board-result-files-box > summary:hover { color: var(--accent); }
+.board-result-files-stats { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.board-result-files { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.board-result-files .task-merge-head { padding: 4px 9px; min-height: 26px; }
+.board-result-files .task-merge-diff { max-height: 280px; }
+.board-result-files-note { margin: 0; color: var(--muted); font-size: 11.5px; }
+.board-card-tests.trouble { color: var(--danger); }
 /* The questions a card's answer ends with, and the box that answers them in its task. */
 .board-questions { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 .board-questions-title { margin: 0; color: var(--text-strong); font-size: 12.5px; font-weight: 600; }

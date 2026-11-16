@@ -277,7 +277,7 @@
     showPreviewAt(folder, relative, file, line, endLine = line) {
       const id = api.getState().projectId;
       previewVersion++;
-      showPreview(file, (folder.displayName || folder.name) + ' / ' + relative, id);
+      showPreview(file, (folder.displayName || folder.name) + (file.inCopy ? ' (copy)' : file.branch ? ` (${file.branch})` : '') + ' / ' + relative, id);
       nav = pendingNav; pendingNav = null; paintNav();
       if (browser.open) browser.close();
       $('close-file-preview').focus();

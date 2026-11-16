@@ -200,9 +200,8 @@ export class MutationCoordinator {
   acquire(workspace, operation) {
     return this.acquireMany([workspace], operation);
   }
-  acquireMany(workspaces, operation) {
-    if (!Array.isArray(workspaces) || !workspaces.length) throw fail('A workspace must contain at least one folder.');
-    workspaces = [...new Set(workspaces.map(workspace => {
+  normalize(workspaces) {
+    return [...new Set(workspaces.map(workspace => {
       // The native realpath matches letter case to the disk, so leases taken through differently typed paths still overlap.
       try { return fs.realpathSync.native(workspace); }
       catch (error) {
@@ -212,6 +211,29 @@ export class MutationCoordinator {
         throw error;
       }
     }))];
+  }
+  active(workspaces) {
+    if (!Array.isArray(workspaces) || !workspaces.length) return [];
+    const normalized = this.normalize(workspaces);
+    const coordinator = path.join(this.root, 'coordinator');
+    const found = [];
+    withFileGuard(coordinator, () => {
+      for (const name of fs.readdirSync(this.root).filter(name => name.endsWith('.json'))) {
+        const full = path.join(this.root, name);
+        let other;
+        try { other = JSON.parse(fs.readFileSync(full, 'utf8')); }
+        catch { found.push({ id: null, operation: 'an unreadable lock', workspaces: [] }); continue; }
+        if (!alive(other.pid, other.pidStart) && !groupAlive(other.processGroup, other.processGroupStart)) { fs.unlinkSync(full); continue; }
+        const otherRoots = other.workspaces || [other.workspace];
+        const otherFolders = otherRoots.map(root => { try { return fs.realpathSync.native(root); } catch { return root; } });
+        if (normalized.some(workspace => otherFolders.some(folder => overlaps(workspace, folder)))) found.push({ id: other.id, operation: other.operation || 'another operation', workspaces: otherFolders });
+      }
+    });
+    return found;
+  }
+  acquireMany(workspaces, operation) {
+    if (!Array.isArray(workspaces) || !workspaces.length) throw fail('A workspace must contain at least one folder.');
+    workspaces = this.normalize(workspaces);
     const id = randomUUID();
     const filename = path.join(this.root, `${id}.json`);
     const coordinator = path.join(this.root,'coordinator');

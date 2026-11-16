@@ -105,17 +105,17 @@ test('a card runs as its own task under Normal, finishes in Review with its summ
   assert.equal(column(env, card), 'doing');
   assert.deepEqual([task.title, task.provider, task.board.cardId, task.board.revision], ['Fix the footer', 'claude', card.id, 1]);
   assert.equal(env.broker.execution.current(env.c, task.execution.taskId).mode, 'normal', 'The card’s task is Normal, whatever the workspace default.');
-  await until(() => env.captured(fs.realpathSync(env.folder('a'))).length, 'the card’s task to start');
-  const sent = env.captured(fs.realpathSync(env.folder('a')))[0].context.currentRequest;
+  await until(() => task.scopePath && env.captured(task.scopePath).length, 'the card’s task to start');
+  const sent = env.captured(task.scopePath)[0].context.currentRequest;
   assert.match(sent, /^Fix the footer\n\nIt overlaps on phones\.\n\nDone means:\n- Looks right at 375 px/);
   assert.throws(() => env.board.edit(env.c, card.id, { notes: 'Changed while it works' }), /Stop it first/, 'What the agent works from stays as it started.');
   assert.equal(env.board.edit(env.c, card.id, { labels: ['later'] }).labels[0], 'later', 'Labels can still change.');
   assert.throws(() => env.board.accept(env.c, card.id), /Only a card in Review/);
-  env.release(fs.realpathSync(env.folder('a')));
+  env.release(task.scopePath);
   await until(() => column(env, card) === 'review', 'the card to reach Review');
   const shown = env.board.list(env.c)[0];
   assert.equal(shown.result.summary, 'Moved the footer below the content. Checked at 375 px.');
-  assert.equal(shown.result.status, 'complete'); assert.equal(shown.result.inCopy, false);
+  assert.equal(shown.result.status, 'complete'); assert.equal(shown.result.inCopy, true);
   assert.equal(shown.attempts.length, 1); assert.equal(shown.attempts[0].outcome, 'complete'); assert.equal(shown.attempts[0].provider, 'claude');
   assert.equal(shown.column, 'review', 'Finishing isn’t the same as done: the agent never accepts its own work.');
   const accepted = env.board.accept(env.c, card.id);
@@ -135,11 +135,12 @@ test('a stopped or cancelled card goes back to Ready with the reason, and a card
   assert.throws(() => env.board.move(env.c, card.id, { column: 'backlog' }), /Stop it to move it/);
   env.board.stop(env.c, card.id);
   await until(() => column(env, card) === 'ready', 'it to go back to Ready');
-  assert.equal(env.card(card.id).reason, 'Stopped before it finished.'); assert.equal(env.card(card.id).task, null);
+  assert.equal(env.card(card.id).reason, 'Stopped before it finished. Its copy is still in Tasks, to merge or discard.'); assert.equal(env.card(card.id).task, null);
   assert.equal(env.card(card.id).attempts[0].outcome, 'stopped');
   // Run again: it finishes this time, and is sent back from Review with a note.
-  env.release(fs.realpathSync(env.folder('a')));
   env.board.run(env.c, { ids: [card.id] });
+  await until(() => env.task(env.card(card.id).task)?.status === 'running' && env.task(env.card(card.id).task)?.scopePath, 'the second try to start');
+  env.release(env.task(env.card(card.id).task).scopePath);
   await until(() => column(env, card) === 'review', 'the second try to finish');
   assert.equal(env.card(card.id).attempts.length, 2);
   env.board.sendBack(env.c, card.id, { reason: 'It missed the empty state.' });
@@ -162,7 +163,13 @@ test('Run Ready runs the exact cards chosen, in the order their waits give, and 
   await until(() => env.task(tasks[first.id]).status === 'running', 'Schema to start');
   assert.equal(env.task(tasks[second.id]).status, 'waiting'); assert.match(env.task(tasks[second.id]).reason, /Waiting for “Schema”/);
   assert.deepEqual([column(env, first), column(env, second), column(env, other)], ['doing', 'doing', 'ready'], 'A Ready card nobody chose stays where it is.');
-  env.release(fs.realpathSync(env.folder('a')));
+  // A Plan card running in its own copy never blocks Workspace chat (no 409 Project files are busy).
+  assert.equal(env.task(tasks[first.id]).mode, 'worktree');
+  env.broker.start(env.c, { text: 'Main work while card runs', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
+  await env.broker.running.done;
+  assert.equal(env.c.status, 'complete');
+  assert.equal(env.task(tasks[first.id]).status, 'running');
+  env.release(env.task(tasks[first.id]).scopePath);
   await until(() => column(env, second) === 'review', 'API to finish after Schema');
   assert.equal(column(env, first), 'review'); assert.equal(column(env, other), 'ready');
   assert.equal(env.c.parallelTasks.length, 2);
@@ -176,7 +183,7 @@ test('after a restart a working card goes back to Ready, and one waiting for it 
   await until(() => env.task(env.card(working.id).task)?.status === 'running', 'the first to start');
   assert.match(env.task(env.card(queued.id).task).reason, /Waiting for “Working”/, 'The second waits for the first.');
   await env.reopen();
-  assert.deepEqual([column(env, working), env.card(working.id).reason], ['ready', 'Stopped before it finished.'], 'What was working is known to have stopped.');
+  assert.deepEqual([column(env, working), env.card(working.id).reason], ['ready', 'Stopped before it finished. Its copy is still in Tasks, to merge or discard.'], 'What was working is known to have stopped.');
   const waiting = env.board.list(env.c).find(card => card.id === queued.id);
   assert.deepEqual([waiting.column, waiting.taskState.status, waiting.taskState.held], ['doing', 'waiting', true], 'Nothing starts by itself after a restart.');
   env.board.stop(env.c, queued.id);
@@ -652,7 +659,7 @@ test('a card in Flow’s Run Ready doesn’t start once the run has used up its 
   state.tokens.input = 4000;
   assert.equal(env.broker.tasks.sharedUsage(env.c, env.task(tasks[second.id])).tokens, 4000, 'The second card counts what the first used.');
   assert.match(env.broker.tasks.runSpent(env.c, env.task(tasks[second.id]).batch), /used 4,000 tokens, its limit of 1,000/);
-  env.release(fs.realpathSync(env.folder('a')));
+  env.release(env.task(tasks[first.id]).scopePath);
   await until(() => column(env, second) === 'ready', 'the second card to be held back');
   assert.equal(env.task(tasks[second.id]).status, 'cancelled');
   assert.match(env.card(second.id).reason, /^Not started: This run has used 4,000 tokens/);
@@ -717,7 +724,7 @@ test('a finished card is tested before the cards after it start, and each card i
   // Continuing anyway is your call; the next card is told the tests failed, and what the first card reported.
   env.board.proceed(env.c, contract.id);
   await until(() => env.card(page.id).column === 'review', 'the second card to finish');
-  const brief = env.captured(fs.realpathSync(env.folder('a'))).map(capture => capture.context.currentRequest).find(text => text.startsWith('Build the page'));
+  const brief = env.captured(taskOf(page).scopePath).map(capture => capture.context.currentRequest).find(text => text.startsWith('Build the page'));
   assert.ok(brief, 'The second card ran.');
   assert.match(brief, /^Build the page \(frontend\)/);
   assert.match(brief, /Files or folders it expects to change: public\/items\.js/);
@@ -758,7 +765,7 @@ function reviewRound(t, { second }) {
   const review = env.add({ title: 'Review the API', column: 'ready', role: 'reviewer', agent: { provider: 'claude' }, dependsOn: [api.id] });
   const docs = env.add({ title: 'Write the docs', column: 'ready', dependsOn: [review.id] });
   env.board.run(env.c, { ids: [api.id, review.id, docs.id] });
-  const taskOf = card => env.task(env.card(card.id).task), requests = () => env.captured(fs.realpathSync(folder)).map(capture => capture.context.currentRequest);
+  const taskOf = card => env.task(env.card(card.id).task), requests = () => [...new Set([folder, ...(env.c.parallelTasks || []).map(item => item.scopePath)].filter(Boolean).map(place => fs.realpathSync(place)))].flatMap(place => env.captured(place)).map(capture => capture.context.currentRequest);
   return { env, api, review, docs, taskOf, requests, folder };
 }
 
@@ -779,7 +786,7 @@ test('a review’s findings go back to the card they name for one repair run, an
   assert.equal(shown.find(item => item.id === review.id).taskState.holds, true);
   assert.equal(taskOf(docs).status, 'waiting');
   await until(() => /to repair what it found and review again/.test(taskOf(docs).reason || ''), 'the docs card to say why it waits');
-  env.release(fs.realpathSync(folder));
+  env.release(taskOf(api).scopePath);
   // The review checks the repair, with what the repair reported, and passes: only then do the docs start.
   await until(() => taskOf(review)?.review?.status === 'passed', 'the second review to pass');
   const again = requests().find(text => text.startsWith('The cards you reviewed had one repair run'));
@@ -794,9 +801,9 @@ test('a review’s findings go back to the card they name for one repair run, an
 });
 
 test('findings left after the repair round wait for you, never repair twice, and Continue anyway lets the cards after it start (#89)', { skip: scriptCLIs }, async t => {
-  const { env, review, docs, taskOf, requests, folder } = reviewRound(t, { second: { verdict: 'changes', findings: [{ card: 'Build the API', problem: 'Sessions are still not checked on delete.' }] } });
+  const { env, api, review, docs, taskOf, requests, folder } = reviewRound(t, { second: { verdict: 'changes', findings: [{ card: 'Build the API', problem: 'Sessions are still not checked on delete.' }] } });
   await until(() => requests().some(text => /Fix these/.test(text)), 'the repair to start');
-  env.release(fs.realpathSync(folder));
+  env.release(taskOf(api).scopePath);
   await until(() => taskOf(review)?.review?.status === 'held', 'the second review to hold');
   assert.match(taskOf(review).review.reason, /still found 1 problem after the repair round/);
   await until(() => /couldn’t settle/.test(taskOf(docs).reason || ''), 'the docs card to wait for you');
@@ -1017,20 +1024,20 @@ test('a major card is split with an agent before it runs, each subtask runs in i
   act({ action: 'remove', subtaskId: env.card(card.id).subtasks.at(-1).id });
   assert.throws(() => act({ action: 'clear' }), /Stop it before splitting it again/);
   assert.equal(env.card(card.id).revision, 2, 'Editing subtasks isn’t a change to what the card says; only the split was.');
-  env.release(env.folder('a'));
+  const task = env.task(env.card(card.id).task);
+  env.release(task.scopePath);
   await until(() => env.card(card.id).column === 'review', 'the card to finish');
   const done = env.card(card.id).subtasks;
   assert.deepEqual(done.map(item => [item.title, item.status, item.provider]), [['Add the cart', 'done', 'codex'], ['Add the receipt', 'done', 'codex'], ['Email the receipt', 'done', 'claude']]);
   assert.equal(done[0].summary, 'Added the cart model and its tests.');
   // Each subtask continues the same task, told its place among the others.
-  const asked = requests(env);
+  const asked = [...requests(env), ...env.captured(task.scopePath).map(capture => capture.context.currentRequest)];
   assert.equal(asked.length, 4, 'One split, then one run for each subtask.');
   assert.ok(asked[1].startsWith('Build checkout'), 'The first subtask is the task’s first run, so it carries the card’s brief.');
   assert.match(asked[1], /Subtask 1 of 2 for the card “Build checkout”: Add the cart\n\nA cart model\./);
   assert.match(asked[2], /^Subtask 2 of 3 for the card “Build checkout”: Add the receipt\n\nA receipt page with totals\./);
   assert.match(asked[2], /Do only this subtask\. One more follows: “Email the receipt”\./);
   assert.match(asked[3], /^Subtask 3 of 3[\s\S]*This is the card’s last subtask/);
-  const task = env.task(env.card(card.id).task);
   assert.equal(task.status, 'complete');
   await until(() => env.card(card.id).result?.tests === 'passed', 'the card’s tests after its last subtask');
   // Export lists them.
@@ -1119,23 +1126,23 @@ test('a paused major card stops after its subtask, Run carries on from the next,
   assert.equal(env.card(card.id).split, true);
   assert.throws(() => act({ action: 'pause' }), /Only a running card can be paused/);
   scriptMatch(env, 'Subtask 1 of 2', { behavior: 'hold', text: 'Indexed.' });
-  env.board.run(env.c, { ids: [card.id] });
+  const firstRun = env.board.run(env.c, { ids: [card.id] }).tasks[card.id];
   await until(() => env.card(card.id).subtasks[0].status === 'running', 'the first subtask');
   act({ action: 'pause' });
-  env.release(env.folder('a'));
+  env.release(env.task(firstRun).scopePath);
   await until(() => env.card(card.id).column === 'ready', 'the card to pause');
-  assert.equal(env.card(card.id).reason, 'Paused after 1 of 2 subtasks. Run carries on from “Search box”.');
+  assert.equal(env.card(card.id).reason, 'Paused after 1 of 2 subtasks. Run carries on from “Search box”. Its copy is still in Tasks, to merge or discard.');
   assert.deepEqual(env.card(card.id).subtasks.map(item => item.status), ['done', 'pending']);
-  let asked = requests(env);
+  let asked = env.captured(env.task(firstRun).scopePath).map(capture => capture.context.currentRequest);
   assert.equal(asked.length, 1, 'No split: the card already had its subtasks.');
   assert.ok(asked[0].startsWith('Ship search'), 'The first run of a task carries the card’s brief.');
   assert.match(asked[0], /Subtask 1 of 2 for the card “Ship search”: Index the items\n\nBuild the index\./);
   // Run carries on in a new task, told what the earlier subtasks did.
-  env.board.run(env.c, { ids: [card.id] });
+  const secondRun = env.board.run(env.c, { ids: [card.id] }).tasks[card.id];
   await until(() => env.card(card.id).column === 'review', 'the card to finish');
-  asked = requests(env);
-  assert.match(asked[1], /Subtasks already done for this card, by earlier runs:\n- 1\. Index the items: Indexed\./);
-  assert.match(asked[1], /Subtask 2 of 2 for the card “Ship search”: Search box/);
+  asked = env.captured(env.task(secondRun).scopePath).map(capture => capture.context.currentRequest);
+  assert.match(asked[0], /Subtasks already done for this card, by earlier runs:\n- 1\. Index the items: Indexed\./);
+  assert.match(asked[0], /Subtask 2 of 2 for the card “Ship search”: Search box/);
   assert.equal(env.card(card.id).subtasksPaused, false);
   // Sent back, a major card gets one more subtask for what should change. Cleared, it needs subtasks again, and a split
   // that isn't JSON changes nothing.
@@ -1409,7 +1416,7 @@ test('a card whose report says the Plan should change updates it by itself, and 
   assert.deepEqual([env.c.boardSuggest.cardId, env.c.boardSuggest.provider], [research.id, 'codex']);
   assert.match(env.card(research.id).autoUpdate.said, /index the Postgres table/);
   assert.equal(env.card(research.id).autoUpdate.jobId, env.c.boardSuggest.id);
-  assert.match(requests(env).find(text => /^Research sessions/.test(text || '')), /add a heading “Plan changes” near the end/);
+  assert.match(env.captured(env.task(tasks[research.id]).scopePath).map(c => c.context.currentRequest).find(text => /^Research sessions/.test(text || '')), /add a heading “Plan changes” near the end/);
   assert.ok(env.c.messages.some(message => /“Research sessions” found that the Plan should change/.test(message.text)));
   // The queued card is told it may change, and waits rather than starting from a Plan that's about to.
   assert.match(await until(() => requests(env).find(text => /has finished, and its findings are below/.test(text || '')), 'the update’s request'), /haven’t started: they are queued to run[\s\S]*Build the session store/);
@@ -1450,7 +1457,7 @@ test('a card that ends with questions keeps its Plan update waiting for your ans
   env.script(after, null, 'Wrote the guide.');
   const { tasks } = env.board.run(env.c, { ids: [after.id, research.id] });
   await until(() => env.card(research.id).autoUpdate?.asking, 'the update to wait for the answers');
-  assert.match(requests(env).find(text => /^Polish the header/.test(text || '')), /Follow-ups to this card’s own work aren’t Plan changes/);
+  assert.match(env.captured(env.task(tasks[research.id]).scopePath).map(c => c.context.currentRequest).find(text => /^Polish the header/.test(text || '')), /Follow-ups to this card’s own work aren’t Plan changes/);
   assert.ok(env.c.messages.some(message => /“Polish the header” has questions for you/.test(message.text)));
   await until(() => /has questions for you/.test(env.task(tasks[after.id]).reason || ''), 'the next card to wait for the answers');
   await new Promise(resolve => setTimeout(resolve, 30));
@@ -1540,12 +1547,12 @@ test('a card with no folder runs in the one its files point to, shows it, and it
   const { tasks } = env.board.run(env.c, { ids: [card.id] }), task = env.task(tasks[card.id]);
   assert.equal(task.folderId, 'b', 'It runs in the folder its files point to, not the first one.');
   const b = fs.realpathSync(env.folder('b')), a = fs.realpathSync(env.folder('a'));
-  await until(() => env.captured(b).length, 'the card’s task to start');
-  const scope = env.captured(b)[0].context.taskScope;
-  assert.ok(scope.startsWith(`This task works directly in ${b} and changes only that folder.`), scope);
+  await until(() => task.scopePath && env.captured(task.scopePath).length, 'the card’s task to start');
+  const scope = env.captured(task.scopePath)[0].context.taskScope;
+  assert.ok(scope.startsWith(`This task works in its own copy of b, at ${task.scopePath}, made from that folder's last commit.`), scope);
   assert.ok(scope.includes(`other folder, a (${a}), copy files out of it`) && scope.includes('dev servers there, but Codeshi refuses changes there'), scope);
-  assert.deepEqual(env.lane(task.id).broker.guarded.map(folder => [folder.name, folder.copy]), [['a', null], ['b', null]]);
-  env.release(b);
+  assert.deepEqual(env.lane(task.id).broker.guarded.map(folder => [folder.name, folder.copy]), [['a', null], ['b', task.scopePath]]);
+  env.release(task.scopePath);
   await until(() => column(env, card) === 'review', 'the card to reach Review');
 });
 
@@ -1562,4 +1569,52 @@ test('a drafted card works in the folder its planner names, or the one its files
   // The planner is told the folders only when there is a choice.
   assert.match(planningRequest('Ship it', { folders: env.list }), /This workspace has 2 folders: "a", "b"\. Give every card folder/);
   assert.doesNotMatch(planningRequest('Ship it', { folders: env.list.slice(0, 1) }), /Give every card folder/);
+});
+
+test('a merged or kept Plan card preserves its changed files, stats and diffs after reload, and falls back to recorded edits', { skip: scriptCLIs }, async t => {
+  const env = setup(t);
+  fs.writeFileSync(path.join(env.folder('a'), 'notes.txt'), 'alpha\nbeta\n');
+  git(env.folder('a'), 'add', 'notes.txt'); git(env.folder('a'), 'commit', '-qm', 'notes');
+  env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }); const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(env.folder('a'))).length, 'the main run');
+
+  const mergedCard = env.add({ title: 'Update notes', column: 'ready' });
+  const emptyCard = env.add({ title: 'Read only check', column: 'ready' });
+  env.script(mergedCard, null, 'Updated notes and added summary.');
+  env.script(emptyCard, null, 'No edits needed.');
+  const { tasks } = env.board.run(env.c, { ids: [mergedCard.id, emptyCard.id] });
+  await until(() => column(env, mergedCard) === 'review' && column(env, emptyCard) === 'review', 'both cards in review');
+  const mergedTask = env.task(tasks[mergedCard.id]);
+  fs.writeFileSync(path.join(mergedTask.scopePath, 'notes.txt'), 'alpha\ngamma\n');
+  fs.writeFileSync(path.join(mergedTask.scopePath, 'summary.md'), '# Done\n');
+  env.release(fs.realpathSync(env.folder('a'))); await main.done;
+
+  await env.broker.tasks.integrate(env.c, mergedTask.id, { digest: env.broker.tasks.review(env.c, mergedTask.id).digest });
+  await until(() => env.card(mergedCard.id).result?.status === 'integrated', 'card result updated to integrated');
+  assert.equal(env.board.accept(env.c, mergedCard.id).column, 'done');
+  assert.equal(env.board.accept(env.c, emptyCard.id).column, 'done');
+  assert.equal(env.card(emptyCard.id).result.status, 'integrated');
+  assert.equal(env.card(emptyCard.id).result.inCopy, false);
+
+  await env.reopen();
+  const shown = env.board.public(env.c, env.card(mergedCard.id));
+  assert.deepEqual(shown.taskState.integration, { files: 2, branch: null, at: env.task(mergedTask.id).integration.at, folder: 'a' });
+  const ans = env.board.answer(env.c, mergedCard.id);
+  assert.equal(ans.filesSource, 'merged');
+  assert.deepEqual(ans.integration, { files: 2, branch: null, at: env.task(mergedTask.id).integration.at, folder: 'a', totalFiles: 2 });
+  assert.deepEqual(ans.files.map(({ path: p, change, added, removed, status }) => ({ path: p, change, added, removed, status })), [
+    { path: 'notes.txt', change: 'update', added: 1, removed: 1, status: 'clean' },
+    { path: 'summary.md', change: 'add', added: 1, removed: 0, status: 'clean' },
+  ]);
+  assert.match(ans.files[0].diff, /\+gamma/);
+  assert.match(ans.files[1].diff, /\+# Done/);
+
+  // Fallback for an older merged or direct card without integration.changes: normalized recorded paths.
+  const directCard = env.add({ title: 'Direct edit', column: 'ready' });
+  const fakeTask = { id: 't-direct', title: 'Direct edit', status: 'integrated', mode: 'direct', folderId: 'a', folderName: 'a', folderPath: env.folder('a'), provider: 'codex', board: { cardId: directCard.id }, integration: { files: 1, at: new Date().toISOString() }, stepResult: { summary: 'Done', files: [path.join(env.folder('a'), 'src/app.mjs'), 'src/app.mjs'] } };
+  env.c.parallelTasks.push(fakeTask);
+  env.board.update(env.c, env.card(directCard.id), { column: 'done', task: fakeTask.id, result: { status: 'integrated', files: 1, tests: 'passed', summary: 'Done', at: new Date().toISOString() } });
+  const fallback = env.board.answer(env.c, directCard.id);
+  assert.equal(fallback.filesSource, 'recorded');
+  assert.deepEqual(fallback.files, [{ path: 'src/app.mjs' }]);
 });

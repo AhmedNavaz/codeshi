@@ -4,12 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { fixtures, fixtureById } from '../evals/fixtures.mjs';
 import { compareResults, parsePolicy, repeatedFileReads, reportMarkdown, runCheck, runFixture } from '../evals/harness.mjs';
 import { scriptCLIs } from './platform.mjs';
 import { checkPin, experimentInputs, fingerprint, validatePin } from '../evals/experiment.mjs';
 
-const cli = new URL('../evals/cli.mjs', import.meta.url).pathname;
+const cli = fileURLToPath(new URL('../evals/cli.mjs', import.meta.url));
 
 test('routing evaluations count assessor overhead, reserve its budget and repeat the same pinned inputs', { skip: scriptCLIs }, async () => {
   const fixture = fixtureById('routing-assessment'), policy = parsePolicy({ agent: 'codex' });

@@ -1477,8 +1477,15 @@ export class Board {
     if (task && task.mode === 'worktree' && !['integrated', 'kept', 'discarded'].includes(task.status) && !empty) throw fail('Its changes are still in the task’s own copy. Review and merge them first, or keep them as a branch.');
     const now = new Date().toISOString();
     // Done first, so freeing the copy doesn't move the card.
-    this.update(c, card, { column: 'done', order: this.lastOrder(c, 'done') + 1, acceptedAt: now, acceptedBy: by === 'flow' ? 'flow' : 'you', reason: null });
-    if (empty) this.main.tasks.finish(c, task, { status: 'integrated', integration: { files: 0, at: now } });
+    this.update(c, card, {
+      column: 'done',
+      order: this.lastOrder(c, 'done') + 1,
+      acceptedAt: now,
+      acceptedBy: by === 'flow' ? 'flow' : 'you',
+      reason: null,
+      ...(empty && card.result ? { result: { ...card.result, status: 'integrated', files: 0, inCopy: false, at: now } } : {}),
+    });
+    if (empty) this.main.tasks.finish(c, task, { status: 'integrated', integration: { files: 0, at: now, changes: [] } });
     return this.public(c, card);
   }
   // Whether a card's copy holds no changes, worked out from the copy itself rather than from what the agent reported.
@@ -1492,18 +1499,83 @@ export class Board {
   // The card's report is its own run's last reply: the run that finished it, a repair or a second review. A question you
   // asked in its task afterwards is a follow-up, listed after the report, so the report and its verdict aren't replaced by
   // a short reply such as "Thanks, done".
+  recordedFiles(c, task) {
+    let messages = [];
+    try {
+      const lane = this.main.tasks.lanes.get(task.id) || this.main.tasks.lane(c, task);
+      messages = lane?.c?.messages || [];
+    } catch { /* Its conversation can't be read. */ }
+    const roots = [task.worktree, task.scopePath, task.folderPath, task.repoRoot].filter(Boolean).map(p => path.resolve(p));
+    const prefix = task.prefix ? `${task.prefix.replace(/\/+$/, '')}/` : '';
+    const normalize = raw => {
+      const trimmed = String(raw || '').trim();
+      if (!trimmed) return '';
+      if (path.isAbsolute(trimmed)) {
+        const abs = path.resolve(trimmed);
+        for (const root of roots) {
+          const rel = path.relative(root, abs);
+          if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel.replace(/\\/g, '/');
+        }
+      }
+      const clean = trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
+      return prefix && clean.startsWith(prefix) ? clean.slice(prefix.length) : clean;
+    };
+    const fromMessages = messages.length ? runSteps(messages).files : [];
+    const rawList = fromMessages.length ? fromMessages : (task.stepResult?.files || []);
+    const out = [], seen = new Set();
+    for (const item of rawList) {
+      const norm = normalize(item);
+      if (!norm || seen.has(norm)) continue;
+      seen.add(norm); out.push(norm);
+      if (out.length >= 200) break;
+    }
+    return out;
+  }
   answer(c, id) {
     const card = this.find(c, id), task = this.task(c, card);
-    let reply = '', provider = null, model = null, followUps = [];
+    let reply = '', provider = null, model = null, followUps = [], files = [], filesSource = null, integration = null;
     if (task) {
       this.reviews.recover(c, task);
       const thread = this.thread(c, task);
       if (thread.report) ({ text: reply, provider, model } = thread.report);
       followUps = thread.followUps.map(item => ({ ask: clip(item.ask, 4000), text: clip(item.text, 20000), at: item.at, provider: item.provider, model: item.model }));
       if (!reply) reply = task.stepResult?.summary || '';
+      if (task.integration) {
+        integration = {
+          files: task.integration.files ?? null,
+          branch: task.integration.branch || null,
+          at: task.integration.at || null,
+          folder: task.folderName || null,
+          totalFiles: task.integration.totalFiles ?? (Array.isArray(task.integration.changes) ? task.integration.changes.length : null),
+        };
+      }
+      if (Array.isArray(task.integration?.changes)) {
+        files = task.integration.changes;
+        filesSource = task.status === 'kept' ? 'branch' : 'merged';
+      } else if (task.mode === 'worktree' && !ENDED.has(task.status) && task.worktree && fs.existsSync(task.worktree) && !this.main.tasks.lanes.get(task.id)?.broker.running) {
+        try {
+          files = this.main.tasks.planFor(c, task).plan.files.slice(0, 200).map(({ path: filePath, change, added, removed, status, resolved, diff }) => ({
+            path: filePath,
+            change,
+            added: Number(added) || 0,
+            removed: Number(removed) || 0,
+            status,
+            ...(resolved ? { resolved: true } : {}),
+            ...(diff ? { diff } : {}),
+          }));
+          if (files.length) filesSource = 'copy';
+        } catch { /* Fall back to recorded tool activity. */ }
+      }
+      if (!files.length && filesSource !== 'copy' && filesSource !== 'merged' && filesSource !== 'branch') {
+        const collected = this.recordedFiles(c, task);
+        if (collected.length) {
+          files = collected.map(filePath => ({ path: filePath }));
+          filesSource = 'recorded';
+        }
+      }
     }
     if (!reply) reply = card.result?.summary || '';
-    return { text: clip(reply, 60000), provider, model, followUps, taskId: task?.id || null };
+    return { text: clip(reply, 60000), provider, model, followUps, taskId: task?.id || null, files, filesSource, integration };
   }
   // A task's runs, each with what started it and its last reply, split into the report and the follow-ups after it. Runs
   // that resolved a merge conflict in its copy are neither: Codeshi asked for them, and the task's chat shows them.
@@ -1692,9 +1764,9 @@ export class Board {
     const split = c ? this.cards(c).find(card => card.id === task.board?.cardId)?.subtasks?.length : 0;
     // A split card's changes are its every subtask's, not only the last run's, and with follow-ups or resolving, the report's and theirs.
     const from = (thread.followUps.length || thread.resolves) && conversation ? (conversation.messages || []).findIndex(message => message.runId === thread.report?.runId) : -1;
-    const files = task.integration?.files ?? (split && conversation ? runSteps(conversation.messages || []).files.length : from >= 0 ? runSteps(conversation.messages.slice(from)).files.length : run && conversation.snapshots?.[run.id]?.files != null ? Number(conversation.snapshots[run.id].files) || 0 : null);
+    const files = task.integration?.files ?? (Array.isArray(task.integration?.changes) ? task.integration.changes.length : null) ?? (split && conversation ? runSteps(conversation.messages || []).files.length : from >= 0 ? runSteps(conversation.messages.slice(from)).files.length : run && conversation.snapshots?.[run.id]?.files != null ? Number(conversation.snapshots[run.id].files) || 0 : null);
     const check = task.stepCheck;
-    return { status: task.status, summary: clip(reply.replace(/\s+/g, ' '), LIMITS.summary), files, tests: this.tests(task) ?? run?.check?.status ?? null, ...(check?.reason ? { testsReason: clip(check.reason, LIMITS.reason) } : {}), ...(check?.command ? { testCommand: check.command } : {}), ...(check?.unrunnable ? { testsUnrunnable: true } : {}), ...(check?.accepted ? { testsAccepted: true } : {}), inCopy: task.mode === 'worktree', ...(thread.report?.runId ? { reportRun: thread.report.runId } : {}), ...(thread.followUps.length ? { followUps: thread.followUps.length } : {}), at: new Date().toISOString() };
+    return { status: task.status, summary: clip(reply.replace(/\s+/g, ' '), LIMITS.summary), files, tests: this.tests(task) ?? run?.check?.status ?? null, ...(check?.reason ? { testsReason: clip(check.reason, LIMITS.reason) } : {}), ...(check?.command ? { testCommand: check.command } : {}), ...(check?.unrunnable ? { testsUnrunnable: true } : {}), ...(check?.accepted ? { testsAccepted: true } : {}), inCopy: task.mode === 'worktree' && !ENDED.has(task.status), ...(thread.report?.runId ? { reportRun: thread.report.runId } : {}), ...(thread.followUps.length ? { followUps: thread.followUps.length } : {}), at: new Date().toISOString() };
   }
   // What the card's own tests say (#162): running, passed, failed, interrupted, no changes to test, or not tested.
   tests(task) {
@@ -1735,7 +1807,7 @@ export class Board {
     const reviewer = REVIEW_ROLES.includes(card.role) && task ? (lane?.c?.activeRun?.provider || task.provider) : null;
     // The folder it runs in: the one chosen, or the one its files point to, which the page says it guessed.
     const folderId = this.folderOf(card), folderGuessed = Boolean(folderId && folderId !== card.folderId);
-    return { ...rest, folderId: folderId || null, ...(folderGuessed ? { folderGuessed } : {}), managed: this.managed(c, card), labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), ...(Number.isInteger(task.copyFiles) ? { copyFiles: task.copyFiles } : {}), ...(task.resolve?.open ? { resolving: true } : {}), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, ...(check.unrunnable ? { testsUnrunnable: true } : {}), testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review || planUpdate ? { holds: held } : {}), ...(planUpdate ? { planUpdate } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
+    return { ...rest, folderId: folderId || null, ...(folderGuessed ? { folderGuessed } : {}), managed: this.managed(c, card), labels: card.labels || [], group: card.group || null, role: card.role || 'builder', artifact: card.artifact || null, check: card.check || null, files: card.files || [], tier: card.tier || 'standard', auto: card.auto === true, routingMode: card.routingMode || null, closed: card.closed === true, split: card.split === true, subtasks: card.subtasks || [], subtasksPaused: card.subtasksPaused === true, splitting: Boolean(card.splitting && task && card.splitting.taskId === task.id), draft: card.draft || null, commentCount: comments?.length || 0, ...(task ? { taskState: { id: task.id, status: task.status, reason: task.reason || null, held: Boolean(task.held), mode: task.mode || null, hasWorktree: Boolean(task.worktree) && !ENDED.has(task.status), ...(task.integration ? { integration: { files: task.integration.files ?? null, branch: task.integration.branch || null, at: task.integration.at || null, folder: task.folderName || null } } : {}), ...(Number.isInteger(task.copyFiles) ? { copyFiles: task.copyFiles } : {}), ...(task.resolve?.open ? { resolving: true } : {}), conversationId: task.conversationId || null, provider: lane?.c?.activeRun?.provider || task.provider, model: lane?.c?.activeRun?.model ?? task.model ?? null, effort: lane?.c?.activeRun?.effort ?? task.effort ?? null, approvals: lane?.broker.pendingCount() || 0, usage: this.main.tasks.usageOf?.(task, lane) || null, ...(check ? { tests: this.tests(task), testsReason: check.reason || null, testCommand: check.command || null, ...(check.unrunnable ? { testsUnrunnable: true } : {}), testOutput: check.outcome === 'failed' ? String(check.output || '').slice(-2000) : null } : {}), ...(check || review || planUpdate ? { holds: held } : {}), ...(planUpdate ? { planUpdate } : {}), ...(review ? { review } : {}), ...(reviewer && !this.reviews.independent(c, card, reviewer) ? { notIndependent: true } : {}), ...(task.repairOf ? { repairOf: { cardId: task.repairOf.cardId, title: this.cards(c).find(other => other.id === task.repairOf.cardId)?.title || null, running: LIVE.has(task.status) } } : {}) } } : {}) };
   }
   list(c) { return [...this.cards(c)].sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || a.order - b.order).map(card => this.public(c, card)); }
   // The Plan chat, once opened: its task, whether it is working, and its approvals waiting.

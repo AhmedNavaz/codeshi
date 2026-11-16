@@ -397,16 +397,64 @@
     const dot = base.lastIndexOf(".");
     return dot > 0 && FILE_EXTENSIONS.has(base.slice(dot + 1));
   }
+  const trimSlash = value => String(value || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  function knownTasks() {
+    const list = [], active = state.conversation?.task;
+    if (active) list.push(active);
+    for (const item of state.conversation?.parallelTasks || []) if (!active || item.id !== active.id) list.push(item);
+    return list;
+  }
+  function activeTaskForFolder(folder) {
+    const current = state.taskId ? (state.conversation?.task || knownTasks().find(item => item.id === state.taskId)) : null;
+    if (!current || (folder?.id && current.folderId && current.folderId !== folder.id)) return null;
+    return current.mode === "worktree" ? current : null;
+  }
+  function resolveTaskWorktreePath(norm, folders) {
+    for (const task of knownTasks()) {
+      if (task.mode !== "worktree" && !task.worktree) continue;
+      const folder = folders.find(item => item.id === task.folderId) || null;
+      const scopeRoot = task.scopePath ? trimSlash(task.scopePath) : "";
+      const wtRoot = task.worktree ? trimSlash(task.worktree) : "";
+      const prefix = task.prefix ? trimSlash(task.prefix).replace(/^\/+/, "") : "";
+      const candidates = [
+        ...(scopeRoot ? [{ root: scopeRoot, stripPrefix: false }] : []),
+        ...(wtRoot && wtRoot !== scopeRoot ? [{ root: wtRoot, stripPrefix: Boolean(prefix) }] : []),
+      ];
+      for (const { root, stripPrefix } of candidates) {
+        if (norm !== root && !norm.startsWith(root + "/")) continue;
+        let relative = norm === root ? "" : norm.slice(root.length + 1);
+        if (stripPrefix && prefix) {
+          if (relative === prefix) relative = "";
+          else if (relative.startsWith(prefix + "/")) relative = relative.slice(prefix.length + 1);
+        }
+        return { task, folder, relative };
+      }
+    }
+    const match = norm.match(/\/tasks\/([\da-f-]{36})\/worktree(?:\/(.*))?$/i);
+    if (match) {
+      const [, taskId, relative = ""] = match;
+      return { task: knownTasks().find(item => item.id === taskId) || { id: taskId }, folder: null, relative };
+    }
+    return null;
+  }
   function resolveWorkspaceCandidates(filePath) {
     const project = (state.status?.project?.id === state.projectId ? state.status.project : null) || currentProject(), folders = foldersFor(project), raw = String(filePath || "").trim();
     if (!project || !folders.length) return { kind: "no-project" };
     if (!raw) return { kind: "directory", path: raw };
     if (raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)) {
-      const norm = raw.replace(/\\/g, "/").replace(/\/+$/, "");
-      const matches = folders.map(folder => ({ folder, root: String(folder.path || "").replace(/\\/g, "/").replace(/\/+$/, "") }))
+      const norm = trimSlash(raw);
+      const matches = folders.map(folder => ({ folder, root: trimSlash(folder.path || "") }))
         .filter(item => item.root && (norm === item.root || norm.startsWith(item.root + "/")))
         .sort((a, b) => b.root.length - a.root.length);
-      if (!matches.length) return { kind: "outside", path: raw };
+      if (!matches.length) {
+        const wt = resolveTaskWorktreePath(norm, folders);
+        if (!wt) return { kind: "outside", path: raw };
+        if (!wt.relative) return { kind: "directory", path: raw };
+        if (wt.relative.split("/").some(part => !part || part === "." || part === "..")) return { kind: "outside", path: raw };
+        const folder = wt.folder || (wt.task.folderId ? folders.find(item => item.id === wt.task.folderId) : null) || (folders.length === 1 ? folders[0] : null);
+        if (folder && folder.available === false && !wt.task.hasWorktree) return { kind: "unavailable", folder };
+        return { kind: "task", taskId: wt.task.id, folder, relative: wt.relative };
+      }
       const { folder, root } = matches[0];
       if (norm === root) return { kind: "directory", path: raw };
       const relative = norm.slice(root.length + 1);
@@ -469,7 +517,7 @@
   function showPreviewFallback(folder, relative, file, line, endLine = line) {
     if (window.relayFiles?.showPreviewAt) { window.relayFiles.showPreviewAt(folder, relative, file, line, endLine); return; }
     $("file-preview-name").textContent = file.name || relative.split("/").pop();
-    $("file-preview-path").textContent = (folder.displayName || folder.name) + " / " + relative;
+    $("file-preview-path").textContent = (folder.displayName || folder.name) + (file.inCopy ? " (copy)" : file.branch ? ` (${file.branch})` : "") + " / " + relative;
     const content = $("file-preview-content"), source = element("pre", "file-source"), lines = String(file.text || "").split("\n");
     lines.forEach((text, index) => { const row = element("span", "source-line"); row.append(element("span", "line-number", String(index + 1)), element("code", "", text || " ")); source.append(row); });
     content.replaceChildren(source);
@@ -480,14 +528,15 @@
       rows[line - 1]?.scrollIntoView({ block: "center" });
     }
   }
-  async function openWorkspaceFile(folder, relative, line, endLine, fallbackRelative = null) {
-    const projectId = state.projectId;
+  async function openWorkspaceFile(folder, relative, line, endLine, fallbackRelative = null, taskId = null) {
+    const projectId = state.projectId, tid = taskId || activeTaskForFolder(folder)?.id || null;
     try {
-      const file = await api(`/api/files/preview?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}`, {}, projectId);
-      if (projectId === state.projectId) showPreviewFallback(folder, relative, file, line, endLine);
+      const query = `${folder?.id ? `folderId=${encodeURIComponent(folder.id)}&` : ""}path=${encodeURIComponent(relative)}${tid ? `&taskId=${encodeURIComponent(tid)}` : ""}`;
+      const file = await api(`/api/files/preview?${query}`, {}, projectId);
+      if (projectId === state.projectId) showPreviewFallback(folder || { id: file.folderId || "", name: file.folderName || "Task" }, relative, file, line, endLine);
       return true;
     } catch (error) {
-      if (fallbackRelative && fallbackRelative !== relative) return openWorkspaceFile(folder, fallbackRelative, line, endLine, null);
+      if (fallbackRelative && fallbackRelative !== relative) return openWorkspaceFile(folder, fallbackRelative, line, endLine, null, taskId);
       if (projectId === state.projectId) showNotice(error.message);
       return false;
     }
@@ -495,7 +544,8 @@
   async function probeWorkspaceFiles(folders, relative, line, endLine) {
     const projectId = state.projectId;
     const results = await Promise.all(folders.map(async folder => {
-      try { return { folder, file: await api(`/api/files/preview?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}`, {}, projectId) }; }
+      const tid = activeTaskForFolder(folder)?.id || null;
+      try { return { folder, file: await api(`/api/files/preview?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}${tid ? `&taskId=${encodeURIComponent(tid)}` : ""}`, {}, projectId) }; }
       catch (error) { return { folder, error }; }
     }));
     if (projectId !== state.projectId) return false;
@@ -523,12 +573,13 @@
     if (parsed.kind === "web") { openExternal(parsed.url); return; }
     if (parsed.kind === "unsupported") { showNotice("Only web addresses and files in this workspace can be opened from a reply."); return; }
     const resolved = resolveWorkspaceCandidates(parsed.path);
+    if (resolved.kind === "task") { await openWorkspaceFile(resolved.folder, resolved.relative, parsed.line, parsed.endLine, null, resolved.taskId); return; }
     if (resolved.kind === "exact") { await openWorkspaceFile(resolved.folder, resolved.relative, parsed.line, parsed.endLine, resolved.fallbackRelative); return; }
     if (resolved.kind === "probe") { await probeWorkspaceFiles(resolved.folders, resolved.relative, parsed.line, parsed.endLine); return; }
     reportResolutionProblem(resolved);
   }
-  function showDiffFallback(folder, result) {
-    if (window.relayGit?.showDiff) { window.relayGit.showDiff(folder, result); return; }
+  function showDiffFallback(folder, result, status) {
+    if (window.relayGit?.showDiff) { window.relayGit.showDiff(folder, result, status); return; }
     $("diff-title").textContent = result.path;
     $("diff-meta").replaceChildren(`${folder.displayName || folder.name} · Changed`);
     $("diff-content").replaceChildren(element("pre", "diff-lines", result.diff || ""));
@@ -536,10 +587,29 @@
   }
   async function openActivityFile(file) {
     const resolved = resolveWorkspaceCandidates(file.path);
-    if (resolved.kind !== "exact" && resolved.kind !== "probe") { reportResolutionProblem(resolved); return; }
-    const projectId = state.projectId, folders = resolved.kind === "exact" ? [resolved.folder] : resolved.folders, relative = resolved.relative;
+    if (resolved.kind !== "exact" && resolved.kind !== "probe" && resolved.kind !== "task") { reportResolutionProblem(resolved); return; }
+    const projectId = state.projectId, relative = resolved.relative;
+    if (resolved.kind === "task") {
+      let diffError = null;
+      try {
+        const query = `${resolved.folder?.id ? `folderId=${encodeURIComponent(resolved.folder.id)}&` : ""}path=${encodeURIComponent(relative)}&taskId=${encodeURIComponent(resolved.taskId)}`;
+        const result = await api(`/api/git/diff?${query}`, {}, projectId);
+        if (projectId === state.projectId) showDiffFallback(resolved.folder || { id: result.folderId || "", name: result.folderName || "Task" }, result, result.status);
+        return;
+      } catch (error) { diffError = error; }
+      if (projectId !== state.projectId) return;
+      if (diffError?.message && /discarded|working copy is gone/i.test(diffError.message)) { showNotice(diffError.message); return; }
+      if (file.change === "delete") { showNotice(`${relative} was deleted and has no current uncommitted changes.`); return; }
+      await openWorkspaceFile(resolved.folder, relative, null, null, null, resolved.taskId);
+      return;
+    }
+    const currentTask = state.taskId ? (state.conversation?.task || knownTasks().find(item => item.id === state.taskId)) : null;
+    const taskFolder = currentTask?.folderId && !["plan-chat", "project-review"].includes(currentTask.purpose) ? resolved.folders?.find(item => item.id === currentTask.folderId) : null;
+    const folders = resolved.kind === "exact" ? [resolved.folder] : taskFolder ? [taskFolder] : resolved.folders;
+    const taskFor = folder => activeTaskForFolder(folder)?.id || null;
     const diffs = await Promise.all(folders.map(async folder => {
-      try { return { folder, result: await api(`/api/git/diff?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}`, {}, projectId) }; }
+      const tid = taskFor(folder);
+      try { return { folder, result: await api(`/api/git/diff?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}${tid ? `&taskId=${encodeURIComponent(tid)}` : ""}`, {}, projectId) }; }
       catch (error) { return { folder, error }; }
     }));
     if (projectId !== state.projectId) return;
@@ -547,19 +617,21 @@
     if (found.length > 1) {
       const actions = found.map(item => ({
         label: item.folder.displayName || item.folder.name,
-        run: () => showDiffFallback(item.folder, item.result)
+        run: () => showDiffFallback(item.folder, item.result, item.result.status)
       }));
       showNotice(`${relative} has uncommitted changes in ${found.length} workspace folders. Show the changes from:`, null, "Retry", actions);
       return;
     }
-    if (found.length === 1) { showDiffFallback(found[0].folder, found[0].result); return; }
+    if (found.length === 1) { showDiffFallback(found[0].folder, found[0].result, found[0].result.status); return; }
+    if (diffs[0]?.error?.message && taskFor(folders[0]) && /discarded|working copy is gone/i.test(diffs[0].error.message)) { showNotice(diffs[0].error.message); return; }
     if (file.change === "delete") { showNotice(`${relative} was deleted and has no current uncommitted changes.`); return; }
     if (resolved.kind === "exact") await openWorkspaceFile(resolved.folder, relative, null, null, resolved.fallbackRelative);
     else await probeWorkspaceFiles(folders, relative, null, null);
   }
   async function openImageFile(path) {
     const resolved = resolveWorkspaceCandidates(path);
-    if (resolved.kind === "exact") await openWorkspaceFile(resolved.folder, resolved.relative, null, null, resolved.fallbackRelative);
+    if (resolved.kind === "task") await openWorkspaceFile(resolved.folder, resolved.relative, null, null, null, resolved.taskId);
+    else if (resolved.kind === "exact") await openWorkspaceFile(resolved.folder, resolved.relative, null, null, resolved.fallbackRelative);
     else if (resolved.kind === "probe") await probeWorkspaceFiles(resolved.folders, resolved.relative, null, null);
     else reportResolutionProblem(resolved);
   }
@@ -606,13 +678,16 @@
     return IMAGE_EXTENSIONS.has(parsed.path.split(".").pop().toLowerCase()) ? parsed.path : null;
   }
   async function loadReplyImage(path, projectId) {
-    const read = async (folder, relative) => {
+    const read = async (folder, relative, taskId = null) => {
+      const tid = taskId || activeTaskForFolder(folder)?.id || null;
       try {
-        const file = await api(`/api/files/preview?folderId=${encodeURIComponent(folder.id)}&path=${encodeURIComponent(relative)}`, {}, projectId);
+        const query = `${folder?.id ? `folderId=${encodeURIComponent(folder.id)}&` : ""}path=${encodeURIComponent(relative)}${tid ? `&taskId=${encodeURIComponent(tid)}` : ""}`;
+        const file = await api(`/api/files/preview?${query}`, {}, projectId);
         return file?.kind === "image" && /^image\/(?:png|jpeg|gif|webp)$/.test(file.mime) && typeof file.data === "string" ? `data:${file.mime};base64,${file.data}` : null;
       } catch { return null; }
     };
     const resolved = resolveWorkspaceCandidates(path);
+    if (resolved.kind === "task") return await read(resolved.folder, resolved.relative, resolved.taskId);
     if (resolved.kind === "exact") return await read(resolved.folder, resolved.relative) || (resolved.fallbackRelative ? read(resolved.folder, resolved.fallbackRelative) : null);
     if (resolved.kind !== "probe") return null;
     const found = (await Promise.all(resolved.folders.map(folder => read(folder, resolved.relative)))).filter(Boolean);
@@ -791,6 +866,12 @@
     for (const folder of folders) {
       if (folder.path && text === folder.path) return folders.length > 1 ? folder.name : "";
       if (folder.path && text.startsWith(folder.path + "/")) return (folders.length > 1 ? folder.name + "/" : "") + text.slice(folder.path.length + 1);
+    }
+    const norm = trimSlash(text), wt = (text.startsWith("/") || /^[A-Za-z]:[\\/]/.test(text)) ? resolveTaskWorktreePath(norm, folders) : null;
+    if (wt) {
+      const folder = wt.folder || (wt.task.folderId ? folders.find(item => item.id === wt.task.folderId) : null) || (folders.length === 1 ? folders[0] : null);
+      if (!wt.relative) return folders.length > 1 && folder ? folder.name : "";
+      return (folders.length > 1 && folder ? folder.name + "/" : "") + wt.relative;
     }
     const separator = text.includes("\\") ? "\\" : "/", parts = text.split(separator);
     if (!(text.startsWith("/") || /^[A-Za-z]:[\\/]/.test(text)) || parts.length <= 4) return text;

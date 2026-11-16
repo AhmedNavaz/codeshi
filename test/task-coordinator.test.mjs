@@ -37,7 +37,7 @@ function setup(t, folders, { tests = null, policy = null } = {}) {
   const made = typeof folders === 'function' ? folders(path.join(root, 'w')) : folders;
   const list = Object.entries(made).map(([name, where]) => ({ id: name, name, path: where }));
   const mutations = new MutationCoordinator(path.join(root, 'locks'));
-  const open = () => { const paths = list.map(folder => folder.path); return new Broker({ workspace: paths[0], workspaceFolders: list, dataDir, bins, tests, handoffPreferences: () => ({ threshold: 0, automatic: false }), acquireMutation: operation => mutations.acquireMany(paths, operation), acquireFolders: (where, operation) => mutations.acquireMany(where, operation), withFolders: (where, operation, work) => mutations.withMutations(where, operation, work) }); };
+  const open = () => { const paths = list.map(folder => folder.path); return new Broker({ workspace: paths[0], workspaceFolders: list, dataDir, bins, tests, handoffPreferences: () => ({ threshold: 0, automatic: false }), acquireMutation: operation => mutations.acquireMany(paths, operation), acquireFolders: (where, operation) => mutations.acquireMany(where, operation), withFolders: (where, operation, work) => mutations.withMutations(where, operation, work), activeMutations: where => mutations.active(where) }); };
   const broker = open(), c = broker.get(broker.create().id);
   broker.checks.usage = async () => ({ available: false });
   if (policy) broker.budget.setPolicy(c, policy);
@@ -80,8 +80,8 @@ test('folder identity goes by the disk and by Git, not by labels', { skip: noSym
 test('the plan: direct when nothing is shared, a worktree for a shared repository, and waiting where neither is safe', () => {
   const git1 = { real: '/r1', git: true, head: true, commonDir: '/r1/.git' }, plain = { real: '/p', git: false }, empty = { real: '/e', git: true, head: false, commonDir: '/e/.git' };
   const on = (real, commonDir = null, extra = {}) => ({ real, commonDir, unrestricted: false, label: 'Other', ...extra });
-  assert.equal(planIsolation(git1, []).mode, 'direct');
-  assert.equal(planIsolation(git1, [on('/r2', '/r2/.git')]).mode, 'direct', 'Disjoint repositories run directly.');
+  assert.equal(planIsolation(git1, []).mode, 'worktree');
+  assert.equal(planIsolation(git1, [on('/r2', '/r2/.git')]).mode, 'worktree', 'Git repositories with commits run in their own copy.');
   assert.equal(planIsolation(git1, [on('/r1-copy', '/r1/.git')]).mode, 'worktree', 'Another worktree of one repository still shares it.');
   assert.equal(planIsolation({ ...git1, real: '/r1/web', commonDir: '/r1/.git' }, [on('/r1/api', '/r1/.git')]).mode, 'worktree', 'Different folders, same repository.');
   assert.equal(planIsolation(plain, []).mode, 'direct');
@@ -129,11 +129,11 @@ test('two tasks in different folders run at once, each with its own output and S
   const env = setup(t, root => ({ a: repository(path.join(root, 'a')), b: repository(path.join(root, 'b')) }));
   const a = hold(env, 'a', 'Hold A'), b = hold(env, 'b', 'Hold B');
   await working(env, a); await working(env, b);
-  assert.deepEqual([env.task(a.id).status, env.task(b.id).status, env.task(a.id).mode, env.task(b.id).mode], ['running', 'running', 'direct', 'direct']);
+  assert.deepEqual([env.task(a.id).status, env.task(b.id).status, env.task(a.id).mode, env.task(b.id).mode], ['running', 'running', 'worktree', 'worktree']);
   const [laneA, laneB] = [env.lane(a.id), env.lane(b.id)];
-  assert.deepEqual(laneA.broker.workspaces, [fs.realpathSync(env.folders.a)], 'A task only holds its own folder.');
+  assert.deepEqual(laneA.broker.workspaces, [env.task(a.id).scopePath], 'A task only holds its own copy.');
   assert.notEqual(laneA.c.id, laneB.c.id);
-  assert.equal(env.captured(env.folders.a)[0].context.currentRequest, 'Hold A'); assert.equal(env.captured(env.folders.b)[0].context.currentRequest, 'Hold B');
+  assert.equal(env.captured(env.task(a.id).scopePath)[0].context.currentRequest, 'Hold A'); assert.equal(env.captured(env.task(b.id).scopePath)[0].context.currentRequest, 'Hold B');
   // Stop one: the other carries on, and a late event from the stopped one reaches nobody else.
   const runA = laneA.broker.running; laneA.broker.stop(laneA.c.id); await runA.done; await finished(env, a);
   assert.equal(env.task(a.id).status, 'stopped'); assert.equal(env.task(b.id).status, 'running');
@@ -146,7 +146,7 @@ test('two tasks in different folders run at once, each with its own output and S
   const view = env.broker.tasks.view(env.c, b.id);
   assert(view.messages.some(message => message.text === 'Hold B')); assert(!view.messages.some(message => message.text === 'Hold A'), 'Each keeps its own history.');
   assert.equal(view.task.id, b.id); assert.equal(view.parallelTasks.length, 2);
-  assert.deepEqual(env.broker.tasks.lanes.get(b.id).broker.workspaces, [fs.realpathSync(env.folders.b)], 'A restart doesn’t widen what it reaches.');
+  assert.deepEqual(env.broker.tasks.lanes.get(b.id).broker.workspaces, [env.task(b.id).scopePath], 'A restart doesn’t widen what it reaches.');
   assert.equal(env.c.messages.length, 0, 'None of this lands in the main conversation.');
 });
 
@@ -160,7 +160,7 @@ test('approvals and questions stay with their task', { skip: scriptCLIs }, async
   assert.equal(laneB.broker.view(laneB.c).pendingApprovals.length, 0); assert.equal(laneA.broker.view(laneA.c).pendingApprovals.length, 1);
   await assert.rejects(async () => laneB.broker.approve(laneA.broker.running.id, 'ask', true), /./, 'Answering through another task finds nothing to answer.');
   laneA.broker.running.approvals.clear();
-  env.release(env.folders.a); env.release(env.folders.b); await finished(env, a); await finished(env, b);
+  env.release(env.task(a.id).scopePath); env.release(env.task(b.id).scopePath); await finished(env, a); await finished(env, b);
 });
 
 test('the same repository under two roots, a nested root and a linked root all take their own copy, and a main run shares too', { skip: noSymlinks || scriptCLIs }, async t => {
@@ -170,7 +170,7 @@ test('the same repository under two roots, a nested root and a linked root all t
     return { web: path.join(repo, 'web'), api: path.join(repo, 'api'), link: path.join(root, 'link') };
   });
   const web = hold(env, 'web', 'Hold A'); await working(env, web);
-  assert.equal(env.task(web.id).mode, 'direct');
+  assert.equal(env.task(web.id).mode, 'worktree');
   assert.equal(env.broker.tasks.preview(env.c, { folderId: 'api' }).mode, 'worktree', 'Different labels, one repository.');
   assert.equal(env.broker.tasks.preview(env.c, { folderId: 'link' }).mode, 'worktree', 'A link to the folder around it.');
   const api = hold(env, 'api', 'Hold B'); await working(env, api);
@@ -193,9 +193,10 @@ test('outside Git, an overlapping task waits and starts by itself when the folde
   env.release(fs.realpathSync(env.folders.inner)); env.release(fs.realpathSync(env.folders.other)); await finished(env, nested); await finished(env, apart);
 });
 
-test('a direct task and a run or file operation in the same folder can’t both proceed', { skip: scriptCLIs }, async t => {
-  const env = setup(t, root => ({ a: repository(path.join(root, 'a')), b: repository(path.join(root, 'b')) }));
+test('a direct task and a run or file operation in the same folder can’t both proceed, while a worktree task leaves them free', { skip: scriptCLIs }, async t => {
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a'), {}, { commit: false }), b: repository(path.join(root, 'b')) }));
   const a = hold(env, 'a', 'Hold A'); await working(env, a);
+  assert.equal(env.task(a.id).mode, 'direct');
   assert.throws(() => env.broker.start(env.c, { text: 'Main work', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }), /busy/, 'The main conversation reaches every folder, so its run waits.');
   await assert.rejects(env.mutations.withMutations([env.folders.a], 'patch', async () => {}), /busy/, 'Patches, undo and imports take the same lease.');
   const folder = { id: 'a', path: env.folders.a };
@@ -205,6 +206,17 @@ test('a direct task and a run or file operation in the same folder can’t both 
   await stageChanges({ id: 'b', path: env.folders.b }, { all: true });
   assert.deepEqual(await env.mutations.withMutations([env.folders.b], 'patch', async () => 'done'), 'done', 'Another folder isn’t held.');
   env.release(fs.realpathSync(env.folders.a)); await finished(env, a);
+  // A Git task with a commit runs in its own copy, so the workspace chat and folder operations stay free.
+  const b = hold(env, 'b', 'Hold B'); await working(env, b);
+  assert.equal(env.task(b.id).mode, 'worktree');
+  assert.deepEqual(await env.mutations.withMutations([env.folders.b], 'patch', async () => 'free'), 'free');
+  await stageChanges({ id: 'b', path: env.folders.b }, { all: true });
+  env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' });
+  const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(env.folders.a)).length, 'main run in workspace');
+  assert.equal(env.task(b.id).status, 'running');
+  env.release(fs.realpathSync(env.folders.a)); await main.done;
+  env.release(env.task(b.id).scopePath); await finished(env, b);
 });
 
 test('a task beside a running main conversation takes its own copy, and is merged only after review', { skip: scriptCLIs }, async t => {
@@ -330,10 +342,10 @@ test('changes on both sides merge when they don’t touch, and a conflict overwr
   const text = 'one\n2\n3\n4\n5\n6\nseven\n';
   const env = setup(t, root => ({ a: repository(path.join(root, 'a'), { 'merge.txt': text, 'clash.txt': 'same\n', 'both.txt': 'x\n', 'bin.dat': 'y\n' }) }), { policy: { maxConcurrent: 5 } });
   const first = hold(env, 'a', 'Hold A'), second = hold(env, 'a', 'Hold B'); await working(env, first); await working(env, second);
-  assert.deepEqual([env.task(first.id).mode, env.task(second.id).mode], ['direct', 'worktree'], 'Concurrent work in one repository: the second takes a copy.');
+  assert.deepEqual([env.task(first.id).mode, env.task(second.id).mode], ['worktree', 'worktree'], 'Both tasks in a Git repository work in their own copies.');
   edit(env, second, 'merge.txt', 'ONE\n2\n3\n4\n5\n6\nseven\n'); edit(env, second, 'clash.txt', 'theirs\n'); edit(env, second, 'both.txt', 'identical\n');
   await finish(env, second);
-  env.release(fs.realpathSync(env.folders.a)); await finished(env, first);
+  env.release(env.task(first.id).scopePath); await finished(env, first);
   fs.writeFileSync(path.join(env.folders.a, 'merge.txt'), 'one\n2\n3\n4\n5\n6\nSEVEN\n'); fs.writeFileSync(path.join(env.folders.a, 'clash.txt'), 'ours\n'); fs.writeFileSync(path.join(env.folders.a, 'both.txt'), 'identical\n');
   const review = env.broker.tasks.review(env.c, second.id), status = Object.fromEntries(review.files.map(file => [file.path, file.status]));
   assert.deepEqual(status, { 'both.txt': 'same', 'clash.txt': 'conflict', 'merge.txt': 'merged' }); assert.equal(review.conflicts, 1);
@@ -416,7 +428,7 @@ test('an agent resolves a conflict in the task’s copy, never the folder, and t
   const first = hold(env, 'a', 'Hold A'), second = hold(env, 'a', 'Hold B'); await working(env, first); await working(env, second);
   edit(env, second, 'list.md', 'intro\none\nfrom the card\nend\n'); edit(env, second, 'other.txt', 'y\n');
   await finish(env, second);
-  env.release(fs.realpathSync(env.folders.a)); await finished(env, first);
+  env.release(env.task(first.id).scopePath); await finished(env, first);
   fs.writeFileSync(path.join(env.folders.a, 'list.md'), 'intro\none\nfrom the folder\nend\n');
   const review = env.broker.tasks.review(env.c, second.id);
   assert.equal(review.conflicts, 1); assert.equal(review.files.find(file => file.path === 'list.md').kind, 'lines');
@@ -449,7 +461,7 @@ test('a file left marked can’t be merged: resolving again starts from where it
   const env = setup(t, root => ({ a: resolvingRepository(path.join(root, 'a'), { 'title.md': 'Old title\n' }) }), { policy: { maxConcurrent: 5 } });
   const first = hold(env, 'a', 'Hold A'), second = hold(env, 'a', 'Hold B'); await working(env, first); await working(env, second);
   edit(env, second, 'title.md', 'Card title\n'); await finish(env, second);
-  env.release(fs.realpathSync(env.folders.a)); await finished(env, first);
+  env.release(env.task(first.id).scopePath); await finished(env, first);
   fs.writeFileSync(path.join(env.folders.a, 'title.md'), 'Folder title\n');
   const copy = env.task(second.id).scopePath, folderBase = env.task(second.id).base;
   // A run that can't start puts the copy back as it was.
@@ -610,7 +622,7 @@ test('a plan step is tested before the steps after it start, and a failure holds
   const saved = () => env.c.orchestrations.find(item => item.id === plan.id), first = () => env.task(saved().tasks.s1), second = () => env.task(saved().tasks.s2);
 
   await until(() => first().stepCheck?.status === 'done', 'the first step’s tests');
-  assert.deepEqual([first().mode, first().stepCheck.outcome, first().stepCheck.exitCode, first().stepCheck.command], ['direct', 'failed', 2, command.command]);
+  assert.deepEqual([first().mode, first().stepCheck.outcome, first().stepCheck.exitCode, first().stepCheck.command], ['worktree', 'failed', 2, command.command]);
   assert.match(first().stepCheck.output, /contract broken/);
   await until(() => /tests failed on “1\. Step s1”/.test(second().reason || ''), 'the second step to be held');
   assert.equal(second().status, 'waiting', 'Nothing builds on a step whose tests failed.');
@@ -625,7 +637,7 @@ test('a plan step is tested before the steps after it start, and a failure holds
   assert.equal(first().stepCheck.accepted, true);
   assert.equal(saved().stepOutcomes.s1.accepted, true);
   await until(() => second().status === 'complete' && second().stepCheck?.status === 'done', 'the second step');
-  const brief = env.captured(fs.realpathSync(env.folders.a)).map(capture => capture.context.currentRequest).find(text => text.includes('step 2 of 2'));
+  const brief = env.captured(second().scopePath).map(capture => capture.context.currentRequest).find(text => text.includes('step 2 of 2'));
   assert.ok(brief, 'The second step ran.');
   assert.match(brief, /Step 1: Step s1 \(backend\)/);
   assert.match(brief, /Tests failed on its result: node -e/);
@@ -661,7 +673,7 @@ test('a dependency keeps its work in order, and a copy has to be merged before w
   await env.broker.tasks.integrate(env.c, first.id, { digest: env.broker.tasks.review(env.c, first.id).digest });
   await working(env, after);
   assert.throws(() => env.broker.tasks.discard(env.c, after.id), /Stop this task/);
-  env.release(fs.realpathSync(env.folders.b)); await finished(env, after);
+  env.release(env.task(after.id).scopePath); await finished(env, after);
   assert.throws(() => env.start('b', 'Later', { dependsOn: 'missing' }), /no longer here/);
 });
 
@@ -675,10 +687,10 @@ test('every task shares the workspace’s limit, with the main run, and starts w
   assert.throws(() => env.start('c', 'On Claude', { provider: 'claude' }), /isn't allowed by this workspace's task limits/, 'A task can’t use an agent the workspace left out.');
   assert.deepEqual(env.lane(a.id).broker.budget.policy(env.lane(a.id).c).allowedProviders, ['codex'], 'Its limits come from the workspace.');
   env.broker.budget.setPolicy(env.c, { maxHandoffs: 1 });
-  env.release(fs.realpathSync(env.folders.a)); await finished(env, a);
+  env.release(env.task(a.id).scopePath); await finished(env, a);
   await working(env, c);
   assert.equal(env.lane(c.id).broker.budget.policy(env.lane(c.id).c).maxHandoffs, 1, 'And changes reach it when it starts.');
-  env.release(fs.realpathSync(env.folders.b)); env.release(fs.realpathSync(env.folders.c)); await finished(env, b); await finished(env, c);
+  env.release(env.task(b.id).scopePath); env.release(env.task(c.id).scopePath); await finished(env, b); await finished(env, c);
 });
 
 test('a restart holds what was waiting, marks what was running, and a task that lost its folder or copy can’t run', { skip: scriptCLIs }, async t => {
@@ -706,7 +718,7 @@ test('a restart holds what was waiting, marks what was running, and a task that 
   assert.equal(env.task(a.id).status, 'detached'); assert.equal(env.task(dependent.id).status, 'waiting', 'A task in a folder still here keeps its place.');
   const detached = env.broker.tasks.lane(env.c, env.task(a.id));
   assert.throws(() => detached.broker.start(detached.c, { text: 'More', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }), /no longer in this workspace/);
-  assert.deepEqual(detached.broker.workspaces, [fs.realpathSync(env.folders.a)], 'Its lane keeps to that folder, and nothing gets more access.');
+  assert.deepEqual(detached.broker.workspaces, [env.task(a.id).scopePath], 'Its lane keeps to its own copy, and nothing gets more access.');
   assert(env.broker.tasks.view(env.c, a.id).messages.some(message => message.text === 'Hold A'), 'Its history stays readable.');
 });
 
@@ -725,11 +737,11 @@ test('an agent left running by a crash blocks only its own task, and the workspa
   if (group) { assert.equal(env.task(a.id).status, 'blocked'); assert.match(env.task(a.id).reason, /may still be active/); }
   const b = hold(env, 'b', 'Hold B'); await working(env, b);
   assert.equal(env.task(b.id).status, 'running', 'Other folders carry on.');
-  env.release(fs.realpathSync(env.folders.b)); await finished(env, b);
+  env.release(env.task(b.id).scopePath); await finished(env, b);
 });
 
 test('a task starts once for one request, keeps its access, and gets the workspace’s memory, skills and chosen history', { skip: scriptCLIs }, async t => {
-  const env = setup(t, root => ({ a: repository(path.join(root, 'a')), b: repository(path.join(root, 'b')) }));
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a'), {}, { commit: false }), b: repository(path.join(root, 'b')) }));
   env.broker.changeMemory(env.c, { action: 'add', kind: 'convention', text: 'Dates are UTC everywhere', folderId: null });
   env.broker.changeMemory(env.c, { action: 'add', kind: 'convention', text: 'Only for folder b', folderId: 'b' });
   env.broker.message(env.c, 'user', 'Earlier context from the main conversation', 'codex');
@@ -771,7 +783,7 @@ test('a task’s copy must be merged or discarded before it closes, and a waitin
   env.broker.tasks.closeTask(env.c, copy.id);
   const waiting = env.start('a', 'Hold C', { dependsOn: first.id });
   assert.equal(env.broker.tasks.discard(env.c, waiting.id).task.status, 'cancelled');
-  env.release(fs.realpathSync(env.folders.a)); await finished(env, first);
+  env.release(env.task(first.id).scopePath); await finished(env, first);
   assert.equal(env.task(waiting.id).conversationId, undefined, 'A cancelled task never starts.');
 });
 
@@ -785,10 +797,11 @@ test('through the real server: a task starts, its conversation answers for itsel
   const project = app.registry.list()[0], main = app.registry.broker(project.id), home = main.get(app.registry.mainConversation(project.id).id);
   const call = async (route, input) => { const response = await fetch(`http://127.0.0.1:${app.server.address().port}${route}${route.includes('?') ? '&' : '?'}projectId=${project.id}`, { method: input === undefined ? 'GET' : 'POST', headers: { 'X-AI-Relay-Token': 'fixture-token', 'X-AI-Relay': '1', 'Content-Type': 'application/json' }, ...(input === undefined ? {} : { body: JSON.stringify(input) }) }); return { status: response.status, body: await response.json() }; };
   const folder = project.folders.find(item => item.path === a), other = project.folders.find(item => item.path === b);
-  assert.equal((await call('/api/tasks/plan', { folderId: folder.id })).body.mode, 'direct');
+  assert.equal((await call('/api/tasks/plan', { folderId: folder.id })).body.mode, 'worktree');
   const started = await call('/api/tasks', { text: 'Hold A', folderId: folder.id, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'server-one' });
   assert.equal(started.status, 202);
-  await until(() => fs.existsSync(path.join(a, '.mock-captures.jsonl')), 'the task to start');
+  const firstScope = () => main.tasks.find(home, started.body.id)?.scopePath;
+  await until(() => firstScope() && fs.existsSync(path.join(firstScope(), '.mock-captures.jsonl')), 'the task to start');
   const shown = await call(`/api/conversation?task=${started.body.id}`);
   assert.equal(shown.status, 200); assert.equal(shown.body.status, 'running'); assert.equal(shown.body.task.id, started.body.id); assert(shown.body.messages.some(message => message.text === 'Hold A'));
   assert.deepEqual(shown.body.checkpoints, {}, 'Undo works from the main conversation.');
@@ -802,9 +815,9 @@ test('through the real server: a task starts, its conversation answers for itsel
   const remembered = await call(`/api/conversations/${shown.body.id}/memory`, { action: 'add', kind: 'convention', text: 'Saved from a task' });
   assert.equal(remembered.status, 200); assert(home.memory.some(entry => entry.text === 'Saved from a task'));
   assert.equal(main.tasks.lanes.get(started.body.id).c.memory?.some(entry => entry.text === 'Saved from a task') || false, false);
-  // Folders can't change while a task works there.
+  // Folders can't change while a task works there, though mutations in the workspace folder itself stay free.
   assert.throws(() => app.registry.removeFolder(project.id, other.id), /Stop the current run/);
-  await assert.rejects(app.registry.withMutation(project.id, 'patch', async () => {}), /busy/, 'Workspace-wide operations wait too.');
+  await app.registry.withMutation(project.id, 'patch', async () => {});
   // Stop reaches this task by its conversation, and only this task.
   const stopped = await call(`/api/conversations/${shown.body.id}/stop`, {});
   assert.equal(stopped.body.stopped, true);
@@ -812,15 +825,119 @@ test('through the real server: a task starts, its conversation answers for itsel
   assert.equal((await call(`/api/conversations/${home.id}/stop`, {})).body.stopped, false, 'The main conversation had nothing to stop.');
   assert.equal((await call(`/api/conversations/not-a-conversation/stop`, {})).status, 404);
   assert.equal((await call('/api/tasks/plan', { folderId: 'missing' })).status, 400);
+  assert.equal((await call(`/api/tasks/${started.body.id}/discard`, {})).body.task.status, 'discarded');
   assert.equal((await call(`/api/tasks/${started.body.id}/close`, {})).body.closed, true);
   assert.deepEqual((await call('/api/tasks')).body.tasks, []);
   // Without a task running, folders can change, and a task whose folder went stays, but can't run.
   const second = await call('/api/tasks', { text: 'Hold B', folderId: other.id, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'server-two' });
-  await until(() => fs.existsSync(path.join(b, '.mock-captures.jsonl')), 'the second task');
-  fs.writeFileSync(path.join(b, '.release'), '');
+  const secondScope = () => main.tasks.find(home, second.body.id)?.scopePath;
+  await until(() => secondScope() && fs.existsSync(path.join(secondScope(), '.mock-captures.jsonl')), 'the second task');
+  fs.writeFileSync(path.join(secondScope(), '.release'), '');
   await until(() => !main.tasks.lanes.get(second.body.id)?.broker.running && main.tasks.find(home, second.body.id).status === 'complete', 'it to finish');
   app.registry.removeFolder(project.id, other.id);
   const after = app.registry.broker(project.id), now = after.get(app.registry.mainConversation(project.id).id);
   assert.equal(after.tasks.find(now, second.body.id).status, 'detached');
   assert.equal((await call(`/api/conversation?task=${second.body.id}`)).status, 200, 'Its history stays readable.');
+});
+
+test('integrating or keeping a task records its changed files and diffs on integration, and public() omits diffs', { skip: scriptCLIs }, async t => {
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a'), { 'existing.txt': 'hello\nworld\n' }) }), { policy: { maxConcurrent: 5 } });
+  env.broker.start(env.c, { text: 'Hold main', provider: 'codex', mode: 'edit', approvalPolicy: 'ask' }); const main = env.broker.running;
+  await until(() => env.captured(fs.realpathSync(env.folders.a)).length, 'the main run');
+
+  const first = hold(env, 'a', 'Hold A'), second = hold(env, 'a', 'Hold B');
+  await working(env, first); await working(env, second);
+  edit(env, first, 'existing.txt', 'hello\ncodeshi\n');
+  edit(env, first, 'added.txt', 'brand new\nline two\n');
+  edit(env, second, 'kept.txt', 'on branch\n');
+  await finish(env, first); await finish(env, second);
+  env.release(fs.realpathSync(env.folders.a)); await main.done;
+
+  const review = env.broker.tasks.review(env.c, first.id);
+  await env.broker.tasks.integrate(env.c, first.id, { digest: review.digest });
+  const merged = env.task(first.id);
+  assert.equal(merged.status, 'integrated');
+  assert.equal(merged.integration.files, 2);
+  assert.deepEqual(
+    merged.integration.changes.map(({ path: p, change, added, removed, status }) => ({ path: p, change, added, removed, status })),
+    [
+      { path: 'added.txt', change: 'add', added: 2, removed: 0, status: 'clean' },
+      { path: 'existing.txt', change: 'update', added: 1, removed: 1, status: 'clean' },
+    ]
+  );
+  assert.match(merged.integration.changes[0].diff, /\+brand new/);
+  assert.match(merged.integration.changes[1].diff, /-world/);
+  const shown = env.broker.tasks.public(merged);
+  assert.equal(shown.integration.changes.length, 2);
+  assert.equal(shown.integration.changes[0].diff, undefined, 'SSE task state omits diffs.');
+
+  const { branch } = env.broker.tasks.keep(env.c, second.id);
+  const kept = env.task(second.id);
+  assert.equal(kept.status, 'kept');
+  assert.equal(kept.integration.branch, branch);
+  assert.equal(kept.integration.files, 1);
+  assert.equal(kept.integration.changes[0].path, 'kept.txt');
+  assert.match(kept.integration.changes[0].diff, /\+on branch/);
+  assert.equal(env.broker.tasks.public(kept).integration.changes[0].diff, undefined);
+});
+
+test('task files and diffs can be previewed from a live copy, merged folder or kept branch via routes and coordinator (#88)', { skip: scriptCLIs }, async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-task-files-')));
+  const a = repository(path.join(root, 'a'), { 'docs/guide.md': '# Title\noriginal\n' });
+  const cli = path.join(root, 'codex-mock.mjs');
+  fs.writeFileSync(cli, `#!${process.execPath}\nimport ${JSON.stringify(pathToFileURL(fixture).href)};\n`, { mode: 0o700 });
+  const app = createRelayServer({ workspace: a, dataRoot: path.join(root, 'data'), bins: { codex: cli, claude: cli, gemini: path.join(root, 'missing') }, accessToken: 'fixture-token' });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  t.after(async () => { await app.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const project = app.registry.list()[0], main = app.registry.broker(project.id), home = main.get(app.registry.mainConversation(project.id).id);
+  const call = async (route, input) => {
+    const response = await fetch(`http://127.0.0.1:${app.server.address().port}${route}${route.includes('?') ? '&' : '?'}projectId=${project.id}`, {
+      method: input === undefined ? 'GET' : 'POST',
+      headers: { 'X-AI-Relay-Token': 'fixture-token', 'X-AI-Relay': '1', 'Content-Type': 'application/json' },
+      ...(input === undefined ? {} : { body: JSON.stringify(input) }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const t1 = (await call('/api/tasks', { text: 'Hold 1', folderId: project.folders[0].id, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'f-1' })).body;
+  const t2 = (await call('/api/tasks', { text: 'Hold 2', folderId: project.folders[0].id, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'f-2' })).body;
+  const scope = id => main.tasks.find(home, id)?.scopePath;
+  await until(() => scope(t1.id) && fs.existsSync(path.join(scope(t1.id), '.mock-captures.jsonl')) && scope(t2.id) && fs.existsSync(path.join(scope(t2.id), '.mock-captures.jsonl')), 'both worktrees to start');
+
+  fs.mkdirSync(path.join(scope(t1.id), 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(scope(t1.id), 'docs/guide.md'), '# Title\nupdated in copy\n');
+  fs.writeFileSync(path.join(scope(t1.id), 'docs/new.md'), 'brand new doc\n');
+  fs.writeFileSync(path.join(scope(t2.id), 'docs/branch.md'), 'only on branch\n');
+  fs.writeFileSync(path.join(scope(t1.id), '.release'), '');
+  fs.writeFileSync(path.join(scope(t2.id), '.release'), '');
+  await until(() => !main.tasks.lanes.get(t1.id)?.broker.running && !main.tasks.lanes.get(t2.id)?.broker.running && main.tasks.find(home, t1.id).status === 'complete' && main.tasks.find(home, t2.id).status === 'complete', 'both tasks to finish');
+
+  // While worktree exists, preview and diff read from the task copy even before merging (even without folderId).
+  const copyPreview = await call(`/api/files/preview?path=docs%2Fnew.md&taskId=${t1.id}`);
+  assert.equal(copyPreview.status, 200);
+  assert.equal(copyPreview.body.text, 'brand new doc\n');
+  assert.equal(copyPreview.body.inCopy, true);
+  const copyDiff = await call(`/api/git/diff?path=docs%2Fguide.md&taskId=${t1.id}`);
+  assert.equal(copyDiff.status, 200);
+  assert.match(copyDiff.body.diff, /\+updated in copy/);
+
+  // After integrating (worktree removed), preview reads the merged workspace file and diff returns the saved merge diff.
+  const review = main.tasks.review(home, t1.id);
+  await main.tasks.integrate(home, t1.id, { digest: review.digest });
+  const mergedPreview = await call(`/api/files/preview?path=docs%2Fguide.md&taskId=${t1.id}`);
+  assert.equal(mergedPreview.status, 200);
+  assert.equal(mergedPreview.body.text, '# Title\nupdated in copy\n');
+  const mergedDiff = await call(`/api/git/diff?path=docs%2Fnew.md&taskId=${t1.id}`);
+  assert.equal(mergedDiff.status, 200);
+  assert.match(mergedDiff.body.diff, /\+brand new doc/);
+
+  // After keeping as a branch, preview reads the blob from the kept branch and diff returns its saved diff.
+  const { branch } = main.tasks.keep(home, t2.id);
+  const branchPreview = await call(`/api/files/preview?path=docs%2Fbranch.md&taskId=${t2.id}`);
+  assert.equal(branchPreview.status, 200);
+  assert.equal(branchPreview.body.text, 'only on branch\n');
+  assert.equal(branchPreview.body.branch, branch);
+  const branchDiff = await call(`/api/git/diff?path=docs%2Fbranch.md&taskId=${t2.id}`);
+  assert.equal(branchDiff.status, 200);
+  assert.match(branchDiff.body.diff, /\+only on branch/);
 });

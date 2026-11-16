@@ -34,7 +34,7 @@ function setup(t) {
   let clock = new Date(2026, 10, 11, 8, 0).getTime();
   const open = () => {
     const paths = list.map(folder => folder.path);
-    const broker = new Broker({ workspace: paths[0], workspaceFolders: list, dataDir, bins, handoffPreferences: () => ({ threshold: 0, automatic: false }), acquireMutation: operation => mutations.acquireMany(paths, operation), acquireFolders: (where, operation) => mutations.acquireMany(where, operation), withFolders: (where, operation, work) => mutations.withMutations(where, operation, work) });
+    const broker = new Broker({ workspace: paths[0], workspaceFolders: list, dataDir, bins, handoffPreferences: () => ({ threshold: 0, automatic: false }), acquireMutation: operation => mutations.acquireMany(paths, operation), acquireFolders: (where, operation) => mutations.acquireMany(where, operation), withFolders: (where, operation, work) => mutations.withMutations(where, operation, work), activeMutations: where => mutations.active(where) });
     broker.schedules.now = () => clock;
     // Usage is recorded, never read from this computer's real accounts: unknown unless a test sets it.
     broker.checks.usage = async provider => { reads.push(provider); return typeof usage === 'function' ? usage(provider) : usage; };
@@ -54,9 +54,9 @@ function setup(t) {
     card: id => env.c.board.find(item => item.id === id),
     schedule: id => env.c.schedules.find(item => item.id === id),
     task: id => env.c.parallelTasks.find(item => item.id === id),
-    captured: () => { const file = path.join(env.folder, '.mock-captures.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').slice(0, -1).map(JSON.parse) : []; },
+    captured: id => { const dir = (id && env.task(id)?.scopePath) || env.folder; const file = path.join(dir, '.mock-captures.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').slice(0, -1).map(JSON.parse) : []; },
     script: (request, behavior) => { const file = path.join(env.folder, '.mock-scenarios.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8')); saved[request] = { behavior }; fs.writeFileSync(file, JSON.stringify(saved)); git(env.folder, 'commit', '-qam', 'script'); },
-    release: () => fs.writeFileSync(path.join(env.folder, '.release'), ''),
+    release: id => fs.writeFileSync(path.join((id && env.task(id)?.scopePath) || env.folder, '.release'), ''),
     reopen: async () => { await env.broker.close(); env.broker = open(); env.c = env.broker.get(c.id); return env.broker; },
   };
   return env;
@@ -126,8 +126,8 @@ test('a scheduled card runs once at its time as a Normal task, and a restart doe
   assert.equal(env.broker.execution.current(env.c, task.execution.taskId).mode, 'normal', 'A scheduled card runs under Normal, whatever the workspace default.');
   assert.match(task.requestId, /^schedule-/);
   assert.deepEqual(notices.map(notice => notice.kind), ['scheduled']);
-  await until(() => env.captured().length, 'the scheduled run to start');
-  assert.match(env.captured()[0].context.currentRequest, /scheduled in Codeshi for .*Don’t push, deploy, publish or release anything/s, 'The agent is told nobody may be watching, and not to publish.');
+  await until(() => env.captured(task.id).length, 'the scheduled run to start');
+  assert.match(env.captured(task.id)[0].context.currentRequest, /scheduled in Codeshi for .*Don’t push, deploy, publish or release anything/s, 'The agent is told nobody may be watching, and not to publish.');
   await until(() => env.card(card.id).column === 'review', 'the card to reach Review');
   // The same time is never started twice: not by another tick, nor after a restart.
   await env.schedules.tick();
@@ -205,7 +205,7 @@ test('a scheduled prompt runs as its own task with the access saved with it, and
   await env.schedules.tick();
   assert.match(env.schedule(made.id).missed.reason, /last run is still working/);
   assert.equal(env.c.parallelTasks.length, 1);
-  env.release();
+  env.release(task.id);
   await until(() => !['waiting', 'running'].includes(env.task(task.id).status), 'the prompt to finish');
 });
 

@@ -583,7 +583,7 @@
   // A split's parts show here too, with their agent and state, so the list is never empty while Flow is working; Flow merges
   // them itself, so they have no Review or Close buttons.
   // The Plan chat (#162) shows only when it waits for an approval; the Plan view lists it with the cards' tasks.
-  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => task.purpose === 'plan-chat' ? Boolean(task.approvals) : task.purpose !== 'project-review' || task.id === state.taskId || task.approvals);
+  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => task.purpose === 'plan-chat' ? Boolean(task.approvals || task.id === state.taskId) : task.purpose !== 'project-review' || task.id === state.taskId || task.approvals);
   const taskMergeable = task => Boolean(task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status));
   const taskEnded = task => !['running', 'waiting'].includes(task.status) && !taskMergeable(task);
   const TASK_STATUS_WORDS = { complete: 'finished', stopped: 'stopped', failed: 'didn’t finish', discarded: 'discarded', cancelled: 'cancelled', blocked: 'blocked', lost: 'copy gone', detached: 'folder removed' };
@@ -613,17 +613,18 @@
     const selectTask = id => { if (peeking) closePeek(); return window.relayTaskThreads?.select?.(id)?.catch?.(error => api.showNotice?.(error.message)); };
     const startDraft = folderId => { pickingTaskFolder = false; if (peeking) closePeek(); return window.relayTaskThreads?.open?.(folderId); };
 
-    // A Plan's cards run as tasks too, but they're followed and read on the Plan, so they share one row here. The card task
-    // you're in still shows as its own row.
-    const planTasks = tasks.filter(task => task.board && task.id !== state.taskId);
-    const planOpen = planTasks.filter(task => ['doing', 'review'].includes(task.cardColumn));
-    const ownTasks = tasks.filter(task => !task.board || task.id === state.taskId);
-    if (ownTasks.length || planOpen.length) {
-      const runningCount = ownTasks.filter(task => task.status === 'running').length;
-      const approvalCount = ownTasks.filter(task => task.approvals > 0).length;
+    // A Plan's cards and the Plan chat run as tasks too, but they're followed and read on the Plan, so they share one row
+    // here that opens the Plan view instead of keeping the Plan chat or a card inside Flow.
+    const isPlanTask = task => Boolean(task && (task.board || task.purpose === 'plan-chat'));
+    const planChatTask = tasks.find(task => task.purpose === 'plan-chat') || null;
+    const planOpen = tasks.filter(task => task.board && (['doing', 'review'].includes(task.cardColumn) || task.id === state.taskId || task.approvals > 0));
+    const ownTasks = tasks.filter(task => !isPlanTask(task));
+    if (ownTasks.length || planOpen.length || planChatTask) {
+      const runningCount = ownTasks.filter(task => task.status === 'running').length + planOpen.filter(task => task.status === 'running').length + (planChatTask?.status === 'running' ? 1 : 0);
+      const approvalCount = ownTasks.filter(task => task.approvals > 0).length + planOpen.filter(task => task.approvals > 0).length + (planChatTask?.approvals ? 1 : 0);
       const mergeCount = ownTasks.filter(taskMergeable).length;
       const waitingCount = ownTasks.filter(task => task.status === 'waiting').length;
-      const parts = [ownTasks.length ? plural(ownTasks.length, 'task') : '', planOpen.length ? `Plan: ${plural(planOpen.length, 'card')}` : ''].filter(Boolean);
+      const parts = [ownTasks.length ? plural(ownTasks.length, 'task') : '', planOpen.length ? `Plan: ${plural(planOpen.length, 'card')}` : planChatTask ? 'Plan chat' : ''].filter(Boolean);
       if (runningCount) parts.push(`${runningCount} working`);
       if (approvalCount) parts.push(`${approvalCount} needing you`);
       if (mergeCount) parts.push(`${mergeCount} ready to merge`);
@@ -647,7 +648,7 @@
       body.append(draftItem);
     }
 
-    if (tasks.length || state.taskId) {
+    if (ownTasks.length || planOpen.length || planChatTask || state.taskId) {
       // One row per conversation. The whole row switches to it; the one you're in has the accent bar and isn't a
       // button. Working is a small dot, needing you is the amber badge, so the three never look alike.
       const list = node('ul', 'flow-tasks');
@@ -676,12 +677,18 @@
 
       list.append(row({ title: 'Workspace chat', place: 'Whole workspace', live: mainRunning, liveText: 'Working', approvals: mainApprovals, here: !state.taskId && !state.taskDraft, onOpen: () => selectTask(null), openLabel: 'Switch to the workspace chat', kind: 'main' }));
 
-      if (planOpen.length) {
-        const working = planOpen.filter(task => task.status === 'running').length, waiting = planOpen.filter(task => task.status === 'waiting').length;
-        const needs = planOpen.reduce((sum, task) => sum + (task.approvals || 0), 0);
+      if (planOpen.length || planChatTask) {
+        const working = planOpen.filter(task => task.status === 'running').length + (planChatTask?.status === 'running' ? 1 : 0);
+        const waiting = planOpen.filter(task => task.status === 'waiting').length;
+        const needs = planOpen.reduce((sum, task) => sum + (task.approvals || 0), 0) + (planChatTask?.approvals || 0);
         const review = planOpen.filter(task => task.cardColumn === 'review').length;
-        const still = [waiting ? `${waiting} waiting` : '', review ? `${review} to review` : ''].filter(Boolean).join(' · ') || plural(planOpen.length, 'card');
-        list.append(row({ key: 'plan', title: 'Plan', place: plural(planOpen.length, 'card'), live: working > 0, liveText: `${working} working${waiting ? ` · ${waiting} waiting` : ''}`, still: working ? '' : still, approvals: needs, pill: review && !working ? 'Results' : '', onOpen: () => window.relayBoard?.open?.(), openLabel: 'Open the Plan to follow its cards and read their results', kind: 'plan' }));
+        const targetId = (planChatTask && (planChatTask.approvals > 0 || state.taskId === planChatTask.id))
+          ? planChatTask.id
+          : (state.taskId && planOpen.some(task => task.id === state.taskId))
+            ? state.taskId
+            : (planOpen.find(task => task.approvals > 0)?.id || (planOpen.length === 1 ? planOpen[0].id : null));
+        const still = [waiting ? `${waiting} waiting` : '', review ? `${review} to review` : ''].filter(Boolean).join(' · ') || (planOpen.length ? plural(planOpen.length, 'card') : (planChatTask?.approvals ? 'Needs approval' : 'Chat'));
+        list.append(row({ key: 'plan', title: 'Plan', place: planOpen.length ? plural(planOpen.length, 'card') : 'Plan chat', live: working > 0, liveText: `${working} working${waiting ? ` · ${waiting} waiting` : ''}`, still: working ? '' : still, approvals: needs, pill: review && !working ? 'Results' : '', here: false, onOpen: () => { if (peeking) closePeek(); return window.relayBoard?.openTask?.(targetId ?? null) ?? window.relayBoard?.open?.(); }, openLabel: 'Open the Plan to follow its cards and read their results', kind: 'plan' }));
       }
 
       for (const task of ownTasks) {

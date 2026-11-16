@@ -30,8 +30,8 @@
     try { state = await work(); } catch (error) { api.showNotice(error.message); }
     render();
   }
-  const install = () => { attempted = true; call(() => bridge.installUpdate()); };
-  const restart = () => call(() => bridge.restartToUpdate());
+  const install = () => { attempted = true; close(); call(() => bridge.installUpdate()); };
+  const restart = () => { close(); call(() => bridge.restartToUpdate()); };
 
   function body() {
     const host = node('div', undefined, 'update-body'), latest = state.latest, text = (value, cls = 'update-text') => host.append(node('p', value, cls));
@@ -70,7 +70,7 @@
       return host;
     }
     text(`Codeshi downloads the update for ${computer} and checks it. You restart when you’re ready, never in the middle of a run.`);
-    const skip = action('Skip this version', () => call(() => bridge.skipUpdate(latest.version)), 'text-link');
+    const skip = action('Skip this version', () => { close(); call(() => bridge.skipUpdate(latest.version)); }, 'text-link');
     row(skip, action(state.status === 'error' ? 'Try again' : 'Update', install, 'primary-button'));
     return host;
   }
@@ -133,15 +133,38 @@
     kit.toggle(rows, { label: t('Check for updates automatically'), description: t('Codeshi looks for a new version in the background and offers it in the status bar.'), keywords: 'update', checked: state.automatic, onChange: value => call(() => bridge.setAutomaticUpdates(value)) });
   }
 
-  button.addEventListener('click', () => {
+  const openers = [];
+  function toggleOn(control, onClick) {
+    if (!control) return;
+    let wasOpen = false;
+    openers.push(() => { wasOpen = false; });
+    control.addEventListener('pointerdown', () => { wasOpen = isOpen(); });
+    control.addEventListener('pointercancel', () => { wasOpen = false; });
+    control.addEventListener('keydown', () => { wasOpen = false; });
+    control.addEventListener('click', () => {
+      const closing = wasOpen; wasOpen = false;
+      onClick(closing);
+    });
+  }
+  toggleOn(button, closing => {
     if (!state) return;
-    if (!direct()) { if (isOpen()) close(); else open(button); return; }
+    if (!direct()) {
+      if (closing && !isOpen()) return;
+      if (isOpen()) close(); else open(button);
+      return;
+    }
     close();
     if (state.status === 'ready') restart(); else install();
   });
-  more?.addEventListener('click', () => { if (isOpen()) close(); else open(more); });
+  toggleOn(more, closing => {
+    if (closing && !isOpen()) return;
+    if (isOpen()) close(); else open(more);
+  });
   $('close-update').addEventListener('click', () => { close(); (anchor.hidden ? button : anchor).focus(); });
-  popover.addEventListener('toggle', () => { if (!isOpen()) for (const control of [button, more].filter(Boolean)) control.setAttribute('aria-expanded', 'false'); });
+  popover.addEventListener('toggle', () => {
+    if (isOpen()) { for (const reset of openers) reset(); return; }
+    for (const control of [button, more].filter(Boolean)) control.setAttribute('aria-expanded', 'false');
+  });
   window.addEventListener('resize', position);
   // Opening a workspace clears notices, so this one waits until that has happened.
   let installFailed = false;

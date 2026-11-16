@@ -6,7 +6,11 @@ import { evaluateIntegration, stepPrompt } from './orchestration.mjs';
 import { reviewHolds } from './plan-review.mjs';
 import { runSteps } from './recap.mjs';
 import { noteActivity } from './activity.mjs';
-import { RESOLVABLE, applyPlan, checkCombined, createWorktree, folderIdentity, integrationPlan, keepBranch, markerLabels, ownCheck, planIsolation, prepareResolution, prepareWorktree, removeWorktree, resolvePrompt, restoreResolution, snapshotWorktree, uncommittedCount, unfinishedFiles, unrestricted } from './task-isolation.mjs';
+import { attachmentLimits, inspectAttachment } from './attachments.mjs';
+import { validateRelativePath } from './collaboration-format.mjs';
+import { readExplorerFile } from './file-explorer.mjs';
+import { workspaceGitDiff } from './workspace-git.mjs';
+import { RESOLVABLE, applyPlan, checkCombined, createWorktree, folderIdentity, git, integrationPlan, keepBranch, markerLabels, ownCheck, planIsolation, prepareResolution, prepareWorktree, removeWorktree, resolvePrompt, restoreResolution, snapshotWorktree, uncommittedCount, unfinishedFiles, unrestricted } from './task-isolation.mjs';
 
 // Independent tasks in one workspace (#88). Each task is a lane: a broker of its own, scoped to one folder, with its own
 // journal, native sessions, approvals, queue and Stop. A late event can't reach the wrong task, because a lane has no other
@@ -14,6 +18,16 @@ import { RESOLVABLE, applyPlan, checkCombined, createWorktree, folderIdentity, i
 // recovered from, and the coordinator decides how each lane may run (see task-isolation.mjs).
 const fail = (message, status = 409) => Object.assign(new Error(message), { status });
 const ENDED = new Set(['integrated', 'kept', 'discarded', 'cancelled']);
+const MAX_INTEGRATION_CHANGES = 200;
+const integrationChanges = (files = []) => files.slice(0, MAX_INTEGRATION_CHANGES).map(file => ({
+  path: file.path,
+  change: file.change,
+  added: Number(file.added) || 0,
+  removed: Number(file.removed) || 0,
+  status: file.status,
+  ...(file.resolved ? { resolved: true } : {}),
+  ...(file.diff ? { diff: file.diff } : {}),
+}));
 const STOPPED = { complete: 'complete', interrupted: 'stopped', incomplete: 'failed' };
 // The tasks one waits for: none, one (as a task started by hand saves it) or several (a plan step after more than one step).
 const waitsFor = task => task.dependsOn ? [].concat(task.dependsOn) : [];
@@ -39,9 +53,11 @@ const sum = rows => {
 // A review card's findings hold the cards after it too (#89), while it repairs and once it needs you (src/plan-review.mjs).
 const gated = task => Boolean(tested(task) && task.status === 'complete' && ((task.stepCheck && (task.stepCheck.status === 'running' || ((task.stepCheck.outcome === 'failed' || task.stepCheck.status === 'interrupted') && !task.stepCheck.accepted))) || reviewHolds(task)));
 
+const AGENT_LEASE = /^(?:provider:|compact-context$|automatic-review$)/;
+
 export class TaskCoordinator {
-  constructor(main, { BrokerClass, acquireFolders = () => ({ release() {}, setProcess() {} }), withFolders = async (paths, operation, work) => work(), tests = null }) {
-    Object.assign(this, { main, BrokerClass, acquireFolders, withFolders, tests });
+  constructor(main, { BrokerClass, acquireFolders = () => ({ release() {}, setProcess() {} }), withFolders = async (paths, operation, work) => work(), activeMutations = () => [], tests = null }) {
+    Object.assign(this, { main, BrokerClass, acquireFolders, withFolders, activeMutations, tests });
     this.lanes = new Map(); this.closed = false; this.ticking = false; this.mainBusy = false; this.checking = new Map(); this.aborts = new Set();
     // Tasks whose copy is still being prepared. They hold a slot, and the queue leaves them alone until they start.
     this.preparing = new Map();
@@ -101,6 +117,10 @@ export class TaskCoordinator {
     try { identity = folderIdentity(folder.path); } catch { throw fail(`${folder.displayName || folder.name} is unavailable.`, 404); }
     // Launch-map preparation reads the actual attached workspace concurrently. It never edits files or uses a worktree.
     if (input.purpose === 'project-review') return { mode: 'direct', reason: 'Inspecting the attached workspace', identity, folder };
+    // Git commits, merges, staging, patches and restores briefly rewrite repository state or move HEAD: wait for them
+    // before branching a worktree or entering the folder so the new task starts from clean, post-mutation state.
+    const folderBusy = this.activeMutations([...new Set([identity.root, identity.real].filter(Boolean))]).find(entry => !AGENT_LEASE.test(entry.operation));
+    if (folderBusy) return { mode: 'wait', blocker: folderBusy.operation, reason: `Project files are busy: ${folderBusy.operation} is active in an overlapping workspace.`, identity, folder };
     const plan = planIsolation(identity, this.occupants(c, input.taskId), { loose: unrestricted({ provider: input.provider || c.provider, mode: input.accessMode || input.mode || c.mode, approvalPolicy: input.approvalPolicy || c.approvalPolicy || 'ask' }), keeps: keptFiles(input.ignoredFiles) });
     return { ...plan, identity, folder, ...(plan.mode === 'worktree' ? { uncommitted: uncommittedCount(folder.path) } : {}) };
   }
@@ -257,6 +277,12 @@ export class TaskCoordinator {
     for (const task of tasks) if (!task.closed) this.update(c, task, { closed: true });
   }
   tickAll() { for (const c of this.main.conversations.values()) if (c.parallelTasks?.some(task => task.status === 'waiting')) this.tick(c); }
+  emptyCopy(c, task) {
+    if (task.mode !== 'worktree' || task.status !== 'complete' || working(this.lanes.get(task.id))) return false;
+    if (!task.worktree || !task.repoRoot || !fs.existsSync(task.worktree) || !fs.existsSync(task.repoRoot)) return false;
+    try { const { plan } = this.planFor(c, task); return !plan.conflicts && plan.files.length === 0; }
+    catch { return false; }
+  }
   tick(c) {
     if (this.closed || this.ticking) return;
     this.ticking = true;
@@ -269,20 +295,22 @@ export class TaskCoordinator {
         if (spent) { this.update(c, task, { status: 'cancelled', batchHeld: true, reason: `Not started: ${spent}`, endedAt: new Date().toISOString() }); continue; }
         // A card whose findings are updating the Plan holds the cards after it until you settle the update (src/board.mjs).
         const updating = before => this.main.board?.holdsAfter?.(c, before) || null;
-        const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !(before.status === 'integrated' || before.status === 'kept' || (before.mode !== 'worktree' && before.status === 'complete')) || gated(before) || updating(before));
+        const needsMerge = before => before.mode === 'worktree' && before.status === 'complete' && !this.emptyCopy(c, before);
+        const built = before => before.status === 'integrated' || before.status === 'kept' || (before.status === 'complete' && !needsMerge(before));
+        const pending = waitsFor(task).map(id => this.find(c, id)).find(before => !built(before) || gated(before) || updating(before));
         if (pending) {
           // A step that ended without finishing can't be built on, so this one says what it needs instead of waiting quietly.
           const ended = { stopped: 'stopped', failed: 'did not finish', discarded: 'was discarded', cancelled: 'was cancelled', lost: 'lost its copy', detached: 'lost its folder', blocked: 'is blocked' }[pending.status];
-          const check = pending.status === 'complete' ? pending.stepCheck : null, copy = pending.mode === 'worktree';
-          const held = ['complete', 'integrated', 'kept'].includes(pending.status) && !(copy && pending.status === 'complete') && !gated(pending) ? updating(pending) : null;
+          const check = pending.status === 'complete' ? pending.stepCheck : null, mergePending = needsMerge(pending);
+          const held = ['complete', 'integrated', 'kept'].includes(pending.status) && !mergePending && !gated(pending) ? updating(pending) : null;
           wait(ended ? `Waiting for “${pending.title}”, which ${ended}. Continue it in its task, or cancel this one.`
             : held ? held
             : check?.status === 'running' ? `Waiting for the tests on “${pending.title}”.`
-            : check?.outcome === 'failed' && !check.accepted ? `The tests failed on “${pending.title}”. Fix it in its task, or ${copy ? 'merge it anyway' : 'continue anyway from the plan'}.`
+            : check?.outcome === 'failed' && !check.accepted ? `The tests failed on “${pending.title}”. Fix it in its task, or ${mergePending ? 'merge it anyway' : 'continue anyway from the plan'}.`
             : check?.status === 'interrupted' && !check.accepted ? `The tests on “${pending.title}” were interrupted. Check it again or continue anyway from the plan.`
             : pending.review?.status === 'repairing' ? `Waiting for “${pending.title}” to repair what it found and review again.`
             : reviewHolds(pending) ? `“${pending.title}” found problems it couldn’t settle. Read it, then continue anyway or send cards back.`
-            : copy && pending.status === 'complete' ? `Waiting for “${pending.title}” to be merged.` : `Waiting for “${pending.title}”.`);
+            : mergePending ? `Waiting for “${pending.title}” to be merged.` : `Waiting for “${pending.title}”.`);
           continue;
         }
         try { this.admit(c, task); } catch (error) { wait(error.message); continue; }
@@ -532,7 +560,7 @@ export class TaskCoordinator {
       // A Plan card in its own copy counts the files the copy really changed, so one that changed nothing, such as
       // research, needn't be merged (src/board.mjs).
       let copyFiles = null;
-      if (task.board && task.mode === 'worktree' && task.worktree && fs.existsSync(task.worktree)) { try { copyFiles = this.planFor(c, task).plan.files.length; } catch { /* Counted again when it's accepted. */ } }
+      if ((task.board || task.plan) && task.mode === 'worktree' && task.worktree && fs.existsSync(task.worktree)) { try { copyFiles = this.planFor(c, task).plan.files.length; } catch { /* Counted again when it's accepted. */ } }
       this.update(c, task, { stepResult: result, ...(copyFiles !== null ? { copyFiles } : {}) });
       if (plan && step.artifact) this.main.record(c, { type: 'orchestration_artifact', id: plan.id, stepId: step.id, kind: step.artifact, content: result.summary, revision: result.runId || id, role: step.role || null });
     }
@@ -549,7 +577,8 @@ export class TaskCoordinator {
     if (task.board && !recheck && evaluated.outcome !== 'failed') this.main.board?.reviews.ended(c, task, reply);
     this.update(c, task, { stepCheck: outcome });
     if (plan) this.main.record(c, { type: 'orchestration_step_outcome', id: plan.id, stepId: step.id, outcome: evaluated.outcome, status: evaluated.status, reason, ...(ran.command ? { command: ran.command } : {}) });
-    if (evaluated.outcome === 'failed' && dependents) this.main.message(c, 'system', plan ? `The tests failed on step ${task.plan.number}, “${step.title}”, so the steps after it wait. Fix it in its task, or ${task.mode === 'worktree' ? 'merge it anyway' : 'continue anyway from the plan'}.` : `The tests failed on “${step.title}”, so the cards after it wait. Fix it in its task, or ${task.mode === 'worktree' ? 'merge it anyway' : 'continue anyway from the Plan'}.`);
+    const mergePending = task.mode === 'worktree' && !this.emptyCopy(c, task);
+    if (evaluated.outcome === 'failed' && dependents) this.main.message(c, 'system', plan ? `The tests failed on step ${task.plan.number}, “${step.title}”, so the steps after it wait. Fix it in its task, or ${mergePending ? 'merge it anyway' : 'continue anyway from the plan'}.` : `The tests failed on “${step.title}”, so the cards after it wait. Fix it in its task, or ${mergePending ? 'merge it anyway' : 'continue anyway from the Plan'}.`);
     setImmediate(() => this.tick(c));
   }
   // The test command marked in the Run panel, on a temporary copy of the step's result: the folder as it is for a step
@@ -619,11 +648,16 @@ export class TaskCoordinator {
   }
 
   public(task) {
-    const lane = this.lanes.get(task.id), { text, attachments, requestId, folderPath, commonDir, repoRoot, preparationSource, workspaceFolders, resolve, ...shown } = task;
+    const lane = this.lanes.get(task.id), { text, attachments, requestId, folderPath, commonDir, repoRoot, preparationSource, workspaceFolders, resolve, integration, ...shown } = task;
     const active = lane?.c?.activeRun;
     const runningProvider = (lane?.broker?.running && active?.provider) || (task.status === "running" && (active?.provider || lane?.c?.provider || task.provider)) || null;
+    const publicIntegration = integration ? {
+      ...integration,
+      ...(Array.isArray(integration.changes) ? { changes: integration.changes.map(({ diff, ...meta }) => meta) } : {}),
+    } : undefined;
     return {
       ...shown,
+      ...(publicIntegration ? { integration: publicIntegration } : {}),
       // Whether an agent is resolving its conflicts, and with how many files; the commits behind it stay here.
       resolving: resolve ? { open: Boolean(resolve.open), files: resolve.files.length } : null,
       runningProvider,
@@ -675,6 +709,93 @@ export class TaskCoordinator {
     const broker = lane?.c ? lane.broker : this.main, conversation = lane?.c || c;
     if (!task.execution) throw fail('Refresh this task after its legacy policy has been restored.');
     return broker.execution.change(conversation, { ...input, taskId: task.execution.taskId });
+  }
+
+  // Reading a file or diff associated with a task, whether from its active copy, kept branch, saved merge record or the merged folder.
+  previewFile(c, id, folder, relative) {
+    const task = this.find(c, id);
+    const targetFolder = folder || this.main.workspaceFolders.find(item => item.id === task.folderId);
+    if (!targetFolder) throw fail('That folder is no longer in this workspace.', 404);
+    if (!relative) throw fail('Choose a file.', 400);
+    const readFrom = target => {
+      try { return readExplorerFile(target, relative); }
+      catch (error) {
+        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') throw fail('File not found.', 404);
+        throw error;
+      }
+    };
+    if (task.mode !== 'worktree') return readFrom(targetFolder);
+    const copyPath = task.scopePath || task.worktree;
+    if (!ENDED.has(task.status) && copyPath && fs.existsSync(copyPath)) {
+      const realCopy = fs.realpathSync.native(copyPath);
+      return { ...readFrom({ id: targetFolder.id, path: realCopy }), taskId: task.id, inCopy: true, folderName: targetFolder.displayName || targetFolder.name };
+    }
+    if (task.status === 'integrated') return { ...readFrom(targetFolder), folderName: targetFolder.displayName || targetFolder.name };
+    if (task.status === 'kept' && task.integration?.branch) {
+      validateRelativePath(relative);
+      const repoPath = task.prefix ? `${task.prefix}/${relative}` : relative;
+      const repoRoot = task.repoRoot && fs.existsSync(task.repoRoot) ? task.repoRoot : targetFolder.path;
+      const tree = git(repoRoot, ['ls-tree', task.integration.branch, '--', repoPath]);
+      const line = tree.status === 0 ? tree.stdout.trim().split('\n')[0] || '' : '';
+      const mode = line.split(' ')[0];
+      if (!line || !['100644', '100755'].includes(mode)) throw fail(`File not found in branch ${task.integration.branch}.`, 404);
+      const blob = git(repoRoot, ['cat-file', 'blob', `${task.integration.branch}:${repoPath}`], { encoding: 'buffer' });
+      if (blob.error || blob.status !== 0) throw fail(`Could not read ${relative} from branch ${task.integration.branch}.`, 404);
+      const contents = blob.stdout;
+      if (contents.length > attachmentLimits.imageBytes) throw fail('Preview supports images up to 5 MB and text/code up to 64 KB.', 413);
+      const { text, ...meta } = inspectAttachment(path.basename(relative), contents);
+      return { ...meta, folderId: targetFolder.id, path: relative, data: contents.toString('base64'), ...(meta.kind === 'text' ? { text } : {}), folderName: targetFolder.displayName || targetFolder.name, branch: task.integration.branch };
+    }
+    if (task.status === 'discarded') throw fail('This task’s changes were discarded, so its working copy is gone.', 404);
+    throw fail('This task’s working copy is gone.', 404);
+  }
+  fileDiff(c, id, folder, relative) {
+    const task = this.find(c, id);
+    const targetFolder = folder || this.main.workspaceFolders.find(item => item.id === task.folderId);
+    if (!targetFolder) throw fail('That folder is no longer in this workspace.', 404);
+    if (!relative) throw fail('Choose a file.', 400);
+    validateRelativePath(relative);
+    const repoPath = task.prefix ? `${task.prefix}/${relative}` : relative;
+    const saved = (task.integration?.changes || []).find(item => item.path === repoPath || item.path === relative);
+    if (saved?.diff) {
+      return {
+        folderId: targetFolder.id,
+        folderName: targetFolder.displayName || targetFolder.name,
+        path: relative,
+        code: saved.change === 'add' ? ' A' : saved.change === 'delete' ? ' D' : ' M',
+        diff: saved.diff,
+        truncated: false,
+        status: saved.change === 'add' ? 'added' : saved.change === 'delete' ? 'deleted' : 'modified',
+      };
+    }
+    const copyPath = task.scopePath || task.worktree;
+    if (task.mode === 'worktree' && !ENDED.has(task.status) && task.worktree && fs.existsSync(copyPath)) {
+      const realWorktree = fs.realpathSync.native(task.worktree);
+      const wtFolder = { id: targetFolder.id, path: realWorktree };
+      try {
+        const current = workspaceGitDiff(wtFolder, repoPath);
+        if (current?.diff) return { ...current, path: relative, folderName: targetFolder.displayName || targetFolder.name };
+      } catch { /* Check diff against task.base below. */ }
+      if (task.base) {
+        const diffRes = git(realWorktree, ['diff', '--no-renames', '--no-ext-diff', '--no-textconv', task.base, '--', repoPath]);
+        if (diffRes.status === 0 && diffRes.stdout) {
+          const limit = 400 * 1024;
+          return {
+            folderId: targetFolder.id,
+            folderName: targetFolder.displayName || targetFolder.name,
+            path: relative,
+            code: ' M',
+            diff: diffRes.stdout.slice(0, limit),
+            truncated: diffRes.stdout.length > limit,
+          };
+        }
+      }
+      throw fail('This file has no current changes in this task’s copy.', 404);
+    }
+    if (task.mode !== 'worktree' || task.status === 'integrated') {
+      return workspaceGitDiff(targetFolder, task.prefix ? repoPath : relative);
+    }
+    throw fail(task.status === 'discarded' ? 'This task’s changes were discarded, so its working copy is gone.' : 'This file has no saved diff for this task.', 404);
   }
 
   // ---- Coming back: a worktree task's changes against the folder as it is now.
@@ -772,9 +893,9 @@ export class TaskCoordinator {
       if (plan.conflicts) throw fail(`${plan.conflicts} file${plan.conflicts === 1 ? ' conflicts' : 's conflict'}, so nothing was merged and both versions are safe. Keep it as a branch to merge by hand.`);
       if (task.check?.digest === digest && task.check.status !== 'passed' && acceptFailedCheck !== true) throw fail('The tests failed on the combined result. Confirm to merge anyway.');
       applyPlan(task.repoRoot, plan);
-      const count = plan.writes.length;
+      const count = plan.writes.length, changes = integrationChanges(plan.files);
       if (!quiet) this.main.message(c, 'system', count ? `Merged “${task.title}” into ${task.folderName}: ${count} file${count === 1 ? '' : 's'}.` : `“${task.title}” had nothing left to merge into ${task.folderName}.`);
-      this.finish(c, task, { status: 'integrated', integration: { files: count, at: new Date().toISOString() } });
+      this.finish(c, task, { status: 'integrated', integration: { files: count, at: new Date().toISOString(), changes, ...(plan.files.length > changes.length ? { totalFiles: plan.files.length } : {}) } });
       if (count) noteActivity('merges');
       return { merged: count, task: this.public(task) };
     });
@@ -786,8 +907,10 @@ export class TaskCoordinator {
     const left = task.resolve?.open ? unfinishedFiles(task.worktree, task.resolve) : [];
     if (left.length) this.update(c, task, { base: restoreResolution({ root: task.repoRoot, worktree: task.worktree, id: task.id, base: task.base, before: task.resolve.before, from: task.resolve.from, files: left }), resolve: { ...task.resolve, open: false } });
     const result = snapshotWorktree(task.worktree, task.id, brought(task)), branch = keepBranch(task.repoRoot, result, task.title, task.id);
+    let changes = [], totalFiles = 0;
+    try { const plan = integrationPlan({ root: task.repoRoot, prefix: task.prefix, base: task.base, result, pending: null }); totalFiles = plan.files.length; changes = integrationChanges(plan.files); } catch { /* Branch is saved; file summary unavailable. */ }
     this.main.message(c, 'system', `“${task.title}” is kept as the branch ${branch}. Nothing was merged into ${task.folderName}.`);
-    this.finish(c, task, { status: 'kept', integration: { branch, at: new Date().toISOString() } });
+    this.finish(c, task, { status: 'kept', integration: { branch, files: totalFiles, at: new Date().toISOString(), changes, ...(totalFiles > changes.length ? { totalFiles } : {}) } });
     return { branch, task: this.public(task) };
   }
   discard(c, id) {

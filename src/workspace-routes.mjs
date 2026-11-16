@@ -67,9 +67,15 @@ export function createWorkspaceRoutes({ registry, body, json, readGitHub = githu
         fail('Unsupported attachment operation.', 405);
       }
       if (req.method !== 'GET') fail('The file explorer is read only.', 405);
-      const folder = project.folders.find(entry => entry.id === url.searchParams.get('folderId'));
-      if (!folder) fail('That folder is no longer in this workspace.', 404);
+      const taskId = url.searchParams.get('taskId'), folderId = url.searchParams.get('folderId');
+      const folder = folderId ? project.folders.find(entry => entry.id === folderId) : null;
+      if (folderId && !folder) fail('That folder is no longer in this workspace.', 404);
       const relative = url.searchParams.get('path') || '';
+      if (url.pathname === '/api/files/preview' && taskId) {
+        const broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId));
+        json(res, 200, broker.tasks.previewFile(c, taskId, folder, relative)); return true;
+      }
+      if (!folder) fail('That folder is no longer in this workspace.', 404);
       json(res, 200, url.pathname === '/api/files' ? listFiles(folder, relative, Number(url.searchParams.get('offset') || 0)) : readExplorerFile(folder, relative)); return true;
     }
     // Staging and committing answer with the refreshed Git activity, so the panel shows the result at once.
@@ -96,8 +102,15 @@ export function createWorkspaceRoutes({ registry, body, json, readGitHub = githu
     if (!projectId) fail('Select a workspace first.');
     const project = registry.get(projectId);
     if (url.pathname === '/api/git') { json(res, 200, await gitActivity(project.folders)); return true; }
-    const folder = project.folders.find(entry => entry.id === url.searchParams.get('folderId'));
+    const taskId = url.searchParams.get('taskId'), folderId = url.searchParams.get('folderId');
+    const folder = folderId ? project.folders.find(entry => entry.id === folderId) : null;
+    if (folderId && !folder) fail('That folder is no longer in this workspace.', 404);
+    const relative = url.searchParams.get('path') || '';
+    if (taskId) {
+      const broker = registry.broker(projectId), c = broker.get(registry.mainConversationId(projectId));
+      json(res, 200, broker.tasks.fileDiff(c, taskId, folder, relative)); return true;
+    }
     if (!folder) fail('That folder is no longer in this workspace.', 404);
-    json(res, 200, workspaceGitDiff(folder, url.searchParams.get('path') || '')); return true;
+    json(res, 200, workspaceGitDiff(folder, relative)); return true;
   };
 }

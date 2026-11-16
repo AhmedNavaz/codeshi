@@ -119,12 +119,15 @@ test('only this month and last month are kept, and a file that cannot be read is
 test('badges count the month’s own days and say the day each was earned; none of them rewards long days', () => {
   const day = (date, extra = {}) => ({ ...summarizeDay(date), ...extra });
   const days = [
-    day('2026-11-02', { activeMs: 2 * HOUR, prompts: 40 }), day('2026-11-03', { activeMs: HOUR, prompts: 40 }), day('2026-11-04', { activeMs: HOUR, cards: 6 }),
-    day('2026-11-05', { activeMs: HOUR, prompts: 25, cards: 4 }), day('2026-11-06', { activeMs: 30_000 }), day('2026-11-08', { activeMs: HOUR }), day('2026-11-09', { activeMs: HOUR, games: 3 }),
+    day('2026-11-02', { activeMs: 2 * HOUR, prompts: 40, tokens: 1_000_000 }), day('2026-11-03', { activeMs: HOUR, prompts: 40, tokens: 4_000_000 }), day('2026-11-04', { activeMs: HOUR, cards: 6 }),
+    day('2026-11-05', { activeMs: HOUR, prompts: 25, cards: 4, tokens: 5_000_000 }), day('2026-11-06', { activeMs: 30_000 }), day('2026-11-08', { activeMs: HOUR }), day('2026-11-09', { activeMs: HOUR, games: 3 }),
   ];
   const badges = Object.fromEntries(badgesFor(days).map(badge => [badge.id, badge]));
   assert.equal(badges['hundred-prompts'].earnedOn, '2026-11-05');
   assert.equal(badges.finisher.earnedOn, '2026-11-05');
+  assert.equal(badges['ten-million-tokens'].target, 10_000_000);
+  assert.equal(badges['ten-million-tokens'].earnedOn, '2026-11-05');
+  assert.equal(badgesFor([day('2026-11-02', { tokens: 1_000_000 })]).find(badge => badge.id === 'ten-million-tokens').earnedOn, null);
   // Five days of one Monday-to-Sunday week, each a minute or more: Nov 6 had thirty seconds, so the week has four.
   assert.equal(badges['steady-week'].value, 5, 'Nov 2–5 and Nov 8 are the same week');
   assert.equal(badges['steady-week'].earnedOn, '2026-11-08');

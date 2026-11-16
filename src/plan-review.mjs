@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 // Review and one repair round on the Plan (#89). A Reviewer or QA card checks the cards it builds on and ends with a verdict:
@@ -128,9 +129,9 @@ export class PlanReviews {
     if (card.column === 'done') return 'You’ve accepted it, so it isn’t changed without you. Send it back from Done to change it.';
     const task = this.board.task(c, card);
     if (!task) return 'It has no task to repair in. Run it again with the findings in a comment.';
-    if (task.mode === 'worktree') return 'It worked in its own copy, so a repair would need a new run. Send it back with the findings to repair it.';
+    if (task.mode === 'worktree' && task.status !== 'complete') return 'It worked in its own copy, so a repair would need a new run. Send it back with the findings to repair it.';
     if (task.status !== 'complete') return `Its task is ${task.status}, not finished.`;
-    if (!task.conversationId || !task.scopePath) return 'Its task’s conversation is gone.';
+    if (!task.conversationId || !task.scopePath || (task.mode === 'worktree' && (!task.worktree || !fs.existsSync(task.worktree)))) return 'Its task’s conversation is gone.';
     return null;
   }
 

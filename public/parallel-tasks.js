@@ -191,7 +191,12 @@
     if (!plan) title.append(node('span', 'task-banner-state', `${task.folderName} · ${status}`));
     text.append(title);
     const how = task.reason || (task.resolving?.open ? (task.status === 'running' ? 'Resolving its merge conflicts in its own copy. You review the combined result before it’s merged.' : 'Resolving its merge conflicts isn’t finished. Answer the agent here, or review and merge it to resolve again.') : task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
-    if (task.status === 'integrated') text.append(node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`));
+    if (task.status === 'integrated') {
+      const detail = node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`);
+      const changed = (task.integration?.changes || []).map(item => item.path).filter(Boolean);
+      if (changed.length) detail.title = changed.join('\n');
+      text.append(detail);
+    }
     else if (task.status === 'kept') text.append(node('span', 'task-banner-detail', `Saved as the branch ${task.integration?.branch}. Nothing was merged.`));
     // One line: the first sentence says how it runs, and the rest is in the tooltip and read out in full.
     else if (how && !(plan && task.mode === 'direct' && !task.reason)) { const detail = node('span', 'task-banner-detail', how); detail.title = how; text.append(detail); }
@@ -390,6 +395,6 @@
   });
   $('task-merge-close').addEventListener('click', () => $('task-merge-dialog').close());
   window.addEventListener('relay-state', () => { render(); followResolve(); followTests(); });
-  window.relayTaskThreads = { refresh: () => render(true), open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => selectThread(tasks().find(task => task.id === id) || null), review: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => openReview(task)); }, resume: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'start')); }, discard: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'discard')); }, close: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(async () => { await act(task, 'close'); if ((focused || api.getState().taskId) === task.id) await selectThread(null); }); } };
+  window.relayTaskThreads = { refresh: () => render(true), open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => { const all = api.getState().conversation?.parallelTasks || []; const task = all.find(item => item.id === id) || null; if (task && (task.board || task.purpose === 'plan-chat') && window.relayBoard?.openTask) return window.relayBoard.openTask(task.id); return selectThread(tasks().find(item => item.id === id) || null); }, review: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => openReview(task)); }, resume: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'start')); }, discard: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'discard')); }, close: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(async () => { await act(task, 'close'); if ((focused || api.getState().taskId) === task.id) await selectThread(null); }); } };
   render(true);
 })();

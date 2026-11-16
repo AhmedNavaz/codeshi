@@ -3977,6 +3977,14 @@ test('the chevron beside the update has its release notes and Skip, and Check fo
   more.click();
   assert.equal(popover.matches(':popover-open'), true);
   assert.equal(more.getAttribute('aria-expanded'), 'true');
+  // Clicking the down arrow while the dialog is open closes it, even when popover=auto light-dismisses before click.
+  more.dispatchEvent(new UIEvent('pointerdown')); popover.hidePopover(); more.click();
+  assert.equal(popover.matches(':popover-open'), false);
+  more.click();
+  assert.equal(popover.matches(':popover-open'), true);
+  more.click();
+  assert.equal(popover.matches(':popover-open'), false);
+  more.click();
   assert.equal(ui.$('update-title').textContent, 'Codeshi 0.15.0');
   assert.equal(ui.$('update-subtitle').textContent, 'You have 0.14.0');
   ui.findButton('Release notes ↗').click(); await flush();
@@ -3985,12 +3993,18 @@ test('the chevron beside the update has its release notes and Skip, and Check fo
   ui.findButton('Skip this version').click(); await flush();
   assert.deepEqual(ui.updateCalls.at(-1), ['skip', '0.15.0']);
   assert.deepEqual([button.hidden, more.hidden], [true, true]);
-  popover.hidePopover();
+  assert.equal(popover.matches(':popover-open'), false);
   ui.window.relayUI.commands['check-updates'](); await flush();
   assert.deepEqual(ui.updateCalls.at(-1), ['check']);
   assert.equal(popover.matches(':popover-open'), true);
   ui.findButton('Update').click(); await flush();
   assert.deepEqual(ui.updateCalls.at(-1), ['install'], 'The details can start the update too.');
+  assert.equal(popover.matches(':popover-open'), false, 'Clicking Update closes the details dialog.');
+  // Clicking the status button while downloading toggles the details closed cleanly too.
+  button.click();
+  assert.equal(popover.matches(':popover-open'), true);
+  button.dispatchEvent(new UIEvent('pointerdown')); popover.hidePopover(); button.click();
+  assert.equal(popover.matches(':popover-open'), false);
 });
 
 test('an app that cannot replace itself offers the download instead, and a manual check says when Codeshi is up to date', async () => {
@@ -9254,4 +9268,234 @@ test('Add next pre-links an empty card without Auto, and Suggest next confirms a
   assert.match(ui.$('board-drafts').textContent, /Codex suggested 1 card after “Build auth”[\s\S]*Follow-up QA\./);
   face(ids.drafted).click(); await flush();
   assert.match(drawer().textContent, /Codex · gpt-6.1 drafted this card as a follow-up to “Build auth”/);
+});
+
+test('in Flow, Tasks side by side groups Plan cards and Plan chat into one Plan row that opens Plan view and never shows Plan threads inside Flow (#162)', async () => {
+  const ui = await flowBrowser({ boardUI: true, tasksUI: true, wide: true });
+  planChatBrowserRoutes(ui);
+  const chat = ui.canonical.get('project-one');
+  const folder = ui.state().projects[0].folders[0];
+  const planTask = chat.parallelTasks.find(t => t.id === 'plan-chat');
+  const cardTask = chat.parallelTasks.find(t => t.id === 'card-task');
+  const ownTask = { id: 'own-task', title: 'Run linter', folderName: folder.name, folderId: folder.id, status: 'complete', approvals: 0, conversationId: 'own-lane', mode: 'worktree' };
+  chat.parallelTasks = [planTask, cardTask, ownTask];
+  await ui.window.relayUI.refresh(); await flush();
+
+  // Hide Plan chat first, then enter Flow while idle (so routed stays on across Flow <-> Plan).
+  ui.window.relayFlow.enter(); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'flow');
+  ui.$('open-plan').click(); await flush(); await flush(); await flush();
+  ui.$('plan-chat-hide').click(); await flush();
+  assert.equal(ui.$('app-shell').classList.contains('plan-chat-hidden'), true);
+  ui.window.relayFlow.setView('flow'); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'flow');
+  assert.equal(ui.state().taskId, null, 'Leaving Plan into Flow returns to Workspace chat.');
+
+  // Plan chat and a Plan card become active with approvals while in Flow.
+  planTask.status = 'running'; planTask.approvals = 1;
+  cardTask.status = 'running'; cardTask.cardColumn = 'doing'; cardTask.approvals = 1;
+  await ui.window.relayUI.refresh(); await flush();
+
+  const card = ui.$('flow-card-tasks');
+  const row = id => card.querySelectorAll('.flow-task').find(el => el.dataset.taskId === id);
+  assert.ok(row('own-task'), 'Ordinary folder tasks still show in Flow.');
+  assert.equal(row('plan-chat'), undefined, 'Plan chat never renders as a standalone Flow task row.');
+  assert.equal(row('card-task'), undefined, 'Plan card tasks never render as standalone Flow task rows.');
+  const planRow = row('plan');
+  assert.ok(planRow, 'A single Plan row represents active Plan work and approvals.');
+  assert.equal(planRow.querySelector('.flow-task-badge').textContent, '2 approvals');
+
+  // Clicking the Plan row opens Plan view, unhides Plan chat, and switches to plan-chat (which has an approval).
+  planRow.querySelector('.flow-task-row').click(); await flush(); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'plan');
+  assert.equal(ui.window.relayBoard.isOpen(), true);
+  assert.equal(ui.$('app-shell').classList.contains('plan-chat-hidden'), false);
+  assert.equal(ui.state().taskId, 'plan-chat');
+  assert.equal(ui.$('task-banner').hidden, true);
+
+  // When only a Plan card task needs attention, clicking the Plan row from Flow opens Plan view on that card task.
+  ui.window.relayFlow.setView('flow'); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'flow');
+  assert.equal(ui.state().taskId, null);
+  planTask.approvals = 0; planTask.status = 'complete';
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(row('plan').querySelector('.flow-task-badge').textContent, '1 approval');
+  row('plan').querySelector('.flow-task-row').click(); await flush(); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'plan');
+  assert.equal(ui.window.relayBoard.isOpen(), true);
+  assert.equal(ui.state().taskId, 'card-task');
+  assert.equal(ui.$('app-shell').classList.contains('plan-chat-hidden'), false);
+});
+
+test('selecting a Plan card task or plan-chat notification from Flow opens Plan view and leaving restores Workspace chat (#162)', async () => {
+  const ui = await flowBrowser({ boardUI: true, tasksUI: true, wide: true });
+  planChatBrowserRoutes(ui);
+  await ui.window.relayUI.refresh(); await flush();
+  ui.window.relayFlow.enter(); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'flow');
+
+  const chat = ui.canonical.get('project-one');
+  const cardTask = chat.parallelTasks.find(t => t.id === 'card-task');
+  cardTask.cardColumn = 'doing'; cardTask.status = 'running'; cardTask.approvals = 1;
+  await ui.window.relayUI.refresh(); await flush();
+
+  const opened = await ui.window.relayUI.commands['open-approval']({ projectId: 'project-one', taskId: 'card-task', approvalId: 'ap-1' });
+  await flush(); await flush(); await flush();
+  assert.equal(opened, true);
+  assert.equal(ui.window.relayFlow.view(), 'plan');
+  assert.equal(ui.window.relayBoard.isOpen(), true);
+  assert.equal(ui.state().taskId, 'card-task');
+
+  // Returning to Flow clears the Plan card thread so Flow shows Workspace chat, not the card task.
+  ui.window.relayFlow.setView('flow'); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'flow');
+  assert.equal(ui.state().taskId, null);
+
+  // Selecting plan-chat via relayTaskThreads.select from Flow opens Plan view on plan-chat.
+  const selected = await ui.window.relayTaskThreads.select('plan-chat'); await flush(); await flush(); await flush();
+  assert.equal(selected, true);
+  assert.equal(ui.window.relayFlow.view(), 'plan');
+  assert.equal(ui.window.relayBoard.isOpen(), true);
+  assert.equal(ui.state().taskId, 'plan-chat');
+});
+
+test('a merged Done card shows a success result, changed files with expandable diffs, branch and usage (#162)', async () => {
+  const ui = await browser({ boardUI: true, layoutUI: true, wide: true });
+  const base = { notes: '', priority: 'normal', labels: [], due: null, commentCount: 0, agent: { provider: 'codex', model: null, effort: null }, auto: false, folderId: 'f1', dependsOn: [], checks: [], group: 'Build', role: 'builder', artifact: null, check: null, files: [], tier: 'standard', split: false, subtasks: [], revision: 1, attempts: [], createdAt: '2026-11-16T09:00:00.000Z' };
+  const cards = [
+    { ...base, id: 'c-done', title: 'Ship footer', column: 'done', order: 1, acceptedAt: '2026-11-16T10:05:00.000Z', result: { status: 'integrated', summary: 'Updated the footer.', files: 2, tests: 'passed', testCommand: 'npm test', at: '2026-11-16T10:00:00.000Z' }, taskState: { id: 't-done', status: 'integrated', provider: 'codex', model: 'gpt-6.1-sol', integration: { files: 2, folder: 'frontend', at: '2026-11-16T10:00:00.000Z' }, usage: { workedMs: 120000, activeSince: null, tokens: 3500, spendUSD: 0.05 } } },
+    { ...base, id: 'c-kept', title: 'Save experiment', column: 'done', order: 2, acceptedAt: '2026-11-16T10:15:00.000Z', result: { status: 'kept', summary: 'Kept on branch.', files: 1, tests: 'unverified', at: '2026-11-16T10:10:00.000Z' }, taskState: { id: 't-kept', status: 'kept', provider: 'claude', integration: { files: 1, branch: 'codeshi/save-experiment', folder: 'frontend', at: '2026-11-16T10:10:00.000Z' } } },
+  ];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response({ revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'f1', name: 'frontend' }], limits: {}, cards });
+    if (request.path === '/api/board/cards/c-done/answer') return response({
+      text: 'Updated the footer in full.',
+      followUps: [],
+      filesSource: 'merged',
+      integration: { files: 2, folder: 'frontend', totalFiles: 2 },
+      files: [
+        { path: 'src/footer.js', change: 'update', added: 5, removed: 2, status: 'clean', diff: '@@ -1,2 +1,5 @@\n+new line' },
+        { path: 'src/footer.css', change: 'add', added: 10, removed: 0, status: 'merged', diff: '@@ -0,0 +1,10 @@\n+.footer {}' },
+      ],
+    });
+    if (request.path === '/api/board/cards/c-kept/answer') return response({
+      text: 'Kept on its own branch.',
+      followUps: [],
+      filesSource: 'recorded',
+      integration: { files: 1, branch: 'codeshi/save-experiment', folder: 'frontend' },
+      files: [{ path: 'src/experiment.js' }],
+    });
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  const face = id => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  assert.match(face('c-done').querySelector('.board-card-meta').textContent, /2 files merged.*Tests passed/);
+  assert.match(face('c-kept').querySelector('.board-card-meta').textContent, /1 file changed.*codeshi\/save-experiment/);
+
+  face('c-done').click(); await flush(); await flush();
+  const result = ui.$('board-drawer-body').querySelector('.board-result');
+  assert.equal(result.classList.contains('trouble'), false, 'Merged cards show success styling, not trouble.');
+  assert.equal(result.querySelector('.board-result-title').textContent, 'Result · Merged');
+  assert.deepEqual(result.querySelector('.board-result-facts').children.map(item => item.textContent), ['2 files merged into frontend', 'Tests passed']);
+  assert.equal(result.querySelector('.board-result-facts').children[1].title, 'Command: npm test');
+  assert.equal(result.querySelector('.board-result-usage').textContent, 'Used: 2 min · 3.5k tokens · $0.05');
+  const filesBox = result.querySelector('.board-result-files-box');
+  assert.ok(filesBox);
+  assert.match(filesBox.querySelector('summary').textContent, /Changed files \(2\).*\+15.*−2/);
+  const rows = filesBox.querySelector('.board-result-files').querySelectorAll('.task-merge-file');
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /src\/footer\.jsChanged\+5−2Merged/);
+  assert.match(rows[0].querySelector('.task-merge-diff').textContent, /\+new line/);
+  assert.match(rows[1].textContent, /src\/footer\.cssNew\+10Merged with folder/);
+  assert.equal(result.querySelector('.board-result-answer').textContent, 'Updated the footer in full.');
+
+  face('c-kept').click(); await flush(); await flush();
+  const keptResult = ui.$('board-drawer-body').querySelector('.board-result');
+  assert.equal(keptResult.classList.contains('trouble'), false);
+  assert.deepEqual(keptResult.querySelector('.board-result-facts').children.map(item => item.textContent), ['1 file changed', 'Not tested', 'Branch: codeshi/save-experiment']);
+  assert.match(keptResult.querySelector('.board-result-files-note').textContent, /recorded from agent edits/i);
+});
+
+test('clicking a task worktree file link or changed file in chat opens its preview or diff instead of blocking as outside', async () => {
+  const ui = await browser({ filesUI: true, parallelUI: true });
+  const chat = ui.canonical.get('project-one'), runId = 'wt-run';
+  const taskId = '5eab811c-f3a2-4d0a-aa3f-81072d90faeb';
+  const closedTaskId = '99999999-aaaa-4bbb-8ccc-dddddddddddd';
+  const worktree = `/Users/m1/Library/Application Support/Throughline/relay-data/project-one/tasks/${taskId}/worktree`;
+  const closedWorktree = `/Users/m1/Library/Application Support/Throughline/relay-data/project-one/tasks/${closedTaskId}/worktree`;
+  const taskObj = { id: taskId, title: 'Write guide', folderName: 'Frontend', folderId: 'frontend', status: 'integrated', mode: 'worktree', worktree, scopePath: worktree, conversationId: 'lane-wt', hasWorktree: false };
+  chat.parallelTasks = [taskObj];
+  const requests = [];
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/conversation' && request.params.task === taskId) {
+      return response({
+        id: 'lane-wt', projectId: 'project-one', provider: 'codex', mode: 'edit', approvalPolicy: 'ask',
+        status: 'complete', cursor: 1, task: taskObj, parallelTasks: [taskObj],
+        messages: [
+          { id: 'wt-u1', runId, role: 'user', text: 'Update the guide' },
+          { id: 'wt-step-edit', runId, role: 'activity', provider: 'claude', text: `Edit\n{"file_path":"${worktree}/docs/guide.md","old_string":"a","new_string":"b"}\nDone.` },
+          { id: 'wt-step-codex', runId, role: 'activity', provider: 'codex', text: 'File changes: [{"path":"docs/notes.md","kind":"add","added":4}]' },
+          { id: 'wt-reply', runId, role: 'assistant', provider: 'codex', text: `Updated [guide.md](file://${worktree}/docs/guide.md#L2), inline \`${worktree}/docs/guide.md:1\`, closed [old.md](${closedWorktree}/docs/old.md), and [outside](/private/tmp/notes.txt).` },
+        ],
+      });
+    }
+    if (request.path === '/api/files/preview') {
+      requests.push({ kind: 'preview', params: { ...request.params } });
+      return response({ name: request.params.path.split('/').pop(), folderId: request.params.folderId || 'frontend', folderName: 'Frontend', kind: 'text', mime: 'text/plain', bytes: 20, text: 'line one\nline two\n' });
+    }
+    if (request.path === '/api/git/diff') {
+      requests.push({ kind: 'diff', params: { ...request.params } });
+      if (request.params.folderId && request.params.folderId !== 'frontend') return response({ error: 'This file has no current changes.' }, 404);
+      return response({ folderId: request.params.folderId || 'frontend', path: request.params.path, code: ' M', diff: 'diff --git a/docs/guide.md b/docs/guide.md\n@@ -1 +1 @@\n-old\n+new\n', truncated: false });
+    }
+    return next();
+  });
+
+  await ui.window.relayUI.setTask(taskId); await flush();
+  // Activity step displays clean folder-relative path instead of truncated worktree path.
+  const entries = ui.document.querySelectorAll('.activity-entry');
+  assert.equal(entries[0].querySelector('.activity-file').textContent, 'Frontend/docs/guide.md');
+  const editFile = entries[0].querySelector('.activity-file');
+  assert.ok(editFile);
+
+  const links = ui.$('message-wt-reply').querySelectorAll('.message-file-link');
+  links.find(node => node.textContent === 'guide.md').click(); await flush();
+  assert.equal(ui.$('file-preview').hidden, false);
+  assert.equal(ui.$('file-preview-path').textContent, 'Frontend / docs/guide.md');
+  assert.equal(requests.at(-1).params.taskId, taskId);
+  assert.equal(requests.at(-1).params.path, 'docs/guide.md');
+  assert.equal(ui.$('notice').hidden, true);
+
+  // Inline code worktree path also opens cleanly.
+  ui.$('close-file-preview').click(); await flush();
+  links.find(node => node.textContent.includes('/worktree/docs/guide.md:1')).click(); await flush();
+  assert.equal(ui.$('file-preview').hidden, false);
+  assert.equal(requests.at(-1).params.taskId, taskId);
+
+  // Even a closed task worktree path resolves by its UUID in /tasks/<id>/worktree/...
+  ui.$('close-file-preview').click(); await flush();
+  links.find(node => node.textContent === 'old.md').click(); await flush();
+  assert.equal(ui.$('file-preview').hidden, false);
+  assert.equal(requests.at(-1).params.taskId, closedTaskId);
+  assert.equal(requests.at(-1).params.path, 'docs/old.md');
+
+  // Clicking activity step changed files opens the diff dialog with taskId.
+  editFile.click(); await flush();
+  assert.equal(ui.$('diff-dialog').open, true);
+  assert.equal(requests.at(-1).kind, 'diff');
+  assert.equal(requests.at(-1).params.taskId, taskId);
+  assert.equal(requests.at(-1).params.path, 'docs/guide.md');
+  ui.$('close-diff').click();
+
+  entries[1].querySelector('.activity-file').click(); await flush();
+  assert.equal(ui.$('diff-dialog').open, true);
+  assert.equal(requests.at(-1).kind, 'diff');
+  assert.equal(requests.at(-1).params.taskId, taskId);
+  assert.equal(requests.at(-1).params.path, 'docs/notes.md');
+  ui.$('close-diff').click();
+
+  // Paths genuinely outside the workspace and not in any task worktree remain blocked.
+  links.find(node => node.textContent === 'outside').click(); await flush();
+  assert.match(ui.$('notice-text').textContent, /Only files inside this workspace can be opened/);
 });

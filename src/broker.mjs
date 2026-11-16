@@ -134,7 +134,7 @@ function importPlaces(existing, entries) {
 }
 
 export class Broker extends EventEmitter {
-  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), acquireFolders, withFolders, lane = false, contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), verificationCadence = () => 'as-needed', contextLimit = () => 'auto', contextRouting = () => null, tests = null }) {
+  constructor({ workspace, workspaces = [], workspaceFolders = [], dataDir, googleRoot = path.join(dataDir, 'google'), bins = {}, acquireMutation = () => ({ release() {}, setProcess() {} }), acquireFolders, withFolders, activeMutations, lane = false, contextPolicy = 'task', handoffPreferences = () => ({ threshold: 90, automatic: false }), verificationCadence = () => 'as-needed', contextLimit = () => 'auto', contextRouting = () => null, tests = null }) {
     super();
     this.execution = new ExecutionPolicies(this); this.handoffPreferences = handoffPreferences;
     this.workspace = savedWorkspace(workspace); this.contextPolicy = contextPolicy; this.budget = new TaskBudgets(this);
@@ -233,7 +233,7 @@ export class Broker extends EventEmitter {
     this.checks = new RunChecks(this, { tests });
     this.checkpoints = new RunCheckpoints(this);
     // A lane runs one task, so only the workspace's own broker coordinates others.
-    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), tests }); this.tasks.restore(); this.board = new Board(this); this.schedules = new Schedules(this); this.splits = new FlowSplits(this); this.attachments.planGate = plan => this.board.gate(plan); }
+    if (!lane) { this.tasks = new TaskCoordinator(this, { BrokerClass: this.constructor, ...(acquireFolders ? { acquireFolders } : {}), ...(withFolders ? { withFolders } : {}), ...(activeMutations ? { activeMutations } : {}), tests }); this.tasks.restore(); this.board = new Board(this); this.schedules = new Schedules(this); this.splits = new FlowSplits(this); this.attachments.planGate = plan => this.board.gate(plan); }
     this.checks.restore();
     // The first check of a wait saved before a restart runs once startup has finished.
     if (this.resume.waiting) setTimeout(() => this.resume.tick(), 0);

@@ -161,12 +161,14 @@ test('a task reviews only its own folder, saves the review with the task and cou
   f.scenario({ output: 'Changed the value.' });
   const task = broker.tasks.start(home, { text: 'Change the value in the task', folderId: mine.id, provider: 'codex', mode: 'edit', approvalPolicy: 'ask', requestId: 'task-build' });
   for (let i = 0; i < 1500 && broker.tasks.find(home, task.id).status !== 'complete'; i++) await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(broker.tasks.find(home, task.id).status, 'complete');
+  const doneTask = broker.tasks.find(home, task.id);
+  assert.equal(doneTask.status, 'complete');
+  fs.writeFileSync(path.join(doneTask.scopePath, 'app.js'), 'export const value = 3;\n');
   const lane = broker.tasks.lanes.get(task.id);
   // The task's review lists only its folder and starts from what the task was asked to do.
   const listed = await call('', undefined, task.id);
   assert.equal(listed.status, 200); assert.deepEqual(listed.body.repositories.map(repo => repo.folderId), [mine.id]);
-  assert.equal(listed.body.goal, 'Change the value in the task'); assert.equal(listed.body.task.id, task.id); assert.equal(listed.body.task.mode, 'direct');
+  assert.equal(listed.body.goal, 'Change the value in the task'); assert.equal(listed.body.task.id, task.id); assert.equal(listed.body.task.mode, 'worktree');
   assert.equal((await call('/preview', { files: [{ folderId: theirs.id, path: 'b.js' }] }, task.id)).status, 409, 'Another folder is out of the task’s reach.');
   assert.equal((await call('/automatic/preview', {}, task.id)).status, 409);
   assert.equal((await call('', undefined, '00000000-0000-4000-8000-000000000000')).status, 404);

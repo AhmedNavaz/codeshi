@@ -81,10 +81,16 @@ export function ownCheck(command, folder) {
 export function planIsolation(identity, occupants, { loose = false, keeps = [] } = {}) {
   const sharing = occupants.find(item => pathsOverlap(item.real, identity.real) || (identity.commonDir && item.commonDir === identity.commonDir));
   const blocker = sharing || occupants.find(item => item.unrestricted) || (loose ? occupants[0] : null);
+  const why = blocker ? (sharing ? `${blocker.label} is using ${identity.commonDir && blocker.commonDir === identity.commonDir ? 'this repository' : 'this folder'}` : `${blocker.label} could reach this folder, as it isn't asked before acting`) : '';
+  if (keeps.length) {
+    if (!blocker) return { mode: 'direct', reason: 'Runs directly in this folder, as it saves files Git ignores and nothing else is using it.' };
+    return { mode: 'wait', blocker: blocker.label, keeps: true, reason: `${why}, and this card saves files Git ignores (${someOf(keeps)}), which its own copy would lose. So it waits until that finishes, then works in the folder itself.` };
+  }
+  if (identity.git && identity.head) {
+    if (blocker) return { mode: 'worktree', blocker: blocker.label, reason: `${why}, so this task works in its own copy from the last commit. You review its changes before they're merged.` };
+    return { mode: 'worktree', reason: "Works in its own copy from the last commit so your workspace stays free. You review its changes before they're merged." };
+  }
   if (!blocker) return { mode: 'direct', reason: 'Runs directly in this folder, as nothing else is using it.' };
-  const why = sharing ? `${blocker.label} is using ${identity.commonDir && blocker.commonDir === identity.commonDir ? 'this repository' : 'this folder'}` : `${blocker.label} could reach this folder, as it isn't asked before acting`;
-  if (keeps.length) return { mode: 'wait', blocker: blocker.label, keeps: true, reason: `${why}, and this card saves files Git ignores (${someOf(keeps)}), which its own copy would lose. So it waits until that finishes, then works in the folder itself.` };
-  if (identity.git && identity.head) return { mode: 'worktree', blocker: blocker.label, reason: `${why}, so this task works in its own copy from the last commit. You review its changes before they're merged.` };
   return { mode: 'wait', blocker: blocker.label, reason: `${why}, and ${identity.git ? 'a repository with no commits' : 'a folder outside Git'} can't have its own copy, so this task waits until that finishes.` };
 }
 // Uncommitted work isn't in a worktree, which starts from the last commit, so the person is told how much that leaves out.

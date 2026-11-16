@@ -225,7 +225,7 @@
   }
   // Small stroke icons for the card's footer, drawn like the rest of the app's icons.
   const glyph = d => { const icon = svg('svg'); icon.setAttribute('class', 'icon'); icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true'); for (const part of d.split('|')) { const path = svg('path'); path.setAttribute('d', part); icon.append(path); } return icon; };
-  const ICONS = { checks: 'M4 12.5l3 3 6-7|M14 9h6M14 15h6', waits: 'M4 6h7a4 4 0 0 1 4 4v8|M11 14l4 4 4-4', smart: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z', subtasks: 'M5 6h4M5 12h4M5 18h4|M13 6h6M13 12h6M13 18h6' };
+  const ICONS = { checks: 'M4 12.5l3 3 6-7|M14 9h6M14 15h6', waits: 'M4 6h7a4 4 0 0 1 4 4v8|M11 14l4 4 4-4', smart: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z', subtasks: 'M5 6h4M5 12h4M5 18h4|M13 6h6M13 12h6M13 18h6', files: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z|M14 3v5h5' };
   // Who does a card, in a few words: its task's agent while it runs, otherwise Smart routing or the agent chosen.
   function whoOf(card) {
     const provider = card.taskState?.provider || card.agent?.provider || null;
@@ -379,6 +379,21 @@
     const charged = (card.draft || ['backlog', 'ready'].includes(card.column)) && card.agent && bills(card.agent.provider) ? billsLabel(card.agent.provider) : '';
     if (charged) fact('board-card-billing', '', charged, `${billsSentence(card.agent.provider)} You’re asked before it runs.`);
     if (card.checks?.length && !['doing', 'done'].includes(card.column)) fact('board-card-checks', ICONS.checks, `${card.checks.filter(check => check.done).length}/${card.checks.length}`, `Done means: ${plural(card.checks.length, 'check')}`);
+    if (card.result && ['review', 'done'].includes(card.column)) {
+      const emptyCopy = card.taskState?.hasWorktree && card.taskState.copyFiles === 0;
+      const changed = emptyCopy ? 0 : card.result.files;
+      const folder = card.taskState?.integration?.folder || folderName(card.folderId);
+      const branch = card.taskState?.integration?.branch;
+      if (changed != null) {
+        const fileText = card.result.status === 'integrated' ? (changed ? `${plural(changed, 'file')} merged` : 'Nothing merged') : (changed ? `${plural(changed, 'file')} changed` : 'No changes');
+        fact('board-card-files', ICONS.files, fileText, card.result.status === 'integrated' && folder ? `${fileText} into ${folder}` : fileText);
+      }
+      if (card.result.status === 'kept' && branch) fact('board-card-branch', '', branch, `Saved as branch ${branch}`);
+      if (card.column === 'done' && card.result.tests && card.result.tests !== 'no-change') {
+        const testLabel = testsWord(card.result.tests, card.result) || `Tests ${card.result.tests}`;
+        fact(`board-card-tests${['failed', 'interrupted'].includes(card.result.tests) ? ' trouble' : ''}`, '', testLabel, card.result.testCommand ? `${testLabel} (${card.result.testCommand})` : testLabel);
+      }
+    }
     const after = (card.dependsOn || []).map(cardBy).filter(other => other && other.column !== 'done');
     if (after.length && (card.draft || ['backlog', 'ready'].includes(card.column))) fact('board-card-after', ICONS.waits, after.length === 1 ? after[0].title : `Waits for ${after.length}`, `Waits for ${after.map(other => `“${other.title}”`).join(', ')}`);
     // A card closed to agents says so; when the whole Plan is closed, the banner above says it once instead.
@@ -1161,25 +1176,82 @@
   // then the agent's whole answer. The verdict a Reviewer or QA card ends with is for the Plan, which shows it as the
   // review below, so it's left out of the answer. Questions the agent asks at the end show on their own, with a box to
   // answer them: the answer goes to the card's task, which carries on from where it stopped.
+  const FILE_CHANGE = { add: 'New', delete: 'Deleted', update: 'Changed' };
+  const FILE_STATUS = { clean: 'Merged', merged: 'Merged with folder', same: 'Already here', conflict: 'Conflict' };
+  function changedFilesBox(card, currentReply, fileCount, integration) {
+    const list = currentReply?.files || [], source = currentReply?.filesSource || null;
+    if (list.length) {
+      const box = node('details', 'board-result-files-box');
+      box.open = true;
+      const summary = node('summary');
+      const totalFiles = integration?.totalFiles && integration.totalFiles > list.length ? integration.totalFiles : list.length;
+      const heading = totalFiles > list.length ? `Changed files (${list.length} of ${totalFiles})` : `Changed files (${list.length})`;
+      summary.append(node('span', '', heading));
+      const added = list.reduce((sum, item) => sum + (Number(item.added) || 0), 0);
+      const removed = list.reduce((sum, item) => sum + (Number(item.removed) || 0), 0);
+      if (added || removed) {
+        const stats = node('span', 'board-result-files-stats');
+        if (added) stats.append(node('span', 'line-count added', `+${added}`));
+        if (removed) stats.append(node('span', 'line-count removed', `−${removed}`));
+        summary.append(stats);
+      }
+      const ul = node('ul', 'board-result-files');
+      ul.append(...list.map(file => {
+        const item = node('li', 'task-merge-file');
+        if (file.resolved && file.status !== 'conflict') item.dataset.status = 'combined';
+        else if (file.status) item.dataset.status = file.status;
+        const head = node(file.diff ? 'summary' : 'div', 'task-merge-head');
+        const pathEl = node('span', 'task-merge-path', file.path);
+        pathEl.title = file.path;
+        head.append(pathEl);
+        if (file.change && FILE_CHANGE[file.change]) head.append(node('span', 'task-merge-change', FILE_CHANGE[file.change]));
+        if (file.added) head.append(node('span', 'line-count added', `+${file.added}`));
+        if (file.removed) head.append(node('span', 'line-count removed', `−${file.removed}`));
+        const statusWord = file.resolved && file.status !== 'conflict' ? 'Combined' : source === 'copy' && file.status === 'clean' ? 'Ready' : source === 'branch' && file.status === 'clean' ? 'In branch' : FILE_STATUS[file.status];
+        if (statusWord) head.append(node('span', 'task-merge-status', statusWord));
+        if (file.diff) { const details = node('details'); details.append(head, node('pre', 'task-merge-diff', file.diff)); item.append(details); }
+        else item.append(head);
+        return item;
+      }));
+      box.append(summary, ul);
+      if (source === 'recorded') box.append(node('p', 'board-result-files-note', 'Paths recorded from agent edits (no saved diff).'));
+      return [box];
+    }
+    if (!currentReply && card.taskState && fileCount > 0) return [node('p', 'board-result-files-note', 'Loading changed files…')];
+    if (currentReply && fileCount > 0) return [node('p', 'board-result-files-note', 'Detailed file list wasn’t saved for this earlier run.')];
+    return [];
+  }
   function resultBox(card) {
     const result = card.result, empty = card.taskState?.hasWorktree && card.taskState.copyFiles === 0, files = empty ? 0 : result.files, tests = result.tests;
-    const box = node('section', `board-result${result.status === 'complete' ? '' : ' trouble'}`); box.setAttribute('aria-label', `Result of “${card.title}”`);
+    const ok = ['complete', 'integrated', 'kept'].includes(result.status);
+    const box = node('section', `board-result${ok ? '' : ' trouble'}`); box.setAttribute('aria-label', `Result of “${card.title}”`);
     const head = node('div', 'board-result-head'), mark = node('span', 'board-result-mark'); mark.setAttribute('aria-hidden', 'true');
-    mark.append(glyph(result.status === 'complete' ? 'M5 12.5l4.5 4.5L19 7.5' : 'M12 7v6|M12 16.5v.5'));
+    mark.append(glyph(ok ? 'M5 12.5l4.5 4.5L19 7.5' : 'M12 7v6|M12 16.5v.5'));
     const provider = card.taskState?.provider || card.attempts?.at(-1)?.provider, model = card.taskState?.model || card.attempts?.at(-1)?.model;
     const who = [provider ? [AGENT[provider] || provider, modelLabel(provider, model)].filter(Boolean).join(' · ') : '', result.at ? when(result.at) : ''].filter(Boolean).join(' · ');
     head.append(mark, node('h3', 'board-result-title', result.status === 'complete' ? 'Result' : `Result · ${OUTCOME[result.status] || result.status}`), ...(who ? [node('span', 'board-result-who', who)] : []));
-    const facts = [files != null ? (files ? plural(files, 'file') + ' changed' : 'No files changed') : '', tests ? (testsWord(tests, result) || `Tests ${tests}`) + (result.testsAccepted ? ', continued anyway' : '') : 'No tests recorded', result.status === 'discarded' ? 'Changes discarded' : empty ? 'Nothing to merge' : result.inCopy ? (result.status === 'complete' ? 'In its own copy, not merged yet' : '') : ''].filter(Boolean);
+    const atKey = result.at ?? '__none__', reply = replies.get(card.id), currentReply = reply && reply.at === atKey ? reply : null;
+    if (!currentReply && (card.taskState || result.summary)) readReply(card);
+    const integration = currentReply?.integration || card.taskState?.integration || null;
+    const folder = integration?.folder || folderName(card.folderId);
+    const fileFact = files != null ? (result.status === 'integrated' ? (files ? `${plural(files, 'file')} merged${folder ? ` into ${folder}` : ''}` : `Nothing merged${folder ? ` into ${folder}` : ''}`) : (files ? plural(files, 'file') + ' changed' : 'No files changed')) : '';
+    const testFact = tests ? (testsWord(tests, result) || `Tests ${tests}`) + (result.testsAccepted ? ', continued anyway' : '') : 'No tests recorded';
+    const stateFact = result.status === 'discarded' ? 'Changes discarded' : result.status === 'kept' && integration?.branch ? `Branch: ${integration.branch}` : empty ? 'Nothing to merge' : result.inCopy && result.status === 'complete' ? 'In its own copy, not merged yet' : '';
+    const testCmd = result.testCommand || card.taskState?.testCommand || '';
+    const chipItems = [fileFact && { text: fileFact }, testFact && { text: testFact, title: testCmd ? `Command: ${testCmd}` : '' }, stateFact && { text: stateFact }].filter(Boolean);
     const chips = node('ul', 'board-result-facts'); chips.setAttribute('aria-label', 'What it changed and how it was tested');
-    chips.append(...facts.map(text => node('li', '', text)));
+    chips.append(...chipItems.map(({ text, title }) => { const li = node('li', '', text); if (title) li.title = title; return li; }));
     box.append(head, chips);
+    const usage = usageWords(card.taskState?.usage);
+    if (usage.length) box.append(node('p', 'board-result-usage', `Used: ${usage.join(' · ')}`));
+    box.append(...changedFilesBox(card, currentReply, files, integration));
     // The whole answer, read when the card opens; the short summary stands in until then.
     // The report stays the report: questions you asked in its task afterwards are listed after it, and only the newest reply
     // offers to answer what it asks.
-    const reply = replies.get(card.id), text = reply && reply.at === result.at && reply.text ? stripVerdict(reply.text) : null, later = text ? reply.followUps || [] : [];
+    const text = currentReply?.text ? stripVerdict(currentReply.text) : null, later = currentReply ? currentReply.followUps || [] : [];
     let asked = [];
     if (text) { const split = questionsIn(text); if (!later.length) asked = split.questions; box.append(answerBlock(later.length ? text : split.answer)); }
-    else if (result.summary) { box.append(node('p', 'board-result-summary', stripVerdict(result.summary))); if (result.followUps) box.append(node('p', 'board-result-note', `Then ${result.followUps === 1 ? 'one follow-up' : `${result.followUps} follow-ups`}…`)); readReply(card); }
+    else if (result.summary) { box.append(node('p', 'board-result-summary', stripVerdict(result.summary))); if (result.followUps) box.append(node('p', 'board-result-note', `Then ${result.followUps === 1 ? 'one follow-up' : `${result.followUps} follow-ups`}…`)); }
     if (later.length) {
       const list = node('section', 'board-followups'); list.setAttribute('aria-label', 'Follow-ups');
       list.append(node('h4', 'board-followups-title', later.length === 1 ? 'Follow-up' : `Follow-ups (${later.length})`));
@@ -1284,9 +1356,19 @@
   // The card carries the first lines of its agent's last reply. Its drawer reads the whole reply once per result and shows
   // it as the chat would, so the result is read here rather than in the card's task.
   async function readReply(card) {
-    const at = card.result?.at, id = card.id;
+    const at = card.result?.at ?? '__none__', id = card.id;
     if (replying.get(id) === at) return; replying.set(id, at);
-    try { const result = await api.api(`/api/board/cards/${id}/answer`); replies.set(id, { at, text: result.text || '', followUps: Array.isArray(result.followUps) ? result.followUps : [] }); }
+    try {
+      const result = await api.api(`/api/board/cards/${id}/answer`);
+      replies.set(id, {
+        at,
+        text: result.text || '',
+        followUps: Array.isArray(result.followUps) ? result.followUps : [],
+        files: Array.isArray(result.files) ? result.files : [],
+        filesSource: result.filesSource || null,
+        integration: result.integration || null,
+      });
+    }
     catch { replying.delete(id); return; }
     if (selected === id) { drawn = null; renderDrawer(); }
   }
@@ -2256,7 +2338,9 @@
         face.dataset.card = card.id; face.dataset.column = card.column; face.setAttribute('aria-pressed', String(selected === card.id));
         const after = (card.dependsOn || []).map(cardBy).filter(Boolean).map(other => `“${other.title}”`);
         const agent = card.taskState?.provider ? AGENT[card.taskState.provider] : card.agent ? AGENT[card.agent.provider] : card.auto ? modeName(card) : inFlow() && !card.draft ? 'Flow picks' : 'No agent yet';
-        face.append(node('span', 'board-outline-title', card.title), node('span', 'board-outline-meta', [card.draft ? draftWord(card) : COLUMNS.find(([id]) => id === card.column)[1], card.role !== 'builder' ? ROLE[card.role] : '', agent, card.closed && !board?.closed ? 'Closed to agents' : '', card.taskState?.notIndependent ? 'Not independent' : '', state && !card.draft ? state.text : !card.draft && needsSubtasks(card) ? 'Needs subtasks' : '', after.length ? `after ${listed(after)}` : ''].filter(Boolean).join(' · ')));
+        const emptyCopy = card.taskState?.hasWorktree && card.taskState.copyFiles === 0;
+        const doneFiles = ['review', 'done'].includes(card.column) && card.result && (emptyCopy ? 0 : card.result.files) != null ? (() => { const count = emptyCopy ? 0 : card.result.files; return card.result.status === 'integrated' ? (count ? `${plural(count, 'file')} merged` : 'Nothing merged') : (count ? `${plural(count, 'file')} changed` : 'No changes'); })() : '';
+        face.append(node('span', 'board-outline-title', card.title), node('span', 'board-outline-meta', [card.draft ? draftWord(card) : COLUMNS.find(([id]) => id === card.column)[1], card.role !== 'builder' ? ROLE[card.role] : '', agent, card.closed && !board?.closed ? 'Closed to agents' : '', card.taskState?.notIndependent ? 'Not independent' : '', state && !card.draft ? state.text : !card.draft && needsSubtasks(card) ? 'Needs subtasks' : '', doneFiles, after.length ? `after ${listed(after)}` : ''].filter(Boolean).join(' · ')));
         if (state?.tone) face.dataset.tone = state.tone;
         // A running card's agent, what it's doing now and what it has used, rewritten in place as it changes (patchLive).
         const live = liveOf(card);
@@ -2850,38 +2934,72 @@
     if (badge) { badge.textContent = short; badge.hidden = !short; }
   }
 
-  // What to do once the Plan shows: a new card written from a prefill.
-  let then = null;
+  // What to do once the Plan shows: a new card written from a prefill, or a Plan thread (the Plan chat or a card's task).
+  let then = null, readyThread = null;
+  const isPlanTaskId = id => Boolean(id && (planThreads().has(id) || (api.getState().conversation?.parallelTasks || []).some(task => task.id === id && (task.board || task.purpose === 'plan-chat'))));
   function open(prefill = null) {
     if (!api.getState().projectId) return false;
     if (showing) { if (prefill) openNew('backlog', null, prefill); return true; }
+    then?.done?.();
     then = prefill ? { prefill } : null;
     return window.relayFlow?.plan?.() !== false;
+  }
+  async function openThread(taskId = null) {
+    if (!api.getState().projectId) return false;
+    const target = taskId || null;
+    const isChat = !target || target === planChatId() || (api.getState().conversation?.parallelTasks || []).some(task => task.id === target && task.purpose === 'plan-chat');
+    if (showing) {
+      showChat();
+      if (isChat) { chatFailed = false; await openChat({ focus: true }); }
+      else {
+        if (api.getState().taskId !== target) await api.setTask(target);
+        drawThreads();
+        $('message-input')?.focus();
+      }
+      return true;
+    }
+    then?.done?.();
+    let resolveReady;
+    const waitReady = new Promise(resolve => { resolveReady = resolve; });
+    then = { taskId: target, isChat, showChat: true, done: resolveReady };
+    const moved = window.relayFlow?.plan?.() !== false;
+    if (!moved) { then = null; resolveReady(); return false; }
+    await waitReady;
+    if (readyThread) await readyThread;
+    return true;
   }
   function show() {
     if (showing) return;
     showing = true; dialog.hidden = false;
     selected = null; draft = null; failure = ''; drawn = null;
-    const next = then; then = null;
+    const next = then; then = null; readyThread = null;
+    if (next?.showChat) showChat();
     render(); chatAttention();
     // The chat you were on comes back when you leave; a card's task you were on stays open beside the Plan.
     before = api.getState().taskDraft ? null : api.getState().taskId || null; chatFailed = false;
-    if (!onPlanThread()) openChat(); else drawThreads();
+    if (next?.taskId && !next.isChat) {
+      readyThread = (api.getState().taskId === next.taskId ? Promise.resolve() : api.setTask(next.taskId)).then(() => { if (!showing) return; drawThreads(); $('message-input')?.focus(); }).catch(error => api.showNotice(error.message));
+    } else if (next?.showChat) {
+      readyThread = !onPlanThread() || next.isChat ? openChat({ focus: true }) : Promise.resolve().then(() => { if (!showing) return; drawThreads(); $('message-input')?.focus(); });
+    } else {
+      if (!onPlanThread()) openChat(); else drawThreads();
+    }
+    next?.done?.();
     load().then(() => {
       if (!showing) return;
       if (next?.prefill) openNew('backlog', null, next.prefill);
       // Focus lands on the first card so the keys work at once, but without the ring: opening the Plan isn't choosing a card.
-      else (view === 'canvas' ? space : view === 'outline' ? $('board-outline') : $('board-columns')).querySelector('[data-card]')?.focus({ focusVisible: false });
+      else if (!next?.showChat && !next?.taskId) (view === 'canvas' ? space : view === 'outline' ? $('board-outline') : $('board-columns')).querySelector('[data-card]')?.focus({ focusVisible: false });
     });
   }
   function hide() {
     if (!showing) return;
-    showing = false; dialog.hidden = true; then = null; tick();
+    showing = false; dialog.hidden = true; then?.done?.(); then = null; readyThread = null; tick();
     selected = null; draft = null; sdraft = null; drawn = null; picked$ = null; suggestConfirm = null;
     const menu = $('board-export-menu'); if (menu) menu.hidden = true;
     drafting = false; replaces = null; leftOut = { card: null }; drawContext(); entry();
     const back = before; before = null; chatFailed = false;
-    if (onPlanThread()) api.setTask(back && !planThreads().has(back) ? back : null).catch(error => api.showNotice(error.message));
+    if (onPlanThread() || isPlanTaskId(api.getState().taskId)) api.setTask(back && !isPlanTaskId(back) ? back : null).catch(error => api.showNotice(error.message));
     window.relayTaskThreads?.refresh?.();
   }
   // Esc lets go of a chosen arrow, then closes the card beside the board. It never leaves the Plan: the view switch does.
@@ -2982,5 +3100,5 @@
   });
   // open({ title, notes }) opens the Plan with a new card written from them, as Write it yourself does.
   // close() goes back to Normal, or to Flow when routing was on. showChat() opens the chat beside the Plan.
-  window.relayBoard = { open, show, hide, canLeave, showChat, asking, openChat: () => openChat({ focus: true }), chatTaskId: () => planChatId(), onPlanChat: () => showing && onPlanChat(), close: () => showing ? window.relayFlow?.setView?.(window.relayFlow.isRouted?.() ? 'flow' : 'normal') !== false : true, isOpen: () => showing, reload: load, drafts: () => cards().filter(card => card.draft) };
+  window.relayBoard = { open, openTask: openThread, show, hide, canLeave, showChat, asking, openChat: () => openChat({ focus: true }), chatTaskId: () => planChatId(), onPlanChat: () => showing && onPlanChat(), close: () => showing ? window.relayFlow?.setView?.(window.relayFlow.isRouted?.() ? 'flow' : 'normal') !== false : true, isOpen: () => showing, reload: load, drafts: () => cards().filter(card => card.draft) };
 })();
