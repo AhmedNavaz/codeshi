@@ -214,7 +214,6 @@ See [ROADMAP.md](ROADMAP.md) for **Next**, **Later**, **Final checks**, **Ongoin
 Codeshi is free and open source, under the MIT license. If it saves you time, you can support ongoing development:
 
 - [Patreon](https://www.patreon.com/17048317/join)
-- [Buy Me a Coffee](https://www.buymeacoffee.com/codeshi)
 
 Funding goals:
 

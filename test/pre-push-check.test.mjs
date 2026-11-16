@@ -97,7 +97,7 @@ test('runChecks runs syntax, selected tests and smoke test when releasing', () =
   const calls = [], logs = [];
   runChecks({
     changedFiles: ['src/activity.mjs'],
-    execImpl: (bin, args) => calls.push([path.basename(bin), ...args.map(arg => arg.startsWith('/') ? path.basename(arg) : arg)]),
+    execImpl: (bin, args) => calls.push([path.basename(bin), ...args.map(arg => path.isAbsolute(arg) ? path.basename(arg) : arg)]),
     log: message => logs.push(message),
   });
   assert.deepEqual(calls, [
