@@ -664,6 +664,8 @@ test('a card in Flow’s Run Ready doesn’t start once the run has used up its 
   assert.equal(env.task(tasks[second.id]).status, 'cancelled');
   assert.match(env.card(second.id).reason, /^Not started: This run has used 4,000 tokens/);
   assert.equal(env.captured(fs.realpathSync(env.folder('b'))).length, 0, 'Its agent was never started.');
+  // The second card is held back as soon as the run's limit is used up, which can be before the first card's task ends.
+  await until(() => env.task(tasks[first.id]).budgetUsed, 'the first card’s task to end');
   assert.equal(env.task(tasks[first.id]).budgetUsed.tokens, 4000, 'What the first card used is kept with its task.');
 });
 
