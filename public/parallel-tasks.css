@@ -40,8 +40,9 @@
 .task-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; flex: none; padding: 7px 16px; border-bottom: 1px solid var(--border); background: var(--surface-raised); font-size: 12px; line-height: 1.45; }
 .task-banner[hidden] { display: none; }
 .task-banner-text { flex: 1 1 260px; min-width: 0; display: grid; gap: 1px; }
-.task-banner-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--text-strong); font-weight: 600; }
-.task-banner-kind { flex: none; padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: 10.5px; font-weight: 600; line-height: 17px; }
+.task-banner-title { display: flex; align-items: flex-start; gap: 8px; min-width: 0; color: var(--text-strong); font-weight: 600; line-height: 18px; }
+/* Exactly one title line tall, so it sits centred on the first line however the title wraps. */
+.task-banner-kind { flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: 10.5px; font-weight: 600; line-height: 1; }
 .task-banner-name { min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #app-shell.plan .task-banner-name { white-space: normal; overflow-wrap: anywhere; }
 .task-banner-state { flex: none; color: var(--muted); font-weight: 400; }

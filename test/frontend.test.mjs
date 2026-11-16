@@ -8185,7 +8185,8 @@ test('the Plan view shows the Plan chat, not the Workspace chat, lists each card
   assert.equal(ui.$('composer').classList.contains('plan-asking'), false);
   assert.match(ui.$('task-banner').textContent, /Card/);
   assert.equal(ui.$('task-banner').querySelector('.task-banner-back'), null, 'The thread tabs already provide navigation.');
-  assert.equal(ui.$('task-banner').querySelector('.task-banner-state').textContent, 'Finished', 'The folder name does not crowd the card title.');
+  assert.equal(ui.$('task-banner').querySelector('.task-banner-state'), null, 'The thread tab already shows the state, and no folder name crowds the card title.');
+  assert.match(ui.$('task-banner').querySelector('.task-banner-name').title, /Cart page · Finished/);
   // Leaving the Plan view goes back to the chat you were on before it.
   ui.window.relayFlow.leave(); await flush(); await flush(); await flush();
   assert.equal(ui.window.relayFlow.view(), 'normal'); assert.equal(ui.state().taskId, null);

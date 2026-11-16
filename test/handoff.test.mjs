@@ -636,6 +636,26 @@ test('automatic handoff follows the same rules and says so in the conversation',
   assert.match(notes(limit.c).at(-1), /handed the task to Claude\. 1 queued prompt moved to Claude\.$/);
 });
 
+test('a usage-limit handoff stays switching until queued prompts move and the destination starts', { skip: scriptCLIs }, async t => {
+  const env = setup(t, { preferences: allowed });
+  const run = await env.start();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  let moving = false;
+  const move = env.broker.handoff.moveQueue.bind(env.broker.handoff);
+  env.broker.handoff.moveQueue = async (...args) => { moving = true; await gate; return move(...args); };
+  env.broker.event(run, { type: 'turn.failed', error: { message: 'You have hit your usage limit.' } });
+  env.release();
+  await until(() => moving, 'queued prompts to begin moving');
+  assert.equal(env.broker.running, null);
+  assert.equal(env.c.limitSwitching?.provider, 'codex', 'The gap remains a handoff until the new run starts.');
+  release();
+  await continued(env, 'claude');
+  await done(env);
+  assert.equal(env.c.limitSwitching, null);
+});
+
 test('Flow mode executes handoff autonomously without publishing an interactive handoff offer card (#135)', { skip: scriptCLIs }, async t => {
   const env = setup(t, { preferences: { ...allowed, mode: 'smart' } }), run = await env.start();
   queue(env, 'Flow queued task');

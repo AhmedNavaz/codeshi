@@ -228,14 +228,20 @@ export class HandoffMonitor {
     this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual', provider: offer.to.provider, model: offer.to.model, effort: offer.to.effort });
     run.handoff = offer;
     if (c.handoffOffer === offer) c.handoffOffer = null;
-    this.broker.stop(c.id);
-    await run.done;
-    this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' });
-    const queue = await this.moveQueue(c, offer.from.provider, offer.to, { covered: offer.queue?.items || [], billingConfirmed: queueBillingConfirmed === true, verifyExecution: () => this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' }) });
-    this.broker.message(c, 'system', `${names[offer.from.provider]} was close to its usage limit, so ${automatic ? 'Codeshi handed' : 'you handed'} the task to ${names[offer.to.provider]}.${this.queueNote(queue, offer.from.provider, offer.to.provider)}`);
-    const result = this.broker.start(c, { provider: offer.to.provider, model: offer.to.model, ...(offer.to.routing ? { effort: offer.to.effort, routing: offer.to.routing } : {}), mode: offer.to.mode, approvalPolicy: offer.to.approvalPolicy, fresh: true, text: continuationRequest, billingConfirmed: offer.to.billingSource !== 'subscription' && billingConfirmed === true, requestId: `handoff-${offer.id}` }, { execution: offer.execution, executionAction: automatic ? 'handoff' : 'manual' });
-    if (automatic) this.broker.emit('notify', { conversationId: c.id, kind: 'started', title: `Handed off to ${names[offer.to.provider]}`, body: `${names[offer.from.provider]} was close to its usage limit, so the task continues with ${names[offer.to.provider]}.` });
-    return result;
+    const switching = c.limitSwitching = { provider: run.provider };
+    try {
+      this.broker.stop(c.id);
+      await run.done;
+      this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' });
+      const queue = await this.moveQueue(c, offer.from.provider, offer.to, { covered: offer.queue?.items || [], billingConfirmed: queueBillingConfirmed === true, verifyExecution: () => this.broker.execution.assert(c, offer.execution, { action: automatic ? 'handoff' : 'manual' }) });
+      this.broker.message(c, 'system', `${names[offer.from.provider]} was close to its usage limit, so ${automatic ? 'Codeshi handed' : 'you handed'} the task to ${names[offer.to.provider]}.${this.queueNote(queue, offer.from.provider, offer.to.provider)}`);
+      const result = this.broker.start(c, { provider: offer.to.provider, model: offer.to.model, ...(offer.to.routing ? { effort: offer.to.effort, routing: offer.to.routing } : {}), mode: offer.to.mode, approvalPolicy: offer.to.approvalPolicy, fresh: true, text: continuationRequest, billingConfirmed: offer.to.billingSource !== 'subscription' && billingConfirmed === true, requestId: `handoff-${offer.id}` }, { execution: offer.execution, executionAction: automatic ? 'handoff' : 'manual' });
+      if (automatic) this.broker.emit('notify', { conversationId: c.id, kind: 'started', title: `Handed off to ${names[offer.to.provider]}`, body: `${names[offer.from.provider]} was close to its usage limit, so the task continues with ${names[offer.to.provider]}.` });
+      return result;
+    } finally {
+      if (c.limitSwitching === switching) c.limitSwitching = null;
+      this.broker.emit('update', { conversationId: c.id });
+    }
   }
 
   // Revalidates the offer immediately before switching, then stops the run and continues on the destination.
@@ -316,7 +322,6 @@ export class HandoffMonitor {
       // The person may have sent something while this was being worked out; theirs goes ahead.
       if (this.closed || this.broker.running || c.lastRun?.id !== run.id || !this.broker.execution.allows(c, run.execution, { action: 'handoff' })) return done(true);
       if (to?.billingSource === 'subscription' && to.quota === 'ok') {
-        c.limitSwitching = null;
         // Queued prompts wait for the run that takes over, as after any handoff.
         run.handoff = { atLimit: true };
         const queue = await this.moveQueue(c, run.provider, to, { verifyExecution: () => this.broker.execution.assert(c, run.execution, { action: 'handoff' }) });

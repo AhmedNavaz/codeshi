@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { gitExecutable } from './resolve-binary.mjs';
+import { commandEnvironment, gitExecutable } from './resolve-binary.mjs';
 
 // How a task can run beside other work (#88), and how its changes come back. Folder labels prove nothing: two folders can be
 // one repository, one can sit inside another, and a link can name either. So everything here goes by the path on disk and
@@ -430,7 +430,7 @@ export async function checkCombined({ root, prefix = '', plan, command, director
     const cwd = path.join(target, prefix, directory);
     if (!fs.existsSync(cwd)) return { status: 'failed', exitCode: null, output: `${path.posix.join(prefix, directory)} doesn't exist in the combined result.` };
     return await new Promise(resolve => {
-      const child = spawn(command, { cwd, shell: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1' } });
+      const child = spawn(command, { cwd, shell: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], env: { ...commandEnvironment(), CI: '1' } });
       let output = '', timedOut = false, settled = false;
       const keep = chunk => { output = (output + chunk).slice(-OUTPUT_TAIL); };
       child.stdout.on('data', keep); child.stderr.on('data', keep);

@@ -184,8 +184,11 @@
     if (!task || task.purpose === 'plan-chat') return;
     const text = node('div', 'task-banner-text');
     // Says which conversation this is by name, so a task's chat can't be mistaken for the workspace chat.
-    const title = node('strong', 'task-banner-title'), name = node('span', 'task-banner-name', task.title || 'Task'); name.title = task.title || '';
-    title.append(node('span', 'task-banner-kind', task.board ? 'Card' : 'Task'), name, node('span', 'task-banner-state', plan ? (LABEL[task.status] || task.status) : `${task.folderName} · ${LABEL[task.status] || task.status}`));
+    // In the Plan view the card's tab in the thread bar already shows its state, so the banner leaves it to the tooltip.
+    const status = LABEL[task.status] || task.status;
+    const title = node('strong', 'task-banner-title'), name = node('span', 'task-banner-name', task.title || 'Task'); name.title = plan ? `${task.title || 'Task'} · ${status}` : task.title || '';
+    title.append(node('span', 'task-banner-kind', task.board ? 'Card' : 'Task'), name);
+    if (!plan) title.append(node('span', 'task-banner-state', `${task.folderName} · ${status}`));
     text.append(title);
     const how = task.reason || (task.resolving?.open ? (task.status === 'running' ? 'Resolving its merge conflicts in its own copy. You review the combined result before it’s merged.' : 'Resolving its merge conflicts isn’t finished. Answer the agent here, or review and merge it to resolve again.') : task.mode === 'worktree' ? `Works in its own copy from the last commit${task.uncommitted ? `, without ${task.uncommitted} uncommitted change${task.uncommitted === 1 ? '' : 's'} in the folder` : ''}. You review its changes before they’re merged.${copyNote(task.setup)}` : task.mode === 'direct' ? 'Works directly in this folder.' : '');
     if (task.status === 'integrated') text.append(node('span', 'task-banner-detail', `${task.integration?.files || 0} file${task.integration?.files === 1 ? '' : 's'} merged into ${task.folderName}.`));

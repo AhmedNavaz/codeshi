@@ -28,6 +28,8 @@ const clip = (text, limit) => { const value = String(text || '').trim(); return 
 // after it until you check it again or choose to continue anyway. A step in its own copy waits for your merge instead.
 // A card from the Plan (#162) is held the same way.
 const tested = task => Boolean(task.plan || task.board);
+// A handoff keeps its task and slot while the old run has ended and the destination is starting.
+const working = lane => Boolean(lane?.broker.running || lane?.c?.limitSwitching);
 // Usage rows added up, for limits shared by several tasks.
 const sum = rows => {
   const total = { workingMs: 0, tokens: 0, spendUSD: 0, retries: 0, reviews: 0, handoffs: 0, runsWithoutUsage: 0, runsWithPartialUsage: 0, runsWithoutCost: 0, running: 0 };
@@ -51,10 +53,10 @@ export class TaskCoordinator {
   find(c, id) { const task = (c.parallelTasks || []).find(item => item.id === id); if (!task) throw fail('That task is no longer here.', 404); return task; }
   // A card on the board (#132) follows the task it started, so the board hears about every change.
   update(c, task, changes) { this.main.record(c, { type: 'parallel_task_update', id: task.id, changes }); this.onTask?.(c, task); this.main.emit('update', { conversationId: c.id }); }
-  get running() { return [...this.lanes.values()].filter(lane => lane.broker.running).length; }
+  get running() { return [...this.lanes.values()].filter(working).length; }
   get activeWorkers() { return (this.main.running ? 1 : 0) + this.running + this.holding() + this.preparing.size + (this.main.board?.suggestJobs?.size || 0) + [...this.main.conversations.values(), ...[...this.lanes.values()].map(lane => lane.c).filter(Boolean)].reduce((sum, c) => sum + c.reviews.filter(review => review.background && review.status === 'running').length, 0); }
   // Cards between two subtasks have no run for a moment but keep their slot (src/subtasks.mjs).
-  holding() { let count = 0; for (const [id, lane] of this.lanes) if (!lane.broker.running && lane.task && this.main.board?.subtasks.holding(lane.task)) count++; return count; }
+  holding() { let count = 0; for (const [id, lane] of this.lanes) if (!working(lane) && lane.task && this.main.board?.subtasks.holding(lane.task)) count++; return count; }
   get busy() { return this.running > 0 || this.checking.size > 0; }
   get waitingResumes() { return [...this.lanes.values()].reduce((count, lane) => count + (lane.broker.waitingResumes || 0), 0); }
   openLanes() { return [...this.lanes.values()].map(lane => lane.broker); }
@@ -68,7 +70,7 @@ export class TaskCoordinator {
     if (task && !this.available(task)) throw fail(`${task.folderName} is no longer in this workspace, so this task can't run. Its history stays.`);
     if (task && (ENDED.has(task.status) || task.status === 'lost')) throw fail('This task has ended, so it can’t run again. Its history stays. Start a new task to carry on.');
     const home = c || [...this.main.conversations.values()].find(item => item.id === this.main.mainConversationId) || [...this.main.conversations.values()][0];
-    const limit = this.main.budget.policy(home).maxConcurrent, others = this.activeWorkers - (task && (this.lanes.get(task.id)?.broker.running || this.main.board?.subtasks.holding(task)) ? 1 : 0);
+    const limit = this.main.budget.policy(home).maxConcurrent, others = this.activeWorkers - (task && (working(this.lanes.get(task.id)) || this.main.board?.subtasks.holding(task)) ? 1 : 0);
     if (others >= limit) throw fail(`${others} ${others === 1 ? 'task is' : 'tasks are'} already running, the most this workspace's task limits allow at once.`);
     if (task) this.syncPolicy(home, task);
   }
@@ -87,7 +89,7 @@ export class TaskCoordinator {
       for (const folder of this.main.workspaceFolders) { try { const identity = folderIdentity(folder.path); rows.push({ real: identity.real, commonDir: identity.commonDir || null, unrestricted: loose, label: 'The main conversation' }); } catch { /* A folder that's gone holds nothing. */ } }
     }
     for (const { task } of this.all()) {
-      if (task.id === except || !this.lanes.get(task.id)?.broker.running) continue;
+      if (task.id === except || !working(this.lanes.get(task.id))) continue;
       rows.push({ real: task.scopePath, commonDir: task.commonDir || null, unrestricted: task.mode === 'direct' && unrestricted({ provider: task.provider, mode: task.accessMode, approvalPolicy: task.approvalPolicy }), label: `“${task.title}”` });
     }
     return rows;
@@ -399,7 +401,7 @@ export class TaskCoordinator {
   sync(c, task) {
     const lane = this.lanes.get(task.id);
     if (!lane?.c || this.closed || ENDED.has(task.status) || ['detached', 'lost', 'blocked'].includes(task.status)) return;
-    const status = lane.broker.running ? 'running' : task.preparationCancelled ? 'stopped' : STOPPED[lane.c.status] || (lane.c.status === 'running' ? 'running' : task.status);
+    const status = working(lane) ? 'running' : task.preparationCancelled ? 'stopped' : STOPPED[lane.c.status] || (lane.c.status === 'running' ? 'running' : task.status);
     // A major card's task keeps running from one subtask to the next, or ends paused (#155). How it ended stays, though
     // its last run completed, until someone works in the task again.
     if (task.subtasksEnded) { if (!lane.broker.running) return; this.update(c, task, { subtasksEnded: false }); }

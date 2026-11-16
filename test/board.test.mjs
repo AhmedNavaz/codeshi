@@ -1037,6 +1037,61 @@ test('a major card is split with an agent before it runs, each subtask runs in i
   assert.match(env.board.markdown(env.c), /Subtasks:\n\n1\. \[x\] Add the cart\n2\. \[x\] Add the receipt\n3\. \[x\] Email the receipt/);
 });
 
+test('a subtask keeps its card, conversation and slot across a handoff, and a failed handoff releases them', { skip: scriptCLIs }, async t => {
+  for (const fails of [false, true]) await t.test(fails ? 'destination fails' : 'destination continues', async t => {
+    const env = setup(t, ['a'], { policy: { maxConcurrent: 2 } });
+    const card = env.add({ title: 'Build checkout', column: 'ready' });
+    for (const title of ['Add cart', 'Add receipt', 'Check checkout']) env.board.subtasks.act(env.c, card.id, { action: 'add', title });
+    scriptMatch(env, 'Subtask 2 of 3', { behavior: 'hold', text: 'Receipt complete.' });
+    const { tasks } = env.board.run(env.c, { ids: [card.id] }), task = env.task(tasks[card.id]);
+    await until(() => env.card(card.id).subtasks[1].status === 'running' && env.captured(task.scopePath).length === 2, 'the second subtask');
+    const lane = env.lane(task.id), run = lane.broker.running, conversationId = lane.c.id;
+    const handoff = lane.broker.handoff;
+    handoff.preferences = () => ({ threshold: 90, automatic: false });
+    handoff.usage = async provider => ({ available: true, checkedAt: new Date().toISOString(), windows: [{ id: 'primary', label: '5-hour', usedPercent: provider === 'codex' ? 96 : 10, resetsAt: new Date(Date.now() + 3600000).toISOString() }] });
+    handoff.account = async provider => ({ installed: provider !== 'gemini', authenticated: true, billingSource: 'subscription' });
+    handoff.models = async () => ({ models: [{ id: 'haiku', displayName: 'Haiku' }] });
+    await handoff.check(run);
+    assert(lane.c.handoffOffer, 'A handoff offer is prepared for the lane.');
+    let releaseMove;
+    const gate = new Promise(resolve => { releaseMove = resolve; });
+    t.after(() => releaseMove());
+    const move = handoff.moveQueue.bind(handoff);
+    handoff.moveQueue = async (...args) => { await gate; return move(...args); };
+    const start = lane.broker.start.bind(lane.broker);
+    lane.broker.start = (...args) => { if (fails && args[0] === lane.c) throw new Error('Destination unavailable'); return start(...args); };
+    const switching = lane.broker.acceptHandoff(lane.c, { offerId: lane.c.handoffOffer.id });
+    await until(() => !lane.broker.running && lane.c.limitSwitching, 'the gap between agents');
+    env.broker.budget.setPolicy(env.c, { maxConcurrent: 1 });
+    assert.equal(task.status, 'running');
+    assert.equal(env.card(card.id).column, 'doing');
+    assert.equal(env.card(card.id).task, task.id);
+    assert.deepEqual(env.card(card.id).subtasks.map(sub => sub.status), ['done', 'running', 'pending']);
+    assert.equal(env.broker.tasks.activeWorkers, 1, 'The handoff keeps its concurrency slot.');
+    assert.throws(() => env.broker.tasks.admit(env.c, null), /already running/);
+    assert.equal(env.broker.tasks.occupants(env.c).length, 1, 'Its folder stays occupied.');
+    releaseMove();
+    if (fails) {
+      await assert.rejects(switching, /Destination unavailable/);
+      assert.equal(lane.c.limitSwitching, null);
+      assert.equal(task.status, 'stopped');
+      assert.equal(env.card(card.id).column, 'ready');
+      assert.equal(env.broker.tasks.activeWorkers, 0, 'A failed start releases its slot.');
+      return;
+    }
+    await switching;
+    assert.equal(lane.c.id, conversationId);
+    assert.equal(lane.broker.running.provider, 'claude');
+    assert.equal(env.card(card.id).task, task.id);
+    await until(() => env.card(card.id).column === 'review', 'the remaining subtasks');
+    assert.deepEqual(env.card(card.id).subtasks.map(sub => sub.status), ['done', 'done', 'done']);
+    assert.equal(env.card(card.id).subtasks[1].provider, 'claude');
+    assert.equal(env.captured(task.scopePath).filter(entry => entry.context.currentRequest.includes('Subtask 1 of 3')).length, 1, 'The completed subtask never restarts.');
+    assert.equal(env.c.parallelTasks.filter(item => item.board?.cardId === card.id).length, 1);
+    assert.equal(lane.c.limitSwitching, null);
+  });
+});
+
 test('splits run side by side, each with its own line, up to Tasks at once (#162)', { skip: scriptCLIs }, async t => {
   const env = setup(t);
   env.broker.budget.setPolicy(env.c, { maxConcurrent: 2 });

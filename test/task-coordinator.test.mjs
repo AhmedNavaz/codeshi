@@ -11,7 +11,7 @@ import { captureReview, listReviewChanges, reviewFreshness } from '../src/agent-
 import { Broker } from '../src/broker.mjs';
 import { MutationCoordinator } from '../src/mutation-lock.mjs';
 import { createRelayServer } from '../src/server.mjs';
-import { applyPlan, folderIdentity, ignoredPaths, integrationPlan, markerLabels, ownCheck, pathsOverlap, planIsolation, prepareResolution, unrestricted } from '../src/task-isolation.mjs';
+import { applyPlan, checkCombined, folderIdentity, ignoredPaths, integrationPlan, markerLabels, ownCheck, pathsOverlap, planIsolation, prepareResolution, unrestricted } from '../src/task-isolation.mjs';
 import { stageChanges, unstageChanges, commitChanges } from '../src/workspace-commit.mjs';
 
 const fixture = fileURLToPath(new URL('./mock-cli.mjs', import.meta.url));
@@ -555,6 +555,21 @@ test('a change outside the task’s folder, a link, or a file changed to a folde
   fs.rmSync(path.join(restore, 'b.txt')); fs.mkdirSync(path.join(restore, 'b.txt'));
   assert.throws(() => applyPlan(restore, { writes: [{ path: 'a.txt', content: Buffer.from('changed\n') }, { path: 'b.txt', content: Buffer.from('x\n') }] }), /can't be replaced/);
   assert.equal(fs.readFileSync(path.join(restore, 'a.txt'), 'utf8'), 'a\n');
+});
+
+test('combined checks find package managers from a Finder PATH and sanitize the app environment', { skip: process.platform === 'win32' }, async t => {
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a')) }));
+  const nvm = path.join(env.root, 'nvm'), bin = path.join(nvm, 'versions/node/v22.12.0/bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'npm'), `#!${process.execPath}\nconsole.log(JSON.stringify({found: 'package-manager', ci: process.env.CI, electron: process.env.ELECTRON_RUN_AS_NODE, options: process.env.NODE_OPTIONS, relay: process.env.AI_RELAY_CHECK_SECRET}));\n`, { mode: 0o700 });
+  const changes = { PATH: '/usr/bin:/bin', NVM_DIR: nvm, ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--no-warnings', AI_RELAY_CHECK_SECRET: 'private' };
+  const saved = Object.fromEntries(Object.keys(changes).map(key => [key, process.env[key]]));
+  Object.assign(process.env, changes);
+  let result;
+  try { result = await checkCombined({ root: env.folders.a, plan: { writes: [] }, command: 'npm', target: path.join(env.root, 'check') }); }
+  finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
+  assert.equal(result.status, 'passed', result.output);
+  assert.deepEqual(JSON.parse(result.output.trim()), { found: 'package-manager', ci: '1' });
 });
 
 test('the combined result is checked before merging, in a temporary copy, and failing tests need a yes', { skip: scriptCLIs }, async t => {
