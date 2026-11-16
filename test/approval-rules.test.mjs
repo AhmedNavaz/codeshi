@@ -4,7 +4,7 @@ import { scriptCLIs } from './platform.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { guardedReason, guardedWrite, readOnlyCommand, readOnlyRequest } from '../src/approval-rules.mjs';
+import { approvalScope, guardedReason, guardedWrite, readOnlyCommand, readOnlyRequest } from '../src/approval-rules.mjs';
 import { runClaude } from '../src/providers.mjs';
 
 const workspaces = ['/work/app', '/work/shared'], cwd = '/work/app';
@@ -46,6 +46,24 @@ test('Codex argv commands, including a shell wrapper, are judged by the command 
   assert.equal(reads(['bash', '-lc', 'npm install']), false);
   assert.equal(reads(['ls', '-la']), true);
   assert.equal(reads(['rm', '-rf', 'dist']), false);
+});
+
+test('the line Codex 0.165 asks about, its shell and all, is judged and remembered as the command that shell runs', () => {
+  const codex = (command, more = {}) => ({ kind: 'item/commandExecution/requestApproval', command, cwd, ...more });
+  const allowed = request => readOnlyRequest(request, { workspaces });
+  const remembered = request => approvalScope(request, { provider: 'codex', workspaces });
+  for (const command of ["/bin/zsh -lc 'git status'", "/bin/zsh -lc 'rg -n foo src | head -20'", '/bin/bash -lc "git log --oneline -5"', "sh -c 'cat README.md'"]) assert.equal(allowed(codex(command)), true, command);
+  for (const command of ["/bin/zsh -lc 'git push origin main'", "/bin/zsh -lc 'cat /etc/passwd'", "/bin/zsh -lc 'cat notes.txt > out.txt'", "/bin/zsh -lc 'npm install'"]) assert.equal(allowed(codex(command)), false, command);
+  // Only a known shell given exactly one script is taken off. Anything else is the program it names.
+  for (const command of ["/tmp/tools/zsh -lc 'git status'", "/bin/zsh -lc 'git status' more", "/bin/zsh -lic 'git status'", "/bin/zsh -lc"]) assert.equal(allowed(codex(command)), false, command);
+  assert.equal(allowed(codex("/bin/zsh -lc 'git status'", { codexKind: 'writeStdin' })), false, 'Input for a terminal that is already running is not the command it names.');
+  assert.equal(allowed({ kind: 'Bash', input: { command: "/bin/zsh -lc 'git status'" } }), false, 'A shell another agent names itself is its own doing, and asks as before.');
+  assert.equal(remembered(codex("/bin/zsh -lc 'git push origin main'")).label, 'git push origin main');
+  assert.equal(remembered(codex("/bin/zsh -lc 'git push origin main'")).key, remembered(codex(['/bin/zsh', '-lc', 'git push origin main'])).key, 'The same action as its argv form.');
+  assert.equal(remembered(codex(`/bin/zsh -lc "git commit -m 'Add note'"`)).label, "git commit -m 'Add note'");
+  assert.equal(remembered(codex("/bin/zsh -lc 'git add . && git commit -m x'")), null, 'Single commands only.');
+  assert.equal(remembered(codex("/tmp/tools/zsh -lc 'git push'")).label, "/tmp/tools/zsh -lc 'git push'", 'An unknown shell is part of what is remembered.');
+  assert.equal(remembered(codex("/bin/zsh -lc 'git push'", { codexKind: 'writeStdin' })), null);
 });
 
 test('approval requests from each agent are recognized: reads inside the workspace pass, edits and outside reads ask', () => {
@@ -145,6 +163,8 @@ test('a task can’t change the workspace’s real folders: edits, file changes,
   for (const command of [`touch ${site.replace(' ', '\\ ')}/x`, `sed -i '' s/a/b/ '${path.join(site, 'x.ts')}'`, 'rm -rf ~/app/dist', 'echo hi > $HOME/app/notes.md', 'cp a ${HOME}/app/a', `npm --prefix=${real} run build`])
     assert.notEqual(guard({ kind: 'Bash', input: { command } }), null, command);
   assert.equal(guard({ kind: 'item/commandExecution/requestApproval', command: ['/bin/zsh', '-lc', `touch ${path.join(real, 'x')}`], cwd: copy }), 'app', 'Codex argv, through its shell wrapper.');
+  assert.equal(guard({ kind: 'item/commandExecution/requestApproval', command: `/bin/zsh -lc 'printf x > ${path.join(real, 'x.txt')}'`, cwd: copy }), 'app', 'The same as the one line Codex 0.165 sends.');
+  assert.equal(guard({ kind: 'item/commandExecution/requestApproval', codexKind: 'writeStdin', command: `/bin/zsh -lc 'touch ${path.join(real, 'x')}'`, cwd: copy }), 'app', 'Input for a running terminal is read too.');
   assert.equal(guard({ kind: 'item/commandExecution/requestApproval', command: 'npm test', cwd: real }), 'app', 'A command that runs in the real folder.');
   for (const command of ['npm test && touch build/x', 'npm install', `node ${path.join(copy, 'run.mjs')}`, 'curl https://example.com/a/b', "sed -i '' s/app/site/ src/a.js", `cat > notes.md <<'EOF'\ncd "${site}" && rm -rf lib\nEOF`])
     assert.equal(guard({ kind: 'Bash', input: { command } }), null, command);

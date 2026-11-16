@@ -21,11 +21,14 @@ const requests = [
   { marker: 'RUN-SERVER-FORM', method: 'mcpServer/elicitation/request', params: { threadId: 'auto-thread', turnId: 'auto-turn', serverName: 'deploys', mode: 'form', message: 'Choose how to deploy', _meta: null, requestedSchema: { type: 'object', properties: { target: { type: 'string', title: 'Target', oneOf: [{ const: 'eu-1', title: 'Europe' }, { const: 'us-1', title: 'America' }] }, canary: { type: 'boolean', title: 'Canary' }, count: { type: 'integer', title: 'Count' } } } } },
   { marker: 'RUN-OPAQUE-FORM', method: 'mcpServer/elicitation/request', params: { threadId: 'auto-thread', turnId: 'auto-turn', serverName: 'custom', mode: 'openai/form', message: 'Fill this in', _meta: null, requestedSchema: { anything: true } } },
 ];
+// What Codex 0.165 sends for a command its sandbox blocked, taken from a real run: the whole line it would run, through
+// the person's shell, and a kind of its own. This stand-in used to send the command as argv, and no kind.
+const pushRequest = { threadId: 'auto-thread', turnId: 'auto-turn', itemId: 'push', startedAtMs: 1, environmentId: 'local', kind: 'command', reason: 'Needs the network', command: "/bin/zsh -lc 'git push origin main'", commandActions: [{ type: 'unknown', command: 'git push origin main' }], proposedExecpolicyAmendment: ['git', 'push', 'origin', 'main'], availableDecisions: ['accept', { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['git', 'push', 'origin', 'main'] } }, 'cancel'] };
 function setup(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-full-auto-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const workspace = path.join(root, 'workspace'), dataDir = path.join(root, 'data'), log = path.join(root, 'rpc.jsonl'), bin = path.join(root, 'codex-mock.mjs');
-  fs.mkdirSync(workspace);
+  const workspace = path.join(root, 'workspace'), site = path.join(root, 'site'), dataDir = path.join(root, 'data'), log = path.join(root, 'rpc.jsonl'), bin = path.join(root, 'codex-mock.mjs');
+  fs.mkdirSync(workspace); fs.mkdirSync(site);
   fs.writeFileSync(bin, `#!${process.execPath}
 import fs from 'node:fs';import readline from 'node:readline';
 if(process.argv.includes('--version')){console.log('full-auto-fixture 1');process.exit(0);}
@@ -41,7 +44,7 @@ if(prompt.includes('RUN-ALL-FINE')){command('one','Everything up-to-date');finis
 if(prompt.includes('RUN-CONNECTOR-READ-ONLY')){send({method:'item/completed',params:{threadId:'auto-thread',item:{id:'tool',type:'mcpToolCall',server:'codex_apps',tool:'github.create_issue',status:'failed',arguments:{},error:{message:'MCP tool call requires approval, but approval policy is never'}}}});finish('Refused');return;}
 const ask=${JSON.stringify(requests)}.find(entry=>prompt.includes(entry.marker));if(ask){send({method:'item/started',params:{threadId:'auto-thread',item:{id:'tool',type:'mcpToolCall',server:'codex_apps',tool:'github.create_issue',status:'inProgress',arguments:{title:'Bug'}}}});send({id:89,method:ask.method,params:ask.params});return;}
 if(prompt.includes('RUN-READ-ONLY')){command('one','fatal: unable to access: Could not resolve host: github.com');command('two','ssh: Could not resolve hostname: nodename nor servname provided');command('three','Could not resolve host: github.com');finish('It looks like GitHub is down');return;}
-send({id:88,method:'item/commandExecution/requestApproval',params:{threadId:'auto-thread',turnId:'auto-turn',itemId:'push',command:['/bin/zsh','-lc','git push origin main'],cwd:process.cwd(),reason:'Needs the network'}});}
+send({id:88,method:'item/commandExecution/requestApproval',params:{...${JSON.stringify(pushRequest)},cwd:process.cwd(),...(prompt.includes('RUN-OTHER-FOLDER')?{command:"/bin/zsh -lc 'printf x > "+${JSON.stringify(path.join(site, 'x.txt'))}+"'"}:{})}});}
 if(message.id===88&&message.result&&!prompt.includes('RUN-HOLD'))finish(message.result.decision==='accept'?'Pushed':'Not pushed');
 if(message.id===89&&message.result){send({method:'item/completed',params:{threadId:'auto-thread',item:{id:'tool',type:'mcpToolCall',server:'codex_apps',tool:'github.create_issue',status:'completed',arguments:{title:'Bug'},error:null,result:{content:[{type:'text',text:'Created issue 7'}]}}}});finish('Answered');}
 });
@@ -50,7 +53,7 @@ if(message.id===89&&message.result){send({method:'item/completed',params:{thread
   const open = () => { const broker = new Broker({ workspace, dataDir, bins: { codex: bin, claude: path.join(root, 'none'), gemini: path.join(root, 'none') } }); brokers.push(broker); return broker; };
   t.after(async () => { await Promise.all(brokers.map(broker => broker.close())); });
   const rpc = () => fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-  return { open, rpc };
+  return { open, rpc, workspace, site };
 }
 let count = 0;
 const start = (broker, c, text, approvalPolicy, mode = 'edit') => { broker.start(c, { text, provider: 'codex', transport: 'app-server', mode, approvalPolicy, requestId: 'full-auto-' + ++count }); return broker.running; };
@@ -72,11 +75,28 @@ test('Full auto-approval gives Codex the network, lets it ask for what its sandb
   assert.deepEqual(decisions(rpc), ['accept', 'accept']);
 });
 
+test('Full auto-approval does not approve a task’s Codex command into another folder of the workspace', { skip: scriptCLIs }, async t => {
+  const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
+  // As the task coordinator sets them for a task that works directly in its own folder.
+  broker.guarded = [{ path: env.workspace, name: 'app', copy: null }, { path: env.site, name: 'site', copy: null }];
+  await start(broker, c, 'RUN-OTHER-FOLDER', 'auto').done;
+  assert.deepEqual(decisions(env.rpc()), ['decline']);
+  assert(c.messages.some(message => message.role === 'activity' && message.text === `Blocked: ${path.join(env.site, 'x.txt')} is in site, another folder of this workspace. A task changes only its own folder.`));
+  assert.equal(c.messages.some(message => message.text.startsWith('Auto-approved: ')), false);
+  assert.equal(fs.existsSync(path.join(env.site, 'x.txt')), false);
+  // What it asks for in its own folder still goes ahead.
+  await start(broker, c, 'Push it', 'auto').done;
+  assert.deepEqual(decisions(env.rpc()), ['decline', 'accept']);
+  assert(c.messages.some(message => message.text === 'Auto-approved: git push origin main'));
+});
+
 test('switching between Ask before changes and Full auto-approval applies to each run', { skip: scriptCLIs }, async t => {
   const env = setup(t), broker = env.open(), c = broker.get(broker.create().id);
   let run = start(broker, c, 'First', 'ask');
   const [first] = await asking(run);
   assert(first, 'Ask before changes shows the request.');
+  assert.equal(first.kind, 'item/commandExecution/requestApproval', 'The kind Codex names in the request does not replace the one the rules know.');
+  assert.equal(first.scope?.label, 'git push origin main', 'So that exact command can be allowed again, named without the shell Codex runs it through.');
   assert.equal(broker.view(c).pendingApprovals.length, 1);
   await broker.approve(run.id, first.id, true);
   await run.done;

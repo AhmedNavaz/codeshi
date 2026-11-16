@@ -4,6 +4,9 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+### Fixed
+- **A task's Codex commands stay in its own folder.** Recent versions of Codex describe a command they ask approval for in a way Codeshi didn't read as a command. One that changed another folder of the workspace, or the real folder behind the task's copy, could therefore be approved, also by Full auto-approval. It is now refused there, as Codex's file edits are. Approving a Codex command offers **Allow for this run** and **Always allow in this workspace** again, and an **Auto-approved** step names the command without the shell Codex runs it through.
+
 ## [0.58.0] - 2026-11-16
 
 ### Added

@@ -128,7 +128,12 @@ export async function runCodex(config, { event, approval, question = null, metad
       if (message.id !== undefined && message.method) {
         if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) {
           const paths = message.method === 'item/fileChange/requestApproval' ? changing.get(p.itemId) || [] : [];
-          const allow = config.mode === 'read' ? false : await approval({ id: String(message.id), kind: message.method, ...p, ...(paths.length ? { paths } : {}) });
+          // Codex says what a command approval is about in a `kind` of its own: "command", or "writeStdin" for input sent
+          // to a terminal that is already running. The rules know an approval by the request it came in, so that stays
+          // the kind, or the folder guard and remembered approvals would pass it by. Input for a terminal is marked,
+          // since it isn't the command it names.
+          const { kind: codexKind, ...params } = p;
+          const allow = config.mode === 'read' ? false : await approval({ ...params, id: String(message.id), kind: message.method, ...(codexKind && codexKind !== 'command' ? { codexKind } : {}), ...(paths.length ? { paths } : {}) });
           client.send({ id: message.id, result: { decision: allow ? 'accept' : 'decline' } });
         } else if (message.method === 'mcpServer/elicitation/request' && isToolApproval(p)) {
           // Running a connector or MCP tool is an approval like a command, so it follows the run's policy.

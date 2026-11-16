@@ -1,11 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { unwrapShell } from './cli-format.mjs';
 
 // One line saying what an agent asked to do, for the run's activity.
 export function requestSummary(request = {}) {
   let command = request.command ?? request.input?.command;
   if (Array.isArray(command)) command = command.length === 3 && ['-c', '-lc'].includes(command[1]) ? command[2] : command.join(' ');
+  // Codex names the shell it runs a command through, and the line reads better without it.
+  else if (typeof command === 'string') command = unwrapShell(command);
   const tool = request.connector && request.title ? `${request.connector}: ${request.title}` : null;
   return String(command || tool || request.reason || request.title || 'A change outside the sandbox').split('\n')[0].slice(0, 200);
 }
@@ -46,6 +49,16 @@ function words(command) {
   if (quote) return null;
   if (started) segments.at(-1).push(current);
   return segments.every(segment => segment.length) ? segments : null;
+}
+
+// Codex runs each command through the person's shell and asks about the whole line, such as `/bin/zsh -lc 'git status'`
+// (the same can arrive as argv). What that shell runs, when the line is exactly a known shell given one script;
+// anything else stays as it is, and is judged and remembered together with whatever runs it.
+const codexCommands = 'item/commandExecution/requestApproval';
+const wrappingShells = new Set(['bash', 'sh', 'zsh', '/bin/bash', '/bin/sh', '/bin/zsh']);
+function shellScript(command) {
+  const line = typeof command === 'string' ? words(command) : null;
+  return line?.length === 1 && line[0].length === 3 && wrappingShells.has(line[0][0]) && ['-c', '-lc'].includes(line[0][1]) ? line[0][2] : command;
 }
 
 const insideAny = (target, roots) => roots.some(root => target === root || target.startsWith(root + path.sep));
@@ -99,7 +112,7 @@ export function readOnlyCommand(command, { cwd, workspaces = [] } = {}) {
   if (!insideAny(directory, roots)) return false;
   // Codex can send the command as argv, including a shell wrapper around the real command.
   if (Array.isArray(command)) {
-    if (command.length === 3 && ['bash', 'sh', 'zsh', '/bin/bash', '/bin/sh', '/bin/zsh'].includes(command[0]) && ['-c', '-lc'].includes(command[1])) command = command[2];
+    if (command.length === 3 && wrappingShells.has(command[0]) && ['-c', '-lc'].includes(command[1])) command = command[2];
     else if (command.every(part => typeof part === 'string')) command = command.map(part => /[\s'"]/.test(part) ? `'${part.replace(/'/g, '')}'` : part).join(' ');
     else return false;
   }
@@ -123,8 +136,10 @@ export function readOnlyRequest(request = {}, { workspaces = [] } = {}) {
     return roots.length > 0 && [...named, ...locations].every(inside);
   }
   if (commandTools.has(kind)) {
+    // Input Codex sends to a terminal that is already running isn't the command it names, so it always asks.
+    if (request.codexKind) return false;
     const command = request.command ?? input.command ?? request.toolCall?.rawInput?.command;
-    return readOnlyCommand(command, { cwd: request.cwd || input.directory || input.cwd || roots[0], workspaces: roots });
+    return readOnlyCommand(kind === codexCommands ? shellScript(command) : command, { cwd: request.cwd || input.directory || input.cwd || roots[0], workspaces: roots });
   }
   return false;
 }
@@ -138,8 +153,10 @@ export function approvalScope(request = {}, { provider, workspaces = [] } = {}) 
   const input = request.input && typeof request.input === 'object' ? request.input : {};
   if (!roots.length || !provider) return null;
   if (commandTools.has(kind)) {
+    if (request.codexKind) return null;
     let command = request.command ?? input.command ?? request.toolCall?.rawInput?.command;
     if (Array.isArray(command) && command.length === 3 && ['-c', '-lc'].includes(command[1]) && /(?:^|\/)(?:ba|z)?sh$/.test(command[0])) command = command[2];
+    else if (kind === codexCommands) command = shellScript(command);
     const segments = typeof command === 'string' ? words(command) : null;
     if (!segments || segments.length !== 1) return null;
     const cwd = path.resolve(request.cwd || input.directory || input.cwd || roots[0]);
