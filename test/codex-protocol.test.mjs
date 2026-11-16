@@ -94,3 +94,48 @@ test('a truncated Codex event at EOF fails without discarding it or submitting a
   assert.equal(messages.length, 0);
   assert.equal(client.counter, 1);
 });
+
+for (const access of [
+  { name: 'Ask before changes', mode: 'edit', approvalPolicy: 'ask', expected: 'untrusted' },
+  { name: 'default Ask before changes', mode: 'edit', expected: 'untrusted' },
+  { name: 'Full auto-approval', mode: 'edit', approvalPolicy: 'auto', expected: 'on-request' },
+  { name: 'Read only', mode: 'read', approvalPolicy: 'ask', expected: 'never' },
+]) {
+  for (const resumed of [false, true]) {
+    test(`Codex ${access.name} sets thread and turn permissions in a ${resumed ? 'resumed' : 'new'} conversation`, async () => {
+      class Client extends EventEmitter {
+        requests = []; async initialize() {} close() {}
+        async request(method, params) {
+          this.requests.push({ method, params });
+          if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: 'thread' } };
+          if (method === 'turn/start') {
+            queueMicrotask(() => this.emit('message', { method: 'turn/completed', params: { turn: { status: 'completed' } } }));
+            return { turn: { id: 'turn' } };
+          }
+          throw new Error(`Unexpected request: ${method}`);
+        }
+      }
+      const client = new Client();
+      await runCodex({ workspace: '/project', workspaces: ['/project', '/site'], prompt: 'Continue', mode: access.mode,
+        ...(access.approvalPolicy ? { approvalPolicy: access.approvalPolicy } : {}),
+        ...(resumed ? { sessionId: 'thread' } : {}), model: 'm', effort: 'low' },
+      { clientFactory: () => client, event() {}, metadata() {}, approval() { assert.fail('This fixture does not request approval.'); } });
+      assert.deepEqual(client.requests.map(request => request.method), [resumed ? 'thread/resume' : 'thread/start', 'turn/start']);
+      const [thread, turn] = client.requests.map(request => request.params);
+      assert.equal(thread.threadId, resumed ? 'thread' : undefined);
+      assert.equal(turn.threadId, 'thread');
+      for (const params of [thread, turn]) {
+        assert.equal(params.approvalPolicy, access.expected, 'The current choice overrides saved thread and turn permissions.');
+        assert.equal(params.approvalsReviewer, 'user', 'Approvals must reach Codeshi.');
+        assert.equal(params.cwd, '/project');
+      }
+      const readOnly = access.mode === 'read', networkAccess = access.approvalPolicy === 'auto';
+      assert.equal(thread.sandbox, readOnly ? 'read-only' : 'workspace-write');
+      assert.deepEqual(thread.config['sandbox_workspace_write.writable_roots'], readOnly ? [] : ['/project', '/site']);
+      assert.equal(thread.config['sandbox_workspace_write.network_access'], networkAccess);
+      assert.deepEqual(turn.sandboxPolicy, readOnly
+        ? { type: 'readOnly', networkAccess: false }
+        : { type: 'workspaceWrite', writableRoots: ['/project', '/site'], networkAccess });
+    });
+  }
+}
