@@ -959,7 +959,7 @@
     if (card.column === 'review') {
       const accept = button('Accept', () => act(`/api/board/cards/${card.id}/accept`, {}, () => api.announce(`“${card.title}” is done.`)), 'primary-button');
       const merge = card.taskState?.hasWorktree && card.taskState.copyFiles !== 0;
-      if (merge) { row.append(button('Review and merge', () => openTask(card), 'primary-button')); accept.className = 'secondary-button'; accept.disabled = true; accept.title = state?.detail || ''; }
+      if (merge) { row.append(button('Review and merge', () => { if (window.relayTaskThreads?.review && card.taskState?.id) return window.relayTaskThreads.review(card.taskState.id); return openTask(card); }, 'primary-button')); accept.className = 'secondary-button'; accept.disabled = true; accept.title = state?.detail || ''; }
       row.append(accept);
       // Its tests hold the cards after it (#162): check it again, or let them build on it anyway.
       const tests = card.taskState?.tests;

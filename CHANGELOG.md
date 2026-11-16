@@ -2,7 +2,14 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.59.2] - 2026-11-17
+
+### Fixed
+- **Splitting a Plan card accepts complete subtasks when the agent omits the final JSON wrapper brackets** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)). Replies in code fences or surrounded by prose are recognized, while unfinished subtasks still fail instead of silently losing work.
+- **Clicking Review and merge inside a Plan card opens the merge diff dialog directly** ([#162](https://github.com/AhmedNavaz/codeshi/issues/162)), instead of focusing the task chat input.
+
+### Internal
+- **Contributor setup and public docs cleanup.** Added [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md), a GitHub Discussions link in issue templates, and review/claiming guidance in [CONTRIBUTING.md](CONTRIBUTING.md); removed internal planning notes from the public docs and fixed Windows absolute-path handling in pre-push check tests.
 
 ## [0.59.1] - 2026-11-17
 

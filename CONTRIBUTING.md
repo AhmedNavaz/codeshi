@@ -5,9 +5,17 @@ Thanks for helping. Bug reports, fixes and focused improvements are all welcome.
 ## Where to start
 
 - Check the [roadmap](ROADMAP.md) for planned work, and issues labelled [good first issue](https://github.com/AhmedNavaz/codeshi/labels/good%20first%20issue) or [help wanted](https://github.com/AhmedNavaz/codeshi/labels/help%20wanted).
-- For anything bigger than a bug fix, open an issue first so we can agree on the approach before you write code.
+- Take questions and ideas to [GitHub Discussions](https://github.com/AhmedNavaz/codeshi/discussions). For anything bigger than a bug fix, discuss the approach there before you write code; agreed work can then be tracked in an issue.
 - When a feature ships in stages, the remaining work stays in open issues, linked from the issue that shipped and listed on the roadmap. Closed issues don't hold planned work.
 - The [guide](docs/guide.md) describes how each feature behaves, which is useful context before changing it.
+
+## Claiming an issue
+
+Comment on the issue you want to work on, and a maintainer will assign it to you. Wait for assignment before starting so contributors don't duplicate work. If there's no activity for 14 days, a maintainer will unassign the issue so someone else can pick it up. A progress comment counts as activity; let us know if you need more time.
+
+## What to expect from review
+
+Expect a first reply to your issue or pull request within a few days. That reply may ask for more information or suggest a smaller scope; a full review may take longer. Keep discussion on the issue or pull request so everyone can follow the decisions.
 
 ## Set up
 
@@ -97,6 +105,10 @@ Run `npm run hooks:install` once to enable `.githooks/pre-push` so `git push` ru
 ## Reporting bugs
 
 Use the [bug report](https://github.com/AhmedNavaz/codeshi/issues/new?template=bug_report.yml) form, or [design feedback](https://github.com/AhmedNavaz/codeshi/issues/new?template=ux_feedback.yml) for anything confusing or rough in the interface. Include your Codeshi version, your system (macOS or Windows) and its version, the agent you used and the steps to reproduce. Please remove anything private from logs and screenshots. For security problems, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+
+## Licence
+
+Contributions are accepted under the project's [MIT License](LICENSE), the same terms Codeshi is released under. No contributor licence agreement (CLA) or sign-off is required.
 
 ## Releasing
 

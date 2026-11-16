@@ -1,6 +1,6 @@
 # Core execution roadmap
 
-Status: design proposals tracked in GitHub issues #84–#90, with scope extensions posted to #12, #21 and #15. The first milestones of #84, #85, #86, #87, #88 and #21 shipped in 0.26.0, each noted under its section; everything else here is still a proposal. Existing behavior is described separately from proposals. No runtime feature is implemented by this document.
+Status: design proposals tracked in GitHub issues #84–#90, with scope extensions to #12, #21 and #15. The first milestones of #84, #85, #86, #87, #88 and #21 shipped in 0.26.0, each noted under its section; everything else here is still a proposal. Existing behavior is described separately from proposals. No runtime feature is implemented by this document.
 
 ## Product outcome
 
@@ -10,7 +10,7 @@ Codeshi cannot increase a provider's subscription allowance, change its reset ru
 
 ## Flow feedback follow-ups
 
-The November 2026 reports extend existing work rather than implying that the focused Flow layout already manages every decision. See the [report-to-issue map](roadmap-details.md#flow-feedback-follow-ups).
+These follow-ups extend existing work; the focused Flow layout does not yet manage every decision. The [follow-up table](roadmap-details.md#flow-feedback-follow-ups) maps each one to its issue.
 
 - **Fresh routing evidence (#134):** shipped in 0.35.0. Join or refresh account/usage probes on first Send within a bounded deadline, show probing phase in Flow, and progressively recheck completed readings before failing. Cover cold/stale caches, slow/concurrent probes and Stop without manufacturing fresh timestamps, permitting stale quota, or allowing duplicate submissions.
 - **Admission and handoff (#12, #135):** shipped in 0.35.0. Adaptive quota thresholds evaluate window duration, reset cadence, and workload size instead of static 90% cutoffs. Autonomous handoff execution in Flow mode transitions seamlessly under task execution policy (#131) without surfacing manual suggestion cards.
@@ -29,7 +29,7 @@ The November 2026 reports extend existing work rather than implying that the foc
 
 ## Desktop performance and energy use
 
-Track the significant battery-drain report in [#152](https://github.com/AhmedNavaz/codeshi/issues/152). The supplied Activity Monitor row has no column headers, so its values alone do not establish CPU utilization, energy impact or the responsible process.
+Battery drain and sustained resource use are tracked in [#152](https://github.com/AhmedNavaz/codeshi/issues/152). A single process reading does not establish CPU utilization, energy impact or the responsible process; the work starts from reproducible profiles.
 
 A first mitigation, shipped with the Lounge in 0.38.0, removes continuous redraws for unstarted/paused Lounge games and Clear weather, suspends Lounge animation in hidden pages, and shares element layout measurements across settled snow particles. These changes address observed unnecessary work; they do not establish that the reported drain is resolved.
 
@@ -167,9 +167,9 @@ Add a local task-efficiency ledger and a reproducible evaluation suite. Compare 
 - [ ] Repeat an experiment from a pinned repository snapshot, policy, skill version, model configuration and check command.
 - [ ] Compare first-attempt success, verified completion, total measured usage, wall time, retry count and interventions; report missing data and run variability.
 - [ ] Include planning, summaries, retrieval models, reviewers and delegated agents in totals, not just the builder.
-- [ ] Offline CI uses recorded/fake-provider traces. Live evaluations are explicit runs on the owner's accounts with a stated budget.
+- [ ] Offline CI uses recorded/fake-provider traces. Live evaluations are explicit runs on chosen provider accounts with a stated budget.
 - [ ] Results remain local by default, can be inspected/exported/redacted/deleted, and send no remote telemetry.
-- [ ] Publish measured tradeoffs before advertising a token reduction or quality gain.
+- [ ] Publish measured tradeoffs before any public claim of a token reduction or quality gain.
 
 #### Implementation boundary
 
@@ -198,18 +198,18 @@ Track with [#84](https://github.com/AhmedNavaz/codeshi/issues/84), alongside the
 - **Units.** Working time compares across agents. API estimates are shown and never compared, because no dated price list is kept. Plan allowance is excluded.
 - **Measured comparisons.** `npm run eval -- compare` pairs saved `small-edit` and `routing-assessment` results with the same snapshot, checks, agent, context policy, engine and runtime, using the same rules with evaluation minimums (3 repeats on each side).
 
-Still open: budgeted live comparisons on the owner's accounts, opt-in redacted sharing of reports, and any public claim, which must cite a live measured comparison that passes these gates.
+Still open: budgeted live comparisons on real provider accounts, opt-in redacted sharing of reports, and any public claim, which must cite a live measured comparison that passes these gates.
 
-Give each person a local **Smart results** summary in Flow and Tasks, using their own recorded task usage and outcomes. Make its underlying evidence useful for evaluating routing changes and supporting defensible marketing claims. Smart, Saver, Ultra and manual runs remain separate groups.
+Give each person a local **Smart results** summary in Flow and Tasks, using their own recorded task usage and outcomes. Make its underlying evidence useful for evaluating routing changes and for checking any public claim about them. Smart, Saver, Ultra and manual runs remain separate groups.
 
 - **Observed results first:** show whole-task usage, elapsed time, verified completion, retries and interventions. Include assessment/reference retrieval, planning, summaries, handoffs, failed/cancelled attempts and reviews where available, without double counting resumed or child runs. Missing usage stays unknown; deferred checks remain unverified. Render from recorded data without an extra model call.
 - **Three evidence levels:** distinguish actual observed usage, estimated differences against sufficiently comparable personal manual-task history, and controlled measured comparisons on equivalent pinned inputs/checks. Preserve the person's explicit manual provider/model/effort baseline, matching method, sample count, time range, coverage, exclusions and uncertainty. A same-token price scenario is not evidence of what a different model would have consumed. Without a usable baseline, show actual results and “Not enough comparable data”. Never silently run a duplicate paid task.
 - **Honest arithmetic and quality:** for comparable metrics, difference is baseline total minus Smart total; divide by a positive baseline total for a relative difference. Aggregate compatible totals rather than averaging percentages. Include failed work and all known overhead; expose zero/negative results, incomplete coverage and quality regressions. Compare cost/time per verified completion alongside success rates. Define minimum samples, matching rules, uncertainty and quality non-regression thresholds before enabling savings headlines.
 - **Keep units truthful:** show input/output/cache/reasoning coverage with provider semantics. Separate API cost estimates (with pricing source/date and cache treatment) from actual charges. Subscription allowance remains per account/model/window with reset and freshness; account-wide changes may include other clients. Do not combine quota percentages or invent dollars saved from subscription tokens.
 - **Useful presentation:** a quiet card with a time range, verified tasks, usage and a supported comparison; expand into task records, baseline assumptions, routing reasons and outcome checks. Explain positive results when evidence supports them; give extra usage and insufficient evidence equal prominence. No fabricated cold-start percentage or promotional claim when results are negative or uncertain.
-- **Evaluation and marketing:** versioned local reports separate task classes, provider/model, policy versions and billing types, retaining full overhead, quality, variability and missing data. Data stays local by default with inspect/redact/export/delete controls and explicit voluntary sharing that excludes prompts/code/secrets by default; no automatic telemetry. Combine budgeted controlled evaluations with voluntarily shared reports without treating self-selected reports as representative. Public claims must identify their cohort, period, baseline, metric, quality checks and limitations and be reproducible from supporting evidence.
+- **Evaluation and public claims:** versioned local reports separate task classes, provider/model, policy versions and billing types, retaining full overhead, quality, variability and missing data. Data stays local by default with inspect/redact/export/delete controls and explicit voluntary sharing that excludes prompts/code/secrets by default; no automatic telemetry. Combine budgeted controlled evaluations with voluntarily shared reports without treating self-selected reports as representative. Public claims must identify their cohort, period, baseline, metric, quality checks and limitations and be reproducible from supporting evidence.
 
-Sequence: #84 accounting and comparison inputs → baseline/evidence specification → observed personal results → qualified comparison/reporting → budgeted live validation before marketing savings. Acceptance coverage must include cold start/no baseline, missing usage, zero/negative differences, incompatible cohorts, mixed billing, price changes, external quota activity, restart/resume and quality regressions.
+Sequence: #84 accounting and comparison inputs → baseline/evidence specification → observed personal results → qualified comparison/reporting → budgeted live validation before any public savings claim. Acceptance coverage must include cold start/no baseline, missing usage, zero/negative differences, incompatible cohorts, mixed billing, price changes, external quota activity, restart/resume and quality regressions.
 
 **Sequence:** Foundation; implement first.
 
@@ -479,15 +479,15 @@ Extract a headless service interface used by the desktop first, then implement s
 
 ## Updates to existing issues
 
-These scope extensions are posted to the existing routing, memory and review issues rather than opening duplicates.
+These sections extend the existing routing, memory and review issues.
 
 ### Existing issue #12: Extend routing with measured task budgets and capability-aware selection
 
 [Existing issue #12](https://github.com/AhmedNavaz/codeshi/issues/12) · [Posted scope extension](https://github.com/AhmedNavaz/codeshi/issues/12#issuecomment-6627782621)
 
-#### Proposed core-roadmap follow-up
+#### Planned scope
 
-Keep this as the routing issue rather than opening a duplicate. Stages 1 and 2 already route whole prompts and perform one test-triggered escalation; the next stage should use measured completed-task outcomes, task-scoped context and a shared budget across planning, builders, reviewers and retries.
+Stages 1 and 2 already route whole prompts and perform one test-triggered escalation; the next stage should use measured completed-task outcomes, task-scoped context and a shared budget across planning, builders, reviewers and retries.
 
 - Choose by required tools/skill compatibility as well as model capability, available allowance and observed outcomes.
 - Evaluate applicable five-hour, weekly and model-specific windows independently; missing data stays unknown.
@@ -521,11 +521,11 @@ Implementation proposals: #84 (measurement), #85 (context), #87 (shared budgets)
 
 [Existing issue #21](https://github.com/AhmedNavaz/codeshi/issues/21) · [Posted scope extension](https://github.com/AhmedNavaz/codeshi/issues/21#issuecomment-6627785636)
 
-**Tracking:** the first version is built in `src/project-memory.mjs`, following the [design](https://github.com/AhmedNavaz/codeshi/issues/21#issuecomment-6652426011). The proposal below is kept as written.
+**Tracking:** the first version is built in `src/project-memory.mjs`, following the [design](https://github.com/AhmedNavaz/codeshi/issues/21#issuecomment-6652426011). The scope below covers that version and later work.
 
-#### Proposed core-roadmap follow-up
+#### Planned scope
 
-Use this existing issue for persistent project knowledge rather than creating another memory system. The manual summary/goal/decisions/tasks fields already exist; a reviewed, evidence-linked memory layer should reduce rediscovery across providers.
+Persistent project knowledge builds on the existing manual summary/goal/decisions/tasks fields rather than another memory system; a reviewed, evidence-linked memory layer should reduce rediscovery across providers.
 
 - Store project/folder scope, source revision, evidence, date and status for conventions, decisions, working solutions and failed approaches.
 - Suggest updates after verified outcomes. Users inspect, edit, accept, reject, export or delete them; raw history must not silently become permanent instructions.
@@ -535,7 +535,7 @@ Use this existing issue for persistent project knowledge rather than creating an
 - Do not add model calls to every message to maintain memory. Account for optional extraction/summarization in the task budget.
 - Measure fewer repeated reads/failed approaches without lowering correctness; test stale memories, contradictory user instructions, malicious tool text and cross-project leakage.
 
-Proposed priority: Next, alongside task-scoped context. This remains a design proposal, not a claim that automatic memory is shipped.
+Sequence: alongside task-scoped context. Anything here beyond the shipped first version remains planned; automatic memory is not shipped.
 
 Implementation proposals: #85 (context) and #86 (portable skills), evaluated through #84.
 
@@ -544,7 +544,7 @@ Implementation proposals: #85 (context) and #86 (portable skills), evaluated thr
 
 [Existing issue #15](https://github.com/AhmedNavaz/codeshi/issues/15) · [Posted scope extension](https://github.com/AhmedNavaz/codeshi/issues/15#issuecomment-6627787387)
 
-#### Proposed core-roadmap follow-up
+#### Planned scope
 
 Preserve the shipped per-prompt build → tests → read-only review workflow. A future workflow engine should reuse its captured scopes, findings and approval model rather than invent another review engine.
 

@@ -999,7 +999,8 @@ test('a major card is split with an agent before it runs, each subtask runs in i
   assert.equal(card.split, true);
   assert.throws(() => env.board.run(env.c, { ids: [card.id] }), /isn’t in Ready|needs subtasks/);
   // Split with an agent: one read-only run, before anything runs. The subtasks wait for you, and the card moves to Ready.
-  scriptMatch(env, 'into subtasks, before any work', { text: `Here it is:\n${JSON.stringify({ cards: [{ card: 1, subtasks: [{ title: 'Add the cart', instructions: 'A cart model.', tier: 'light' }, { title: 'Add the receipt', instructions: 'A receipt page.', tier: 'deep' }] }] })}` });
+  // A complete list with the outer ]} missing still reaches Ready and can run, as a well-formed reply does.
+  scriptMatch(env, 'into subtasks, before any work', { text: `Here it is:\n${JSON.stringify({ cards: [{ card: 1, subtasks: [{ title: 'Add the cart', instructions: 'A cart model.', tier: 'light' }, { title: 'Add the receipt', instructions: 'A receipt page.', tier: 'deep' }] }] }).slice(0, -2)}` });
   assert.equal(env.board.split(env.c, { ids: [card.id], provider: 'codex' }).kind, 'split');
   assert.equal(env.c.boardSuggest, null, 'A split keeps its own list, so Suggest next and Plan updates stay free.');
   assert.throws(() => env.board.split(env.c, { ids: [card.id], provider: 'codex' }), /already splitting “Build checkout”/, 'One card is split by one run at a time.');

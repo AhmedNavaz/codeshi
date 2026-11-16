@@ -15,6 +15,65 @@ export const SUBTASK_LIMITS = { subtasks: 100, title: 200, instructions: 4000, s
 const clip = (value, limit) => { const line = String(value || '').replace(/\s+/g, ' ').trim(); return line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line; };
 const text = (value, limit) => typeof value === 'string' && value.trim() && value.trim().length <= limit ? value.trim() : null;
 
+// Extract a split from prose or a code fence. Recover missing wrapper delimiters only after a complete subtask;
+// never invent the end of a subtask or discard an unfinished tail to make a partial split succeed.
+function parseSplitJson(reply) {
+  const tryJson = raw => {
+    try { return JSON.parse(raw); } catch { /* A model may leave trailing commas outside strings. */ }
+    const cleaned = raw.replace(/"(?:\\.|[^"\\])*"|,\s*(?=[}\]])/g, match => match.startsWith('"') ? match : '');
+    try { return JSON.parse(cleaned); } catch { return undefined; }
+  };
+  const isSplitShape = val => val && typeof val === 'object' && (Array.isArray(val.cards) || Array.isArray(val.subtasks)
+    || Array.isArray(val) && val.some(item => typeof item?.title === 'string' || Array.isArray(item?.subtasks)));
+  const sources = [...Array.from(reply.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/gi), m => m[1]), reply];
+  let fallback;
+  for (const source of sources) {
+    for (let start = 0; start < source.length; start++) {
+      const open = source[start];
+      if (open !== '{' && open !== '[') continue;
+      const stack = [open === '{' ? '}' : ']'];
+      let inString = false, escape = false;
+      for (let i = start + 1; i < source.length; i++) {
+        const ch = source[i];
+        if (inString) {
+          if (escape) escape = false;
+          else if (ch === '\\') escape = true;
+          else if (ch === '"') inString = false;
+          continue;
+        }
+        if (ch === '"') { inString = true; continue; }
+        if (ch === '{' || ch === '[') { stack.push(ch === '{' ? '}' : ']'); continue; }
+        if (ch === '}' || ch === ']') {
+          if (stack.at(-1) !== ch) { stack.length = 0; start = i; break; }
+          stack.pop();
+          if (!stack.length) {
+            const val = tryJson(source.slice(start, i + 1));
+            if (isSplitShape(val)) return val;
+            if (val !== undefined && fallback === undefined) fallback = val;
+            start = i;
+            break;
+          }
+        }
+      }
+      if (stack.length) {
+        const body = source.slice(start).trimEnd();
+        if (!inString && /[}\]]$/.test(body)) {
+          const val = tryJson(body + stack.slice().reverse().join(''));
+          // These are the only open containers outside the subtask objects in each supported format.
+          const wrappers = Array.isArray(val?.cards) ? ['}', ']', '}', ']']
+            : Array.isArray(val?.subtasks) ? ['}', ']']
+            : Array.isArray(val) ? val.some(item => Array.isArray(item?.subtasks)) ? [']', '}', ']'] : [']'] : [];
+          if (isSplitShape(val) && stack.length <= wrappers.length && stack.every((close, index) => close === wrappers[index])) return val;
+        }
+        // Do not reinterpret a nested array as a complete split when its parent payload was cut off.
+        if (/^\{\s*"(?:cards|subtasks)"\s*:|^\[/.test(source.slice(start))) break;
+      }
+    }
+  }
+  if (fallback !== undefined) return fallback;
+  throw fail('The split didn’t return its subtasks as JSON.', 422);
+}
+
 // What the split run is asked, after the card's own brief.
 export const splitRequest = brief => [
   brief,
@@ -50,10 +109,12 @@ export function splitCardsRequest(briefs, { goals = [] } = {}) {
 // The split run's reply, as one list of subtasks per card, in the order asked. A card the reply leaves out gets null.
 export function parseSplitCards(reply, count) {
   if (typeof reply !== 'string' || !reply.trim() || Buffer.byteLength(reply) > SUBTASK_LIMITS.reply * Math.max(1, Math.min(count, 8))) throw fail('The split didn’t return any subtasks.', 422);
-  const start = reply.indexOf('{'), end = reply.lastIndexOf('}');
-  let value;
-  try { value = JSON.parse(reply.slice(start, end + 1)); } catch { throw fail('The split didn’t return its subtasks as JSON.', 422); }
-  const entries = Array.isArray(value?.cards) ? value.cards : count === 1 && Array.isArray(value?.subtasks) ? [{ card: 1, subtasks: value.subtasks }] : null;
+  const value = parseSplitJson(reply);
+  const entries = Array.isArray(value?.cards) ? value.cards
+    : Array.isArray(value) && value.some(item => Array.isArray(item?.subtasks)) ? value
+    : count === 1 && Array.isArray(value?.subtasks) ? [{ card: 1, subtasks: value.subtasks }]
+    : count === 1 && Array.isArray(value) ? [{ card: 1, subtasks: value }]
+    : null;
   if (!entries?.length) throw fail('The split didn’t return any subtasks.', 422);
   const out = Array.from({ length: count }, () => null);
   entries.forEach((entry, index) => {
@@ -87,10 +148,8 @@ export function subtaskRequest(card, sub, { brief = null } = {}) {
 // The split run's reply, as subtasks, or an error that says what was wrong.
 export function parseSplit(reply) {
   if (typeof reply !== 'string' || !reply.trim() || Buffer.byteLength(reply) > SUBTASK_LIMITS.reply) throw fail('The split didn’t return any subtasks.', 422);
-  const start = reply.indexOf('{'), end = reply.lastIndexOf('}');
-  let value;
-  try { value = JSON.parse(reply.slice(start, end + 1)); } catch { throw fail('The split didn’t return its subtasks as JSON.', 422); }
-  const raw = Array.isArray(value) ? value : value?.subtasks;
+  const value = parseSplitJson(reply);
+  const raw = Array.isArray(value) ? value : Array.isArray(value?.subtasks) ? value.subtasks : Array.isArray(value?.cards) && value.cards.length === 1 ? value.cards[0]?.subtasks : null;
   if (!Array.isArray(raw) || !raw.length) throw fail('The split didn’t return any subtasks.', 422);
   if (raw.length > SUBTASK_LIMITS.subtasks) throw fail(`The split returned ${raw.length} subtasks, more than the ${SUBTASK_LIMITS.subtasks} a card keeps. Split the card into smaller cards instead.`, 422);
   return raw.map((item, index) => {

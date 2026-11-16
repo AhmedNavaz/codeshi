@@ -225,9 +225,9 @@ Open questions before building:
 
 ## Flow feedback follow-ups
 
-The November 2026 reports are tracked without reopening shipped milestones:
+These problems are tracked without reopening shipped milestones:
 
-| Report | Tracking and next step |
+| Problem | Tracking and next step |
 | --- | --- |
 | Smart rejects stale plan usage on first Send, then succeeds on retry | [#134](https://github.com/AhmedNavaz/codeshi/issues/134), shipped in 0.35.0: bounded fresh probes, progressive rechecks, probing phase indicator and deterministic timing tests; stale/unknown readings still cannot authorize work. |
 | Smart selects an agent above its handoff threshold and immediately transfers it | [#135](https://github.com/AhmedNavaz/codeshi/issues/135), shipped in 0.35.0: adaptive quota thresholds evaluating window duration, reset cadence, and workload size; autonomous handoff execution in Flow mode without manual suggestion cards. |

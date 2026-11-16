@@ -8077,6 +8077,7 @@ assert.equal(ui.$('open-plan').disabled, false); assert.equal(ui.$('open-plan-st
   find(ids.copy).click(); await flush();
   assert.equal(ui.$('board-drawer').hidden, false); assert.deepEqual(drawer().querySelector('.board-result-facts').children.map(item => item.textContent), ['2 files changed', 'Tests passed', 'In its own copy, not merged yet']); assert.match(drawer().textContent, /Moved it\./);
   assert.equal(action('Accept').disabled, true); assert.ok(action('Review and merge'));
+  let reviewed = null; ui.window.relayTaskThreads = { ...ui.window.relayTaskThreads, review: id => { reviewed = id; } }; action('Review and merge').click(); await flush(); assert.equal(reviewed, 't2');
   // Running one Ready card runs exactly that card.
   find(ids.first).click(); await flush();
   // A Run the app refuses says why inside the open card, and drawing the card again doesn't wipe it.

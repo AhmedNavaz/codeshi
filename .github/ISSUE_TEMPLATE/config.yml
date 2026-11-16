@@ -3,3 +3,6 @@ contact_links:
   - name: Report a security vulnerability
     url: https://github.com/AhmedNavaz/codeshi/security/advisories/new
     about: Please report security problems privately instead of opening a public issue.
+  - name: Ask a question or share an idea
+    url: https://github.com/AhmedNavaz/codeshi/discussions
+    about: Use GitHub Discussions for questions and ideas.
