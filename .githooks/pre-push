@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# Runs Codeshi's local pre-push checks before Git pushes commits or release tags to a remote.
+# To bypass in an emergency: git push --no-verify (or CODESHI_SKIP_PREPUSH=1).
+set -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+for dir in "/opt/homebrew/bin" "/usr/local/bin" "$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tail -n 1)/bin" "$HOME/.volta/bin" "$HOME/.bun/bin"; do
+  if [ -d "$dir" ]; then
+    PATH="$dir:$PATH"
+  fi
+done
+export PATH
+
+exec node "$ROOT/scripts/pre-push-check.mjs" --pre-push

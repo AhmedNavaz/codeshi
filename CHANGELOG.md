@@ -4,6 +4,14 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 
 ## [Unreleased]
 
+## [0.59.1] - 2026-11-17
+
+### Fixed
+- **Auto spends expiring weekly allowance before it resets** ([#12](https://github.com/AhmedNavaz/codeshi/issues/12), [#153](https://github.com/AhmedNavaz/codeshi/issues/153)). Across **Saver**, **Smart** and **Ultra**, an agent whose weekly limit is in its final six hours now takes priority over agents whose weekly limits reset days later, instead of leaving that allowance unused until it resets. Saver's 80% handoff line and non-current headroom checks no longer block an expiring weekly window while it still has room, and **Smart** and **Ultra** both use **Fable** and **Astra**'s expiring weekly allowance on deep work before it expires.
+
+### Internal
+- **Local pre-push and release checks** (`npm run check:push`, `npm run check:release`, `npm run hooks:install`, `.githooks/pre-push`) verify syntax on changed JavaScript files, run only the test files affected by a change, check `package.json` and `CHANGELOG.md` version metadata before tagging, and run the desktop smoke test.
+
 ## [0.59.0] - 2026-11-16
 
 ### Added

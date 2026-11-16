@@ -1,6 +1,6 @@
 {
   "name": "codeshi",
-  "version": "0.59.0",
+  "version": "0.59.1",
   "description": "Claude Code, Codex, Gemini and local models in one conversation. Switch agents mid-task, keep going when one hits its limit, and use the plans you already pay for.",
   "keywords": [
     "claude-code",
@@ -41,6 +41,9 @@
     "web": "node src/server.mjs",
     "test": "node --import ./test/isolate.mjs --test test/*.test.mjs sharing/test/*.test.mjs",
     "test:desktop": "node desktop/launch.mjs --smoke-test",
+    "check:push": "node scripts/pre-push-check.mjs",
+    "check:release": "node scripts/pre-push-check.mjs --release",
+    "hooks:install": "node scripts/pre-push-check.mjs --install-hooks",
     "sharing": "node sharing/server.mjs",
     "eval": "node evals/cli.mjs",
     "stats": "node scripts/stats.mjs",

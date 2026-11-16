@@ -15,7 +15,9 @@
   // 5: a message with images goes only to a model and connection known to take images.
   // 6: Ultra sends deep work to Fable and Astra; Gemini's plain ids are rated (Argon deep, Hydrogen standard); deep work
   //    goes to a model below deep only when no deep model has usable allowance.
-  const POLICY_VERSION = 6;
+  // 7: weekly windows resetting within burndown hours get steeper spendability and fit under handoff so expiring
+  //    allowance is used before fresh weeks on other agents, and Ultra uses Fable/Astra while their weekly limit is expiring.
+  const POLICY_VERSION = 7;
   const LEGACY_MODES = Object.freeze({ saving: 'saver', balanced: 'smart', quality: 'ultra' });
   const normalizeMode = mode => MODES.includes(mode) ? mode : LEGACY_MODES[mode] || null;
   const modeNames = { saver: 'Saver', smart: 'Smart', ultra: 'Ultra', saving: 'Saver', balanced: 'Smart', quality: 'Ultra' };
@@ -119,9 +121,12 @@
     const periodHours = windowPeriodHours(row);
     const fraction = hasReset ? Math.min(1, Math.max(0.05, hoursLeft / periodHours)) : 1;
     const daysLeft = hasReset ? hoursLeft / 24 : 0;
-    const denom = hasReset ? 0.25 + 0.75 * fraction + 0.25 * daysLeft : 1;
+    const burndown = hasReset && hoursLeft !== null && hoursLeft <= burndownHours(row);
+    // A weekly or daily window inside its burndown hours is about to expire, so its leftover allowance is valued
+    // much more freely than allowance that still has days to last.
+    const denom = hasReset ? (burndown && periodHours >= 24 ? 0.1 + 0.15 * (hoursLeft / burndownHours(row)) : 0.25 + 0.75 * fraction + 0.25 * daysLeft) : 1;
     const spendability = remaining > 0 ? remaining / denom : 0;
-    return { ...row, usedPercent, remaining, hoursLeft, periodHours, spendability };
+    return { ...row, usedPercent, remaining, hoursLeft, periodHours, spendability, ...(burndown ? { burndown: true } : {}) };
   }
   function bindingWindow(quota, now = Date.now()) {
     if (!quota?.windows?.length) return null;
@@ -317,7 +322,7 @@
       const row = windowSpendability(raw, now);
       const usual = usualForWindow(candidate, row, tier);
       if (usual !== null && row.remaining < usual) {
-        return { window: row, remaining: row.remaining, usual, resetsSoon: row.hoursLeft !== null && row.hoursLeft <= 2 };
+        return { window: row, remaining: row.remaining, usual, resetsSoon: row.hoursLeft !== null && row.hoursLeft <= burndownHours(raw) };
       }
     }
     return null;
@@ -327,8 +332,9 @@
   // for new work and deciding whether a running task moves apply this one test, so a task is never started on an agent
   // it would leave at its first usage check. The agent already on the task fits up to the line, and past it while the
   // only windows over it reset soon (#153). Moving means the next agent re-reads the task, so another agent fits only
-  // with room under the line for what a run of this size usually spends there. The line rises near a reset, as the
-  // safety margin does. usual is a candidate's measured spend (usualWindowSpend); tier is the task's size.
+  // with room under the line for what a run of this size usually spends there — unless its tight window resets within
+  // burndown hours, when using up the expiring allowance is the point. The line rises near a reset, as the safety margin
+  // does. usual is a candidate's measured spend (usualWindowSpend); tier is the task's size.
   function handoffFit(usage, model, { mode, current = false, tier = null, usual = null, now = Date.now() } = {}) {
     const line = handoffThresholds[normalizeMode(mode)] ?? null;
     if (!line) return { fits: true, line: null };
@@ -337,7 +343,8 @@
     if (current && quota.state === 'near' && quota.burndown) return { fits: true, line, quota, reason: 'expiring' };
     if (quota.state !== 'ok') return { fits: false, line, quota, reason: quota.state };
     if (current) return { fits: true, line, quota };
-    const tight = quota.windows.find(row => adaptiveThreshold(row, line, { now, workload: spend(row), tier }) - row.usedPercent < spend(row));
+    const resetsSoon = row => { const ms = row.resetsAt ? Date.parse(row.resetsAt) : NaN; return Number.isFinite(ms) && ms > now && (ms - now) / 3600000 <= burndownHours(row); };
+    const tight = quota.windows.find(row => !resetsSoon(row) && adaptiveThreshold(row, line, { now, workload: spend(row), tier }) - row.usedPercent < spend(row));
     return tight ? { fits: false, line, quota, reason: 'room', window: { label: tight.label, usedPercent: tight.usedPercent, usual: spend(tight) } } : { fits: true, line, quota };
   }
 
@@ -379,14 +386,15 @@
         const line = handoffFit(candidate.usage, model && modelId(model), { mode, current: candidate.provider === current, tier: task.tier, usual: candidate.usualSpend ?? candidate.usualPercent ?? null, now });
         return { ...candidate, selectedModel: model, quota, bindingWindow: binding, shortRoom, line, steppedDown, steppedDownFrom, steppedDownQuota, passedOver };
       };
-      // Deep work in Ultra tries Fable or Astra first, and only with confirmed room under the handoff line: their own
-      // limits are separate, and the agent's other deep model is nearly as strong. Otherwise the usual choice follows.
-      const strongest = top ? pickModel(rows, tier, { top: true }) : null;
+      // Deep work in Ultra tries Fable or Astra first, and also in Smart/Ultra when their own weekly allowance is
+      // expiring within burndown hours so it doesn't go to waste.
+      const strongest = pickModel(rows, tier, { top: true });
       if (strongest && ultraModel(strongest)) {
         const tries = [strongest, ...rows.filter(row => row !== strongest && ultraModel(row) && routable(row, { top: true }) && distance(row) === distance(strongest))].map(model => decorate(model));
-        const ready = tries.filter(row => row.quota.state === 'ok' && row.line.fits);
+        const hasExpiringScope = row => (row.quota?.windows || []).some(win => (win.scope || win.scopes?.length) && windowSpendability(win, now).burndown && (win.usedPercent ?? 100) < 100);
+        const ready = tries.filter(row => (top ? (row.quota.state === 'ok' && row.line.fits || row.quota.state === 'near' && Boolean(row.quota.burndown)) : (mode !== 'saver' && task.tier === 'deep' && hasExpiringScope(row) && (row.quota.state === 'ok' && row.line.fits || row.quota.state === 'near' && Boolean(row.quota.burndown)))));
         if (ready.length) return ready;
-        passedOver = tries[0];
+        if (top) passedOver = tries[0];
       }
       // When Fable or Astra is all an agent may use, it stays the choice, under the usual allowance rules.
       let preferred = pickModel(rows, tier);
@@ -399,6 +407,10 @@
       const choices = options.map(model => decorate(model));
       const usable = choices.filter(row => !['exhausted', 'near', 'stale'].includes(row.quota.state));
       if (usable.length) return usable;
+      // If the preferred model is near its limit only because its window is about to reset (burndown), keep it to spend
+      // the expiring allowance before stepping down a tier (#153) — unless a model-specific window is near mid-week.
+      const expiringPreferred = choices.filter(row => row.quota.state === 'near' && Boolean(row.quota.burndown));
+      if (expiringPreferred.length) return expiringPreferred;
       // Weekly and model-specific windows count separately (#128): an exhausted Opus weekly window leaves Claude
       // usable at the next tier down (never light for deep work), and Ultra steps down one tier when needed.
       let fallbackChoices = [];
@@ -455,7 +467,7 @@
     // An agent the task could keep comes before one it would leave at the first usage check (#12). Past the line, an
     // agent is still used when no other fits: allowance short of the limit is not unusable, and with nowhere to move
     // the task stays.
-    const fits = candidate => candidate.line.fits ? 0 : 1;
+    const fits = candidate => candidate.line.fits || (candidate.quota.state === 'near' && Boolean(candidate.quota.burndown)) ? 0 : 1;
     const chosen = [...pool].sort((a, b) => fits(a) - fits(b) || score(b) - score(a) || order.indexOf(a.provider) - order.indexOf(b.provider))[0];
     // On the last of an allowance, the top effort level isn't used: it can spend the rest in one turn (#153).
     const spendingRemainder = chosen.quota.state === 'near';

@@ -112,8 +112,12 @@ test('Ultra sends deep work to Fable and Astra while they have room, and deep wo
   assert.match(tight.reason, /Fable 5\.2 is near its limit \(5-hour: 10% used; Weekly · Fable: 97% used\), so Opus 5\.5/);
   const out = route({ ...deep, mode: 'ultra', current: 'claude', candidates: [at('claude', [{ label: '5-hour', usedPercent: 10 }, { label: 'Weekly · Fable', scope: 'fable', usedPercent: 100 }])] });
   assert.match(out.reason, /Fable 5\.2 has reached its limit .*, so Opus 5\.5/);
-  // Smart never uses them, whatever the room.
+  // Smart never uses them under ordinary mid-week headroom, whatever the room.
   assert.equal(route({ ...deep, mode: 'smart', current: 'claude', candidates: [one('claude')] }).model, 'opus');
+  // When Fable's own weekly window is about to reset (within 6 hours), Smart and Ultra spend its expiring allowance on deep work.
+  const now = Date.parse('2026-11-16T16:30:00Z'), checkedAt = new Date(now).toISOString(), soon = new Date(now + 1.5 * 3600000).toISOString();
+  const expiringFable = { ...one('claude'), usage: { available: true, checkedAt, windows: [{ label: '5-hour', usedPercent: 1 }, { label: 'Weekly', usedPercent: 83, resetsAt: soon }, { label: 'Weekly · Fable', scope: 'fable', usedPercent: 56, resetsAt: soon }] } };
+  assert.equal(route({ ...deep, mode: 'smart', current: 'gemini', now, candidates: [expiringFable, one('gemini')] }).model, 'claude-fable-5-2');
 
   // Across agents: Sol is a middle model, so a Codex with far more room loses deep work to a deep model with less.
   const roomy = at('codex', [{ label: '5-hour', usedPercent: 0 }]), busy = at('claude', [{ label: '5-hour', usedPercent: 70 }]);
@@ -173,6 +177,17 @@ test('allowance is spent where it resets soonest, without masking weekly exhaust
   });
   assert.equal(weekChoice.provider, 'claude');
   assert.match(weekChoice.reason, /Claude has 19% of its week left and resets Monday; Codex is kept for later in the week/);
+  // When a weekly limit is within burndown hours (e.g. 17% left resetting in 1.5h, 5-hour at 1%), it beats another agent
+  // that is current and has 84-87% of its week left with days to go, across Saver, Smart and Ultra.
+  const expiringWeek = {
+    claude: { models: catalogs.claude, usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 1, resetsAt: new Date(now + 4.3 * 3600000).toISOString() }, { label: 'Weekly', usedPercent: 83, resetsAt: new Date(now + 1.5 * 3600000).toISOString() }, { label: 'Weekly · Fable', scope: 'fable', usedPercent: 56, resetsAt: new Date(now + 1.5 * 3600000).toISOString() }] } },
+    codex: { models: catalogs.codex, usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: '5-hour', usedPercent: 5, resetsAt: new Date(now + 4.9 * 3600000).toISOString() }, { label: 'Weekly', usedPercent: 16, resetsAt: new Date(now + 162 * 3600000).toISOString() }] } },
+  };
+  const geminiCandidate = { provider: 'gemini', eligible: true, billingSource: 'subscription', models: catalogs.gemini, usage: { available: true, checkedAt: new Date(now).toISOString(), windows: [{ label: 'Weekly · Gemini Models', scopes: ['gemini'], usedPercent: 13, resetsAt: new Date(now + 103 * 3600000).toISOString() }, { label: '5-hour · Gemini Models', scopes: ['gemini'], usedPercent: 45, resetsAt: new Date(now + 1.7 * 3600000).toISOString() }, { label: 'Gemini 4 Argon Weekly Limit', scopes: ['argon'], usedPercent: 63, resetsAt: new Date(now + 163 * 3600000).toISOString() }] } };
+  for (const mode of ['saver', 'smart', 'ultra']) {
+    const picked = route({ text: 'Add a button', mode, now, current: 'gemini', candidates: [...agents(expiringWeek), geminiCandidate] });
+    assert.equal(picked.provider, 'claude', `${mode} spends Claude's expiring 17% weekly allowance instead of keeping Gemini or Codex`);
+  }
   candidates[1].usage = reading(150, 30, 0.1);
   assert.equal(route({ text: 'Add a button', candidates, current: 'codex', now }).provider, 'codex', 'An early five-hour reset cannot outweigh the tighter weekly window.');
   candidates[1].usage = reading(0.1, 100);

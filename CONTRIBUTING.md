@@ -80,7 +80,10 @@ Codeshi's interface can be translated, with no build step. The English is writte
 ```sh
 npm test
 npm run test:desktop
+npm run check:push     # syntax check + tests for your changed files
 ```
+
+Run `npm run hooks:install` once to enable `.githooks/pre-push` so `git push` runs `check:push` (and release metadata + desktop smoke checks on `v*` tags) locally before pushing.
 
 - Keep changes focused, and add or update tests for behavior you change.
 - Write new interface text with `t()` (see [Translations](#translations)).
