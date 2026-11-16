@@ -218,6 +218,54 @@ test('ending a session hangs up the shell and stops every process it started; re
   assert.throws(() => sessions.start('project-0', { folderId: 'web' }), /stopping/);
 });
 
+test('stopping a stubborn shell re-reads its process tree after stopGrace, and killAll stops active shells immediately', { skip: process.platform === 'win32' }, async t => {
+  const { registry } = workspaces(t, 1), children = [];
+  t.after(() => { for (const child of children) try { child.kill('SIGKILL'); } catch {} });
+  const spawnStubborn = () => {
+    const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{});process.on("SIGHUP",()=>{});setInterval(()=>{},1000)']);
+    children.push(child);
+    return child;
+  };
+  let lateChild = null, treeCalls = 0;
+  const pty = {
+    spawn() {
+      const shellChild = spawnStubborn();
+      const listeners = { exit: [] };
+      shellChild.on('exit', (code, sig) => listeners.exit.forEach(fn => fn({ exitCode: code ?? 0, signal: sig })));
+      return {
+        pid: shellChild.pid,
+        onData() {},
+        onExit: fn => listeners.exit.push(fn),
+        kill: () => { lateChild = spawnStubborn(); },
+      };
+    },
+  };
+  const sessions = new TerminalSessions({
+    registry,
+    pty,
+    shell: '/bin/zsh',
+    flushMs: 1,
+    stopGrace: 60,
+    platform: 'darwin',
+    tree: async () => {
+      treeCalls++;
+      return lateChild ? [lateChild.pid] : [];
+    },
+  });
+  const started = sessions.start('project-0', { folderId: 'web' });
+  const shellPid = sessions.sessions.get(started.id).pid;
+  await sessions.stop('project-0', started.id);
+  assert(treeCalls >= 2, 'The process tree is re-read when the shell ignores SIGHUP.');
+  await until(() => !alive(shellPid) && lateChild && !alive(lateChild.pid));
+
+  const killSessions = new TerminalSessions({ registry, pty, shell: '/bin/zsh', flushMs: 1, platform: 'darwin' });
+  const running = killSessions.start('project-0', { folderId: 'web' });
+  const killPid = killSessions.sessions.get(running.id).pid;
+  assert(alive(killPid));
+  killSessions.killAll();
+  await until(() => !alive(killPid));
+});
+
 test('on Windows, ending a session ends the shell’s whole process tree at once', async t => {
   const { registry } = workspaces(t), pty = fakePty(), ended = [];
   const sessions = new TerminalSessions({ registry, pty, shell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', flushMs: 1, stopGrace: 200, platform: 'win32', endTree: async pid => { ended.push(pid); }, tree: async () => { throw new Error('Windows has no process list to walk.'); } });

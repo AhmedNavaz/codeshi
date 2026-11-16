@@ -69,7 +69,7 @@ test('managed commands use the selected cwd, retain bounded UTF-8 output and use
   const session = f.commands.state(f.project.id).sessions.test;
   assert.equal(session.id, value.id); assert.equal(session.status, 'failed'); assert.equal(session.exitCode, 7); assert.equal(session.truncated, true);
   assert(session.output.length <= commandLogLimit); assert(session.output.includes('🌍')); assert(session.output.includes('EADDRINUSE')); assert(session.output.includes(f.backend));
-  assert.equal(session.output.includes('�'), false);
+  assert.equal(session.output.includes('\uFFFD'), false);
   assert.equal('child' in session, false); assert.equal('done' in session, false);
   f.commands.save(f.project.id, { id: 'test', name: 'Test', ...f.config(print('recovered')) });
   const next = f.commands.start(f.project.id, 'test');
@@ -104,6 +104,22 @@ test('Start deduplicates running commands, Stop and shutdown clean up child proc
   await waitFor(() => f.commands.state(f.project.id).sessions.run.output.includes('child='));
   await f.commands.close(); assert.equal(f.commands.state(f.project.id).sessions.run.status, 'stopped');
   assert.throws(() => f.commands.start(f.project.id, 'run'), /stopping/);
+});
+
+test('a command that exits on SIGTERM does not wait the full stopGrace, and killAll stops stubborn commands immediately', { skip: process.platform === 'win32' && 'Uses POSIX signals' }, async t => {
+  const f = fixture(t, { stopGrace: 1500 });
+  const polite = run(f, 'Polite', f.config(`${quote(process.execPath)} -e "console.log('ready');setInterval(()=>{},1000)"`));
+  await waitFor(() => f.commands.state(f.project.id).sessions.polite.output.includes('ready'));
+  const t0 = Date.now();
+  await f.commands.stop(f.project.id, 'polite', polite.id);
+  const elapsed = Date.now() - t0;
+  assert(elapsed < 750, `Expected polite command to stop well before stopGrace (1500 ms), took ${elapsed} ms`);
+
+  run(f, 'Stubborn', f.config(`${quote(process.execPath)} -e "process.on('SIGTERM',()=>{});console.log('stubborn='+process.pid);setInterval(()=>{},1000)"`));
+  await waitFor(() => f.commands.state(f.project.id).sessions.stubborn.output.includes('stubborn='));
+  const stubbornPid = Number(f.commands.state(f.project.id).sessions.stubborn.output.match(/stubborn=(\d+)/)[1]);
+  f.commands.killAll();
+  await waitFor(() => { try { process.kill(stubbornPid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } });
 });
 
 test('a shell exiting early still terminates its inherited server and releases the session', { skip: process.platform === 'win32' && 'Leaves a server running in the background with POSIX shell syntax' }, async t => {

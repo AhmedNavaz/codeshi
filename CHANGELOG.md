@@ -5,6 +5,7 @@ Notable changes to Codeshi, called Throughline until 0.23; earlier entries use t
 ## [Unreleased]
 
 ### Fixed
+- **Restart to update and quitting finish even when a terminal or shutdown step is stuck** ([#82](https://github.com/AhmedNavaz/codeshi/issues/82)). If an earlier shutdown step hung until the 10-second quit limit, Codeshi never reached its terminal and command cleanup. An open terminal running a program that ignored hangup kept the main process waiting after the window closed, so the update helper timed out after two minutes without installing the update, and running commands or review servers were left behind. Each shutdown step now has its own time limit so later steps still run, quitting past the limit force-stops any remaining terminals and commands before exit, stopping a terminal rechecks for child processes started during the grace period, and commands that exit cleanly on `SIGTERM` no longer wait the full 1.5-second grace period each.
 - **A task's Codex commands stay in its own folder.** Recent versions of Codex describe a command they ask approval for in a way Codeshi didn't read as a command. One that changed another folder of the workspace, or the real folder behind the task's copy, could therefore be approved, also by Full auto-approval. It is now refused there, as Codex's file edits are. Approving a Codex command offers **Allow for this run** and **Always allow in this workspace** again, and an **Auto-approved** step names the command without the shell Codex runs it through.
 
 ## [0.58.0] - 2026-11-16

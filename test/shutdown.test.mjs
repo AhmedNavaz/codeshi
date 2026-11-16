@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { closeWithin, SHUTDOWN_LIMIT, writeShutdownLog } from '../desktop/shutdown.mjs';
+import { createRelayServer } from '../src/server.mjs';
 
 // Time that moves only when the test says so.
 function clock() {
@@ -38,6 +39,26 @@ test('a slow or failed shutdown is written down with what each step took', async
   assert.match(lines[0], /Shutdown took 3000 ms: workspaces 3000 ms\.$/);
   assert.equal(await closeWithin(({ onStep }) => { onStep({ name: 'terminals', ms: 1, error: 'gone' }); return Promise.reject(new Error('gone')); }, { log: line => lines.push(line), now: time.now, timers: time.timers }), true, 'A failed step still counts as finished, so quitting carries on.');
   assert.match(lines[1], /terminals 1 ms \(gone\)\. gone$/);
+});
+
+test('a hung shutdown step in the server times out so commands, terminals and workspaces still close', async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codeshi-shutdown-server-')));
+  const workspace = path.join(root, 'project'); fs.mkdirSync(workspace);
+  const relay = createRelayServer({ workspace, dataDir: path.join(root, 'data'), lock: false });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  await new Promise(resolve => relay.server.listen(0, '127.0.0.1', resolve));
+  // Make an early step hang forever; later steps must still run within the shutdown budget.
+  relay.projectReview.close = () => new Promise(() => {});
+  const steps = [], lines = [];
+  const finished = await closeWithin(options => relay.close({ ...options, stepLimit: 60, onStep: step => { steps.push(step); options.onStep?.(step); } }), { log: line => lines.push(line) });
+  assert.equal(finished, true);
+  const hung = steps.find(step => step.name === 'project review');
+  assert.equal(hung?.error, 'timed out');
+  assert.deepEqual(steps.map(step => step.name), [
+    'remote access', 'move', 'watch-along', 'reviews', 'project review',
+    'commands', 'terminals', 'voice', 'workspaces', 'activity', 'connections',
+  ]);
+  assert.match(lines[0], /project review \d+ ms \(timed out\)/);
 });
 
 test('the shutdown log stays small, and a log that cannot be written does not stop quitting', t => {

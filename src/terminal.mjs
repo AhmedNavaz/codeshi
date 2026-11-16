@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -46,18 +46,20 @@ export function shellArguments(shell) {
 // Windows has no signal that asks a process to stop, so a shell and every process it started end together.
 export function endProcessTree(pid) {
   const taskkill = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
-  return new Promise(resolve => execFile(taskkill, ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve()));
+  return new Promise(resolve => execFile(taskkill, ['/pid', String(pid), '/T', '/F'], { timeout: 5000, windowsHide: true }, () => resolve()));
 }
 
+function parseProcessTree(stdout, root) {
+  const children = new Map();
+  for (const line of String(stdout).trim().split('\n')) { const [pid, ppid] = line.trim().split(/\s+/).map(Number); if (pid && ppid) children.set(ppid, [...children.get(ppid) || [], pid]); }
+  const found = [], queue = [...children.get(root) || []];
+  while (queue.length) { const pid = queue.shift(); if (found.includes(pid)) continue; found.push(pid); queue.push(...children.get(pid) || []); }
+  return found;
+}
 // Every process the shell started, found before the shell ends, since its children are then adopted by launchd.
 export function processTree(root) {
-  return new Promise(resolve => execFile('/bin/ps', ['-axo', 'pid=,ppid='], { maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-    if (error) return resolve([]);
-    const children = new Map();
-    for (const line of String(stdout).trim().split('\n')) { const [pid, ppid] = line.trim().split(/\s+/).map(Number); if (pid && ppid) children.set(ppid, [...children.get(ppid) || [], pid]); }
-    const found = [], queue = [...children.get(root) || []];
-    while (queue.length) { const pid = queue.shift(); if (found.includes(pid)) continue; found.push(pid); queue.push(...children.get(pid) || []); }
-    resolve(found);
+  return new Promise(resolve => execFile('/bin/ps', ['-axo', 'pid=,ppid='], { maxBuffer: 4 * 1024 * 1024, timeout: 2000 }, (error, stdout) => {
+    resolve(error ? [] : parseProcessTree(stdout, root));
   }));
 }
 const signal = (pid, kind) => { try { process.kill(pid, kind); return true; } catch { return false; } };
@@ -126,7 +128,7 @@ export class TerminalSessions {
     if (replace) {
       replaced = this.session(projectId, replace);
       if (terminalActive(replaced)) fail('That shell is still running. End it before starting another in its place.', 409);
-      place = { tabId: replaced.tabId, pane: replaced.pane, split: replaced.split, order: replaced.order };
+      place = { tabId: replaced.tabId, pane: 0, split: replaced.split, order: replaced.order, ...{ pane: replaced.pane } };
     } else {
       if (open.length >= MAX_SESSIONS) fail(`A workspace keeps up to ${MAX_SESSIONS} terminals. End one to open another.`, 409);
       if (split) {
@@ -247,10 +249,11 @@ export class TerminalSessions {
       } else {
         const processes = session.pid ? await this.tree(session.pid) : [];
         try { session.process.kill('SIGHUP'); } catch { /* Already gone. */ }
-        for (const pid of processes) signal(pid, 'SIGTERM');
+        for (const pid of processes) { signal(-pid, 'SIGTERM'); signal(pid, 'SIGTERM'); }
         const ended = await Promise.race([session.done.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), this.stopGrace))]);
-        for (const pid of processes) signal(pid, 'SIGKILL');
-        if (!ended && session.pid) signal(session.pid, 'SIGKILL');
+        const remaining = !ended && session.pid ? await this.tree(session.pid) : [];
+        if (!ended && session.pid) { signal(-session.pid, 'SIGKILL'); signal(session.pid, 'SIGKILL'); }
+        for (const pid of new Set([...processes, ...remaining])) { signal(-pid, 'SIGKILL'); signal(pid, 'SIGKILL'); }
       }
       await Promise.race([session.done, new Promise(resolve => setTimeout(resolve, this.stopGrace))]);
       if (!session.endedAt) this.exited(session, null, 'SIGKILL');
@@ -269,6 +272,28 @@ export class TerminalSessions {
     this.closing = true;
     this.registry.off?.('projects', this.onProjects);
     await Promise.all([...this.sessions.values()].map(session => this.stop(session.projectId, session.id)));
+  }
+  // node-pty joins its exit-watcher thread when the Node environment frees its handles. If shutdown gives up early,
+  // every shell PID must still be killed first or that join blocks the process from exiting.
+  killAll() {
+    this.closing = true;
+    const active = [...this.sessions.values()].filter(session => terminalActive(session) && session.pid);
+    if (!active.length) return;
+    if (this.platform === 'win32') {
+      const taskkill = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
+      for (const session of active) {
+        try { execFileSync(taskkill, ['/pid', String(session.pid), '/T', '/F'], { timeout: 2000, windowsHide: true }); } catch {}
+        try { session.process?.kill(); } catch {}
+      }
+      return;
+    }
+    let ps = '';
+    if (this.tree === processTree) { try { ps = execFileSync('/bin/ps', ['-axo', 'pid=,ppid='], { maxBuffer: 4 * 1024 * 1024, timeout: 500 }); } catch {} }
+    for (const session of active) {
+      const children = ps ? parseProcessTree(ps, session.pid) : [];
+      signal(-session.pid, 'SIGKILL'); signal(session.pid, 'SIGKILL');
+      for (const pid of children) { signal(-pid, 'SIGKILL'); signal(pid, 'SIGKILL'); }
+    }
   }
 }
 

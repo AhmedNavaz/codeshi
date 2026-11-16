@@ -500,33 +500,42 @@ export function createRelayServer({ workspace, workspaces = [], dataRoot, dataDi
     onChange: () => { for (const res of listeners) res.write('event: watch\ndata: {}\n\n'); } });
   registry.on('update', ({ projectId, conversationId } = {}) => watchAlong.notify(projectId, conversationId));
   let closePromise;
+  const killAll = () => { commandRoutes.commands.killAll(); terminalRoutes.sessions.killAll(); };
   // force drops requests still in flight, such as account checks, for a desktop quit or restart, where the page goes away anyway.
-  // Each step gets its turn even if an earlier one fails, and reports its time through onStep, so a slow shutdown can be traced.
-  const close = ({ force = false, onStep = () => {} } = {}) => closePromise ||= (async () => {
+  // Each step gets its turn even if an earlier one fails or hangs, and reports its time through onStep, so a slow shutdown can be traced.
+  const close = ({ force = false, stepLimit = force ? 3500 : 0, onStep = () => {} } = {}) => closePromise ||= (async () => {
     closing = true;
     let failure = null;
     const step = async (name, work) => {
       const started = Date.now();
-      try { await work(); onStep({ name, ms: Date.now() - started }); }
-      catch (error) { failure ||= error; onStep({ name, ms: Date.now() - started, error: error.message }); }
+      let timer = null;
+      try {
+        await (stepLimit > 0 ? Promise.race([work(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timed out')), stepLimit); timer.unref?.(); })]) : work());
+        onStep({ name, ms: Date.now() - started });
+      } catch (error) { failure ||= error; onStep({ name, ms: Date.now() - started, error: error.message }); }
+      finally { clearTimeout(timer); }
     };
-    closeAccountConnections();
-    await step('remote access', () => phoneAccess.close());
-    await step('move', () => moveRoutes.close());
-    await step('watch-along', () => watchAlong.close());
-    await step('reviews', () => reviewRoutes.close());
-    await step('project review', () => projectReviewRoutes.close());
-    await step('commands', () => commandRoutes.close());
-    await step('terminals', () => terminalRoutes.close());
-    await step('voice', () => voiceRoutes.close());
-    await step('workspaces', () => registry.close());
-    await step('activity', () => activity.close());
-    clearInterval(heartbeat);
-    for (const res of listeners) res.end();
-    await step('connections', () => new Promise(resolve => { server.close(resolve); if (force) server.closeAllConnections(); }));
-    if (failure) throw failure;
+    try {
+      closeAccountConnections();
+      await step('remote access', () => phoneAccess.close());
+      await step('move', () => moveRoutes.close());
+      await step('watch-along', () => watchAlong.close());
+      await step('reviews', () => reviewRoutes.close());
+      await step('project review', () => projectReviewRoutes.close());
+      await step('commands', () => commandRoutes.close());
+      await step('terminals', () => terminalRoutes.close());
+      await step('voice', () => voiceRoutes.close());
+      await step('workspaces', () => registry.close());
+      await step('activity', () => activity.close());
+      clearInterval(heartbeat);
+      for (const res of listeners) res.end();
+      await step('connections', () => new Promise(resolve => { server.close(resolve); if (force) server.closeAllConnections(); }));
+      if (failure) throw failure;
+    } finally {
+      if (force) killAll();
+    }
   })();
-  return { server, registry, collaboration, activity, eventClients: () => listeners.size, sharing, commands: commandRoutes.commands, projectReview: projectReviewRoutes.review, terminals: terminalRoutes.sessions, close,
+  return { server, registry, collaboration, activity, eventClients: () => listeners.size, sharing, commands: commandRoutes.commands, projectReview: projectReviewRoutes.review, terminals: terminalRoutes.sessions, close, killAll,
     getAppearancePreference: () => appearance(config),
     // The menus' words, in the language the page uses (#27).
     getText: () => textFor(currentLanguage(), localesDir),

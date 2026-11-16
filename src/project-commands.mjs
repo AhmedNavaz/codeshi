@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { stripVTControlCharacters } from 'node:util';
@@ -211,13 +211,15 @@ export class ProjectCommands {
     const pid = session.child?.pid;
     if (!pid) return;
     if (process.platform === 'win32') {
-      await new Promise((resolve, reject) => execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, error => error && ![128, 255].includes(error.code) ? reject(error) : resolve())); return;
+      await new Promise((resolve, reject) => execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { timeout: 5000, windowsHide: true }, error => error && ![128, 255].includes(error.code) ? reject(error) : resolve())); return;
     }
     // On macOS, signalling a process group that's already exiting answers EPERM rather than ESRCH.
     const signal = kind => { try { process.kill(-pid, kind); return true; } catch (error) { if (error.code === 'ESRCH' || error.code === 'EPERM') return false; throw error; } };
     if (!signal('SIGTERM')) return;
-    await new Promise(resolve => setTimeout(resolve, this.stopGrace));
-    signal('SIGKILL');
+    // Wait only until the group exits, and up to stopGrace for one that ignores SIGTERM.
+    const deadline = Date.now() + this.stopGrace;
+    while (Date.now() < deadline && signal(0)) await new Promise(resolve => setTimeout(resolve, Math.min(20, Math.max(1, deadline - Date.now()))));
+    if (signal(0)) signal('SIGKILL');
   }
   async stop(id, commandId, sessionId) {
     this.registry.get(id);
@@ -235,6 +237,16 @@ export class ProjectCommands {
   async close() {
     this.closing = true;
     await Promise.all([...this.sessions.values()].filter(commandActive).map(session => this.stop(session.projectId, session.commandId, session.id)));
+  }
+  // When shutdown gives up on a stuck step, active commands still end before the process exits.
+  killAll() {
+    this.closing = true;
+    for (const session of this.sessions.values()) {
+      const pid = session.child?.pid;
+      if (!pid || !commandActive(session)) continue;
+      if (process.platform === 'win32') { try { execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { timeout: 2000, windowsHide: true }); } catch {} continue; }
+      for (const target of [-pid, pid]) { try { process.kill(target, 'SIGKILL'); } catch {} }
+    }
   }
 }
 

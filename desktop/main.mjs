@@ -57,8 +57,8 @@ let text=english;
 if(!primary) app.quit();
 else {
   app.on('second-instance',(_event,argv=[])=>{if(argv.includes('--background'))return;if(openMain)return openMain();windowWanted=true;app.dock?.show();if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
-  app.on('before-quit',event=>{if(relay&&!quitting){if(!confirmQuit()){event.preventDefault();return;}event.preventDefault();quitting=true;if(win&&!win.isDestroyed())win.webContents.send('relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{app.quit();setTimeout(()=>app.exit(0),2000);});}});
-  app.on('will-quit',()=>{removeConnection(connectionFile(app.getPath('userData')));keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
+  app.on('before-quit',event=>{if(relay&&!quitting){if(!confirmQuit()){event.preventDefault();return;}event.preventDefault();quitting=true;if(win&&!win.isDestroyed())win.webContents.send('relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{relay.killAll?.();app.quit();setTimeout(()=>app.exit(0),2000);});}});
+  app.on('will-quit',()=>{relay?.killAll?.();removeConnection(connectionFile(app.getPath('userData')));keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
     // The packaged app's layered icon switches between Paper and Ink with the appearance; in development the Dock shows a picture, so swap it.
@@ -84,7 +84,7 @@ else {
       }catch(error){dialog.showErrorBox(t('The performance trace was not saved'),error?.message||String(error));}
     };
     // Install 'codeshi' Command (#90), in the Codeshi menu on macOS and File on Windows: a link to bin/codeshi in this
-    // app, or on Windows a launcher for bin\codeshi.cmd. Either runs the CLI with the app's own Node.
+    // app, or on Windows a launcher for bin\\codeshi.cmd. Either runs the CLI with the app's own Node.
     const commandTarget=path.join(root,'bin',process.platform==='win32'?'codeshi.cmd':'codeshi');
     const command=async install=>{
       const {t}=text,owner=win&&!win.isDestroyed()?win:undefined;
@@ -340,7 +340,7 @@ else {
     ipcMain.handle('relay:pick-folder',async event=>{if(!trusted(event))throw Error('Untrusted renderer');const choice=await dialog.showOpenDialog(win,{properties:['openDirectory','multiSelections'],message:'Choose one or more project folders. Hold ⌘ to select several.'});return choice.canceled||!choice.filePaths.length?null:choice.filePaths;});
     // A Codeshi backup (#160): where to save one, or which one to import. The page gets the path; the server reads and
     // writes the file.
-    ipcMain.handle('relay:pick-backup',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const filters=[{name:'Codeshi Backup',extensions:['codeshibackup']}];if(input?.mode==='save'){const name=String(input?.name||'Codeshi Backup.codeshibackup').replace(/[\\/:]/g,'-').slice(0,120);const choice=await dialog.showSaveDialog(win,{defaultPath:path.join(app.getPath('documents'),name),filters,properties:['createDirectory','showOverwriteConfirmation']});return choice.canceled||!choice.filePath?null:choice.filePath;}const choice=await dialog.showOpenDialog(win,{properties:['openFile'],filters});return choice.canceled||!choice.filePaths.length?null:choice.filePaths[0];});
+    ipcMain.handle('relay:pick-backup',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const filters=[{name:'Codeshi Backup',extensions:['codeshibackup']}];if(input?.mode==='save'){const name=String(input?.name||'Codeshi Backup.codeshibackup').replace(/[\\\\/:]/g,'-').slice(0,120);const choice=await dialog.showSaveDialog(win,{defaultPath:path.join(app.getPath('documents'),name),filters,properties:['createDirectory','showOverwriteConfirmation']});return choice.canceled||!choice.filePath?null:choice.filePath;}const choice=await dialog.showOpenDialog(win,{properties:['openFile'],filters});return choice.canceled||!choice.filePaths.length?null:choice.filePaths[0];});
     ipcMain.handle('relay:open-external',async(event,input)=>{if(!trusted(event))throw Error('Untrusted renderer');const url=new URL(input);if(url.username||url.password||(url.protocol!=='https:' && !(url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname))))throw Error('Only HTTPS or local test links without credentials may open');await shell.openExternal(url.href);return true;});
     win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
     win.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(origin+'/'))event.preventDefault();});
@@ -413,7 +413,7 @@ else {
       }
       smokeStep('menus');
       await win.webContents.executeJavaScript(`document.documentElement.dataset.smokeTest = 'true'`);
-      if((process.platform==='darwin'||process.platform==='win32')&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/"type":"check"/.test(String(stdout)))));
+      if((process.platform==='darwin'||process.platform==='win32')&&app.isPackaged)result.speech=await new Promise(resolve=>execFile(helperPath(),['--check'],{timeout:15000},(_error,stdout)=>resolve(/\"type\":\"check\"/.test(String(stdout)))));
       result.terminalUI=await win.webContents.executeJavaScript(`typeof window.relayTerminal?.toggle==='function'&&typeof window.Terminal==='function'&&typeof window.FitAddon?.FitAddon==='function'&&typeof window.WebLinksAddon?.WebLinksAddon==='function'`);
       // The menu bar is Codeshi's. The page reports its state to it, and an item's command reaches the page and comes back as a tick.
       const settled=async done=>{for(let tries=0;!done()&&tries<250;tries++)await new Promise(resolve=>setTimeout(resolve,20));return done();};
