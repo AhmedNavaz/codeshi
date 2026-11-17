@@ -8,6 +8,10 @@ export const appearances = ['system', 'light', 'dark', 'graphite'];
 export const appearance = config => appearances.includes(config.appearance) ? config.appearance : 'system';
 // view is the layout setup chose for new workspaces: Normal (every panel, manual choices) or Flow (routed, cards).
 export const defaultPreferences = { provider: 'codex', model: null, effort: null, mode: 'edit', billing: 'subscription', view: 'normal' };
+// Experimental features (#176): newer parts of Codeshi that can each be turned off. All are on by default, so a missing
+// or partial saved value means on.
+export const experimentalFeatures = ['remote', 'plan', 'review', 'smartResults', 'tasks'];
+export const experimental = config => Object.fromEntries(experimentalFeatures.map(id => [id, config.experimental?.[id] !== false]));
 export function preferencePatch(input, previous = {}, { languages = ['en'] } = {}) {
   const patch = {};
   // The interface language (#27): System follows the computer, or a language with a catalog.
@@ -24,6 +28,11 @@ export function preferencePatch(input, previous = {}, { languages = ['en'] } = {
   if (input.suggestions !== undefined) {
     if (typeof input.suggestions !== 'boolean') fail('Turn suggestions on or off.');
     patch.suggestions = input.suggestions;
+  }
+  if (input.experimental !== undefined) {
+    const value = input.experimental;
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.entries(value).some(([id, on]) => !experimentalFeatures.includes(id) || typeof on !== 'boolean')) fail('Turn each experimental feature on or off.');
+    patch.experimental = { ...experimental(previous), ...value };
   }
   if (input.theme !== undefined) {
     if (!appearances.includes(input.theme)) fail('Choose System, Light, Dark or Graphite.');
@@ -49,5 +58,5 @@ export function preferencePatch(input, previous = {}, { languages = ['en'] } = {
   return patch;
 }
 export function publicPreferences(config, hasProjects, { languages = [], language = 'en' } = {}) {
-  return { defaults: { ...defaultPreferences, ...config.defaults }, theme: appearance(config), language: config.language || 'system', activeLanguage: language, languages, verificationCadence: verificationCadence(config), contextLimit: contextLimit(config), suggestions: config.suggestions !== false, onboarding: config.onboarding || { step: 0 }, firstRun: !hasProjects && !config.onboarding?.completedAt && !config.onboarding?.dismissed };
+  return { defaults: { ...defaultPreferences, ...config.defaults }, theme: appearance(config), language: config.language || 'system', activeLanguage: language, languages, verificationCadence: verificationCadence(config), contextLimit: contextLimit(config), suggestions: config.suggestions !== false, experimental: experimental(config), onboarding: config.onboarding || { step: 0 }, firstRun: !hasProjects && !config.onboarding?.completedAt && !config.onboarding?.dismissed };
 }

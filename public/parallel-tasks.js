@@ -153,7 +153,7 @@
   }
   function renderList() {
     const state = api.getState(), level = api.sidebarLevel?.() || 'single', chosen = api.selectedFolderId?.();
-    section.hidden = !state.projectId;
+    section.hidden = !state.projectId || window.relayExperimental?.enabled('tasks') === false;
     // A folder shows its own tasks. The main conversation spans every folder, so it shows with the workspace.
     const shown = level === 'folder' ? tasks().filter(task => task.folderId === chosen) : tasks();
     const blank = state.taskDraft ? (() => { const row = node('li', 'task-row-holder'), item = node('div', 'task-row task-row-draft active'), mark = node('span', 'task-row-draft-icon'); mark.setAttribute('aria-hidden', 'true'); item.setAttribute('aria-current', 'true'); item.append(mark, node('span', 'task-row-title task-row-draft-title', draftTitle())); row.append(item); return [row]; })() : [];
@@ -216,7 +216,7 @@
     // A blank task belongs to its folder, so going to the workspace or another folder puts it away. What was typed is kept.
     if (state.taskDraft && (api.sidebarLevel?.() === 'workspace' || (api.sidebarLevel?.() === 'folder' && api.selectedFolderId?.() !== state.taskDraft.folderId))) { attempt(() => selectThread(null)); return; }
     remember(state);
-    const key = JSON.stringify([state.projectId, state.taskId, state.taskDraft, state.provider, state.mode, state.approvalPolicy, focused, api.sidebarLevel?.(), api.selectedFolderId?.(), state.conversation?.status, state.conversation?.pendingApprovals?.length, state.status?.runningConversationId, tasks().map(task => [task.id, task.status, task.approvals, task.reason, task.hasWorktree, task.held, task.title, task.folderId, task.resolving?.open]), [...plans.values()].map(plan => [plan.id, plan.status, plan.summary || plan.goal])]);
+    const key = JSON.stringify([state.projectId, state.taskId, state.taskDraft, state.provider, state.mode, state.approvalPolicy, focused, window.relayExperimental?.enabled('tasks') !== false, api.sidebarLevel?.(), api.selectedFolderId?.(), state.conversation?.status, state.conversation?.pendingApprovals?.length, state.status?.runningConversationId, tasks().map(task => [task.id, task.status, task.approvals, task.reason, task.hasWorktree, task.held, task.title, task.folderId, task.resolving?.open]), [...plans.values()].map(plan => [plan.id, plan.status, plan.summary || plan.goal])]);
     if (focused && !tasks().some(task => task.id === focused)) focused = null;
     if (!force && key === signature) return;
     signature = key; renderList(); renderBanner(); renderDraft(); loadTotals();
@@ -229,6 +229,7 @@
   const folderName = folder => folder?.displayName || folder?.name || 'this folder';
   let planKey = null, knownKey = null;
   async function openDraft(folderId) {
+    if (window.relayExperimental?.enabled('tasks') === false) { api.showNotice?.('Tasks side by side is turned off. Turn it on in Settings › Experimental.'); return; }
     const state = api.getState();
     if (!state.projectId) return;
     if (api.sidebarLevel?.() === 'workspace') api.showFolderLevel?.();
@@ -395,6 +396,7 @@
   });
   $('task-merge-close').addEventListener('click', () => $('task-merge-dialog').close());
   window.addEventListener('relay-state', () => { render(); followResolve(); followTests(); });
-  window.relayTaskThreads = { refresh: () => render(true), open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => { const all = api.getState().conversation?.parallelTasks || []; const task = all.find(item => item.id === id) || null; if (task && (task.board || task.purpose === 'plan-chat') && window.relayBoard?.openTask) return window.relayBoard.openTask(task.id); return selectThread(tasks().find(item => item.id === id) || null); }, review: id => { const all = api.getState().conversation?.parallelTasks || []; const task = all.find(item => item.id === id) || tasks().find(item => item.id === id); if (task) return attempt(() => openReview(task)); }, resume: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'start')); }, discard: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'discard')); }, close: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(async () => { await act(task, 'close'); if ((focused || api.getState().taskId) === task.id) await selectThread(null); }); } };
+  window.relayExperimental?.onChange(() => { if (window.relayExperimental.enabled('tasks') === false) { const state = api.getState(), current = state.taskId ? tasks().find(item => item.id === state.taskId) : null; if (state.taskDraft || (current && !current.board && current.purpose !== 'plan-chat' && current.purpose !== 'project-review')) attempt(() => selectThread(null)); } render(true); });
+  window.relayTaskThreads = { refresh: () => render(true), open: folderId => attempt(() => openDraft(folderId)), start: startTask, started, select: id => { const all = api.getState().conversation?.parallelTasks || []; const task = all.find(item => item.id === id) || null; if (task && !task.managed && (task.board || task.purpose === 'plan-chat') && window.relayBoard?.openTask) return window.relayBoard.openTask(task.id); return selectThread(tasks().find(item => item.id === id) || (task?.managed ? task : null)); }, review: id => { const all = api.getState().conversation?.parallelTasks || []; const task = all.find(item => item.id === id) || tasks().find(item => item.id === id); if (task) return attempt(() => openReview(task)); }, resume: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'start')); }, discard: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(() => act(task, 'discard')); }, close: id => { const task = tasks().find(item => item.id === id); if (task) return attempt(async () => { await act(task, 'close'); if ((focused || api.getState().taskId) === task.id) await selectThread(null); }); } };
   render(true);
 })();

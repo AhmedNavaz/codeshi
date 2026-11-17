@@ -1,6 +1,6 @@
 {
   "name": "codeshi",
-  "version": "0.59.2",
+  "version": "0.60.0",
   "description": "Claude Code, Codex, Gemini and local models in one conversation. Switch agents mid-task, keep going when one hits its limit, and use the plans you already pay for.",
   "keywords": [
     "claude-code",
@@ -14,9 +14,11 @@
     "agent-orchestration",
     "coding-agent",
     "desktop",
-    "electron"
+    "electron",
+    "git-worktree",
+    "llm"
   ],
-  "homepage": "https://github.com/AhmedNavaz/codeshi#readme",
+  "homepage": "https://codeshi.dev",
   "bugs": {
     "url": "https://github.com/AhmedNavaz/codeshi/issues"
   },

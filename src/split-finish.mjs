@@ -162,12 +162,15 @@ export class SplitFinish {
     const files = new Set();
     for (const [index, card] of cards.entries()) {
       const task = board.task(c, card), answer = board.answer(c, card.id);
-      for (const file of task?.stepResult?.files || []) files.add(file);
+      for (const file of answer.files || []) if (file?.path) files.add(file.path);
       const who = [NAMES[task?.provider] || task?.provider, task?.model].filter(Boolean).join(' · '), count = card.result?.files;
       lines.push('', `**${index + 1}. ${card.title}**${who ? ` · ${who}` : ''}${Number.isInteger(count) ? ` · ${plural(count, 'file')}` : ''}`, '', excerpt(answer.text) || 'It gave no report.');
     }
     const reviewTask = review ? board.task(c, review) : null, verdict = reviewTask?.review || null, check = reviewTask?.stepCheck || null;
-    for (const task of (c.parallelTasks || []).filter(item => item.splitId === run.id && item.splitRepair)) for (const file of task.stepResult?.files || []) files.add(file);
+    for (const task of (c.parallelTasks || []).filter(item => item.splitId === run.id && item.splitRepair)) {
+      const changed = Array.isArray(task.integration?.changes) ? task.integration.changes.map(item => item?.path).filter(Boolean) : board.recordedFiles(c, task);
+      for (const file of changed) files.add(file);
+    }
     if (review) {
       const by = NAMES[reviewTask?.provider] || reviewTask?.provider || 'An agent', alone = reviewTask && !board.reviews.independent(c, review, reviewTask.provider) ? ' It ran on an agent that also built a part, as no other was available.' : '';
       let said;

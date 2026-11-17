@@ -1,7 +1,7 @@
 // A message Flow found separate parts in (#107 stage 2, #108). Nothing has started: the card above the message box shows
-// each part, the agent and model routing would pick for it now and what that agent is billed to. Run them as tasks side
-// by side, do the message as one, or put it back in the message box. Run side by side, Flow finishes the parts by itself
-// and answers once (src/split-finish.mjs); they go to the Plan only if something needs you.
+// each part, the agent and model routing would pick for it now and what that agent is billed to, and only while Flow is shown.
+// Run them as tasks side by side, do the message as one, or put it back in the message box. Run side by side, Flow finishes the
+// parts by itself and answers once (src/split-finish.mjs); they go to the Plan only if something needs you.
 (() => {
   const $ = id => document.getElementById(id), api = window.relayUI, section = $('split-offer');
   if (!section || !api) return;
@@ -10,7 +10,11 @@
   const node = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; };
   let busy = false, shown = null;
 
-  const proposal = () => { const state = api.getState(); return state.taskId || state.taskDraft ? null : state.conversation?.splitProposal || null; };
+  const proposal = () => {
+    if (window.relayFlow && !window.relayFlow.isOn()) return null;
+    const state = api.getState();
+    return state.taskId || state.taskDraft ? null : state.conversation?.splitProposal || null;
+  };
   const folders = () => { const state = api.getState(), project = state.projects?.find(item => item.id === state.projectId); return Array.isArray(project?.folders) ? project.folders : []; };
   const pickText = pick => {
     if (!pick || pick.error) return pick?.error ? 'No agent available' : 'Chosen when it starts';
@@ -91,6 +95,7 @@
   $('split-billing-confirm').addEventListener('change', draw);
   $('split-auto').addEventListener('change', event => prefer(event.target.checked));
   window.addEventListener('relay-state', draw);
+  window.addEventListener('relay-flow', draw);
   window.relaySplitOffer = { draw, open: () => Boolean(proposal()) };
   draw();
 })();

@@ -85,7 +85,7 @@ function realXterm(){
 }
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
-async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
+async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,experimentalUI=false,splitUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
   const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
@@ -270,6 +270,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   vm.runInContext(fs.readFileSync(new URL('../public/i18n.js',import.meta.url),'utf8'),context,{filename:'public/i18n.js'});if(locale)window.codeshiText.load(locale);
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
   vm.runInContext(fs.readFileSync(new URL('../public/routing.js',import.meta.url),'utf8'),context,{filename:'public/routing.js'});
+  if(experimentalUI)vm.runInContext(fs.readFileSync(new URL('../public/experimental.js',import.meta.url),'utf8'),context,{filename:'public/experimental.js'});
   const previewOpens=[],previewListeners=[],previewCloses=[];
   if(previewUI)window.relayDesktop=Object.assign(window.relayDesktop||{},{openPreview:async input=>{previewOpens.push(clone(input));return true;},closePreviews:async input=>{previewCloses.push(clone(input));return input.urls.length;},onPreviewPick:callback=>{previewListeners.push(callback);return ()=>{};}});
   vm.runInContext(fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context,{filename:'public/app.js'});if(questionsUI)vm.runInContext(fs.readFileSync(new URL('../public/questions.js',import.meta.url),'utf8'),context,{filename:'public/questions.js'});if(workbench){vm.runInContext(fs.readFileSync(new URL('../public/settings.js',import.meta.url),'utf8'),context,{filename:'public/settings.js'});vm.runInContext(fs.readFileSync(new URL('../public/workbench.js',import.meta.url),'utf8'),context,{filename:'public/workbench.js'});}
@@ -303,6 +304,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
     vm.runInContext(fs.readFileSync(new URL('../public/flow-lounge-puzzles.js',import.meta.url),'utf8'),context,{filename:'public/flow-lounge-puzzles.js'});
     vm.runInContext(fs.readFileSync(new URL('../public/flow-lounge.js',import.meta.url),'utf8'),context,{filename:'public/flow-lounge.js'});
   }
+  if(splitUI){vm.runInContext(fs.readFileSync(new URL('../public/split-offer.js',import.meta.url),'utf8'),context,{filename:'public/split-offer.js'});vm.runInContext(fs.readFileSync(new URL('../public/split-progress.js',import.meta.url),'utf8'),context,{filename:'public/split-progress.js'});}
   if(alertsUI)vm.runInContext(fs.readFileSync(new URL('../public/alerts.js',import.meta.url),'utf8'),context,{filename:'public/alerts.js'});
   if(update)vm.runInContext(fs.readFileSync(new URL('../public/updater.js',import.meta.url),'utf8'),context,{filename:'public/updater.js'});
   // A stand-in for xterm.js: it records what the page writes and lets a test type into it. With realTerminal, the page
@@ -5293,7 +5295,7 @@ test('Settings has its own pages, keeps Ask a friend separate and opens Accounts
   ui.$('relay-settings').click(); await flush();
   assert.equal(ui.$('settings').open, true); assert.equal(ui.$('workbench').open, false);
   assert.equal(ui.$('settings-title').textContent, 'General'); assert.deepEqual(pages(), ['general']);
-  assert.deepEqual(ui.$('settings-nav').querySelectorAll('[data-page]').map(button => button.textContent), ['General', 'Appearance', 'Agents & accounts', 'Routing & handoffs', 'Testing', 'Phone & remote', 'Voice', 'Alerts', 'Updates']);
+  assert.deepEqual(ui.$('settings-nav').querySelectorAll('[data-page]').map(button => button.textContent), ['General', 'Appearance', 'Agents & accounts', 'Routing & handoffs', 'Testing', 'Phone & remote', 'Voice', 'Alerts', 'Experimental', 'Updates']);
   navigate('accounts');
   assert.deepEqual(pages(), ['accounts']); assert.equal(ui.$('settings-title').textContent, 'Agents & accounts');
   assert.equal(ui.$('settings-nav').querySelectorAll('[data-page]').find(button => button.dataset.page === 'accounts').getAttribute('aria-current'), 'page');
@@ -5877,6 +5879,10 @@ test('Flow turns routing on with Smart by default, keeps mode changes in Agent s
   assert.deepEqual(chat.routing, { mode: 'ultra', allowApi: false, check: false }, 'Agent settings change the mode without changing billing or tests.');
   assert.equal(card.querySelector('.flow-mode').dataset.mode, 'ultra');
   ui.$('flow-detail-close').click(); await flush();
+  ui.$('model-picker-button').click(); await flush();
+  assert.equal(ui.$('flow-detail').open, true, 'Clicking Routing from the chat field opens the overlay dialog.');
+  assert.equal(ui.$('agents-routing').classList.contains('flash'), false, 'Clicking Routing from the chat field does not highlight the section in the overlay dialog.');
+  ui.$('flow-detail-close').click(); await flush();
   ui.window.relayFlow.leave(); await flush();
   assert.equal(chat.routing, null, 'Leaving Flow turns routing off: the normal view picks by hand.');
   assert.equal(ui.$('agents-routing').hidden, true); assert.equal(ui.$('agents-routing-note').hidden, false);
@@ -5995,6 +6001,47 @@ test('Smart results show observed use, compare with manual tasks only when the e
   ui.$('tasks-results-body').querySelectorAll('button').find(button => /^Show the 24 tasks$/.test(button.textContent)).click(); await flush();
   ui.$('tasks-results-body').querySelectorAll('button').find(button => button.textContent === 'Leave out').click(); await flush();
   assert.equal(asked.at(-1).exclude, enough.tasks[0].id, 'A task left out is sent with the next request, so the server recomputes without it.');
+});
+
+test('Smart results ask for the selected workspace, and a failure is said with a way to try again instead of reading forever', async () => {
+  const at = minute => new Date(Date.UTC(2026, 10, 5) + minute * 60000).toISOString();
+  const report = smartResults([{ id: 'task-1', startedAt: at(1), endedAt: at(2), status: 'complete', verification: 'passed', routing: { mode: 'smart', policy: 1 }, taskClass: { kind: 'change', size: 'standard' }, contextPolicy: 'task',
+    models: [{ provider: 'codex', model: 'gpt-5', effort: 'low', role: 'builder' }], billing: ['subscription'], apiEstimateUSD: { total: null, runs: 0, billedRuns: 0 }, workingMs: 60000,
+    usage: { runs: 1, reportedBy: { input: 1, output: 1 }, input: 1000, output: 100, cacheWrite: null, partialRuns: 0, runsWithTokens: 1 }, runs: 1, retries: 0, interventions: 0, firstAttemptSuccess: true }], { now: Date.parse(at(200)), days: null });
+  let down = false;
+  const asked = [];
+  const ui = await flowBrowser({ desktop: true, desktopControls: true });
+  ui.setIntercept((request, next) => {
+    // Like the server with more than one workspace: no projectId, no answer.
+    if (request.path === '/api/results') { asked.push({ ...request.params }); return down ? response({ error: 'The task ledger could not be read.' }, 500) : request.params.projectId ? response(report) : response({ error: 'Select a project workspace first.' }, 400); }
+    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [] });
+    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
+    return next();
+  });
+  const card = () => ui.$('flow-card-results').textContent.replace(/\s+/g, ' ');
+  ui.window.relayFlow.enter(); await flush(); await ui.window.relaySmartResults.refresh(); await flush();
+  assert.equal(asked.at(-1).projectId, 'project-one', 'The selected workspace is named, so the server never has to guess.');
+  assert.match(card(), /1 task · 1 verified by tests/);
+  assert.doesNotMatch(card(), /Reading your saved tasks/);
+
+  // A fresh window whose first read fails says so, and Try again reads again.
+  down = true;
+  const fresh = await flowBrowser({ desktop: true, desktopControls: true });
+  fresh.setIntercept((request, next) => {
+    if (request.path === '/api/results') { asked.push({ ...request.params }); return down ? response({ error: 'The task ledger could not be read.' }, 500) : response(report); }
+    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [] });
+    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
+    return next();
+  });
+  const freshCard = () => fresh.$('flow-card-results').textContent.replace(/\s+/g, ' ');
+  fresh.window.relayFlow.enter(); await flush(); await fresh.window.relaySmartResults.refresh(); await flush();
+  assert.match(freshCard(), /Smart results couldn’t be read: The task ledger could not be read\./);
+  const before = asked.length;
+  await flush(); await flush();
+  assert.equal(asked.length, before, 'A failure is not asked again in a loop.');
+  down = false;
+  fresh.$('flow-card-results').querySelectorAll('button').find(button => button.textContent === 'Try again').click(); await flush(); await flush();
+  assert.match(freshCard(), /1 task · 1 verified by tests/);
 });
 
 test('Flow details use a dismissible sheet and restore the workbench when leaving', async () => {
@@ -9499,4 +9546,155 @@ test('clicking a task worktree file link or changed file in chat opens its previ
   // Paths genuinely outside the workspace and not in any task worktree remain blocked.
   links.find(node => node.textContent === 'outside').click(); await flush();
   assert.match(ui.$('notice-text').textContent, /Only files inside this workspace can be opened/);
+});
+
+test('Flow split-into-parts managed tasks stay out of Plan row, Task lanes, and outside Flow', async () => {
+  const ui = await flowBrowser({ boardUI: true, tasksUI: true, wide: true, splitUI: true });
+  planChatBrowserRoutes(ui);
+  const chat = ui.canonical.get('project-one');
+  const folder = ui.state().projects[0].folders[0];
+  chat.splitRuns = [{ id: 'split-1', status: 'working', cards: ['c-1', 'c-2'], reviewCardId: 'c-rev' }];
+  chat.splitProposal = { id: 'prop-1', request: { text: 'Do both' }, parts: [{ title: 'Part 1', instructions: 'One' }, { title: 'Part 2', instructions: 'Two' }] };
+  await ui.window.relayUI.refresh(); await flush();
+
+  // Normal view hides #split-progress and #split-offer.
+  assert.equal(ui.window.relayFlow.view(), 'normal');
+  assert.equal(ui.$('split-progress').hidden, true);
+  assert.equal(ui.$('split-offer').hidden, true);
+
+  // Enter Flow while idle, then split parts start running.
+  ui.window.relayFlow.enter(); await flush(); await flush();
+  const splitTasks = [
+    { id: 'split-t1', title: 'Promo helper', folderName: folder.name, folderId: folder.id, status: 'running', runningProvider: 'claude', managed: true, splitId: 'split-1', board: { boardId: 'b1', cardId: 'c-1' }, cardColumn: 'doing', conversationId: 'conv-s1', approvals: 0 },
+    { id: 'split-t2', title: 'Checkout UI', folderName: folder.name, folderId: folder.id, status: 'running', runningProvider: 'codex', managed: true, splitId: 'split-1', board: { boardId: 'b1', cardId: 'c-2' }, cardColumn: 'doing', conversationId: 'conv-s2', approvals: 0 },
+    { id: 'split-rev', title: 'Review', folderName: folder.name, folderId: folder.id, status: 'waiting', managed: true, splitId: 'split-1', board: { boardId: 'b1', cardId: 'c-rev' }, cardColumn: 'backlog', approvals: 0 },
+  ];
+  chat.parallelTasks = splitTasks;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') return response({ revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [], limits: { title: 200, notes: 20000, check: 300, checks: 20 }, cards: [], suggest: null, chat: { taskId: 'plan-chat', conversationId: 'plan-lane', status: 'complete', running: false, approvals: 0 } });
+    if (request.path === '/api/board/chat') return response({ task: { id: 'plan-chat', title: 'Plan chat', purpose: 'plan-chat', status: 'complete', conversationId: 'plan-lane' }, board: { revision: 1, cards: [], chat: { taskId: 'plan-chat', conversationId: 'plan-lane' } } });
+    if (request.path === '/api/conversation' && request.params.task) {
+      const t = splitTasks.find(item => item.id === request.params.task) || { id: 'plan-chat', title: 'Plan chat', purpose: 'plan-chat', status: 'complete', conversationId: 'plan-lane' };
+      return response({ ...clone(chat), id: t.conversationId || 'plan-lane', messages: [], status: 'complete', activeRun: null, task: t, parallelTasks: splitTasks, cursor: 0, checkpoints: {} });
+    }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'flow');
+  assert.equal(ui.$('split-progress').hidden, false);
+  assert.equal(ui.$('split-offer').hidden, false);
+  assert.match(ui.$('flow-status-text').textContent, /Working in 2 parts side by side/);
+  assert.doesNotMatch(ui.$('flow-status-text').textContent, /Task lane/);
+  assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === 'plan'), undefined);
+  assert.equal(ui.$('flow-card-tasks').querySelectorAll('.flow-task').find(el => el.dataset.taskId === 'split-t1'), undefined);
+  assert.doesNotMatch(ui.$('flow-card-working').textContent, /Task lanes/);
+
+  // Opening a managed split part inside Flow, then switching to Plan or Normal, hides split UI and exits the managed part.
+  ui.$('split-progress-toggle').click(); await flush();
+  ui.$('split-progress-list').querySelector('.split-progress-open').click(); await flush();
+  assert.equal(ui.state().taskId, 'split-t1');
+  ui.window.relayFlow.setView('plan'); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'plan');
+  assert.equal(ui.$('split-progress').hidden, true);
+  assert.equal(ui.$('split-offer').hidden, true);
+  assert.equal(ui.state().taskId, 'plan-chat');
+
+  // Back in Flow, opening a managed split part and then leaving Flow for Normal returns to Workspace chat.
+  ui.window.relayFlow.setView('flow'); await flush(); await flush();
+  ui.$('split-progress-toggle').click(); await flush();
+  ui.$('split-progress-list').querySelector('.split-progress-open').click(); await flush();
+  assert.equal(ui.state().taskId, 'split-t1');
+  for (const t of chat.parallelTasks) t.status = 'complete';
+  await ui.window.relayUI.refresh(); await flush();
+  ui.window.relayFlow.setView('normal'); await flush(); await flush();
+  assert.equal(ui.window.relayFlow.view(), 'normal');
+  assert.equal(ui.$('split-progress').hidden, true);
+  assert.equal(ui.$('split-offer').hidden, true);
+  assert.equal(ui.state().taskId, null);
+});
+
+test('Smart results preserves Experimental subtitle on mode updates and resets across workspace switches', async () => {
+  const at = minute => new Date(Date.UTC(2026, 10, 5) + minute * 60000).toISOString();
+  const reportOne = smartResults([{ id: 't1', startedAt: at(1), endedAt: at(2), status: 'complete', verification: 'passed', routing: { mode: 'smart', policy: 1 }, taskClass: { kind: 'change', size: 'standard' }, contextPolicy: 'task',
+    models: [{ provider: 'codex', model: 'gpt-5', effort: 'low', role: 'builder' }], billing: ['subscription'], apiEstimateUSD: { total: null, runs: 0, billedRuns: 0 }, workingMs: 60000,
+    usage: { runs: 1, reportedBy: { input: 1, output: 1 }, input: 1000, output: 100, cacheWrite: null, partialRuns: 0, runsWithTokens: 1 }, runs: 1, retries: 0, interventions: 0, firstAttemptSuccess: true }], { now: Date.parse(at(200)), days: null });
+  const reportTwo = smartResults([], { now: Date.parse(at(200)), days: null });
+  const ui = await flowBrowser({ experimentalUI: true, moreProjects: true });
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/results') return response(request.params.projectId === 'project-two' ? reportTwo : reportOne);
+    if (request.path === '/api/ledger') return response({ runs: [], quotaObservations: [], tasks: [] });
+    if (request.path === '/api/budget') return response({ policy: {}, defaults: {}, quota: {}, task: null });
+    return next();
+  });
+  ui.window.relayFlow.enter(); await flush(); await ui.window.relaySmartResults.refresh(); await flush();
+  const titleEl = () => ui.$('flow-card-results-title');
+  assert.equal(titleEl().querySelector('.flow-card-title').textContent, 'Smart results');
+  assert.equal(titleEl().querySelector('.experimental-badge').textContent, 'Experimental');
+  assert.match(ui.$('flow-card-results').textContent, /1 task/);
+
+  const chat = ui.canonical.get('project-one');
+  chat.routing = { mode: 'saver', allowApi: false, check: true };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.equal(titleEl().querySelector('.flow-card-title').textContent, 'Saver results');
+  assert.equal(titleEl().querySelector('.experimental-badge').textContent, 'Experimental');
+
+  await ui.switchProject('project-two'); await flush();
+  assert.doesNotMatch(ui.$('flow-card-results').textContent, /1 task/);
+  assert.match(ui.$('flow-card-results').textContent, /no finished Smart tasks yet/);
+});
+
+test('Tasks side by side is experimental: marked in Normal and Flow, and turning it off hides its entry points', async () => {
+  const ui = await flowBrowser({ experimentalUI: true, workbench: true });
+  const first = ui.state().projects[0].folders[0];
+  let experimental = { remote: true, plan: true, review: true, smartResults: true, tasks: true };
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/preferences' && request.method === 'GET') return response({ experimental });
+    if (request.path === '/api/preferences' && request.method === 'POST') { experimental = { ...experimental, ...request.body.experimental }; return response({ experimental }); }
+    if (request.path === '/api/tasks/plan') return response({ mode: 'worktree', reason: 'It works in its own copy.', uncommitted: 0, running: 0, limit: 2, full: false });
+    if (request.path === '/api/memory') return response({ entries: [], suggestions: [] });
+    if (request.path === '/api/skills') return response({ enabled: [], available: [], dirs: [] });
+    return next();
+  });
+  await ui.window.relayExperimental.reload(); await flush();
+
+  // Normal mode sidebar and Flow card both show the Experimental subtitle.
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="toggle-tasks"[\s\S]*?data-experimental-mark[\s\S]*?<\/button>/);
+  assert.equal(ui.$('task-section').hidden, false);
+  ui.window.relayFlow.enter(); await flush();
+  assert.equal(ui.$('flow-card-tasks-title').querySelector('.experimental-badge').textContent, 'Experimental');
+  ui.window.relayFlow.leave(); await flush();
+
+  // Settings › Experimental includes the toggle for Tasks side by side.
+  await ui.window.relaySettings.open('experimental'); await flush();
+  assert.equal(ui.$('settings-experimental-tasks').checked, true);
+
+  // Command palette includes "New task beside this one" while enabled.
+  ui.$('workspace-search').value = '>New task'; ui.fire('workspace-search', 'input');
+  assert(ui.$('command-results').textContent.includes('New task beside this one'));
+  ui.$('workspace-search').value = '';
+
+  // Open a draft task, then turn Tasks side by side off: the draft closes and entry points hide.
+  await ui.window.relayTaskThreads.open(first.id); await flush();
+  assert.equal(ui.state().taskDraft.folderId, first.id);
+
+  await ui.window.relayExperimental.set('tasks', false); await flush();
+  assert.equal(ui.document.documentElement.dataset.expTasks, 'off');
+  assert.equal(ui.state().taskDraft, null);
+  assert.equal(ui.$('task-section').hidden, true);
+  assert.equal(ui.$('settings-experimental-tasks').checked, false);
+
+  // Command palette omits it when off, and direct open shows a notice.
+  ui.$('workspace-search').value = '>New task'; ui.fire('workspace-search', 'input');
+  assert(!ui.$('command-results').textContent.includes('New task beside this one'));
+
+  await ui.window.relayTaskThreads.open(first.id); await flush();
+  assert.equal(ui.state().taskDraft, null);
+  assert.match(ui.$('notice-text').textContent, /Settings › Experimental/);
+
+  // Flow narrow strip leaves out Tasks side by side when off.
+  ui.window.relayFlow.enter(); await flush();
+  ui.$('flow-strip').hidden = false;
+  ui.window.relayFlow.peek('tasks');
+  assert.equal(ui.$('flow-peek').hidden, true);
 });

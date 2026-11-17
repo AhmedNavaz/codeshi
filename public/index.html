@@ -22,6 +22,8 @@
     <script src="/i18n.js" defer></script>
     <script src="/locale.js" defer></script>
     <script src="/keyboard.js" defer></script>
+    <script src="/experimental.js" defer></script>
+    <link rel="stylesheet" href="/experimental.css" />
     <script src="/routing.js" defer></script>
     <script src="/layout.js" defer></script>
     <script src="/app.js" defer></script>
@@ -117,7 +119,7 @@
         <button id="open-setup" class="setup-launch" type="button" hidden><span>Getting started</span><span id="setup-progress">Setup</span></button>
         <nav id="workspace-list" class="workspace-list" aria-label="Saved workspaces and folders"></nav>
         <section id="task-section" class="task-section" aria-label="Tasks" hidden>
-          <div class="task-section-heading"><button id="toggle-tasks" type="button" aria-expanded="true" aria-controls="task-list"><span class="tree-chevron" aria-hidden="true"></span>Tasks<span id="task-count" class="count-badge" hidden></span></button><button id="new-task" class="icon-button" type="button" aria-label="New task" title="New task, running beside this one"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <div class="task-section-heading"><button id="toggle-tasks" type="button" aria-expanded="true" aria-controls="task-list"><span class="tree-chevron" aria-hidden="true"></span><span class="task-section-title"><span>Tasks</span><span data-experimental-mark></span></span><span id="task-count" class="count-badge" hidden></span></button><button id="new-task" class="icon-button" type="button" aria-label="New task" title="New task, running beside this one"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
           <ul id="task-list" class="task-list"></ul>
         </section>
         <span id="workspace-name" class="sr-only">No workspace selected</span>
@@ -156,7 +158,7 @@
               <button id="toggle-sidebar" class="layout-toggle" type="button" aria-pressed="true" aria-label="Sidebar" title="Toggle sidebar"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><rect class="layout-fill" x="5" y="6" width="3" height="12" rx="1"/></svg></button>
               <button id="toggle-side-panel" class="layout-toggle" type="button" aria-pressed="false" aria-label="Side panel" title="Toggle side panel"><svg class="icon layout-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/><rect class="layout-fill" x="16" y="6" width="3" height="12" rx="1"/></svg></button>
             </div>
-            <div id="flow-brand" class="flow-brand" hidden><img class="flow-brand-mark" src="/mark.svg" alt="" width="22" height="22" /><span class="flow-brand-name">Flow</span><button id="flow-brand-workspace" class="flow-brand-workspace" type="button" aria-haspopup="menu" aria-expanded="false" hidden></button></div>
+            <div id="flow-brand" class="flow-brand" hidden><img class="flow-brand-mark" src="/mark.svg" alt="" width="22" height="22" /><span class="flow-brand-title"><span class="flow-brand-name">Flow</span><span class="flow-brand-experimental" data-experimental-mark></span></span><button id="flow-brand-workspace" class="flow-brand-workspace" type="button" aria-haspopup="menu" aria-expanded="false" hidden></button></div>
             <button id="workspace-chip" class="workspace-chip" type="button" title="Show the sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg><span id="workspace-chip-name">Codeshi</span></button>
           </div>
           <div class="header-title sr-only"><h1 id="conversation-title">No workspace selected</h1><p id="conversation-subtitle">Create a workspace to start.</p></div>
@@ -441,7 +443,7 @@
             <div id="task-card" class="task-card" hidden></div>
           </section>
           <section id="tasks-results" class="panel-section" aria-labelledby="tasks-results-title" hidden>
-            <div class="panel-section-head"><h3 id="tasks-results-title" class="panel-section-title">Smart results</h3></div>
+            <div class="panel-section-head"><h3 id="tasks-results-title" class="panel-section-title">Smart results <span data-experimental-mark></span></h3></div>
             <div id="tasks-results-body" class="results-body"></div>
           </section>
           <section id="tasks-recent" class="panel-section" aria-labelledby="tasks-recent-title" hidden>
@@ -624,6 +626,7 @@
           <button type="button" data-page="phone"><span class="settings-nav-icon" data-icon="phone" aria-hidden="true"></span>Phone & remote</button>
           <button type="button" data-page="voice"><span class="settings-nav-icon" data-icon="voice" aria-hidden="true"></span>Voice</button>
           <button type="button" data-page="alerts"><span class="settings-nav-icon" data-icon="alerts" aria-hidden="true"></span>Alerts</button>
+          <button type="button" data-page="experimental"><span class="settings-nav-icon" data-icon="experimental" aria-hidden="true"></span>Experimental</button>
           <button type="button" data-page="updates"><span class="settings-nav-icon" data-icon="updates" aria-hidden="true"></span>Updates</button>
         </nav>
         <button id="open-setup-guide" class="settings-guide" type="button">Setup guide</button>

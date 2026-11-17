@@ -147,7 +147,7 @@
     $('flow-detail-close')?.focus();
   }
   function showPhone() {
-    const kit = on && detail && window.relayPhone?.settings ? phoneKit() : null;
+    const kit = on && detail && window.relayPhone?.settings && window.relayExperimental?.enabled('remote') !== false ? phoneKit() : null;
     if (!kit) return false;
     if (detailPanel === 'phone') { $('flow-detail-close')?.focus(); return true; }
     phoneHost.replaceChildren();
@@ -184,10 +184,13 @@
   function scheduleDetail() { if (!detailScheduled) { detailScheduled = true; Promise.resolve().then(syncDetail); } }
 
   // ---- The cards. Each is built once; renders replace only its body and footer.
+  // Tasks side by side, Smart results and Run and review your project are experimental (#176); off, their cards leave both rails and the strip.
+  const cardOff = id => (id === 'tasks' && window.relayExperimental?.enabled('tasks') === false) || (id === 'results' && window.relayExperimental?.enabled('smartResults') === false) || (id === 'preview' && window.relayExperimental?.enabled('review') === false);
   const cards = new Map(CARDS.map(card => {
-    const element = node('section', 'flow-card'), head = node('div', 'flow-card-head'), title = node('h2', undefined, card.title), body = node('div', 'flow-card-body'), foot = node('div', 'flow-card-foot');
+    const element = node('section', 'flow-card'), head = node('div', 'flow-card-head'), title = node('h2'), body = node('div', 'flow-card-body'), foot = node('div', 'flow-card-foot');
+    title.append(node('span', 'flow-card-title', card.title));
     element.id = `flow-card-${card.id}`; title.id = `flow-card-${card.id}-title`; element.setAttribute('aria-labelledby', title.id);
-    if (card.hidden) element.hidden = true; head.append(title); element.append(head, body, foot);
+    if (card.hidden) element.hidden = true; if (['tasks', 'results', 'preview'].includes(card.id)) title.append(window.relayExperimental?.badge() || ''); head.append(title); element.append(head, body, foot);
     return [card.id, { ...card, element, body, foot, signature: null }];
   }));
   // Quiet utility areas anchor the two rails, separate from the live task cards.
@@ -292,7 +295,7 @@
   function updateWorkingFacts(state, c, current) {
     workingFacts.replaceChildren();
     const run = c?.activeRun, running = api.isRunning();
-    const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running");
+    const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running" && !task.managed);
 
     if (running && run) {
       const agent = agentName(run.provider, run.connection === "local");
@@ -387,7 +390,7 @@
   function renderWorking(card) {
     const state = api.getState(), c = state.conversation, current = routing(), currentMode = canonicalMode(current?.mode);
     const running = api.isRunning() ? (c?.activeRun?.connection === "local" ? "local" : c?.activeRun?.provider) : null;
-    const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running").map(t => [t.id, t.runningProvider, t.status]);
+    const runningLanes = (c?.parallelTasks || []).filter(task => task.status === "running" && !task.managed).map(t => [t.id, t.runningProvider, t.status]);
         const signature = JSON.stringify([current, routingPending, state.provider, state.model, state.ready, testingPending, state.status?.verificationCadence, running, c?.activeRun?.phase, c?.activeRun?.purpose, c?.resume, c?.handoffOffer, runningLanes]);
     if (signature === card.signature) return;
     card.signature = signature;
@@ -579,11 +582,10 @@
 
   // Tasks side by side (#88, #107): the workspace chat and every folder task running alongside it, with approvals,
   // copy/merge state and direct switching without leaving Flow.
-  // A split's parts that Flow is finishing by itself show above the message box instead (split-progress.js).
-  // A split's parts show here too, with their agent and state, so the list is never empty while Flow is working; Flow merges
-  // them itself, so they have no Review or Close buttons.
+  // A split's parts that Flow is finishing by itself (task.managed) show above the message box instead (split-progress.js)
+  // and never appear in Flow's Tasks side by side card, Plan row, or outside Flow.
   // The Plan chat (#162) shows only when it waits for an approval; the Plan view lists it with the cards' tasks.
-  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => task.purpose === 'plan-chat' ? Boolean(task.approvals || task.id === state.taskId) : task.purpose !== 'project-review' || task.id === state.taskId || task.approvals);
+  const visibleTasks = state => (state.conversation?.parallelTasks || []).filter(task => !task.managed && (task.purpose === 'plan-chat' ? Boolean(task.approvals || task.id === state.taskId) : task.purpose !== 'project-review' || task.id === state.taskId || task.approvals));
   const taskMergeable = task => Boolean(task.hasWorktree && ['complete', 'stopped', 'failed'].includes(task.status));
   const taskEnded = task => !['running', 'waiting'].includes(task.status) && !taskMergeable(task);
   const TASK_STATUS_WORDS = { complete: 'finished', stopped: 'stopped', failed: 'didn’t finish', discarded: 'discarded', cancelled: 'cancelled', blocked: 'blocked', lost: 'copy gone', detached: 'folder removed' };
@@ -615,7 +617,7 @@
 
     // A Plan's cards and the Plan chat run as tasks too, but they're followed and read on the Plan, so they share one row
     // here that opens the Plan view instead of keeping the Plan chat or a card inside Flow.
-    const isPlanTask = task => Boolean(task && (task.board || task.purpose === 'plan-chat'));
+    const isPlanTask = task => Boolean(task && !task.managed && (task.board || task.purpose === 'plan-chat'));
     const planChatTask = tasks.find(task => task.purpose === 'plan-chat') || null;
     const planOpen = tasks.filter(task => task.board && (['doing', 'review'].includes(task.cardColumn) || task.id === state.taskId || task.approvals > 0));
     const ownTasks = tasks.filter(task => !isPlanTask(task));
@@ -836,11 +838,13 @@
       return { text: `${agent} ${doing}${elapsed ? ` · ${elapsed}` : ''}`, live: true };
     }
     if (c.resume || c.limitSwitching) return { text: 'Waiting for a usage limit to reset', live: true };
+    const activeSplit = (c.splitRuns || []).findLast(run => run.status === 'working');
+    if (activeSplit) return { text: `Working in ${plural(activeSplit.cards?.length || 2, 'part')} side by side`, live: true };
     const last = c.lastRun;
     if (last && (last.status === 'interrupted' || last.errorCategory === 'quota' || last.status === 'incomplete' || last.status === 'failed')) {
       return { text: last.status === 'interrupted' ? 'Stopped' : last.errorCategory === 'quota' ? 'Stopped at a usage limit' : 'The last run didn’t finish', live: false, attention: last.status !== 'interrupted' };
     }
-    const runningLanes = (c.parallelTasks || []).filter(task => task.status === 'running');
+    const runningLanes = (c.parallelTasks || []).filter(task => task.status === 'running' && !task.managed);
     if (runningLanes.length) {
       const lane = runningLanes[0];
       const laneAgent = agentName(lane.runningProvider || lane.provider);
@@ -881,7 +885,7 @@
   }
   function renderStrip() {
     if (strip.hidden) return;
-    strip.replaceChildren(...CARDS.filter(card => !card.hidden).map(card => {
+    strip.replaceChildren(...CARDS.filter(card => !card.hidden && !cardOff(card.id)).map(card => {
       const chip = button('flow-chip', chipText(card.id), () => peekCard(card.id));
       chip.setAttribute('aria-pressed', String(peeking === card.id)); chip.setAttribute('aria-label', `${card.title}: ${chipText(card.id)}`);
       return chip;
@@ -893,7 +897,7 @@
   function peekCard(id) {
     if (peeking === id) { closePeek(); return; }
     closePeek();
-    const card = id === 'space' ? { element: preferences, title: 'Your space' } : cards.get(id); if (!card) return;
+    const card = id === 'space' ? { element: preferences, title: 'Your space' } : cardOff(id) ? null : cards.get(id); if (!card) return;
     if (id === 'space') preferences.replaceChildren(space, connect);
     peeking = id; peekBody.replaceChildren(card.element); peek.hidden = false; peek.setAttribute('aria-label', card.title);
     renderStrip(); $('flow-peek-close')?.focus();
@@ -942,7 +946,7 @@
         window.relayAgents?.close?.(); window.relayGit?.close?.(); window.relayBrief?.close?.(); window.relayTasks?.close?.(); window.relayTimeline?.close?.(); window.relayReviews?.closePanel?.();
         if (saved.bottom) window.relayPanel?.hide?.();
       } else closeDetail();
-      if (from === 'flow') { on = false; closePeek(); clearTimeout(ticker); ticker = null; shell.classList.remove('flow'); keepFocus(restoreControls); }
+      if (from === 'flow') { const s = api.getState(), conv = s.conversation, openTask = s.taskId && ((conv?.task?.id === s.taskId ? conv.task : null) || (conv?.parallelTasks || []).find(task => task.id === s.taskId)); if (openTask?.managed) api.setTask?.(null)?.catch?.(() => {}); on = false; closePeek(); clearTimeout(ticker); ticker = null; shell.classList.remove('flow'); keepFocus(restoreControls); }
       if (from === 'plan') { shell.classList.remove('plan'); window.relayBoard?.hide?.(); }
       view = target; routed = nextRouted;
       if (target === 'normal') {
@@ -964,6 +968,7 @@
   function changeView(target, remember = true) {
     if (!['normal', 'flow', 'plan'].includes(target)) return false;
     if (target === view) return true;
+    if (target === 'plan' && window.relayExperimental?.enabled('plan') === false) { api.showNotice?.('The Plan is turned off. Turn it on in Settings › Experimental.'); return false; }
     if (!api.getState().projectId) { api.showNotice?.(target === 'plan' ? 'Open a workspace to use the Plan.' : 'Open a workspace to use Flow.'); return false; }
     if (checkingMode || transitioning) { api.showNotice?.('The view is changing. Try again in a moment.'); return false; }
     // A card with unsaved edits asks before the Plan goes.
@@ -997,6 +1002,7 @@
     if (normalButton) normalButton.title = wait || (blocked('normal') ? lockReason() : 'Normal: every panel, and you choose the agent and model');
     if (mark) {
       mark.hidden = view === 'normal';
+      mark.dataset.view = view;
       const word = mark.querySelector('.flow-brand-name'); if (word) word.textContent = view === 'plan' ? 'Plan' : 'Flow';
       // The workspace name opens the workspace menu, as Flow and the Plan have no sidebar to switch from.
       const name = state.projects?.find(project => project.id === state.projectId)?.name || '', button = $('flow-brand-workspace');
@@ -1045,6 +1051,8 @@
   toggle.addEventListener('click', () => changeView('flow'));
   normalButton?.addEventListener('click', () => changeView('normal'));
   planButton?.addEventListener('click', () => changeView('plan'));
+  // Turning the Plan off while it shows returns to Normal; the other flags only hide entry points, so a redraw is enough.
+  window.relayExperimental?.onChange(() => { if (view === 'plan' && window.relayExperimental.enabled('plan') === false) changeView('normal'); if (peeking && cardOff(peeking)) closePeek(); schedule(); });
   api.wireWorkspaceButton?.($('flow-brand-workspace'));
   $('flow-detail-close')?.addEventListener('click', closeDetail);
   detail?.addEventListener('cancel', event => { event.preventDefault(); closeDetail(); });
@@ -1072,7 +1080,7 @@
     if (has && api.getState().ready && !restored) {
       restored = true;
       const flowWanted = read(KEY) === 'on' && !lockReason();
-      if (read(VIEW_KEY) === 'plan' && view === 'normal') { routed = flowWanted; applyView('plan', false, api.getState().projectId); }
+      if (read(VIEW_KEY) === 'plan' && view === 'normal' && window.relayExperimental?.enabled('plan') !== false) { routed = flowWanted; applyView('plan', false, api.getState().projectId); }
       else if (flowWanted && view === 'normal') changeView('flow', false);
     }
     if (!has && view !== 'normal' && !transitioning) applyView('normal', false, null, true);

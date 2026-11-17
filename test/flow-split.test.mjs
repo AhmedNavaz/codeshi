@@ -137,7 +137,8 @@ test('Flow finishes a split by itself: it accepts each part, waits for the revie
   const { split } = await broker.dispatch(c, input);
   const done = await broker.splits.act(c, { id: split.id, action: 'tasks' });
   const run = c.splitRuns.at(-1);
-  for (const id of done.cards) finishPart(broker, c, id);
+  finishPart(broker, c, done.cards[0], { worktree: '/tmp/codeshi-wt/worktree', stepResult: { summary: 'Did it.', files: ['/tmp/codeshi-wt/worktree/src/redirect.js'] } });
+  for (const id of done.cards.slice(1)) finishPart(broker, c, id);
   await settle();
   assert(done.cards.every(id => broker.board.find(c, id).column === 'done' && broker.board.find(c, id).acceptedBy === 'flow'), 'Flow accepts a finished part whose tests passed.');
   assert.equal(c.splitRuns.at(-1).status, 'working', 'It waits for the review.');
@@ -152,7 +153,8 @@ test('Flow finishes a split by itself: it accepts each part, waits for the revie
   assert.match(answer.text, /\*\*1\. Fix the login redirect\*\* · Codex/);
   assert.match(answer.text, /\*\*Review\*\* · Codex found 1 problem; one repair round fixed it\./);
   assert.match(answer.text, /\*\*Tests\*\* · `npm test` passed on the combined result\./);
-  assert.match(answer.text, /\*\*Changed\*\* · `/);
+  assert.match(answer.text, /\*\*Changed\*\* · `src\/redirect\.js`/);
+  assert.doesNotMatch(answer.text, /codeshi-wt/, 'Changed paths are folder-relative rather than worktree paths.');
   assert.equal(broker.board.cards(c).length, 0, 'The parts and the review leave the Plan.');
   assert.equal(broker.view(c).parallelTasks.length, 0, 'And Tasks; their conversations stay.');
   assert.equal(c.parallelTasks.length, 4);

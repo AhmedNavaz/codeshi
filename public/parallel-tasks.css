@@ -3,6 +3,7 @@
 .task-section[hidden] { display: none; }
 .task-section-heading { display: flex; align-items: center; gap: 8px; flex: none; padding: 7px 12px 5px 10px; }
 .task-section-heading > button:first-child { display: flex; align-items: center; gap: 7px; flex: 1; padding: 0; border: 0; background: none; color: var(--text); font-size: var(--font-ui-sm); font-weight: 600; text-align: left; }
+.task-section-title { display: grid; line-height: 1.1; }
 .task-section-heading .icon-button { width: 24px; height: 24px; }
 .task-section-heading .icon-button .icon { width: 14px; height: 14px; }
 .task-list { flex: 1; min-height: 0; margin: 0; padding: 0 6px 6px; overflow: hidden auto; list-style: none; }

@@ -1,7 +1,7 @@
 // A split message Flow is finishing by itself (src/split-finish.mjs). Its parts aren't on the Plan or in Tasks, so this one
-// line above the message box says how far it is. Details lists each part, the review and any repair, with its agent and
-// state, and opens a part's conversation to watch it. A part that needs your approval opens the details by itself. Stop
-// stops every part, and the parts then go to the Plan for you to finish.
+// line above the message box says how far it is, and only while Flow is shown. Details lists each part, the review and any
+// repair, with its agent and state, and opens a part's conversation to watch it. A part that needs your approval opens the
+// details by itself. Stop stops every part, and the parts then go to the Plan for you to finish.
 (() => {
   const $ = id => document.getElementById(id), api = window.relayUI, section = $('split-progress');
   if (!section || !api) return;
@@ -12,6 +12,7 @@
   let open = false, shownRun = null, stopping = false;
 
   const current = () => {
+    if (window.relayFlow && !window.relayFlow.isOn()) return null;
     const state = api.getState(), c = state.conversation;
     if (state.taskId || state.taskDraft || !c) return null;
     return (c.splitRuns || []).findLast(run => run.status === 'working') || null;
@@ -93,5 +94,6 @@
     finally { stopping = false; await api.refresh?.(); draw(); }
   });
   window.addEventListener('relay-state', draw);
+  window.addEventListener('relay-flow', draw);
   draw();
 })();

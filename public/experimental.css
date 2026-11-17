@@ -1,0 +1,15 @@
+/* Experimental features (#176). Every experimental feature carries the same quiet subtitle. */
+[data-experimental-mark] { display: contents; }
+.experimental-badge { display: block; margin-top: 2px; color: var(--muted, #8e96a0); font: 500 10px/1.2 var(--font-ui, var(--font, system-ui)); letter-spacing: .01em; white-space: nowrap; }
+/* Off: the feature's entry points leave the window. */
+html[data-exp-remote="off"] #connect-phone,
+html[data-exp-remote="off"] #settings-nav [data-page="phone"],
+html[data-exp-plan="off"] #open-plan,
+html[data-exp-plan="off"] #board-view,
+html[data-exp-review="off"] #flow-card-preview,
+html[data-exp-smart-results="off"] #flow-card-results,
+html[data-exp-smart-results="off"] #tasks-results,
+html[data-exp-tasks="off"] #task-section,
+html[data-exp-tasks="off"] #task-draft,
+html[data-exp-tasks="off"] #flow-card-tasks { display: none !important; }
+.settings-nav-icon[data-icon="experimental"] { --settings-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2.2h12.4a1.5 1.5 0 0 0 1.3-2.2L14 9V3'/%3E%3C/svg%3E"); }

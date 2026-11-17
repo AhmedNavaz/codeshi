@@ -2,6 +2,19 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.60.0] - 2026-11-18
+
+### Added
+- **Turn newer features on or off in Settings › Experimental.** **Remote access**, **Plan**, **Run and review your project**, **Smart results**, and **Tasks side by side** carry a consistent **Experimental** subtitle across the window, stay on by default, and can each be turned off individually in **Settings › Experimental** (hiding their entry points until re-enabled, and carried across settings backups).
+
+### Fixed
+- **Checks before merging and on Plan cards now pass Next.js and other builds that refuse linked dependencies.** A check's temporary copy gets a copy-on-write clone of each `node_modules` folder instead of linking back to yours (falling back to a link only where the disk can't clone), keeping check dependencies isolated alongside finding Volta and other Node tools on Dock launches.
+- **Smart results resets when switching workspaces and explains failed reads** ([#139](https://github.com/AhmedNavaz/codeshi/issues/139)), preserving its **Experimental** label across mode changes and offering **Try again** when loading fails.
+- **Flow message splits stay inside Flow and summarize merged file paths cleanly** ([#107](https://github.com/AhmedNavaz/codeshi/issues/107)), hiding the split offer and progress card when leaving Flow and listing merged file paths in the finished summary.
+
+### Internal
+- **Documentation, screenshot, and repository metadata updates.** Aligned `README.md` and `docs/guide.md` headings with recent releases (`Activity & Work time`, `While you were away`, `Run and review your project`, `Automatic context refresh`, `Design notes & Point and tell`, `Share live`, and `Settings › Experimental`), added `docs/README.md`, refreshed `docs/features/` screenshots, updated `ROADMAP.md` through 0.60.0, and added a targeted feature test table to `CONTRIBUTING.md` ([#178](https://github.com/AhmedNavaz/codeshi/issues/178)).
+
 ## [0.59.2] - 2026-11-17
 
 ### Fixed

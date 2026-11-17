@@ -133,7 +133,7 @@
   }
   async function api(path, options = {}, projectId = state.projectId) {
     const providerEndpoint = /^\/api\/providers(?:\/|$)/.test(path);
-    if (/^\/api\/(?:tasks|board|ledger|memory|budget|skills|suggestion|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
+    if (/^\/api\/(?:tasks|board|ledger|results|memory|budget|skills|suggestion|status|conversation|conversations|collaboration|git|imports|files|attachments|reviews|local-models|commands|permissions|terminal|checkpoints)(?:\/|$|\?)/.test(path) || (providerEndpoint && projectId)) {
       if (!projectId) throw new Error("Choose a project first.");
       path += `${path.includes("?") ? "&" : "?"}projectId=${encodeURIComponent(projectId)}`;
     }
@@ -3002,13 +3002,13 @@
     { label: "Agents: plan usage and handoff", run: () => window.relayAgents?.open() },
     { label: "Brief: memory and skills every agent gets", run: () => window.relayBrief?.open() },
     { label: "Tasks: what each task used, and its limits", run: () => window.relayTasks?.open() },
-    { label: "New task beside this one", run: () => window.relayTaskThreads?.open() },
+    { label: "New task beside this one", experimental: "tasks", run: () => window.relayTaskThreads?.open() },
     { label: "Timeline: review and restore checkpoints", run: () => window.relayTimeline?.open() },
     { label: "Git activity", run: () => { if ($("git-panel").hidden) $("open-git").click(); } },
     { label: "Terminal", workbench: true, run: () => window.relayTerminal?.open() },
     { label: "Run: your dev servers, tests and scripts", workbench: true, run: () => window.relayPanel?.show("run") },
-    { label: "Review your app: launch map and live services", run: () => window.relayProjectReview?.open() },
-    ...(window.relayDesktop?.openPreview ? [{ label: "Preview your app and point at what to change", run: () => { if (window.relayFlow?.isOn()) { window.relayProjectReview?.open(); return; } const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
+    ...(window.relayExperimental?.enabled("review") === false ? [] : [{ label: "Review your app: launch map and live services", run: () => window.relayProjectReview?.open() }]),
+    ...(window.relayDesktop?.openPreview && window.relayExperimental?.enabled("review") !== false ? [{ label: "Preview your app and point at what to change", run: () => { if (window.relayFlow?.isOn()) { window.relayProjectReview?.open(); return; } const url = window.relayCommands?.localURL?.(); if (url) window.relayPreview?.open(url); else { window.relayPanel?.show("run"); showNotice("Start your dev server in Run first; its local address opens in the preview."); } } }] : []),
     { label: "While you were away", run: () => window.relayRecap?.open() },
     { label: "Activity: working time, breaks and badges", run: () => window.relayActivity?.open() },
     { label: "New workspace…", id: "create-workspace" }, { label: "Settings", id: "relay-settings" },
@@ -3041,7 +3041,7 @@
     const { actionsOnly, text } = commandQuery();
     const workspaces = actionsOnly ? [] : state.projects.filter(project => project.name.toLowerCase().includes(text)).slice(0, 6).map(project => ({ group: "Workspaces", label: project.name, detail: project.id === state.projectId ? "Open" : "", run: () => { selectProject(project.id); ui.input.focus(); } }));
     const files = actionsOnly || commandFiles.query !== text ? [] : commandFiles.files.slice(0, 10).map(file => ({ group: "Files", label: file.path.split("/").pop(), detail: [state.projects.length > 1 ? file.projectName : "", file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : file.folderName].filter(Boolean).join(" · "), run: () => openFound(file) }));
-    const actions = commandActions.filter(action => !action.workbench || !workbenchAway()).filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled && (action.id !== 'compact-context' || !$(action.id).hidden)))
+    const actions = commandActions.filter(action => !action.workbench || !workbenchAway()).filter(action => !action.experimental || window.relayExperimental?.enabled(action.experimental) !== false).filter(action => !text || action.label.toLowerCase().includes(text)).filter(action => !action.id || ($(action.id) && !$(action.id).disabled && (action.id !== 'compact-context' || !$(action.id).hidden)))
       .map(action => ({ group: "Actions", label: action.label, detail: "", run: action.run || (() => $(action.id).click()) }));
     return [...workspaces, ...files, ...actions];
   }

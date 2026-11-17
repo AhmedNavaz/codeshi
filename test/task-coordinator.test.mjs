@@ -584,6 +584,50 @@ test('combined checks find package managers from a Finder PATH and sanitize the 
   assert.deepEqual(JSON.parse(result.output.trim()), { found: 'package-manager', ci: '1' });
 });
 
+test('combined checks find a tool that only a Volta folder in the home provides', { skip: process.platform === 'win32' }, async t => {
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a')) }));
+  const home = path.join(env.root, 'home'), bin = path.join(home, '.volta/bin');
+  fs.mkdirSync(bin, { recursive: true });
+  // A name no computer has installed, so only the temporary home can supply it.
+  fs.writeFileSync(path.join(bin, 'volta-only-tool'), `#!${process.execPath}\nconst relay = Object.keys(process.env).filter(key => key.startsWith('AI_RELAY_'));\nconsole.log(JSON.stringify({ found: 'volta', ci: process.env.CI, electron: process.env.ELECTRON_RUN_AS_NODE, options: process.env.NODE_OPTIONS, relay }));\n`, { mode: 0o700 });
+  const changes = { PATH: '/usr/bin:/bin', HOME: home, NVM_DIR: undefined, ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--no-warnings', AI_RELAY_CHECK_SECRET: 'private' };
+  const saved = Object.fromEntries(Object.keys(changes).map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(changes)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  let result;
+  try { result = await checkCombined({ root: env.folders.a, plan: { writes: [] }, command: 'volta-only-tool', target: path.join(env.root, 'check') }); }
+  finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
+  assert.equal(result.status, 'passed', result.output);
+  assert.deepEqual(JSON.parse(result.output.trim()), { found: 'volta', ci: '1', relay: [] });
+});
+
+test('a combined check gets its own clone of each node_modules, so a build that refuses a linked one runs, and reinstalling leaves the folder’s alone', { skip: process.platform === 'win32' }, async t => {
+  const env = setup(t, root => ({ a: repository(path.join(root, 'a'), { 'app.js': 'one\n', 'web/page.js': 'page\n' }) }));
+  for (const place of ['node_modules/dep', 'web/node_modules/tool']) { fs.mkdirSync(path.join(env.folders.a, place), { recursive: true }); fs.writeFileSync(path.join(env.folders.a, place, 'index.js'), 'installed\n'); }
+  // Where the disk can't clone, the check links instead, as before, and this build's refusal can't be avoided.
+  const probe = path.join(env.root, 'probe');
+  fs.mkdirSync(path.join(probe, 'from'), { recursive: true });
+  const flags = process.platform === 'darwin' ? ['-c', '-R'] : ['-R', '--reflink=always'];
+  try { execFileSync('/bin/cp', [...flags, path.join(probe, 'from'), path.join(probe, 'to')], { stdio: 'ignore' }); } catch { t.skip('This disk can’t make copy-on-write clones.'); return; }
+  // Like Next.js's Turbopack: it resolves only inside the project, so a node_modules that leads out of it is refused.
+  const build = path.join(env.root, 'build.mjs');
+  fs.writeFileSync(build, `import fs from 'node:fs'; import path from 'node:path';
+const project = fs.realpathSync('..');
+for (const [place, name] of [['../node_modules', 'dep'], ['node_modules', 'tool']]) {
+  const real = fs.realpathSync(place);
+  if (fs.lstatSync(place).isSymbolicLink() || !real.startsWith(project + path.sep)) { console.log('Could not find ' + name + ': ' + place + ' leads outside ' + project); process.exit(1); }
+  if (fs.readFileSync(path.join(place, name, 'index.js'), 'utf8') !== 'installed\\n') process.exit(2);
+  fs.writeFileSync(path.join(place, name, 'index.js'), 'reinstalled\\n');
+}
+console.log('built');
+`);
+  const result = await checkCombined({ root: env.folders.a, plan: { writes: [] }, command: `${JSON.stringify(process.execPath)} ${JSON.stringify(build)}`, directory: 'web', target: path.join(env.root, 'check') });
+  assert.equal(result.status, 'passed', result.output);
+  assert.equal(result.output.trim(), 'built');
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'node_modules/dep/index.js'), 'utf8'), 'installed\n', 'Reinstalling in the check leaves the folder’s dependencies alone.');
+  assert.equal(fs.readFileSync(path.join(env.folders.a, 'web/node_modules/tool/index.js'), 'utf8'), 'installed\n');
+  assert.equal(fs.existsSync(path.join(env.root, 'check')), false, 'The check’s copy is gone, with its clones.');
+});
+
 test('the combined result is checked before merging, in a temporary copy, and failing tests need a yes', { skip: scriptCLIs }, async t => {
   let command = { command: `node -e "process.exit(require('fs').readFileSync('value.txt','utf8').trim()==='ours+theirs'?0:1)"`, directory: '' };
   const env = setup(t, root => ({ a: repository(path.join(root, 'a'), { 'value.txt': 'base\n', 'other.txt': 'x\n', 'more.txt': 'top\n1\n2\n3\n4\n5\nbottom\n' }) }), { tests: { saved: () => command, run() { throw new Error('The task’s check runs in its own copy.'); } } });

@@ -416,8 +416,10 @@ export function resolvePrompt({ folder, card = false, prefix = '', files, labels
 }
 
 // The tests against the combined result: a temporary worktree with the folder's current changes and the task's merged on
-// top, so nothing real is touched and a failure can't damage either side. It borrows installed dependencies by link, since
-// a fresh checkout has none. The command is the one the person marked in the Run panel, never one from an agent or a repository.
+// top, so nothing real is touched and a failure can't damage either side. A fresh checkout has no installed dependencies, so
+// each node_modules gets a copy-on-write clone, as a task's copy does: Next.js's Turbopack won't build with a node_modules
+// linked from outside the project, and a clone keeps the check from changing the folder's. Where the disk can't clone, it is
+// linked, as before. The command is the one the person marked in the Run panel, never one from an agent or a repository.
 export async function checkCombined({ root, prefix = '', plan, command, directory = '', target, signal }) {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   patient(root, ['worktree', 'add', '--detach', '--quiet', target, 'HEAD']);
@@ -431,7 +433,9 @@ export async function checkCombined({ root, prefix = '', plan, command, director
     for (const item of plan.writes) { const to = path.join(target, item.path); if (item.content === null || item.content === undefined) fs.rmSync(to, { force: true }); else writeFile(to, item.content, item.mode); }
     for (const place of new Set(['', prefix, path.posix.join(prefix, directory)])) {
       const real = path.join(root, place, 'node_modules'), copy = path.join(target, place, 'node_modules');
-      if (fs.existsSync(real) && !fs.existsSync(copy)) { fs.mkdirSync(path.dirname(copy), { recursive: true }); fs.symlinkSync(real, copy, process.platform === 'win32' ? 'junction' : 'dir'); }
+      if (!fs.existsSync(real) || fs.existsSync(copy)) continue;
+      fs.mkdirSync(path.dirname(copy), { recursive: true });
+      if (!(await cloneFolder(real, copy))) fs.symlinkSync(real, copy, process.platform === 'win32' ? 'junction' : 'dir');
     }
     const cwd = path.join(target, prefix, directory);
     if (!fs.existsSync(cwd)) return { status: 'failed', exitCode: null, output: `${path.posix.join(prefix, directory)} doesn't exist in the combined result.` };

@@ -98,6 +98,7 @@
 
   const remember = value => { try { localStorage.setItem(PANEL_KEY, value); } catch { /* The panel choice is a convenience. */ } };
   const preferred = () => { try { return localStorage.getItem(PANEL_KEY) || 'agents'; } catch { return 'agents'; } };
+  const flowing = () => ['flow', 'plan'].includes(window.relayFlow?.view?.()) || Boolean($('app-shell')?.classList.contains('flow'));
   // Plan usage lists Ollama when it has models downloaded (#99). This only reads what's installed: nothing is downloaded and
   // no model runs. With no Ollama there's simply no row.
   let localRequest = 0;
@@ -121,7 +122,12 @@
       loadLocalRow();
       loadTestCommand();
       render();
-      if (section) { const target = $(`agents-${section}`); target?.scrollIntoView?.({ block: 'start' }); target?.classList.add('flash'); setTimeout(() => target?.classList.remove('flash'), 1200); }
+      if (section) {
+        const target = $(`agents-${section}`);
+        // In Flow and the Plan the panel opens inside the overlay dialog, so scroll cleanly without flashing a section box.
+        if (flowing()) Promise.resolve().then(() => { if (!panel.hidden && target && !target.hidden) target.scrollIntoView?.({ block: 'nearest' }); });
+        else { target?.scrollIntoView?.({ block: 'start' }); target?.classList.add('flash'); setTimeout(() => target?.classList.remove('flash'), 1200); }
+      }
     }
   }
   button.addEventListener('click', () => setOpen(panel.hidden));
@@ -141,7 +147,6 @@
   // On a docked layout, a workspace opens with the side panel last chosen, Agents at first. Flow and the Plan have no side
   // panel, and an open one shows there as a sheet, so switching or creating a workspace in either opens nothing.
   let lastProject = null;
-  const flowing = () => ['flow', 'plan'].includes(window.relayFlow?.view?.()) || Boolean($('app-shell')?.classList.contains('flow'));
   window.addEventListener('relay-state', () => {
     const projectId = api.getState().projectId;
     if (projectId !== lastProject) {

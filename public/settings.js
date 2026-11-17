@@ -9,9 +9,9 @@
   const { t, tn } = window.codeshiText;
   const modal = $('settings'), content = $('settings-content'), nav = $('settings-nav'), search = $('settings-search'), error = $('settings-error'), title = $('settings-title');
   if (!modal || !content) return;
-  const PAGES = [['general', t('General')], ['appearance', t('Appearance')], ['accounts', t('Agents & accounts')], ['routing', t('Routing & handoffs')], ['testing', t('Testing')], ['phone', t('Phone & remote')], ['voice', t('Voice')], ['alerts', t('Alerts')], ['updates', t('Updates')]];
+  const PAGES = [['general', t('General')], ['appearance', t('Appearance')], ['accounts', t('Agents & accounts')], ['routing', t('Routing & handoffs')], ['testing', t('Testing')], ['phone', t('Phone & remote')], ['voice', t('Voice')], ['alerts', t('Alerts')], ['experimental', t('Experimental')], ['updates', t('Updates')]];
   // Places in Settings by the names other parts of the app used before it had these pages.
-  const ALIASES = { preferences: 'general', connections: 'accounts', remote: 'phone', handoff: 'routing', context: 'routing' };
+  const ALIASES = { flags: 'experimental', preferences: 'general', connections: 'accounts', remote: 'phone', handoff: 'routing', context: 'routing' };
   const HEADINGS = { Alerts: 'alerts', Voice: 'voice', Updates: 'updates', Appearance: 'appearance', Testing: 'testing', 'Remote access': 'phone', 'While agents work': 'general', 'Work time': 'general' };
   const node = (tag, text, cls) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (cls) value.className = cls; return value; };
   const providerName = provider => ({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini' })[provider];
@@ -209,12 +209,27 @@
     api().api('/api/preferences').then(value => { savedCadence = value.verificationCadence || 'as-needed'; cadence.value = savedCadence; cadence.disabled = false; }).catch(() => { if (cadence.isConnected) { error.textContent = t('Testing preferences could not be loaded. Close Settings and try again.'); error.hidden = false; } });
     kit.note(testing.parentNode, t('Applies to new turns in every workspace, in Normal and Flow. Running agents keep their starting setting. Review first defers Codeshi’s routine automatic test command and repair loop; explicitly selected build/review workflows and required repository checks still apply. Agents receive guidance, not a command block, and must report deferred verification honestly.'));
   }
-  function phone(host) { if (window.relayPhone) window.relayPhone.settings(host, kit); else kit.note(host, t('Phone access is not available here.')); }
+  function phone(host) { if (window.relayExperimental?.enabled('remote') === false) kit.note(host, t('Remote access is turned off. Turn it on in Settings › Experimental.')); else if (window.relayPhone) window.relayPhone.settings(host, kit); else kit.note(host, t('Phone access is not available here.')); }
+  // Experimental: the newer features, each with a switch. All are on by default; one that is off leaves the window.
+  function experimental(host) {
+    const flags = window.relayExperimental;
+    if (!flags) { kit.note(host, t('Experimental features are not available here.')); return; }
+    const rows = kit.group(host, t('Experimental features'), t('These parts of Codeshi are new and may change. All are on by default; turn one off and it leaves the window until you turn it back on.'));
+    for (const item of flags.features) {
+      const box = kit.toggle(rows, { label: item.name, description: item.description, keywords: `experimental beta flag feature ${item.id}`, checked: flags.enabled(item.id), onChange: value => perform(async () => {
+        box.disabled = true;
+        try { await flags.set(item.id, value); } finally { box.checked = flags.enabled(item.id); box.disabled = false; }
+      }) });
+      box.id = `settings-experimental-${item.id}`;
+      box.closest('.settings-row').querySelector('.settings-row-label').append(flags.badge());
+    }
+  }
   function updates(host) {
     if (window.relayUpdater) { const part = node('div', undefined, 'settings-section'); host.append(part); window.relayUpdater.settings(part, kit); }
     else kit.note(host, t('Updates are handled where you installed Codeshi.'));
   }
   // Turned on from the offer at a usage limit.
+  window.relayExperimental?.onChange(() => { if (modal.open && sections.phone) render('phone'); if (modal.open && sections.experimental) for (const item of window.relayExperimental.features) { const box = $(`settings-experimental-${item.id}`); if (box) box.checked = window.relayExperimental.enabled(item.id); } });
   window.addEventListener('relay-handoff-preferences', () => { handoff = null; });
   async function saveHandoff(patch) {
     await perform(async () => { handoff = await api().post('/api/handoff-preferences', patch); });
@@ -310,12 +325,14 @@
     if (window.relayRecap) { const part = node('div', undefined, 'settings-section'); host.append(part); window.relayRecap.settings(part, kit); }
   }
   function voice(host) { if (window.relayVoice) { const part = node('div', undefined, 'settings-section'); host.append(part); window.relayVoice.settings(part, kit); } else kit.note(host, t('Voice is not available here.')); }
-  const DRAW = { general, appearance, accounts, routing, testing, phone, voice, alerts, updates };
+  const DRAW = { general, appearance, accounts, routing, testing, phone, voice, alerts, experimental, updates };
 
   // Every page is drawn when Settings opens, so search can look through all of them; one shows at a time.
   function render(name) {
     const section = node('section', undefined, 'settings-page'); section.dataset.page = name;
-    section.append(node('h2', PAGES.find(([id]) => id === name)[1], 'settings-page-heading'));
+    const heading = node('h2', PAGES.find(([id]) => id === name)[1], 'settings-page-heading');
+    if (name === 'phone' && window.relayExperimental) heading.append(window.relayExperimental.badge());
+    section.append(heading);
     DRAW[name](section);
     if (sections[name]) sections[name].replaceWith(section); else content.append(section);
     sections[name] = section; show();

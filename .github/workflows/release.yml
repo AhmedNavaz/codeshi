@@ -165,6 +165,8 @@ jobs:
           awk -v version="$version" 'index($0, "## [" version "]") == 1 { found = 1; next } found && /^## \[/ { exit } found && !/^\[[^]]*\]: /' CHANGELOG.md > changes.md
           test -s changes.md
           {
+            echo "Codeshi puts Claude Code, Codex, Gemini and local Ollama models in one conversation per project on macOS and Windows. Download the builds below or install in one command."
+            echo
             echo "## Install"
             echo
             echo "### macOS"

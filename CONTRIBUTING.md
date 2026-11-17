@@ -29,7 +29,11 @@ npm start        # desktop app
 npm run start:fresh # replay onboarding with a temporary profile
 npm run start:update-demo # try the update button: a pretend update, nothing downloaded or replaced
 npm run web      # browser-only session on http://127.0.0.1:4318
+npm test         # unit and integration tests; about 2.5 minutes, no agents needed
+npm run test:desktop # opens the packaged-style app briefly and checks the main screens
 ```
+
+`npm ci` doesn't download Electron. The first `npm start`, `npm run start:fresh` or `npm run test:desktop` fetches it (about 100 MB), so that run is slow and needs a network connection. `npm ci` compiled nothing in my check, so no extra build tools should be needed. On macOS you can ignore a `sandbox_extension_issue_file` line when the app starts from a restricted terminal, and in `npm run start:fresh` attachments currently fail on macOS because the temporary profile sits under `/var`, a symlink to `/private/var` ([#167](https://github.com/AhmedNavaz/codeshi/issues/167)). `npm run web` serves on `localhost` only; for a different port use `npm run web -- --port 4319`.
 
 `npm start` opens **Codeshi Dev**, a separate app from an installed release: it keeps its own workspaces and conversations in `~/Library/Application Support/Codeshi Dev` (or `Throughline Dev`, if you ran it before the rename), so both can run side by side, and you can work on Codeshi from the installed app while testing your changes in the dev one. A **Dev** label next to the name tells them apart. To open your real data from source instead, quit the installed app and run `AI_RELAY_DESKTOP_DATA="$HOME/Library/Application Support/Codeshi" npm start`, with `Throughline` in place of `Codeshi` if you installed it before the rename.
 
@@ -62,7 +66,7 @@ Backend code lives in `src/`; Electron, browser UI and the separately deployable
 | `src/task-ledger.mjs`, `evals/` | What tasks used, worked out from the journal, and repeatable evaluations with hidden checks |
 | `src/collaboration*.mjs`, `src/patches.mjs`, `src/sharing-client.mjs` | Ask a Friend: approved packages, returned patches and the private-link client |
 | `src/workspace-*.mjs`, `src/file-explorer.mjs`, `src/mutation-lock.mjs` | Safe file access, Git activity, snapshots and locks that prevent conflicting edits |
-| `public/` | Interface: `app.js` (core), `insights.js` (models, progress, Git and usage), `conversation-history.js` (import and export), `conversation-search.js` (find in the conversation), `files.js`, `setup.js`, `settings.js` (searchable app settings), `workbench.js` (the separate Ask a Friend dialog) and the CSS |
+| `public/` | Interface: `app.js` (core), `experimental.js` (`Settings › Experimental` flags), `flow.js`, `insights.js` (models, progress, Git and usage), `parallel-tasks.js`, `smart-results.js`, `conversation-history.js` (import and export), `conversation-search.js` (find in the conversation), `files.js`, `setup.js`, `settings.js` (searchable app settings), `workbench.js` (the separate Ask a Friend dialog) and the CSS |
 | `desktop/` | Electron main process, preload bridge, packaging and icon generation (the logo itself is drawn in `brand.mjs`; `npm run icons` writes every icon from it) |
 | `public/i18n.js`, `src/i18n.mjs`, `scripts/i18n.mjs`, `public/locales/` | Translation: `t()` and `tn()`, choosing the language, finding the texts, and the catalogs (see [Translations](#translations)) |
 | `sharing/` | The self-hostable private-link service and its container image |
@@ -93,13 +97,32 @@ npm run check:push     # syntax check + tests for your changed files
 
 Run `npm run hooks:install` once to enable `.githooks/pre-push` so `git push` runs `check:push` (and release metadata + desktop smoke checks on `v*` tags) locally before pushing.
 
+### Targeted tests by feature
+
+While iterating, run individual suites directly (all run offline against stand-in providers in `test/mock-cli.mjs` or simulated helpers):
+
+| Area / Experimental feature | Primary module(s) | Focused test command | Simulation boundaries |
+| --- | --- | --- | --- |
+| **Settings › Experimental** | `public/experimental.js`, `src/preferences.mjs` | `node --test test/experimental.test.mjs` | Browser flags & UI hiding covered further in `test/frontend.test.mjs` |
+| **Gemini (Antigravity ACP)** | `src/gemini.mjs`, `src/providers.mjs` | `node --test test/antigravity.test.mjs` | Mock ACP runtime & installer fixtures; real Google OAuth stays manual |
+| **Flow message splits** | `src/split-finish.mjs`, `public/split-*.js` | `node --test test/flow-split.test.mjs` | Mock agents split, merge, and run checks locally |
+| **Paid API task limits (#87)** | `src/task-budget.mjs`, `src/task-ledger.mjs` | `node --test test/task-budget.test.mjs` | Simulated provider token/cost reports, not a real pay-per-use account |
+| **Move over network (#160)** | `src/backup.mjs`, `src/server.mjs` | `node --test test/move.test.mjs` | Both endpoints run on loopback rather than two machines on Wi-Fi |
+| **Windows in-app updates (#163)** | `desktop/updates.mjs`, `desktop/main.mjs` | `node --test test/updater.test.mjs` | Uses macOS/POSIX stand-ins; also check UI flows with `npm run start:update-demo` |
+| **Claude plan usage** | `src/usage-watch.mjs`, `src/providers.mjs` | `node --test test/usage-watch.test.mjs` | Simulated SDK quota responses; live SDK calls stay unverified offline |
+| **Plan board & subtasks (#162)** | `src/subtasks.mjs`, `public/board.js` | `node --test test/board.test.mjs` | Fake DOM (`test/frontend.test.mjs` covers full drawer interactions) |
+| **Run and review your project** | `src/project-review.mjs`, `desktop/preview.mjs` | `node --test test/project-review.test.mjs` | Local dummy HTTP ports/processes rather than user frameworks |
+| **Tasks side by side (#88)** | `src/task-coordinator.mjs`, `src/task-isolation.mjs` | `node --test test/task-coordinator.test.mjs` | Uses real temporary Git worktrees & APFS/CoW clones with mock CLIs |
+| **Smart results (#139)** | `src/smart-results.mjs`, `public/smart-results.js` | `node --test test/smart-results.test.mjs` | Deterministic journal fixtures; UI reset checked in `test/frontend.test.mjs` |
+| **Remote mobile access (#23)** | `src/remote-routes.mjs`, `public/phone-access.js` | `node --test test/phone-remote.test.mjs` | Local relay harness (for Firebase emulator tests, run `npm run test:phone:remote`) |
+
 - Keep changes focused, and add or update tests for behavior you change.
 - Write new interface text with `t()` (see [Translations](#translations)).
 - Tests must never call a real model or touch your saved history.
 - Match the surrounding style: plain JavaScript ES modules, no build step and no new runtime dependencies without discussion.
 - The interface must work under the server's Content Security Policy: no inline scripts or `style` attributes, and no `innerHTML` for provider or user content. Build DOM nodes instead.
 - Colors, sizes and icons come from the tokens in `public/editor-theme.css`; please don't hard-code colors in components.
-- App settings belong on General, Accounts, Alerts or Voice in `public/settings.js`; use its shared group/row kit when a feature supplies its own controls. Keep workspace-specific choices in their workspace controls and Ask a Friend actions in its separate dialog.
+- App settings belong on General, Accounts, Alerts, Voice or Experimental in `public/settings.js`; use its shared group/row kit when a feature supplies its own controls. Keep workspace-specific choices in their workspace controls and Ask a Friend actions in its separate dialog.
 - Some identifiers still use the project's former names, AI Relay and Throughline: `ai-relay.*` file formats, the `X-AI-Relay` header and `AI_RELAY_*` variables; the app's bundle ID `local.throughline.desktop` and the speech helper's `local.throughline.speech`; `throughline:` keys in the page's storage; the `Throughline` and `AI Relay` data folders; and formerly the `throughline-sharing` container image. Installed copies, saved data and exported files depend on them, so they are kept on purpose; don't rename them without a migration. The repository is now `AhmedNavaz/codeshi`; keep the old `AhmedNavaz/throughline` name unused so GitHub can redirect old links.
 
 ## Reporting bugs

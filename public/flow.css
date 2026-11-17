@@ -33,6 +33,8 @@
 :is(#app-shell.flow, #app-shell.plan) .side-panel, :is(#app-shell.flow, #app-shell.plan) .review-panel { display: none; }
 /* The What's next card carries the plan, so the line above the message box steps aside. */
 #app-shell.flow #run-plan { display: none; }
+/* Flow split-into-parts UI shows only inside Flow. */
+#app-shell:not(.flow) :is(#split-progress, #split-offer) { display: none !important; }
 
 /* The header spans the window: the seal and the word Flow beside the window controls, search in the middle of the
    window, and the way out at its far right. The two outer columns match, so the search stays centred. */
@@ -50,6 +52,8 @@
 .flow-brand { display: none; grid-column: 1; grid-row: 1; align-items: center; gap: 8px; min-width: 0; }
 :is(#app-shell.flow, #app-shell.plan) .flow-brand:not([hidden]) { display: inline-flex; animation: flow-in .5s cubic-bezier(.2, .8, .2, 1) both; }
 .flow-brand-mark { flex: none; width: 20px; height: 20px; }
+.flow-brand-title { display: grid; gap: 1px; align-content: center; line-height: 1.1; }
+.flow-brand:not([data-view="plan"]) .flow-brand-experimental { display: none; }
 .flow-brand-name { color: var(--text-strong); font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
 /* The workspace name opens the workspace menu, since Flow has no sidebar. */
 .flow-brand-workspace { position: relative; display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 260px; height: 26px; margin-left: 12px; padding: 0 7px 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; line-height: 1.4; white-space: nowrap; cursor: pointer; }

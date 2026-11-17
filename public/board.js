@@ -2936,7 +2936,7 @@
 
   // What to do once the Plan shows: a new card written from a prefill, or a Plan thread (the Plan chat or a card's task).
   let then = null, readyThread = null;
-  const isPlanTaskId = id => Boolean(id && (planThreads().has(id) || (api.getState().conversation?.parallelTasks || []).some(task => task.id === id && (task.board || task.purpose === 'plan-chat'))));
+  const isPlanTaskId = id => Boolean(id && (planThreads().has(id) || (api.getState().conversation?.parallelTasks || []).some(task => task.id === id && !task.managed && (task.board || task.purpose === 'plan-chat'))));
   function open(prefill = null) {
     if (!api.getState().projectId) return false;
     if (showing) { if (prefill) openNew('backlog', null, prefill); return true; }

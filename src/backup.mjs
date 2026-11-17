@@ -37,7 +37,7 @@ const deriveKey = (passphrase, kdf, salt) => scrypt(Buffer.from(passphrase.norma
 const version = (() => { try { return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return null; } })();
 // Settings that mean the same on another computer. Paths, pairings, the share server and the setup guide's progress
 // stay with the computer they were made on.
-export const PORTABLE_SETTINGS = ['appearance', 'language', 'defaults', 'notifications', 'handoff', 'contextLimit', 'verificationCadence', 'suggestions'];
+export const PORTABLE_SETTINGS = ['appearance', 'language', 'defaults', 'notifications', 'handoff', 'contextLimit', 'verificationCadence', 'suggestions', 'experimental'];
 
 export function checkPassphrase(value) {
   if (typeof value !== 'string' || value.length < 8) fail('Use a passphrase of at least 8 characters.');

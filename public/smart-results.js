@@ -20,8 +20,9 @@
   const projectKey = name => `throughline:results-${name}:${api.getState().projectId || ''}`;
   const read = (name, fallback) => { try { return JSON.parse(localStorage.getItem(projectKey(name)) || 'null') ?? fallback; } catch { return fallback; } };
   const write = (name, value) => { try { localStorage.setItem(projectKey(name), JSON.stringify(value)); } catch { /* A convenience only. */ } };
-  let data = null, received = 0, shown = null, loading = 0, mode = null, showTasks = false;
+  let data = null, failed = null, received = 0, shown = null, loading = 0, mode = null, showTasks = false, lastProjectId = null;
   const listeners = new Set();
+  const notify = () => { received++; for (const listener of listeners) listener(); };
 
   const query = (extra = {}) => {
     const baseline = read('baseline', null), exclude = read('exclude', []);
@@ -31,15 +32,25 @@
   // A task ending, a routing change or a setting here are the only things that change the answer.
   const scope = () => { const state = api.getState(), c = state.conversation; return state.projectId ? `${state.projectId}:${c?.lastRun?.id || ''}:${c?.lastRun?.status || ''}:${(c?.parallelTasks || []).map(task => task.status).join(',')}:${query()}` : null; };
   async function load(force = false) {
+    const projectId = api.getState().projectId || null;
+    if (projectId !== lastProjectId) { lastProjectId = projectId; data = null; failed = null; shown = null; notify(); }
     const key = scope();
     if (!key || (!force && key === shown)) return data;
     shown = key;
     const request = ++loading;
-    try { const next = await api.api(query()); if (request === loading) { data = next; received++; for (const listener of listeners) listener(); } }
-    catch { if (request === loading) shown = null; }
+    try { const next = await api.api(query()); if (request === loading) { data = next; failed = null; notify(); } }
+    // A failure is said, not left as "Reading…" forever. The same answer isn't asked for again until something changes
+    // or the person tries again, since a re-render after the failure would otherwise ask again at once.
+    catch (error) { if (request === loading) { failed = error?.message || 'Smart results could not be worked out.'; notify(); } }
     return data;
   }
   const refresh = () => load(true);
+  // Shown in place of results while there are none yet: still reading, or why reading failed.
+  function pending(cls) {
+    if (!failed) return [node('p', cls, 'Reading your saved tasks…')];
+    const line = node('p', cls, `Smart results couldn’t be read: ${failed}`);
+    return [line, button('Try again', () => { failed = null; notify(); refresh(); })];
+  }
 
   // ---- What a comparison says, in one sentence, for the card and the panel alike.
   function verdict(result, name) {
@@ -70,10 +81,16 @@
     const signature = JSON.stringify([current, received]);
     if (signature === card.signature) return;
     card.signature = signature;
-    const title = card.element.querySelector('h2'); if (title) title.textContent = `${NAMES[current]} results`;
+    const title = card.element.querySelector('h2');
+    if (title) {
+      const text = title.querySelector('.flow-card-title');
+      if (text) text.textContent = `${NAMES[current]} results`;
+      else if (title.firstChild?.nodeType === 3) title.firstChild.textContent = `${NAMES[current]} results`;
+      else title.textContent = `${NAMES[current]} results`;
+    }
     card.body.replaceChildren(); card.foot.replaceChildren();
     card.foot.append(button('Details', () => openDetails(current), 'flow-button'));
-    if (!data) { card.body.append(node('p', 'flow-empty', 'Reading your saved tasks…')); return; }
+    if (!data) { card.body.append(...pending('flow-empty')); return; }
     const seen = data.observed[current], range = DAYS.find(([value]) => value === String(data.range.days ?? 'all'))?.[1] || 'All time';
     if (!seen.tasks) { card.body.append(node('p', 'flow-empty', `${range}: no finished ${NAMES[current]} tasks yet. Results build up from your own tasks; nothing is estimated for you in advance.`)); return; }
     const facts = node('ul', 'results-facts');
@@ -87,7 +104,7 @@
   function renderSection() {
     const host = $('tasks-results-body'); if (!host) return;
     const section = $('tasks-results');
-    if (!data) { host.replaceChildren(node('p', 'panel-muted', 'Reading your saved tasks…')); return; }
+    if (!data) { host.replaceChildren(...pending('panel-muted')); if (failed && section) section.hidden = false; return; }
     const current = mode || window.relayRouting?.normalizeMode?.(api.getState().conversation?.routing?.mode) || 'smart';
     const controls = node('div', 'results-controls'), days = node('select', 'results-select'), baseline = node('select', 'results-select'), compareWith = node('select', 'results-select');
     days.setAttribute('aria-label', 'Time range');
