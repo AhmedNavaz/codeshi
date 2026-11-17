@@ -606,6 +606,7 @@ test('a combined check gets its own clone of each node_modules, so a build that 
   // Where the disk can't clone, the check links instead, as before, and this build's refusal can't be avoided.
   const probe = path.join(env.root, 'probe');
   fs.mkdirSync(path.join(probe, 'from'), { recursive: true });
+  fs.writeFileSync(path.join(probe, 'from', 'file'), 'x\n');
   const flags = process.platform === 'darwin' ? ['-c', '-R'] : ['-R', '--reflink=always'];
   try { execFileSync('/bin/cp', [...flags, path.join(probe, 'from'), path.join(probe, 'to')], { stdio: 'ignore' }); } catch { t.skip('This disk can’t make copy-on-write clones.'); return; }
   // Like Next.js's Turbopack: it resolves only inside the project, so a node_modules that leads out of it is refused.
