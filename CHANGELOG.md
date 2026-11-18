@@ -2,6 +2,16 @@
 
 Notable changes to Codeshi, called Throughline until 0.23; earlier entries use the name each version shipped under. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Plan card previews keep `*` and `_` inside inline code** ([#181](https://github.com/AhmedNavaz/codeshi/pull/181), thanks [@P1LOTRX](https://github.com/P1LOTRX)), and only strip heading or quote markers at the start of a line.
+- **Plan card dialogs trap `Tab` focus and restore focus on close** ([#182](https://github.com/AhmedNavaz/codeshi/pull/182), thanks [@P1LOTRX](https://github.com/P1LOTRX)), keeping keyboard focus inside the drawer while open and returning it to the opener when closed.
+- **Quitting by signal skips windows whose page is already tearing down** ([#183](https://github.com/AhmedNavaz/codeshi/pull/183), thanks [@emreocell](https://github.com/emreocell)), avoiding disposed-frame errors during shutdown.
+
+### Internal
+- **Desktop packaging options extracted into a testable module** ([#180](https://github.com/AhmedNavaz/codeshi/pull/180), thanks [@P1LOTRX](https://github.com/P1LOTRX)), covering ignore filters and build options in tests.
+
 ## [0.60.0] - 2026-11-18
 
 ### Added

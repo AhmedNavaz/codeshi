@@ -117,6 +117,7 @@ While iterating, run individual suites directly (all run offline against stand-i
 | **Remote mobile access (#23)** | `src/remote-routes.mjs`, `public/phone-access.js` | `node --test test/phone-remote.test.mjs` | Local relay harness (for Firebase emulator tests, run `npm run test:phone:remote`) |
 
 - Keep changes focused, and add or update tests for behavior you change.
+- Leave `package.json` version and `CHANGELOG.md` release headings unchanged in pull requests; maintainers batch merged PRs into scheduled releases.
 - Write new interface text with `t()` (see [Translations](#translations)).
 - Tests must never call a real model or touch your saved history.
 - Match the surrounding style: plain JavaScript ES modules, no build step and no new runtime dependencies without discussion.
@@ -135,7 +136,11 @@ Contributions are accepted under the project's [MIT License](LICENSE), the same 
 
 ## Releasing
 
-Maintainers: `npm run stats` shows downloads by release and platform and repository traffic, from what GitHub already records; the app reports nothing. To release, bump `version` in `package.json` and add a section to [CHANGELOG.md](CHANGELOG.md). Run the **Release** workflow by hand on `main` (`gh workflow run release.yml --ref main`), which builds and smoke-tests every app and publishes nothing. When it passes, push a matching tag such as `v0.4.1`. A tag can't be moved or deleted, so a failed tag costs a version number. GitHub Actions tests and builds both macOS apps and the Windows app, publishes the private-link service image and creates the release.
+Maintainers: `npm run stats` shows downloads by release and platform and repository traffic, from what GitHub already records; the app reports nothing.
+
+Merged pull requests stay on `main` under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) (crediting contributors with `thanks @username`) and are batched into scheduled releases—for example weekly or once a few user-facing fixes land—so users aren't interrupted by frequent updates. Only urgent crash, data-loss, or auth fixes need an immediate patch release.
+
+To release, move completed `## [Unreleased]` items into a new version section in [CHANGELOG.md](CHANGELOG.md) and bump `version` in `package.json`. Run the **Release** workflow by hand on `main` (`gh workflow run release.yml --ref main`), which builds and smoke-tests every app and publishes nothing. When it passes, push a matching tag such as `v0.60.1`. A tag can't be moved or deleted, so a failed tag costs a version number. GitHub Actions tests and builds both macOS apps and the Windows app, publishes the private-link service image and creates the release. To give testers a build without notifying regular users through the in-app updater, tag a pre-release such as `v0.61.0-beta.1` (tags with `-` publish as GitHub pre-releases, which the in-app updater ignores).
 
 Before tagging, compare the README and website with the release's user-facing features. Update their descriptions and refresh images when the interface changes; move shipped features out of their planned lists while keeping unfinished work clearly marked. The README should explain the current release without requiring a visit to the website.
 
