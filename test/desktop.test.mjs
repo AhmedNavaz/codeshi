@@ -7,6 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {migrateLegacyData,preferredUserData} from '../desktop/storage.mjs';
 import {APP_ID,ensureStartMenuShortcut} from '../desktop/windows.mjs';
+import {ignoredPackagePaths,packageOptions} from '../desktop/package-options.mjs';
 
 test('the macOS installer is valid POSIX shell and verifies checksums before installing',()=>{const script=new URL('../install.sh',import.meta.url);const check=spawnSync('sh',['-n',fileURLToPath(script)],{encoding:'utf8'});if(!(process.platform==='win32'&&check.error?.code==='ENOENT'))assert.equal(check.status,0,check.stderr);const source=fs.readFileSync(script,'utf8');const move=source.indexOf('mv "$app" "$dest/Codeshi.app"');assert.ok(move>0&&source.indexOf('"$expected" != "$actual"')<move,'The checksum is checked before anything is moved into place.');assert.ok(source.indexOf('rm -rf "$dest/Throughline.app"')>move,'The copy from before the rename goes only once Codeshi is in place.');assert.ok(source.indexOf('"Codeshi-$version-mac-$build.zip" "Throughline-$version-mac-$build.zip"')>0,'Releases from before the rename still install.');});
 test('the Windows installer is valid PowerShell and verifies checksums before installing',()=>{
@@ -18,6 +19,39 @@ test('the Windows installer is valid PowerShell and verifies checksums before in
   const powershell=path.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
   const check=spawnSync(powershell,['-NoProfile','-NonInteractive','-Command','$errors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile($env:THROUGHLINE_SCRIPT,[ref]$null,[ref]$errors);if($errors){$errors|ForEach-Object{$_.ToString()};exit 1}'],{encoding:'utf8',env:{...process.env,THROUGHLINE_SCRIPT:script}});
   assert.equal(check.status,0,check.stdout+check.stderr);
+});
+
+const packaged=(platform,arch,file)=>ignoredPackagePaths({platform,arch}).some(rule=>rule.test(file));
+test('packaging options pick the icon for each platform and sign only on macOS with an identity',()=>{
+  const root=path.resolve('app-root');
+  for(const [platform,icon] of [['darwin','icon.icns'],['win32','icon.ico'],['linux','icon.png']]){
+    const options=packageOptions({root,platform,arch:'x64'});
+    assert.equal(options.icon,path.join(root,'assets',icon));
+    assert.equal(options.dir,root);assert.equal(options.out,path.join(root,'dist'));
+    assert.equal('osxSign' in options,false);
+    assert.equal(Boolean(options.afterCopy),platform==='darwin','Only macOS copies Assets.car into the app.');
+    assert.equal(options.extendInfo.CFBundleIconName,platform==='darwin'?'AppIcon':undefined);
+  }
+  assert.deepEqual(packageOptions({root,platform:'darwin',arch:'arm64',identity:'Dev ID'}).osxSign,{identity:'Dev ID'});
+});
+test('packaged apps keep only the node-pty prebuild for their own platform and architecture',()=>{
+  for(const [platform,arch] of [['darwin','x64'],['darwin','arm64'],['win32','x64'],['win32','arm64'],['linux','x64'],['linux','arm64']]){
+    const own=`/node_modules/node-pty/prebuilds/${platform}-${arch}/pty.node`;
+    assert.equal(packaged(platform,arch,own),false,own+' stays in the '+platform+'-'+arch+' package.');
+    for(const [other,otherArch] of [['darwin','x64'],['darwin','arm64'],['win32','x64'],['win32','arm64'],['linux','x64'],['linux','arm64']]){
+      if(other===platform&&otherArch===arch)continue;
+      assert.equal(packaged(platform,arch,`/node_modules/node-pty/prebuilds/${other}-${otherArch}/pty.node`),true,`${other}-${otherArch} is left out of ${platform}-${arch}.`);
+    }
+    assert.equal(packaged(platform,arch,'/node_modules/node-pty/lib/index.js'),false,"node-pty's JavaScript stays.");
+    assert.equal(packaged(platform,arch,'/node_modules/node-pty/binding_gyp'),false,'Only binding.gyp itself is left out, not a name that merely looks like it.');
+    for(const file of ['/node_modules/node-pty/src/pty.cc','/node_modules/node-pty/deps/winpty/x','/node_modules/node-pty/binding.gyp','/node_modules/node-pty/build/Release/x.pdb'])assert.equal(packaged(platform,arch,file),true,file+' is left out.');
+  }
+});
+test('packaged apps leave out build inputs, tests and local data on every platform',()=>{
+  for(const platform of ['darwin','win32','linux']){
+    for(const file of ['/output/x.png','/test/desktop.test.mjs','/evals/a.json','/.data/state.json','/docs/guide.md','/scripts/i18n.mjs','/dist/x','/.git/HEAD','/.github/workflows/ci.yml','/install.sh','/install.ps1','/assets/Assets.car','/assets/brand/a.png','/assets/AppIcon.icon/icon.json','/assets/icon.svg','/remote/test/a.js','/sharing/deploy/a.yml','/node_modules/@xterm/xterm/src/a.ts','/node_modules/@xterm/xterm/lib/a.js.map','/node_modules/node-addon-api/index.js','/x.code-workspace'])assert.equal(packaged(platform,'x64',file),true,file+' is left out of the '+platform+' package.');
+    for(const file of ['/package.json','/src/server.mjs','/public/app.js','/desktop/main.mjs','/assets/icon.png','/assets/icon.ico','/assets/icon.icns','/node_modules/@xterm/xterm/lib/xterm.js'])assert.equal(packaged(platform,'x64',file),false,file+' is kept in the '+platform+' package.');
+  }
 });
 
 test('desktop migration copies history reversibly and is idempotent',t=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'relay-migration-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const legacy=path.join(root,'legacy'),dest=path.join(root,'data');fs.mkdirSync(path.join(legacy,'p'),{recursive:true});fs.writeFileSync(path.join(legacy,'projects.json'),'{"version":1,"projects":[]}');fs.writeFileSync(path.join(legacy,'p','history.jsonl'),'user history\n');fs.writeFileSync(path.join(legacy,'p','server.lock'),JSON.stringify({pid:2147483647}));const result=migrateLegacyData(legacy,dest);assert.equal(result.migrated,true);assert.equal(fs.readFileSync(path.join(legacy,'p','history.jsonl'),'utf8'),'user history\n');assert.equal(fs.readFileSync(path.join(dest,'p','history.jsonl'),'utf8'),'user history\n');assert.equal(fs.existsSync(path.join(dest,'p','server.lock')),false);assert.equal(migrateLegacyData(legacy,dest).migrated,false);});
