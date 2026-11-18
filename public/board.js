@@ -468,6 +468,23 @@
   // Every group on the Plan, in the order first used.
   const allGroups = () => [...new Set(cards().map(card => card.group).filter(Boolean))];
   const dirty = () => { if (!draft) return false; if (selected === 'new') return Boolean(draft.title.trim() || draft.notes.trim()); const card = cardBy(selected); return card ? fields(draft) !== fields(editable(card)) : false; };
+  // The controls Tab can reach inside an element: enabled and showing, in page order.
+  const reachable = root => {
+    const found = [], walk = element => {
+      for (const child of element.children) {
+        if (child.hidden) continue;
+        const control = ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(child.tagName) && !child.disabled && child.type !== 'hidden' || child.tagName === 'A' && child.getAttribute('href') !== null;
+        if (control && (!child.checkVisibility || child.checkVisibility())) found.push(child);
+        walk(child);
+      }
+    };
+    walk(root); return found;
+  };
+  // Focus goes to the first enabled control in the drawer; a card that's working has disabled fields, and focus on one of those goes nowhere.
+  const focusDrawer = () => { const first = reachable($('board-drawer-body'))[0]; if (first) first.focus(); else { const aside = $('board-drawer'); aside.tabIndex = -1; aside.focus(); } };
+  // What had focus when New card, Run Ready cards or Schedules opened, so closing the drawer gives it back.
+  let opener = null;
+  const rememberOpener = () => { const active = document.activeElement; if (active && active !== document.body && !$('board-drawer').contains(active)) opener = active; };
   function select(id) {
     if (selected && selected !== id && dirty() && !window.confirm('Leave this card without saving your changes?')) return;
     selected = selected === id ? null : id; failure = ''; suggestConfirm = null;
@@ -476,23 +493,25 @@
     // A card that's working shows its task beside the Plan: its messages, approvals, questions and Stop (#162 stage 5).
     const chosen = selected && cardBy(selected);
     if (chosen?.column === 'doing' && chosen.taskState?.id && api.getState().taskId !== chosen.taskState.id) openTask(chosen);
-    if (selected) $('board-drawer-body').querySelector('input, textarea, button')?.focus();
+    if (selected) focusDrawer();
   }
   function openNew(column = 'backlog', at = null, prefill = {}) {
     if (selected && dirty() && !window.confirm('Leave this card without saving your changes?')) return;
+    rememberOpener();
     selected = 'new'; draft = blank(column, at, prefill); failure = ''; suggestConfirm = null; drawn = null; render();
     $('board-drawer-body').querySelector('.board-field-title')?.focus();
   }
   // Run Ready, or one group's Ready cards when a group is given.
   function openRun(group = null) {
     if (selected && selected !== 'run' && dirty() && !window.confirm('Leave this card without saving your changes?')) return;
+    rememberOpener();
     selected = 'run'; draft = null; failure = ''; suggestConfirm = null; drawn = null;
     picked = new Set(cards().filter(card => card.column === 'ready' && runnable(card) && (group === null || (card.group || NO_GROUP) === group)).map(card => card.id));
     const policy = board?.taskLimits || {}, typed = value => value === null || value === undefined ? '' : String(value);
     shared = { maxWorkingMinutes: typed(policy.maxWorkingMinutes), maxTokens: typed(policy.maxTokens), maxSpendUSD: typed(policy.maxSpendUSD) };
-    render();
+    render(); focusDrawer();
   }
-  function closeDrawer() { if (dirty() && !window.confirm('Leave this card without saving your changes?')) return; const was = selected; selected = null; draft = null; failure = ''; suggestConfirm = null; render(); if (was) [...(shownCards()?.querySelectorAll(view === 'outline' ? '.board-outline-card' : '.board-card') || [])].find(item => item.dataset.card === was)?.focus(); }
+  function closeDrawer() { if (dirty() && !window.confirm('Leave this card without saving your changes?')) return; const was = selected, back = opener; opener = null; selected = null; draft = null; failure = ''; suggestConfirm = null; render(); if (!was) return; const face = [...(shownCards()?.querySelectorAll(view === 'outline' ? '.board-outline-card' : '.board-card') || [])].find(item => item.dataset.card === was); if (face) face.focus(); else if (back?.isConnected && !back.hidden && !back.disabled && (!back.checkVisibility || back.checkVisibility())) back.focus(); }
   // Where the cards are drawn in the view now showing, so focus goes back to the card whose drawer closed in any view.
   const shownCards = () => view === 'canvas' ? $('board-space') : view === 'outline' ? $('board-outline') : $('board-columns');
 
@@ -3078,11 +3097,21 @@
     menu?.hidePopover?.();
   });
   $('board-more-menu')?.addEventListener('toggle', event => { if (event.newState === 'closed' && $('board-export-menu')) { $('board-export-menu').hidden = true; $('board-export')?.setAttribute('aria-expanded', 'false'); } });
+  // A card open as a dialog keeps Tab inside it, wrapping from its last control to its first and back.
+  $('board-drawer').addEventListener('keydown', event => {
+    const aside = $('board-drawer');
+    if (event.key !== 'Tab' || event.isComposing || aside.getAttribute('aria-modal') !== 'true') return;
+    const list = reachable(aside);
+    if (!list.length) { event.preventDefault(); return; }
+    const first = list[0], last = list.at(-1), active = document.activeElement;
+    if (event.shiftKey && (active === first || active === aside)) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && active === last) { event.preventDefault(); first.focus(); }
+  });
   $('board-drawer-close').addEventListener('click', closeDrawer);
   $('board-card-shade')?.addEventListener('click', closeDrawer);
   $('board-new').addEventListener('click', () => openNew('backlog'));
   $('board-run-ready').addEventListener('click', () => openRun());
-  $('board-schedules')?.addEventListener('click', () => { if (selected === 'schedules') { closeDrawer(); return; } if (selected && dirty() && !window.confirm('Leave this card without saving your changes?')) return; selected = 'schedules'; draft = null; sdraft = null; failure = ''; drawn = null; render(); });
+  $('board-schedules')?.addEventListener('click', () => { if (selected === 'schedules') { closeDrawer(); return; } if (selected && dirty() && !window.confirm('Leave this card without saving your changes?')) return; rememberOpener(); selected = 'schedules'; draft = null; sdraft = null; failure = ''; drawn = null; render(); focusDrawer(); });
   // Leaving the Plan, or its workspace, asks first when a card has unsaved edits.
   const canLeave = () => !dirty() || window.confirm('Leave this card without saving your changes?');
   { let chat = null; try { chat = localStorage.getItem(CHAT_KEY); } catch { /* A convenience only. */ } setChat(chat !== 'hidden', false); }
