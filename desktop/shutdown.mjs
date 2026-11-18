@@ -34,3 +34,14 @@ export function writeShutdownLog(file, line) {
     fs.appendFileSync(file, `${line}\n`, { mode: 0o600 });
   } catch { /* Quitting matters more than the note about it. */ }
 }
+
+// A window can still report itself alive while its page is already being torn down, as when the app is quit by a signal.
+// Sending to it then throws "Render frame was disposed", so this checks the page too and treats a failed send as nothing to tell.
+// Returns true when the message went out.
+export function safeSend(win, channel, ...args) {
+  try {
+    if (!win || win.isDestroyed() || !win.webContents || win.webContents.isDestroyed()) return false;
+    win.webContents.send(channel, ...args);
+    return true;
+  } catch { return false; }
+}
