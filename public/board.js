@@ -185,6 +185,13 @@
   // What a drafted change names for each field it changed.
   const CHANGED = { title: 'title', notes: 'description', checks: 'what done means', group: 'phase', role: 'role', artifact: 'what it produces', check: 'test command', files: 'files', tier: 'size', dependsOn: 'what it waits for' };
   // A drafted card (#162): a new card, a change to a card already on the Plan, or a card to remove or to merge into another.
+  // The preview line of a card's notes: Markdown markers go where they format (headings, quotes, emphasis, backticks) and stay where they are text, as in `a * b` or snake_case_name.
+  const cardGist = notes => {
+    const plain = text => text.replace(/^[ \t]*(?:#{1,6}[ \t]+|>+[ \t]?)/gm, '')
+      .replace(/(\*{1,3})(?=\S)([^*\n]*?\S)\1/g, '$2').replace(/(?<![\w*])(_{1,3})(?=\S)([^_\n]*?\S)\1(?![\w*])/g, '$2');
+    return String(notes || '').split(/(```[\s\S]*?(?:```|$)|`[^`\n]+`)/).map((part, index) => index % 2 === 0 ? plain(part)
+      : part.startsWith('```') ? part.replace(/^```[^\n]*\n?/, '').replace(/```$/, '') : part.slice(1, -1)).join('').replace(/\s+/g, ' ').trim();
+  };
   const draftKind = card => !card.draft ? null : card.draft.remove ? 'remove' : card.draft.was ? 'change' : 'new';
   const draftWord = card => ({ new: 'Draft', change: 'Changed', remove: card.draft?.into ? 'To merge' : 'To remove' })[draftKind(card)] || '';
   // What a card says about itself in one short line, from its task while it has one.
@@ -345,7 +352,7 @@
     const title = node('span', 'board-card-title', card.title);
     const parts = [top, title];
     // The first lines of what it says, so a card can be read without opening it.
-    const gist = String(card.notes || '').replace(/[#*`>_]+/g, '').replace(/\s+/g, ' ').trim();
+    const gist = cardGist(card.notes);
     if (gist) parts.push(node('span', 'board-card-notes', gist));
     // Up to three labels, then how many more; the one being filtered by is marked.
     const names = card.labels || [];

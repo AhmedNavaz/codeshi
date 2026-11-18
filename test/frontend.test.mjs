@@ -8086,6 +8086,19 @@ test('Run tests on an applied patch confirms the saved command and offers undo a
   assert.ok(text.indexOf('Failed') < text.indexOf('I read those files'), 'the latest result comes before the next run');
 });
 
+test('a card face keeps * and _ inside inline code and drops Markdown markers that only format (#168)', async () => {
+  const ui = await browser({ boardUI: true, wide: true });
+  const notes = '## Math\n> Use `multiply(a, b) { return a * b; }` and `snake_case_name`, with **bold** and _slanted_ words.';
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, cards: [
+    { id: 'a0000000-0000-4000-8000-000000000001', title: 'Multiply', column: 'backlog', notes, priority: 'normal', agent: null, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [] },
+  ] };
+  ui.setIntercept((request, next) => request.path === '/api/board' ? response(board) : next());
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  const gist = ui.$('board-columns').querySelectorAll('.board-card-notes')[0].textContent;
+  assert.equal(gist, 'Math Use multiply(a, b) { return a * b; } and snake_case_name, with bold and slanted words.');
+});
+
 test('the board shows a workspace’s cards in five columns, runs exactly the cards chosen and leaves accepting to you (#132)', async () => {
   const ui = await browser({ boardUI: true, wide: true }), posted = [];
   const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
