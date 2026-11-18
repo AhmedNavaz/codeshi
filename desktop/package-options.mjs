@@ -7,7 +7,7 @@ export function ignoredPackagePaths({platform=process.platform,arch=process.arch
     /^\/remote\/(?:dist|test)(?:\/|$)/,
     // Icon sources and the brand kit are build inputs; the app only reads its PNG icons at run time.
     /^\/assets\/(?:brand|AppIcon\.icon)(?:\/|$)/,/^\/assets\/(?:Assets\.car|social-preview\.png|icon(?:-dark)?\.svg)$/,/^\/node_modules\/@anthropic-ai\/claude-agent-sdk-[^/]+(?:\/|$)/,
-    new RegExp(`^/node_modules/node-pty/(?:prebuilds/(?!${platform}-${arch}(?:/|$))[^/]+|deps|third_party|src|scripts|typings|binding\.gyp)(?:/|$)`),/^\/node_modules\/node-pty\/.*\.pdb$/,/^\/node_modules\/node-addon-api(?:\/|$)/,/^\/node_modules\/@xterm\/.*\.map$/,
+    new RegExp(`^/node_modules/node-pty/(?:prebuilds/(?!${platform}-${arch}(?:/|$))[^/]+|deps|third_party|src|scripts|typings|binding\\.gyp)(?:/|$)`),/^\/node_modules\/node-pty\/.*\.pdb$/,/^\/node_modules\/node-addon-api(?:\/|$)/,/^\/node_modules\/@xterm\/.*\.map$/,
     // The page loads xterm's built files. Its TypeScript sources hold the deepest paths, which some Windows tools cannot handle.
     /^\/node_modules\/@xterm\/[^/]+\/src(?:\/|$)/];
 }

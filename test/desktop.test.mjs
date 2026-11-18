@@ -43,6 +43,7 @@ test('packaged apps keep only the node-pty prebuild for their own platform and a
       assert.equal(packaged(platform,arch,`/node_modules/node-pty/prebuilds/${other}-${otherArch}/pty.node`),true,`${other}-${otherArch} is left out of ${platform}-${arch}.`);
     }
     assert.equal(packaged(platform,arch,'/node_modules/node-pty/lib/index.js'),false,"node-pty's JavaScript stays.");
+    assert.equal(packaged(platform,arch,'/node_modules/node-pty/binding_gyp'),false,'Only binding.gyp itself is left out, not a name that merely looks like it.');
     for(const file of ['/node_modules/node-pty/src/pty.cc','/node_modules/node-pty/deps/winpty/x','/node_modules/node-pty/binding.gyp','/node_modules/node-pty/build/Release/x.pdb'])assert.equal(packaged(platform,arch,file),true,file+' is left out.');
   }
 });
