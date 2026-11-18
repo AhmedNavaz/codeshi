@@ -21,7 +21,7 @@ import {alertPlan,alertSample,pillSample,progressPillOn} from '../src/alerts.mjs
 import {english} from '../src/i18n.mjs';
 import {createOverlay} from './overlay.mjs';
 import {giveFrontBack} from './front.mjs';
-import {closeWithin,writeShutdownLog} from './shutdown.mjs';
+import {closeWithin,safeSend,writeShutdownLog} from './shutdown.mjs';
 import {commandState,connectionFile,installCommand,removeConnection,uninstallCommand,writeConnection} from './cli.mjs';
 import {createPreview} from './preview.mjs';
 import {createTraceRecorder} from './trace.mjs';
@@ -57,7 +57,7 @@ let text=english;
 if(!primary) app.quit();
 else {
   app.on('second-instance',(_event,argv=[])=>{if(argv.includes('--background'))return;if(openMain)return openMain();windowWanted=true;app.dock?.show();if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
-  app.on('before-quit',event=>{if(relay&&!quitting){if(!confirmQuit()){event.preventDefault();return;}event.preventDefault();quitting=true;if(win&&!win.isDestroyed())win.webContents.send('relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{relay.killAll?.();app.quit();setTimeout(()=>app.exit(0),2000);});}});
+  app.on('before-quit',event=>{if(relay&&!quitting){if(!confirmQuit()){event.preventDefault();return;}event.preventDefault();quitting=true;safeSend(win,'relay:quitting');keepAwake?.dispose();updater?.finishOnQuit();updater?.dispose();closeWithin(options=>relay.close(options),{log:line=>writeShutdownLog(path.join(app.getPath('userData'),'shutdown.log'),line)}).then(()=>{relay.killAll?.();app.quit();setTimeout(()=>app.exit(0),2000);});}});
   app.on('will-quit',()=>{relay?.killAll?.();removeConnection(connectionFile(app.getPath('userData')));keepAwake?.dispose();overlay?.dispose();preview?.dispose();tray?.destroy();tray=null;});
   app.on('window-all-closed',()=>app.quit());
   app.whenReady().then(async()=>{
@@ -98,7 +98,7 @@ else {
     };
     const updateMenu=()=>Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({platform:process.platform,packaged:app.isPackaged,updates:Boolean(updater?.state().supported),version:app.getVersion(),osVersion:process.getSystemVersion(),arch:process.arch,text,state:page,appearance:relay.getAppearancePreference(),keepAwake:awake,notifications:relay.getNotificationPreferences(),setNotifications:patch=>{relay.setNotificationPreferences(patch);updateMenu();syncStatus();},handoff:relay.getHandoffPreferences(),setHandoff:patch=>{relay.setHandoffPreferences(patch);updateMenu();},open:url=>shell.openExternal(url),tracing:tracer.isRecording(),recordTrace,command:process.platform==="darwin"||process.platform==="win32"?{state:commandState({target:commandTarget}),install:()=>command(true),uninstall:()=>command(false)}:null,
       // A clicked checkbox or radio item ticks itself, so the menu is rebuilt to show the page's answer instead.
-      send:(...command)=>{if(win&&!win.isDestroyed())win.webContents.send('relay:menu-command',...command);updateMenu();}})));
+      send:(...command)=>{safeSend(win,'relay:menu-command',...command);updateMenu();}})));
     app.setAboutPanelOptions({applicationName:'Codeshi',applicationVersion:app.getVersion(),version:''});
     // Work that finishes or needs an answer while the person is elsewhere is reported outside the window, in the ways
     // chosen under Alerts (src/alerts.mjs). While the window is in front the page already shows it. The Dock badge
@@ -165,7 +165,7 @@ else {
         tray.setImage(snapshot.attention&&!focused?statusIcons.attention:statusIcons.idle);
         tray.setTitle(statusTitle(snapshot,text,{focused}),{fontType:'monospacedDigit'});
       }
-      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,text,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);win?.webContents.send('relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
+      tray.setContextMenu(Menu.buildFromTemplate(statusMenu(snapshot,{platform:process.platform,text,keepAwake:keepAwake?.getState()||{enabled:false,active:false},alerts:preferences,setAlerts:setStatusPreferences,alertSettings:()=>{openTarget(null);safeSend(win,'relay:menu-command','alert-settings');},open:openTarget,show:()=>openTarget(null),setKeepAwake:value=>keepAwake?.setEnabled(value),hide:()=>setStatusPreferences({statusItem:false}),quit:()=>app.quit()})));
     }
     async function start(){
       relay=createRelayServer({dataRoot:data,accessToken:token,onAppearance:preference=>{appearance.set(preference);updateMenu();},onHandoff:()=>updateMenu(),onNotify:notify,onNotifications:()=>{updateMenu();scheduleStatus();},
@@ -176,7 +176,7 @@ else {
         cliConnection:smoke?null:connectionFile(app.getPath('userData'))});
       text=relay.getText();
       appearance.set(relay.getAppearancePreference());
-      keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;if(win&&!win.isDestroyed())win.webContents.send('relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
+      keepAwake=createKeepAwake({registry:relay.registry,blocker:powerSaveBlocker,enabled:relay.getKeepAwakePreference(),save:relay.setKeepAwakePreference,onChange:state=>{awake=state.enabled;safeSend(win,'relay:keep-awake-changed',state);updateMenu();scheduleStatus();}});
       // The same port as last time when it is free: the page keeps its saved state (the last workspace, drafts), which the
       // browser stores per address. A taken port falls back to any free one.
       const portFile=path.join(app.getPath('userData'),'last-port.json');
@@ -194,7 +194,7 @@ else {
     // A schedule with a time still to come (#132) keeps Codeshi in the menu bar after its window closes.
     const scheduled=()=>[...relay.registry.brokers.values()].some(({broker})=>broker.schedules?.waiting>0);
     const build=updateBuild({arch:process.arch,translated:app.runningUnderARM64Translation,platform:process.platform}),demo=updateDemo?(await import('./update-demo.mjs')).updateDemo({version:app.getVersion(),build,relaunch:()=>{app.relaunch();app.quit();}}):null;
-    updater=createUpdater({version:app.getVersion(),build,location:demo?.location||(process.platform==='win32'?windowsLocation(process.execPath):bundleLocation(process.execPath)),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{if(win&&!win.isDestroyed())win.webContents.send('relay:update-state',state);}});
+    updater=createUpdater({version:app.getVersion(),build,location:demo?.location||(process.platform==='win32'?windowsLocation(process.execPath):bundleLocation(process.execPath)),directory:path.join(app.getPath('userData'),demo?'updates-demo':'updates'),supported:Boolean(demo)||app.isPackaged&&!smoke,...(demo?{fetchImpl:demo.fetchImpl,exec:demo.exec,launch:demo.launch}:{}),busy,quit:demo?.quit||(()=>app.quit()),onState:state=>{safeSend(win,'relay:update-state',state);}});
     if(demo)updater.check();
     relay.registry.on('update',()=>setTimeout(()=>updater.idle(),0));
     // Live status on the Mac (#13): the menu bar item follows every workspace's runs, approvals and waits.

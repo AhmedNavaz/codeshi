@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { closeWithin, SHUTDOWN_LIMIT, writeShutdownLog } from '../desktop/shutdown.mjs';
+import { closeWithin, safeSend, SHUTDOWN_LIMIT, writeShutdownLog } from '../desktop/shutdown.mjs';
 import { createRelayServer } from '../src/server.mjs';
 
 // Time that moves only when the test says so.
@@ -72,4 +72,18 @@ test('the shutdown log stays small, and a log that cannot be written does not st
   writeShutdownLog(file, 'after');
   assert.equal(fs.readFileSync(file, 'utf8'), 'after\n', 'An oversized log starts again.');
   assert.doesNotThrow(() => writeShutdownLog(path.join(root, 'missing', 'folder', 'shutdown.log'), 'line'));
+});
+
+test('sending to a window that is being torn down does nothing instead of throwing', () => {
+  const sent = [];
+  const window = ({ gone = false, pageGone = false, send = (...message) => sent.push(message) } = {}) => ({ isDestroyed: () => gone, webContents: { isDestroyed: () => pageGone, send } });
+  assert.equal(safeSend(window(), 'relay:quitting'), true);
+  assert.equal(safeSend(window(), 'relay:menu-command', 'open-workspace', 'p1'), true);
+  assert.deepEqual(sent, [['relay:quitting'], ['relay:menu-command', 'open-workspace', 'p1']], 'A live window gets the message and its values.');
+  assert.equal(safeSend(window({ pageGone: true, send: () => { throw new Error('Render frame was disposed'); } }), 'relay:quitting'), false, 'The window still looks alive while its page is already destroyed.');
+  assert.equal(safeSend(window({ send: () => { throw new Error('Render frame was disposed before WebFrameMain could be accessed'); } }), 'relay:quitting'), false, 'A send that fails as the page goes is not an error.');
+  assert.equal(safeSend(window({ gone: true }), 'relay:quitting'), false);
+  assert.equal(safeSend(null, 'relay:quitting'), false);
+  assert.equal(safeSend({ isDestroyed: () => false, webContents: null }, 'relay:quitting'), false);
+  assert.equal(sent.length, 2, 'Nothing is sent to a window that is gone.');
 });
