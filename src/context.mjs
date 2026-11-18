@@ -50,9 +50,8 @@ const FLOW_REVIEW_NOTE = 'Flow has a Review your app card with an agent-maintain
 export function prepareContext(c, text, { workspace, workspaces, workspaceFolders, fresh = false, provider = c.provider, mode = c.mode, maxBytes = 192000, attachments = [], readAttachment, includeImages = true, session = {}, policy = 'recency', journal = null, skills = null, verification = null, rollover = null, taskScope = null } = {}) {
   const fold = policy !== 'task-unfolded';
   if (!fold) policy = 'task';
-  if (rollover) { fresh = true; policy = 'task'; maxBytes = Math.min(maxBytes, 96000, (rollover.thresholdTokens || 75000) * 2); }
   const restoredAfterCompaction = policy === 'task' && restoreAfterCompaction(c, provider, fresh);
-  const reconstruct = fresh || restoredAfterCompaction;
+  const reconstruct = fresh || Boolean(rollover) || restoredAfterCompaction;
   const cursor = reconstruct ? 0 : c.sessions[provider]?.cursor || 0;
   // Messages folded away by a conversation rewind (#20) are history no agent reads again.
   const source = c.messages.filter(message => message.seq > cursor && !message.rewound);
@@ -68,6 +67,12 @@ export function prepareContext(c, text, { workspace, workspaces, workspaceFolder
     catch { return '\n[Saved attachment unavailable: ' + file.name + ']'; }
   }).join('');
   for (const file of attachments) readAttachment(file.id);
+  if (rollover) {
+    fresh = true; policy = 'task';
+    const currentAttachmentBytes = Buffer.byteLength(JSON.stringify(attachmentText(attachments)));
+    const rolloverCap = Math.min(96000, (rollover.thresholdTokens || 75000) * 2);
+    maxBytes = Math.min(maxBytes, rolloverCap + currentAttachmentBytes);
+  }
   const structured = validateContext(c.context || {});
   const folders = workspaceFolders || (workspaces || (workspace ? [workspace] : [])).map(path => ({ path }));
   // The current task's opening: the latest prompt the person wrote, when this run continues it. A new prompt opens its own.

@@ -44,7 +44,7 @@ test('protected requests and manual context survive a smaller local budget with 
   for (let i=0; i<10; i++) message(c, 'user', 'Instruction ' + i + ': ' + '🌍'.repeat(8000) + ' INSTRUCTION-END-' + i);
   for (let i=0; i<30; i++) message(c, 'activity', '$ command\n' + 'x'.repeat(100000));
   const prepared = prepareContext(c, 'Continue this task', { fresh: true, maxBytes: 12000 });
-  const value = envelope(prepared), users = value.context.filter(item => item.role === 'user');
+  const value = envelope(prepared), users = value.context.filter(item => item.text.startsWith('PRIMARY') || item.text.startsWith('Instruction'));
   assert.equal(prepared.metadata.protectedUserMessages, 9); assert(users.length >= 9);
   for (let i=2;i<10;i++) assert(users.some(item => item.text.startsWith('Instruction ' + i + ':')));
   assert(users[0].text.startsWith('PRIMARY')); assert(users[0].text.endsWith('ORIGINAL-END'));
@@ -94,6 +94,17 @@ test('the whole Plan reaches the agent once: with the current request, or else w
   context = value.context.map(item => item.text).join('\n');
   assert.doesNotMatch(context, /PLAN TEXT/); assert.match(context, /the current request carries the Plan as it is now/);
   assert.match(value.currentRequest, /CURRENT PLAN TEXT/);
+  // On a context refresh, large current attachments (such as Plan.md + Workspace chat.md) do not starve protected task history.
+  const bigPlan = { id: 'e'.repeat(64), kind: 'text', name: 'Plan.md', bytes: 56000, plan: { cards: 36, whole: true } };
+  const wsChat = { id: 'f'.repeat(64), kind: 'text', name: 'Workspace chat.md', bytes: 16000 };
+  texts[bigPlan.id] = 'P'.repeat(56000); texts[wsChat.id] = 'W'.repeat(16000);
+  const refreshed = envelope(prepareContext(c, 'Ask about the Plan', {
+    fresh: true, policy: 'task', readAttachment, attachments: [wsChat, bigPlan],
+    rollover: { thresholdTokens: 75000, reason: 'threshold', memory: { version: 1, decisions: [], userRequests: [], observations: [] } },
+  }));
+  assert.match(refreshed.currentRequest, /P{100}/);
+  assert.match(refreshed.currentRequest, /W{100}/);
+  assert(refreshed.context.some(item => item.text.includes('What is missing?')));
 });
 
 test('a long original request keeps its middle requirements in full when intent fits the budget', () => {

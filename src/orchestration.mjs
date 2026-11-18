@@ -242,6 +242,7 @@ export function reviewDraft(steps) {
   const note = (id, text) => { (notes[id] ||= []).push(text); };
   for (const step of steps) {
     if (!step.done?.length && !step.check) note(step.id, 'It doesn’t say what done means. Add a check before running it.');
+    if (step.role === 'reviewer' && (step.files?.length || step.artifact === 'diff')) note(step.id, 'It is a review card, which only checks earlier cards and changes no files itself. Change its role to Builder if it should write them.');
     const checked = step.dependsOn.map(id => byId.get(id)).filter(other => other && CHECKS.includes(other.role));
     if (BUILDS.includes(step.role || 'builder') && checked.length) note(step.id, `It builds on ${checked.map(other => `card ${number.get(other.id)}`).join(' and ')}, a ${checked[0].role === 'qa' ? 'QA' : 'review'} card. Checks should come after the work they check.`);
     if (CONTRACTS.includes(step.artifact)) {
@@ -509,7 +510,7 @@ const unreadable = error => error?.status ? `The planner's plan broke a rule, so
 export function parseSuggest(reply) {
   try {
     if (typeof reply !== 'string' || Buffer.byteLength(reply) > planLimits.reply) throw Error();
-    const plan = JSON.parse(reply.trim().replace(/^\`\`\`(?:json)?\s*\n([\s\S]*?)\n\`\`\`$/, '$1'));
+    const plan = JSON.parse(reply.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'));
     const summary = text(plan?.summary, planLimits.summary);
     if (!summary || !Array.isArray(plan.steps) || !plan.steps.length) throw Error();
     if (plan.steps.length > 3) return { status: 'unstructured', summary: `The agent suggested ${plan.steps.length} cards, more than the 3 “Suggest next” allows. Suggest again, or use Add next to write one yourself.`, steps: [] };

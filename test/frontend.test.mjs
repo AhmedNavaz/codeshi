@@ -8974,8 +8974,27 @@ test('a review card shows its verdict, its findings on the cards they name and t
   assert.match(find(ids.review).textContent, /Changes needed/);
   assert.match(drawer(), /Still found 1 problem./);
   assert.match(drawer(), /Repaired: “Build the API” · tests passed/);
+  assert.equal(ui.$('board-drawer-body').querySelector('.board-review-badge')?.textContent, 'Changes needed');
   [...(ui.$('board-drawer-actions')?.querySelectorAll('button') || []), ...ui.$('board-drawer-body').querySelectorAll('button')].find(item => item.textContent === 'Continue anyway').click(); await flush();
   assert.deepEqual(posted.at(-1), { path: `/api/board/cards/${ids.review}/continue`, body: {} });
+  // When a Reviewer card is misconfigured with files to change, its drawer warns and offers a one-click Change to Builder & send back.
+  const origBoard = board;
+  ui.setIntercept((request, next) => {
+    if (request.path === '/api/board') {
+      const b = origBoard();
+      b.cards[1].files = ['output/audit.md'];
+      return response(b);
+    }
+    if (request.path.startsWith('/api/board/')) { posted.push({ path: request.path, body: clone(request.body) }); return response({ board: origBoard() }); }
+    return next();
+  });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.window.relayBoard.close?.(); ui.window.relayBoard.open(); await flush();
+  find(ids.review).click(); await flush();
+  assert.match(drawer(), /Reviewer cards are read-only and cannot create or edit files \(output\/audit\.md\)\. Change role to Builder\?/);
+  ui.$('board-drawer-body').querySelectorAll('button').find(item => item.textContent === 'Change to Builder & send back').click(); await flush();
+  assert.deepEqual(posted.slice(-2).map(p => p.path), [`/api/board/cards/${ids.review}/edit`, `/api/board/cards/${ids.review}/send-back`]);
+  assert.equal(posted.at(-2).body.role, 'builder');
 });
 
 test('a major card shows its subtasks as they run, with the ones to come to edit, remove or add, and Pause (#155)', async () => {

@@ -134,6 +134,26 @@ export class PlanReviews {
     if (!task.conversationId || !task.scopePath || (task.mode === 'worktree' && (!task.worktree || !fs.existsSync(task.worktree)))) return 'Its task’s conversation is gone.';
     return null;
   }
+  // Reconcile repair entries whose target task finished while a follow-up or restart intervened.
+  reconcileRepairs(c, repairs = []) {
+    if (!Array.isArray(repairs) || !repairs.length) return repairs;
+    let changed = false;
+    const next = repairs.map(item => {
+      if (item?.status !== 'running') return item;
+      const taskId = item.taskId || this.board.cards(c).find(card => card.id === item.cardId)?.task;
+      if (!taskId) return item;
+      const target = (c.parallelTasks || []).find(other => other.id === taskId);
+      if (!target || ['running', 'waiting'].includes(target.status)) return item;
+      if (target.status === 'complete' && target.stepCheck?.status === 'running') return item;
+      if (target.status === 'complete' && target.splitRepair && target.mode === 'worktree') return item;
+      changed = true;
+      if (target.status === 'complete' || (target.status === 'integrated' && target.splitRepair)) {
+        return { ...item, status: 'done', tests: this.board.tests(target) || target.tests || item.tests || null, endedAt: target.endedAt || item.endedAt || new Date().toISOString() };
+      }
+      return { ...item, status: 'failed', reason: item.reason || `Its repair run ${target.status === 'stopped' ? 'was stopped' : 'didn’t finish'}.` };
+    });
+    return changed ? next : repairs;
+  }
 
   // A review card's task finished: read its verdict and decide what happens next. Returns the review saved on the task.
   ended(c, task, reply) {
@@ -142,16 +162,20 @@ export class PlanReviews {
     const was = task.review || null, round = was?.round || 0, at = new Date().toISOString();
     const parsed = parseVerdict(reply);
     // A follow-up you asked in its task after the review answers your question; it doesn't review again. Without a new
-    // verdict, the one it gave stands, and so does what you decided about it.
+    // verdict, the one it gave stands, and so does what you decided about it. While a repair round is still running, a
+    // follow-up in the review task must not end the repair round early.
     const runId = this.tasks.lanes.get(task.id)?.c?.lastRun?.id, followUp = Boolean(runId && (task.laterRuns || []).some(item => item.runId === runId && item.kind === 'follow-up'));
-    if (!parsed && was && was.status !== 'reviewing' && (followUp || was.verdict)) return was;
-    const keep = was ? { findings: was.findings, repairs: was.repairs } : {};
+    const reconciledRepairs = was ? this.reconcileRepairs(c, was.repairs) : [];
+    const currentWas = was && reconciledRepairs !== was.repairs ? { ...was, repairs: reconciledRepairs } : was;
+    if (currentWas && currentWas.status === 'repairing' && followUp) return currentWas;
+    if (!parsed && currentWas && currentWas.status !== 'reviewing' && (followUp || currentWas.verdict)) return currentWas;
+    const keep = was ? { findings: was.findings, repairs: reconciledRepairs } : {};
     let review;
     if (!parsed) review = { ...keep, round, verdict: null, status: 'held', reason: 'The review didn’t end with a verdict, so the cards after it wait. Read its report, then continue anyway or send it back.', at };
     else if (parsed.verdict === 'pass') review = { ...keep, round, verdict: 'pass', status: 'passed', reason: round ? 'The repairs fixed what the review found.' : 'The review found nothing that must change.', at, ...(round ? { earlier: was.findings } : {}), findings: [] };
     else {
       const findings = this.assign(c, card, parsed.findings);
-      if (round >= 1) review = { round, verdict: 'changes', findings, repairs: was?.repairs || [], earlier: was?.findings || [], status: 'held', reason: `The review still found ${plural(findings.length, 'problem')} after the repair round. The cards after it wait for you: continue anyway, or send cards back.`, at };
+      if (round >= 1) review = { round, verdict: 'changes', findings, repairs: reconciledRepairs, earlier: was?.findings || [], status: 'held', reason: `The review still found ${plural(findings.length, 'problem')} after the repair round. The cards after it wait for you: continue anyway, or send cards back.`, at };
       else if (!this.main.execution.allows(c, task.execution, { action: 'review', sequence: true })) review = { round, verdict: 'changes', findings, status: 'held', reason: 'This task’s execution policy doesn’t allow an automatic repair, so the cards after it wait for you.', at };
       else {
         const ids = [...new Set(findings.map(item => item.cardId).filter(Boolean))], repairs = [];
@@ -218,9 +242,11 @@ export class PlanReviews {
       return;
     }
     // Every repair finished: the review checks once more, in its own task, with what each repair did.
-    try { this.again(c, task, card, repairs); save({ repairs, status: 'reviewing', waiting: null, reason: 'Reviewing the repairs.' }); }
+    // Set status to 'reviewing' before starting the run so laterRun records this run as 'rereview', while any user
+    // message sent while status === 'repairing' is recorded as 'follow-up'.
+    try { save({ repairs, status: 'reviewing', waiting: null, reason: 'Reviewing the repairs.' }); this.again(c, task, card, repairs); }
     catch (error) {
-      if (error.status === 409 && /busy|already|at once|slot/i.test(error.message)) { if (review.waiting !== error.message) save({ waiting: clip(error.message, 300) }); return this.later(c, RETRY_MS); }
+      if (error.status === 409 && /busy|already|at once|slot/i.test(error.message)) { save({ repairs, status: 'repairing', waiting: clip(error.message, 300) }); return this.later(c, RETRY_MS); }
       save({ repairs, status: 'held', reason: `The second review couldn’t start: ${clip(error.message, 200)}` });
     }
   }

@@ -194,8 +194,18 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 .board-result-table table { border-collapse: collapse; font-size: 12px; }
 .board-result-table th, .board-result-table td { padding: 4px 8px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
 /* A review card's verdict, findings and repair round (#89). */
-.board-review { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
+.board-review { display: grid; gap: 8px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised); }
+.board-review[data-status=passed] { border-color: color-mix(in srgb, var(--success) 38%, var(--border)); }
+.board-review[data-status=held] { border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); }
+.board-review-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.board-review-badge { flex: none; display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.01em; background: var(--surface-strong); color: var(--text-strong); }
+.board-review-badge[data-tone=done] { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.board-review-badge[data-tone=running] { background: color-mix(in srgb, var(--link) 16%, transparent); color: var(--link); }
+.board-review-badge[data-tone=trouble] { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
 .board-review-lead { margin: 0; color: var(--text-strong); font-weight: 500; line-height: 1.45; }
+.board-review-checked { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.board-review-checked-label { font-weight: 500; }
+.board-review-card-link { font-size: 11.5px; }
 .board-review-findings { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
 .board-review-findings li { line-height: 1.45; overflow-wrap: anywhere; }
 .board-review-problem { display: block; }
@@ -204,6 +214,19 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 .board-review-repair.running { color: var(--link); }
 .board-review-repair.done { color: var(--success); }
 .board-review-repair.failed, .board-review-repair.skipped { color: var(--danger); }
+.board-review-earlier { border-top: 1px solid var(--border); padding-top: 6px; font-size: 12px; }
+.board-review-earlier summary { cursor: pointer; color: var(--muted); font-size: 11.5px; font-weight: 500; }
+.board-review-earlier .board-review-findings { margin-top: 6px; }
+.board-review-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
+.board-role-warning { display: grid; gap: 8px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--warning) 8%, var(--surface)); }
+.board-role-warning[hidden] { display: none; }
+.board-role-warning-text { margin: 0; font-size: 12px; line-height: 1.45; color: var(--text-strong); }
+.board-role-warning-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.board-review-evidence { display: grid; gap: 8px; }
+.board-evidence-card { display: grid; gap: 4px; padding-top: 6px; border-top: 1px solid var(--border); }
+.board-evidence-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; }
+.board-evidence-card-meta { color: var(--muted); font-size: 11.5px; }
+.board-evidence-commands { display: grid; gap: 4px; padding-top: 6px; border-top: 1px solid var(--border); }
 .board-card-top > .orchestration-step-role[data-shared=true] { border-style: dashed; }
 .board-history-box summary { color: var(--muted); cursor: pointer; font-size: 11.5px; }
 .board-history { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 11.5px; line-height: 1.7; }

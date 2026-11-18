@@ -675,12 +675,50 @@
     const check = node('input', 'board-input'); check.value = draft.check; check.maxLength = 300; check.placeholder = 'npm test'; check.setAttribute('aria-label', 'Test command'); check.disabled = locked;
     check.addEventListener('input', () => { draft.check = check.value; changed(); });
     // The role, in the colour it has on the card in Columns and Canvas, above the title: who the agent works as.
-    const rolePick = choose('Role', ROLES, draft.role, value => { draft.role = value; rolePick.dataset.role = value; });
+    let producesPick = null;
+    const roleWarn = slot(node('div', 'board-role-warning'), 'lead');
+    const drawRoleWarn = () => {
+      const files = fileList(draft.files), wantsWrite = draft.role === 'reviewer' && (files.length > 0 || draft.artifact === 'diff');
+      roleWarn.hidden = !wantsWrite;
+      if (!wantsWrite) { roleWarn.replaceChildren(); return; }
+      const note = node('p', 'board-role-warning-text', `Reviewer cards are read-only and cannot create or edit files${files.length ? ` (${files.join(', ')})` : ''}. Change role to Builder?`);
+      const row = node('div', 'board-role-warning-actions');
+      const canSendBack = Boolean(card && !card.draft && card.column === 'review' && (card.result?.files || 0) === 0);
+      if (canSendBack) {
+        const fixAndRetry = button('Change to Builder & send back', async () => {
+          const nextArtifact = draft.artifact === 'findings' || card.artifact === 'findings' ? 'diff' : (draft.artifact || card.artifact);
+          const edited = await act(`/api/board/cards/${card.id}/edit`, { role: 'builder', artifact: nextArtifact, revision: card.revision });
+          if (!edited) return;
+          await act(`/api/board/cards/${card.id}/send-back`, { reason: 'Changed role from Reviewer to Builder so it can write its files.' }, () => {
+            if (selected === card.id && cardBy(card.id)) draft = editable(cardBy(card.id));
+            drawn = null;
+            api.announce(`“${card.title}” is now a Builder card in Ready.`);
+          });
+        }, 'primary-button');
+        fixAndRetry.disabled = busy || locked;
+        row.append(fixAndRetry);
+      }
+      const switchRole = button('Change role to Builder', () => {
+        draft.role = 'builder';
+        if (draft.artifact === 'findings') draft.artifact = 'diff';
+        rolePick.value = 'builder'; rolePick.dataset.role = 'builder';
+        if (producesPick) producesPick.value = draft.artifact || '';
+        drawRoleWarn();
+        if (card && selected !== 'new' && draft.title.trim()) save$();
+        else changed();
+      }, canSendBack ? 'secondary-button' : 'primary-button');
+      switchRole.disabled = busy || locked;
+      row.append(switchRole);
+      roleWarn.replaceChildren(note, row);
+    };
+    const rolePick = choose('Role', ROLES, draft.role, value => { draft.role = value; rolePick.dataset.role = value; drawRoleWarn(); });
     rolePick.className = 'orchestration-step-role board-role-pick'; rolePick.dataset.role = draft.role;
     rolePick.title = 'Role: told to the agent, so it works as that specialist. QA and Reviewer cards check the work before them.';
     const roleRow = slot(node('div', 'board-role-row'), 'lead'); roleRow.append(rolePick);
-    parts.push(roleRow);
-    parts.push(slot(labelled('Test command', check, 'Runs when the agent finishes. If it passes, the cards after this one can start; if it fails, they wait for you. Empty uses the command marked in Run.'), 'side'), slot(labelled('Produces', choose('What it produces', PRODUCES, draft.artifact || '', value => { draft.artifact = value || null; }), 'Its report is passed to the cards after it as this.'), 'side'), slot(labelled('Group', groupRow, 'A phase. The List runs and stops a group together.'), 'side'));
+    producesPick = choose('What it produces', PRODUCES, draft.artifact || '', value => { draft.artifact = value || null; drawRoleWarn(); });
+    drawRoleWarn();
+    parts.push(roleRow, roleWarn);
+    parts.push(slot(labelled('Test command', check, 'Runs when the agent finishes. If it passes, the cards after this one can start; if it fails, they wait for you. Empty uses the command marked in Run.'), 'side'), slot(labelled('Produces', producesPick, 'Its report is passed to the cards after it as this.'), 'side'), slot(labelled('Group', groupRow, 'A phase. The List runs and stops a group together.'), 'side'));
     // Labels are only for you to sort by: the agent isn't told them.
     labelsField.dataset.slot = 'side'; labelsField.append(node('span', 'board-field-note', 'Only for you to sort by. The agent isn’t told them.'));
     parts.push(labelsField, privacyField);
@@ -1052,26 +1090,56 @@
     else if (state?.detail && watching) parts.push(node('p', 'board-status', state.detail));
     if (watching) { const lines = liveLines(card, watching, { withWho: true }); lines.classList.add('board-watch'); lines.setAttribute('aria-label', 'This card’s run'); parts.push(lines); }
     if (card.column === 'ready' && card.reason) parts.push(node('p', 'board-status trouble', card.reason));
-    if (card.result && ['review', 'done'].includes(card.column)) parts.push(resultBox(card));
     const findings = reviewBox(card); if (findings) parts.push(findings);
+    if (card.result && ['review', 'done'].includes(card.column)) parts.push(resultBox(card));
     if (card.column === 'done' && card.acceptedAt) parts.push(node('p', 'board-status done', `Accepted by you, ${when(card.acceptedAt)}.`));
     return parts;
   }
   // A review card's verdict (#89): what it found, on which card, and how the one repair round went.
   const REPAIR = { pending: 'Waiting to repair', running: 'Repairing', done: 'Repaired', failed: 'Repair didn’t finish', skipped: 'Not repaired' };
+  function reviewFindingRow(item) {
+    const row = node('li');
+    row.append(node('span', 'board-review-problem', item.problem));
+    const meta = [item.cardTitle ? `On “${item.cardTitle}”` : item.card ? `Names “${item.card}”, which it didn’t check` : 'No card named', item.file, item.fix ? `Fix: ${item.fix}` : ''].filter(Boolean).join(' · ');
+    if (meta) row.append(node('span', 'board-review-meta', meta));
+    return row;
+  }
   function reviewBox(card) {
     const review = card.taskState?.review, independent = card.taskState?.notIndependent ? node('p', 'board-result-facts', 'Not independent: it ran on an agent that built what it checks, as no other agent could take it.') : null;
     if (!review) return independent;
     const box = node('section', 'board-review'); box.setAttribute('aria-label', 'Review');
+    const [badgeText, badgeTone] = review.status === 'passed' ? [review.round ? 'Passed after repair' : 'Passed', 'done']
+      : review.status === 'repairing' ? ['Repairing', 'running']
+      : review.status === 'reviewing' ? ['Reviewing again', 'running']
+      : review.verdict === 'changes' ? [review.accepted ? 'Changes needed · continued' : 'Changes needed', 'trouble']
+      : [review.accepted ? 'No verdict · continued' : 'No verdict', 'trouble'];
+    box.dataset.status = review.status || '';
+    const head = node('div', 'board-review-head'), badge = node('span', 'board-review-badge', badgeText);
+    badge.dataset.tone = badgeTone;
     const lead = review.status === 'passed' ? (review.round ? `Passed after one repair round. ${plural(review.earlier, 'problem')} found the first time.` : 'Passed: nothing must change before the cards after it build on it.')
       : review.status === 'repairing' ? `Found ${plural(review.findings.length, 'problem')}. One repair round, then a second review.`
       : review.status === 'reviewing' ? 'Reviewing the repairs. This is the last review round.'
       : review.verdict ? `${review.round ? 'Still found' : 'Found'} ${plural(review.findings.length, 'problem')}.` : 'It didn’t end with a verdict.';
-    box.append(node('p', 'board-review-lead', lead));
+    head.append(badge, node('p', 'board-review-lead', lead));
+    box.append(head);
+    const checked = (review.checked?.length ? review.checked : card.checkedCards) || [];
+    if (checked.length) {
+      const checkedRow = node('div', 'board-review-checked');
+      checkedRow.append(node('span', 'board-review-checked-label', 'Cards audited:'));
+      for (const item of checked) {
+        const exists = cardBy(item.id);
+        if (exists) {
+          const link = button(`“${item.title}”`, () => select(item.id), 'text-link board-review-card-link');
+          link.title = `Open “${item.title}”`;
+          checkedRow.append(link);
+        } else checkedRow.append(node('span', 'board-review-card-name', `“${item.title}”`));
+      }
+      box.append(checkedRow);
+    }
     if (review.reason && review.status !== 'passed') box.append(node('p', 'board-result-facts', review.waiting || review.reason));
     if (review.findings.length) {
       const list = node('ol', 'board-review-findings'); list.setAttribute('aria-label', 'Findings');
-      list.append(...review.findings.map(item => { const row = node('li'); row.append(node('span', 'board-review-problem', item.problem)); const meta = [item.cardTitle ? `On “${item.cardTitle}”` : item.card ? `Names “${item.card}”, which it didn’t check` : 'No card named', item.file, item.fix ? `Fix: ${item.fix}` : ''].filter(Boolean).join(' · '); if (meta) row.append(node('span', 'board-review-meta', meta)); return row; }));
+      list.append(...review.findings.map(reviewFindingRow));
       box.append(list);
     }
     if (review.repairs.length) {
@@ -1079,7 +1147,35 @@
       list.append(...review.repairs.map(item => node('li', `board-review-repair ${item.status}`, `${REPAIR[item.status] || item.status}: “${item.title}”${item.tests ? ` · ${TESTS[item.tests]?.toLowerCase() || `tests ${item.tests}`}` : ''}${item.reason ? ` · ${item.reason}` : ''}`)));
       box.append(list);
     }
+    if (review.round > 0 && review.earlierFindings?.length) {
+      const earlierBox = node('details', 'board-review-earlier');
+      earlierBox.append(node('summary', '', `Fixed in repair round (${review.earlierFindings.length})`));
+      const list = node('ol', 'board-review-findings');
+      list.append(...review.earlierFindings.map(reviewFindingRow));
+      earlierBox.append(list);
+      box.append(earlierBox);
+    }
     if (independent) box.append(independent);
+    if (card.column === 'review' && !['repairing', 'reviewing'].includes(review.status)) {
+      const quick = node('div', 'board-review-actions');
+      const byTarget = new Map();
+      for (const item of review.findings || []) {
+        const target = item.cardId && cardBy(item.cardId);
+        if (target && ['review', 'done'].includes(target.column)) {
+          if (!byTarget.has(target.id)) byTarget.set(target.id, { target, list: [] });
+          byTarget.get(target.id).list.push(item);
+        }
+      }
+      for (const { target, list } of byTarget.values()) {
+        const sendTarget = button(`Send back “${target.title}” with findings`, () => {
+          const reason = `From “${card.title}”:\n` + list.map(f => `- ${f.problem}${f.file ? ` (${f.file})` : ''}${f.fix ? ` — Fix: ${f.fix}` : ''}`).join('\n');
+          act(`/api/board/cards/${target.id}/send-back`, { reason }, () => api.announce(`“${target.title}” is back in Ready with the findings.`));
+        }, 'secondary-button');
+        sendTarget.disabled = busy;
+        quick.append(sendTarget);
+      }
+      if (quick.children.length) box.append(quick);
+    }
     return box;
   }
   function history(card) {
@@ -1249,6 +1345,56 @@
     if (currentReply && fileCount > 0) return [node('p', 'board-result-files-note', 'Detailed file list wasn’t saved for this earlier run.')];
     return [];
   }
+  function evidenceBox(card, currentReply) {
+    if (!['reviewer', 'qa'].includes(card.role) || !currentReply?.inspected) return [];
+    const audited = Array.isArray(currentReply.inspected.cards) ? currentReply.inspected.cards : [];
+    const commands = Array.isArray(currentReply.inspected.commands) ? currentReply.inspected.commands : [];
+    const withEvidence = audited.filter(item => item.files?.length || item.tests || item.testCommand);
+    if (!withEvidence.length && !commands.length) return [];
+    const box = node('details', 'board-result-files-box board-review-evidence');
+    const totalFiles = audited.reduce((sum, item) => sum + (item.files?.length || 0), 0);
+    const summaryParts = [totalFiles ? plural(totalFiles, 'audited file') : '', commands.length ? plural(commands.length, 'check command') : ''].filter(Boolean);
+    const summary = node('summary');
+    summary.append(node('span', '', summaryParts.length ? `Audited diffs & evidence (${summaryParts.join(' · ')})` : 'Audited diffs & evidence'));
+    box.append(summary);
+    for (const entry of withEvidence) {
+      const group = node('div', 'board-evidence-card'), head = node('div', 'board-evidence-card-head');
+      const target = cardBy(entry.id);
+      if (target) {
+        const openBtn = button(`“${entry.title}”`, () => select(entry.id), 'text-link board-review-card-link');
+        openBtn.title = `Open “${entry.title}”`;
+        head.append(openBtn);
+      } else head.append(node('strong', '', `“${entry.title}”`));
+      if (entry.tests) {
+        const testText = (TESTS[entry.tests] || `Tests ${entry.tests}`) + (entry.testCommand ? ` (${entry.testCommand})` : '');
+        head.append(node('span', 'board-evidence-card-meta', testText));
+      }
+      group.append(head);
+      if (entry.files?.length) {
+        const ul = node('ul', 'board-result-files');
+        ul.append(...entry.files.map(file => {
+          const item = node('li', 'task-merge-file');
+          const fileHead = node(file.diff ? 'summary' : 'div', 'task-merge-head');
+          const pathEl = node('span', 'task-merge-path', file.path); pathEl.title = file.path;
+          fileHead.append(pathEl);
+          if (file.change && FILE_CHANGE[file.change]) fileHead.append(node('span', 'task-merge-change', FILE_CHANGE[file.change]));
+          if (file.added) fileHead.append(node('span', 'line-count added', `+${file.added}`));
+          if (file.removed) fileHead.append(node('span', 'line-count removed', `−${file.removed}`));
+          if (file.diff) { const details = node('details'); details.append(fileHead, node('pre', 'task-merge-diff', file.diff)); item.append(details); }
+          else item.append(fileHead);
+          return item;
+        }));
+        group.append(ul);
+      }
+      box.append(group);
+    }
+    if (commands.length) {
+      const cmdBox = node('div', 'board-evidence-commands');
+      cmdBox.append(node('span', 'board-field-label', `Commands run by this review (${commands.length})`), node('pre', 'plan-drawer-output', commands.join('\n')));
+      box.append(cmdBox);
+    }
+    return [box];
+  }
   function resultBox(card) {
     const result = card.result, empty = card.taskState?.hasWorktree && card.taskState.copyFiles === 0, files = empty ? 0 : result.files, tests = result.tests;
     const ok = ['complete', 'integrated', 'kept'].includes(result.status);
@@ -1272,7 +1418,7 @@
     box.append(head, chips);
     const usage = usageWords(card.taskState?.usage);
     if (usage.length) box.append(node('p', 'board-result-usage', `Used: ${usage.join(' · ')}`));
-    box.append(...changedFilesBox(card, currentReply, files, integration));
+    box.append(...changedFilesBox(card, currentReply, files, integration), ...evidenceBox(card, currentReply));
     // The whole answer, read when the card opens; the short summary stands in until then.
     // The report stays the report: questions you asked in its task afterwards are listed after it, and only the newest reply
     // offers to answer what it asks.
@@ -1395,6 +1541,7 @@
         files: Array.isArray(result.files) ? result.files : [],
         filesSource: result.filesSource || null,
         integration: result.integration || null,
+        inspected: result.inspected || null,
       });
     }
     catch { replying.delete(id); return; }

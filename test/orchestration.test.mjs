@@ -156,6 +156,7 @@ test('a planner that lists too many files loses the extra ones, with a note on t
   assert.deepEqual(result.steps[0].files, files.slice(0, 12));
   assert.equal(result.steps[0].moreFiles, 2);
   assert.match(reviewDraft(result.steps).s1.join(' '), /listed 2 more files than a card holds, so only the first 12 are kept/);
+  assert.match(reviewDraft([{ id: 's1', title: 'Write docs', instructions: 'Write output/audit.md.', role: 'reviewer', files: ['output/audit.md'], dependsOn: [], done: ['File written'] }]).s1.join(' '), /It is a review card, which only checks earlier cards and changes no files itself\. Change its role to Builder/);
   // A list you edit yourself is still held to the limit.
   assert.throws(() => validateSteps([{ ...step('s1'), files: files.slice(0, 13) }]), /List at most 12 files/);
 });

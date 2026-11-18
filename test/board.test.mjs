@@ -1491,10 +1491,11 @@ test('continuing anyway lets the cards after a card go while its Plan update is 
 
 test('a follow-up asked in a finished card’s task is listed after its report, and a review’s verdict stands without a new one (#89)', async t => {
   const env = setup(t);
-  const card = env.add({ title: 'Review the API', column: 'ready', role: 'reviewer' });
+  const apiCard = env.add({ title: 'Build the API', column: 'ready', files: ['src/api.js'] }); env.card(apiCard.id).column = 'review';
+  const card = env.add({ title: 'Review the API', column: 'ready', role: 'reviewer', dependsOn: [apiCard.id] });
   const message = (role, runId, text) => ({ id: `${runId}-${role}`, role, runId, text, createdAt: new Date().toISOString() });
   const task = { id: 'task-followup', status: 'complete', board: { cardId: card.id }, review: { verdict: 'pass', status: 'passed', round: 0, findings: [], repairs: [] }, laterRuns: [{ runId: 'run-2', kind: 'follow-up' }] };
-  const lane = { c: { lastRun: { id: 'run-2' }, messages: [message('user', 'run-1', 'Review the API'), message('assistant', 'run-1', 'REPORT: all good.\n\n```json\n{"verdict": "pass"}\n```'), message('user', 'run-2', 'Save it to a file?'), message('assistant', 'run-2', 'Thanks, saved.')] } };
+  const lane = { approvals: { pendingCount: 0 }, broker: { running: () => false, pendingCount: () => 0 }, c: { lastRun: { id: 'run-2' }, messages: [message('user', 'run-1', 'Review the API'), message('assistant', 'run-1', 'REPORT: all good.\n\n```json\n{"verdict": "pass"}\n```'), message('user', 'run-2', 'Save it to a file?'), message('assistant', 'run-2', 'Thanks, saved.')] } };
   env.broker.tasks.lanes.set(task.id, lane);
   const thread = env.board.thread(env.c, task);
   assert.match(thread.report.text, /^REPORT/);
@@ -1507,6 +1508,25 @@ test('a follow-up asked in a finished card’s task is listed after its report, 
   try {
     assert.equal(env.board.reviews.ended(env.c, task, 'Thanks, saved.'), task.review);
     assert.deepEqual(saved, []);
+    // A user follow-up while a review is waiting on a repair round is recorded as a follow-up (not a second review), and once the repaired task finishes its repair entry reconciles to done.
+
+    const apiTask = { id: 'task-api-repaired', status: 'complete', tests: 'passed', endedAt: '2026-11-18T10:00:00.000Z', board: { cardId: apiCard.id }, stepResult: { files: ['src/api.js'] }, testCommand: 'npm test' };
+    env.c.parallelTasks = [apiTask, task];
+    env.card(apiCard.id).task = apiTask.id;
+    env.card(card.id).task = task.id;
+    task.review = { verdict: 'changes', status: 'repairing', round: 0, findings: [{ card: 'Build the API', cardId: apiCard.id, cardTitle: 'Build the API', problem: 'Missing check.', fix: 'Add it.', file: 'src/api.js' }], repairs: [{ cardId: apiCard.id, title: 'Build the API', count: 1, status: 'running' }] };
+    lane.c.lastRun = { id: 'run-3' };
+    env.board.laterRun(env.c, task);
+    assert.equal(task.laterRuns.at(-1).kind, 'follow-up');
+    const reconciled = env.board.reviews.ended(env.c, task, 'Still waiting on the repair.');
+    assert.equal(reconciled.repairs[0].status, 'done');
+    assert.equal(reconciled.repairs[0].tests, 'passed');
+    const pub = env.board.list(env.c).find(item => item.id === card.id);
+    assert.deepEqual(pub.checkedCards, [{ id: apiCard.id, title: 'Build the API', role: 'builder', column: 'review' }]);
+    const ans = env.board.answer(env.c, card.id);
+    assert.equal(ans.inspected.cards.length, 1);
+    assert.equal(ans.inspected.cards[0].id, apiCard.id);
+    assert.deepEqual(ans.inspected.cards[0].files.map(f => f.path), ['src/api.js']);
   } finally { env.broker.tasks.update = update; env.broker.tasks.lanes.delete(task.id); }
 });
 
