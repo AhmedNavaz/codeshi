@@ -8091,12 +8091,15 @@ test('a card face keeps * and _ inside inline code and drops Markdown markers th
   const notes = '## Math\n> Use `multiply(a, b) { return a * b; }` and `snake_case_name`, with **bold** and _slanted_ words.';
   const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, cards: [
     { id: 'a0000000-0000-4000-8000-000000000001', title: 'Multiply', column: 'backlog', notes, priority: 'normal', agent: null, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [] },
+    { id: 'a0000000-0000-4000-8000-000000000002', title: 'Rename', column: 'backlog', notes: 'Rename `oldName` > `newName`, then run `npm test` # and ship\n> after a quote', priority: 'normal', agent: null, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 2, attempts: [] },
   ] };
   ui.setIntercept((request, next) => request.path === '/api/board' ? response(board) : next());
   await ui.window.relayUI.refresh(); await flush();
   ui.$('open-plan').click(); await flush();
-  const gist = ui.$('board-columns').querySelectorAll('.board-card-notes')[0].textContent;
+  const [gist, renamed] = ui.$('board-columns').querySelectorAll('.board-card-notes').map(item => item.textContent);
   assert.equal(gist, 'Math Use multiply(a, b) { return a * b; } and snake_case_name, with bold and slanted words.');
+  // A > or # after a code span partway along a line is text, not a quote or heading, so the words either side stay apart.
+  assert.equal(renamed, 'Rename oldName > newName, then run npm test # and ship after a quote');
 });
 
 test('the board shows a workspace’s cards in five columns, runs exactly the cards chosen and leaves accepting to you (#132)', async () => {

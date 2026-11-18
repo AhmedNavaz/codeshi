@@ -187,9 +187,11 @@
   // A drafted card (#162): a new card, a change to a card already on the Plan, or a card to remove or to merge into another.
   // The preview line of a card's notes: Markdown markers go where they format (headings, quotes, emphasis, backticks) and stay where they are text, as in `a * b` or snake_case_name.
   const cardGist = notes => {
-    const plain = text => text.replace(/^[ \t]*(?:#{1,6}[ \t]+|>+[ \t]?)/gm, '')
+    // Heading and quote markers count only at the start of a line; text that follows an inline code span on the same line keeps them, as in `old` > `new`.
+    const plain = (text, lineStart) => text.replace(/(^|\n)[ \t]*(?:#{1,6}[ \t]+|>+[ \t]?)/g, (marker, newline) => newline || lineStart ? newline : marker)
       .replace(/(\*{1,3})(?=\S)([^*\n]*?\S)\1/g, '$2').replace(/(?<![\w*])(_{1,3})(?=\S)([^_\n]*?\S)\1(?![\w*])/g, '$2');
-    return String(notes || '').split(/(```[\s\S]*?(?:```|$)|`[^`\n]+`)/).map((part, index) => index % 2 === 0 ? plain(part)
+    const parts = String(notes || '').split(/(```[\s\S]*?(?:```|$)|`[^`\n]+`)/);
+    return parts.map((part, index) => index % 2 === 0 ? plain(part, index === 0 || parts[index - 1].endsWith('\n'))
       : part.startsWith('```') ? part.replace(/^```[^\n]*\n?/, '').replace(/```$/, '') : part.slice(1, -1)).join('').replace(/\s+/g, ' ').trim();
   };
   const draftKind = card => !card.draft ? null : card.draft.remove ? 'remove' : card.draft.was ? 'change' : 'new';
