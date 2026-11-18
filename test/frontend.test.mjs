@@ -8086,6 +8086,53 @@ test('Run tests on an applied patch confirms the saved command and offers undo a
   assert.ok(text.indexOf('Failed') < text.indexOf('I read those files'), 'the latest result comes before the next run');
 });
 
+test('the Plan drawer keeps Tab inside a card dialog, focuses a control that works on a working card, and gives focus back to what opened it (#176)', async () => {
+  const ui = await browser({ boardUI: true, wide: true });
+  const ids = { ready: 'b0000000-0000-4000-8000-000000000001', busy: 'b0000000-0000-4000-8000-000000000002' };
+  const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'frontend', name: 'Frontend' }], limits: {}, cards: [
+    card(ids.ready, 'Agree the API', 'ready', { at: { x: 0, y: 0 } }),
+    card(ids.busy, 'Speed up search', 'doing', { at: { x: 400, y: 0 }, taskState: { id: 't1', status: 'running', provider: 'codex' } }),
+  ] };
+  ui.setIntercept((request, next) => request.path === '/api/board' ? response(board) : next());
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  const drawer = ui.$('board-drawer'), close = ui.$('board-drawer-close');
+  // This test page builds each element on its own, so put the drawer's parts inside it as the real page has them.
+  drawer.append(ui.$('board-drawer-body'), close);
+  const tab = shiftKey => { const event = new UIEvent('keydown', { key: 'Tab', shiftKey }); drawer.dispatchEvent(event); return event; };
+  const enabled = node => node && !node.disabled && drawer.contains(node);
+  const faceOf = id => ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id);
+  // A working card has disabled fields: focus lands on a control that takes it.
+  faceOf(ids.busy).click(); await flush();
+  assert.equal(drawer.getAttribute('aria-modal'), 'true');
+  assert.ok(enabled(ui.document.activeElement), 'Opening a working card focuses an enabled control in the drawer.');
+  // Tab wraps from the last control to the first, and Shift+Tab from the first to the last.
+  close.focus();
+  const wrapped = tab(false);
+  assert.equal(wrapped.defaultPrevented, true);
+  const first = ui.document.activeElement;
+  assert.ok(enabled(first) && first !== close, 'Tab from the last control goes to the first one inside the drawer.');
+  assert.equal(tab(true).defaultPrevented, true);
+  assert.equal(ui.document.activeElement, close, 'Shift+Tab from the first control goes to the last.');
+  assert.equal(tab(false).defaultPrevented, true);
+  // Closing the card returns focus to it.
+  close.click(); await flush();
+  assert.equal(ui.document.activeElement, faceOf(ids.busy));
+  // New card, Run Ready cards and Schedules move focus in and give it back to their button.
+  for (const [button, title] of [['board-new', /^New card/], ['board-run-ready', /^Run Ready cards$/], ['board-schedules', /^Schedules$/]]) {
+    const opener = ui.$(button); opener.focus(); opener.click(); await flush();
+    assert.match(ui.$('board-drawer-title').textContent, title);
+    assert.ok(drawer.contains(ui.document.activeElement), `${button} moves focus into the drawer.`);
+    close.click(); await flush();
+    assert.equal(ui.document.activeElement, opener, `Closing the drawer returns focus to ${button}.`);
+  }
+  // Escape closes it the same way.
+  const run = ui.$('board-run-ready'); run.focus(); run.click(); await flush();
+  ui.$('board-view').dispatchEvent(new UIEvent('keydown', { key: 'Escape' })); await flush();
+  assert.equal(ui.document.activeElement, run);
+});
+
 test('the board shows a workspace’s cards in five columns, runs exactly the cards chosen and leaves accepting to you (#132)', async () => {
   const ui = await browser({ boardUI: true, wide: true }), posted = [];
   const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
