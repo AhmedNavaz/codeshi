@@ -19,3 +19,4 @@ These documents hold background design exploration and planned work, not guarant
 
 - [Roadmap details](roadmap-details.md) — detailed plans behind items on [ROADMAP.md](../ROADMAP.md) (One Plan, Flow, routing, task board, schedules, designer).
 - [Core roadmap](core-roadmap.md) — deeper technical specifications for orchestration, routing evaluations, shared budgets, and isolation.
+- [Multiple provider accounts](provider-accounts.md) — proposal for account profiles, quota-aware continuation, and account isolation ([#186](https://github.com/AhmedNavaz/codeshi/issues/186)).
