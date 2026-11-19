@@ -218,6 +218,8 @@
     }
     host.append(node('p',app ? 'Finished and Stopped, the volume, the banner style and phone notifications are in Settings › Alerts.' : 'Banners and the Dock icon are part of the desktop app. Finished, Stopped and the volume are in Settings › Alerts.','setup-footnote'));
   }
+  // The folders typed under Enter folder paths instead, one per line.
+  const typedFolders = () => [...new Set(projectPaths.split('\n').map(text => text.trim()).filter(Boolean))];
   async function createWorkspace(folders, name) {
     const project = await api.post('/api/projects',{folders,...(name ? {name} : {})},null);
     await api.refreshProjects(); await api.selectProject(project.id);
@@ -282,7 +284,7 @@
     const paths = field('Folder paths, one per line','textarea',projectPaths); paths.input.rows = 2; paths.input.placeholder = '~/projects/frontend\n~/projects/backend';
     paths.input.addEventListener('input',()=>{projectPaths=paths.input.value;});
     const manual = node('details',undefined,'setup-advanced setup-paths'); manual.open = !desktop || Boolean(projectPaths);
-    manual.append(node('summary','Enter folder paths instead'),paths.wrap,button('Create workspace',async()=>{const folders=[...new Set(projectPaths.split('\n').map(text=>text.trim()).filter(Boolean))];if(!folders.length)throw Error('Enter at least one project folder.');await save();await create(folders);}));
+    manual.append(node('summary','Enter folder paths instead'),paths.wrap,button('Create workspace',async()=>{const folders=typedFolders();if(!folders.length)throw Error('Enter at least one project folder.');await save();await create(folders);}));
     host.append(manual);
     if (!count) host.append(node('p','You can also skip this and add folders later from the sidebar.','setup-footnote'));
     // Moving from another computer (#160): a Codeshi backup brings its workspaces, conversations and settings.
@@ -337,7 +339,10 @@
     event.preventDefault(); $('setup-next').click();
   });
   $('setup-back').addEventListener('click',()=>perform(()=>step === 0 && !reviewing ? show('welcome') : move(Math.max(0,step-1))));
-  $('setup-next').addEventListener('click',()=>perform(async()=>{if(step<last)return move(step+1);if(reviewing)return complete();await save();show('done');}));
+  $('setup-next').addEventListener('click',()=>perform(async()=>{
+    // Typed folder paths are not dropped: Continue creates the workspace from them, as Create workspace does, and stays here if that fails.
+    if(step===STEP.workspace&&!createdId&&typedFolders().length)await createWorkspace(typedFolders(),projectName.trim());
+    if(step<last)return move(step+1);if(reviewing)return complete();await save();show('done');}));
   window.addEventListener('relay-state',()=>{if(dialog.open && screen === 'flow' && step===STEP.agents && !busy && connectionSignature!==connectionState())render();});
   window.addEventListener('relay-account',()=>{if(dialog.open && screen === 'flow' && step===STEP.agents && !busy)render();});
   const ready = api.api('/api/preferences',{},null).then(value=>{

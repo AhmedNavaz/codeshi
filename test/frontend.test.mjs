@@ -1242,6 +1242,26 @@ test('setup resumes its saved step without importing, and failed saves keep the 
   ui.$('setup-back').click();await flush();assert.match(ui.$('setup-step-status').textContent,/4 of 5/);assert.equal(ui.$('setup-error').hidden,false);assert.match(ui.$('setup-error').textContent,/could not be written/);
 });
 
+test('setup creates the workspace from folder paths typed under Enter folder paths instead when Continue is pressed (#165)',async()=>{
+  const ui=await browser({empty:true,existing:false,setup:true,insights:true}),creations=()=>ui.requests.filter(request=>request.path==='/api/projects'&&request.method==='POST');
+  ui.document.querySelector('.onboarding-cta').click();await flush();
+  // Continue with nothing typed still skips the workspace, as before.
+  assert.equal(ui.$('setup-content').querySelectorAll('textarea').length,1,'The folder paths field is shown.');
+  const typeInto=text=>{const field=ui.$('setup-content').querySelectorAll('textarea')[0];field.value=text;field.dispatchEvent(new UIEvent('input'));};
+  typeInto('  ');ui.$('setup-next').click();await flush();
+  assert.equal(creations().length,0,'Blank lines create nothing.');assert.match(ui.$('setup-step-status').textContent,/2 of 5/);
+  ui.$('setup-back').click();await flush();assert.match(ui.$('setup-step-status').textContent,/1 of 5/);
+  // Typed paths are used by Continue, once, before the next step shows.
+  typeInto(['/workspace/example/frontend','',' /workspace/example/backend '].join(String.fromCharCode(10)));
+  ui.$('setup-next').click();await flush();await flush();
+  assert.equal(creations().length,1,'Continue creates the workspace from the typed paths.');
+  assert.deepEqual(creations()[0].body.folders,['/workspace/example/frontend','/workspace/example/backend']);
+  assert.match(ui.$('setup-step-status').textContent,/2 of 5/,'It then moves on.');
+  ui.$('setup-back').click();await flush();
+  assert.match(ui.$('setup-content').textContent,/frontend is ready/,'Going back shows the workspace that was made.');
+  assert.equal(creations().length,1,'Coming back and pressing Continue again does not create it twice.');
+  ui.$('setup-next').click();await flush();assert.equal(creations().length,1);
+});
 test('setup keeps keyboard focus on a choice when the step is rebuilt, and tells a screen reader what the folders are',async()=>{
   const ui=await browser({empty:true,existing:false,desktop:true,setup:true,insights:true}),focused=()=>ui.document.activeElement;
   await flush();ui.document.querySelector('.onboarding-cta').click();await flush();
