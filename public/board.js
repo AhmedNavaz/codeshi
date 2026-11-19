@@ -672,7 +672,7 @@
     group.addEventListener('input', () => { draft.group = group.value; changed(); });
     const groupRow = node('div', 'board-group-edit'); groupRow.append(group, groups);
     const choose = (label, options, current, set) => { const pick = node('select', 'board-input'); pick.setAttribute('aria-label', label); pick.disabled = locked; pick.append(...options.map(([value, text]) => { const option = node('option', '', text); option.value = value; return option; })); pick.value = current; pick.addEventListener('change', () => { set(pick.value); changed(); }); return pick; };
-    const check = node('input', 'board-input'); check.value = draft.check; check.maxLength = 300; check.placeholder = 'npm test'; check.setAttribute('aria-label', 'Test command'); check.disabled = locked;
+    const check = node('input', 'board-input'); check.value = draft.check; check.maxLength = 300; check.placeholder = 'For example, make test or pytest'; check.setAttribute('aria-label', 'Test command'); check.disabled = locked;
     check.addEventListener('input', () => { draft.check = check.value; changed(); });
     // The role, in the colour it has on the card in Columns and Canvas, above the title: who the agent works as.
     let producesPick = null;

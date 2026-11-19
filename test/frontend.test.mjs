@@ -8149,6 +8149,23 @@ test('the Plan drawer keeps Tab inside a card dialog, focuses a control that wor
   assert.equal(ui.document.activeElement, run);
 });
 
+test('the Plan drawer’s Test command field does not assume an npm project (#174)', async () => {
+  const ui = await browser({ boardUI: true, wide: true });
+  const id = 'b0000000-0000-4000-8000-000000000001';
+  const board = { revision: 1, access: { mode: 'edit', approvalPolicy: 'ask' }, folders: [{ id: 'docs', name: 'Docs' }], limits: {}, cards: [
+    { id, title: 'Write the guide', column: 'ready', notes: '', priority: 'normal', agent: { provider: 'codex', model: null, effort: null }, folderId: 'docs', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [] },
+  ] };
+  ui.setIntercept((request, next) => request.path === '/api/board' ? response(board) : next());
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush();
+  ui.$('board-columns').querySelectorAll('.board-card').find(item => item.dataset.card === id).click(); await flush();
+  const field = ui.$('board-drawer-body').querySelectorAll('input').find(input => input.getAttribute('aria-label') === 'Test command');
+  assert.ok(field, 'The card drawer has a Test command field.');
+  assert.doesNotMatch(field.placeholder, /npm/, 'A workspace with no package.json is not told to run npm.');
+  assert.equal(field.placeholder, 'For example, make test or pytest');
+  assert.equal(field.value, '', 'Leaving it empty still falls back to the command marked in Run.');
+});
+
 test('the board shows a workspace’s cards in five columns, runs exactly the cards chosen and leaves accepting to you (#132)', async () => {
   const ui = await browser({ boardUI: true, wide: true }), posted = [];
   const card = (id, title, column, extra = {}) => ({ id, title, column, notes: '', priority: 'normal', agent: { provider: 'codex', model: null, effort: null }, folderId: 'frontend', dependsOn: [], checks: [], revision: 1, order: 1, attempts: [], ...extra });
