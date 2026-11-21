@@ -86,7 +86,7 @@ function realXterm(){
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
 async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,experimentalUI=false,splitUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
-  const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
+  const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[],copiedTexts=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
   const awakeChanges=[],menuListeners=[],menuStates=[];
@@ -265,7 +265,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   class Range{setStart(node,offset){this.startContainer=node;this.startOffset=offset;}setEnd(node,offset){this.endContainer=node;this.endOffset=offset;}getBoundingClientRect(){return this.startContainer.parentNode.getBoundingClientRect();}}
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
   const highlights=new Map();document.createRange=()=>new Range();
-  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,clearInterval:id=>timers.delete(id),cancelAnimationFrame:()=>{},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async()=>{}}}});
+  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,clearInterval:id=>timers.delete(id),cancelAnimationFrame:()=>{},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async text=>{copiedTexts.push(String(text));}}}});
   // The page's words (#27): English unless a test loads a catalog, as /locale.js does.
   vm.runInContext(fs.readFileSync(new URL('../public/i18n.js',import.meta.url),'utf8'),context,{filename:'public/i18n.js'});if(locale)window.codeshiText.load(locale);
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
@@ -331,7 +331,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,previewCloses,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,previewCloses,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,copiedTexts,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -8848,6 +8848,47 @@ test('the side panel tabs keep one Tab stop, move with the arrow keys and keep f
   assert.equal(left.defaultPrevented,true,'The arrow keys wrap around the row.');
   tab('agents','git').click();await flush();
   assert.equal(ui.document.activeElement,tab('agents','agents'),'A click with the mouse leaves focus where it was.');
+});
+
+test('final agent answers stay copyable and Plan card results copy their Markdown (#189)', async () => {
+  const ui = await browser({ boardUI: true, layoutUI: true, wide: true });
+  const chat = ui.canonical.get('project-one');
+  chat.messages.push(
+    { id: 'u1', runId: 'run-1', role: 'user', text: 'First task', createdAt: '2026-11-01T10:00:00Z' },
+    { id: 'a1-old', runId: 'run-1', role: 'assistant', provider: 'codex', text: 'Older answer.', createdAt: '2026-11-01T10:01:00Z' },
+    { id: 'a1', runId: 'run-1', role: 'assistant', provider: 'codex', text: 'The final **Markdown** answer.', createdAt: '2026-11-01T10:02:00Z' },
+    { id: 'u2', runId: 'run-2', role: 'user', text: 'Split task', createdAt: '2026-11-01T10:03:00Z' },
+    { id: 'flow-final', role: 'assistant', provider: 'codex', splitResult: { id: 'split-1', parts: 2 }, text: 'Flow combined **Markdown** answer.', createdAt: '2026-11-01T10:04:00Z' },
+  );
+  await ui.window.relayUI.refresh(); await flush();
+  const oldCopy = ui.$('message-a1-old').querySelector('.message-copy');
+  const finalCopy = ui.$('message-a1').querySelector('.message-copy');
+  assert.equal(oldCopy.classList.contains('message-copy-final'), false);
+  assert.equal(finalCopy.classList.contains('message-copy-final'), true);
+  assert.equal(finalCopy.getAttribute('aria-label'), 'Copy message');
+  finalCopy.click(); await flush();
+  assert.equal(ui.copiedTexts.at(-1), 'The final **Markdown** answer.');
+  assert.equal(finalCopy.classList.contains('copied'), true);
+  const flowCopy = ui.$('message-flow-final').querySelector('.message-copy');
+  assert.equal(flowCopy.classList.contains('message-copy-final'), true);
+  assert.equal(flowCopy.getAttribute('aria-label'), 'Copy message');
+
+  const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.message-copy\.message-copy-final \{ opacity: 1; \}/);
+
+  const answer = 'I checked the cart page.\n\n**Fix now**\n\n- The total rounds wrong.';
+  planChatBrowserRoutes(ui, { answer });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush(); await flush(); await flush();
+  ui.$('board-columns').querySelectorAll('.board-card').find(item => item.textContent.includes('Cart page')).click();
+  await flush(); await flush(); await flush();
+  const result = ui.$('board-drawer-body').querySelector('.board-result');
+  const copy = result.querySelector('.board-result-copy');
+  assert.ok(copy, 'A Plan card result has a Copy button.');
+  assert.equal(copy.getAttribute('aria-label'), 'Copy result');
+  copy.click(); await flush();
+  assert.equal(ui.copiedTexts.at(-1), answer);
+  assert.equal(copy.classList.contains('copied'), true);
 });
 
 test('each message starts with a heading, so a screen reader can move from message to message (#26)',async()=>{
