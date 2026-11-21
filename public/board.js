@@ -19,6 +19,7 @@
 // not started yet to edit, remove or add to, and Pause after the subtask it is on.
 (() => {
   'use strict';
+  const { t } = window.codeshiText;
   const $ = id => document.getElementById(id);
   // The Plan is a view of the window (#162), beside Normal and Flow. flow.js changes view and calls show() and hide();
   // open() asks for the Plan view. The Plan chat is on the right, not the Workspace chat, with each card's task beside it
@@ -48,6 +49,19 @@
   const modelLabel = (provider, id) => { if (!id) return ''; const named = window.relayModelPicker?.modelName?.(provider, id); if (named && named !== id) return named; const short = String(id).replace(/^claude-/, '').replace(/-(\d+)-(\d+)(?=$|-)/, ' $1.$2').replace(/-/g, ' '); return /^claude-/.test(id) ? short.replace(/\b\w/g, char => char.toUpperCase()) : id; };
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'secondary-button') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
+  async function copyResult(button, text) {
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const buffer = node('textarea', 'clipboard-buffer'); buffer.value = text; document.body.append(buffer); buffer.select();
+      const copied = document.execCommand('copy'); buffer.remove(); if (!copied) { api.announce('Copy failed.'); return; }
+    }
+    button.classList.add('copied'); api.announce('Copied to clipboard.');
+    setTimeout(() => button.classList.remove('copied'), 1500);
+  }
+  function copyResultButton(text) {
+    const copy = node('button', 'board-result-copy'); copy.type = 'button'; copy.title = t('Copy result'); copy.setAttribute('aria-label', t('Copy result'));
+    copy.addEventListener('click', () => copyResult(copy, text)); return copy;
+  }
   // The modifier that moves a card on the canvas, named as the keyboard labels it.
   const altKey = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? 'Option' : 'Alt';
   const plural = (count, word, many = `${word}s`) => `${count} ${count === 1 ? word : many}`;
@@ -1457,6 +1471,12 @@
     }
     if (asked.length) box.append(questionsBox(card, asked, provider));
     const update = updateBox(card, { questions: asked.length > 0 && card.column === 'review' }); if (update) box.append(update);
+    const resultText = currentReply?.text || result.summary || '';
+    if (resultText) {
+      const copyRow = node('div', 'board-result-copy-row');
+      copyRow.append(copyResultButton(resultText));
+      box.append(copyRow);
+    }
     return box;
   }
   // The verdict block a review ends with (src/plan-review.mjs), fenced or bare, wherever it is in the answer.

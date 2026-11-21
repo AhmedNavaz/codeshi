@@ -1151,7 +1151,7 @@
     }
     return replyPlans.get(key);
   }
-  function renderMessage(message) {
+  function renderMessage(message, finalAnswer = false) {
     if (message.rewoundMarker) {
       const { id, count, shown } = message.rewoundMarker, line = element("div", "messages-rewound");
       line.setAttribute("role", "note");
@@ -1254,7 +1254,11 @@
       });
       actions.append(jumpRun);
     }
-    if (message.text) actions.append(copyButton("message-copy", "Copy message", message.text));
+    if (message.text) {
+      const copy = copyButton("message-copy", "Copy message", message.text);
+      if (finalAnswer) copy.classList.add("message-copy-final");
+      actions.append(copy);
+    }
     if (message.text && message.id) {
       const remember = element("button", "message-action message-remember", "Remember"); remember.type = "button"; remember.title = "Keep this for every agent in this workspace";
       remember.addEventListener("click", () => window.relayMemory?.remember({ text: message.text, messageId: message.id, runId: message.runId || null, host: row }));
@@ -1381,6 +1385,17 @@
   const noOpenOutputs = new Set();
   function renderMessages(forceScroll = false) {
     const c = state.conversation, messages = shownMessages(c);
+    const finalAnswers = new Set();
+    const finalAnswerKeys = new Set();
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      if (message.role !== "assistant" || !message.text) continue;
+      const key = message.splitResult ? `split:${message.splitResult.id || message.id || index}`
+        : message.runId ? `run:${message.runId}` : `message:${message.id || index}`;
+      if (finalAnswerKeys.has(key)) continue;
+      finalAnswerKeys.add(key);
+      finalAnswers.add(message);
+    }
     const folders = state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path);
     const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.orchestrations?.map(plan => [plan.id, plan.status, window.relayOrchestration?.describe(plan)]), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
     const scope = JSON.stringify([state.projectId, c?.id, folders]);
@@ -1406,6 +1421,7 @@
     // What a message's drawing reads besides the message itself.
     const messageExtra = message => {
       let extra = "";
+      if (message.role === "assistant") extra += `|final-copy:${finalAnswers.has(message)}`;
       if (message.reviewId) { const review = c?.reviews?.find(item => item.id === message.reviewId); extra += JSON.stringify([Boolean(review), review?.summary]); }
       if (message.orchestrationId) { const plan = c?.orchestrations?.find(item => item.id === message.orchestrationId); extra += (message.role === "user" ? window.relayOrchestration?.label(plan) : window.relayOrchestration?.describe(plan)) || ""; }
       // A reply written as a draft plan redraws once its cards are on the Plan, and when the chat moves into a task.
@@ -1445,7 +1461,7 @@
       const messageNode = (message, index) => {
         const key = "message:" + (message.id || index), extra = messageExtra(message), kept = oldNodes.get(key);
         if (kept?.message === message && kept.extra === extra) { nodes.set(key, kept); return kept.node; }
-        const node = renderMessage(message);
+        const node = renderMessage(message, finalAnswers.has(message));
         if (message.rewound) node.classList.add("message-rewound");
         nodes.set(key, { message, extra, node });
         return node;

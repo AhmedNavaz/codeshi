@@ -188,6 +188,11 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 .board-result-answer code { padding: 0 3px; border-radius: 3px; background: var(--surface); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
 .board-result-answer pre { padding: 8px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .board-result-answer pre code { padding: 0; background: none; }
+.board-result-copy-row { display: flex; justify-content: flex-end; }
+.board-result-copy { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); }
+.board-result-copy::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-copy) center / contain no-repeat; mask: var(--icon-copy) center / contain no-repeat; }
+.board-result-copy.copied::before { -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); color: var(--success); }
+.board-result-copy:hover, .board-result-copy:focus-visible { color: var(--text); background: var(--hover); }
 .board-result-answer blockquote { padding-left: 10px; border-left: 2px solid var(--border); color: var(--muted); }
 .board-result-answer hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
 .board-result-table { overflow-x: auto; margin: 0 0 8px; }

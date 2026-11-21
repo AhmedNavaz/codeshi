@@ -334,6 +334,7 @@ summary::-webkit-details-marker { display: none; }
 .message-copy::before, .code-copy::before, .activity-copy::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-copy) center / contain no-repeat; mask: var(--icon-copy) center / contain no-repeat; }
 .message-copy.copied::before, .code-copy.copied::before, .activity-copy.copied::before { -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); color: var(--success); }
 .message-copy:hover, .code-copy:hover, .activity-copy:hover { color: var(--text); background: var(--hover); }
+.message-copy.message-copy-final { opacity: 1; }
 .message-copy { margin: -1px -4px -1px 0; }
 .clipboard-buffer { position: fixed; top: 0; left: -9999px; opacity: 0; }
 .message-text code { padding: 1px 5px; border-radius: 4px; background: var(--code-inline-bg); font: 12.5px/1.6 var(--mono); }
