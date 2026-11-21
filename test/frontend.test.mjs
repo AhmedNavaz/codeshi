@@ -86,7 +86,7 @@ function realXterm(){
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 
 async function browser({existing=true,available=true,providers={},authenticated=true,billingSource='subscription',accountErrors=[],workbench=false,insights=false,historyUI=insights,empty=false,moreProjects=false,desktop=false,wide=false,stored={},usage=null,setup=false,updatesUI=setup,savedPreferences={},desktopControls=false,filesUI=false,searchUI=false,reviewsUI=false,automaticReviewUI=false,orchestrationUI=false,localUI=false,modelPickerUI=false,agentsUI=false,layoutUI=false,commandsUI=false,terminalUI=false,realTerminal=false,voiceUI=false,recapUI=false,previewUI=false,rewindUI=false,flowUI=false,experimentalUI=false,splitUI=false,questionsUI=false,alertsUI=false,githubUI=false,boardUI=false,clock=null,launch=null,update=null,theme=false,systemDark=true,locale=null}={}){
-  const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[];let timerId=0,intercept=null;
+  const document=documentFixture(),window=new Events(),storage=new Map(Object.entries(stored)),timers=new Map(),requests=[],handoffs=[],pickedFolders=[],updateAcknowledgements=[],externalLinks=[],copiedTexts=[];let timerId=0,intercept=null;
   let preferences=clone(savedPreferences),handoffPreferences={threshold:90,automatic:false};
   window.innerWidth=1280;window.innerHeight=800;
   const awakeChanges=[],menuListeners=[],menuStates=[];
@@ -265,7 +265,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   class Range{setStart(node,offset){this.startContainer=node;this.startOffset=offset;}setEnd(node,offset){this.endContainer=node;this.endOffset=offset;}getBoundingClientRect(){return this.startContainer.parentNode.getBoundingClientRect();}}
   class Highlight extends Set{constructor(...ranges){super(ranges);this.priority=0;}}
   const highlights=new Map();document.createRange=()=>new Range();
-  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,clearInterval:id=>timers.delete(id),cancelAnimationFrame:()=>{},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async()=>{}}}});
+  const context=vm.createContext({document,window,fetch,console,CSS:{highlights},Highlight,crypto:{randomUUID},CustomEvent:UIEvent,Event:UIEvent,EventSource:class extends Events{constructor(url){super();this.url=url;eventSources.push(this);}close(){this.closed=true;}},requestAnimationFrame:fn=>fn(),setTimeout:(fn,delay)=>{const id=++timerId;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),setInterval:()=>++timerId,clearInterval:id=>timers.delete(id),cancelAnimationFrame:()=>{},localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,String(value))},URL,Blob,FileReader,navigator:{clipboard:{writeText:async text=>{copiedTexts.push(String(text));}}}});
   // The page's words (#27): English unless a test loads a catalog, as /locale.js does.
   vm.runInContext(fs.readFileSync(new URL('../public/i18n.js',import.meta.url),'utf8'),context,{filename:'public/i18n.js'});if(locale)window.codeshiText.load(locale);
   if(theme)vm.runInContext(fs.readFileSync(new URL('../public/theme.js',import.meta.url),'utf8'),context,{filename:'public/theme.js'});
@@ -331,7 +331,7 @@ async function browser({existing=true,available=true,providers={},authenticated=
   const switchProject=async id=>{$('project-select').value=id;fire('project-select','change');await flush();};
   const textNodes=node=>node.nodeType===3?[node]:node.childNodes.flatMap(textNodes);
   const rangeText=range=>{const nodes=textNodes($('messages')),first=nodes.indexOf(range.startContainer),last=nodes.indexOf(range.endContainer);return nodes.slice(first,last+1).map((node,index)=>node.data.slice(index===0?range.startOffset:0,first+index===last?range.endOffset:undefined)).join('');};
-  return {quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,previewCloses,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
+  return {quitting:()=>quitListeners.forEach(listener=>listener()),previewOpens,previewCloses,pickInPreview:pick=>Promise.all(previewListeners.map(listener=>listener(pick))),runTimers:()=>{for(const [id,timer] of [...timers]){timers.delete(id);timer.fn();}},document,window,$,fire,findButton,highlights,rangeText,labelledInput,requests,conversations,submissions,handoffs,projects,canonical,pickedFolders,updateAcknowledgements,externalLinks,copiedTexts,storage,switchProject,awakeChanges,menuStates,menu:(name,value)=>{for(const fn of menuListeners)fn(name,value);},eventSources,terminals,spoken,updateCalls,pushUpdate:next=>{updateState={...updateState,...next};for(const fn of updateListeners)fn(clone(updateState));},get chatCreations(){return chatCreations;},setIntercept:fn=>{intercept=fn;},setSystemDark:value=>{colorScheme.matches=value;for(const fn of colorScheme.listeners)fn({matches:value});},state:()=>window.relayUI.getState()};
 }
 
 test('late same-project refresh cannot restore superseded provider/access settings',async()=>{
@@ -8848,6 +8848,72 @@ test('the side panel tabs keep one Tab stop, move with the arrow keys and keep f
   assert.equal(left.defaultPrevented,true,'The arrow keys wrap around the row.');
   tab('agents','git').click();await flush();
   assert.equal(ui.document.activeElement,tab('agents','agents'),'A click with the mouse leaves focus where it was.');
+});
+
+test('each finished turn\'s final answer keeps Copy in view, and Plan card results copy the answer they show (#189)', async () => {
+  const ui = await browser({ boardUI: true, layoutUI: true, wide: true });
+  const chat = ui.canonical.get('project-one');
+  chat.messages.push(
+    { id: 'u1', runId: 'run-1', role: 'user', text: 'First task', createdAt: '2026-11-01T10:00:00Z' },
+    { id: 'a1-old', runId: 'run-1', role: 'assistant', provider: 'codex', text: 'Older answer.', createdAt: '2026-11-01T10:01:00Z' },
+    { id: 'a1', runId: 'run-1', role: 'assistant', provider: 'codex', text: 'The final **Markdown** answer.', createdAt: '2026-11-01T10:02:00Z' },
+    { id: 'u2', runId: 'run-2', role: 'user', text: 'Split task', createdAt: '2026-11-01T10:03:00Z' },
+    { id: 'flow-final', role: 'assistant', provider: 'codex', splitResult: { id: 'split-1', parts: 2 }, text: 'Flow combined **Markdown** answer.', createdAt: '2026-11-01T10:04:00Z' },
+    { id: 'notice', role: 'system', text: '“Cart page” finished. Its result is on the Plan for you to read and accept.', createdAt: '2026-11-01T10:04:30Z' },
+  );
+  await ui.window.relayUI.refresh(); await flush();
+  const shownFinal = () => [...ui.$('messages').querySelectorAll('.message-actions-final')].map(row => row.closest('.message').id);
+  // Each turn's final answer keeps Copy in view, older ones too; what the agent said along the way shows it on hover.
+  assert.deepEqual(shownFinal(), ['message-a1', 'message-flow-final']);
+  const flowCopy = ui.$('message-flow-final').querySelector('.message-copy');
+  assert.equal(flowCopy.getAttribute('aria-label'), 'Copy message');
+  // Copy comes first in an answer's row, so its icon lines up with the text; the time follows.
+  assert.equal(flowCopy.parentNode.firstElementChild, flowCopy);
+  assert.ok(flowCopy.parentNode.querySelector('.message-time'));
+  flowCopy.click(); await flush();
+  assert.equal(ui.copiedTexts.at(-1), 'Flow combined **Markdown** answer.');
+  assert.equal(flowCopy.classList.contains('copied'), true);
+  const oldCopy = ui.$('message-a1').querySelector('.message-copy');
+  oldCopy.click(); await flush();
+  assert.equal(ui.copiedTexts.at(-1), 'The final **Markdown** answer.');
+
+  // While the agent is working, nothing it has said in this turn keeps Copy in view; earlier turns keep theirs.
+  chat.messages.push(
+    { id: 'u3', runId: 'run-3', role: 'user', text: 'Another task', createdAt: '2026-11-01T10:05:00Z' },
+    { id: 'a3', runId: 'run-3', role: 'assistant', provider: 'codex', text: 'Looking at it.', status: 'streaming', createdAt: '2026-11-01T10:06:00Z' },
+  );
+  chat.status = 'running'; chat.activeRun = { id: 'run-3', provider: 'codex', startedAt: '2026-11-01T10:05:00Z' };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.deepEqual(shownFinal(), ['message-a1', 'message-flow-final']);
+  // Once it finishes, its answer is the one.
+  chat.messages.at(-1).status = 'complete'; chat.messages.at(-1).text = 'Done.';
+  chat.status = 'idle'; chat.lastRun = chat.activeRun; chat.activeRun = null;
+  await ui.window.relayUI.refresh(); await flush();
+  assert.deepEqual(shownFinal(), ['message-a1', 'message-flow-final', 'message-a3']);
+
+  const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.message-actions-final :is\(\.message-copy, \.message-remember\) \{ opacity: 1; \}/);
+  // Remember is an icon with a name, beside Copy.
+  const remember = ui.$('message-a3').querySelector('.message-remember');
+  assert.equal(remember.textContent, '');
+  assert.equal(remember.getAttribute('aria-label'), 'Remember');
+
+  const shown = 'I checked the cart page.\n\n**Fix now**\n\n- The total rounds wrong.';
+  const answer = `${shown}\n\n## Questions for you\n\n- Should the fix cover gift cards?\n\n\`\`\`json\n{"verdict":"pass"}\n\`\`\``;
+  planChatBrowserRoutes(ui, { answer });
+  await ui.window.relayUI.refresh(); await flush();
+  ui.$('open-plan').click(); await flush(); await flush(); await flush();
+  ui.$('board-columns').querySelectorAll('.board-card').find(item => item.textContent.includes('Cart page')).click();
+  await flush(); await flush(); await flush();
+  const result = ui.$('board-drawer-body').querySelector('.board-result');
+  const copy = result.querySelector('.board-result-copy');
+  assert.ok(copy, 'A Plan card result has a Copy button.');
+  assert.equal(copy.getAttribute('aria-label'), 'Copy result');
+  const row = copy.parentNode, around = row.parentNode.children;
+  assert.ok(around[around.indexOf(row) - 1].classList.contains('board-result-answer'), 'Copy sits right under the answer it copies.');
+  copy.click(); await flush();
+  assert.equal(ui.copiedTexts.at(-1), shown, 'It copies the answer as shown, without the questions box or the verdict block.');
+  assert.equal(copy.classList.contains('copied'), true);
 });
 
 test('each message starts with a heading, so a screen reader can move from message to message (#26)',async()=>{

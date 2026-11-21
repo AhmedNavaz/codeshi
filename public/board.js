@@ -19,6 +19,7 @@
 // not started yet to edit, remove or add to, and Pause after the subtask it is on.
 (() => {
   'use strict';
+  const { t } = window.codeshiText;
   const $ = id => document.getElementById(id);
   // The Plan is a view of the window (#162), beside Normal and Flow. flow.js changes view and calls show() and hide();
   // open() asks for the Plan view. The Plan chat is on the right, not the Workspace chat, with each card's task beside it
@@ -48,6 +49,19 @@
   const modelLabel = (provider, id) => { if (!id) return ''; const named = window.relayModelPicker?.modelName?.(provider, id); if (named && named !== id) return named; const short = String(id).replace(/^claude-/, '').replace(/-(\d+)-(\d+)(?=$|-)/, ' $1.$2').replace(/-/g, ' '); return /^claude-/.test(id) ? short.replace(/\b\w/g, char => char.toUpperCase()) : id; };
   const node = (tag, cls, text) => { const value = document.createElement(tag); if (cls) value.className = cls; if (text !== undefined) value.textContent = text; return value; };
   const button = (text, handler, cls = 'secondary-button') => { const value = node('button', cls, text); value.type = 'button'; value.addEventListener('click', handler); return value; };
+  async function copyResult(button, text) {
+    try { await navigator.clipboard.writeText(text); }
+    catch {
+      const buffer = node('textarea', 'clipboard-buffer'); buffer.value = text; document.body.append(buffer); buffer.select();
+      const copied = document.execCommand('copy'); buffer.remove(); if (!copied) { api.announce('Copy failed.'); return; }
+    }
+    button.classList.add('copied'); api.announce('Copied to clipboard.');
+    setTimeout(() => button.classList.remove('copied'), 1500);
+  }
+  function copyResultButton(text) {
+    const copy = node('button', 'board-result-copy'); copy.type = 'button'; copy.title = t('Copy result'); copy.setAttribute('aria-label', t('Copy result'));
+    copy.addEventListener('click', () => copyResult(copy, text)); return copy;
+  }
   // The modifier that moves a card on the canvas, named as the keyboard labels it.
   const altKey = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? 'Option' : 'Alt';
   const plural = (count, word, many = `${word}s`) => `${count} ${count === 1 ? word : many}`;
@@ -1424,8 +1438,11 @@
     // offers to answer what it asks.
     const text = currentReply?.text ? stripVerdict(currentReply.text) : null, later = currentReply ? currentReply.followUps || [] : [];
     let asked = [];
-    if (text) { const split = questionsIn(text); if (!later.length) asked = split.questions; box.append(answerBlock(later.length ? text : split.answer)); }
-    else if (result.summary) { box.append(node('p', 'board-result-summary', stripVerdict(result.summary))); if (result.followUps) box.append(node('p', 'board-result-note', `Then ${result.followUps === 1 ? 'one follow-up' : `${result.followUps} follow-ups`}…`)); }
+    // Copy sits right under the newest answer and copies it as the card shows it: no verdict block, and none of the
+    // questions listed in their own box below.
+    const withCopy = (block, shown) => { if (!shown.trim()) return [block]; const row = node('div', 'board-result-copy-row'); row.append(copyResultButton(shown)); return [block, row]; };
+    if (text) { const split = questionsIn(text), shown = later.length ? text : split.answer; if (!later.length) asked = split.questions; box.append(...(later.length ? [answerBlock(shown)] : withCopy(answerBlock(shown), shown))); }
+    else if (result.summary) { const shown = stripVerdict(result.summary); box.append(...withCopy(node('p', 'board-result-summary', shown), shown)); if (result.followUps) box.append(node('p', 'board-result-note', `Then ${result.followUps === 1 ? 'one follow-up' : `${result.followUps} follow-ups`}…`)); }
     if (later.length) {
       const list = node('section', 'board-followups'); list.setAttribute('aria-label', 'Follow-ups');
       list.append(node('h4', 'board-followups-title', later.length === 1 ? 'Follow-up' : `Follow-ups (${later.length})`));
@@ -1434,7 +1451,7 @@
         entry.append(node('p', 'board-followup-ask', `You asked${item.at ? `, ${when(item.at)}` : ''}: ${ask.length > 280 ? `${ask.slice(0, 279).trimEnd()}…` : ask || '(no text)'}`));
         const body = stripVerdict(item.text || ''), split = index === later.length - 1 ? questionsIn(body) : { answer: body, questions: [] };
         if (index === later.length - 1) asked = split.questions;
-        entry.append(answerBlock(split.answer));
+        entry.append(...(index === later.length - 1 ? withCopy(answerBlock(split.answer), split.answer) : [answerBlock(split.answer)]));
         list.append(entry);
       });
       box.append(list);

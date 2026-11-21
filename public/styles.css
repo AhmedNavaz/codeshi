@@ -290,8 +290,8 @@ summary::-webkit-details-marker { display: none; }
 .message-actions { display: flex; align-items: center; gap: 2px; height: 22px; margin-top: 2px; }
 .message-assistant .message-actions { margin-left: 20px; }
 /* Time, jumps and copy stay out of the way until the pointer or focus reaches the message. */
-.message-time, .message-action, .message-copy { opacity: 0; transition: opacity .12s; }
-.message:hover :is(.message-time, .message-action, .message-copy), .message :is(.message-action, .message-copy):focus-visible, .message-copy.copied { opacity: 1; }
+.message-time, .message-action, .message-copy, .message-remember { opacity: 0; transition: opacity .12s; }
+.message:hover :is(.message-time, .message-action, .message-copy, .message-remember), .message :is(.message-action, .message-copy, .message-remember):focus-visible, .message-copy.copied { opacity: 1; }
 .message-action { flex: none; height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--faint); font-size: 11px; }
 .message-action:hover { color: var(--text); background: var(--hover); }
 .message-assistant { padding-bottom: 0; }
@@ -330,10 +330,11 @@ summary::-webkit-details-marker { display: none; }
 .code-block { margin: 10px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--code-bg); overflow: hidden; white-space: normal; }
 .code-head { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--border); color: var(--faint); font: 11px var(--font); }
 .message-text pre { margin: 0; padding: 10px 12px; overflow: auto; white-space: pre; }
-.message-copy, .code-copy, .activity-copy { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); }
+.message-copy, .message-remember, .code-copy, .activity-copy { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); }
 .message-copy::before, .code-copy::before, .activity-copy::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-copy) center / contain no-repeat; mask: var(--icon-copy) center / contain no-repeat; }
 .message-copy.copied::before, .code-copy.copied::before, .activity-copy.copied::before { -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); color: var(--success); }
-.message-copy:hover, .code-copy:hover, .activity-copy:hover { color: var(--text); background: var(--hover); }
+.message-copy:hover, .message-remember:hover, .code-copy:hover, .activity-copy:hover { color: var(--text); background: var(--hover); }
+.message-actions-final :is(.message-copy, .message-remember) { opacity: 1; }
 .message-copy { margin: -1px -4px -1px 0; }
 .clipboard-buffer { position: fixed; top: 0; left: -9999px; opacity: 0; }
 .message-text code { padding: 1px 5px; border-radius: 4px; background: var(--code-inline-bg); font: 12.5px/1.6 var(--mono); }
@@ -1421,7 +1422,7 @@ button.commit-hash:hover { text-decoration: underline; }
 .skills-folders:empty { display: none; }
 .skill-folder { display: flex; gap: 8px; justify-content: space-between; overflow-wrap: anywhere; color: var(--muted); }
 .skill-label { margin-top: 10px; }
-.message-remember { font-size: 11px; }
+.message-remember::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-bookmark) center / contain no-repeat; mask: var(--icon-bookmark) center / contain no-repeat; }
 .activity-remember { flex: none; height: 20px; padding: 0 6px; border: 0; border-radius: 4px; background: transparent; color: var(--faint); font-size: 11px; opacity: 0; }
 .activity-entry:hover .activity-remember, .activity-remember:focus-visible { opacity: 1; }
 .activity-remember:hover { color: var(--text); background: var(--hover); }
