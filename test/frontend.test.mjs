@@ -8850,7 +8850,7 @@ test('the side panel tabs keep one Tab stop, move with the arrow keys and keep f
   assert.equal(ui.document.activeElement,tab('agents','agents'),'A click with the mouse leaves focus where it was.');
 });
 
-test('final agent answers stay copyable and Plan card results copy their Markdown (#189)', async () => {
+test('each finished turn\'s final answer keeps Copy in view, and Plan card results copy the answer they show (#189)', async () => {
   const ui = await browser({ boardUI: true, layoutUI: true, wide: true });
   const chat = ui.canonical.get('project-one');
   chat.messages.push(
@@ -8859,24 +8859,47 @@ test('final agent answers stay copyable and Plan card results copy their Markdow
     { id: 'a1', runId: 'run-1', role: 'assistant', provider: 'codex', text: 'The final **Markdown** answer.', createdAt: '2026-11-01T10:02:00Z' },
     { id: 'u2', runId: 'run-2', role: 'user', text: 'Split task', createdAt: '2026-11-01T10:03:00Z' },
     { id: 'flow-final', role: 'assistant', provider: 'codex', splitResult: { id: 'split-1', parts: 2 }, text: 'Flow combined **Markdown** answer.', createdAt: '2026-11-01T10:04:00Z' },
+    { id: 'notice', role: 'system', text: '“Cart page” finished. Its result is on the Plan for you to read and accept.', createdAt: '2026-11-01T10:04:30Z' },
   );
   await ui.window.relayUI.refresh(); await flush();
-  const oldCopy = ui.$('message-a1-old').querySelector('.message-copy');
-  const finalCopy = ui.$('message-a1').querySelector('.message-copy');
-  assert.equal(oldCopy.classList.contains('message-copy-final'), false);
-  assert.equal(finalCopy.classList.contains('message-copy-final'), true);
-  assert.equal(finalCopy.getAttribute('aria-label'), 'Copy message');
-  finalCopy.click(); await flush();
-  assert.equal(ui.copiedTexts.at(-1), 'The final **Markdown** answer.');
-  assert.equal(finalCopy.classList.contains('copied'), true);
+  const shownFinal = () => [...ui.$('messages').querySelectorAll('.message-actions-final')].map(row => row.closest('.message').id);
+  // Each turn's final answer keeps Copy in view, older ones too; what the agent said along the way shows it on hover.
+  assert.deepEqual(shownFinal(), ['message-a1', 'message-flow-final']);
   const flowCopy = ui.$('message-flow-final').querySelector('.message-copy');
-  assert.equal(flowCopy.classList.contains('message-copy-final'), true);
   assert.equal(flowCopy.getAttribute('aria-label'), 'Copy message');
+  // Copy comes first in an answer's row, so its icon lines up with the text; the time follows.
+  assert.equal(flowCopy.parentNode.firstElementChild, flowCopy);
+  assert.ok(flowCopy.parentNode.querySelector('.message-time'));
+  flowCopy.click(); await flush();
+  assert.equal(ui.copiedTexts.at(-1), 'Flow combined **Markdown** answer.');
+  assert.equal(flowCopy.classList.contains('copied'), true);
+  const oldCopy = ui.$('message-a1').querySelector('.message-copy');
+  oldCopy.click(); await flush();
+  assert.equal(ui.copiedTexts.at(-1), 'The final **Markdown** answer.');
+
+  // While the agent is working, nothing it has said in this turn keeps Copy in view; earlier turns keep theirs.
+  chat.messages.push(
+    { id: 'u3', runId: 'run-3', role: 'user', text: 'Another task', createdAt: '2026-11-01T10:05:00Z' },
+    { id: 'a3', runId: 'run-3', role: 'assistant', provider: 'codex', text: 'Looking at it.', status: 'streaming', createdAt: '2026-11-01T10:06:00Z' },
+  );
+  chat.status = 'running'; chat.activeRun = { id: 'run-3', provider: 'codex', startedAt: '2026-11-01T10:05:00Z' };
+  await ui.window.relayUI.refresh(); await flush();
+  assert.deepEqual(shownFinal(), ['message-a1', 'message-flow-final']);
+  // Once it finishes, its answer is the one.
+  chat.messages.at(-1).status = 'complete'; chat.messages.at(-1).text = 'Done.';
+  chat.status = 'idle'; chat.lastRun = chat.activeRun; chat.activeRun = null;
+  await ui.window.relayUI.refresh(); await flush();
+  assert.deepEqual(shownFinal(), ['message-a1', 'message-flow-final', 'message-a3']);
 
   const css = fs.readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.message-copy\.message-copy-final \{ opacity: 1; \}/);
+  assert.match(css, /\.message-actions-final :is\(\.message-copy, \.message-remember\) \{ opacity: 1; \}/);
+  // Remember is an icon with a name, beside Copy.
+  const remember = ui.$('message-a3').querySelector('.message-remember');
+  assert.equal(remember.textContent, '');
+  assert.equal(remember.getAttribute('aria-label'), 'Remember');
 
-  const answer = 'I checked the cart page.\n\n**Fix now**\n\n- The total rounds wrong.';
+  const shown = 'I checked the cart page.\n\n**Fix now**\n\n- The total rounds wrong.';
+  const answer = `${shown}\n\n## Questions for you\n\n- Should the fix cover gift cards?\n\n\`\`\`json\n{"verdict":"pass"}\n\`\`\``;
   planChatBrowserRoutes(ui, { answer });
   await ui.window.relayUI.refresh(); await flush();
   ui.$('open-plan').click(); await flush(); await flush(); await flush();
@@ -8886,8 +8909,10 @@ test('final agent answers stay copyable and Plan card results copy their Markdow
   const copy = result.querySelector('.board-result-copy');
   assert.ok(copy, 'A Plan card result has a Copy button.');
   assert.equal(copy.getAttribute('aria-label'), 'Copy result');
+  const row = copy.parentNode, around = row.parentNode.children;
+  assert.ok(around[around.indexOf(row) - 1].classList.contains('board-result-answer'), 'Copy sits right under the answer it copies.');
   copy.click(); await flush();
-  assert.equal(ui.copiedTexts.at(-1), answer);
+  assert.equal(ui.copiedTexts.at(-1), shown, 'It copies the answer as shown, without the questions box or the verdict block.');
   assert.equal(copy.classList.contains('copied'), true);
 });
 

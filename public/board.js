@@ -1438,8 +1438,11 @@
     // offers to answer what it asks.
     const text = currentReply?.text ? stripVerdict(currentReply.text) : null, later = currentReply ? currentReply.followUps || [] : [];
     let asked = [];
-    if (text) { const split = questionsIn(text); if (!later.length) asked = split.questions; box.append(answerBlock(later.length ? text : split.answer)); }
-    else if (result.summary) { box.append(node('p', 'board-result-summary', stripVerdict(result.summary))); if (result.followUps) box.append(node('p', 'board-result-note', `Then ${result.followUps === 1 ? 'one follow-up' : `${result.followUps} follow-ups`}…`)); }
+    // Copy sits right under the newest answer and copies it as the card shows it: no verdict block, and none of the
+    // questions listed in their own box below.
+    const withCopy = (block, shown) => { if (!shown.trim()) return [block]; const row = node('div', 'board-result-copy-row'); row.append(copyResultButton(shown)); return [block, row]; };
+    if (text) { const split = questionsIn(text), shown = later.length ? text : split.answer; if (!later.length) asked = split.questions; box.append(...(later.length ? [answerBlock(shown)] : withCopy(answerBlock(shown), shown))); }
+    else if (result.summary) { const shown = stripVerdict(result.summary); box.append(...withCopy(node('p', 'board-result-summary', shown), shown)); if (result.followUps) box.append(node('p', 'board-result-note', `Then ${result.followUps === 1 ? 'one follow-up' : `${result.followUps} follow-ups`}…`)); }
     if (later.length) {
       const list = node('section', 'board-followups'); list.setAttribute('aria-label', 'Follow-ups');
       list.append(node('h4', 'board-followups-title', later.length === 1 ? 'Follow-up' : `Follow-ups (${later.length})`));
@@ -1448,7 +1451,7 @@
         entry.append(node('p', 'board-followup-ask', `You asked${item.at ? `, ${when(item.at)}` : ''}: ${ask.length > 280 ? `${ask.slice(0, 279).trimEnd()}…` : ask || '(no text)'}`));
         const body = stripVerdict(item.text || ''), split = index === later.length - 1 ? questionsIn(body) : { answer: body, questions: [] };
         if (index === later.length - 1) asked = split.questions;
-        entry.append(answerBlock(split.answer));
+        entry.append(...(index === later.length - 1 ? withCopy(answerBlock(split.answer), split.answer) : [answerBlock(split.answer)]));
         list.append(entry);
       });
       box.append(list);
@@ -1471,12 +1474,6 @@
     }
     if (asked.length) box.append(questionsBox(card, asked, provider));
     const update = updateBox(card, { questions: asked.length > 0 && card.column === 'review' }); if (update) box.append(update);
-    const resultText = currentReply?.text || result.summary || '';
-    if (resultText) {
-      const copyRow = node('div', 'board-result-copy-row');
-      copyRow.append(copyResultButton(resultText));
-      box.append(copyRow);
-    }
     return box;
   }
   // The verdict block a review ends with (src/plan-review.mjs), fenced or bare, wherever it is in the answer.

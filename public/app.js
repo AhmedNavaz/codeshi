@@ -1231,7 +1231,8 @@
     const actions = element("div", "message-actions");
     const time = element("time", "message-time", messageTime(message.createdAt));
     if (message.createdAt) time.dateTime = message.createdAt;
-    actions.append(time);
+    // An answer's Copy comes first, so its icon lines up with the text above it; the time follows the buttons.
+    if (user) actions.append(time);
     if (user && message.steer) heading.append(element("span", "message-steer-label", "Added while working"));
     // A teammate's message from Share live (#24) says whose it is; it ran on your account.
     if (teammate) { const from = element("span", "message-teammate-label", `From ${teammate}`); from.title = "Sent by a teammate through Share live. It ran on your computer and account."; heading.append(from); }
@@ -1256,14 +1257,16 @@
     }
     if (message.text) {
       const copy = copyButton("message-copy", "Copy message", message.text);
-      if (finalAnswer) copy.classList.add("message-copy-final");
       actions.append(copy);
     }
     if (message.text && message.id) {
-      const remember = element("button", "message-action message-remember", "Remember"); remember.type = "button"; remember.title = "Keep this for every agent in this workspace";
+      const remember = element("button", "message-remember"); remember.type = "button"; remember.title = "Remember: keep this for every agent in this workspace"; remember.setAttribute("aria-label", "Remember");
       remember.addEventListener("click", () => window.relayMemory?.remember({ text: message.text, messageId: message.id, runId: message.runId || null, host: row }));
       actions.append(remember);
     }
+    if (!user) actions.append(time);
+    // The latest answer keeps its Copy and Remember in view; everywhere else they show on hover (#189).
+    if (finalAnswer) actions.classList.add("message-actions-final");
     const body=element('div',user?'message-text':'message-text markdown');
     if (!user && message.reviewId) {
       const review = state.conversation?.reviews?.find(item => item.id === message.reviewId);
@@ -1385,17 +1388,18 @@
   const noOpenOutputs = new Set();
   function renderMessages(forceScroll = false) {
     const c = state.conversation, messages = shownMessages(c);
+    // Each turn's final answer keeps Copy and Remember in view (#189): the last thing an agent said before your next
+    // message. What it said along the way, and the turn still running, show them on hover like every other message.
+    // Notices such as a Plan card finishing don't end a turn, and neither does a note added while the agent worked.
     const finalAnswers = new Set();
-    const finalAnswerKeys = new Set();
-    for (let index = messages.length - 1; index >= 0; index--) {
-      const message = messages[index];
-      if (message.role !== "assistant" || !message.text) continue;
-      const key = message.splitResult ? `split:${message.splitResult.id || message.id || index}`
-        : message.runId ? `run:${message.runId}` : `message:${message.id || index}`;
-      if (finalAnswerKeys.has(key)) continue;
-      finalAnswerKeys.add(key);
-      finalAnswers.add(message);
+    let answer = null;
+    for (const message of messages) {
+      if (message.rewound || message.rewoundMarker) continue;
+      if (message.role === "user" && !message.steer) { if (answer) finalAnswers.add(answer); answer = null; }
+      else if (message.role === "assistant" && message.text && !["streaming", "running"].includes(message.status)) answer = message;
+      else if (message.role === "assistant") answer = null;
     }
+    if (answer && c?.status !== "running") finalAnswers.add(answer);
     const folders = state.projects.find(project => project.id === state.projectId)?.folders?.map(folder => folder.path);
     const base = JSON.stringify([c?.reviews?.map(({ id, status, summary }) => [id, status, summary]), c?.orchestrations?.map(plan => [plan.id, plan.status, window.relayOrchestration?.describe(plan)]), c?.status, c?.activeRun?.id, c?.lastRun?.id, c?.pendingApprovals?.map(({ id, runId }) => [id, runId]), c?.checkpoints]);
     const scope = JSON.stringify([state.projectId, c?.id, folders]);

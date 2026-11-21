@@ -188,7 +188,8 @@ ul.board-result-facts li { padding: 1px 8px; border: 1px solid var(--border); bo
 .board-result-answer code { padding: 0 3px; border-radius: 3px; background: var(--surface); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
 .board-result-answer pre { padding: 8px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .board-result-answer pre code { padding: 0; background: none; }
-.board-result-copy-row { display: flex; justify-content: flex-end; }
+/* Right under the answer it copies, its icon in line with the text, as in the chat. */
+.board-result-copy-row { display: flex; margin: -4px 0 0 -4px; }
 .board-result-copy { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); }
 .board-result-copy::before { content: ""; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--icon-copy) center / contain no-repeat; mask: var(--icon-copy) center / contain no-repeat; }
 .board-result-copy.copied::before { -webkit-mask-image: var(--icon-check); mask-image: var(--icon-check); color: var(--success); }
