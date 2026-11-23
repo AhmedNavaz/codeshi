@@ -26,7 +26,7 @@ function populate(folder, files = {}) {
 function repository(folder, files = {}, { commit = true } = {}) {
   populate(folder, files);
   fs.writeFileSync(path.join(folder, '.gitignore'), '.release\n.mock-captures.jsonl\nnode_modules\n');
-  git(folder, 'init', '-q'); git(folder, 'config', 'user.email', 't@t.t'); git(folder, 'config', 'user.name', 't');
+  git(folder, 'init', '-q'); git(folder, 'config', 'core.autocrlf', 'false'); git(folder, 'config', 'user.email', 't@t.t'); git(folder, 'config', 'user.name', 't');
   if (commit) { git(folder, 'add', '.'); git(folder, 'commit', '-qm', 'first'); }
   return folder;
 }
